@@ -1,0 +1,80 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+function(a11_require_static_dependency target_name)
+  if(NOT TARGET ${target_name})
+    message(FATAL_ERROR "Required A11 dependency target is missing: ${target_name}")
+  endif()
+  get_target_property(A11_DEPENDENCY_TYPE ${target_name} TYPE)
+  if(A11_DEPENDENCY_TYPE STREQUAL "SHARED_LIBRARY" OR
+     A11_DEPENDENCY_TYPE STREQUAL "MODULE_LIBRARY")
+    message(FATAL_ERROR "${target_name} is shared, but A11 was built for static dependencies")
+  endif()
+  foreach(A11_LOCATION_PROPERTY IN ITEMS
+          IMPORTED_LOCATION IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_DEBUG
+          IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_MINSIZEREL)
+    get_target_property(
+      A11_DEPENDENCY_LOCATION ${target_name} ${A11_LOCATION_PROPERTY})
+    if(A11_DEPENDENCY_LOCATION AND
+       A11_DEPENDENCY_LOCATION MATCHES "\\.(dylib|so)(\\.|$)")
+      message(FATAL_ERROR
+        "${target_name} resolved to shared object: ${A11_DEPENDENCY_LOCATION}")
+    endif()
+  endforeach()
+  unset(A11_DEPENDENCY_LOCATION)
+  unset(A11_DEPENDENCY_TYPE)
+  unset(A11_LOCATION_PROPERTY)
+endfunction()
+
+find_dependency(absl 20260526 CONFIG)
+set(Boost_USE_STATIC_LIBS ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+find_dependency(Boost 1.82 CONFIG COMPONENTS context fiber thread)
+find_dependency(nlohmann_json CONFIG)
+
+if(@A11_BUILD_WEBRTC@)
+  find_dependency(LibDataChannel CONFIG)
+endif()
+
+if(@A11_BUILD_HTTP@)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+  find_dependency(OpenSSL)
+  find_dependency(PkgConfig)
+  find_dependency(uvw CONFIG)
+  pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
+  find_library(
+    A11_NGHTTP2_STATIC_LIBRARY
+    NAMES libnghttp2.a nghttp2_static
+    HINTS ${NGHTTP2_STATIC_LIBRARY_DIRS} ${NGHTTP2_LIBRARY_DIRS}
+    NO_DEFAULT_PATH REQUIRED)
+  if(NOT TARGET a11_nghttp2)
+    add_library(a11_nghttp2 STATIC IMPORTED)
+    set_target_properties(
+      a11_nghttp2 PROPERTIES
+      IMPORTED_LOCATION "${A11_NGHTTP2_STATIC_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${NGHTTP2_INCLUDE_DIRS}"
+      INTERFACE_LINK_OPTIONS "${NGHTTP2_STATIC_LDFLAGS_OTHER}")
+  endif()
+  if(NOT TARGET a11::nghttp2)
+    add_library(a11::nghttp2 ALIAS a11_nghttp2)
+  endif()
+endif()
+
+if(@A11_REQUIRE_STATIC_DEPS@)
+  a11_require_static_dependency(Boost::context)
+  a11_require_static_dependency(Boost::fiber)
+  a11_require_static_dependency(Boost::thread)
+  if(@A11_BUILD_WEBRTC@)
+    a11_require_static_dependency(LibDataChannel::LibDataChannel)
+  endif()
+  if(@A11_BUILD_HTTP@)
+    a11_require_static_dependency(OpenSSL::Crypto)
+    a11_require_static_dependency(OpenSSL::SSL)
+    a11_require_static_dependency(uvw::uvw)
+    a11_require_static_dependency(a11_nghttp2)
+  endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/a11Targets.cmake")
+check_required_components(a11)

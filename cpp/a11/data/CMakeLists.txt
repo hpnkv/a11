@@ -1,0 +1,6 @@
+set(A11_DATA_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/json.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/msgpack.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/types.cc
+    PARENT_SCOPE)

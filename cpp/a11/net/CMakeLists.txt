@@ -1,0 +1,21 @@
+set(A11_NET_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/byte_chunking.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/channel_wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/in_process_wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/wire_stream_with_recv.cc
+    PARENT_SCOPE)
+
+set(A11_NET_HTTP_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/http2.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/http_sse_wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/http2_websocket_channel.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/websocket_wire_stream.cc
+    PARENT_SCOPE)
+
+set(A11_NET_WEBRTC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/rtc_binary_channel.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/signalling.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/webrtc_wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/websocket_signalling.cc
+    PARENT_SCOPE)

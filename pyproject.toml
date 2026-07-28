@@ -1,0 +1,119 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.11.6",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "a11"
+version = "0.1.0"
+description = "Concurrent action and streaming runtime with a native C++ backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "absl-py>=2.5.0",
+    "fastapi>=0.139.0",
+    "httpx>=0.28.1",
+    "msgpack>=1.2.1",
+    "ormsgpack>=1.12.2",
+    "pydantic>=2.13.4",
+]
+
+[tool.scikit-build]
+cmake.source-dir = "cpp"
+cmake.version = ">=3.28"
+build-dir = "build/{state}/{wheel_tag}"
+wheel.packages = ["a11", "pybind11_abseil"]
+wheel.exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.pyo",
+    "a11/**/tests/**",
+    "a11/conftest.py",
+]
+install.components = ["python"]
+sdist.include = [
+    "pyproject.toml",
+    "uv.lock",
+    ".clang-format",
+    ".clang-tidy",
+    "AGENTS.md",
+    "README.md",
+    "CMakeLists.txt",
+    "cpp/**",
+    "a11/**",
+    "pybind11_abseil/__init__.py",
+    "scripts/**",
+]
+sdist.inclusion-mode = "explicit"
+sdist.exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.pyo",
+    "a11/_native*.so",
+    "a11/_native*.dylib",
+    "a11/_native*.pyd",
+    "pybind11_abseil/*.so",
+    "pybind11_abseil/*.dylib",
+    "pybind11_abseil/*.pyd",
+]
+
+[tool.scikit-build.cmake.define]
+A11_BUILD_PYTHON = "ON"
+BUILD_TESTING = "OFF"
+
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-* cp314-* cp315-*"
+skip = "*-musllinux* *-win32"
+enable = ["cpython-prerelease"]
+before-all = "bash {project}/scripts/bootstrap_wheel_deps.sh"
+test-command = "python {project}/scripts/audit_wheel.py {wheel}"
+environment-pass = [
+    "A11_DEPS_PREFIX",
+    "A11_WHEEL_ARCH",
+    "CMAKE_ARGS",
+    "CMAKE_PREFIX_PATH",
+    "OPENSSL_ROOT_DIR",
+    "PKG_CONFIG_PATH",
+]
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "13.0" }
+
+[tool.black]
+line-length = 80
+target-version = ["py311"]
+preview = true
+enable-unstable-feature = ["string_processing"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["a11"]
+
+[tool.ruff]
+line-length = 80
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E501"]
+
+[tool.ruff.format]
+preview = true
+docstring-code-line-length = 80
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "cibuildwheel>=4.1.1",
+    "pybind11-stubgen>=2.5.5",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.12.0",
+]

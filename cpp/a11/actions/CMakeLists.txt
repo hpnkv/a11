@@ -1,0 +1,5 @@
+set(A11_ACTIONS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/action.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/registry.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/schema.cc
+    PARENT_SCOPE)

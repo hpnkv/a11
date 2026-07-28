@@ -244,9 +244,7 @@ struct LocalChunkStore::State
 
 absl::StatusOr<std::shared_ptr<LocalChunkStore>> LocalChunkStore::Create(
     std::string node_id) {
-  absl::Status status = data::ValidateName(node_id);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   return std::make_shared<LocalChunkStore>(
       ConstructorToken{}, std::make_shared<State>(std::move(node_id)));
 }

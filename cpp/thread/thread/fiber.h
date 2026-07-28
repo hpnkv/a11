@@ -30,11 +30,17 @@
 #include "thread/selectables.h"
 
 namespace thread {
+enum class StackType {
+  kFixedSize,
+  kSegmented,
+};
+
 struct TreeOptions {
   // Zero selects Thread's configured default. Root fibers may choose a larger
   // stack for unusually deep user code; child fibers inherit their parent's
   // effective size.
   size_t stack_size = 0;
+  StackType stack_type = StackType::kFixedSize;
 };
 
 using InvocableWork = absl::AnyInvocable<void() &&>;
@@ -155,7 +161,7 @@ class Fiber {
   State state_ ABSL_GUARDED_BY(mu_) = RUNNING;
 
   Fiber* absl_nullable const parent_;
-  const size_t stack_size_;
+  const TreeOptions tree_options_;
   Fiber* absl_nullable first_child_ ABSL_GUARDED_BY(mu_) = nullptr;
   Fiber* absl_nullable next_sibling_;
   Fiber* absl_nullable prev_sibling_;

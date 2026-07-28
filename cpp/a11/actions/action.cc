@@ -358,9 +358,9 @@ absl::Status Action::BindStream(std::shared_ptr<net::WireStream> stream) {
     if (!status.ok()) {
       for (const auto& completed : rebound) {
         if (stream != nullptr)
-          (void)completed->DetachStream(stream);
+          completed->DetachStream(stream).IgnoreError();
         if (previous != nullptr)
-          (void)completed->AttachStream(previous);
+          completed->AttachStream(previous).IgnoreError();
       }
       return status;
     }
@@ -527,13 +527,11 @@ data::ActionMessage Action::GetActionMessage() const {
   result.headers = headers_;
   result.inputs.reserve(schema_.inputs.size());
   result.outputs.reserve(schema_.outputs.size());
-  for (const auto& [name, unused] : schema_.inputs) {
-    (void)unused;
+  for (const auto& name : schema_.inputs | std::views::keys) {
     result.inputs.push_back(
         data::Port{.name = name, .id = input_ids_.at(name)});
   }
-  for (const auto& [name, unused] : schema_.outputs) {
-    (void)unused;
+  for (const auto& name : schema_.outputs | std::views::keys) {
     result.outputs.push_back(
         data::Port{.name = name, .id = output_ids_.at(name)});
   }
@@ -696,7 +694,6 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
 }
 
 absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
-  std::shared_ptr<service::Session> session;
   std::shared_ptr<ActionLimiter> limiter;
   {
     thread::MutexLock lock(&mu_);
@@ -704,10 +701,8 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
       return absl::FailedPreconditionError("Action handler has not been set");
     }
   }
-  absl::Status status = Begin(Mode::kRun);
-  if (!status.ok())
-    return status;
-  session = GetSession();
+  ABSL_RETURN_IF_ERROR(Begin(Mode::kRun));
+  const std::shared_ptr<service::Session> session = GetSession();
   bool nested = false;
   std::shared_ptr<ActionLimiter> nested_limiter;
   {
@@ -716,8 +711,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
     nested_limiter = nested_limiter_;
   }
   if (session != nullptr) {
-    status = TrackInSession(session);
-    if (!status.ok()) {
+    if (const absl::Status status = TrackInSession(session); !status.ok()) {
       thread::MutexLock lock(&mu_);
       mode_ = Mode::kNone;
       return status;
@@ -727,15 +721,17 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
     limiter = std::move(nested_limiter);
   }
   std::shared_ptr<Action> self = shared_from_this();
-  a11::Task task = a11::SubmitTask([self, limiter]() mutable -> absl::Status {
-    self->RunHandler(std::move(limiter));
-    return absl::OkStatus();
-  });
   {
+    const a11::Task task =
+        a11::SubmitTask([self, limiter]() mutable -> absl::Status {
+          self->RunHandler(std::move(limiter));
+          return absl::OkStatus();
+        });
+
     thread::MutexLock lock(&mu_);
     task_ = task;
     if (cancel_requested_) {
-      (void)task_.Cancel();
+      task_.Cancel().IgnoreError();
     }
   }
   return self;
@@ -762,7 +758,7 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
   }
   data::WireMessage wire{.actions = {GetActionMessage()},
                          .headers = std::move(*headers)};
-  std::shared_ptr<net::WireStream> stream = GetStream();
+  const std::shared_ptr<net::WireStream> stream = GetStream();
   if (stream != nullptr) {
     status = stream->Send(std::move(wire));
   } else if (session != nullptr) {
@@ -771,12 +767,14 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
     status = absl::FailedPreconditionError(
         "Calling an Action requires an attached WireStream or Session");
   }
+
   if (!status.ok()) {
     UntrackFromSession();
     thread::MutexLock lock(&mu_);
     mode_ = Mode::kNone;
     return a11::FailedFuture<std::shared_ptr<Action>>(status);
   }
+
   return a11::ReadyFuture(shared_from_this());
 }
 
@@ -794,11 +792,12 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
     }
     dispatched = dispatch_future_;
   }
+
   std::shared_ptr<Action> self = shared_from_this();
   return a11::Submit<absl::Status>(
       [self = std::move(self), dispatched,
        timeout]() mutable -> absl::StatusOr<absl::Status> {
-        absl::StatusOr<a11::Unit> ready =
+        const absl::StatusOr<a11::Unit> ready =
             dispatched.Await(TimeoutDeadline(timeout));
         if (!ready.ok()) {
           absl::StatusOr<absl::Status> result;
@@ -819,7 +818,8 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
         }
         return absl::StatusOr<absl::Status>(std::in_place,
                                             *self->dispatch_status_);
-      });
+      },
+      {.stack_size = 512});
 }
 
 a11::Future<std::shared_ptr<Action>> Action::Wait(absl::Duration timeout) {
@@ -840,14 +840,12 @@ a11::Future<std::shared_ptr<Action>> Action::Wait(absl::Duration timeout) {
   return a11::Submit<std::shared_ptr<Action>>(
       [self = std::move(self), done,
        timeout]() mutable -> absl::StatusOr<std::shared_ptr<Action>> {
-        absl::StatusOr<a11::Unit> ready = done.Await(TimeoutDeadline(timeout));
-        if (!ready.ok())
-          return ready.status();
-        const absl::Status status = self->GetStatus();
-        if (!status.ok())
-          return status;
+        ABSL_RETURN_IF_ERROR(done.Await(TimeoutDeadline(timeout)).status());
+        ABSL_RETURN_IF_ERROR(self->GetStatus());
+
         return self;
-      });
+      },
+      {.stack_size = 512});
 }
 
 absl::Status Action::Cancel() {
@@ -900,7 +898,7 @@ absl::Status Action::Cancel() {
       completion_status_ = CancelledStatus();
       promise = done_promise_;
     }
-    (void)promise->SetValue(a11::Unit{});
+    promise->SetValue(a11::Unit{}).IgnoreError();
   }
   return first;
 }
@@ -961,26 +959,18 @@ absl::Status Action::Begin(Mode mode) {
 absl::Status Action::RemapDefaultPorts() {
   input_ids_.clear();
   output_ids_.clear();
-  for (const auto& [name, unused] : schema_.inputs) {
-    (void)unused;
-    absl::StatusOr<std::string> id = MakeNodeId(id_, name);
-    if (!id.ok())
-      return id.status();
-    input_ids_.emplace(name, std::move(*id));
+  for (const auto& name : schema_.inputs | std::views::keys) {
+    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
+    input_ids_.emplace(name, std::move(id));
   }
-  for (const auto& [name, unused] : schema_.outputs) {
-    (void)unused;
-    absl::StatusOr<std::string> id = MakeNodeId(id_, name);
-    if (!id.ok())
-      return id.status();
-    output_ids_.emplace(name, std::move(*id));
+  for (const auto& name : schema_.outputs | std::views::keys) {
+    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
+    output_ids_.emplace(name, std::move(id));
   }
   for (const std::string_view name :
        {kActionStatusOutput, kActionDispatchStatusOutput}) {
-    absl::StatusOr<std::string> id = MakeNodeId(id_, name);
-    if (!id.ok())
-      return id.status();
-    output_ids_.emplace(std::string(name), std::move(*id));
+    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
+    output_ids_.emplace(std::string(name), std::move(id));
   }
   return absl::OkStatus();
 }
@@ -1010,9 +1000,7 @@ absl::Status Action::ValidateMessagePorts(
     std::string_view kind) const {
   absl::flat_hash_set<std::string> seen;
   for (const data::Port& port : ports) {
-    absl::Status status = port.Validate();
-    if (!status.ok())
-      return status;
+    ABSL_RETURN_IF_ERROR(port.Validate());
     if (schema_ports.find(port.name) == schema_ports.end()) {
       return absl::FailedPreconditionError(
           absl::StrCat("Unknown Action ", kind, " port '", port.name, "'"));
@@ -1046,13 +1034,13 @@ void Action::RunHandler(std::shared_ptr<ActionLimiter> limiter) {
       status = absl::FailedPreconditionError("Action handler has not been set");
     } else {
       try {
-        a11::Task handler_task = handler(shared_from_this());
+        const a11::Task handler_task = handler(shared_from_this());
         status = handler_task.Await().status();
         if (thread::Cancelled()) {
           // Await cancellation stops this fiber, but the awaited future may be
           // backed by an asyncio Task on another thread. Propagate explicitly
           // so Python handlers run their cancellation/finally cleanup too.
-          (void)handler_task.Cancel();
+          handler_task.Cancel().IgnoreError();
           status = CancelledStatus();
         }
       } catch (const std::exception& error) {
@@ -1078,7 +1066,7 @@ void Action::StartFinish(absl::Status status) {
   }
   std::shared_ptr<Action> self = shared_from_this();
   a11::Schedule([self, status = std::move(status)]() mutable {
-    (void)self->FinishRun(std::move(status));
+    self->FinishRun(std::move(status)).IgnoreError();
   });
 }
 
@@ -1091,28 +1079,28 @@ absl::Status Action::FinishRun(absl::Status status) {
       children.assign(children_.begin(), children_.end());
     }
     for (const auto& child : children) {
-      (void)child->AbortInputs(final_status);
+      child->AbortInputs(final_status).IgnoreError();
       if (final_status.code() == absl::StatusCode::kCancelled) {
-        (void)child->Cancel();
+        child->Cancel().IgnoreError();
       }
     }
     if (final_status.code() == absl::StatusCode::kCancelled) {
-      (void)AbortInputs(final_status);
+      AbortInputs(final_status).IgnoreError();
     }
   }
 
-  absl::Status output_error = FinishOutputNodes(final_status);
-  if (final_status.ok() && !output_error.ok()) {
+  if (const absl::Status output_error = FinishOutputNodes(final_status);
+      final_status.ok() && !output_error.ok()) {
     final_status = output_error;
-    (void)FinishOutputNodes(final_status);
+    FinishOutputNodes(final_status).IgnoreError();
   }
-  absl::Status communicate_error = CommunicateStatus(final_status);
-  if (final_status.ok() && !communicate_error.ok()) {
+  if (const absl::Status communicate_error = CommunicateStatus(final_status);
+      final_status.ok() && !communicate_error.ok()) {
     final_status = communicate_error;
-    (void)FinishOutputNodes(final_status);
-    (void)CommunicateStatus(final_status);
+    FinishOutputNodes(final_status).IgnoreError();
+    CommunicateStatus(final_status).IgnoreError();
   }
-  (void)ReleaseNodesAfterRun();
+  ReleaseNodesAfterRun().IgnoreError();
 
   std::shared_ptr<a11::Promise<a11::Unit>> promise;
   std::shared_ptr<Action> parent;
@@ -1122,7 +1110,7 @@ absl::Status Action::FinishRun(absl::Status status) {
     promise = done_promise_;
     parent = parent_.lock();
   }
-  (void)promise->SetValue(a11::Unit{});
+  promise->SetValue(a11::Unit{}).IgnoreError();
   if (parent != nullptr) {
     thread::MutexLock lock(&parent->mu_);
     parent->children_.erase(shared_from_this());
@@ -1164,8 +1152,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   if (!status.ok()) {
     KeepFirstError(SendNodeAbortStatuses(ids, status), &first);
   }
-  for (const auto& [unused, node] : nodes) {
-    (void)unused;
+  for (const auto& node : nodes | std::views::values) {
     absl::StatusOr<bool> writable = node->IsWritable().Await();
     if (!writable.ok()) {
       KeepFirstError(writable.status(), &first);
@@ -1236,8 +1223,7 @@ absl::Status Action::AbortInputs(const absl::Status& status) {
   {
     thread::MutexLock lock(&mu_);
     node_map = node_map_;
-    for (const auto& [unused, id] : input_ids_) {
-      (void)unused;
+    for (const auto& id : input_ids_ | std::views::values) {
       ids.insert(id);
     }
     nodes = input_nodes_;
@@ -1269,9 +1255,10 @@ absl::Status Action::AbortInputs(const absl::Status& status) {
 absl::Status Action::SendNodeAbortStatuses(
     const absl::flat_hash_set<std::string>& node_ids,
     const absl::Status& status) {
-  std::shared_ptr<net::WireStream> stream = GetStream();
+  const std::shared_ptr<net::WireStream> stream = GetStream();
   if (stream == nullptr || node_ids.empty())
     return absl::OkStatus();
+
   absl::StatusOr<data::Chunk> chunk = StatusToChunk(status);
   if (!chunk.ok())
     return chunk.status();
@@ -1281,6 +1268,7 @@ absl::Status Action::SendNodeAbortStatuses(
     message.node_fragments.push_back(data::NodeFragment{
         .id = id, .data = *chunk, .seq = 0, .continued = false});
   }
+
   return stream->Send(std::move(message));
 }
 
@@ -1296,12 +1284,10 @@ absl::Status Action::ReleaseNodesAfterRun() {
     node_map = node_map_;
     clear_inputs = settings_.clear_inputs_after_run;
     clear_outputs = settings_.clear_outputs_after_run;
-    for (const auto& [unused, id] : input_ids_) {
-      (void)unused;
+    for (const auto& id : input_ids_ | std::views::values) {
       inputs.push_back(id);
     }
-    for (const auto& [unused, id] : output_ids_) {
-      (void)unused;
+    for (const auto& id : output_ids_ | std::views::values) {
       outputs.push_back(id);
     }
     input_nodes_.clear();
@@ -1374,8 +1360,8 @@ void Action::CompleteCall(absl::Status status, bool remove_from_session) {
     }
   }
   if (completed) {
-    (void)DetachBoundStreamNodes();
-    (void)promise->SetValue(a11::Unit{});
+    DetachBoundStreamNodes().IgnoreError();
+    promise->SetValue(a11::Unit{}).IgnoreError();
   }
   if (remove_from_session)
     UntrackFromSession();
@@ -1401,7 +1387,7 @@ void Action::AbortLocalCallOutputs(absl::Status status) {
       continue;
     absl::StatusOr<bool> writable = (*node)->IsWritable().Await();
     if (writable.ok() && *writable) {
-      (void)(*node)->AbortWithStatus(status).Await();
+      (*node)->AbortWithStatus(std::move(status)).Await().IgnoreError();
     }
   }
 }
@@ -1448,7 +1434,7 @@ void Action::SetDispatchStatus(absl::Status status) {
     dispatch_status_ = std::move(status);
     promise = dispatch_promise_;
   }
-  (void)promise->SetValue(a11::Unit{});
+  promise->SetValue(a11::Unit{}).IgnoreError();
 }
 
 void Action::SetCompletionStatus(absl::Status status) {
@@ -1472,7 +1458,7 @@ void Action::SetCompletionStatus(absl::Status status) {
     }
   }
   if (dispatch != nullptr)
-    (void)dispatch->SetValue(a11::Unit{});
+    dispatch->SetValue(a11::Unit{}).IgnoreError();
   if (late_after_cancellation) {
     UntrackFromSession();
   } else if (should_complete) {

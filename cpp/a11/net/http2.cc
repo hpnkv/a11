@@ -357,12 +357,12 @@ std::vector<std::pair<std::string, std::string>> RequestHeaders(
 }
 
 std::vector<std::pair<std::string, std::string>> ResponseHeaders(
-    int status, const HttpHeaders& headers) {
+    int status, HttpHeaders headers) {
   std::vector<std::pair<std::string, std::string>> values;
   values.reserve(headers.size() + 1);
   values.emplace_back(":status", std::to_string(status));
-  for (const auto& header : headers)
-    values.push_back(header);
+  for (auto& header : headers)
+    values.push_back(std::move(header));
   return values;
 }
 
@@ -1431,7 +1431,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       stream->response->stream_id = stream_id;
       stream->response->cancel =
           [weak, stream_id](absl::Status status) -> absl::Status {
-        std::shared_ptr<Http2Connection> self = weak.lock();
+        const std::shared_ptr<Http2Connection> self = weak.lock();
         if (self == nullptr)
           return absl::OkStatus();
         return self->CancelRequest(stream_id, std::move(status));
@@ -1456,12 +1456,15 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       std::weak_ptr<Http2ResponseStream> response_weak = response;
       const absl::Time deadline = options_.deadline;
       a11::Schedule([done = std::move(done), response_weak, deadline]() {
-        absl::Status completion = done.Await(deadline).status();
-        if (absl::IsDeadlineExceeded(completion)) {
-          if (std::shared_ptr<Http2ResponseStream> stream =
+        if (const absl::Status completion_status =
+                done.Await(deadline).status();
+            absl::IsDeadlineExceeded(completion_status)) {
+          if (const std::shared_ptr<Http2ResponseStream> stream =
                   response_weak.lock()) {
-            (void)stream->Cancel(absl::DeadlineExceededError(
-                "HTTP/2 request exceeded its deadline"));
+            stream
+                ->Cancel(absl::DeadlineExceededError(
+                    "HTTP/2 request exceeded its deadline"))
+                .IgnoreError();
           }
         }
       });
@@ -1552,12 +1555,15 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       std::weak_ptr<Http2ResponseStream> response_weak = response;
       const absl::Time deadline = options_.deadline;
       a11::Schedule([done = std::move(done), response_weak, deadline]() {
-        if (const absl::Status completion = done.Await(deadline).status();
-            absl::IsDeadlineExceeded(completion)) {
+        if (const absl::Status completion_status =
+                done.Await(deadline).status();
+            absl::IsDeadlineExceeded(completion_status)) {
           if (const std::shared_ptr<Http2ResponseStream> active =
                   response_weak.lock()) {
-            (void)active->Cancel(absl::DeadlineExceededError(
-                "HTTP/2 extended CONNECT exceeded its deadline"));
+            active
+                ->Cancel(absl::DeadlineExceededError(
+                    "HTTP/2 extended CONNECT exceeded its deadline"))
+                .IgnoreError();
           }
         }
       });
@@ -1583,7 +1589,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       return absl::FailedPreconditionError(
           "HTTP/2 response headers have already been sent");
     }
-    auto values = ResponseHeaders(status, headers);
+    auto values = ResponseHeaders(status, std::move(headers));
     auto fields = MakeNv(values);
     nghttp2_data_provider provider{};
     provider.source.ptr = stream;

@@ -479,56 +479,59 @@ a11::Task Session::AwaitAllActions(absl::Duration timeout) {
         absl::InvalidArgumentError("timeout must not be negative"));
   }
   std::shared_ptr<Session> self = shared_from_this();
-  return a11::SubmitTask([self = std::move(self), timeout]() -> absl::Status {
-    const absl::Time deadline = timeout == absl::InfiniteDuration()
-                                    ? absl::InfiniteFuture()
-                                    : absl::Now() + timeout;
-    absl::flat_hash_set<actions::Action*> observed;
-    std::vector<absl::Status> failures;
-    while (true) {
-      std::vector<std::shared_ptr<actions::Action>> pending;
-      {
-        thread::MutexLock lock(&self->state_->mu);
-        for (const auto& [unused, action] : self->state_->actions) {
-          (void)unused;
-          if (observed.find(action.get()) == observed.end())
-            pending.push_back(action);
-        }
-      }
-      if (pending.empty())
-        break;
-      for (const auto& action : pending) {
-        observed.insert(action.get());
-        const absl::Duration remaining =
-            deadline == absl::InfiniteFuture()
-                ? absl::InfiniteDuration()
-                : std::max(absl::ZeroDuration(), deadline - absl::Now());
-        absl::Status result = action->Wait(remaining).Await().status();
-        if (!result.ok()) {
-          if (result.code() == absl::StatusCode::kDeadlineExceeded &&
-              !action->IsDone()) {
-            return result;
+  return a11::SubmitTask(
+      [self = std::move(self), timeout]() -> absl::Status {
+        const absl::Time deadline = timeout == absl::InfiniteDuration()
+                                        ? absl::InfiniteFuture()
+                                        : absl::Now() + timeout;
+        absl::flat_hash_set<actions::Action*> observed;
+        std::vector<absl::Status> failures;
+        while (true) {
+          std::vector<std::shared_ptr<actions::Action>> pending;
+          {
+            thread::MutexLock lock(&self->state_->mu);
+            for (const auto& [unused, action] : self->state_->actions) {
+              (void)unused;
+              if (observed.find(action.get()) == observed.end())
+                pending.push_back(action);
+            }
           }
-          failures.push_back(result);
+          if (pending.empty())
+            break;
+          for (const auto& action : pending) {
+            observed.insert(action.get());
+            const absl::Duration remaining =
+                deadline == absl::InfiniteFuture()
+                    ? absl::InfiniteDuration()
+                    : std::max(absl::ZeroDuration(), deadline - absl::Now());
+            if (absl::Status result = action->Wait(remaining).Await().status();
+                !result.ok()) {
+              if (result.code() == absl::StatusCode::kDeadlineExceeded &&
+                  !action->IsDone()) {
+                return result;
+              }
+              failures.push_back(result);
+            }
+          }
         }
-      }
-    }
-    if (failures.empty())
-      return absl::OkStatus();
-    absl::StatusCode code = failures.front().code();
-    for (const absl::Status& failure : failures) {
-      if (failure.code() != code) {
-        code = absl::StatusCode::kUnknown;
-        break;
-      }
-    }
-    nlohmann::json details = nlohmann::json::array();
-    for (const absl::Status& failure : failures)
-      details.push_back({{"status", StatusJson(failure)}});
-    return MakeStatus(
-        code, absl::StrCat(failures.size(), " Actions completed with errors."),
-        std::move(details));
-  });
+        if (failures.empty())
+          return absl::OkStatus();
+        absl::StatusCode code = failures.front().code();
+        for (const absl::Status& failure : failures) {
+          if (failure.code() != code) {
+            code = absl::StatusCode::kUnknown;
+            break;
+          }
+        }
+        nlohmann::json details = nlohmann::json::array();
+        for (const absl::Status& failure : failures)
+          details.push_back({{"status", StatusJson(failure)}});
+        return MakeStatus(
+            code,
+            absl::StrCat(failures.size(), " Actions completed with errors."),
+            std::move(details));
+      },
+      {.stack_size = 2048});
 }
 
 absl::Status Session::TrackAction(
@@ -651,113 +654,113 @@ a11::Task Session::DispatchActionMessage(
   if (!validation.ok())
     return a11::FailedTask(validation);
   std::shared_ptr<Session> self = shared_from_this();
-  return a11::SubmitTask([self = std::move(self), message = std::move(message),
-                          origin_stream = std::move(
-                              origin_stream)]() mutable -> absl::Status {
-    if (message.name == actions::kCancelActionName) {
-      std::optional<std::string> action_id;
-      for (const auto& [name, value] : message.headers) {
-        if (absl::AsciiStrToLower(name) == actions::kCancelActionHeader) {
-          action_id = value;
-          break;
+  return a11::SubmitTask(
+      [self = std::move(self), message = std::move(message),
+       origin_stream = std::move(origin_stream)]() mutable -> absl::Status {
+        if (message.name == actions::kCancelActionName) {
+          std::optional<std::string> action_id;
+          for (const auto& [name, value] : message.headers) {
+            if (absl::AsciiStrToLower(name) == actions::kCancelActionHeader) {
+              action_id = value;
+              break;
+            }
+          }
+          if (!action_id.has_value()) {
+            return absl::InvalidArgumentError(
+                "Cancel Action requires the __action header");
+          }
+          absl::Status valid_id = data::ValidateName(*action_id);
+          if (!valid_id.ok())
+            return valid_id;
+          absl::StatusOr<std::shared_ptr<actions::Action>> action =
+              self->GetAction(*action_id);
+          if (action.ok())
+            return (*action)->Cancel();
+          if (action.status().code() == absl::StatusCode::kNotFound) {
+            return absl::OkStatus();
+          }
+          return action.status();
         }
-      }
-      if (!action_id.has_value()) {
-        return absl::InvalidArgumentError(
-            "Cancel Action requires the __action header");
-      }
-      absl::Status valid_id = data::ValidateName(*action_id);
-      if (!valid_id.ok())
-        return valid_id;
-      absl::StatusOr<std::shared_ptr<actions::Action>> action =
-          self->GetAction(*action_id);
-      if (action.ok())
-        return (*action)->Cancel();
-      if (action.status().code() == absl::StatusCode::kNotFound) {
-        return absl::OkStatus();
-      }
-      return action.status();
-    }
 
-    absl::Status dispatch_status;
-    std::shared_ptr<actions::ActionRegistry> registry;
-    {
-      thread::MutexLock lock(&self->state_->mu);
-      if (self->state_->phase != Phase::kOpen || self->state_->remote_closed) {
-        dispatch_status = absl::FailedPreconditionError(
-            "Session is no longer accepting Actions");
-      } else if (self->state_->actions.find(message.id) !=
-                 self->state_->actions.end()) {
-        dispatch_status =
-            absl::AlreadyExistsError("Action already exists in the Session");
-      } else {
-        registry = self->state_->action_registry;
-        if (registry == nullptr) {
-          dispatch_status =
-              absl::FailedPreconditionError("Session has no ActionRegistry");
-        }
-      }
-    }
-    if (dispatch_status.ok()) {
-      absl::StatusOr<std::shared_ptr<actions::Action>> action =
-          registry->MakeAction(message.name, message.id, self->GetNodeMap(),
-                               origin_stream, self);
-      if (!action.ok()) {
-        dispatch_status = action.status();
-      } else {
-        dispatch_status = (*action)->MapPortsFromMessage(message);
-        for (const auto& [name, value] : message.headers) {
-          if (!dispatch_status.ok())
-            break;
-          dispatch_status = (*action)->SetHeader(name, value);
+        absl::Status dispatch_status;
+        std::shared_ptr<actions::ActionRegistry> registry;
+        {
+          thread::MutexLock lock(&self->state_->mu);
+          if (self->state_->phase != Phase::kOpen ||
+              self->state_->remote_closed) {
+            dispatch_status = absl::FailedPreconditionError(
+                "Session is no longer accepting Actions");
+          } else if (self->state_->actions.find(message.id) !=
+                     self->state_->actions.end()) {
+            dispatch_status = absl::AlreadyExistsError(
+                "Action already exists in the Session");
+          } else {
+            registry = self->state_->action_registry;
+            if (registry == nullptr) {
+              dispatch_status = absl::FailedPreconditionError(
+                  "Session has no ActionRegistry");
+            }
+          }
         }
         if (dispatch_status.ok()) {
-          (void)(*action)->ClearInputsAfterRun();
-          (void)(*action)->ClearOutputsAfterRun();
-          absl::StatusOr<std::shared_ptr<actions::Action>> started =
-              (*action)->Run();
-          dispatch_status = started.status();
+          absl::StatusOr<std::shared_ptr<actions::Action>> action =
+              registry->MakeAction(message.name, message.id, self->GetNodeMap(),
+                                   origin_stream, self);
+          if (!action.ok()) {
+            dispatch_status = action.status();
+          } else {
+            dispatch_status = (*action)->MapPortsFromMessage(message);
+            for (const auto& [name, value] : message.headers) {
+              if (!dispatch_status.ok())
+                break;
+              dispatch_status = (*action)->SetHeader(name, value);
+            }
+            if (dispatch_status.ok()) {
+              (void)(*action)->ClearInputsAfterRun();
+              (void)(*action)->ClearOutputsAfterRun();
+              absl::StatusOr<std::shared_ptr<actions::Action>> started =
+                  (*action)->Run();
+              dispatch_status = started.status();
+            }
+          }
         }
-      }
-    }
 
-    if (origin_stream != nullptr) {
-      absl::StatusOr<data::Chunk> chunk =
-          actions::StatusToChunk(dispatch_status);
-      if (!chunk.ok())
-        return chunk.status();
-      absl::StatusOr<std::string> dispatch_id = actions::Action::MakeNodeId(
-          message.id, actions::kActionDispatchStatusOutput);
-      if (!dispatch_id.ok())
-        return dispatch_id.status();
-      data::WireMessage report;
-      report.node_fragments.push_back(data::NodeFragment{
-          .id = *dispatch_id,
-          .data = *chunk,
-          .seq = 0,
-          .continued = false,
-      });
-      if (!dispatch_status.ok()) {
-        absl::StatusOr<std::string> status_id = actions::Action::MakeNodeId(
-            message.id, actions::kActionStatusOutput);
-        if (!status_id.ok())
-          return status_id.status();
-        report.node_fragments.push_back(data::NodeFragment{
-            .id = *status_id,
-            .data = *chunk,
-            .seq = 0,
-            .continued = false,
-        });
-      }
-      absl::Status sent = origin_stream->Send(std::move(report));
-      if (!sent.ok())
-        return sent;
-      // A successfully reported dispatch failure is local to the Action,
-      // not a reason to abort its shared stream.
-      return absl::OkStatus();
-    }
-    return dispatch_status;
-  });
+        if (origin_stream != nullptr) {
+          absl::StatusOr<data::Chunk> chunk =
+              actions::StatusToChunk(dispatch_status);
+          if (!chunk.ok())
+            return chunk.status();
+          absl::StatusOr<std::string> dispatch_id = actions::Action::MakeNodeId(
+              message.id, actions::kActionDispatchStatusOutput);
+          if (!dispatch_id.ok())
+            return dispatch_id.status();
+          data::WireMessage report;
+          report.node_fragments.push_back(data::NodeFragment{
+              .id = *dispatch_id,
+              .data = *chunk,
+              .seq = 0,
+              .continued = false,
+          });
+          if (!dispatch_status.ok()) {
+            absl::StatusOr<std::string> status_id = actions::Action::MakeNodeId(
+                message.id, actions::kActionStatusOutput);
+            if (!status_id.ok())
+              return status_id.status();
+            report.node_fragments.push_back(data::NodeFragment{
+                .id = *status_id,
+                .data = *chunk,
+                .seq = 0,
+                .continued = false,
+            });
+          }
+          ABSL_RETURN_IF_ERROR(origin_stream->Send(std::move(report)));
+          // A successfully reported dispatch failure is local to the Action,
+          // not a reason to abort its shared stream.
+          return absl::OkStatus();
+        }
+        return dispatch_status;
+      },
+      {.stack_size = 2048});
 }
 
 a11::Task Session::DispatchAction(std::shared_ptr<actions::Action> action) {
@@ -765,23 +768,28 @@ a11::Task Session::DispatchAction(std::shared_ptr<actions::Action> action) {
     return a11::FailedTask(
         absl::InvalidArgumentError("action must not be null"));
   }
-  if (action->GetNodeMap() == nullptr)
-    (void)action->BindNodeMap(GetNodeMap());
-  if (action->GetRegistry() == nullptr) {
-    (void)action->BindRegistry(GetActionRegistry());
+  if (action->GetNodeMap() == nullptr) {
+    action->BindNodeMap(GetNodeMap()).IgnoreError();
   }
-  absl::Status status = action->BindSession(shared_from_this());
-  if (!status.ok())
-    return a11::FailedTask(status);
-  absl::StatusOr<std::shared_ptr<actions::Action>> started = action->Run();
+  if (action->GetRegistry() == nullptr) {
+    action->BindRegistry(GetActionRegistry()).IgnoreError();
+  }
+  if (absl::Status status = action->BindSession(shared_from_this());
+      !status.ok()) {
+    return a11::FailedTask(std::move(status));
+  }
+  const absl::StatusOr<std::shared_ptr<actions::Action>> started =
+      action->Run();
   return started.ok() ? a11::ReadyTask() : a11::FailedTask(started.status());
 }
 
 a11::Task Session::DispatchWireMessage(
     data::WireMessage message, std::shared_ptr<net::WireStream> origin_stream) {
-  absl::Status validation = message.Validate();
-  if (!validation.ok())
-    return a11::FailedTask(validation);
+  if (const absl::Status validation_status = message.Validate();
+      !validation_status.ok()) {
+    return a11::FailedTask(validation_status);
+  }
+
   std::shared_ptr<Session> self = shared_from_this();
   return a11::SubmitTask(
       [self = std::move(self), message = std::move(message),
@@ -834,7 +842,8 @@ a11::Task Session::DispatchWireMessage(
                          message.node_fragments.size() + message.actions.size(),
                          " WireMessage elements"),
             std::move(details));
-      });
+      },
+      {.stack_size = 2048});
 }
 
 bool Session::IsClosed() const {
@@ -1081,10 +1090,12 @@ a11::Task Session::HandleStreamMessage(
     }
     if (start_pump) {
       std::function<void()> cancel = a11::ScheduleCancelable(
-          [self, stream_state] { self->ProcessStreamMessages(stream_state); });
+          [self, stream_state] { self->ProcessStreamMessages(stream_state); },
+          {.stack_size = 2048});
       thread::MutexLock lock(&self->state_->mu);
-      if (stream_state->message_pump_running)
+      if (stream_state->message_pump_running) {
         stream_state->message_pump_cancel = std::move(cancel);
+      }
     }
     // Transport backpressure covers bounded admission. User callbacks run in
     // the per-stream pump so one slow callback does not hold the transport's

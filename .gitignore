@@ -1,0 +1,9 @@
+.claude
+.idea
+.junie
+.venv
+
+build/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-relwithdebinfo/

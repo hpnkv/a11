@@ -268,7 +268,8 @@ a11::Future<std::optional<data::WireMessage>> WireStreamWithRecv::Receive(
       [state = std::move(state), cancellation]() {
         thread::MutexLock lock(&state->mu);
         cancellation->requested = true;
-      });
+      },
+      {.stack_size = 256});
 }
 
 a11::Task WireStreamWithRecv::HandleMessage(
@@ -282,12 +283,15 @@ a11::Task WireStreamWithRecv::HandleMessage(
           std::shared_ptr<thread::PermanentEvent> notify;
           {
             thread::MutexLock lock(&self->state_->mu);
-            if (self->state_->error.has_value())
+            if (self->state_->error.has_value()) {
               return absl::OkStatus();
+            }
+
             if (self->state_->remote_half_closed) {
               return absl::InternalError(
                   "WireStream delivered data after remote half-close");
             }
+
             if (self->state_->queue.empty()) {
               if (!message.has_value()) {
                 self->state_->remote_half_closed = true;
@@ -300,10 +304,12 @@ a11::Task WireStreamWithRecv::HandleMessage(
               changed = self->state_->changed;
             }
           }
+
           if (notify) {
             notify->Notify();
             break;
           }
+
           const int selected =
               thread::Select({thread::OnCancel(), changed->OnEvent()});
           if (selected == 0) {
@@ -311,6 +317,7 @@ a11::Task WireStreamWithRecv::HandleMessage(
                 "WireStream receive callback was cancelled");
           }
         }
+
         if (!observer)
           return absl::OkStatus();
         try {
@@ -320,7 +327,8 @@ a11::Task WireStreamWithRecv::HandleMessage(
         } catch (...) {
           return absl::UnknownError("on_message raised an exception");
         }
-      });
+      },
+      {.stack_size = 256});
 }
 
 a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
@@ -341,6 +349,7 @@ a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
                                  std::make_shared<thread::PermanentEvent>());
         }
         notify->Notify();
+
         if (!observer)
           return absl::OkStatus();
         try {
@@ -350,13 +359,14 @@ a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
         } catch (...) {
           return absl::UnknownError("on_done raised an exception");
         }
-      });
+      },
+      {.stack_size = 256});
 }
 
 void WireStreamWithRecv::RecordCurrentStatus() const {
-  const absl::Status status = GetStatus();
-  if (!status.ok())
-    SignalError(status);
+  if (absl::Status status = GetStatus(); !status.ok()) {
+    SignalError(std::move(status));
+  }
 }
 
 void WireStreamWithRecv::SignalError(absl::Status status) const {

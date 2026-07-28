@@ -33,9 +33,11 @@ void CompleteTask(const std::shared_ptr<a11::Promise<a11::Unit>>& promise,
   if (promise == nullptr) {
     return;
   }
-  const absl::Status ignored =
-      status.ok() ? promise->SetValue(a11::Unit{}) : promise->SetStatus(status);
-  (void)ignored;
+  if (status.ok()) {
+    promise->SetValue(a11::Unit{}).IgnoreError();
+  } else {
+    promise->SetStatus(status).IgnoreError();
+  }
 }
 
 }  // namespace
@@ -486,8 +488,7 @@ struct ChunkStoreWriter::State
       const absl::Status mismatch = absl::InternalError(
           "Writer completion has the wrong number of sequences");
       for (Element& element : elements) {
-        const absl::Status ignored = element.result.SetStatus(mismatch);
-        (void)ignored;
+        element.result.SetStatus(mismatch).IgnoreError();
       }
       return;
     }
@@ -495,10 +496,11 @@ struct ChunkStoreWriter::State
       if (!status.ok()) {
         CompleteTask(elements[index].admission, status);
       }
-      const absl::Status ignored =
-          status.ok() ? elements[index].result.SetValue(sequences[index])
-                      : elements[index].result.SetStatus(status);
-      (void)ignored;
+      if (status.ok()) {
+        elements[index].result.SetValue(sequences[index]).IgnoreError();
+      } else {
+        elements[index].result.SetStatus(status).IgnoreError();
+      }
     }
   }
 
@@ -580,11 +582,12 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
         .confirmation = a11::FailedFuture<std::uint32_t>(status),
     };
   };
-  absl::Status validation = chunk.Validate();
-  if (!validation.ok()) {
+
+  if (const absl::Status validation = chunk.Validate(); !validation.ok()) {
     return failed_write(validation);
   }
-  auto admission = std::make_shared<a11::Promise<a11::Unit>>();
+
+  const auto admission = std::make_shared<a11::Promise<a11::Unit>>();
   a11::Task admitted = admission->future();
   a11::Promise<std::uint32_t> promise;
   a11::Future<std::uint32_t> confirmation = promise.future();
@@ -748,14 +751,14 @@ a11::Task ChunkStoreWriter::AbortWithStatus(absl::Status status) {
     active = state_->active_write;
   }
   if (active.valid()) {
-    (void)active.Cancel();
+    active.Cancel().IgnoreError();
   }
   state_->Wake();
   return lifecycle;
 }
 
 a11::Task ChunkStoreWriter::WaitForBufferToDrain() {
-  auto promise = std::make_shared<a11::Promise<a11::Unit>>();
+  const auto promise = std::make_shared<a11::Promise<a11::Unit>>();
   a11::Task future = promise->future();
   std::optional<absl::Status> immediate;
   {

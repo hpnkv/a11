@@ -25,7 +25,7 @@ absl::Status ValidateName(std::string_view name);
 struct ChunkMetadata {
   std::string mimetype;
   std::optional<absl::Time> timestamp;
-  ByteMap attributes;
+  ByteMap attributes{};
 
   [[nodiscard]] size_t ApproxBytes() const;
   [[nodiscard]] std::string DebugString() const;
@@ -136,9 +136,9 @@ struct Port {
 struct ActionMessage {
   std::string id;
   std::string name;
-  std::vector<Port> inputs;
-  std::vector<Port> outputs;
-  ByteMap headers;
+  std::vector<Port> inputs{};
+  std::vector<Port> outputs{};
+  ByteMap headers{};
 
   [[nodiscard]] size_t ApproxBytes() const;
   [[nodiscard]] std::string DebugString() const;
@@ -158,9 +158,9 @@ struct ActionMessage {
 struct WireMessage {
   static constexpr std::uint32_t kVersion = 1;
 
-  std::vector<NodeFragment> node_fragments;
-  std::vector<ActionMessage> actions;
-  ByteMap headers;
+  std::vector<NodeFragment> node_fragments{};
+  std::vector<ActionMessage> actions{};
+  ByteMap headers{};
 
   [[nodiscard]] size_t ApproxBytes() const;
   [[nodiscard]] std::string DebugString() const;

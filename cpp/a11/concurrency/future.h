@@ -66,6 +66,16 @@ void InvokeFutureCallback(
 }  // namespace internal
 
 template <typename T>
+Future<T> SubmitWithCancellationHook(
+    absl::AnyInvocable<absl::StatusOr<T>() &&> work,
+    std::function<void()> cancellation_hook,
+    thread::TreeOptions tree_options = {});
+
+template <typename T>
+Future<T> Submit(absl::AnyInvocable<absl::StatusOr<T>() &&> work,
+                 thread::TreeOptions tree_options = {});
+
+template <typename T>
 class Future {
  public:
   Future() = default;
@@ -92,10 +102,12 @@ class Future {
       }
       cancel = state_->cancel;
     }
+
     if (cancel == nullptr) {
       return absl::UnimplementedError(
           "This Future does not have a cancellation source");
     }
+
     try {
       cancel();
       return absl::OkStatus();
@@ -191,11 +203,13 @@ class Future {
 
   friend class Promise<T>;
   template <typename U>
-  friend Future<U> Submit(absl::AnyInvocable<absl::StatusOr<U>() &&> work);
+  friend Future<U> Submit(absl::AnyInvocable<absl::StatusOr<U>() &&> work,
+                          thread::TreeOptions tree_options);
   template <typename U>
   friend Future<U> SubmitWithCancellationHook(
       absl::AnyInvocable<absl::StatusOr<U>() &&> work,
-      std::function<void()> cancellation_hook);
+      std::function<void()> cancellation_hook,
+      thread::TreeOptions tree_options);
 };
 
 template <typename T>
@@ -297,8 +311,7 @@ template <typename T>
 Future<T> ReadyFuture(T value) {
   Promise<T> promise;
   Future<T> future = promise.future();
-  const absl::Status status = promise.SetValue(std::move(value));
-  (void)status;
+  promise.SetResult(std::move(value)).IgnoreError();
   return future;
 }
 
@@ -306,8 +319,7 @@ template <typename T>
 Future<T> CompletedFuture(absl::StatusOr<T> result) {
   Promise<T> promise;
   Future<T> future = promise.future();
-  const absl::Status status = promise.SetResult(std::move(result));
-  (void)status;
+  promise.SetResult(std::move(result)).IgnoreError();
   return future;
 }
 
@@ -315,8 +327,7 @@ template <typename T>
 Future<T> FailedFuture(absl::Status status) {
   Promise<T> promise;
   Future<T> future = promise.future();
-  const absl::Status completion = promise.SetStatus(std::move(status));
-  (void)completion;
+  promise.SetStatus(std::move(status)).IgnoreError();
   return future;
 }
 

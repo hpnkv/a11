@@ -15,6 +15,8 @@
 #include "thread/thread_pool.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -39,6 +41,7 @@
 #include <absl/time/time.h>
 #include <boost/context/detail/prefetch.hpp>
 #include <boost/context/fixedsize_stack.hpp>
+#include <boost/context/segmented_stack.hpp>  // IWYU pragma: keep
 #include <boost/fiber/algo/algorithm.hpp>
 #include <boost/fiber/algo/shared_work.hpp>
 #include <boost/fiber/all.hpp>
@@ -51,6 +54,26 @@
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
 #include "thread/fiber.h"
+
+#if !defined(BOOST_USE_SEGMENTED_STACKS)
+namespace boost::context {
+class segmented_stack {
+ public:
+  explicit segmented_stack(size_t) {}
+
+  stack_context allocate() {
+    LOG(FATAL) << "Segmented stacks are not supported.";
+    ABSL_ASSUME(false);
+    return {};
+  }
+
+  void deallocate(boost::context::stack_context&) BOOST_NOEXCEPT_OR_NOTHROW {
+    LOG(FATAL) << "Segmented stacks are not supported.";
+    ABSL_ASSUME(false);
+  }
+};
+}  // namespace boost::context
+#endif
 
 namespace thread {
 
@@ -77,6 +100,183 @@ void Fiber::DestroyBoostState() {
 }
 
 namespace {
+
+#if !defined(BOOST_USE_SEGMENTED_STACKS)
+boost::context::segmented_stack SegmentedAllocator(size_t) {
+  LOG(FATAL) << "Segmented stacks are not supported. You need to compile Boost "
+                "with BOOST_USE_SEGMENTED_STACKS.";
+  ABSL_ASSUME(false);
+}
+#else
+boost::context::segmented_stack SegmentedAllocator(size_t requested_size) {
+  const size_t minimum = boost::context::stack_traits::minimum_size();
+  const size_t configured =
+      requested_size == 0 ? static_cast<size_t>(THREAD_DEFAULT_FIBER_STACK_SIZE)
+                          : requested_size;
+  return {std::max(minimum, configured)};
+}
+#endif
+
+constexpr size_t kMiB = 1024 * 1024;
+
+constexpr bool IsPowerOfTwo(size_t value) {
+  return value != 0 && (value & (value - 1)) == 0;
+}
+
+// "Included" power of two: one of 2^7 (128 B) through 2^16 (64 KiB), each
+// with its own dedicated pool.
+constexpr bool IsIncludedPowerOfTwo(size_t value) {
+  return value >= 128 && value <= 65536 && IsPowerOfTwo(value);
+}
+
+constexpr size_t kDefaultStackSize = THREAD_DEFAULT_FIBER_STACK_SIZE;
+constexpr bool kDefaultIsIncluded = IsIncludedPowerOfTwo(kDefaultStackSize);
+
+// Every included power of two gets a 4 MiB pool; whichever size matches
+// THREAD_DEFAULT_FIBER_STACK_SIZE gets 16 MiB instead, since it's the size
+// nearly every fiber requests (TreeOptions default to stack_size 0).
+template <size_t StackSize>
+constexpr size_t kPoolBudgetBytes =
+    StackSize == kDefaultStackSize ? 16 * kMiB : 4 * kMiB;
+
+template <size_t StackSize>
+constexpr size_t kPoolCapacity = kPoolBudgetBytes<StackSize> / StackSize;
+
+// Lock-free pool of stacks of exactly StackSize bytes. Each slot is an
+// independent atomic pointer rather than a linked free list, so reuse can
+// never hit the classic Treiber-stack ABA hazard.
+template <size_t StackSize, size_t Capacity>
+std::array<std::atomic<void*>, Capacity>& StackPool() {
+  static absl::NoDestructor<std::array<std::atomic<void*>, Capacity>> slots;
+  return *slots;
+}
+
+template <size_t Capacity>
+void* TryClaim(std::array<std::atomic<void*>, Capacity>& slots) {
+  for (std::atomic<void*>& slot : slots) {
+    if (void* sp = slot.exchange(nullptr, std::memory_order_acquire))
+      return sp;
+  }
+  return nullptr;
+}
+
+template <size_t Capacity>
+bool TryRelease(std::array<std::atomic<void*>, Capacity>& slots, void* sp) {
+  for (std::atomic<void*>& slot : slots) {
+    if (void* expected = nullptr;
+        slot.compare_exchange_strong(expected, sp, std::memory_order_release,
+                                     std::memory_order_relaxed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Pools exist for the 10 included powers of two plus, if it isn't already
+// one of those, THREAD_DEFAULT_FIBER_STACK_SIZE. Any other size (including a
+// non-power-of-two request) falls through to the caller's backing allocator.
+void* TryClaimFromPool(size_t stack_size) {
+  switch (stack_size) {
+    case 128:
+      return TryClaim(StackPool<128, kPoolCapacity<128>>());
+    case 256:
+      return TryClaim(StackPool<256, kPoolCapacity<256>>());
+    case 512:
+      return TryClaim(StackPool<512, kPoolCapacity<512>>());
+    case 1024:
+      return TryClaim(StackPool<1024, kPoolCapacity<1024>>());
+    case 2048:
+      return TryClaim(StackPool<2048, kPoolCapacity<2048>>());
+    case 4096:
+      return TryClaim(StackPool<4096, kPoolCapacity<4096>>());
+    case 8192:
+      return TryClaim(StackPool<8192, kPoolCapacity<8192>>());
+    case 16384:
+      return TryClaim(StackPool<16384, kPoolCapacity<16384>>());
+    case 32768:
+      return TryClaim(StackPool<32768, kPoolCapacity<32768>>());
+    case 65536:
+      return TryClaim(StackPool<65536, kPoolCapacity<65536>>());
+    default:
+      if constexpr (!kDefaultIsIncluded) {
+        if (stack_size == kDefaultStackSize) {
+          return TryClaim(
+              StackPool<kDefaultStackSize, 16 * kMiB / kDefaultStackSize>());
+        }
+      }
+      return nullptr;
+  }
+}
+
+bool TryReleaseToPool(size_t stack_size, void* sp) {
+  switch (stack_size) {
+    case 128:
+      return TryRelease(StackPool<128, kPoolCapacity<128>>(), sp);
+    case 256:
+      return TryRelease(StackPool<256, kPoolCapacity<256>>(), sp);
+    case 512:
+      return TryRelease(StackPool<512, kPoolCapacity<512>>(), sp);
+    case 1024:
+      return TryRelease(StackPool<1024, kPoolCapacity<1024>>(), sp);
+    case 2048:
+      return TryRelease(StackPool<2048, kPoolCapacity<2048>>(), sp);
+    case 4096:
+      return TryRelease(StackPool<4096, kPoolCapacity<4096>>(), sp);
+    case 8192:
+      return TryRelease(StackPool<8192, kPoolCapacity<8192>>(), sp);
+    case 16384:
+      return TryRelease(StackPool<16384, kPoolCapacity<16384>>(), sp);
+    case 32768:
+      return TryRelease(StackPool<32768, kPoolCapacity<32768>>(), sp);
+    case 65536:
+      return TryRelease(StackPool<65536, kPoolCapacity<65536>>(), sp);
+    default:
+      if constexpr (!kDefaultIsIncluded) {
+        if (stack_size == kDefaultStackSize) {
+          return TryRelease(
+              StackPool<kDefaultStackSize, 16 * kMiB / kDefaultStackSize>(),
+              sp);
+        }
+      }
+      return false;
+  }
+}
+
+class PooledFixedSizeStack {
+ public:
+  using traits_type = boost::context::stack_traits;
+
+  explicit PooledFixedSizeStack(size_t stack_size)
+      : stack_size_(stack_size), backing_(stack_size) {}
+
+  boost::context::stack_context allocate() {
+    if (void* sp = TryClaimFromPool(stack_size_)) {
+      boost::context::stack_context context;
+      context.size = stack_size_;
+      context.sp = sp;
+      return context;
+    }
+    return backing_.allocate();
+  }
+
+  void deallocate(boost::context::stack_context& context) {
+    if (TryReleaseToPool(context.size, context.sp))
+      return;
+    backing_.deallocate(context);
+  }
+
+ private:
+  size_t stack_size_;
+  boost::context::fixedsize_stack backing_;
+};
+
+PooledFixedSizeStack FixedSizeAllocator(size_t requested_size) {
+  const size_t minimum = boost::context::stack_traits::minimum_size();
+  const size_t configured =
+      requested_size == 0 ? static_cast<size_t>(THREAD_DEFAULT_FIBER_STACK_SIZE)
+                          : requested_size;
+  return PooledFixedSizeStack(std::max(minimum, configured));
+}
 
 using PoolWork = absl::AnyInvocable<void() &&>;
 
@@ -193,18 +393,7 @@ class WorkerThreadPool {
 
   static WorkerThreadPool& Instance();
 
-  // A11 fibers migrate between worker threads. pooled_fixedsize_stack copies
-  // share a boost::pool whose allocate/free operations are not thread-safe.
-  // fixedsize_stack owns no shared mutable state and safely trades an
-  // allocation per user-facing fiber for correct migration.
-  boost::context::fixedsize_stack Allocator(size_t requested_size) const {
-    const size_t minimum = boost::context::stack_traits::minimum_size();
-    const size_t configured =
-        requested_size == 0
-            ? static_cast<size_t>(THREAD_DEFAULT_FIBER_STACK_SIZE)
-            : requested_size;
-    return boost::context::fixedsize_stack(std::max(minimum, configured));
-  }
+  // boost::context::
 
  private:
   struct Worker {
@@ -375,6 +564,10 @@ void EnsureWorkerThreadPool() {
 
 void Fiber::Start() {
   EnsureWorkerThreadPool();
+  // EnsureThreadHasScheduler runs only once, so from within the worker pool,
+  // threads will keep their shared_work nature. Outside the pool, threads are
+  // initialized with round_robin to avoid participation in the pool, but be
+  // compatible with fibers.
   EnsureThreadHasScheduler<InstrumentedRoundRobin>();
 
   auto body = [this] {
@@ -390,11 +583,19 @@ void Fiber::Start() {
 
   // FiberProperties is owned and eventually destroyed by the context.
   thread::MutexLock lock(&mu_);
-  auto properties = std::make_unique<FiberProperties>(this);
-  GetBoostState()->context = boost::fibers::make_worker_context_with_properties(
-      boost::fibers::launch::post, properties.get(),
-      WorkerThreadPool::Instance().Allocator(stack_size_), std::move(body));
-  (void)properties.release();
+  const auto properties = new FiberProperties(this);  // NOLINT
+  if (tree_options_.stack_type == StackType::kFixedSize) {
+    GetBoostState()->context =
+        boost::fibers::make_worker_context_with_properties(
+            boost::fibers::launch::post, properties,
+            FixedSizeAllocator(tree_options_.stack_size), std::move(body));
+  } else {
+    GetBoostState()->context =
+        boost::fibers::make_worker_context_with_properties(
+            boost::fibers::launch::post, properties,
+            SegmentedAllocator(tree_options_.stack_size), std::move(body));
+  }
+
   WorkerThreadPool::Instance().Schedule(GetBoostState()->context);
 }
 

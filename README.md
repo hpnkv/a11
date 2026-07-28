@@ -103,8 +103,20 @@ Run tests in a **new process** after this command. The rebuild process imports
 the old extension to reach its loader, and a loaded native module cannot be
 replaced within that same process.
 
-After changing `pyproject.toml`, the CMake install layout, build options, or the
-Python interpreter, recreate the editable metadata as well:
+The hook only runs `cmake --build` and `cmake --install` against the build tree
+that `uv sync` already configured under `build/editable/<wheel-tag>`; it does
+not configure that tree. When the tree is absent — a fresh clone before the
+first `uv sync`, or after `build/` was deleted or cleaned (see the note in
+[Native C++ build](#native-c-build)) — the rebuild fails with:
+
+```
+Error: not a CMake build directory (missing CMakeCache.txt)
+```
+
+Recreating the editable build tree fixes this. The same command is also required
+after changing `pyproject.toml`, the CMake install layout, build options, or the
+Python interpreter, since each invalidates the configured tree or the editable
+metadata:
 
 ```sh
 uv sync --locked --group dev --reinstall-package a11
@@ -136,6 +148,13 @@ explicit rebuild above installs the current C++ output there.
 Use a separate Debug tree for C++ tests. Turning the Python module off here
 keeps this build independent of the editable extension; the editable workflow
 above compiles and tests the binding layer separately.
+
+This Debug tree and the editable extension's tree both live under `build/`
+(`build/` itself and `build/editable/<wheel-tag>`, respectively). Removing or
+cleaning `build/` — for example to reconfigure this Debug tree from scratch —
+therefore also destroys the editable tree, so the next `native.__loader__.rebuild()`
+reports a missing `CMakeCache.txt`. Recreate the editable tree with
+`uv sync --locked --group dev --reinstall-package a11` afterward.
 
 ```sh
 cmake -S . -B build -G Ninja \
@@ -193,6 +212,9 @@ ctest --test-dir build --output-on-failure
 
 # 2. Compile and install that source revision for the editable Python package.
 #    This command must finish before pytest starts in its separate process.
+#    If it reports a missing CMakeCache.txt, the editable build tree is not
+#    configured — recreate it with the reinstall command in "Editable Python
+#    build", then rerun this step.
 .venv/bin/python -c \
   'import a11._native as native; native.__loader__.rebuild()'
 

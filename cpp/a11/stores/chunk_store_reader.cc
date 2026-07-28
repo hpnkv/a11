@@ -447,20 +447,20 @@ struct ChunkStoreReader::State
 
   static void Complete(std::vector<Completion> completions) {
     for (Completion& completion : completions) {
-      absl::Status ignored;
       switch (completion.kind) {
         case CompletionKind::kFragment:
-          ignored = completion.request->promise.SetValue(
-              NextResult(std::move(*completion.fragment)));
+          completion.request->promise
+              .SetValue(NextResult(std::move(*completion.fragment)))
+              .IgnoreError();
           break;
         case CompletionKind::kEnd:
-          ignored = completion.request->promise.SetValue(std::nullopt);
+          completion.request->promise.SetValue(std::nullopt).IgnoreError();
           break;
         case CompletionKind::kError:
-          ignored = completion.request->promise.SetStatus(completion.status);
+          completion.request->promise.SetStatus(completion.status)
+              .IgnoreError();
           break;
       }
-      (void)ignored;
     }
   }
 

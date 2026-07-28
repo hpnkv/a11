@@ -24,15 +24,17 @@ struct FiberControl {
   void Cancel() ABSL_LOCKS_EXCLUDED(mu) {
     thread::MutexLock lock(&mu);
     cancel_requested = true;
-    if (fiber != nullptr)
+    if (fiber != nullptr) {
       fiber->Cancel();
+    }
   }
 };
 
 }  // namespace
 
-void Schedule(absl::AnyInvocable<void() &&> work) {
-  thread::Detach(thread::TreeOptions{}, [work = std::move(work)]() mutable {
+void Schedule(absl::AnyInvocable<void() &&> work,
+              thread::TreeOptions tree_options) {
+  thread::Detach(std::move(tree_options), [work = std::move(work)]() mutable {
     try {
       std::move(work)();
     } catch (const std::exception& error) {
@@ -43,10 +45,11 @@ void Schedule(absl::AnyInvocable<void() &&> work) {
   });
 }
 
-std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work) {
+std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
+                                         thread::TreeOptions tree_options) {
   auto control = std::make_shared<FiberControl>();
   std::unique_ptr<thread::Fiber> fiber = thread::NewTree(
-      thread::TreeOptions{}, [work = std::move(work)]() mutable {
+      std::move(tree_options), [work = std::move(work)]() mutable {
         try {
           std::move(work)();
         } catch (const std::exception& error) {
@@ -59,10 +62,11 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work) {
   {
     thread::MutexLock lock(&control->mu);
     control->fiber = fiber.get();
-    if (control->cancel_requested)
+    if (control->cancel_requested) {
       control->fiber->Cancel();
+    }
   }
-  thread::Detach(thread::TreeOptions{},
+  thread::Detach({.stack_size = 256},
                  [control, fiber = std::move(fiber)]() mutable {
                    fiber->Join();
                    {
@@ -71,6 +75,7 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work) {
                    }
                    fiber.reset();
                  });
+
   return [control]() {
     control->Cancel();
   };

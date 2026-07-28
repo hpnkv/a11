@@ -67,7 +67,7 @@ static thread_local ThreadLocalFiber kPerThreadNoOpFiber;
 Fiber::Fiber(Unstarted, InvocableWork work, Fiber* parent)
     : work_(std::move(work)),
       parent_(parent),
-      stack_size_(parent->stack_size_),
+      tree_options_(parent->tree_options_),
       next_sibling_(this),
       prev_sibling_(this) {
   ConstructBoostState();
@@ -87,7 +87,7 @@ Fiber::Fiber(Unstarted, InvocableWork work, Fiber* parent)
 Fiber::Fiber(Unstarted, InvocableWork work, TreeOptions&& tree_options)
     : work_(std::move(work)),
       parent_(nullptr),
-      stack_size_(tree_options.stack_size),
+      tree_options_(std::move(tree_options)),
       next_sibling_(this),
       prev_sibling_(this) {
   ConstructBoostState();

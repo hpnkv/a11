@@ -10,7 +10,7 @@ step changes directory explicitly.
 A complete Python release contains one source distribution and 20
 architecture-specific wheels:
 
-- CPython 3.11, 3.12, 3.13, 3.14, and 3.15;
+- CPython 3.11, 3.12, 3.13, and 3.14;
 - macOS x86_64 and arm64; and
 - manylinux x86_64 and aarch64.
 

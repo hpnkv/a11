@@ -82,7 +82,9 @@ def test_native_action_schema_json_round_trip_preserves_binary_fields():
             "request": ActionPortSchema(
                 name="request",
                 type="application/octet-stream",
-                autofills=[Chunk(data=b"\x00\xff")],
+                autofills=[
+                    NodeFragment(continued=False, data=Chunk(data=b"\x00\xff"))
+                ],
             )
         },
         outputs={

@@ -330,12 +330,14 @@ absl::Status Session::Initialize(
         changed = state->changed;
       }
       if (deadline_due) {
-        (void)session->Abort(absl::DeadlineExceededError(
-            "The Session deadline has been exceeded"));
+        session
+            ->Abort(absl::DeadlineExceededError(
+                "The Session deadline has been exceeded"))
+            .IgnoreError();
         return;
       }
       if (no_stream_due) {
-        (void)session->HalfClose();
+        session->HalfClose().IgnoreError();
         return;
       }
       const int selected =

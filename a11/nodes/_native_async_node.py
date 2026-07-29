@@ -18,6 +18,7 @@ from a11.stores.chunk_store import ChunkStore, ChunkStoreFactory
 from a11.stores.chunk_store_reader import ChunkStoreReaderOptions
 from a11.stores.chunk_store_writer import ChunkStoreWriterOptions
 from a11.stores.local_chunk_store import LocalChunkStore
+from a11 import timing
 
 T = TypeVar("T")
 
@@ -398,8 +399,10 @@ def _remaining_timeout(
 
 
 async def consume_fragment(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> types.NodeFragment:
+    node: _NativeAsyncNode,
+    timeout: timing.Duration | None = None,
+    allow_none: bool = False,
+) -> types.NodeFragment | None:
     if not get_reader_options(node).ordered:
         raise Status(
             code=StatusCode.FAILED_PRECONDITION,
@@ -410,10 +413,13 @@ async def consume_fragment(
     started_at = timing.now()
     fragment = await next_fragment(node, converted_timeout)
     if fragment is None:
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message="AsyncNode is empty at the current reader offset.",
-        ).to_exception()
+        if not allow_none:
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message="AsyncNode is empty at the current reader offset.",
+            ).to_exception()
+        return None
+
     chunk = fragment.get_chunk()
     if chunk.is_null():
         raise Status(
@@ -447,9 +453,14 @@ async def consume_fragment(
 
 
 async def consume_chunk(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> types.Chunk:
-    return (await consume_fragment(node, timeout)).get_chunk()
+    node: _NativeAsyncNode,
+    timeout: timing.Duration | None = None,
+    allow_none: bool = False,
+) -> types.Chunk | None:
+    fragment = await consume_fragment(node, timeout, allow_none=allow_none)
+    if fragment is None:
+        return None
+    return fragment.get_chunk()
 
 
 async def consume(
@@ -457,8 +468,12 @@ async def consume(
     obj_type: type[T] | None = None,
     timeout: timing.Duration | None = None,
     mimetype_patterns: str | Sequence[str] = "",
-) -> T | Any:
-    fragment = await consume_fragment(node, timeout)
+    allow_none: bool = False,
+) -> T | Any | None:
+    fragment = await consume_fragment(node, timeout, allow_none=allow_none)
+    if fragment is None:
+        return None
+
     mimetype_patterns, obj_type = _resolve_expected_types(
         node, mimetype_patterns, obj_type
     )
@@ -506,8 +521,10 @@ def _aiter(node: _NativeAsyncNode) -> _NativeAsyncNode:
     return node
 
 
-async def _anext(node: _NativeAsyncNode) -> Any:
-    fragment = await next_fragment(node)
+async def _anext(
+    node: _NativeAsyncNode, timeout: timing.Duration | None = None
+) -> Any:
+    fragment = await next_fragment(node, timeout)
     if fragment is None:
         raise StopAsyncIteration
     chunk = fragment.get_chunk()
@@ -525,6 +542,16 @@ async def _anext(node: _NativeAsyncNode) -> Any:
         node.__dict__["_expected_mimetype_patterns"],
         node.__dict__["_expected_obj_type"],
     )
+
+
+async def _iter_with_deadline(node: _NativeAsyncNode, deadline: timing.Time):
+    node.set_reader_options(ChunkStoreReaderOptions(ordered=True))
+    node = node.__aiter__()
+    while True:
+        try:
+            yield await _anext(node, deadline - timing.now())
+        except StopAsyncIteration:
+            return
 
 
 _NativeAsyncNode.serialization_registry = property(
@@ -557,6 +584,7 @@ _NativeAsyncNode.consume_chunk = consume_chunk
 _NativeAsyncNode.consume = consume
 _NativeAsyncNode.iter_fragments = iter_fragments
 _NativeAsyncNode.iter_chunks = iter_chunks
+_NativeAsyncNode.iter_with_deadline = _iter_with_deadline
 _NativeAsyncNode.__aenter__ = _aenter
 _NativeAsyncNode.__aexit__ = _aexit
 _NativeAsyncNode.__aiter__ = _aiter
@@ -618,7 +646,6 @@ _NativeAsyncNode.__init__ = _node_init
 _NativeAsyncNode.create = classmethod(_create_node)
 _NativeAsyncNode.__module__ = "a11.nodes.async_node"
 AsyncNode = _NativeAsyncNode
-
 
 NodeMap = _NativeNodeMap
 NodeMap.__module__ = "a11.nodes.async_node"

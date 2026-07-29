@@ -238,7 +238,7 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
 
  private:
   struct Impl;
-  static constexpr size_t kImplSize = 256;
+  static constexpr size_t kImplSize = 272;
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
   Http2Client(std::string host, std::uint16_t port, Http2Options options,

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
-import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+import pydantic_core
 from pydantic_core import core_schema
 
 from a11 import _native
@@ -65,25 +65,47 @@ def _validate_action_port(
     if isinstance(value, ActionPortSchema):
         return value
     data = _schema_mapping(value, "ActionPortSchema")
-    return ActionPortSchema(
+    autofills = []
+    if "autofills" in data:
+        for item in data["autofills"]:
+            if item is None:
+                autofills.append(
+                    types.NodeFragment(
+                        continued=False,
+                        data=types.Chunk(
+                            metadata=types.ChunkMetadata(
+                                mimetype="application/octet-stream"
+                            )
+                        ),
+                    )
+                )
+                continue
+
+            autofills.append(
+                types.NodeFragment.model_validate_json(
+                    pydantic_core.to_json(item)
+                )
+                if json_mode
+                else types.NodeFragment.model_validate(item)
+            )
+
+    port_python_type = None
+    port_type_name = data["type"]
+
+    if isinstance(data["type"], type):
+        port_python_type = data["type"]
+        port_type_name = data["type"].__name__
+
+    schema = ActionPortSchema(
         name=data["name"],
-        type=data["type"],
+        type=port_type_name,
         description=data.get("description", ""),
         required=data.get("required", False),
         unary=data.get("unary", False),
-        autofills=(
-            None
-            if data.get("autofills") is None
-            else [
-                (
-                    types.Chunk.model_validate_json(json.dumps(item))
-                    if json_mode
-                    else types.Chunk.model_validate(item)
-                )
-                for item in data["autofills"]
-            ]
-        ),
+        autofills=autofills,
+        typeinfo=port_python_type,
     )
+    return schema
 
 
 def _validate_action_header(
@@ -112,15 +134,24 @@ def _validate_action_schema(
         name=data["name"],
         description=data.get("description", ""),
         inputs={
-            str(name): _validate_action_port(port, json_mode=json_mode)
+            str(name): _validate_action_port(
+                port | {"name": port.get("name", str(name))},
+                json_mode=json_mode,
+            )
             for name, port in data.get("inputs", {}).items()
         },
         outputs={
-            str(name): _validate_action_port(port, json_mode=json_mode)
+            str(name): _validate_action_port(
+                port | {"name": port.get("name", str(name))},
+                json_mode=json_mode,
+            )
             for name, port in data.get("outputs", {}).items()
         },
         headers={
-            str(name): _validate_action_header(header, json_mode=json_mode)
+            str(name): _validate_action_header(
+                header | {"name": header.get("name", str(name))},
+                json_mode=json_mode,
+            )
             for name, header in data.get("headers", {}).items()
         },
         output_to_json_field=dict(data.get("output_to_json_field", {})),
@@ -144,45 +175,67 @@ _ACTION_VALIDATORS = {
 
 def _dump_action_model(value: Any, mode: str = "python") -> dict[str, Any]:
     if isinstance(value, ActionPortSchema):
-        return {
+        out = {
             "name": value.name,
-            "type": value.type,
-            "description": value.description,
-            "required": value.required,
-            "unary": value.unary,
-            "autofills": (
-                None
-                if value.autofills is None
-                else [chunk.model_dump(mode=mode) for chunk in value.autofills]
-            ),
         }
+        if value.description:
+            out["description"] = value.description
+        if value.type:
+            out["type"] = value.type
+        if value.required:
+            out["required"] = value.required
+        if value.unary:
+            out["unary"] = value.unary
+        if value.autofills:
+            out["autofills"] = [
+                chunk.model_dump(mode=mode) for chunk in value.autofills
+            ]
+        return out
     if isinstance(value, ActionHeaderSchema):
         default = value.default
         if mode == "json" and default is not None:
             default = base64.b64encode(default).decode("ascii")
-        return {
+        out = {
             "name": value.name,
-            "description": value.description,
-            "default": default,
         }
+        if value.description:
+            out["description"] = value.description
+        if default is not None:
+            out["default"] = default
+        return out
     if isinstance(value, ActionSchema):
-        return {
+        out = {
             "name": value.name,
-            "description": value.description,
-            "inputs": {
+        }
+        if value.description:
+            out["description"] = value.description
+        if value.inputs:
+            out["inputs"] = {
                 name: _dump_action_model(port, mode)
                 for name, port in value.inputs.items()
-            },
-            "outputs": {
+            }
+            for key, action_input in out["inputs"].items():
+                if action_input.get("name") == key:
+                    del action_input["name"]
+        if value.outputs:
+            out["outputs"] = {
                 name: _dump_action_model(port, mode)
                 for name, port in value.outputs.items()
-            },
-            "headers": {
+            }
+            for key, action_output in out["outputs"].items():
+                if action_output.get("name") == key:
+                    del action_output["name"]
+        if value.headers:
+            out["headers"] = {
                 name: _dump_action_model(header, mode)
                 for name, header in value.headers.items()
-            },
-            "output_to_json_field": dict(value.output_to_json_field),
-        }
+            }
+            for key, action_header in out["headers"].items():
+                if action_header.get("name") == key:
+                    del action_header["name"]
+        if value.output_to_json_field:
+            out["output_to_json_field"] = dict(value.output_to_json_field)
+        return out
     return {
         "bind_streams_on_inputs_by_default": (
             value.bind_streams_on_inputs_by_default
@@ -201,7 +254,7 @@ def _action_model_validate(cls, value: Any, **_: Any):
 
 def _action_model_validate_json(cls, value: str | bytes, **_: Any):
     try:
-        decoded = json.loads(value)
+        decoded = pydantic_core.from_json(value)
         if cls is ActionPortSchema:
             return _validate_action_port(decoded, json_mode=True)
         if cls is ActionHeaderSchema:
@@ -235,7 +288,9 @@ def _action_model_copy(
 
 
 def _action_model_dump_json(self, **kwargs: Any) -> str:
-    return json.dumps(self.model_dump(mode="json"), **kwargs)
+    return pydantic_core.to_json(
+        self.model_dump(mode="json"), **kwargs
+    ).decode()
 
 
 def _action_model_json_schema(cls, **_: Any) -> dict[str, Any]:
@@ -260,7 +315,7 @@ def _action_json_schema(cls, _schema, _handler):
 _ACTION_ANNOTATIONS = {
     ActionPortSchema: {
         "name": types.NameString,
-        "type": str,
+        "type": str | type,
         "description": str,
         "required": bool,
         "unary": bool,
@@ -321,6 +376,34 @@ def is_status_chunk(chunk: types.Chunk) -> bool:
     return isinstance(chunk, types.Chunk) and _native.is_status_chunk(chunk)
 
 
+DEFAULT_HEADERS = {
+    "x-a11-deadline": ActionHeaderSchema(
+        "x-a11-deadline",
+        "Deadline for execution in milliseconds since epoch.",
+    ),
+    "x-a11-allowed-actions": ActionHeaderSchema(
+        "x-a11-allowed-actions",
+        "Comma-separated list of allowed nested actions.",
+    ),
+    "x-a11-user-log-node": ActionHeaderSchema(
+        "x-a11-user-log-node",
+        "An AsyncNode that will be used to log messages helpful to the user.",
+    ),
+    "x-otel-traceparent": ActionHeaderSchema(
+        "x-otel-traceparent",
+        "OpenTelemetry traceparent header.",
+    ),
+    "x-otel-tracestate": ActionHeaderSchema(
+        "x-otel-tracestate",
+        "OpenTelemetry tracestate header.",
+    ),
+    "x-otel-baggage": ActionHeaderSchema(
+        "x-otel-baggage",
+        "OpenTelemetry baggage header.",
+    ),
+}
+
+
 __all__ = [
     "ACTION_DISPATCH_STATUS_OUTPUT",
     "ACTION_HEADER_PREFIX",
@@ -328,6 +411,7 @@ __all__ = [
     "ACTION_STATUS_OUTPUT",
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
+    "DEFAULT_HEADERS",
     "DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS",
     "Action",
     "ActionHandler",

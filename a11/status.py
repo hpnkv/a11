@@ -307,8 +307,38 @@ def _status_model_copy(
     return Status(**values)
 
 
+def _inline_local_refs(value: Any, defs: dict[str, Any]) -> Any:
+    """Resolves and inlines every "#/$defs/..." reference within `value`.
+
+    `Status.model_json_schema()` is spliced verbatim into any model that
+    embeds a `Status` field (see `_status_json_schema` below). Its `$ref`s
+    are relative to its own document root, so once spliced into a larger
+    schema they no longer resolve against the outer document's `$defs` and
+    pydantic's own schema generator raises a `KeyError`. Inlining ahead of
+    time makes the returned schema self-contained and safe to embed.
+    """
+    if isinstance(value, list):
+        return [_inline_local_refs(item, defs) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    reference = value.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/$defs/"):
+        name = reference.removeprefix("#/$defs/")
+        resolved = _inline_local_refs(defs[name], defs)
+        overrides = {k: v for k, v in value.items() if k != "$ref"}
+        return {**resolved, **_inline_local_refs(overrides, defs)}
+
+    return {
+        key: _inline_local_refs(item, defs)
+        for key, item in value.items()
+        if key != "$defs"
+    }
+
+
 def _status_model_json_schema(cls, **kwargs: Any) -> dict[str, Any]:
     schema = _StatusConvenience.model_json_schema(**kwargs)
+    schema = _inline_local_refs(schema, schema.get("$defs", {}))
     schema["title"] = "Status"
     return schema
 

@@ -191,24 +191,31 @@ T ValidateSchema(T value) {
   return value;
 }
 
-std::optional<std::vector<data::Chunk>> ActionAutofillsFromPython(
+std::vector<std::optional<data::NodeFragment>> ActionAutofillsFromPython(
     const py::object& value) {
-  if (value.is_none())
-    return std::nullopt;
+  if (value.is_none()) {
+    return {};
+  }
+
   if (!py::isinstance<py::iterable>(value) || py::isinstance<py::str>(value) ||
       py::isinstance<py::bytes>(value)) {
     ThrowStatus(
         absl::InvalidArgumentError("autofills must be an iterable or None"));
   }
-  std::vector<data::Chunk> result;
+
+  std::vector<std::optional<data::NodeFragment>> result;
   for (const py::handle item : py::reinterpret_borrow<py::iterable>(value)) {
-    if (py::isinstance<data::Chunk>(item)) {
-      result.push_back(item.cast<data::Chunk>());
+    if (item.is_none()) {
+      result.push_back(std::nullopt);
+      continue;
+    }
+    if (py::isinstance<data::NodeFragment>(item)) {
+      result.push_back(item.cast<data::NodeFragment>());
     } else {
       result.push_back(py::module_::import("a11.data.types")
-                           .attr("Chunk")
+                           .attr("NodeFragment")
                            .attr("model_validate")(item)
-                           .cast<data::Chunk>());
+                           .cast<data::NodeFragment>());
     }
   }
   return result;
@@ -387,6 +394,23 @@ std::shared_ptr<actions::Action> ReturnAction(
   return self;
 }
 
+void* PortSchemaTypeInfoFromPython(const py::handle& value) {
+  if (value.is_none()) {
+    return nullptr;
+  }
+  if (PyType_Check(value.ptr()) == 0) {
+    ThrowStatus(absl::InvalidArgumentError(
+        "ActionPortSchema typeinfo must be a Python type or None"));
+  }
+  return value.ptr();
+}
+
+py::object PortSchemaTypeInfoToPython(void* typeinfo) {
+  if (typeinfo == nullptr)
+    return py::none();
+  return py::reinterpret_borrow<py::object>(static_cast<PyObject*>(typeinfo));
+}
+
 py::object StatusObject(const absl::Status& status) {
   return StatusToPython(status);
 }
@@ -402,30 +426,39 @@ void BindActions(py::module_& module) {
       module, "_StringSchemaMapView");
 
   py::class_<actions::ActionPortSchema>(module, "ActionPortSchema")
-      .def(py::init([](std::string name, std::string type,
-                       std::string description, bool required, bool unary,
-                       const py::object& autofills) {
-             return ValidateSchema(actions::ActionPortSchema{
-                 .name = std::move(name),
-                 .type = std::move(type),
-                 .description = std::move(description),
-                 .required = required,
-                 .unary = unary,
-                 .autofills = ActionAutofillsFromPython(autofills)});
-           }),
-           py::arg("name"), py::arg("type"), py::arg("description") = "",
-           py::arg("required") = false, py::arg("unary") = false,
-           py::arg("autofills") = std::nullopt)
+      .def(
+          py::init([](std::string name, std::string type,
+                      std::string description, bool required, bool unary,
+                      const py::object& autofills, const py::object& typeinfo) {
+            return ValidateSchema(actions::ActionPortSchema{
+                .name = std::move(name),
+                .type = std::move(type),
+                .description = std::move(description),
+                .required = required,
+                .unary = unary,
+                .autofills = ActionAutofillsFromPython(autofills),
+                .typeinfo = PortSchemaTypeInfoFromPython(typeinfo)});
+          }),
+          py::arg("name"), py::arg("type"), py::arg("description") = "",
+          py::arg("required") = false, py::arg("unary") = false,
+          py::arg("autofills") = std::nullopt, py::arg("typeinfo") = py::none())
       .def_readwrite("name", &actions::ActionPortSchema::name)
       .def_readwrite("type", &actions::ActionPortSchema::type)
       .def_readwrite("description", &actions::ActionPortSchema::description)
       .def_readwrite("required", &actions::ActionPortSchema::required)
       .def_readwrite("unary", &actions::ActionPortSchema::unary)
       .def_property(
+          "typeinfo",
+          [](const actions::ActionPortSchema& schema) -> py::object {
+            return PortSchemaTypeInfoToPython(schema.typeinfo);
+          },
+          [](actions::ActionPortSchema& schema, const py::object& value) {
+            schema.typeinfo = PortSchemaTypeInfoFromPython(value);
+          })
+      .def_property(
           "autofills",
           [](const actions::ActionPortSchema& schema) -> py::object {
-            return schema.autofills.has_value() ? py::cast(*schema.autofills)
-                                                : py::none();
+            return py::cast(schema.autofills);
           },
           [](actions::ActionPortSchema& schema, const py::object& value) {
             schema.autofills = ActionAutofillsFromPython(value);

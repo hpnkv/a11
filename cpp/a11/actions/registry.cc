@@ -145,11 +145,11 @@ std::shared_ptr<ActionRegistry> ActionRegistry::Copy(
     if (clear_autofills) {
       for (auto& [unused, port] : schema.inputs) {
         (void)unused;
-        port.autofills.reset();
+        port.autofills.clear();
       }
       for (auto& [unused, port] : schema.outputs) {
         (void)unused;
-        port.autofills.reset();
+        port.autofills.clear();
       }
     }
     result->schemas_.emplace(name, std::move(schema));

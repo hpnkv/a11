@@ -8,6 +8,7 @@ from .actions import (
     ActionSchema,
     ActionSettings,
 )
+from .actions.action import DEFAULT_HEADERS as DEFAULT_ACTION_HEADERS
 from .data.types import (
     ChunkMetadata,
     Chunk,
@@ -75,10 +76,69 @@ from .service.session import (
     SessionOptions,
     SessionWithRecv,
 )
+from .status import Status, StatusCode
 from .stores.chunk_store import ChunkStore, ChunkStoreFactory
 from .stores.chunk_store_reader import ChunkStoreReader, ChunkStoreReaderOptions
 from .stores.chunk_store_writer import ChunkStoreWriter, ChunkStoreWriterOptions
 from .stores.local_chunk_store import LocalChunkStore
+from .timing import (
+    Duration,
+    Time,
+    infinite_duration,
+    infinite_future,
+    infinite_past,
+    now,
+    zero_duration,
+)
+
+
+def get_deadline(action: Action) -> Time:
+    deadline_str = action.get_header("x-a11-deadline", decode=True)
+    if deadline_str is None:
+        return infinite_future()
+
+    nanos = False
+    if deadline_str.endswith("ns"):
+        deadline_str = deadline_str[:-2]
+        nanos = True
+
+    try:
+        deadline = int(deadline_str)
+    except ValueError:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "Deadline header must be an integer optionally followed by 'ns'"
+            ),
+        ).to_exception()
+
+    if deadline < 0:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "Deadline header must be a non-negative integer optionally"
+                " followed by 'ns'"
+            ),
+        ).to_exception()
+
+    if nanos:
+        deadline *= 1000000
+
+    return Time.from_nanoseconds_since_epoch(deadline)
+
+
+def set_deadline_header(action: Action, deadline: Time = infinite_future()):
+    if deadline == infinite_future():
+        try:
+            action.remove_header("x-a11-deadline")
+            return
+        except:
+            pass
+
+    action.set_header(
+        "x-a11-deadline",
+        str(deadline.nanoseconds_since_epoch // 1000000).encode(),
+    )
 
 
 def to_chunk(obj: Any, mimetype: str = "") -> Chunk:

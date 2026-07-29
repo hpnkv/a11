@@ -31,7 +31,9 @@ struct ActionPortSchema {
   std::string description;
   bool required = false;
   bool unary = false;
-  std::optional<std::vector<data::Chunk>> autofills;
+  std::vector<std::optional<data::NodeFragment>> autofills;
+  
+  void* typeinfo = nullptr;
 
   absl::Status Validate() const;
   friend bool operator==(const ActionPortSchema&,

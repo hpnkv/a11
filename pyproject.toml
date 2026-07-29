@@ -5,8 +5,8 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "a11"
-version = "0.1.0"
+name = "a11-kit"
+version = "0.1.1"
 description = "Concurrent action and streaming runtime with a native C++ backend"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -63,7 +63,7 @@ A11_BUILD_PYTHON = "ON"
 BUILD_TESTING = "OFF"
 
 [tool.cibuildwheel]
-build = "cp311-* cp312-* cp313-* cp314-* cp315-*"
+build = "cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux* *-win32"
 enable = ["cpython-prerelease"]
 before-all = "bash {project}/scripts/bootstrap_wheel_deps.sh"
@@ -81,6 +81,8 @@ environment-pass = [
 archs = ["x86_64", "aarch64"]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
+container-engine = { name = "docker", create-args = ["--memory", "16g", "--memory-swap", "16g", "--shm-size", "2g"] }
+environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]
@@ -110,6 +112,7 @@ docstring-code-line-length = 80
 
 [dependency-groups]
 dev = [
+    "anthropic>=0.120.0",
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
     "pybind11-stubgen>=2.5.5",

@@ -967,6 +967,7 @@ def _to_wire(value: Any, *, binary: bool, top_level: bool = False) -> Any:
             types.Port,
             types.ActionMessage,
             types.WireMessage,
+            Status,
         ),
     ):
         encoded = _to_wire(value.model_dump(), binary=binary, top_level=True)
@@ -1397,6 +1398,7 @@ _NATIVE_DATA_TYPES: tuple[type, ...] = (
     types.Port,
     types.ActionMessage,
     types.WireMessage,
+    Status,
 )
 
 

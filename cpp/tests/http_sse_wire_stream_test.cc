@@ -22,7 +22,10 @@ namespace a11::net {
 namespace {
 
 std::string TestDataPath(std::string_view name) {
-  return (std::filesystem::path(__FILE__).parent_path() / "testdata" / name)
+  return ((std::filesystem::path(A11_CPP_SOURCE_ROOT).parent_path() /
+           std::filesystem::path(__FILE__))
+              .parent_path() /
+          "testdata" / name)
       .string();
 }
 

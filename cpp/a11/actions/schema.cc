@@ -9,6 +9,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 
@@ -18,18 +19,15 @@
 namespace a11::actions {
 
 absl::Status ActionPortSchema::Validate() const {
-  absl::Status status = data::ValidateName(name);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   if (type.empty()) {
     return absl::InvalidArgumentError("Action port type must not be empty");
   }
-  if (autofills.has_value()) {
-    for (const data::Chunk& chunk : *autofills) {
-      status = chunk.Validate();
-      if (!status.ok())
-        return status;
+  for (const std::optional<data::NodeFragment>& fragment : autofills) {
+    if (!fragment) {
+      continue;
     }
+    ABSL_RETURN_IF_ERROR(fragment->Validate());
   }
   return absl::OkStatus();
 }

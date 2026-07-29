@@ -119,7 +119,18 @@ Python interpreter, since each invalidates the configured tree or the editable
 metadata:
 
 ```sh
-uv sync --locked --group dev --reinstall-package a11
+uv sync --locked --group dev --reinstall-package a11-kit
+```
+
+`--reinstall-package` takes the distribution name (`a11-kit`, from
+`pyproject.toml`'s `[project] name`), not the import name (`a11`). Passing
+`a11` matches nothing, so `uv sync` silently reports `Checked N packages` and
+does **not** recreate the build tree — the next `native.__loader__.rebuild()`
+still fails with the same `CMakeCache.txt` error. There is no warning when this
+happens, so always double-check with:
+
+```sh
+ls build/editable/*/CMakeCache.txt
 ```
 
 The active files can be checked without relying on shell activation:
@@ -154,7 +165,9 @@ This Debug tree and the editable extension's tree both live under `build/`
 cleaning `build/` — for example to reconfigure this Debug tree from scratch —
 therefore also destroys the editable tree, so the next `native.__loader__.rebuild()`
 reports a missing `CMakeCache.txt`. Recreate the editable tree with
-`uv sync --locked --group dev --reinstall-package a11` afterward.
+`uv sync --locked --group dev --reinstall-package a11-kit` afterward (use the
+distribution name `a11-kit`, not the import name `a11` — see the note in
+[Editable Python build](#editable-python-build)).
 
 ```sh
 cmake -S . -B build -G Ninja \

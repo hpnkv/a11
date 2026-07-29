@@ -44,10 +44,6 @@ def _done(action: Action) -> _ActionDoneEvent:
     return event
 
 
-def _await_action(action: Action):
-    return action.wait().__await__()
-
-
 def _get_header(
     action: Action, name: str, decode: bool = False
 ) -> bytes | str | None:
@@ -98,7 +94,6 @@ for _field in (
 
 Action.__module__ = "a11.actions.action"
 Action.done = property(_done)
-Action.__await__ = _await_action
 Action.get_header = _get_header
 Action.run_in_background = _native_run
 Action.settings = property(_get_settings, _set_settings)

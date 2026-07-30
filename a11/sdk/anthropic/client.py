@@ -34,7 +34,7 @@ def get_anthropic_client(api_key: str | None = None) -> AsyncAnthropic:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
+            code=StatusCode.FAILED_PRECONDITION,
             message="ANTHROPIC_API_KEY is not set, nor is a key supplied.",
         ).to_exception()
 

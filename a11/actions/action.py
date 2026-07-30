@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import enum
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -376,29 +377,40 @@ def is_status_chunk(chunk: types.Chunk) -> bool:
     return isinstance(chunk, types.Chunk) and _native.is_status_chunk(chunk)
 
 
+class DefaultHeaders(enum.StrEnum):
+    """Default header names for A11 actions."""
+
+    DEADLINE = "x-a11-deadline"
+    ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
+    USER_LOG_NODE = "x-a11-user-log-node"
+    OTEL_TRACEPARENT = "x-otel-traceparent"
+    OTEL_TRACESTATE = "x-otel-tracestate"
+    OTEL_BAGGAGE = "x-otel-baggage"
+
+
 DEFAULT_HEADERS = {
-    "x-a11-deadline": ActionHeaderSchema(
-        "x-a11-deadline",
+    DefaultHeaders.DEADLINE: ActionHeaderSchema(
+        DefaultHeaders.DEADLINE,
         "Deadline for execution in milliseconds since epoch.",
     ),
-    "x-a11-allowed-actions": ActionHeaderSchema(
-        "x-a11-allowed-actions",
-        "Comma-separated list of allowed nested actions.",
+    DefaultHeaders.ALLOWED_LLM_ACTIONS: ActionHeaderSchema(
+        DefaultHeaders.ALLOWED_LLM_ACTIONS,
+        "Comma-separated regex patterns of actions the LLM may call as tools.",
     ),
-    "x-a11-user-log-node": ActionHeaderSchema(
-        "x-a11-user-log-node",
+    DefaultHeaders.USER_LOG_NODE: ActionHeaderSchema(
+        DefaultHeaders.USER_LOG_NODE,
         "An AsyncNode that will be used to log messages helpful to the user.",
     ),
-    "x-otel-traceparent": ActionHeaderSchema(
-        "x-otel-traceparent",
+    DefaultHeaders.OTEL_TRACEPARENT: ActionHeaderSchema(
+        DefaultHeaders.OTEL_TRACEPARENT,
         "OpenTelemetry traceparent header.",
     ),
-    "x-otel-tracestate": ActionHeaderSchema(
-        "x-otel-tracestate",
+    DefaultHeaders.OTEL_TRACESTATE: ActionHeaderSchema(
+        DefaultHeaders.OTEL_TRACESTATE,
         "OpenTelemetry tracestate header.",
     ),
-    "x-otel-baggage": ActionHeaderSchema(
-        "x-otel-baggage",
+    DefaultHeaders.OTEL_BAGGAGE: ActionHeaderSchema(
+        DefaultHeaders.OTEL_BAGGAGE,
         "OpenTelemetry baggage header.",
     ),
 }

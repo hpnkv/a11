@@ -7,7 +7,11 @@ from a11._native import NodeFragment
 import a11
 from a11.status import Status, StatusCode, StatusException
 
-from a11.sdk.llm import get_allowed_action_names, Interaction
+from a11.sdk.llm import (
+    action_name_matches_allowed,
+    get_allowed_llm_action_patterns,
+    Interaction,
+)
 from a11.sdk.llm_tools.adapter import ToolAdapter
 
 
@@ -58,10 +62,10 @@ async def execute_actions_from_interaction(
             message="Cannot execute actions against an empty registry.",
         ).to_exception()
 
-    allowed_actions = get_allowed_action_names(action)
+    allowed_patterns = get_allowed_llm_action_patterns(action)
     nested_actions: list[a11.Action] = []
     for call in interaction.action_calls:
-        if call.name not in allowed_actions:
+        if not action_name_matches_allowed(call.name, allowed_patterns):
             raise Status(
                 code=StatusCode.PERMISSION_DENIED,
                 message=f"Action {call.name} is not allowed",
@@ -79,7 +83,11 @@ async def execute_actions_from_interaction(
         for fragment in input_fragments:
             await nested_action[fragment.id].put_fragment(fragment)
 
-        for input_name in nested_action.get_schema().inputs.keys():
+        # Autofilled inputs are written, drained, and closed by the native run
+        # flow, so the runner must only close the inputs it fed itself.
+        for input_name, port in nested_action.get_schema().inputs.items():
+            if port.autofills:
+                continue
             await nested_action[input_name].drain_and_close()
         nested_actions.append(nested_action)
 

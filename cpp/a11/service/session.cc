@@ -720,9 +720,17 @@ a11::Task Session::DispatchActionMessage(
             if (dispatch_status.ok()) {
               (void)(*action)->ClearInputsAfterRun();
               (void)(*action)->ClearOutputsAfterRun();
-              absl::StatusOr<std::shared_ptr<actions::Action>> started =
-                  (*action)->Run();
-              dispatch_status = started.status();
+              // The receiver applies its own input autofills (which may differ
+              // from the caller's) before running and before this WireMessage's
+              // node fragments are dispatched. Each autofilled input must be
+              // empty, so a caller cannot inject data into it; a caller that
+              // tries later writes to a closed node and is rejected.
+              dispatch_status = (*action)->ApplyInputAutofills();
+              if (dispatch_status.ok()) {
+                absl::StatusOr<std::shared_ptr<actions::Action>> started =
+                    (*action)->Run();
+                dispatch_status = started.status();
+              }
             }
           }
         }
@@ -802,17 +810,9 @@ a11::Task Session::DispatchWireMessage(
           absl::Status status;
         };
         std::vector<DispatchFailure> failures;
-        for (size_t index = 0; index < message.node_fragments.size(); ++index) {
-          data::NodeFragment& fragment = message.node_fragments[index];
-          absl::Status status =
-              self->DispatchNodeFragment(std::move(fragment)).Await().status();
-          if (!status.ok())
-            failures.push_back(DispatchFailure{
-                .element_type = "node_fragment",
-                .element_index = index,
-                .status = std::move(status),
-            });
-        }
+        // Actions are dispatched before node fragments so a receiver applies
+        // its own input autofills (and closes those inputs) ahead of any
+        // fragments in the same WireMessage that target them.
         for (size_t index = 0; index < message.actions.size(); ++index) {
           data::ActionMessage& action = message.actions[index];
           absl::Status status =
@@ -825,6 +825,26 @@ a11::Task Session::DispatchWireMessage(
                 .element_index = index,
                 .status = std::move(status),
             });
+        }
+        for (size_t index = 0; index < message.node_fragments.size(); ++index) {
+          data::NodeFragment& fragment = message.node_fragments[index];
+          const std::string fragment_id = fragment.id;
+          absl::Status status =
+              self->DispatchNodeFragment(std::move(fragment)).Await().status();
+          if (!status.ok()) {
+            // A rejected write to an Action input (e.g. a caller trying to
+            // populate a receiver-autofilled, now-closed input) cancels the
+            // owning Action so the failure propagates back to the caller.
+            const size_t separator = fragment_id.find('#');
+            if (separator != std::string::npos) {
+              self->CancelAction(fragment_id.substr(0, separator)).IgnoreError();
+            }
+            failures.push_back(DispatchFailure{
+                .element_type = "node_fragment",
+                .element_index = index,
+                .status = std::move(status),
+            });
+          }
         }
         if (failures.empty())
           return absl::OkStatus();

@@ -18,7 +18,13 @@ from a11.sdk.anthropic.interact_with_claude_schema import (
     CreateMessageConfig,
     DEFAULT_MODEL,
 )
-from a11.sdk.llm import Interaction, LlmHeaders, Role, get_allowed_action_names
+from a11.sdk.llm import (
+    action_name_matches_allowed,
+    get_allowed_llm_action_patterns,
+    Interaction,
+    LlmHeaders,
+    Role,
+)
 from a11.sdk.llm_tools import runner
 
 
@@ -390,8 +396,18 @@ async def interact_with_claude(action: a11.Action):
 
     client = get_anthropic_client(api_key)
 
-    allowed_actions = get_allowed_action_names(action)
-    tools = runner.get_tool_definitions(action.get_registry(), allowed_actions)
+    allowed_patterns = get_allowed_llm_action_patterns(action)
+    requested_tools = [
+        tool async for tool in action["tools"].iter_with_deadline(deadline)
+    ]
+    tools = []
+    for tool in requested_tools:
+        if not action_name_matches_allowed(tool["name"], allowed_patterns):
+            logging.warning(
+                "Tool `%s` was requested, but isn't allowed.", tool["name"]
+            )
+            continue
+        tools.append(tool)
 
     try:
         while True:

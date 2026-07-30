@@ -20,6 +20,11 @@ class ToolAdapter:
         required_nodes = []
 
         for input_node in self._schema.inputs.values():
+            # Autofilled inputs are supplied automatically before the handler
+            # runs, so the LLM must never see them in the tool definition.
+            if input_node.autofills:
+                continue
+
             name = input_node.name
             unary = input_node.unary
             required = input_node.required

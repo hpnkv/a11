@@ -193,18 +193,20 @@ async def test_wire_dispatch_tries_every_element_and_aggregates_failures():
     aggregate = raised.value.status
     assert aggregate.code == StatusCode.UNKNOWN
     assert "3 of 4" in aggregate.message
+    # Action messages are dispatched before node fragments so a receiver can
+    # apply its own input autofills ahead of fragments that target them.
     assert [
         (detail["element_type"], detail["element_index"])
         for detail in aggregate.details
     ] == [
-        ("node_fragment", 0),
         ("action_message", 0),
         ("action_message", 1),
+        ("node_fragment", 0),
     ]
     assert [detail["status"]["code"] for detail in aggregate.details] == [
+        StatusCode.FAILED_PRECONDITION,
+        StatusCode.FAILED_PRECONDITION,
         StatusCode.INVALID_ARGUMENT,
-        StatusCode.FAILED_PRECONDITION,
-        StatusCode.FAILED_PRECONDITION,
     ]
 
     # The valid fragment was still dispatched after the invalid one.

@@ -1,21 +1,16 @@
 # Copyright 2026 The A11 Authors.
 
-import asyncio
 import base64
 import enum
+import re
 import uuid
-from typing import Any, Literal
+from typing import Literal
 
 import a11
-import anthropic
-import pydantic_core
-from absl import logging
-from a11 import timing
-from a11.status import Status, StatusCode, StatusException
+from a11.status import Status, StatusCode
 from pydantic import (
     BaseModel,
     Field,
-    field_validator,
     model_validator,
     field_serializer,
 )
@@ -25,20 +20,26 @@ class LlmHeaders(enum.StrEnum):
     API_KEY = "x-a11-llm-api-key"
     MODEL = "x-a11-llm-model"
     PROVIDER = "x-a11-llm-provider"
-    ALLOWED_ACTIONS = "x-a11-allowed-actions"
+    ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
 
 
-def get_allowed_action_names(action: a11.Action) -> list[str]:
+def get_allowed_llm_action_patterns(action: a11.Action) -> list[str]:
+    """Regex patterns for the actions the LLM may invoke as tools.
+
+    This is a tool-call-time restriction: it constrains which registered
+    actions are surfaced to (and callable by) the model, not which nested
+    actions the handler code may run.
+    """
     try:
         header = action.get_header(
-            LlmHeaders.ALLOWED_ACTIONS.value, decode=True
+            LlmHeaders.ALLOWED_LLM_ACTIONS.value, decode=True
         )
     except Exception as exc:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message=(
-                f"The header {LlmHeaders.ALLOWED_ACTIONS.value} is not a valid"
-                f" utf-8 string: {str(exc)}"
+                f"The header {LlmHeaders.ALLOWED_LLM_ACTIONS.value} is not a"
+                f" valid utf-8 string: {str(exc)}"
             ),
         ).to_exception() from exc
 
@@ -46,7 +47,24 @@ def get_allowed_action_names(action: a11.Action) -> list[str]:
         return []
 
     header: str
-    return [name.strip() for name in header.split(",") if name.strip()]
+    return [pattern.strip() for pattern in header.split(",") if pattern.strip()]
+
+
+def action_name_matches_allowed(name: str, patterns: list[str]) -> bool:
+    """Whether an action name is fully matched by any allowed regex pattern."""
+    for pattern in patterns:
+        try:
+            if re.fullmatch(pattern, name) is not None:
+                return True
+        except re.error as exc:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    f"Allowed LLM action pattern {pattern!r} is not a valid"
+                    f" regular expression: {str(exc)}"
+                ),
+            ).to_exception() from exc
+    return False
 
 
 class Role(enum.Enum):
@@ -288,11 +306,6 @@ class Interaction(BaseModel):
     system_instructions: list[a11.Chunk] = Field(
         default_factory=list,
         description="The system instructions of the interaction.",
-        exclude_if=lambda x: not x,
-    )
-    action_schemas: list[str | a11.ActionSchema] = Field(
-        default_factory=list,
-        description="The actions available for the model.",
         exclude_if=lambda x: not x,
     )
     action_configs: dict[str, A11ActionConfig] = Field(

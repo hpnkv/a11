@@ -174,6 +174,8 @@ class Action : public std::enable_shared_from_this<Action> {
       const absl::flat_hash_map<std::string, ActionPortSchema>& schema_ports,
       std::string_view kind) const;
   void RunHandler(std::shared_ptr<ActionLimiter> limiter);
+  absl::Status ApplyInputAutofills();
+  [[nodiscard]] std::vector<data::NodeFragment> CollectAutofillFragments() const;
   void StartFinish(absl::Status status);
   absl::Status FinishRun(absl::Status status);
   absl::Status FinishOutputNodes(const absl::Status& status);
@@ -213,6 +215,7 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::flat_hash_set<std::shared_ptr<nodes::AsyncNode>> stream_bound_nodes_
       ABSL_GUARDED_BY(mu_);
   Mode mode_ ABSL_GUARDED_BY(mu_) = Mode::kNone;
+  bool input_autofills_applied_ ABSL_GUARDED_BY(mu_) = false;
   a11::Task task_ ABSL_GUARDED_BY(mu_);
   bool cancel_requested_ ABSL_GUARDED_BY(mu_) = false;
   bool finishing_ ABSL_GUARDED_BY(mu_) = false;

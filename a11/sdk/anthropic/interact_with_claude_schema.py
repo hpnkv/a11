@@ -28,6 +28,12 @@ INTERACT_WITH_CLAUDE_SCHEMA = a11.ActionSchema(
             typeinfo=Interaction,
             required=True,
         ),
+        "tools": a11.ActionPortSchema(
+            "tools",
+            "application/json",
+            typeinfo=dict,
+            required=False,
+        ),
         "config": a11.ActionPortSchema(
             "config",
             "application/json",

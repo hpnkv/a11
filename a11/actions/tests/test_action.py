@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+import a11
 from a11 import timing
 from a11.actions import (
     Action,
@@ -11,6 +12,7 @@ from a11.actions import (
     ActionSchema,
     status_from_chunk,
 )
+from a11.data import types
 from a11.net.in_process_wire_stream import InProcessWireStream
 from a11.net.wire_stream import OnDone, OnMessage, WireStream
 from a11.nodes.async_node import NodeMap
@@ -766,3 +768,223 @@ async def test_remote_cancel_immediately_after_call_is_not_lost():
         assert server_stream.get_status().is_ok()
     finally:
         await _close_session_pair(client, server, client_stream, server_stream)
+
+
+def _autofill(value: str) -> types.NodeFragment:
+    return types.NodeFragment(data=a11.to_chunk(value), continued=False)
+
+
+@pytest.mark.asyncio
+async def test_local_run_applies_input_autofills_before_handler():
+    schema = ActionSchema(
+        name="autofill-run",
+        inputs={
+            "prefilled": ActionPortSchema(
+                name="prefilled",
+                type="text/plain",
+                autofills=[
+                    types.NodeFragment(
+                        data=a11.to_chunk("auto"), continued=True
+                    ),
+                    _autofill("value"),
+                ],
+            ),
+            "nulled": ActionPortSchema(
+                name="nulled", type="text/plain", autofills=[None]
+            ),
+        },
+        outputs={"result": _port("result")},
+    )
+
+    async def handler(action: Action) -> None:
+        parts = []
+        while (value := await action["prefilled"].next_object(str)) is not None:
+            parts.append(value)
+        nulled = await action["nulled"].next_object(str)
+        await _confirm(
+            await action["result"].put(
+                f"{','.join(parts)}|{nulled}", final=True
+            )
+        )
+
+    action = Action(schema, handler=handler)
+    result = action.get_output("result", bind_stream=False)
+
+    action.run()
+    assert await action.wait() is action
+    assert await result.next_object(str) == "auto,value|None"
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_autofill_when_input_already_has_data():
+    schema = ActionSchema(
+        name="autofill-guard",
+        inputs={
+            "guarded": ActionPortSchema(
+                name="guarded", type="text/plain", autofills=[_autofill("auto")]
+            )
+        },
+        outputs={"result": _port("result")},
+    )
+
+    async def handler(action: Action) -> None:
+        await _confirm(await action["result"].put("ran", final=True))
+
+    action = Action(schema, handler=handler)
+    # Smuggle data into the autofilled input before the run applies it.
+    guarded = action.get_input("guarded", bind_stream=False)
+    await _confirm(await guarded.put("intruder", final=True))
+
+    action.run()
+    with pytest.raises(StatusException) as raised:
+        await action.wait()
+    assert raised.value.status.code == StatusCode.FAILED_PRECONDITION
+
+
+@pytest.mark.asyncio
+async def test_remote_call_sends_caller_autofills_over_the_wire():
+    # The receiver treats the input as ordinary; the caller autofills it, and
+    # the value travels inside the call's WireMessage.
+    server_schema = ActionSchema(
+        name="echo",
+        inputs={"text": ActionPortSchema(name="text", type="text/plain")},
+        outputs={"response": _port("response")},
+    )
+
+    async def handler(action: Action) -> None:
+        text = await action["text"].consume(str)
+        await _confirm(await action["response"].put(f"{text}!", final=True))
+
+    registry = ActionRegistry()
+    registry.register("echo", server_schema, handler)
+    client_stream, server_stream = InProcessWireStream.create_pair()
+    client = Session(options=_session_options())
+    server = Session(options=_session_options(), action_registry=registry)
+    await asyncio.gather(
+        client.add_stream(client_stream),
+        server.add_stream(server_stream, mode="accept"),
+    )
+
+    try:
+        caller_schema = ActionSchema(
+            name="echo",
+            inputs={
+                "text": ActionPortSchema(
+                    name="text", type="text/plain", autofills=[_autofill("hi")]
+                )
+            },
+            outputs={"response": _port("response")},
+        )
+        action = Action(
+            caller_schema,
+            node_map=client.node_map,
+            stream=client_stream,
+            session=client,
+        )
+        # The caller provides no input: the autofill rides the call message.
+        await action.call()
+        assert (await action.wait_for_dispatch()).is_ok()
+        assert await action["response"].consume(str) == "hi!"
+        assert await action.wait() is action
+        assert action.get_status().is_ok()
+    finally:
+        await _close_session_pair(client, server, client_stream, server_stream)
+
+
+@pytest.mark.asyncio
+async def test_remote_call_applies_receiver_side_autofills():
+    # The receiver autofills 'secret' with its own value; the caller neither
+    # knows about nor sends it.
+    server_schema = ActionSchema(
+        name="srv",
+        inputs={
+            "secret": ActionPortSchema(
+                name="secret", type="text/plain", autofills=[_autofill("shh")]
+            )
+        },
+        outputs={"response": _port("response")},
+    )
+
+    async def handler(action: Action) -> None:
+        secret = await action["secret"].consume(str)
+        await _confirm(
+            await action["response"].put(f"got:{secret}", final=True)
+        )
+
+    registry = ActionRegistry()
+    registry.register("srv", server_schema, handler)
+    client_stream, server_stream = InProcessWireStream.create_pair()
+    client = Session(options=_session_options())
+    server = Session(options=_session_options(), action_registry=registry)
+    await asyncio.gather(
+        client.add_stream(client_stream),
+        server.add_stream(server_stream, mode="accept"),
+    )
+
+    try:
+        caller_schema = ActionSchema(
+            name="srv", outputs={"response": _port("response")}
+        )
+        action = Action(
+            caller_schema,
+            node_map=client.node_map,
+            stream=client_stream,
+            session=client,
+        )
+        await action.call()
+        assert (await action.wait_for_dispatch()).is_ok()
+        assert await action["response"].consume(str) == "got:shh"
+        assert await action.wait() is action
+        assert action.get_status().is_ok()
+    finally:
+        await _close_session_pair(client, server, client_stream, server_stream)
+
+
+@pytest.mark.asyncio
+async def test_receiver_rejects_a_write_to_its_autofilled_input():
+    # A peer that ships a fragment for a receiver-autofilled input (alongside
+    # the ActionMessage) is rejected: the receiver applies its autofill first
+    # and closes the input, so the smuggled write fails.
+    node_map = NodeMap()
+    schema = ActionSchema(
+        name="guarded-srv",
+        inputs={
+            "secret": ActionPortSchema(
+                name="secret", type="text/plain", autofills=[_autofill("shh")]
+            )
+        },
+        outputs={"response": _port("response")},
+    )
+
+    async def handler(action: Action) -> None:
+        secret = await action["secret"].consume(str)
+        await _confirm(
+            await action["response"].put(f"got:{secret}", final=True)
+        )
+
+    registry = ActionRegistry()
+    registry.register("guarded-srv", schema, handler)
+    server = Session(
+        options=_session_options(),
+        action_registry=registry,
+        node_map=node_map,
+    )
+
+    action_id = "intruder-call"
+    secret_node = Action.make_node_id(action_id, "secret")
+    message = types.WireMessage(
+        node_fragments=[
+            types.NodeFragment(
+                id=secret_node, data=a11.to_chunk("evil"), continued=False
+            )
+        ],
+        actions=[registry.make_action_message("guarded-srv", action_id)],
+    )
+
+    with pytest.raises(StatusException) as raised:
+        await server.dispatch_wire_message(message)
+
+    assert any(
+        detail["element_type"] == "node_fragment"
+        for detail in raised.value.status.details
+    )

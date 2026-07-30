@@ -756,7 +756,8 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
       return a11::FailedFuture<std::shared_ptr<Action>>(status);
     }
   }
-  data::WireMessage wire{.actions = {GetActionMessage()},
+  data::WireMessage wire{.node_fragments = CollectAutofillFragments(),
+                         .actions = {GetActionMessage()},
                          .headers = std::move(*headers)};
   const std::shared_ptr<net::WireStream> stream = GetStream();
   if (stream != nullptr) {
@@ -1032,6 +1033,8 @@ void Action::RunHandler(std::shared_ptr<ActionLimiter> limiter) {
       status = CancelledStatus();
     } else if (!handler) {
       status = absl::FailedPreconditionError("Action handler has not been set");
+    } else if (absl::Status autofill = ApplyInputAutofills(); !autofill.ok()) {
+      status = std::move(autofill);
     } else {
       try {
         const a11::Task handler_task = handler(shared_from_this());
@@ -1055,6 +1058,115 @@ void Action::RunHandler(std::shared_ptr<ActionLimiter> limiter) {
   if (status.code() == absl::StatusCode::kCancelled)
     status = CancelledStatus();
   StartFinish(std::move(status));
+}
+
+absl::Status Action::ApplyInputAutofills() {
+  std::vector<
+      std::pair<std::string, std::vector<std::optional<data::NodeFragment>>>>
+      work;
+  std::shared_ptr<nodes::NodeMap> node_map;
+  {
+    thread::MutexLock lock(&mu_);
+    if (input_autofills_applied_)
+      return absl::OkStatus();
+    node_map = node_map_;
+    for (const auto& [name, port] : schema_.inputs) {
+      if (port.autofills.empty())
+        continue;
+      const auto found = input_ids_.find(name);
+      if (found == input_ids_.end())
+        continue;
+      work.emplace_back(found->second, port.autofills);
+    }
+  }
+  if (work.empty()) {
+    thread::MutexLock lock(&mu_);
+    input_autofills_applied_ = true;
+    return absl::OkStatus();
+  }
+  if (node_map == nullptr) {
+    return absl::FailedPreconditionError(
+        "Action has no NodeMap to apply input autofills");
+  }
+
+  // First pass: every autofilled input must be empty and writable before it is
+  // filled, so a peer cannot smuggle data into a receiver-autofilled input
+  // ahead of (or racing) the ActionMessage that authorizes it.
+  std::vector<std::shared_ptr<nodes::AsyncNode>> nodes;
+  nodes.reserve(work.size());
+  for (const auto& [node_id, autofills] : work) {
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> node,
+                          node_map->Get(node_id));
+    ABSL_ASSIGN_OR_RETURN(bool writable, node->IsWritable().Await());
+    if (!writable) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Autofilled input '", node_id, "' is not writable"));
+    }
+    ABSL_ASSIGN_OR_RETURN(size_t size, node->GetChunkStore()->Size().Await());
+    if (size != 0) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Autofilled input '", node_id, "' already contains data"));
+    }
+    {
+      thread::MutexLock lock(&mu_);
+      input_nodes_.insert(node);
+    }
+    nodes.push_back(std::move(node));
+  }
+
+  // Second pass: write and close each autofilled input.
+  for (size_t index = 0; index < work.size(); ++index) {
+    const std::shared_ptr<nodes::AsyncNode>& node = nodes[index];
+    const std::string& node_id = work[index].first;
+    for (const std::optional<data::NodeFragment>& autofill :
+         work[index].second) {
+      // A missing fragment is a null final marker, mirroring PutNullFinal.
+      if (!autofill.has_value()) {
+        ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
+        continue;
+      }
+      data::NodeFragment fragment = *autofill;
+      fragment.id = node_id;
+      ABSL_RETURN_IF_ERROR(
+          node->PutFragment(std::move(fragment)).Await().status());
+    }
+    ABSL_RETURN_IF_ERROR(node->DrainAndClose().Await().status());
+  }
+  thread::MutexLock lock(&mu_);
+  input_autofills_applied_ = true;
+  return absl::OkStatus();
+}
+
+std::vector<data::NodeFragment> Action::CollectAutofillFragments() const {
+  std::vector<data::NodeFragment> fragments;
+  thread::MutexLock lock(&mu_);
+  for (const auto& [name, port] : schema_.inputs) {
+    if (port.autofills.empty())
+      continue;
+    const auto found = input_ids_.find(name);
+    if (found == input_ids_.end())
+      continue;
+    const std::string& node_id = found->second;
+    const size_t start = fragments.size();
+    for (const std::optional<data::NodeFragment>& autofill : port.autofills) {
+      data::NodeFragment fragment;
+      if (autofill.has_value()) {
+        fragment = *autofill;
+      } else {
+        // A missing fragment is a null final marker, mirroring PutNullFinal.
+        fragment.data = data::Chunk{
+            .metadata = data::ChunkMetadata{
+                .mimetype = std::string("application/octet-stream")}};
+      }
+      fragment.id = node_id;
+      fragments.push_back(std::move(fragment));
+    }
+    // The last fragment must close the remote input node, since a called
+    // Action cannot drain and close it over the wire.
+    if (fragments.size() > start)
+      fragments.back().continued = false;
+  }
+  return fragments;
 }
 
 void Action::StartFinish(absl::Status status) {

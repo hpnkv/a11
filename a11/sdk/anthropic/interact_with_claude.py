@@ -1,6 +1,7 @@
 # Copyright 2026 The A11 Authors.
 
 import asyncio
+import dataclasses
 import traceback
 from typing import Any
 
@@ -24,6 +25,7 @@ from a11.sdk.llm import (
     Interaction,
     LlmHeaders,
     Role,
+    UsageMetadata,
 )
 from a11.sdk.llm_tools import runner
 
@@ -135,7 +137,7 @@ class Conversation:
             ).to_exception()
 
         for field in ("id", "container", "stop_reason", "stop_details"):
-            if value := interaction.message_metadata.get(field):
+            if value := interaction.backend_specific_metadata.get(field):
                 if isinstance(value, bytes):
                     value = value.decode()
                 message[field] = value
@@ -151,17 +153,34 @@ class Conversation:
         return interaction
 
 
+@dataclasses.dataclass
+class _ToolCall:
+    """A tool call aggregated from a model's streamed content block."""
+
+    name: str
+    id: str
+    partial_json: str = ""
+    params: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    def apply_input_delta(self, partial_json: str) -> None:
+        self.partial_json += partial_json
+
+    async def finalize_params(self) -> None:
+        if self.partial_json:
+            self.params = await asyncio.to_thread(
+                pydantic_core.from_json, self.partial_json
+            )
+
+
 class ActionCallAdapter:
     def __init__(
         self,
-        tool_name: str,
-        tool_call_id: str,
-        tool_params: dict[str, Any],
+        tool_call: _ToolCall,
         schema: a11.ActionSchema,
     ):
-        self._name = tool_name
-        self._call_id = tool_call_id
-        self._arguments = tool_params
+        self._name = tool_call.name
+        self._call_id = tool_call.id
+        self._arguments = tool_call.params
         self._schema = schema
 
     @property
@@ -198,43 +217,27 @@ class ActionCallAdapter:
 
     @staticmethod
     def _validate_tool_call_integrity(
-        tool_call: dict[str, Any],
-    ) -> dict[str, Any]:
-        for field in ("name", "id", "params"):
-            if field not in tool_call:
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=f"Tool call must have a field `{field}`.",
-                ).to_exception()
-
-        if len(tool_call) != 3:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=(
-                    "Tool call must have exactly three fields: name, id,"
-                    " params."
-                ),
-            ).to_exception()
-
-        if not isinstance(tool_call["name"], str):
+        tool_call: _ToolCall,
+    ) -> _ToolCall:
+        if not isinstance(tool_call.name, str):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message=f"Tool call name must be a string.",
             ).to_exception()
 
-        if not isinstance(tool_call["id"], str):
+        if not isinstance(tool_call.id, str):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message=f"Tool call id must be a string.",
             ).to_exception()
 
-        if not isinstance(tool_call["params"], dict):
+        if not isinstance(tool_call.params, dict):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message=f"Tool call params must be a dictionary.",
             ).to_exception()
 
-        for key in tool_call["params"].keys():
+        for key in tool_call.params.keys():
             if not isinstance(key, str):
                 raise Status(
                     code=StatusCode.INVALID_ARGUMENT,
@@ -245,22 +248,22 @@ class ActionCallAdapter:
 
     @staticmethod
     def validate_against_schema(
-        tool_call: dict[str, Any],
+        tool_call: _ToolCall,
         schema: a11.ActionSchema,
         validate_integrity: bool = True,
-    ) -> dict[str, Any]:
+    ) -> _ToolCall:
         if validate_integrity:
             tool_call = ActionCallAdapter._validate_tool_call_integrity(
                 tool_call
             )
 
-        if tool_call["name"] != schema.name:
+        if tool_call.name != schema.name:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message=f"Tool call name must be {schema.name}.",
             ).to_exception()
 
-        for actual_input in tool_call["params"].keys():
+        for actual_input in tool_call.params.keys():
             if actual_input not in schema.inputs:
                 raise Status(
                     code=StatusCode.INVALID_ARGUMENT,
@@ -270,7 +273,7 @@ class ActionCallAdapter:
         for expected_input_name, expected_input in schema.inputs.items():
             if (
                 expected_input.required
-                and expected_input_name not in tool_call["params"]
+                and expected_input_name not in tool_call.params
             ):
                 raise Status(
                     code=StatusCode.INVALID_ARGUMENT,
@@ -283,7 +286,7 @@ class ActionCallAdapter:
             expected_input: a11.ActionPortSchema
             if (
                 expected_input.autofills
-                and tool_call["params"].get(expected_input_name) is not None
+                and tool_call.params.get(expected_input_name) is not None
             ):
                 raise Status(
                     code=StatusCode.INVALID_ARGUMENT,
@@ -293,15 +296,13 @@ class ActionCallAdapter:
         return tool_call
 
     @staticmethod
-    def create(tool_call: dict[str, Any], schema: a11.ActionSchema):
+    def create(tool_call: _ToolCall, schema: a11.ActionSchema):
         tool_call = ActionCallAdapter._validate_tool_call_integrity(tool_call)
         tool_call = ActionCallAdapter.validate_against_schema(
             tool_call, schema, validate_integrity=False
         )
 
-        return ActionCallAdapter(
-            tool_call["name"], tool_call["id"], tool_call["params"], schema
-        )
+        return ActionCallAdapter(tool_call, schema)
 
 
 def _decode_action_output_fragments(
@@ -346,22 +347,96 @@ async def _build_tool_results_from_outputs(
 
 
 async def _add_tool_calls_to_interaction(
-    tool_calls: list[dict[str, Any]],
+    tool_calls: list[_ToolCall],
     interaction: Interaction,
     registry: a11.ActionRegistry,
 ):
     for tool_call in tool_calls:
         adapter = ActionCallAdapter.create(
             tool_call,
-            registry.get_schema(tool_call["name"]),
+            registry.get_schema(tool_call.name),
         )
 
         interaction.action_calls.append(adapter.action_message)
-        if tool_call["id"] not in interaction.action_inputs:
-            interaction.action_inputs[tool_call["id"]] = []
-        interaction.action_inputs[tool_call["id"]].extend(
+        if tool_call.id not in interaction.action_inputs:
+            interaction.action_inputs[tool_call.id] = []
+        interaction.action_inputs[tool_call.id].extend(
             await adapter.get_action_inputs()
         )
+
+
+def _build_usage_metadata(
+    usage: anthropic.types.Usage | None,
+) -> UsageMetadata | None:
+    """Map Anthropic's `Usage` onto the provider-independent `UsageMetadata`."""
+    if usage is None:
+        return None
+
+    reasoning_tokens = None
+    if usage.output_tokens_details is not None:
+        reasoning_tokens = usage.output_tokens_details.thinking_tokens
+
+    cache_read = usage.cache_read_input_tokens or 0
+    cache_write = usage.cache_creation_input_tokens or 0
+    # Anthropic reports `input_tokens` as the uncached remainder, so the full
+    # token count for the interaction adds the cached-read and cache-write
+    # input tokens on top of the (uncached) input and the output tokens.
+    total_tokens = (
+        usage.input_tokens + usage.output_tokens + cache_read + cache_write
+    )
+
+    return UsageMetadata(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=usage.cache_read_input_tokens,
+        cache_write_tokens=usage.cache_creation_input_tokens,
+        reasoning_tokens=reasoning_tokens,
+    )
+
+
+def _encode_backend_value(value: Any) -> bytes:
+    """Encode a backend-specific metadata value as bytes.
+
+    `Interaction.backend_specific_metadata` is a `dict[str, bytes]`; scalars are
+    stored as their UTF-8 encoding and structured values (SDK models, dicts) as
+    their JSON encoding.
+    """
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode()
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    return pydantic_core.to_json(value)
+
+
+def _build_backend_specific_metadata(
+    snapshot: anthropic.types.Message,
+) -> dict[str, bytes]:
+    """Collect Anthropic-specific fields that don't map onto shared models."""
+    metadata: dict[str, bytes] = {}
+
+    for field in ("container", "stop_reason", "stop_details"):
+        value = getattr(snapshot, field, None)
+        if value is not None:
+            metadata[field] = _encode_backend_value(value)
+
+    # Usage counters that are specific to Anthropic and have no place in the
+    # provider-independent `UsageMetadata`.
+    usage = snapshot.usage
+    if usage is not None:
+        for field in (
+            "service_tier",
+            "inference_geo",
+            "server_tool_use",
+            "cache_creation",
+        ):
+            value = getattr(usage, field, None)
+            if value is not None:
+                metadata[field] = _encode_backend_value(value)
+
+    return metadata
 
 
 async def interact_with_claude(action: a11.Action):
@@ -444,10 +519,8 @@ async def interact_with_claude(action: a11.Action):
                     code=StatusCode.INTERNAL, message=str(exc)
                 ).to_exception() from exc
 
-            tool_calls = []
-            tool_names = dict()
-            tool_use_ids = dict()
-            tool_inputs = dict()
+            tool_calls: list[_ToolCall] = []
+            pending_tool_calls: dict[int, _ToolCall] = {}
 
             async for event in stream:
                 await action["event_stream"].put(event)
@@ -457,47 +530,32 @@ async def interact_with_claude(action: a11.Action):
 
                 if event.type == "content_block_start":
                     if event.content_block.type == "tool_use":
-                        tool_names[event.index] = event.content_block.name
-                        tool_use_ids[event.index] = event.content_block.id
-                        tool_inputs[event.index] = ""
+                        pending_tool_calls[event.index] = _ToolCall(
+                            name=event.content_block.name,
+                            id=event.content_block.id,
+                        )
 
                 if event.type == "content_block_delta":
                     delta = event.delta
 
                     if delta.type == "input_json_delta":
-                        tool_inputs[event.index] += delta.partial_json
+                        pending_tool_calls[event.index].apply_input_delta(
+                            delta.partial_json
+                        )
 
                 if (
                     event.type == "content_block_stop"
-                    and event.index in tool_inputs
+                    and event.index in pending_tool_calls
                 ):
-                    parsed_tool_input = {}
-                    if tool_inputs[event.index]:
-                        parsed_tool_input = await asyncio.to_thread(
-                            pydantic_core.from_json, tool_inputs[event.index]
-                        )
-                    tool_calls.append(
-                        {
-                            "name": tool_names[event.index],
-                            "id": tool_use_ids[event.index],
-                            "params": parsed_tool_input,
-                        }
-                    )
-                    tool_names.pop(event.index)
-                    tool_use_ids.pop(event.index)
-                    tool_inputs.pop(event.index)
+                    tool_call = pending_tool_calls.pop(event.index)
+                    await tool_call.finalize_params()
+                    tool_calls.append(tool_call)
 
             if snapshot is None:
                 raise Status(
                     code=StatusCode.DATA_LOSS,
                     message="No message could be accumulated.",
                 ).to_exception()
-
-            message_metadata = {}
-            for field in ("container", "stop_reason", "stop_details"):
-                value = getattr(snapshot, field)
-                if value is not None:
-                    message_metadata[field] = value
 
             interaction = Interaction(
                 previous_interaction_id=previous_interaction_id,
@@ -509,7 +567,10 @@ async def interact_with_claude(action: a11.Action):
                         a11.to_chunk, snapshot.model_dump(exclude_none=True)
                     )
                 ],
-                message_metadata=message_metadata,
+                backend_specific_metadata=_build_backend_specific_metadata(
+                    snapshot
+                ),
+                usage_metadata=_build_usage_metadata(snapshot.usage),
             )
             previous_interaction_id = interaction.id
             await _add_tool_calls_to_interaction(

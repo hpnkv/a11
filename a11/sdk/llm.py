@@ -76,7 +76,72 @@ class Role(enum.Enum):
 
 
 class UsageMetadata(BaseModel):
-    pass
+    """Provider-independent token accounting for a single interaction.
+
+    The fields are the common denominator across the major LLM provider APIs
+    (Anthropic, Gemini, Ollama, OpenAI). Each field documents the per-provider
+    source it maps from. Counters that are specific to one backend and do not
+    generalize (e.g. Anthropic's `server_tool_use`, `service_tier`, or Ollama's
+    timing durations) do not belong here — they go into an interaction's
+    `backend_specific_metadata`.
+    """
+
+    input_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Prompt/input tokens consumed. Anthropic `input_tokens`, OpenAI"
+            " `prompt_tokens`, Gemini `promptTokenCount`, Ollama"
+            " `prompt_eval_count`."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    output_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Completion/output tokens generated. Anthropic `output_tokens`,"
+            " OpenAI `completion_tokens`, Gemini `candidatesTokenCount`, Ollama"
+            " `eval_count`."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    total_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Total tokens attributed to the interaction. Provider-supplied"
+            " where available (OpenAI `total_tokens`, Gemini"
+            " `totalTokenCount`); otherwise the sum of the input, output, and"
+            " cache token counts."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    cached_input_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Input tokens served from a prompt cache (billed at a reduced"
+            " rate). Anthropic `cache_read_input_tokens`, OpenAI"
+            " `prompt_tokens_details.cached_tokens`, Gemini"
+            " `cachedContentTokenCount`."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    cache_write_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Input tokens written to a prompt cache. Currently only reported by"
+            " Anthropic (`cache_creation_input_tokens`)."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    reasoning_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Output tokens spent on internal reasoning/thinking. Anthropic"
+            " `output_tokens_details.thinking_tokens`, OpenAI"
+            " `completion_tokens_details.reasoning_tokens`, Gemini"
+            " `thoughtsTokenCount`."
+        ),
+        exclude_if=lambda x: x is None,
+    )
 
 
 GLOBAL_WEBRTC_SIGNALLING_ENDPOINT = "wss://a11.services/ice"
@@ -335,7 +400,7 @@ class Interaction(BaseModel):
         exclude_if=lambda x: not x,
     )
 
-    message_metadata: dict[str, bytes] = Field(
+    backend_specific_metadata: dict[str, bytes] = Field(
         default_factory=dict,
         description=(
             "The backend-specific metadata of the interaction. For example,"

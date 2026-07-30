@@ -1,4 +1,5 @@
 import asyncio
+from collections import defaultdict
 
 import pytest
 
@@ -37,6 +38,20 @@ class _ObservedGetStore(LocalChunkStore):
 class _RuntimeErrorStore(LocalChunkStore):
     async def get(self, seq, deadline=timing.infinite_future()):
         raise RuntimeError("injected read failure")
+
+
+class _GatedGetStore(LocalChunkStore):
+    """A store whose per-sequence reads block until individually released."""
+
+    def __init__(self, node_id):
+        super().__init__(node_id)
+        self.started = defaultdict(asyncio.Event)
+        self.gates = defaultdict(asyncio.Event)
+
+    async def get(self, seq, deadline=timing.infinite_future()):
+        self.started[seq].set()
+        await self.gates[seq].wait()
+        return await super().get(seq, deadline)
 
 
 @pytest.mark.asyncio
@@ -143,6 +158,38 @@ async def test_arrival_order_reader_does_not_stop_at_early_final_arrival():
     await reader.wait()
     assert [(await reader.next()).seq for _ in range(3)] == [2, 0, 1]
     assert await reader.next() is None
+
+
+@pytest.mark.asyncio
+async def test_prefetched_fragment_is_delivered_before_a_later_fetch():
+    # Regression: a fetch completing while an earlier fragment already sits in
+    # the prefetch buffer must not hand the later fragment to a waiting caller
+    # ahead of the buffered one. The caller's wake-up is coalesced away while a
+    # fetch is in flight, so ordered reads have to stay serial regardless.
+    store = _GatedGetStore("serial-order")
+    await store.put_many([_fragment(0), _fragment(1), _fragment(2, final=True)])
+    reader = ChunkStoreReader(
+        store, ChunkStoreReaderOptions(num_chunks_to_buffer=8)
+    )
+
+    # Prefetch seq 0 and let it land in the buffer.
+    await asyncio.wait_for(store.started[0].wait(), timeout=1)
+    store.gates[0].set()
+    while reader.buffer_size < 1:
+        await asyncio.sleep(0)
+
+    # With seq 0 buffered and the seq 1 fetch already in flight, a fresh read
+    # request cannot be matched yet - its Wake() is coalesced by the active
+    # fetch. It must still receive the earliest fragment.
+    await asyncio.wait_for(store.started[1].wait(), timeout=1)
+    pending = reader.next()
+    store.gates[1].set()
+    store.gates[2].set()
+
+    assert (await asyncio.wait_for(pending, timeout=1)).seq == 0
+    assert [(await reader.next()).seq for _ in range(2)] == [1, 2]
+    assert await reader.next() is None
+    await reader.wait()
 
 
 @pytest.mark.asyncio

@@ -353,19 +353,18 @@ struct ChunkStoreReader::State
                             std::vector<Completion>* completions)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
     const bool continued = fragment.continued;
-    const std::shared_ptr<Request> request = PopPendingReadLocked();
-    if (request != nullptr) {
-      completions->push_back(Completion{
-          .request = request,
-          .kind = CompletionKind::kFragment,
-          .fragment = std::move(fragment),
-          .status = absl::OkStatus(),
-      });
-    } else {
-      // A timed-out zero-buffer request may leave one unavoidable in-flight
-      // result. Preserve it for the next caller instead of dropping data.
-      buffer.push_back(std::move(fragment));
-    }
+    // Fetches are serialised through the operation guard, so fragments finish
+    // in strictly increasing position order and the freshly read one always
+    // belongs at the back of the ordered buffer. Appending it here - rather
+    // than handing it straight to the FIFO-front waiter - is what makes serial
+    // reads deliver serially: a request that could not yet be matched against
+    // an earlier buffered fragment (its wake-up was coalesced away while this
+    // fetch was in flight) must not receive this later fragment ahead of it.
+    // CollectAvailableLocked below drains the buffer front-to-back, so any
+    // waiter is always paired with the earliest outstanding fragment. It also
+    // covers the zero-buffer case, where a timed-out request may leave one
+    // unavoidable in-flight result that is preserved for the next caller.
+    buffer.push_back(std::move(fragment));
 
     ++chunks_read;
     ++position;

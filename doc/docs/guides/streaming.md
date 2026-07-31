@@ -24,16 +24,28 @@ node = a11.AsyncNode.create("tokens")
 
 ## Write to it
 
-`put()` appends a value; `put_final()` appends the last one and closes the
-stream. Both are coroutines that resolve once the value is durably stored, so
-**awaiting them applies backpressure** — a fast producer waits for a slow
-consumer instead of buffering without bound:
+`put()` appends a value. Awaiting it resolves once the value is durably stored,
+so **awaiting applies backpressure** — a fast producer waits for a slow consumer
+instead of buffering without bound.
+
+When you are the *authoritative* writer — the one who decides the stream is done
+— finish in two steps: mark the last value **final**, then **seal** the store:
 
 ```python
 await node.put("A11")
 await node.put("streams")
-await node.put_final("everything")   # closes the stream
+await node.put_final("everything")   # mark where the data ends
+await node.drain_and_close()         # flush, forbid further writes, record OK
 ```
+
+These do different jobs, and a correct writer usually wants **both**:
+
+- `put_final(value)` (equivalently `put(value)` then `put_null_final()`) marks
+  the *end of the data*, so a reader knows the last value is whole.
+- `drain_and_close()` waits for buffered writes to flush, then **closes the
+  store with an OK status and refuses further writes**. On its own,
+  `put_final()` leaves the store open to more writes; without a final marker, a
+  `consume()` reader cannot tell the value was complete.
 
 A value can be anything the node's serialization registry can encode (strings,
 dicts, dataclasses, Pydantic models, …); see
@@ -58,18 +70,24 @@ result = await node.consume()
 
 ## Let the context manager finalize it
 
-Writing `put_final()` by hand is easy to forget, and an error midway should not
-leave a reader hanging on a half-written stream. Used as an async context
-manager, a node **drains and closes on a clean exit** and **aborts with the
-error's [`Status`][a11.status.Status] on an exception**, so the reader always
-observes a definite end:
+Sealing by hand is easy to forget, and an error midway should not leave a reader
+hanging on a half-written stream. As an async context manager a node
+**`drain_and_close()`s on a clean exit** and **aborts with the error's
+[`Status`][a11.status.Status] on an exception**, so a reader always observes a
+definite end:
 
 ```python
 async with a11.AsyncNode.create("tokens") as node:
     for word in ["A11", "streams", "everything"]:
         await node.put(word)
-    # no explicit close: leaving the block finalizes the stream
+    # leaving the block seals the store (clean exit) or aborts it (on error)
 ```
+
+The context manager handles the *sealing*, but it does not mark a final data
+chunk — which is exactly what `async for` and `next()` want, since they stop the
+moment the store closes. A `consume()` reader, which expects one whole value,
+still needs an explicit terminator: end the block with `put_final(value)` (or a
+`put_null_final()` after the last `put()`).
 
 ## Putting it together
 
@@ -92,6 +110,6 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-That is the whole model: produce into a node, consume it back, and let the
-context manager mark the end. Next, [carry a node's data over a
+That is the whole model: produce into a node, read it back, and let the context
+manager seal it. Next, [carry a node's data over a
 network](echo-session.md) with a session.

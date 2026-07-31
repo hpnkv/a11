@@ -26,7 +26,9 @@ string instead of a real API call:
 ```python
 async def get_weather(action):
     location = await action["location"].consume()
-    await action["report"].put(f"It is 22°C and sunny in {location}.")
+    # This handler is the sole writer of `report`: mark the value final, then
+    # seal the port so the caller sees a complete, OK-terminated result.
+    await action["report"].put_final(f"It is 22°C and sunny in {location}.")
     await action["report"].drain_and_close()
 ```
 

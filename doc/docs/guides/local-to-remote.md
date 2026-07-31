@@ -23,6 +23,7 @@ output port, exactly like the LLM interaction:
 async def shout(action):
     text = await action["text"].consume()
     await action["result"].put_final(text.upper())
+    await action["result"].drain_and_close()   # seal the output with OK
 
 
 SHOUT = a11.ActionSchema(
@@ -96,8 +97,9 @@ input, read the output — but the bytes now travel over the network to the
 server's handler and back:
 
 ```python
-await action["text"].put_final("hello")
-print(await action["result"].consume())          # -> "HELLO"
+await action["text"].put_final("hello")           # mark the input final...
+await action["text"].drain_and_close()            # ...and seal it
+print(await action["result"].consume())           # -> "HELLO"
 ```
 
 ## Putting it together
@@ -113,6 +115,7 @@ import a11
 async def shout(action):
     text = await action["text"].consume()
     await action["result"].put_final(text.upper())
+    await action["result"].drain_and_close()   # seal the output with OK
 
 
 SHOUT = a11.ActionSchema(
@@ -155,6 +158,7 @@ async def main() -> None:
         )
         await action.call()
         await action["text"].put_final("hello")
+        await action["text"].drain_and_close()
         print("remote:", await action["result"].consume())  # -> HELLO
         await action.wait()
     finally:

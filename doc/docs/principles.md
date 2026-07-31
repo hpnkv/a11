@@ -65,11 +65,13 @@ changing any action or node code. You choose an implementation by passing a
 
 ### WireStream — how bytes move between peers
 
-A [`WireStream`][a11.net.wire_stream.WireStream] is a bidirectional, ordered
-channel carrying [`WireMessage`][a11.data.types.WireMessage] values between two
-endpoints. Everything above it — node mirroring, session multiplexing, remote
-action dispatch — is written against this one interface, so the concrete
-transport is a detail you pick at the edge:
+A [`WireStream`][a11.net.wire_stream.WireStream] is a bidirectional channel
+carrying [`WireMessage`][a11.data.types.WireMessage] values between two
+endpoints. Delivery is unordered, but synchronised on closure — a reader
+observes every delivered message before the stream reports done. Everything
+above it — node mirroring, session multiplexing, remote action dispatch — is
+written against this one interface, so the concrete transport is a detail you
+pick at the edge:
 
 - [`InProcessWireStream`][a11.net.in_process_wire_stream.InProcessWireStream] —
   two endpoints in one process (great for tests and in-process composition);

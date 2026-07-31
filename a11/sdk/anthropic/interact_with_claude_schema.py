@@ -5,7 +5,7 @@ from typing import Any
 import a11
 from pydantic import BaseModel, Field
 
-from a11.sdk.llm import Interaction, LlmHeaders, Role
+from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.status import Status, StatusCode
 
 
@@ -65,22 +65,7 @@ INTERACT_WITH_CLAUDE_SCHEMA = a11.ActionSchema(
 )
 
 
-def make_text_message_interaction(
-    text: str, system_prompt: str = ""
-) -> Interaction:
-    system_instructions = [a11.to_chunk(system_prompt)] if system_prompt else []
-    return Interaction(
-        role=Role.USER,
-        content=[
-            a11.to_chunk(
-                {"role": "user", "content": [{"type": "text", "text": text}]}
-            )
-        ],
-        system_instructions=system_instructions,
-    )
-
-
-def get_message_from_interaction(interaction: Interaction) -> dict[str, Any]:
+def _get_message_from_interaction(interaction: Interaction) -> dict[str, Any]:
     if not interaction.content or len(interaction.content) > 1:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -91,6 +76,44 @@ def get_message_from_interaction(interaction: Interaction) -> dict[str, Any]:
     return message
 
 
-def get_message_text_from_interaction(interaction: Interaction) -> str:
-    message = get_message_from_interaction(interaction)
-    return "".join(content["text"] for content in message["content"])
+class ClaudeInteractionAdapter(InteractionAdapter):
+    def __init__(self, interaction: Interaction):
+        self._interaction = interaction
+
+    @staticmethod
+    def make_text_message_interaction(
+        text: str, system_prompt: str, role: Role
+    ) -> Interaction:
+        if role == Role.SYSTEM:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Claude does not support a system role.",
+            ).to_exception()
+
+        role_str = "user"
+        if role == role.ASSISTANT:
+            role_str = "assistant"
+
+        system_instructions = (
+            [a11.to_chunk(system_prompt)] if system_prompt else []
+        )
+        return Interaction(
+            role=Role.USER,
+            content=[
+                a11.to_chunk(
+                    {
+                        "role": role_str,
+                        "content": [{"type": "text", "text": text}],
+                    }
+                )
+            ],
+            system_instructions=system_instructions,
+        )
+
+    def get_message_text(self) -> str:
+        message = _get_message_from_interaction(self._interaction)
+        return "".join(
+            content["text"]
+            for content in message["content"]
+            if "text" in content
+        )

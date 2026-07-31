@@ -115,8 +115,18 @@ dev = [
     "anthropic>=0.120.0",
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
+    "google-genai>=1.55.0",
     "pybind11-stubgen>=2.5.5",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.12.0",
+]
+anthropic = [
+    "anthropic>=0.120.0",
+]
+claude = [
+    "anthropic>=0.120.0",
+]
+gemini = [
+    "google-genai>=1.55.0",
 ]

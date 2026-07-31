@@ -113,7 +113,12 @@ def test_pydantic_subclasses_and_native_types_round_trip_across_registries(
     model_chunk = producer.to_chunk(model, mimetype)
     native_chunk = producer.to_chunk(native, mimetype)
 
-    assert model_chunk.get_mimetype() == f"{mimetype};type=_Model"
+    # User-defined pydantic subclasses use their fully-qualified name so that
+    # like-named classes from different modules cannot collide on the wire.
+    assert (
+        model_chunk.get_mimetype()
+        == f"{mimetype};type={_Model.__module__}.{_Model.__qualname__}"
+    )
     assert consumer.from_chunk(model_chunk) == model
     assert consumer.from_chunk(native_chunk) == native
 

@@ -19,19 +19,160 @@ from a11.sdk.anthropic.interact_with_claude_schema import (
     CreateMessageConfig,
     DEFAULT_MODEL,
 )
-from a11.sdk.llm import (
-    action_name_matches_allowed,
-    get_allowed_llm_action_patterns,
-    Interaction,
-    LlmHeaders,
-    Role,
-    UsageMetadata,
-)
+from a11.sdk import llm
 from a11.sdk.llm_tools import runner
 
 
+def _stringify_content(content: Any) -> str:
+    """Flatten a tool-result content payload into plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        if texts:
+            return "".join(texts)
+    return pydantic_core.to_json(content).decode()
+
+
+def _claude_to_normalized(
+    interaction: llm.Interaction,
+) -> llm.NormalizedMessage:
+    """Produce the normalized view of a Claude-native interaction."""
+    content = a11.from_chunk(interaction.content[0])
+    if isinstance(
+        content, (anthropic.types.Message, anthropic.types.ParsedMessage)
+    ):
+        content = content.model_dump()
+
+    if isinstance(content, str):
+        return llm.NormalizedMessage(
+            role=llm.Role.USER,
+            parts=[
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TEXT, text=content
+                )
+            ],
+        )
+
+    if not isinstance(content, dict):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Unrecognized Claude interaction content.",
+        ).to_exception()
+
+    role = (
+        llm.Role.ASSISTANT
+        if content.get("role") == "assistant"
+        else llm.Role.USER
+    )
+    blocks = content.get("content")
+    parts: list[llm.NormalizedPart] = []
+    if isinstance(blocks, str):
+        parts.append(
+            llm.NormalizedPart(type=llm.NormalizedContentType.TEXT, text=blocks)
+        )
+        blocks = []
+
+    for block in blocks or []:
+        if isinstance(block, str):
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TEXT, text=block
+                )
+            )
+            continue
+
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TEXT,
+                    text=block.get("text", ""),
+                )
+            )
+        elif block_type == "tool_use":
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TOOL_CALL,
+                    id=block.get("id"),
+                    name=block.get("name"),
+                    arguments=block.get("input") or {},
+                )
+            )
+        elif block_type == "tool_result":
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TOOL_RESULT,
+                    call_id=block.get("tool_use_id"),
+                    content=_stringify_content(block.get("content")),
+                )
+            )
+        elif block_type == "image":
+            source = block.get("source") or {}
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.IMAGE,
+                    data=source.get("data"),
+                    mime_type=source.get("media_type"),
+                )
+            )
+        # `thinking`, `redacted_thinking`, and server tool blocks carry no
+        # portable content and are intentionally dropped.
+
+    return llm.NormalizedMessage(role=role, parts=parts)
+
+
+def _claude_from_normalized(message: llm.NormalizedMessage) -> dict[str, Any]:
+    """Translate a normalized message into a Claude-native message dict."""
+    role = "assistant" if message.role == llm.Role.ASSISTANT else "user"
+    blocks: list[dict[str, Any]] = []
+    for part in message.parts:
+        if part.type == llm.NormalizedContentType.TEXT:
+            blocks.append({"type": "text", "text": part.text or ""})
+        elif part.type == llm.NormalizedContentType.IMAGE:
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": (
+                            part.mime_type or "application/octet-stream"
+                        ),
+                        "data": part.data or "",
+                    },
+                }
+            )
+        elif part.type == llm.NormalizedContentType.TOOL_CALL:
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": part.id or "",
+                    "name": part.name or "",
+                    "input": part.arguments or {},
+                }
+            )
+        elif part.type == llm.NormalizedContentType.TOOL_RESULT:
+            blocks.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": part.call_id or "",
+                    "content": part.content or "",
+                }
+            )
+    return {"role": role, "content": blocks}
+
+
+llm.register_interaction_normalizer(llm.Backend.CLAUDE, _claude_to_normalized)
+
+
 class Conversation:
-    _interactions: list[Interaction]
+    _interactions: list[llm.Interaction]
     _messages: list[dict[str, Any]]
     _system_instructions: list[str]
 
@@ -56,7 +197,9 @@ class Conversation:
     def messages(self) -> list[dict[str, Any]]:
         return self._messages
 
-    def feed_next_interaction(self, interaction: Interaction) -> Interaction:
+    def feed_next_interaction(
+        self, interaction: llm.Interaction
+    ) -> llm.Interaction:
         if interaction.previous_interaction_id:
             if (
                 self._interactions
@@ -112,6 +255,27 @@ class Conversation:
                 message="Only one content chunk is allowed.",
             ).to_exception()
 
+        backend = llm.interaction_backend(interaction)
+        if backend is not None and backend != llm.Backend.CLAUDE:
+            # Produced by another backend: bridge it through the normalised
+            # representation and leave the interaction's own content untouched.
+            message = _claude_from_normalized(
+                llm.normalize_interaction(interaction)
+            )
+        else:
+            # Tagged as ours, or untagged (optimistically treated as native).
+            message = self._native_message(interaction)
+
+        if self._interactions and not interaction.previous_interaction_id:
+            interaction.previous_interaction_id = self._interactions[-1].id
+
+        self._messages.append(message)
+        self._interactions.append(interaction)
+
+        return interaction
+
+    @staticmethod
+    def _native_message(interaction: llm.Interaction) -> dict[str, Any]:
         content = a11.from_chunk(interaction.content[0])
         if isinstance(
             content, (anthropic.types.Message, anthropic.types.ParsedMessage)
@@ -127,7 +291,7 @@ class Conversation:
                 ).to_exception()
             message = {"role": role, "content": content_content}
         elif isinstance(content, str):
-            message = {"role": Role.USER, "content": content}
+            message = {"role": llm.Role.USER, "content": content}
         else:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
@@ -143,14 +307,7 @@ class Conversation:
                 message[field] = value
 
         interaction.content = [a11.to_chunk(message)]
-
-        if self._interactions and not interaction.previous_interaction_id:
-            interaction.previous_interaction_id = self._interactions[-1].id
-
-        self._messages.append(message)
-        self._interactions.append(interaction)
-
-        return interaction
+        return message
 
 
 @dataclasses.dataclass
@@ -348,7 +505,7 @@ async def _build_tool_results_from_outputs(
 
 async def _add_tool_calls_to_interaction(
     tool_calls: list[_ToolCall],
-    interaction: Interaction,
+    interaction: llm.Interaction,
     registry: a11.ActionRegistry,
 ):
     for tool_call in tool_calls:
@@ -367,7 +524,7 @@ async def _add_tool_calls_to_interaction(
 
 def _build_usage_metadata(
     usage: anthropic.types.Usage | None,
-) -> UsageMetadata | None:
+) -> llm.UsageMetadata | None:
     """Map Anthropic's `Usage` onto the provider-independent `UsageMetadata`."""
     if usage is None:
         return None
@@ -385,7 +542,7 @@ def _build_usage_metadata(
         usage.input_tokens + usage.output_tokens + cache_read + cache_write
     )
 
-    return UsageMetadata(
+    return llm.UsageMetadata(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=total_tokens,
@@ -415,7 +572,9 @@ def _build_backend_specific_metadata(
     snapshot: anthropic.types.Message,
 ) -> dict[str, bytes]:
     """Collect Anthropic-specific fields that don't map onto shared models."""
-    metadata: dict[str, bytes] = {}
+    metadata: dict[str, bytes] = {
+        llm.BACKEND_METADATA_KEY: str(llm.Backend.CLAUDE).encode()
+    }
 
     for field in ("container", "stop_reason", "stop_details"):
         value = getattr(snapshot, field, None)
@@ -445,7 +604,7 @@ async def interact_with_claude(action: a11.Action):
     def remaining_timeout():
         return max(deadline - a11.now(), a11.zero_duration())
 
-    api_key = action.get_header(LlmHeaders.API_KEY.value, decode=True)
+    api_key = action.get_header(llm.LlmHeaders.API_KEY.value, decode=True)
     if api_key is None:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -454,7 +613,8 @@ async def interact_with_claude(action: a11.Action):
     api_key: str
 
     model: str = (
-        action.get_header(LlmHeaders.MODEL.value, decode=True) or DEFAULT_MODEL
+        action.get_header(llm.LlmHeaders.MODEL.value, decode=True)
+        or DEFAULT_MODEL
     )
 
     config = await action["config"].consume(
@@ -471,13 +631,13 @@ async def interact_with_claude(action: a11.Action):
 
     client = get_anthropic_client(api_key)
 
-    allowed_patterns = get_allowed_llm_action_patterns(action)
+    allowed_patterns = llm.get_allowed_llm_action_patterns(action)
     requested_tools = [
         tool async for tool in action["tools"].iter_with_deadline(deadline)
     ]
     tools = []
     for tool in requested_tools:
-        if not action_name_matches_allowed(tool["name"], allowed_patterns):
+        if not llm.action_name_matches_allowed(tool["name"], allowed_patterns):
             logging.warning(
                 "Tool `%s` was requested, but isn't allowed.", tool["name"]
             )
@@ -557,9 +717,9 @@ async def interact_with_claude(action: a11.Action):
                     message="No message could be accumulated.",
                 ).to_exception()
 
-            interaction = Interaction(
+            interaction = llm.Interaction(
                 previous_interaction_id=previous_interaction_id,
-                role=Role.ASSISTANT,
+                role=llm.Role.ASSISTANT,
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 model=snapshot.model,
                 content=[
@@ -587,11 +747,14 @@ async def interact_with_claude(action: a11.Action):
                 interaction, action, action.get_registry()
             )
 
-            tool_output_interaction = Interaction(
+            tool_output_interaction = llm.Interaction(
                 previous_interaction_id=previous_interaction_id,
-                role=Role.USER,
+                role=llm.Role.USER,
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 action_outputs=outputs,
+                backend_specific_metadata={
+                    llm.BACKEND_METADATA_KEY: str(llm.Backend.CLAUDE).encode()
+                },
                 content=[
                     a11.to_chunk(
                         {

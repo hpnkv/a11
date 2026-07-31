@@ -12,6 +12,7 @@ import datetime
 import enum
 import fnmatch
 import functools
+import importlib
 import inspect
 import json
 import math
@@ -95,10 +96,6 @@ def _status_boundary(fn: _F) -> _F:
     return cast(_F, wrapped)
 
 
-def _raise_status(code: StatusCode, message: str) -> None:
-    raise Status(code=code, message=message).to_exception()
-
-
 @dataclass(frozen=True, slots=True)
 class _Mimetype:
     media_type: str
@@ -130,36 +127,36 @@ def _parse_parameter_value(value: str) -> str:
 
 def _parse_mimetype(value: str, *, allow_patterns: bool) -> _Mimetype:
     if not isinstance(value, str) or not value.strip():
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Mimetype must be a non-empty string.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Mimetype must be a non-empty string.",
+        ).to_exception()
 
     parts = value.split(";")
     media_type = parts[0].strip().lower()
     if media_type.count("/") != 1:
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"Invalid mimetype: {value!r}.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=f"Invalid mimetype: {value!r}.",
+        ).to_exception()
 
     major, minor = media_type.split("/", 1)
     part_re = _MIME_PART_RE if allow_patterns else _MIME_TOKEN_RE
     if not major or not minor or not part_re.fullmatch(major):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"Invalid mimetype: {value!r}.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=f"Invalid mimetype: {value!r}.",
+        ).to_exception()
     if not part_re.fullmatch(minor):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"Invalid mimetype: {value!r}.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=f"Invalid mimetype: {value!r}.",
+        ).to_exception()
     if not allow_patterns and any(char in media_type for char in "*?["):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Registered mimetypes must identify an exact media type.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Registered mimetypes must identify an exact media type.",
+        ).to_exception()
 
     parameters: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -173,18 +170,20 @@ def _parse_mimetype(value: str, *, allow_patterns: bool) -> _Mimetype:
             or not parameter_value
             or name in seen
         ):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                f"Invalid mimetype parameter in {value!r}.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Invalid mimetype parameter in {value!r}.",
+            ).to_exception()
         if not allow_patterns and any(
             char in parameter_value for char in "*?["
         ):
             if name != _TYPE_PARAMETER or parameter_value != "*":
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "Registered mimetype parameters cannot be patterns.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "Registered mimetype parameters cannot be patterns."
+                    ),
+                ).to_exception()
         if name == _TYPE_PARAMETER:
             parameter_value = urllib.parse.unquote(parameter_value)
         parameters.append((name, parameter_value))
@@ -200,12 +199,50 @@ def _format_parameter(value: str) -> str:
     return f'"{escaped}"'
 
 
-def _format_exact_mimetype(mimetype: _Mimetype, obj_type: type) -> str:
+def _qualified_name(obj_type: type) -> str:
+    """A stable, collision-resistant identifier for a type.
+
+    Uses the fully qualified ``module.qualname`` so identically named classes
+    from different modules (for example, two SDKs that each define a
+    ``TextDelta``) do not clash. Builtins, ``__main__`` and locally defined
+    classes — whose qualified names cannot be resolved by import anyway — fall
+    back to the bare class name.
+    """
+    qualname = getattr(obj_type, "__qualname__", None) or obj_type.__name__
+    module = getattr(obj_type, "__module__", "") or ""
+    if "<locals>" in qualname or module in ("", "builtins", "__main__"):
+        return obj_type.__name__
+    return f"{module}.{qualname}"
+
+
+def _import_qualified(name: str) -> type | None:
+    """Best-effort resolution of a ``module.qualname`` identifier by import."""
+    if "." not in name:
+        return None
+    module_path, _, attribute = name.rpartition(".")
+    while module_path:
+        try:
+            module = importlib.import_module(module_path)
+        except Exception:
+            module_path, _, head = module_path.rpartition(".")
+            attribute = f"{head}.{attribute}" if head else attribute
+            continue
+        obj: Any = module
+        try:
+            for part in attribute.split("."):
+                obj = getattr(obj, part)
+        except AttributeError:
+            return None
+        return obj if isinstance(obj, type) else None
+    return None
+
+
+def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
     parameters = list(mimetype.without_parameter(_TYPE_PARAMETER).parameters)
-    type_identifier = urllib.parse.quote(
-        obj_type.__name__, safe="!#$%&'*+.^_`|~-"
+    encoded_identifier = urllib.parse.quote(
+        type_identifier, safe="!#$%&'*+.^_`|~-"
     )
-    parameters.append((_TYPE_PARAMETER, type_identifier))
+    parameters.append((_TYPE_PARAMETER, encoded_identifier))
     suffix = "".join(
         f";{name}={_format_parameter(value)}" for name, value in parameters
     )
@@ -275,20 +312,20 @@ def _callable_signature(fn: Callable[..., Any]) -> inspect.Signature | None:
 
 def _validate_serializer(serializer: SerializerFn) -> None:
     if not callable(serializer):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Serializer must be callable.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Serializer must be callable.",
+        ).to_exception()
     signature = _callable_signature(serializer)
     if signature is None:
         return
     try:
         signature.bind(object())
     except TypeError:
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Serializer must accept one object argument.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Serializer must accept one object argument.",
+        ).to_exception()
 
 
 def _deserializer_call_info(
@@ -296,10 +333,10 @@ def _deserializer_call_info(
     receives_chunk: bool | None,
 ) -> tuple[str, bool]:
     if not callable(deserializer):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Deserializer must be callable.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Deserializer must be callable.",
+        ).to_exception()
 
     signature = _callable_signature(deserializer)
     if signature is None:
@@ -319,11 +356,13 @@ def _deserializer_call_info(
                 signature.bind(marker)
                 call_mode = "data"
             except TypeError:
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "Deserializer must accept data and, optionally, an object"
-                    " type.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "Deserializer must accept data and, optionally, an"
+                        " object type."
+                    ),
+                ).to_exception()
 
     if receives_chunk is None:
         positional = [
@@ -363,9 +402,55 @@ class SerializationRegistry:
         self._serializers: list[_SerializerRegistration] = []
         self._deserializers: list[_DeserializerRegistration] = []
         self._known_types: dict[str, list[type]] = {}
+        # Explicit, user-set type tags and their reverse index, plus a
+        # qualified-name index populated as types are seen.
+        self._type_tags: dict[type, str] = {}
+        self._tag_to_type: dict[str, type] = {}
+        self._known_by_tag: dict[str, type] = {}
         self._next_order = 0
         if register_defaults:
             self.register_defaults()
+
+    @_status_boundary
+    def set_type_tag(self, obj_type: type, tag: str) -> None:
+        """Pin the wire tag used to identify ``obj_type`` in serialized data.
+
+        Overrides the default fully-qualified name. Use this to keep a short,
+        stable tag for a type (for example to preserve an existing wire format)
+        or to give two like-named types deterministic, distinct identifiers.
+        """
+        if not isinstance(obj_type, type):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="obj_type must be a type.",
+            ).to_exception()
+        if not isinstance(tag, str) or not tag:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="tag must be a non-empty string.",
+            ).to_exception()
+        existing = self._tag_to_type.get(tag)
+        if existing is not None and existing is not obj_type:
+            raise Status(
+                code=StatusCode.ALREADY_EXISTS,
+                message=(
+                    f"Tag {tag!r} is already assigned to {existing.__name__}."
+                ),
+            ).to_exception()
+        previous = self._type_tags.get(obj_type)
+        if previous is not None and previous != tag:
+            self._tag_to_type.pop(previous, None)
+        self._type_tags[obj_type] = tag
+        self._tag_to_type[tag] = obj_type
+        self._remember_type(obj_type)
+
+    @_status_boundary
+    def _type_tag(self, obj_type: type) -> str:
+        """The wire tag for ``obj_type``: explicit if set, else qualified."""
+        explicit = self._type_tags.get(obj_type)
+        if explicit is not None:
+            return explicit
+        return _qualified_name(obj_type)
 
     @_status_boundary
     def register_serializer(
@@ -482,13 +567,13 @@ class SerializationRegistry:
         if mimetype:
             selection = _parse_mimetype(mimetype, allow_patterns=True)
         elif not isinstance(mimetype, str):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "Mimetype must be a string.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Mimetype must be a string.",
+            ).to_exception()
 
         actual_type = type(obj)
-        actual_identifier = actual_type.__name__
+        actual_identifiers = {actual_type.__name__, self._type_tag(actual_type)}
         candidates = [
             registration
             for registration in self._serializers
@@ -500,9 +585,12 @@ class SerializationRegistry:
             and (
                 selection is None
                 or selection.get_parameter(_TYPE_PARAMETER) is None
-                or fnmatch.fnmatchcase(
-                    actual_identifier,
-                    cast(str, selection.get_parameter(_TYPE_PARAMETER)),
+                or any(
+                    fnmatch.fnmatchcase(
+                        identifier,
+                        cast(str, selection.get_parameter(_TYPE_PARAMETER)),
+                    )
+                    for identifier in actual_identifiers
                 )
             )
         ]
@@ -514,16 +602,18 @@ class SerializationRegistry:
         )
         if not candidates:
             requested = mimetype or "the object's type"
-            _raise_status(
-                StatusCode.NOT_FOUND,
-                f"No serializer is registered for {actual_type.__name__} and"
-                f" {requested!r}.",
-            )
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message=(
+                    f"No serializer is registered for {actual_type.__name__}"
+                    f" and {requested!r}."
+                ),
+            ).to_exception()
 
         registration = candidates[0]
         serialized = registration.serializer(obj)
         exact_mimetype = _format_exact_mimetype(
-            registration.mimetype, actual_type
+            registration.mimetype, self._type_tag(actual_type)
         )
         self._remember_type(actual_type)
 
@@ -542,11 +632,13 @@ class SerializationRegistry:
         elif isinstance(serialized, (bytearray, memoryview)):
             data = bytes(serialized)
         else:
-            _raise_status(
-                StatusCode.INTERNAL,
-                "Serializer returned an unsupported value of type"
-                f" {type(serialized).__name__}.",
-            )
+            raise Status(
+                code=StatusCode.INTERNAL,
+                message=(
+                    "Serializer returned an unsupported value of type"
+                    f" {type(serialized).__name__}."
+                ),
+            ).to_exception()
 
         return types.Chunk(
             metadata=types.ChunkMetadata(mimetype=exact_mimetype),
@@ -569,20 +661,23 @@ class SerializationRegistry:
         """
 
         if not isinstance(chunk, types.Chunk):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "chunk must be an instance of Chunk.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="chunk must be an instance of Chunk.",
+            ).to_exception()
         if obj_type is not None and not isinstance(obj_type, type):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "obj_type must be a type or None.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="obj_type must be a type or None.",
+            ).to_exception()
         if chunk.ref:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "A referenced chunk must be resolved before deserialization.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "A referenced chunk must be resolved before"
+                    " deserialization."
+                ),
+            ).to_exception()
 
         actual = None
         actual_mimetype = chunk.get_mimetype()
@@ -642,50 +737,58 @@ class SerializationRegistry:
             if expected_type is not None and not isinstance(
                 result, expected_type
             ):
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "Deserializer returned"
-                    f" {type(result).__name__}; expected"
-                    f" {expected_type.__name__}.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "Deserializer returned"
+                        f" {type(result).__name__}; expected"
+                        f" {expected_type.__name__}."
+                    ),
+                ).to_exception()
             return result
 
         if obj_type is not None and had_matching_format:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                f"The chunk cannot be deserialized as {obj_type.__name__}.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    f"The chunk cannot be deserialized as {obj_type.__name__}."
+                ),
+            ).to_exception()
         if had_unresolved_type:
-            _raise_status(
-                StatusCode.NOT_FOUND,
-                "The chunk's MIME type does not identify a registered Python"
-                " type.",
-            )
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message=(
+                    "The chunk's MIME type does not identify a registered"
+                    " Python type."
+                ),
+            ).to_exception()
         requested = (
             mimetype_patterns
             if mimetype_patterns
             else actual_mimetype or "<missing>"
         )
-        _raise_status(
-            StatusCode.NOT_FOUND,
-            f"No deserializer matched {requested!r}.",
-        )
+        raise Status(
+            code=StatusCode.NOT_FOUND,
+            message=f"No deserializer matched {requested!r}.",
+        ).to_exception()
 
     @_status_boundary
     def _registration_key(self, obj_type: type, mimetype: str) -> _Mimetype:
         if not isinstance(obj_type, type):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "obj_type must be a type.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="obj_type must be a type.",
+            ).to_exception()
         parsed = _parse_mimetype(mimetype, allow_patterns=False)
         encoded_type = parsed.get_parameter(_TYPE_PARAMETER)
         if encoded_type not in {None, "*", obj_type.__name__}:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "A registered MIME type's type parameter must be '*' or the"
-                f" class name {obj_type.__name__!r}.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "A registered MIME type's type parameter must be '*' or the"
+                    f" class name {obj_type.__name__!r}."
+                ),
+            ).to_exception()
         return parsed.without_parameter(_TYPE_PARAMETER)
 
     @_status_boundary
@@ -702,11 +805,13 @@ class SerializationRegistry:
             and registration.mimetype == mimetype
             for registration in registrations
         ):
-            _raise_status(
-                StatusCode.ALREADY_EXISTS,
-                f"A handler for {obj_type.__name__} and"
-                f" {mimetype.media_type!r} is already registered.",
-            )
+            raise Status(
+                code=StatusCode.ALREADY_EXISTS,
+                message=(
+                    f"A handler for {obj_type.__name__} and"
+                    f" {mimetype.media_type!r} is already registered."
+                ),
+            ).to_exception()
 
     @_status_boundary
     def _take_order(self) -> int:
@@ -719,13 +824,27 @@ class SerializationRegistry:
         known = self._known_types.setdefault(obj_type.__name__, [])
         if obj_type not in known:
             known.append(obj_type)
+        self._known_by_tag.setdefault(_qualified_name(obj_type), obj_type)
 
     @_status_boundary
     def _resolve_type(self, name: str) -> type | None:
+        # 1. An explicitly-pinned tag always wins.
+        explicit = self._tag_to_type.get(name)
+        if explicit is not None:
+            return explicit
+
+        # 2. A previously-seen fully-qualified name.
+        by_tag = self._known_by_tag.get(name)
+        if by_tag is not None:
+            return by_tag
+
+        # 3. Legacy bare class name (ambiguous; first-seen wins, as before).
         known = self._known_types.get(name)
         if known:
             return known[0]
 
+        # 4. Scan loaded subclasses, matching the qualified name first (exact,
+        #    collision-free) and the bare name second (back-compatible).
         visited: set[type] = set()
         pending = [
             candidate
@@ -737,14 +856,19 @@ class SerializationRegistry:
             if candidate in visited:
                 continue
             visited.add(candidate)
-            if candidate.__name__ == name:
+            if _qualified_name(candidate) == name or candidate.__name__ == name:
                 self._remember_type(candidate)
                 return candidate
             try:
                 pending.extend(candidate.__subclasses__())
             except TypeError:
                 pass
-        return None
+
+        # 5. Last resort: import a dotted qualified name directly.
+        resolved = _import_qualified(name)
+        if resolved is not None:
+            self._remember_type(resolved)
+        return resolved
 
     @_status_boundary
     def _prepare_selectors(
@@ -757,27 +881,31 @@ class SerializationRegistry:
         elif isinstance(mimetype_patterns, Sequence):
             requested = list(mimetype_patterns)
         else:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "mimetype_patterns must be a string or sequence of strings.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "mimetype_patterns must be a string or sequence of strings."
+                ),
+            ).to_exception()
 
         if not requested:
             if actual is None:
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "The chunk has no mimetype and no mimetype match was"
-                    " supplied.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "The chunk has no mimetype and no mimetype match was"
+                        " supplied."
+                    ),
+                ).to_exception()
             return [cast(_Mimetype, actual)]
 
         selectors: list[_Mimetype] = []
         for requested_mimetype in requested:
             if not isinstance(requested_mimetype, str):
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "Every mimetype match must be a string.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="Every mimetype match must be a string.",
+                ).to_exception()
             if not requested_mimetype:
                 if actual is not None:
                     selectors.append(actual)
@@ -812,11 +940,13 @@ class SerializationRegistry:
 
         if not selectors:
             if actual is None:
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    "The chunk has no mimetype and no usable mimetype match was"
-                    " supplied.",
-                )
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "The chunk has no mimetype and no usable mimetype match"
+                        " was supplied."
+                    ),
+                ).to_exception()
             selectors.append(actual)
         return selectors
 
@@ -832,21 +962,31 @@ class SerializationRegistry:
         if encoded_name is None:
             return requested
         if encoded is None:
-            if encoded_name != requested.__name__:
-                _raise_status(
-                    StatusCode.INVALID_ARGUMENT,
-                    f"The chunk contains {encoded_name}, not"
-                    f" {requested.__name__}.",
-                )
+            accepted = {
+                requested.__name__,
+                self._type_tag(requested),
+                _qualified_name(requested),
+            }
+            if encoded_name not in accepted:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        f"The chunk contains {encoded_name}, not"
+                        f" {requested.__name__}."
+                    ),
+                ).to_exception()
             return requested
         if issubclass(encoded, requested):
             return encoded
         if issubclass(requested, encoded):
             return requested
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"The chunk contains {encoded.__name__}, not {requested.__name__}.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                f"The chunk contains {encoded.__name__}, not"
+                f" {requested.__name__}."
+            ),
+        ).to_exception()
 
     @_status_boundary
     def _invoke_deserializer(
@@ -903,7 +1043,18 @@ def _pydantic_values(model: pydantic.BaseModel) -> dict[str, Any]:
     return result
 
 
-def _to_wire(value: Any, *, binary: bool, top_level: bool = False) -> Any:
+def _to_wire(
+    value: Any,
+    *,
+    binary: bool,
+    top_level: bool = False,
+    tag_for: Callable[[type], str] | None = None,
+) -> Any:
+    resolve_tag = tag_for or _qualified_name
+
+    def rec(item: Any, *, top: bool = False) -> Any:
+        return _to_wire(item, binary=binary, top_level=top, tag_for=resolve_tag)
+
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, int):
@@ -930,12 +1081,12 @@ def _to_wire(value: Any, *, binary: bool, top_level: bool = False) -> Any:
     if isinstance(value, timing.Time):
         encoded = _timing_value(value)
         if isinstance(encoded, int):
-            encoded = _to_wire(encoded, binary=binary)
+            encoded = rec(encoded)
         return encoded if top_level else _wire_tag("a11.Time", encoded)
     if isinstance(value, timing.Duration):
         encoded = _timing_value(value)
         if isinstance(encoded, int):
-            encoded = _to_wire(encoded, binary=binary)
+            encoded = rec(encoded)
         return encoded if top_level else _wire_tag("a11.Duration", encoded)
     if isinstance(value, datetime.datetime):
         encoded = value.isoformat()
@@ -952,7 +1103,7 @@ def _to_wire(value: Any, *, binary: bool, top_level: bool = False) -> Any:
             + value.seconds * 1_000_000
             + value.microseconds
         )
-        encoded = _to_wire(encoded, binary=binary)
+        encoded = rec(encoded)
         return encoded if top_level else _wire_tag("timedelta", encoded)
     if isinstance(value, uuid.UUID):
         encoded = str(value)
@@ -970,68 +1121,62 @@ def _to_wire(value: Any, *, binary: bool, top_level: bool = False) -> Any:
             Status,
         ),
     ):
-        encoded = _to_wire(value.model_dump(), binary=binary, top_level=True)
+        encoded = rec(value.model_dump(), top=True)
         if top_level:
             return encoded
-        return _wire_tag("a11.value", encoded, class_name=type(value).__name__)
+        return _wire_tag(
+            "a11.value", encoded, class_name=resolve_tag(type(value))
+        )
     if isinstance(value, pydantic.BaseModel):
         encoded = {
-            key: _to_wire(item, binary=binary)
-            for key, item in _pydantic_values(value).items()
+            key: rec(item) for key, item in _pydantic_values(value).items()
         }
         if top_level and _WIRE_TAG not in encoded:
             return encoded
         return _wire_tag(
             "pydantic",
             encoded,
-            class_name=type(value).__name__,
+            class_name=resolve_tag(type(value)),
         )
     if isinstance(value, enum.Enum):
-        return _to_wire(value.value, binary=binary)
+        return rec(value.value)
     if isinstance(value, dict):
         if (
             all(isinstance(key, str) for key in value)
             and _WIRE_TAG not in value
         ):
-            return {
-                key: _to_wire(item, binary=binary)
-                for key, item in value.items()
-            }
-        pairs = [
-            [
-                _to_wire(key, binary=binary),
-                _to_wire(item, binary=binary),
-            ]
-            for key, item in value.items()
-        ]
+            return {key: rec(item) for key, item in value.items()}
+        pairs = [[rec(key), rec(item)] for key, item in value.items()]
         return _wire_tag("dict", pairs)
     if isinstance(value, list):
-        return [_to_wire(item, binary=binary) for item in value]
+        return [rec(item) for item in value]
     if isinstance(value, tuple):
-        values = [_to_wire(item, binary=binary) for item in value]
+        values = [rec(item) for item in value]
         return values if top_level else _wire_tag("tuple", values)
     if isinstance(value, set):
-        values = [_to_wire(item, binary=binary) for item in value]
+        values = [rec(item) for item in value]
         return values if top_level else _wire_tag("set", values)
     if isinstance(value, frozenset):
-        values = [_to_wire(item, binary=binary) for item in value]
+        values = [rec(item) for item in value]
         return values if top_level else _wire_tag("frozenset", values)
 
-    _raise_status(
-        StatusCode.INVALID_ARGUMENT,
-        f"Objects of type {type(value).__name__} cannot be serialized by the"
-        " default codecs.",
-    )
+    raise Status(
+        code=StatusCode.INVALID_ARGUMENT,
+        message=(
+            f"Objects of type {type(value).__name__} cannot be serialized by"
+            " the default codecs."
+        ),
+    ).to_exception()
 
 
 def _decode_base64(value: Any) -> bytes:
     if isinstance(value, bytes):
         return value
     if not isinstance(value, str):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Serialized bytes must be bytes or a base64 string.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Serialized bytes must be bytes or a base64 string.",
+        ).to_exception()
     try:
         return base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -1043,10 +1188,10 @@ def _decode_base64(value: Any) -> bytes:
 
 def _parse_datetime(value: Any, cls: type) -> Any:
     if not isinstance(value, str):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"Serialized {cls.__name__} must be a string.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=f"Serialized {cls.__name__} must be a string.",
+        ).to_exception()
     try:
         return cls.fromisoformat(value)
     except ValueError as exc:
@@ -1062,10 +1207,12 @@ def _make_time(value: Any) -> timing.Time:
     if value == "-inf":
         return timing.infinite_past()
     if type(value) is not int:
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Serialized Time must be nanoseconds or an infinity marker.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "Serialized Time must be nanoseconds or an infinity marker."
+            ),
+        ).to_exception()
     return timing.Time.from_nanoseconds_since_epoch(value)
 
 
@@ -1075,10 +1222,12 @@ def _make_duration(value: Any) -> timing.Duration:
     if value == "-inf":
         return -timing.infinite_duration()
     if type(value) is not int:
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "Serialized Duration must be nanoseconds or an infinity marker.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "Serialized Duration must be nanoseconds or an infinity marker."
+            ),
+        ).to_exception()
     return timing.Duration(value)
 
 
@@ -1103,7 +1252,10 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
     if tag == "float":
         values = {"nan": math.nan, "+inf": math.inf, "-inf": -math.inf}
         if encoded not in values:
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Invalid tagged float.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Invalid tagged float.",
+            ).to_exception()
         return values[encoded]
     if tag == "bytes":
         return _decode_base64(encoded)
@@ -1118,10 +1270,10 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
     if tag == "timedelta":
         encoded = _from_wire(encoded, resolver)
         if type(encoded) is not int:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "Invalid tagged timedelta.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Invalid tagged timedelta.",
+            ).to_exception()
         return datetime.timedelta(microseconds=encoded)
     if tag == "uuid":
         try:
@@ -1137,10 +1289,10 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
         return _make_duration(_from_wire(encoded, resolver))
     if tag in {"tuple", "set", "frozenset"}:
         if not isinstance(encoded, list):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                f"Invalid tagged {tag}.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Invalid tagged {tag}.",
+            ).to_exception()
         items = [_from_wire(item, resolver) for item in encoded]
         try:
             return {"tuple": tuple, "set": set, "frozenset": frozenset}[tag](
@@ -1153,15 +1305,17 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
             ).to_exception() from exc
     if tag == "dict":
         if not isinstance(encoded, list):
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Invalid tagged dict.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Invalid tagged dict."
+            ).to_exception()
         result = {}
         try:
             for pair in encoded:
                 if not isinstance(pair, list) or len(pair) != 2:
-                    _raise_status(
-                        StatusCode.INVALID_ARGUMENT,
-                        "Invalid key/value pair in tagged dict.",
-                    )
+                    raise Status(
+                        code=StatusCode.INVALID_ARGUMENT,
+                        message="Invalid key/value pair in tagged dict.",
+                    ).to_exception()
                 key, item = pair
                 result[_from_wire(key, resolver)] = _from_wire(item, resolver)
         except TypeError as exc:
@@ -1176,10 +1330,13 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
             resolver(class_name) if isinstance(class_name, str) else None
         )
         if model_type is None or not issubclass(model_type, pydantic.BaseModel):
-            _raise_status(
-                StatusCode.NOT_FOUND,
-                f"Pydantic model {class_name!r} is not registered or loaded.",
-            )
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message=(
+                    f"Pydantic model {class_name!r} is not registered or"
+                    " loaded."
+                ),
+            ).to_exception()
         decoded = _from_wire(encoded, resolver)
         return _validate_pydantic_model(model_type, decoded)
     if tag == "a11.value":
@@ -1188,10 +1345,13 @@ def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
             resolver(class_name) if isinstance(class_name, str) else None
         )
         if model_type not in _NATIVE_DATA_TYPES:
-            _raise_status(
-                StatusCode.NOT_FOUND,
-                f"A11 value type {class_name!r} is not registered or loaded.",
-            )
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message=(
+                    f"A11 value type {class_name!r} is not registered or"
+                    " loaded."
+                ),
+            ).to_exception()
         return model_type.model_validate(_from_wire(encoded, resolver))
 
     # A normal user mapping can contain the reserved key.  Unknown tags are
@@ -1213,10 +1373,12 @@ def _validate_pydantic_model(
         validation_value, by_alias=True, by_name=True
     )
     if not isinstance(result, model_type):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            f"Validation did not produce a {model_type.__name__} instance.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                f"Validation did not produce a {model_type.__name__} instance."
+            ),
+        ).to_exception()
     return result
 
 
@@ -1237,18 +1399,22 @@ def _coerce_target(
         return _validate_pydantic_model(target, value)
     if target is dict:
         if not isinstance(value, dict):
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected a dict.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected a dict."
+            ).to_exception()
         return value
     if target is list:
         if not isinstance(value, list):
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected a list.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected a list."
+            ).to_exception()
         return value
     if target in {tuple, set, frozenset}:
         if not isinstance(value, (list, tuple, set, frozenset)):
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                f"Expected data for {target.__name__}.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Expected data for {target.__name__}.",
+            ).to_exception()
         try:
             return target(value)
         except TypeError as exc:
@@ -1258,19 +1424,27 @@ def _coerce_target(
             ).to_exception() from exc
     if target is bool:
         if type(value) is not bool:
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected a bool.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected a bool."
+            ).to_exception()
         return value
     if target is int:
         if type(value) is not int:
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected an int.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected an int."
+            ).to_exception()
         return value
     if target is float:
         if type(value) not in {int, float}:
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected a float.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected a float."
+            ).to_exception()
         return float(value)
     if target is str:
         if not isinstance(value, str):
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected a str.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected a str."
+            ).to_exception()
         return value
     if target is bytes:
         return _decode_base64(value)
@@ -1278,7 +1452,9 @@ def _coerce_target(
         return bytearray(_decode_base64(value))
     if target is type(None):
         if value is not None:
-            _raise_status(StatusCode.INVALID_ARGUMENT, "Expected null.")
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT, message="Expected null."
+            ).to_exception()
         return None
     if target is datetime.datetime:
         return (
@@ -1302,10 +1478,12 @@ def _coerce_target(
         if isinstance(value, datetime.timedelta):
             return value
         if type(value) is not int:
-            _raise_status(
-                StatusCode.INVALID_ARGUMENT,
-                "Serialized timedelta must contain integer microseconds.",
-            )
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "Serialized timedelta must contain integer microseconds."
+                ),
+            ).to_exception()
         return datetime.timedelta(microseconds=value)
     if target is uuid.UUID:
         if isinstance(value, uuid.UUID):
@@ -1328,10 +1506,12 @@ def _coerce_target(
     return value
 
 
-def _serialize_json(obj: Any) -> bytes:
+def _serialize_json(
+    obj: Any, tag_for: Callable[[type], str] | None = None
+) -> bytes:
     try:
         return json.dumps(
-            _to_wire(obj, binary=False, top_level=True),
+            _to_wire(obj, binary=False, top_level=True, tag_for=tag_for),
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
@@ -1360,10 +1540,12 @@ def _deserialize_json(
     return _coerce_target(decoded, obj_type, resolver)
 
 
-def _serialize_msgpack(obj: Any) -> bytes:
+def _serialize_msgpack(
+    obj: Any, tag_for: Callable[[type], str] | None = None
+) -> bytes:
     try:
         return msgpack.packb(
-            _to_wire(obj, binary=True, top_level=True),
+            _to_wire(obj, binary=True, top_level=True, tag_for=tag_for),
             use_bin_type=True,
         )
     except StatusException:
@@ -1428,6 +1610,12 @@ DEFAULT_SERIALIZABLE_TYPES: tuple[type, ...] = (
 
 
 def _register_default_serializers(registry: SerializationRegistry) -> None:
+    def serialize_json(obj: Any) -> bytes:
+        return _serialize_json(obj, registry._type_tag)
+
+    def serialize_msgpack(obj: Any) -> bytes:
+        return _serialize_msgpack(obj, registry._type_tag)
+
     def deserialize_json(data: str | bytes, obj_type: type) -> Any:
         return _deserialize_json(data, obj_type, registry._resolve_type)
 
@@ -1438,25 +1626,33 @@ def _register_default_serializers(registry: SerializationRegistry) -> None:
         registry.register(
             obj_type,
             JSON_MIMETYPE,
-            _serialize_json,
+            serialize_json,
             deserialize_json,
         )
         registry.register(
             obj_type,
             MSGPACK_MIMETYPE,
-            _serialize_msgpack,
+            serialize_msgpack,
             deserialize_msgpack,
         )
+
+    # The framework's own well-known types keep their historical bare-name wire
+    # tags (this preserves stored data and cross-language interop); every other
+    # type falls back to a fully-qualified, collision-free tag by default.
+    for obj_type in DEFAULT_SERIALIZABLE_TYPES:
+        if obj_type is pydantic.BaseModel:
+            continue
+        registry.set_type_tag(obj_type, obj_type.__name__)
 
 
 def register_default_serializers(registry: SerializationRegistry) -> None:
     """Register all built-in codecs with an otherwise empty registry."""
 
     if not isinstance(registry, SerializationRegistry):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "registry must be a SerializationRegistry.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="registry must be a SerializationRegistry.",
+        ).to_exception()
     registry.register_defaults()
 
 
@@ -1467,11 +1663,16 @@ def get_global_serialization_registry() -> SerializationRegistry:
     return _global_serialization_registry
 
 
+def set_global_type_tag(obj_type: type, tag: str) -> None:
+    """Pin the wire tag for ``obj_type`` on the process-wide registry."""
+    _global_serialization_registry.set_type_tag(obj_type, tag)
+
+
 def set_global_serialization_registry(registry: SerializationRegistry) -> None:
     if not isinstance(registry, SerializationRegistry):
-        _raise_status(
-            StatusCode.INVALID_ARGUMENT,
-            "registry must be a SerializationRegistry.",
-        )
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="registry must be a SerializationRegistry.",
+        ).to_exception()
     global _global_serialization_registry
     _global_serialization_registry = registry

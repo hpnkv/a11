@@ -181,9 +181,7 @@ async def test_webrtc_wire_stream_exchanges_fragmented_messages():
     server = WebRtcWireServer.create("server", signalling, on_stream)
     try:
         client = WireStreamWithRecv(
-            WebRtcWireStream.create_client(
-                "client", "server", signalling
-            )
+            WebRtcWireStream.create_client("client", "server", signalling)
         )
         await asyncio.wait_for(client.start(), timeout=15)
         accepted = await asyncio.wait_for(accepted_future, timeout=15)

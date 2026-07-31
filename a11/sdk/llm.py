@@ -1,10 +1,11 @@
 # Copyright 2026 The A11 Authors.
 
+import abc
 import base64
 import enum
 import re
 import uuid
-from typing import Literal
+from typing import Any, Callable, Literal
 
 import a11
 from a11.status import Status, StatusCode
@@ -437,3 +438,121 @@ class Interaction(BaseModel):
                 current_mimetype = chunk.get_mimetype()
 
         return self
+
+
+class InteractionAdapter(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def __init__(self, _interaction: Interaction): ...
+
+    @staticmethod
+    @abc.abstractmethod
+    def make_text_message_interaction(
+        text: str, system_prompt: str = "", role: Role = Role.USER
+    ) -> Interaction: ...
+
+    @abc.abstractmethod
+    def get_message_text(self) -> str: ...
+
+
+# --- Cross-backend interaction normalization ---------------------------------
+#
+# Different LLM backends persist an interaction's `content` in their own native
+# shape (Anthropic message blocks, Gemini interaction steps, …). When a
+# conversation is handed from one backend to another mid-flight, the receiving
+# backend cannot read the other's native content directly. To bridge them each
+# interaction is tagged (in `backend_specific_metadata`) with the backend that
+# produced it, and each backend contributes a normalizer that turns its own
+# native content into the provider-independent `NormalizedMessage` below. A
+# consumer that meets a foreign interaction calls `normalize_interaction`
+# (which dispatches to the producer's normalizer by tag) and then translates
+# the `NormalizedMessage` into its own native shape.
+
+
+BACKEND_METADATA_KEY = "backend"
+
+
+class Backend(enum.StrEnum):
+    CLAUDE = "claude"
+    GEMINI = "gemini"
+
+
+class NormalizedContentType(enum.StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+
+
+class NormalizedPart(BaseModel):
+    """A single, backend-independent piece of an interaction's content."""
+
+    type: NormalizedContentType
+    # TEXT
+    text: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    # IMAGE (inline, base64-encoded bytes)
+    data: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    mime_type: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    # TOOL_CALL
+    id: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    name: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    arguments: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda x: x is None
+    )
+    # TOOL_RESULT
+    call_id: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    content: str | None = Field(default=None, exclude_if=lambda x: x is None)
+
+
+class NormalizedMessage(BaseModel):
+    """Backend-independent view of one interaction's content."""
+
+    role: Role = Role.USER
+    parts: list[NormalizedPart] = Field(default_factory=list)
+
+
+_INTERACTION_NORMALIZERS: dict[
+    str, Callable[[Interaction], NormalizedMessage]
+] = {}
+
+
+def register_interaction_normalizer(
+    backend: str, normalizer: Callable[[Interaction], NormalizedMessage]
+) -> None:
+    """Register a backend's native-content -> `NormalizedMessage` producer."""
+    _INTERACTION_NORMALIZERS[str(backend)] = normalizer
+
+
+def interaction_backend(interaction: Interaction) -> str | None:
+    """The backend that produced `interaction`, or None if untagged."""
+    value = interaction.backend_specific_metadata.get(BACKEND_METADATA_KEY)
+    if isinstance(value, bytes):
+        value = value.decode()
+    return value or None
+
+
+def normalize_interaction(interaction: Interaction) -> NormalizedMessage:
+    """Build the normalized view of a (foreign) interaction via its producer.
+
+    Dispatches to the normalizer registered by the backend that produced the
+    interaction. Callers should only reach for this when the interaction is
+    tagged for a backend other than their own.
+    """
+    backend = interaction_backend(interaction)
+    if backend is None:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Cannot normalize an interaction with no backend tag.",
+        ).to_exception()
+
+    normalizer = _INTERACTION_NORMALIZERS.get(backend)
+    if normalizer is None:
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message=(
+                "No interaction normalizer is registered for backend"
+                f" {backend!r}; its module must be imported to consume its"
+                " interactions."
+            ),
+        ).to_exception()
+
+    return normalizer(interaction)

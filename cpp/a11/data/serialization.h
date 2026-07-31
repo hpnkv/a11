@@ -1,5 +1,17 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief Type-and-mimetype indexed serialization of values to/from Chunks.
+ *
+ * a11::data::SerializationRegistry maps a C++ type together with a media type
+ * (its representation) to a serializer/deserializer pair, so arbitrary values
+ * can be converted to and from ::a11::data::Chunk. A serialized chunk records
+ * both halves: its mimetype embeds a stable type tag (for example
+ * @c "application/json;type=..."), letting the deserializer recover the
+ * intended type. JSON and MessagePack codecs are available as defaults.
+ */
+
 #ifndef A11_DATA_SERIALIZATION_H_
 #define A11_DATA_SERIALIZATION_H_
 
@@ -21,23 +33,48 @@
 
 namespace a11::data {
 
+/** @brief Media type of the built-in JSON codec. */
 inline constexpr std::string_view kJsonMimetype = "application/json";
+/** @brief Media type of the built-in MessagePack codec. */
 inline constexpr std::string_view kMsgpackMimetype = "application/x-msgpack";
 
+/**
+ * @brief A registry of serializers and deserializers indexed by type and MIME.
+ *
+ * Register a codec for a C++ type and an exact media type, then use ToChunk /
+ * FromChunk to convert values to and from ::a11::data::Chunk. A new registry
+ * is empty; pass @c register_defaults or call RegisterDefaults to install the
+ * standard JSON and MessagePack codecs. The process-wide registry from
+ * GlobalSerializationRegistry already has them. Not copyable.
+ */
 class SerializationRegistry {
  public:
+  /**
+   * @brief Constructs a registry.
+   * @param register_defaults When true, install the JSON and MessagePack
+   *        codecs; otherwise start empty.
+   */
   explicit SerializationRegistry(bool register_defaults = false);
   ~SerializationRegistry();
 
   SerializationRegistry(const SerializationRegistry&) = delete;
   SerializationRegistry& operator=(const SerializationRegistry&) = delete;
 
+  /** @brief Callable turning a @c T into a Chunk. */
   template <typename T>
   using Serializer = std::function<absl::StatusOr<Chunk>(const T&)>;
 
+  /** @brief Callable reconstructing a @c T from a Chunk. */
   template <typename T>
   using Deserializer = std::function<absl::StatusOr<T>(const Chunk&)>;
 
+  /**
+   * @brief Registers a serializer for type @c T and an exact media type.
+   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param mimetype Exact media type produced by @p serializer.
+   * @param serializer Callable converting a @c T to a Chunk.
+   * @return OK on success, or an error (e.g. when @p serializer is empty).
+   */
   template <typename T>
   absl::Status RegisterSerializer(std::string type_name, std::string mimetype,
                                   Serializer<T> serializer) {
@@ -62,6 +99,13 @@ class SerializationRegistry {
         });
   }
 
+  /**
+   * @brief Registers a deserializer for type @c T and an exact media type.
+   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param mimetype Exact media type accepted by @p deserializer.
+   * @param deserializer Callable reconstructing a @c T from a Chunk.
+   * @return OK on success, or an error (e.g. when @p deserializer is empty).
+   */
   template <typename T>
   absl::Status RegisterDeserializer(std::string type_name, std::string mimetype,
                                     Deserializer<T> deserializer) {
@@ -86,6 +130,18 @@ class SerializationRegistry {
         });
   }
 
+  /**
+   * @brief Atomically registers a serializer/deserializer pair for @c T.
+   *
+   * On failure to register the deserializer, the serializer added by this
+   * call is rolled back.
+   *
+   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param mimetype Exact media type for both codecs.
+   * @param serializer Callable converting a @c T to a Chunk.
+   * @param deserializer Callable reconstructing a @c T from a Chunk.
+   * @return OK on success, or the first error encountered.
+   */
   template <typename T>
   absl::Status Register(std::string type_name, std::string mimetype,
                         Serializer<T> serializer,
@@ -103,12 +159,29 @@ class SerializationRegistry {
     return absl::OkStatus();
   }
 
+  /**
+   * @brief Serializes @p value into a Chunk.
+   * @param value Value to serialize.
+   * @param mimetype Optional media type to select a representation; when empty
+   *        the type's registered default (by registration order) is used.
+   * @return A chunk with an exact mimetype and type tag, or an error when no
+   *         matching serializer is registered.
+   */
   template <typename T>
   absl::StatusOr<Chunk> ToChunk(const T& value,
                                 std::string_view mimetype = {}) const {
     return ToChunkErased(typeid(T), &value, mimetype);
   }
 
+  /**
+   * @brief Deserializes @p chunk into a value of type @c T.
+   * @param chunk Chunk to decode.
+   * @param mimetype_patterns Optional ordered media-type selectors (may use
+   *        wildcards); the first that matches the chunk is used. When empty,
+   *        the chunk's own mimetype selects the codec.
+   * @return The decoded value, or an error when no codec matches or the
+   *         result is not a @c T.
+   */
   template <typename T>
   absl::StatusOr<T> FromChunk(
       const Chunk& chunk,
@@ -124,8 +197,11 @@ class SerializationRegistry {
     }
   }
 
+  /** @brief Installs the standard JSON and MessagePack codecs. */
   absl::Status RegisterDefaults();
+  /** @brief Number of registered serializers. */
   [[nodiscard]] size_t serializer_count() const;
+  /** @brief Number of registered deserializers. */
   [[nodiscard]] size_t deserializer_count() const;
 
  private:
@@ -165,6 +241,7 @@ class SerializationRegistry {
   alignas(kImplAlignment) std::byte impl_[kImplSize];
 };
 
+/** @brief Returns the process-wide registry (defaults pre-installed). */
 SerializationRegistry& GlobalSerializationRegistry();
 
 }  // namespace a11::data

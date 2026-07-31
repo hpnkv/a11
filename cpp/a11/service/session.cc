@@ -969,18 +969,23 @@ absl::StatusOr<a11::Task> Session::AddStream(
     return self != nullptr ? self->HandleStreamDone(stream_state)
                            : a11::ReadyTask();
   };
-  a11::Task startup;
-  try {
-    startup = mode == StreamMode::kStart
-                  ? stream->Start(std::move(on_message), std::move(on_done))
-                  : stream->Accept(std::move(on_message), std::move(on_done));
-  } catch (const std::exception& error) {
-    RemoveStream(stream_state);
-    return CallbackException(error);
-  } catch (...) {
-    RemoveStream(stream_state);
-    return absl::UnknownError("WireStream startup raised an exception");
-  }
+  // Run the transport's Start()/Accept() on the runtime's fiber pool rather
+  // than the caller's thread. Some transports (notably a WebSocket client,
+  // whose Open() drives the HTTP/2 CONNECT handshake inline) block until the
+  // connection is established; doing that on the calling thread would stall an
+  // asyncio event loop and deadlock any in-process peer whose accept callback
+  // needs that same loop. Awaiting off-thread keeps AddStream non-blocking,
+  // matching the raw WireStreamWithRecv.start()/accept() bindings. The stream
+  // is already registered above, so callers may use it before startup settles.
+  a11::Task startup = a11::SubmitTask(
+      [stream = std::move(stream), mode, on_message = std::move(on_message),
+       on_done = std::move(on_done)]() mutable -> absl::Status {
+        a11::Task started =
+            mode == StreamMode::kStart
+                ? stream->Start(std::move(on_message), std::move(on_done))
+                : stream->Accept(std::move(on_message), std::move(on_done));
+        return started.Await().status();
+      });
   auto promise = std::make_shared<a11::Promise<a11::Unit>>();
   a11::Task attached = promise->future();
   std::weak_ptr<Session> cleanup = shared_from_this();

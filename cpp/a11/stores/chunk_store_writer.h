@@ -1,5 +1,12 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief
+ *   A write cursor over a ChunkStore that admits chunks into the store in
+ *   sequence, applying backpressure and optionally mirroring to wire streams.
+ */
+
 #ifndef A11_STORES_CHUNK_STORE_WRITER_H_
 #define A11_STORES_CHUNK_STORE_WRITER_H_
 
@@ -21,54 +28,205 @@ class WireStream;
 
 namespace a11::stores {
 
+/**
+ * @brief
+ *   Tunables controlling how a ChunkStoreWriter batches and buffers chunks.
+ *
+ * Configures the starting offset, how many chunks are flushed to the store per
+ * batch, and an optional bound on the in-flight write buffer that governs
+ * backpressure.
+ */
 struct ChunkStoreWriterOptions {
+  /// Sequence number at which writing begins.
   std::uint32_t offset = 0;
+  /// Maximum number of chunks flushed to the store per batch.
   std::uint64_t max_chunks_to_write_at_once = 8;
+  /// Optional bound on the in-flight write buffer size.
   std::optional<std::uint64_t> num_chunks_to_buffer;
 
+  /** @brief
+   *    Validate that the options are internally consistent.
+   *
+   *  @return
+   *    OK if the options are valid, otherwise an error status.
+   */
   absl::Status Validate() const;
 };
 
+/**
+ * @brief
+ *   The pair of awaitables returned when enqueuing a chunk, separating queue
+ *   admission from durable confirmation.
+ *
+ * The Python API distinguishes admission to the bounded native queue from
+ * durable store confirmation. Native callers that only need confirmation can
+ * continue to use ChunkStoreWriter::PutChunk.
+ */
 struct ChunkStoreWrite {
-  // The Python API distinguishes admission to the bounded native queue from
-  // durable store confirmation. Native callers that only need confirmation
-  // can continue to use ChunkStoreWriter::PutChunk.
+  /// Resolves once the chunk is admitted into the bounded queue (backpressure).
   a11::Task admitted;
+  /// Resolves with the durable sequence number once the chunk is stored.
   a11::Future<std::uint32_t> confirmation;
 };
 
+/**
+ * @brief
+ *   A buffered, backpressured write cursor over a ChunkStore.
+ *
+ * A writer admits `data::Chunk` values into a store in sequence, pacing the
+ * producer through a bounded buffer sized by its `ChunkStoreWriterOptions`. A
+ * background flush loop drains the queue into the store; persisted fragments
+ * can additionally be mirrored to attached wire streams. It is usable directly
+ * though most code reaches one through a node. State is reference-counted and
+ * held via shared_ptr.
+ */
 class ChunkStoreWriter {
  public:
+  /** @brief
+   *    Create a writer over `store`.
+   *
+   *  @param store
+   *    The store to persist chunks to.
+   *  @param options
+   *    Tuning for offset and how much is buffered/flushed at once.
+   *  @return
+   *    A shared, ready-to-use writer, or an error status if the options are
+   *    invalid.
+   */
   static absl::StatusOr<std::shared_ptr<ChunkStoreWriter>> Create(
       std::shared_ptr<ChunkStore> store, ChunkStoreWriterOptions options = {});
 
   ~ChunkStoreWriter() = default;
 
+  /** @brief
+   *    Start the background flush loop if it is not already running.
+   *
+   *  Writing normally starts the loop lazily; call this to begin flushing
+   *  before the first chunk is enqueued.
+   */
   void EnsureStarted();
+
+  /** @brief
+   *    Enqueue a chunk, exposing backpressure and confirmation separately.
+   *
+   *  Unlike PutChunk(), this returns both awaitables: `admitted` resolves once
+   *  the chunk is accepted into the bounded queue and `confirmation` resolves
+   *  with its durable sequence number. Await admission to pace production and
+   *  confirmation to know the write landed.
+   *
+   *  @param chunk
+   *    The chunk to enqueue.
+   *  @param seq
+   *    Optional explicit sequence number; assigned automatically if unset.
+   *  @param final
+   *    Whether this chunk closes the stream.
+   *  @param ensure_started
+   *    Whether to start the flush loop as part of enqueuing.
+   *  @return
+   *    A ChunkStoreWrite holding the admission and confirmation awaitables.
+   */
   ChunkStoreWrite EnqueueChunk(data::Chunk chunk,
                                std::optional<std::uint32_t> seq = std::nullopt,
                                bool final = false, bool ensure_started = true);
+
+  /** @brief
+   *    Write a chunk and await its durable confirmation.
+   *
+   *  Convenience path for callers that only need confirmation, without
+   *  observing queue admission separately.
+   *
+   *  @param chunk
+   *    The chunk to write.
+   *  @param seq
+   *    Optional explicit sequence number; assigned automatically if unset.
+   *  @param final
+   *    Whether this chunk closes the stream.
+   *  @return
+   *    An awaitable that resolves with the stored sequence number.
+   */
   a11::Future<std::uint32_t> PutChunk(
       data::Chunk chunk, std::optional<std::uint32_t> seq = std::nullopt,
       bool final = false);
 
+  /// @return The writer's terminal status, or empty while still open.
   [[nodiscard]] std::optional<absl::Status> GetStatus() const;
+  /// @return The status the writer was aborted with, or empty if not aborted.
   [[nodiscard]] std::optional<absl::Status> GetAbortStatus() const;
+  /// @return Whether the writer still accepts chunks (false once drained,
+  ///         closed, or aborted).
   [[nodiscard]] bool IsWritable() const;
+
+  /** @brief
+   *    Stop the writer immediately, discarding any queued chunks.
+   *
+   *  @return
+   *    An awaitable that resolves once teardown completes.
+   */
   a11::Task Cancel();
 
+  /** @brief
+   *    Flush every queued chunk, then close the stream.
+   *
+   *  The graceful shutdown path once a producer has finished.
+   *
+   *  @return
+   *    An awaitable that resolves once the flush and close complete.
+   */
   a11::Task DrainAndClose();
+
+  /** @brief
+   *    Abort the writer with an error status.
+   *
+   *  Propagates a failure downstream so readers observe the error instead of a
+   *  clean end-of-stream.
+   *
+   *  @param status
+   *    The error status to record.
+   *  @return
+   *    An awaitable that resolves once teardown completes.
+   */
   a11::Task AbortWithStatus(absl::Status status);
+
+  /** @brief
+   *    Wait until the in-flight write buffer empties.
+   *
+   *  A backpressure checkpoint before enqueuing more chunks.
+   *
+   *  @return
+   *    An awaitable that resolves once the buffer has drained.
+   */
   a11::Task WaitForBufferToDrain();
 
-  // Persisted fragments are copied to every attached stream. A transport
-  // failure stops subsequent writes but cannot revoke store confirmations
-  // already returned for the current batch.
+  /** @brief
+   *    Mirror persisted fragments to an additional wire stream.
+   *
+   *  Each confirmed fragment is copied to every attached stream. A transport
+   *  failure stops subsequent writes but cannot revoke store confirmations
+   *  already returned for the current batch. The writer keeps the stream alive
+   *  while attached.
+   *
+   *  @param stream
+   *    The wire stream to fan output out to.
+   *  @return
+   *    OK if the stream was attached, otherwise an error status.
+   */
   absl::Status AttachStream(std::shared_ptr<net::WireStream> stream);
+
+  /** @brief
+   *    Stop mirroring fragments to a previously attached wire stream.
+   *
+   *  @param stream
+   *    The stream to detach.
+   *  @return
+   *    OK if the stream was detached, or an error if it was not attached.
+   */
   absl::Status DetachStream(const std::shared_ptr<net::WireStream>& stream);
 
+  /// @return The store this writer persists chunks to.
   [[nodiscard]] std::shared_ptr<ChunkStore> store() const;
+  /// @return The options this writer was created with.
   [[nodiscard]] ChunkStoreWriterOptions options() const;
+  /// @return The number of chunks currently waiting in the flush queue.
   [[nodiscard]] size_t queue_size() const;
 
  private:

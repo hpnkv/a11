@@ -1,5 +1,20 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief WireStream transport over HTTP/2 Server-Sent Events.
+ *
+ * An HttpSseWireStream carries A11 WireMessage traffic over an HTTP/2 channel:
+ * the server streams messages back as Server-Sent Events while the client
+ * posts outgoing messages to a companion endpoint. Pick this transport when
+ * only ordinary HTTP is available -- it is a firewall- and proxy-friendly
+ * alternative to WebSockets. HttpSseClientWireStream dials out,
+ * HttpSseServerWireStream is the accepted counterpart, and HttpSseServer hosts
+ * them. Delivery carries no global ordering guarantee but is synchronised on
+ * closure -- a reader observes every delivered message before the stream
+ * completes.
+ */
+
 #ifndef A11_NET_HTTP_SSE_WIRE_STREAM_H_
 #define A11_NET_HTTP_SSE_WIRE_STREAM_H_
 
@@ -22,21 +37,41 @@
 
 namespace a11::net {
 
+/** Response header naming the stream id assigned to an SSE connection. */
 inline constexpr std::string_view kSseStreamIdHeader = "x-a11-stream-id";
+/** Prefix under which application HTTP headers are tunneled over SSE. */
 inline constexpr std::string_view kSseHttpHeaderPrefix = "x-a11-http-";
+/** Default path on which a client opens the SSE event stream. */
 inline constexpr std::string_view kDefaultSseConnectEndpoint = "/connect";
+/** Default message-post path template (`{id}` is the stream id). */
 inline constexpr std::string_view kDefaultSseMessageEndpoint =
     "/streams/{id}/message";
 
+/**
+ * @brief Endpoint paths and transport tuning for an HTTP SSE wire stream.
+ *
+ * `connect_endpoint` opens the SSE event stream; `message_endpoint` (a path
+ * template containing the stream id) receives posted outbound messages.
+ * `http2_options` and `stream_options` tune the underlying transport.
+ */
 struct HttpSseOptions {
   WireStreamOptions stream_options;
   Http2Options http2_options;
   std::string connect_endpoint = std::string(kDefaultSseConnectEndpoint);
   std::string message_endpoint = std::string(kDefaultSseMessageEndpoint);
 
+  /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;
 };
 
+/**
+ * @brief Common base for the client and server HTTP SSE wire streams.
+ *
+ * Implements the WireStream interface on top of an internal in-process bridge,
+ * delegating the actual HTTP/2 transport to the concrete subclass. It also
+ * exposes the transport-level HTTP request/response headers so agents can
+ * attach or inspect auth and routing metadata.
+ */
 class HttpSseWireStream
     : public WireStream,
       public std::enable_shared_from_this<HttpSseWireStream> {
@@ -60,10 +95,17 @@ class HttpSseWireStream
   [[nodiscard]] std::string GetId() const override;
   [[nodiscard]] void* absl_nullable GetImpl() const override;
 
+  /** @return The HTTP headers carried on the underlying SSE request. */
   [[nodiscard]] HttpHeaders GetHttpRequestHeaders() const;
+  /** @return The negotiated SSE response headers, or nullopt if not yet
+   * arrived. Prefer awaiting WaitForHttpHeaders() first. */
   [[nodiscard]] std::optional<HttpHeaders> GetHttpResponseHeaders() const;
+  /** Sets HTTP headers to send on the SSE request; call before connecting. */
   absl::Status SetHttpRequestHeaders(HttpHeaders headers);
+  /** Sets HTTP headers to send on the SSE response (server side). */
   absl::Status SetHttpResponseHeaders(HttpHeaders headers);
+  /** @return An awaitable that resolves once HTTP headers have been
+   * exchanged. */
   a11::Task WaitForHttpHeaders() const;
 
  protected:
@@ -100,6 +142,12 @@ class HttpSseWireStream
   friend class HttpSseServer;
 };
 
+/**
+ * @brief The client-side HTTP SSE wire stream, dialing out to a server URL.
+ *
+ * The transport an agent uses to exchange messages with a remote service over
+ * HTTP/2 SSE. The connection opens lazily and runs asynchronously.
+ */
 class HttpSseClientWireStream final : public HttpSseWireStream {
  private:
   struct ClientState;
@@ -107,11 +155,23 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
   struct ConstructorToken {};
 
  public:
+  /**
+   * @brief Creates a client SSE wire stream connecting to @p url.
+   *
+   * @param url The server URL to connect to.
+   * @param options Endpoint paths and transport tuning.
+   * @param client Optional existing Http2Client to reuse; a new one is created
+   *     when null.
+   * @param request_headers Extra HTTP headers to send on the connect request.
+   * @return The stream, or an error status.
+   */
   static absl::StatusOr<std::shared_ptr<HttpSseClientWireStream>> Create(
       std::string url, HttpSseOptions options = {},
       std::shared_ptr<Http2Client> client = nullptr,
       HttpHeaders request_headers = {});
 
+  /** @return The HTTP/2 client backing this stream (reusable for more
+   * streams). */
   [[nodiscard]] std::shared_ptr<Http2Client> client() const;
 
   HttpSseClientWireStream(ConstructorToken, std::string url,
@@ -134,6 +194,12 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
 
 class HttpSseServer;
 
+/**
+ * @brief The server-side HTTP SSE wire stream, accepted from a client.
+ *
+ * Delivered to an HttpSseServer's OnHttpSseConnect handler (or via
+ * WaitForStream) when a client opens an SSE connection.
+ */
 class HttpSseServerWireStream final : public HttpSseWireStream {
  private:
   struct ServerStreamState;
@@ -141,6 +207,8 @@ class HttpSseServerWireStream final : public HttpSseWireStream {
   struct ConstructorToken {};
 
  public:
+  /** @return An awaitable that resolves once the stream is fully established
+   * and ready for the server to send on. */
   a11::Task Accepted() const;
 
   HttpSseServerWireStream(ConstructorToken, std::string id,
@@ -161,21 +229,42 @@ class HttpSseServerWireStream final : public HttpSseWireStream {
   friend class HttpSseServer;
 };
 
+/** Callback invoked with each accepted server-side SSE wire stream. */
 using OnHttpSseConnect =
     std::function<a11::Task(std::shared_ptr<HttpSseServerWireStream>)>;
 
+/**
+ * @brief Hosts HTTP SSE wire streams on top of an HTTP/2 server.
+ *
+ * Accepts A11 clients connecting over HTTP/2 SSE. Either supply an on_connect
+ * callback invoked per stream, or pull streams explicitly with WaitForStream().
+ */
 class HttpSseServer : public std::enable_shared_from_this<HttpSseServer> {
  public:
+  /**
+   * @brief Creates and starts an SSE server accepting A11 wire streams.
+   *
+   * @param bind_address Local address to bind to.
+   * @param port TCP port to listen on; 0 selects an ephemeral port.
+   * @param on_connect Optional callback invoked for each accepted stream.
+   * @param options Endpoint paths and transport tuning.
+   * @return The running server, or an error status.
+   */
   static absl::StatusOr<std::shared_ptr<HttpSseServer>> Create(
       std::string bind_address, std::uint16_t port,
       OnHttpSseConnect on_connect = {}, HttpSseOptions options = {});
 
   ~HttpSseServer();
 
+  /** @return An awaitable resolving to the next incoming SSE wire stream. */
   a11::Future<std::shared_ptr<HttpSseServerWireStream>> WaitForStream();
+  /** Stops the server and releases its resources. */
   absl::Status Stop();
+  /** @return The port listened on, resolved even for an ephemeral 0. */
   [[nodiscard]] std::uint16_t port() const;
+  /** @return Whether the server is currently running. */
   [[nodiscard]] bool running() const;
+  /** @return The underlying HTTP/2 server. */
   [[nodiscard]] std::shared_ptr<Http2Server> http2_server() const;
 
  private:
@@ -199,6 +288,7 @@ class HttpSseServer : public std::enable_shared_from_this<HttpSseServer> {
   friend class HttpSseServerWireStream;
 };
 
+/** Alias for HttpSseServer, spelled to match the WireStream naming family. */
 using HttpSseWireStreamServer = HttpSseServer;
 
 }  // namespace a11::net

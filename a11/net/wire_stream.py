@@ -1,10 +1,16 @@
 """The Python-facing protocol for A11's native wire streams.
 
 A `WireStream` is A11's transport abstraction: a bidirectional,
-ordered channel that carries [WireMessage][a11.data.types.WireMessage] values
-between
-two endpoints. Everything above it --
-[AsyncNode][a11.nodes.async_node.AsyncNode]
+message-oriented channel that carries
+[WireMessage][a11.data.types.WireMessage] values between
+two endpoints. Delivery is **unordered** -- the transport makes no promise that
+messages arrive in the order they were sent -- with a single guarantee that
+matters: it is **synchronised on closure**, so a reader observes every delivered
+message before the stream reports done, and a half-close settles only once
+buffered messages have drained. When you need ordering, impose it above the
+transport (an [AsyncNode][a11.nodes.async_node.AsyncNode] /
+[ChunkStore][a11.stores.chunk_store.ChunkStore] log *is* ordered, by sequence
+number). Everything above it -- ``AsyncNode``
 mirroring, [Session][a11.service.session.Session] multiplexing, remote action
 dispatch -- is written against this one interface, so the concrete transport is
 a pluggable detail. A11 ships several implementations (in-process,

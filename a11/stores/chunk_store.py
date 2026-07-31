@@ -17,7 +17,7 @@ stream to disk, a database, or a blob store, to add fault injection in tests, or
 to enforce a custom retention policy -- without changing any node, action, or
 session code. A `ChunkStoreFactory` (``node_id -> ChunkStore``) is how you
 tell a [NodeMap][a11.nodes.async_node.NodeMap] or
-:meth:`AsyncNode.create <a11.nodes.async_node.AsyncNode.create>` which
+[AsyncNode.create][a11.nodes.async_node.AsyncNode.create] which
 implementation to build.
 
 The class exported here is the native ``a11._native.ChunkStore`` base; its

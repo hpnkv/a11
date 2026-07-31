@@ -1,7 +1,7 @@
 # Transports
 
 A [`WireStream`][a11.net.wire_stream.WireStream] is A11's pluggable transport —
-a bidirectional, ordered channel between two endpoints. Choosing an
+a bidirectional, unordered channel between two endpoints. Choosing an
 implementation is how an agent goes from in-process to networked; see
 [Principles](../principles.md#wirestream-how-bytes-move-between-peers).
 

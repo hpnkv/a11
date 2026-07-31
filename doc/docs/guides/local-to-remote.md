@@ -1,0 +1,180 @@
+# From a local run to a remote call
+
+On the [previous page](llm.md) the model interaction ran **in your process**:
+`.run()` starts an action's handler locally. But `interact_with_llm` is just an
+action, and any action can instead run on **another peer** — a server that holds
+the API keys, has network egress, or owns a GPU — which you reach with `.call()`
+over a session. The action's schema, handler, and ports do not change; only
+*where the handler runs* and *how you dispatch it* do.
+
+To keep every moving part visible we use a tiny action here; a real
+`interact_with_llm` makes the identical jump (it just has more ports).
+
+```python
+import a11
+```
+
+## An action, run locally
+
+Here is a one-line action and a local `.run()` — feed its input port, read its
+output port, exactly like the LLM interaction:
+
+```python
+async def shout(action):
+    text = await action["text"].consume()
+    await action["result"].put_final(text.upper())
+
+
+SHOUT = a11.ActionSchema(
+    name="shout",
+    inputs={"text": a11.ActionPortSchema(
+        name="text", type="text/plain", typeinfo=str, required=True)},
+    outputs={"result": a11.ActionPortSchema(
+        name="result", type="text/plain", typeinfo=str, required=True)},
+)
+
+
+async def run_locally() -> str:
+    action = a11.Action(SHOUT).bind_handler(shout).run()
+    async with action["text"] as text:
+        await text.put_final("hello")
+    return await action["result"].consume()      # -> "HELLO"
+```
+
+## Register it so a server can host it
+
+To run the handler on a peer, put it in an
+[`ActionRegistry`][a11.actions.registry.ActionRegistry] under its name. A server
+[`Session`][a11.service.session.Session] built with that registry dispatches
+incoming calls to it:
+
+```python
+registry = a11.ActionRegistry()
+registry.register("shout", SHOUT, shout)
+```
+
+## Stand up the server
+
+This is the echo server's shape from [before](echo-session.md), but the session
+carries an `action_registry` instead of a message callback — so it answers
+action calls rather than echoing:
+
+```python
+async def accept(stream):
+    session = a11.Session(action_registry=registry)
+    await session.add_stream(stream, mode="accept")
+    await session.done.wait()
+
+
+options = a11.WebSocketServerOptions()
+options.path = "/ws"
+server = a11.WebSocketWireServer.create(accept, options)
+```
+
+## Call it from a client
+
+The client opens a session over a wire stream, then builds the action with
+`registry.make_action`, binding it to that stream and session. `make_action`
+needs the **schema** (to shape the ports) — the handler stays on the server.
+`await action.call()` dispatches it across the wire:
+
+```python
+client = a11.Session()
+stream = a11.WebSocketWireStream.connect(f"ws://127.0.0.1:{server.port}/ws")
+await client.add_stream(stream, mode="start")
+
+action = registry.make_action(
+    "shout", node_map=client.node_map, stream=stream, session=client
+)
+await action.call()
+```
+
+## Feed and read, unchanged
+
+Once dispatched, the ports behave exactly as in the local case — write the
+input, read the output — but the bytes now travel over the network to the
+server's handler and back:
+
+```python
+await action["text"].put_final("hello")
+print(await action["result"].consume())          # -> "HELLO"
+```
+
+## Putting it together
+
+Do the setup — registering the handler, creating the sessions — **inside your
+async entrypoint** (under a running event loop), then run the action both ways:
+
+```python
+import asyncio
+import a11
+
+
+async def shout(action):
+    text = await action["text"].consume()
+    await action["result"].put_final(text.upper())
+
+
+SHOUT = a11.ActionSchema(
+    name="shout",
+    inputs={"text": a11.ActionPortSchema(
+        name="text", type="text/plain", typeinfo=str, required=True)},
+    outputs={"result": a11.ActionPortSchema(
+        name="result", type="text/plain", typeinfo=str, required=True)},
+)
+
+
+async def main() -> None:
+    # Local: the handler runs in this process.
+    local = a11.Action(SHOUT).bind_handler(shout).run()
+    async with local["text"] as text:
+        await text.put_final("hello")
+    print("local:", await local["result"].consume())      # -> HELLO
+
+    # Remote: host the same action on a server and call it over a socket.
+    registry = a11.ActionRegistry()
+    registry.register("shout", SHOUT, shout)
+
+    async def accept(stream):
+        session = a11.Session(action_registry=registry)
+        await session.add_stream(stream, mode="accept")
+        await session.done.wait()
+
+    options = a11.WebSocketServerOptions()
+    options.path = "/ws"
+    server = a11.WebSocketWireServer.create(accept, options)
+    try:
+        client = a11.Session()
+        stream = a11.WebSocketWireStream.connect(
+            f"ws://127.0.0.1:{server.port}/ws"
+        )
+        await client.add_stream(stream, mode="start")
+
+        action = registry.make_action(
+            "shout", node_map=client.node_map, stream=stream, session=client
+        )
+        await action.call()
+        await action["text"].put_final("hello")
+        print("remote:", await action["result"].consume())  # -> HELLO
+        await action.wait()
+    finally:
+        server.stop()
+
+
+asyncio.run(main())
+```
+
+## The whole point
+
+The two paths differ only in the last mile:
+
+| Local | Remote |
+| --- | --- |
+| `a11.Action(SHOUT).bind_handler(shout)` | `registry.make_action("shout", stream=…, session=…)` |
+| `.run()` — handler runs here | `.call()` — handler runs on the peer |
+
+The handler, schema, and port I/O are identical. That is why
+`interact_with_llm` moves server-side with no change to how you feed
+`interactions`/`config`/`tools` or read `text_output`/`new_interactions` — set
+its provider/model/key headers on the action you `make_action`, and `.call()`
+it. Next, let the model [call an action of yours back](agent-tool.md).

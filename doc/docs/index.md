@@ -51,7 +51,7 @@ asyncio.run(main())
 
 - [Principles](principles.md) — the async, streaming model, and the extension
   points you will build on.
-- [Build an agent](guides/build-an-agent.md) — a hands-on tour from a single
-  node to a networked, action-driven agent.
+- [Guides](guides/streaming.md) — a hands-on tour from a single node to a
+  networked, tool-using agent, one small step at a time.
 - [Python API](api/nodes.md) — reference for every public type.
 - [C++ internals](cpp.md) — the native runtime, for contributors.

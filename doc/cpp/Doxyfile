@@ -12,9 +12,20 @@ DOXYFILE_ENCODING      = UTF-8
 PROJECT_NAME           = "A11 (C++ runtime)"
 PROJECT_BRIEF          = "Native C++ implementation of the A11 action and streaming runtime"
 
-# Run from doc/cpp/; sources live at the repository root under cpp/a11.
-INPUT                  = ../../cpp/a11
+# Run from doc/cpp/; sources live at the repository root under cpp/a11. The
+# hand-written landing page (mainpage.md) lives beside this Doxyfile and is
+# promoted to the index via USE_MDFILE_AS_MAINPAGE below.
+INPUT                  = ../../cpp/a11 \
+                         mainpage.md
+USE_MDFILE_AS_MAINPAGE = mainpage.md
 RECURSIVE              = YES
+
+# Show file paths relative to the repository root (e.g. cpp/a11/net/http2.h)
+# rather than the absolute build-machine paths Doxygen would otherwise print.
+# ../.. is the repo root as seen from doc/cpp, where Doxygen is invoked.
+FULL_PATH_NAMES        = YES
+STRIP_FROM_PATH        = ../..
+STRIP_FROM_INC_PATH    = ../..
 FILE_PATTERNS          = *.h *.cc *.md
 EXCLUDE_PATTERNS       = */internal/* */tests/*
 EXCLUDE_SYMBOLS        = *::internal::* pybind11::* absl::*

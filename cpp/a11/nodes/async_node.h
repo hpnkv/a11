@@ -1,5 +1,23 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief A11's unit of streaming state: the AsyncNode.
+ *
+ * An `AsyncNode` is a single, ordered sequence of chunks (keyed by
+ * sequence number) that one side writes and another side reads. It is
+ * backed by a `stores::ChunkStore` -- the durable, ordered buffer the
+ * reader and writer stream through -- and can optionally be mirrored
+ * across a `net::WireStream` to a remote peer.
+ *
+ * Nodes are how the input and output ports of an `actions::Action`
+ * carry data, and how an agent streams partial results (tokens, audio
+ * frames, tool calls) to its caller before the work is finished. Values
+ * enter as raw `data::Chunk` / `data::NodeFragment` objects or as
+ * arbitrary typed values encoded through the node's
+ * `data::SerializationRegistry`, and leave the reader end deserialized.
+ */
+
 #ifndef A11_NODES_ASYNC_NODE_H_
 #define A11_NODES_ASYNC_NODE_H_
 
@@ -32,8 +50,35 @@ class WireStream;
 
 namespace a11::nodes {
 
+/**
+ * @brief An asynchronous, ordered stream of chunks read from and written
+ * to A11.
+ *
+ * A node has two halves. The writer end admits values into the backing
+ * `stores::ChunkStore` in sequence; the reader end yields them back,
+ * optionally deserializing typed objects on the way out. Every `Put*`
+ * resolves once the chunk is durably stored (and, when a `net::WireStream`
+ * is attached, sent), so a producer can apply backpressure by awaiting it.
+ * A null final chunk marks the end of the stream.
+ *
+ * Instances are always heap-allocated and shared via `Create`; the class
+ * is non-copyable and derives from `enable_shared_from_this`.
+ */
 class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
  public:
+  /**
+   * @brief Create a node over an existing chunk store.
+   *
+   * @param store The backing ordered buffer the reader and writer stream
+   *   through.
+   * @param serialization_registry Registry used to (de)serialize typed
+   *   values passed to `Put`/`NextObject`; defaults to none.
+   * @param reader_options Options controlling how the reader buffers and
+   *   orders chunks.
+   * @param writer_options Options controlling how the writer buffers
+   *   chunks.
+   * @return The new node, or an error status on failure.
+   */
   static absl::StatusOr<std::shared_ptr<AsyncNode>> Create(
       std::shared_ptr<stores::ChunkStore> store,
       std::shared_ptr<data::SerializationRegistry> serialization_registry =
@@ -46,33 +91,147 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   AsyncNode(const AsyncNode&) = delete;
   AsyncNode& operator=(const AsyncNode&) = delete;
 
+  /**
+   * @brief Return the node's stable identifier.
+   * @return The id, or an error status if it cannot be resolved. Use it to
+   *   correlate the node with the rest of an agent's state or to key it in
+   *   a NodeMap.
+   */
   absl::StatusOr<std::string> GetId() const;
+
+  /**
+   * @brief Return the underlying chunk store backing this node.
+   * @return The durable, ordered buffer the reader and writer stream
+   *   through; reach for it when you need lower-level access than the
+   *   Put/Next API provides.
+   */
   [[nodiscard]] std::shared_ptr<stores::ChunkStore> GetChunkStore() const;
+
+  /**
+   * @brief Return the registry used to (de)serialize typed values.
+   * @return The current serialization registry (may be null).
+   */
   [[nodiscard]] std::shared_ptr<data::SerializationRegistry>
   serialization_registry() const;
+
+  /**
+   * @brief Replace the serialization registry.
+   * @param registry The registry to install.
+   * @return OK, or an error status on failure.
+   */
   absl::Status SetSerializationRegistry(
       std::shared_ptr<data::SerializationRegistry> registry);
 
+  /**
+   * @brief Return the node's chunk store reader (the consuming half).
+   * @return The reader, or an error status on failure.
+   */
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> reader();
+
+  /**
+   * @brief Return the node's chunk store writer (the producing half).
+   * @return The writer, or an error status on failure.
+   */
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> writer();
 
+  /**
+   * @brief Return a copy of the reader's current options.
+   * @return The reader options in effect.
+   */
   [[nodiscard]] stores::ChunkStoreReaderOptions GetReaderOptions() const;
+
+  /**
+   * @brief Replace the reader options.
+   * @param options The new reader options.
+   * @return OK, or an error status on failure.
+   */
   absl::Status SetReaderOptions(stores::ChunkStoreReaderOptions options);
+
+  /**
+   * @brief Rewind/reconfigure the reader (e.g. to re-read from an offset).
+   * @param options Optional new reader options; the existing options are
+   *   kept when omitted.
+   * @return OK, or an error status on failure.
+   */
   absl::Status ResetReader(
       std::optional<stores::ChunkStoreReaderOptions> options = std::nullopt);
+
+  /**
+   * @brief Return a copy of the writer's current options.
+   * @return The writer options in effect.
+   */
   [[nodiscard]] stores::ChunkStoreWriterOptions GetWriterOptions() const;
+
+  /**
+   * @brief Replace the writer options.
+   * @param options The new writer options.
+   * @return OK, or an error status on failure.
+   */
   absl::Status SetWriterOptions(stores::ChunkStoreWriterOptions options);
 
+  /**
+   * @brief Return the current status of the node's reader.
+   * @return Whether the consuming end is healthy, has completed, or has
+   *   failed while streaming.
+   */
   [[nodiscard]] absl::Status GetReaderStatus() const;
+
+  /**
+   * @brief Return the current status of the node's writer.
+   * @return Whether the producing end is healthy, has completed, or has
+   *   failed while streaming.
+   */
   [[nodiscard]] absl::Status GetWriterStatus() const;
+
+  /**
+   * @brief Return the status the writer was aborted with.
+   * @return The abort status, or nullopt if the writer has not been
+   *   aborted. Use it to surface why a stream was cut short.
+   */
   [[nodiscard]] std::optional<absl::Status> GetWriterAbortStatus() const;
+
+  /**
+   * @brief Report whether the node can currently accept writes.
+   * @return An awaitable that resolves once writability is known; await it
+   *   before producing chunks to respect backpressure.
+   */
   a11::Future<bool> IsWritable();
 
+  /**
+   * @brief Enqueue a raw chunk into the stream.
+   * @param chunk The chunk to admit.
+   * @param seq Optional explicit sequence number; assigned in order when
+   *   omitted.
+   * @param final Set true on the last chunk to close the stream.
+   * @return An awaitable that resolves to the stored sequence number once
+   *   the chunk is durably stored (and sent, if a stream is attached).
+   */
   a11::Future<std::uint32_t> PutChunk(
       data::Chunk chunk, std::optional<std::uint32_t> seq = std::nullopt,
       bool final = false);
+
+  /**
+   * @brief Enqueue a fragment carrying its own sequence and final flag.
+   * @param fragment The fragment to admit.
+   * @return An awaitable that resolves to the stored sequence number.
+   */
   a11::Future<std::uint32_t> PutFragment(data::NodeFragment fragment);
 
+  /**
+   * @brief Serialize and write a typed value to the stream.
+   *
+   * Encodes `value` via the node's serialization registry and admits the
+   * resulting chunk.
+   *
+   * @tparam T The type of the value being written.
+   * @param value The value to encode and write.
+   * @param seq Optional explicit sequence number; assigned in order when
+   *   omitted.
+   * @param final Set true on the last write to close the stream.
+   * @param mimetype Optional MIME type selecting the encoding.
+   * @return An awaitable that resolves to the stored sequence number, or a
+   *   failed future if serialization fails.
+   */
   template <typename T>
   a11::Future<std::uint32_t> Put(
       const T& value, std::optional<std::uint32_t> seq = std::nullopt,
@@ -89,13 +248,41 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
     return PutChunk(std::move(*chunk), seq, final);
   }
 
+  /**
+   * @brief Close the stream with an explicit null terminator (no value).
+   * @param seq Optional explicit sequence number for the terminator.
+   * @return An awaitable that resolves to the stored sequence number.
+   */
   a11::Future<std::uint32_t> PutNullFinal(
       std::optional<std::uint32_t> seq = std::nullopt);
+
+  /**
+   * @brief Read the next raw fragment.
+   * @param timeout How long to wait for a fragment.
+   * @return An awaitable that resolves to the next fragment, or nullopt at
+   *   end of stream.
+   */
   a11::Future<std::optional<data::NodeFragment>> NextFragment(
       absl::Duration timeout = absl::InfiniteDuration());
+
+  /**
+   * @brief Read the next raw chunk.
+   * @param timeout How long to wait for a chunk.
+   * @return An awaitable that resolves to the next chunk, or nullopt at end
+   *   of stream.
+   */
   a11::Future<std::optional<data::Chunk>> NextChunk(
       absl::Duration timeout = absl::InfiniteDuration());
 
+  /**
+   * @brief Read and deserialize the next value.
+   * @tparam T The type to deserialize into.
+   * @param timeout How long to wait for a value.
+   * @param mimetype_patterns Optional MIME patterns constraining which
+   *   encodings are accepted.
+   * @return An awaitable that resolves to the next value, or nullopt at end
+   *   of stream.
+   */
   template <typename T>
   a11::Future<std::optional<T>> NextObject(
       absl::Duration timeout = absl::InfiniteDuration(),
@@ -134,13 +321,57 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
         });
   }
 
+  /**
+   * @brief Wait for the write buffer to drain.
+   * @return An awaitable that resolves once the write buffer has drained;
+   *   await it to let consumers catch up before pushing more chunks.
+   */
   a11::Task WaitForBufferToDrain();
+
+  /**
+   * @brief Flush all buffered chunks and close the stream.
+   * @return An awaitable that resolves once every produced chunk has been
+   *   flushed and the stream is closed -- a graceful shutdown.
+   */
   a11::Task DrainAndClose();
+
+  /**
+   * @brief Fail the stream with an error status.
+   * @param status The error to abort with.
+   * @return An awaitable that resolves once the abort has propagated, so
+   *   consumers observe the error instead of a normal end-of-stream.
+   */
   a11::Task AbortWithStatus(absl::Status status);
+
+  /**
+   * @brief Mirror this node's chunks over a wire stream to a remote peer.
+   * @param stream The transport to attach; kept alive for the node's
+   *   lifetime.
+   * @return OK, or an error status on failure.
+   */
   absl::Status AttachStream(std::shared_ptr<net::WireStream> stream);
+
+  /**
+   * @brief Stop mirroring chunks over a previously attached wire stream.
+   * @param stream The transport to detach.
+   * @return OK, or an error status on failure.
+   */
   absl::Status DetachStream(const std::shared_ptr<net::WireStream>& stream);
+
+  /**
+   * @brief Cancel the reader, unblocking pending Next* awaits.
+   */
   void CancelReader();
+
+  /**
+   * @brief Cancel the writer, unblocking pending Put/drain awaits.
+   */
   void CancelWriter();
+
+  /**
+   * @brief Cancel both reader and writer, tearing down all pending
+   * streaming operations on the node at once.
+   */
   void Cancel();
 
  private:

@@ -1,6 +1,4 @@
 import asyncio
-import sys
-from pathlib import Path
 from typing import Sequence
 
 from absl import app as absl_app
@@ -49,6 +47,9 @@ async def main(_argv: Sequence[str]):
                 try:
                     message = await asyncio.to_thread(input, "> ")
                 except EOFError:
+                    # Ctrl-D / closed stdin: drain and shut down like "exit"
+                    # rather than leaving the session open on ``done.wait()``.
+                    session.half_close()
                     break
 
                 if message.casefold() == "exit":

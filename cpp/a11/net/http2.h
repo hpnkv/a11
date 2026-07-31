@@ -1,5 +1,17 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief A11's nghttp2 HTTP/2 client, server, and streaming primitives.
+ *
+ * These are the HTTP/2 building blocks -- Http2Client, Http2Server, and the
+ * pull-oriented request/response body streams -- that underpin the WebSocket
+ * and HTTP SSE WireStream transports. They are not themselves WireStreams;
+ * most agents use them only indirectly. Reach for this header directly when
+ * you need raw HTTP/2 requests, extended CONNECT duplex streams, or to share
+ * one connection across several transports.
+ */
+
 #ifndef A11_NET_HTTP2_H_
 #define A11_NET_HTTP2_H_
 
@@ -24,17 +36,29 @@ namespace a11::net {
 
 class Http2RequestBodyStream;
 
-// HTTP/2 field names are normalized to lowercase. A compact sequence preserves
-// repeated fields and wire order without allocating a tree node per field.
+/**
+ * @brief An ordered list of (name, value) HTTP/2 header fields.
+ *
+ * Field names are normalized to lowercase. A compact sequence preserves
+ * repeated fields and wire order without allocating a tree node per field.
+ */
 using HttpHeaders = std::vector<std::pair<std::string, std::string>>;
 
+/** @return The first value for @p name, or nullopt if absent. */
 std::optional<std::string> GetHttpHeader(const HttpHeaders& headers,
                                          std::string_view name);
+/** Removes every field named @p name from @p headers. */
 void EraseHttpHeader(HttpHeaders* absl_nonnull headers, std::string_view name);
+/** Replaces any existing @p name fields with a single (name, value) entry. */
 void SetHttpHeader(HttpHeaders* absl_nonnull headers, std::string name,
                    std::string value);
+/** @return OK if the header list is well-formed. */
 absl::Status ValidateHttpHeaders(const HttpHeaders& headers);
 
+/** @brief A parsed HTTP/2 request: pseudo-headers, fields, and body.
+ *
+ * `body_stream` is present only for a request that remains open after its
+ * headers (an extended CONNECT stream). */
 struct HttpRequest {
   std::string method;
   std::string protocol;
@@ -46,16 +70,20 @@ struct HttpRequest {
   std::shared_ptr<Http2RequestBodyStream> body_stream;
 };
 
+/** @brief Status line and headers of an HTTP/2 response, without the body. */
 struct HttpResponseHead {
   int status = 0;
   HttpHeaders headers;
 };
 
+/** @brief A fully buffered HTTP/2 response: head plus complete body. */
 struct HttpResponse {
   HttpResponseHead head;
   std::string body;
 };
 
+/** @brief TLS settings for an HTTP/2 client or server (certificates, peer
+ * verification). */
 struct Http2TlsOptions {
   bool enabled = false;
   bool verify_peer = true;
@@ -66,6 +94,8 @@ struct Http2TlsOptions {
   absl::Status Validate() const;
 };
 
+/** @brief Body-size limits, buffering thresholds, deadline, and TLS for an
+ * HTTP/2 client or server. */
 struct Http2Options {
   size_t max_request_body_size = 32 * 1024 * 1024;
   size_t max_response_body_size = 32 * 1024 * 1024;
@@ -79,15 +109,24 @@ struct Http2Options {
 
 class Http2Connection;
 
-// Pull-oriented request DATA for an extended CONNECT stream. It is present on
-// HttpRequest::body_stream only when a request remains open after its headers.
+/**
+ * @brief Pull-oriented request DATA for an extended CONNECT stream.
+ *
+ * Present on HttpRequest::body_stream only when a request remains open after
+ * its headers. Read incrementally with Read() until it yields nullopt.
+ */
 class Http2RequestBodyStream
     : public std::enable_shared_from_this<Http2RequestBodyStream> {
  public:
+  /** @return An awaitable resolving to the next body chunk, or nullopt at end
+   * of stream. */
   a11::Future<std::optional<std::string>> Read();
+  /** @return An awaitable that resolves when the body stream is done. */
   a11::Task Done() const;
+  /** Cancels the body stream with the given status. */
   absl::Status Cancel(absl::Status status = absl::CancelledError(
                           "HTTP/2 request body cancelled"));
+  /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const;
 
  private:
@@ -101,17 +140,27 @@ class Http2RequestBodyStream
   friend class Http2Connection;
 };
 
-// A pull-oriented HTTP/2 response. Read() returns nullopt after a clean
-// END_STREAM. Only one outstanding Read() is permitted, which provides a
-// bounded handoff from the libuv thread to fibers and ordinary threads.
+/**
+ * @brief A pull-oriented HTTP/2 response body stream.
+ *
+ * Read() returns nullopt after a clean END_STREAM. Only one outstanding Read()
+ * is permitted, which provides a bounded handoff from the libuv thread to
+ * fibers and ordinary threads.
+ */
 class Http2ResponseStream
     : public std::enable_shared_from_this<Http2ResponseStream> {
  public:
+  /** @return An awaitable resolving to the response status and headers. */
   a11::Future<HttpResponseHead> Headers() const;
+  /** @return An awaitable resolving to the next body chunk, or nullopt at end
+   * of stream. */
   a11::Future<std::optional<std::string>> Read();
+  /** @return An awaitable that resolves when the response is done. */
   a11::Task Done() const;
+  /** Cancels the response stream with the given status. */
   absl::Status Cancel(
       absl::Status status = absl::CancelledError("HTTP/2 request cancelled"));
+  /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const;
 
  private:
@@ -126,18 +175,31 @@ class Http2ResponseStream
   friend class Http2Client;
 };
 
-// Client side of an HTTP/2 extended CONNECT stream. Request DATA remains
-// writable while response DATA is read independently on the same stream.
+/**
+ * @brief Client side of an HTTP/2 extended CONNECT stream.
+ *
+ * Request DATA remains writable via Write()/Finish() while response DATA is
+ * read independently with Read() on the same stream. This bidirectional
+ * primitive is what the WebSocket transport is built on.
+ */
 class Http2DuplexStream
     : public std::enable_shared_from_this<Http2DuplexStream> {
  public:
+  /** @return An awaitable resolving to the response status and headers. */
   a11::Future<HttpResponseHead> Headers() const;
+  /** @return An awaitable resolving to the next inbound chunk, or nullopt at
+   * end of stream. */
   a11::Future<std::optional<std::string>> Read();
+  /** Writes a chunk of request DATA. */
   absl::Status Write(std::string data);
+  /** Closes the request side, signalling END_STREAM to the peer. */
   absl::Status Finish();
+  /** Aborts the whole duplex stream with the given status. */
   absl::Status Abort(absl::Status status = absl::CancelledError(
                          "HTTP/2 duplex stream cancelled"));
+  /** @return An awaitable that resolves when the duplex stream is done. */
   a11::Task Done() const;
+  /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const;
 
  private:
@@ -152,20 +214,36 @@ class Http2DuplexStream
   friend class Http2Client;
 };
 
+/**
+ * @brief Server-side handle for writing an HTTP/2 response to one request.
+ *
+ * Handed to an Http2RequestHandler. Either stream the response incrementally
+ * (SendHeaders() then Write()/Finish()) or emit it in one call with
+ * SendResponse().
+ */
 class Http2ResponseWriter
     : public std::enable_shared_from_this<Http2ResponseWriter> {
  public:
+  /** Sends the response status and headers. */
   absl::Status SendHeaders(int status, HttpHeaders headers = {});
+  /** Writes a chunk of response body data. */
   absl::Status Write(std::string data);
+  /** Signals the end of the response body. */
   absl::Status Finish();
+  /** Sends a complete response (status, headers, and body) in one call. */
   absl::Status SendResponse(int status, HttpHeaders headers = {},
                             std::string body = {});
+  /** Aborts the response with the given status. */
   absl::Status Abort(absl::Status status);
+  /** @return An awaitable that resolves when the response is done. */
   a11::Task Done() const;
 
+  /** @return Whether the response headers have been sent. */
   [[nodiscard]] bool headers_sent() const;
+  /** @return Whether the response has been finished. */
   [[nodiscard]] bool finished() const;
 
+  /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const { return stream_id_; }
 
  private:
@@ -184,22 +262,44 @@ class Http2ResponseWriter
   friend class Http2Connection;
 };
 
+/** Callback dispatched for each inbound request, given a response writer. */
 using Http2RequestHandler = std::function<a11::Task(
     HttpRequest request, std::shared_ptr<Http2ResponseWriter> response)>;
 
+/**
+ * @brief An HTTP/2 server that dispatches each request to an async handler.
+ *
+ * The listening endpoint underlying the WebSocket and HTTP SSE server
+ * transports; also usable directly for plain HTTP/2 services.
+ */
 class Http2Server : public std::enable_shared_from_this<Http2Server> {
  public:
+  /**
+   * @brief Creates and starts an HTTP/2 server.
+   *
+   * @param bind_address Local address to bind to.
+   * @param port TCP port to listen on; 0 selects an ephemeral port.
+   * @param handler Async callback invoked for each request.
+   * @param options Body limits, buffering, deadline, and TLS settings.
+   * @return The running server, or an error status.
+   */
   static absl::StatusOr<std::shared_ptr<Http2Server>> Create(
       std::string bind_address, std::uint16_t port, Http2RequestHandler handler,
       Http2Options options = {});
 
   ~Http2Server();
 
+  /** Stops the server and releases its resources. */
   absl::Status Stop();
+  /** @return The port listened on, resolved even for an ephemeral 0. */
   [[nodiscard]] std::uint16_t port() const;
+  /** @return The address the server is bound to. */
   [[nodiscard]] std::string bind_address() const;
+  /** @return Whether the server is currently running. */
   [[nodiscard]] bool running() const;
+  /** @return Whether the server is using TLS. */
   [[nodiscard]] bool secure() const;
+  /** @return An opaque native handle for advanced interop, or nullptr. */
   [[nodiscard]] void* absl_nullable GetImpl() const;
 
  private:
@@ -211,29 +311,53 @@ class Http2Server : public std::enable_shared_from_this<Http2Server> {
   std::shared_ptr<State> state_;
 };
 
+/**
+ * @brief An HTTP/2 client connection, reusable across many streams.
+ *
+ * Issues buffered requests, incremental response streams, or extended CONNECT
+ * duplex streams over a single connection. Shared as the transport backing
+ * HTTP SSE and WebSocket client wire streams.
+ */
 class Http2Client : public std::enable_shared_from_this<Http2Client> {
  public:
+  /**
+   * @brief Asynchronously connects to an HTTP/2 server.
+   *
+   * @param host Server hostname.
+   * @param port Server port.
+   * @param options Body limits, buffering, deadline, and TLS settings.
+   * @return An awaitable that resolves to the connected client.
+   */
   static a11::Future<std::shared_ptr<Http2Client>> Connect(
       std::string host, std::uint16_t port, Http2Options options = {});
 
   ~Http2Client();
 
+  /** Opens a request and returns a pull-oriented response body stream. */
   absl::StatusOr<std::shared_ptr<Http2ResponseStream>> RequestStream(
       std::string method, std::string path, HttpHeaders headers = {},
       std::string body = {}, std::string scheme = {});
+  /** Opens an extended CONNECT duplex stream for bidirectional data. */
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> ExtendedConnect(
       std::string protocol, std::string path, HttpHeaders headers = {},
       std::string scheme = {});
+  /** @return An awaitable resolving to the fully buffered response. */
   a11::Future<HttpResponse> Request(std::string method, std::string path,
                                     HttpHeaders headers = {},
                                     std::string body = {},
                                     std::string scheme = {});
+  /** Closes the client connection. */
   absl::Status Close();
 
+  /** @return The host the client is connected to. */
   [[nodiscard]] std::string host() const;
+  /** @return The port the client is connected to. */
   [[nodiscard]] std::uint16_t port() const;
+  /** @return Whether the client is currently connected. */
   [[nodiscard]] bool connected() const;
+  /** @return Whether the connection is using TLS. */
   [[nodiscard]] bool secure() const;
+  /** @return An opaque native handle for advanced interop, or nullptr. */
   [[nodiscard]] void* absl_nullable GetImpl() const;
 
  private:

@@ -1,5 +1,19 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief In-memory paired WireStream that connects two endpoints without a
+ * network.
+ *
+ * An InProcessWireStream carries A11 WireMessage traffic between two endpoints
+ * living in the same process, with no sockets or serialization on the wire.
+ * Pick it when both peers run in one interpreter -- for tests, for composing
+ * agents locally, and as the internal bridge other transports layer on top of.
+ * Like every WireStream it delivers messages without a global ordering
+ * guarantee, but it is synchronised on closure: a reader observes every
+ * delivered message before the stream completes.
+ */
+
 #ifndef A11_NET_IN_PROCESS_WIRE_STREAM_H_
 #define A11_NET_IN_PROCESS_WIRE_STREAM_H_
 
@@ -19,6 +33,14 @@
 
 namespace a11::net {
 
+/**
+ * @brief A WireStream endpoint wired directly to a peer in the same process.
+ *
+ * The two endpoints share in-memory queues, so a Send() on one is delivered to
+ * the OnMessage callback of the other with no network hop. One endpoint drives
+ * Start() and the other Accept(); either may HalfClose() or Abort(). Construct
+ * a connected pair with CreatePair() rather than instantiating directly.
+ */
 class InProcessWireStream final : public WireStream {
  private:
   struct State;
@@ -26,13 +48,22 @@ class InProcessWireStream final : public WireStream {
   struct ConstructorToken {};
 
  public:
+  /** A connected pair of endpoints returned by CreatePair(). */
   using Pair = std::pair<std::shared_ptr<InProcessWireStream>,
                          std::shared_ptr<InProcessWireStream>>;
 
-  // `preassigned_id`, when non-empty, fixes the shared stream id (and hence the
-  // tracing trace id) instead of generating one. This is the implementation-
-  // level hook for preassigning a stream's trace id without widening the
-  // WireStream interface.
+  /**
+   * @brief Creates a connected pair of in-process endpoints.
+   *
+   * @param options Shared WireStreamOptions applied to both endpoints.
+   * @param first_options Optional overrides for the first endpoint.
+   * @param second_options Optional overrides for the second endpoint.
+   * @param preassigned_id When non-empty, fixes the shared stream id (and hence
+   *     the tracing trace id) instead of generating one. This is the
+   *     implementation-level hook for preassigning a stream's trace id without
+   *     widening the WireStream interface.
+   * @return The two connected endpoints, or an error status.
+   */
   static absl::StatusOr<Pair> CreatePair(
       std::optional<WireStreamOptions> options = std::nullopt,
       std::optional<WireStreamOptions> first_options = std::nullopt,
@@ -51,6 +82,9 @@ class InProcessWireStream final : public WireStream {
   a11::Task DrainOutgoingMessages() override;
   absl::Status Abort(absl::Status status) override;
   absl::Status SetDeadline(absl::Time deadline) override;
+
+  /** @return An awaitable that resolves when this endpoint has fully finished
+   * (its peer half-closed or the stream aborted). */
   a11::Task Done() const;
 
   [[nodiscard]] absl::Time deadline() const override;

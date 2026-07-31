@@ -176,16 +176,20 @@ void BindHttp(py::module_& module) {
                      return py::none();
                    return py::bytes(*value);
                  });
-           })
+           },
+           "Await the next chunk of request body data, or None at end of "
+           "stream.")
       .def("wait_done",
            [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
              return FutureToPython(self->Done());
-           })
+           },
+           "Await completion of the request body stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
             return FutureToPython(self->Done());
-          })
+          },
+          "Future that completes when the request body stream is done.")
       .def(
           "cancel",
           [](net::Http2RequestBodyStream& self, const py::object& status) {
@@ -197,9 +201,11 @@ void BindHttp(py::module_& module) {
                                            : self.Cancel();
             });
           },
+          "Cancel the request body stream with an optional status.",
           py::arg("status") = py::none())
       .def_property_readonly("stream_id",
-                             &net::Http2RequestBodyStream::stream_id);
+                             &net::Http2RequestBodyStream::stream_id,
+                             "The HTTP/2 stream identifier.");
 
   py::class_<net::HttpRequest>(module, "HttpRequest")
       .def(py::init([](std::string_view method, std::string_view scheme,
@@ -215,15 +221,23 @@ void BindHttp(py::module_& module) {
                  .body = ValueOrThrow(HttpBodyFromPython(body)),
                  .body_stream = nullptr};
            }),
+           "Construct an HTTP request.",
            py::arg("method") = "GET", py::arg("scheme") = "http",
            py::arg("authority") = "", py::arg("path") = "/",
            py::arg("headers") = py::none(), py::arg("body") = py::bytes())
-      .def_readwrite("method", &net::HttpRequest::method)
-      .def_readwrite("protocol", &net::HttpRequest::protocol)
-      .def_readwrite("scheme", &net::HttpRequest::scheme)
-      .def_readwrite("authority", &net::HttpRequest::authority)
-      .def_readwrite("path", &net::HttpRequest::path)
-      .def_readonly("body_stream", &net::HttpRequest::body_stream)
+      .def_readwrite("method", &net::HttpRequest::method,
+                     "The HTTP request method (e.g. GET, POST).")
+      .def_readwrite("protocol", &net::HttpRequest::protocol,
+                     "The extended CONNECT protocol, if any.")
+      .def_readwrite("scheme", &net::HttpRequest::scheme,
+                     "The URI scheme (e.g. http, https).")
+      .def_readwrite("authority", &net::HttpRequest::authority,
+                     "The request authority (host and optional port).")
+      .def_readwrite("path", &net::HttpRequest::path,
+                     "The request target path.")
+      .def_readonly("body_stream", &net::HttpRequest::body_stream,
+                    "Pull-oriented request body stream, present only for "
+                    "requests that remain open after their headers.")
       .def_property(
           "headers",
           [](const net::HttpRequest& request) {
@@ -234,7 +248,8 @@ void BindHttp(py::module_& module) {
             ABSL_ASSIGN_OR_RETURN(request.headers,
                                   HttpHeadersFromPython(headers));
             return absl::OkStatus();
-          })
+          },
+          "The request headers as a list of (name, value) pairs.")
       .def_property(
           "body",
           [](const net::HttpRequest& request) {
@@ -244,7 +259,8 @@ void BindHttp(py::module_& module) {
              const py::object& body) -> absl::Status {
             ABSL_ASSIGN_OR_RETURN(request.body, HttpBodyFromPython(body));
             return absl::OkStatus();
-          });
+          },
+          "The request body as bytes.");
 
   py::class_<net::HttpResponseHead>(module, "HttpResponseHead")
       .def(py::init([](int status, const py::object& headers) {
@@ -252,8 +268,10 @@ void BindHttp(py::module_& module) {
                  .status = status,
                  .headers = ValueOrThrow(HttpHeadersFromPython(headers))};
            }),
+           "Construct an HTTP response head (status and headers).",
            py::arg("status") = 0, py::arg("headers") = py::none())
-      .def_readwrite("status", &net::HttpResponseHead::status)
+      .def_readwrite("status", &net::HttpResponseHead::status,
+                     "The HTTP status code.")
       .def_property(
           "headers",
           [](const net::HttpResponseHead& response) {
@@ -261,7 +279,8 @@ void BindHttp(py::module_& module) {
           },
           [](net::HttpResponseHead& response, const py::object& headers) {
             response.headers = ValueOrThrow(HttpHeadersFromPython(headers));
-          });
+          },
+          "The response headers as a list of (name, value) pairs.");
 
   py::class_<net::HttpResponse>(module, "HttpResponse")
       .def(py::init([](net::HttpResponseHead head, const py::object& body) {
@@ -269,9 +288,11 @@ void BindHttp(py::module_& module) {
                  .head = std::move(head),
                  .body = ValueOrThrow(HttpBodyFromPython(body))};
            }),
+           "Construct an HTTP response from a head and body.",
            py::arg("head") = net::HttpResponseHead{},
            py::arg("body") = py::bytes())
-      .def_readwrite("head", &net::HttpResponse::head)
+      .def_readwrite("head", &net::HttpResponse::head,
+                     "The response head (status and headers).")
       .def_property(
           "body",
           [](const net::HttpResponse& response) {
@@ -279,32 +300,45 @@ void BindHttp(py::module_& module) {
           },
           [](net::HttpResponse& response, const py::object& body) {
             response.body = ValueOrThrow(HttpBodyFromPython(body));
-          });
+          },
+          "The response body as bytes.");
 
   py::class_<net::Http2TlsOptions>(module, "Http2TlsOptions")
-      .def(py::init<>())
-      .def_readwrite("enabled", &net::Http2TlsOptions::enabled)
-      .def_readwrite("verify_peer", &net::Http2TlsOptions::verify_peer)
+      .def(py::init<>(), "Construct default HTTP/2 TLS options.")
+      .def_readwrite("enabled", &net::Http2TlsOptions::enabled,
+                     "Whether TLS is enabled.")
+      .def_readwrite("verify_peer", &net::Http2TlsOptions::verify_peer,
+                     "Whether to verify the peer certificate.")
       .def_readwrite("certificate_pem_file",
-                     &net::Http2TlsOptions::certificate_pem_file)
-      .def_readwrite("key_pem_file", &net::Http2TlsOptions::key_pem_file)
+                     &net::Http2TlsOptions::certificate_pem_file,
+                     "Path to the PEM certificate file.")
+      .def_readwrite("key_pem_file", &net::Http2TlsOptions::key_pem_file,
+                     "Path to the PEM private key file.")
       .def_readwrite("ca_certificate_pem_file",
-                     &net::Http2TlsOptions::ca_certificate_pem_file)
-      .def("validate", [](const net::Http2TlsOptions& options) {
-        ThrowIfNotOk(options.Validate());
-      });
+                     &net::Http2TlsOptions::ca_certificate_pem_file,
+                     "Path to the PEM CA certificate file.")
+      .def(
+          "validate",
+          [](const net::Http2TlsOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Validate the TLS options, raising on error.");
 
   py::class_<net::Http2Options>(module, "Http2Options")
-      .def(py::init<>())
+      .def(py::init<>(), "Construct default HTTP/2 options.")
       .def_readwrite("max_request_body_size",
-                     &net::Http2Options::max_request_body_size)
+                     &net::Http2Options::max_request_body_size,
+                     "Maximum accepted request body size in bytes.")
       .def_readwrite("max_response_body_size",
-                     &net::Http2Options::max_response_body_size)
+                     &net::Http2Options::max_response_body_size,
+                     "Maximum accepted response body size in bytes.")
       .def_readwrite("max_buffered_request_bytes",
-                     &net::Http2Options::max_buffered_request_bytes)
+                     &net::Http2Options::max_buffered_request_bytes,
+                     "Maximum buffered request bytes before backpressure.")
       .def_readwrite("max_buffered_response_bytes",
-                     &net::Http2Options::max_buffered_response_bytes)
-      .def_readwrite("tls", &net::Http2Options::tls)
+                     &net::Http2Options::max_buffered_response_bytes,
+                     "Maximum buffered response bytes before backpressure.")
+      .def_readwrite("tls", &net::Http2Options::tls, "The TLS options.")
       .def_property(
           "deadline",
           [](const net::Http2Options& options) {
@@ -312,10 +346,14 @@ void BindHttp(py::module_& module) {
           },
           [](net::Http2Options& options, const py::object& deadline) {
             options.deadline = ValueOrThrow(TimeFromPython(deadline));
-          })
-      .def("validate", [](const net::Http2Options& options) {
-        ThrowIfNotOk(options.Validate());
-      });
+          },
+          "The operation deadline.")
+      .def(
+          "validate",
+          [](const net::Http2Options& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Validate the options, raising on error.");
 
   py::class_<net::Http2ResponseStream,
              std::shared_ptr<net::Http2ResponseStream>>(module,
@@ -323,7 +361,8 @@ void BindHttp(py::module_& module) {
       .def("headers",
            [](const std::shared_ptr<net::Http2ResponseStream>& self) {
              return FutureToPython(self->Headers());
-           })
+           },
+           "Await the response head (status and headers).")
       .def("read",
            [](const std::shared_ptr<net::Http2ResponseStream>& self) {
              return FutureToPythonConverted(
@@ -333,16 +372,20 @@ void BindHttp(py::module_& module) {
                      return py::none();
                    return py::bytes(*value);
                  });
-           })
+           },
+           "Await the next chunk of response body data, or None at end of "
+           "stream.")
       .def("wait_done",
            [](const std::shared_ptr<net::Http2ResponseStream>& self) {
              return FutureToPython(self->Done());
-           })
+           },
+           "Await completion of the response stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
             return FutureToPython(self->Done());
-          })
+          },
+          "Future that completes when the response stream is done.")
       .def(
           "cancel",
           [](net::Http2ResponseStream& self, const py::object& status) {
@@ -354,15 +397,18 @@ void BindHttp(py::module_& module) {
                                            : self.Cancel();
             });
           },
+          "Cancel the response stream with an optional status.",
           py::arg("status") = py::none())
-      .def_property_readonly("stream_id", &net::Http2ResponseStream::stream_id);
+      .def_property_readonly("stream_id", &net::Http2ResponseStream::stream_id,
+                             "The HTTP/2 stream identifier.");
 
   py::class_<net::Http2DuplexStream, std::shared_ptr<net::Http2DuplexStream>>(
       module, "Http2DuplexStream")
       .def("headers",
            [](const std::shared_ptr<net::Http2DuplexStream>& self) {
              return FutureToPython(self->Headers());
-           })
+           },
+           "Await the response head (status and headers).")
       .def("read",
            [](const std::shared_ptr<net::Http2DuplexStream>& self) {
              return FutureToPythonConverted(
@@ -372,7 +418,8 @@ void BindHttp(py::module_& module) {
                      return py::none();
                    return py::bytes(*value);
                  });
-           })
+           },
+           "Await the next chunk of response data, or None at end of stream.")
       .def(
           "write",
           [](net::Http2DuplexStream& self, const py::object& data) {
@@ -380,11 +427,14 @@ void BindHttp(py::module_& module) {
             CallWithoutGil([&self, converted = std::move(converted)]() mutable {
               return self.Write(std::move(converted));
             });
-          })
+          },
+          "Write a chunk of request data to the duplex stream.",
+          py::arg("data"))
       .def("finish",
            [](net::Http2DuplexStream& self) {
              CallWithoutGil([&self] { return self.Finish(); });
-           })
+           },
+           "Signal the end of the request side of the duplex stream.")
       .def(
           "abort",
           [](net::Http2DuplexStream& self, const py::object& status) {
@@ -396,17 +446,21 @@ void BindHttp(py::module_& module) {
                                            : self.Abort();
             });
           },
+          "Abort the duplex stream with an optional status.",
           py::arg("status") = py::none())
       .def("wait_done",
            [](const std::shared_ptr<net::Http2DuplexStream>& self) {
              return FutureToPython(self->Done());
-           })
+           },
+           "Await completion of the duplex stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
             return FutureToPython(self->Done());
-          })
-      .def_property_readonly("stream_id", &net::Http2DuplexStream::stream_id);
+          },
+          "Future that completes when the duplex stream is done.")
+      .def_property_readonly("stream_id", &net::Http2DuplexStream::stream_id,
+                             "The HTTP/2 stream identifier.");
 
   py::class_<net::Http2ResponseWriter,
              std::shared_ptr<net::Http2ResponseWriter>>(module,
@@ -422,6 +476,7 @@ void BindHttp(py::module_& module) {
                   return self.SendHeaders(status, std::move(converted));
                 });
           },
+          "Send the response status and headers.",
           py::arg("status"), py::arg("headers") = py::none())
       .def(
           "write",
@@ -430,11 +485,14 @@ void BindHttp(py::module_& module) {
             CallWithoutGil([&self, converted = std::move(converted)]() mutable {
               return self.Write(std::move(converted));
             });
-          })
+          },
+          "Write a chunk of response body data.",
+          py::arg("data"))
       .def("finish",
            [](net::Http2ResponseWriter& self) {
              CallWithoutGil([&self] { return self.Finish(); });
-           })
+           },
+           "Signal the end of the response body.")
       .def(
           "send_response",
           [](net::Http2ResponseWriter& self, int status,
@@ -449,6 +507,7 @@ void BindHttp(py::module_& module) {
                                        std::move(body));
             });
           },
+          "Send a complete response (status, headers, and body) at once.",
           py::arg("status"), py::arg("headers") = py::none(),
           py::arg("body") = py::bytes())
       .def(
@@ -458,20 +517,27 @@ void BindHttp(py::module_& module) {
             CallWithoutGil([&self, converted = std::move(converted)]() mutable {
               return self.Abort(std::move(converted));
             });
-          })
+          },
+          "Abort the response with the given status.",
+          py::arg("status"))
       .def("wait_done",
            [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
              return FutureToPython(self->Done());
-           })
+           },
+           "Await completion of the response.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
             return FutureToPython(self->Done());
-          })
+          },
+          "Future that completes when the response is done.")
       .def_property_readonly("headers_sent",
-                             &net::Http2ResponseWriter::headers_sent)
-      .def_property_readonly("finished", &net::Http2ResponseWriter::finished)
-      .def_property_readonly("stream_id", &net::Http2ResponseWriter::stream_id);
+                             &net::Http2ResponseWriter::headers_sent,
+                             "Whether the response headers have been sent.")
+      .def_property_readonly("finished", &net::Http2ResponseWriter::finished,
+                             "Whether the response has been finished.")
+      .def_property_readonly("stream_id", &net::Http2ResponseWriter::stream_id,
+                             "The HTTP/2 stream identifier.");
 
   py::class_<net::Http2Server, std::shared_ptr<net::Http2Server>>(module,
                                                                   "Http2Server")
@@ -491,20 +557,30 @@ void BindHttp(py::module_& module) {
                 },
                 options));
           },
+          "Create and start an HTTP/2 server bound to the given address and "
+          "port, dispatching each request to the async handler.",
           py::arg("bind_address") = "127.0.0.1", py::arg("port") = 0,
           py::arg("handler") = py::none(),
           py::arg("options") = net::Http2Options{})
       .def("stop",
            [](net::Http2Server& self) {
              CallWithoutGil([&self] { return self.Stop(); });
-           })
-      .def_property_readonly("port", &net::Http2Server::port)
-      .def_property_readonly("bind_address", &net::Http2Server::bind_address)
-      .def_property_readonly("running", &net::Http2Server::running)
-      .def_property_readonly("secure", &net::Http2Server::secure)
-      .def("get_impl", [](const net::Http2Server& self) {
-        return ImplCapsule(self.GetImpl(), "a11.Http2Server.impl");
-      });
+           },
+           "Stop the server and release its resources.")
+      .def_property_readonly("port", &net::Http2Server::port,
+                             "The port the server is listening on.")
+      .def_property_readonly("bind_address", &net::Http2Server::bind_address,
+                             "The address the server is bound to.")
+      .def_property_readonly("running", &net::Http2Server::running,
+                             "Whether the server is currently running.")
+      .def_property_readonly("secure", &net::Http2Server::secure,
+                             "Whether the server is using TLS.")
+      .def(
+          "get_impl",
+          [](const net::Http2Server& self) {
+            return ImplCapsule(self.GetImpl(), "a11.Http2Server.impl");
+          },
+          "Return an opaque capsule wrapping the native server handle.");
 
   py::class_<net::Http2Client, std::shared_ptr<net::Http2Client>>(module,
                                                                   "Http2Client")
@@ -514,6 +590,8 @@ void BindHttp(py::module_& module) {
             return FutureToPython(
                 net::Http2Client::Connect(std::move(host), port, options));
           },
+          "Asynchronously connect to an HTTP/2 server, returning a future "
+          "that resolves to the connected client.",
           py::arg("host"), py::arg("port"),
           py::arg("options") = net::Http2Options{})
       .def(
@@ -526,6 +604,8 @@ void BindHttp(py::module_& module) {
                 ValueOrThrow(HttpHeadersFromPython(headers)),
                 ValueOrThrow(HttpBodyFromPython(body)), std::move(scheme)));
           },
+          "Open a request and return a pull-oriented response stream for "
+          "reading the response body incrementally.",
           py::arg("method"), py::arg("path"), py::arg("headers") = py::none(),
           py::arg("body") = py::bytes(), py::arg("scheme") = "")
       .def(
@@ -538,6 +618,7 @@ void BindHttp(py::module_& module) {
                 ValueOrThrow(HttpHeadersFromPython(headers)),
                 ValueOrThrow(HttpBodyFromPython(body)), std::move(scheme)));
           },
+          "Send a request and await the full buffered response.",
           py::arg("method"), py::arg("path"), py::arg("headers") = py::none(),
           py::arg("body") = py::bytes(), py::arg("scheme") = "")
       .def(
@@ -549,29 +630,45 @@ void BindHttp(py::module_& module) {
                 ValueOrThrow(HttpHeadersFromPython(headers)),
                 std::move(scheme)));
           },
+          "Open an extended CONNECT duplex stream for bidirectional data.",
           py::arg("protocol"), py::arg("path"), py::arg("headers") = py::none(),
           py::arg("scheme") = "")
       .def("close",
            [](net::Http2Client& self) {
              CallWithoutGil([&self] { return self.Close(); });
-           })
-      .def_property_readonly("host", &net::Http2Client::host)
-      .def_property_readonly("port", &net::Http2Client::port)
-      .def_property_readonly("connected", &net::Http2Client::connected)
-      .def_property_readonly("secure", &net::Http2Client::secure)
-      .def("get_impl", [](const net::Http2Client& self) {
-        return ImplCapsule(self.GetImpl(), "a11.Http2Client.impl");
-      });
+           },
+           "Close the client connection.")
+      .def_property_readonly("host", &net::Http2Client::host,
+                             "The host the client is connected to.")
+      .def_property_readonly("port", &net::Http2Client::port,
+                             "The port the client is connected to.")
+      .def_property_readonly("connected", &net::Http2Client::connected,
+                             "Whether the client is currently connected.")
+      .def_property_readonly("secure", &net::Http2Client::secure,
+                             "Whether the connection is using TLS.")
+      .def(
+          "get_impl",
+          [](const net::Http2Client& self) {
+            return ImplCapsule(self.GetImpl(), "a11.Http2Client.impl");
+          },
+          "Return an opaque capsule wrapping the native client handle.");
 
   py::class_<net::HttpSseOptions>(module, "HttpSseOptions")
-      .def(py::init<>())
-      .def_readwrite("stream_options", &net::HttpSseOptions::stream_options)
-      .def_readwrite("http2_options", &net::HttpSseOptions::http2_options)
-      .def_readwrite("connect_endpoint", &net::HttpSseOptions::connect_endpoint)
-      .def_readwrite("message_endpoint", &net::HttpSseOptions::message_endpoint)
-      .def("validate", [](const net::HttpSseOptions& options) {
-        ThrowIfNotOk(options.Validate());
-      });
+      .def(py::init<>(), "Construct default HTTP SSE wire stream options.")
+      .def_readwrite("stream_options", &net::HttpSseOptions::stream_options,
+                     "The underlying wire stream options.")
+      .def_readwrite("http2_options", &net::HttpSseOptions::http2_options,
+                     "The underlying HTTP/2 transport options.")
+      .def_readwrite("connect_endpoint", &net::HttpSseOptions::connect_endpoint,
+                     "The endpoint path used to open the SSE connection.")
+      .def_readwrite("message_endpoint", &net::HttpSseOptions::message_endpoint,
+                     "The endpoint path template used to post messages.")
+      .def(
+          "validate",
+          [](const net::HttpSseOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Validate the options, raising on error.");
 
   py::class_<net::HttpSseWireStream, net::WireStream,
              std::shared_ptr<net::HttpSseWireStream>>(module,
@@ -579,7 +676,12 @@ void BindHttp(py::module_& module) {
       .def("get_http_request_headers",
            [](const net::HttpSseWireStream& self) {
              return HttpHeadersToPython(self.GetHttpRequestHeaders());
-           })
+           },
+           "Return the HTTP headers carried on the underlying SSE request. "
+           "This is the base class shared by the client and server SSE wire "
+           "streams that transport A11 messages over an HTTP/2 Server-Sent "
+           "Events connection. Use it when building an agent that needs to "
+           "inspect the transport-level request metadata.")
       .def("get_http_response_headers",
            [](const net::HttpSseWireStream& self) -> py::object {
              const std::optional<net::HttpHeaders> headers =
@@ -587,21 +689,37 @@ void BindHttp(py::module_& module) {
              if (!headers.has_value())
                return py::none();
              return HttpHeadersToPython(*headers);
-           })
+           },
+           "Return the HTTP response headers negotiated for the SSE "
+           "connection, or None if they have not arrived yet. Because the "
+           "connection is established asynchronously, prefer awaiting "
+           "wait_for_http_headers() before relying on this value.")
       .def("set_http_request_headers",
            [](net::HttpSseWireStream& self, const py::object& headers) {
              ThrowIfNotOk(self.SetHttpRequestHeaders(
                  ValueOrThrow(HttpHeadersFromPython(headers))));
-           })
+           },
+           "Set the HTTP headers to send on the underlying SSE request. Call "
+           "this before the stream connects to attach auth or routing "
+           "metadata that your agent's transport needs.",
+           py::arg("headers"))
       .def("set_http_response_headers",
            [](net::HttpSseWireStream& self, const py::object& headers) {
              ThrowIfNotOk(self.SetHttpResponseHeaders(
                  ValueOrThrow(HttpHeadersFromPython(headers))));
-           })
+           },
+           "Set the HTTP headers to send on the SSE response. Used on the "
+           "server side to attach transport metadata before the streaming "
+           "response is flushed to the client.",
+           py::arg("headers"))
       .def("wait_for_http_headers",
            [](const std::shared_ptr<net::HttpSseWireStream>& self) {
              return FutureToPython(self->WaitForHttpHeaders());
-           });
+           },
+           "Await the exchange of HTTP headers for the SSE connection. "
+           "Because SSE wire streams connect asynchronously, await this "
+           "future before reading response headers or assuming the stream is "
+           "live.");
 
   py::class_<net::HttpSseClientWireStream, net::HttpSseWireStream,
              std::shared_ptr<net::HttpSseClientWireStream>>(
@@ -613,6 +731,11 @@ void BindHttp(py::module_& module) {
                  std::move(url), std::move(options), std::move(client),
                  ValueOrThrow(HttpHeadersFromPython(request_headers))));
            }),
+           "Construct a client-side SSE wire stream that connects to the "
+           "given URL. This is the transport an A11 agent uses to exchange "
+           "messages with a remote service over HTTP/2 Server-Sent Events; "
+           "the connection is opened lazily and runs asynchronously, so "
+           "await the stream's lifecycle futures rather than blocking.",
            py::arg("url"), py::arg("options") = net::HttpSseOptions{},
            py::arg("client") = nullptr, py::arg("request_headers") = py::none())
       .def_static(
@@ -624,9 +747,17 @@ void BindHttp(py::module_& module) {
                 std::move(url), std::move(options), std::move(client),
                 ValueOrThrow(HttpHeadersFromPython(request_headers))));
           },
+          "Create a client-side SSE wire stream connecting to the given URL, "
+          "optionally reusing an existing HTTP/2 client. Prefer this factory "
+          "when wiring an agent's outbound transport, and drive the returned "
+          "stream asynchronously as SSE events arrive.",
           py::arg("url"), py::arg("options") = net::HttpSseOptions{},
           py::arg("client") = nullptr, py::arg("request_headers") = py::none())
-      .def_property_readonly("client", &net::HttpSseClientWireStream::client);
+      .def_property_readonly(
+          "client", &net::HttpSseClientWireStream::client,
+          "The underlying HTTP/2 client backing this SSE wire stream, which "
+          "you can reuse to multiplex additional streams from the same "
+          "agent connection.");
 
   py::class_<net::HttpSseServerWireStream, net::HttpSseWireStream,
              std::shared_ptr<net::HttpSseServerWireStream>>(
@@ -634,7 +765,12 @@ void BindHttp(py::module_& module) {
       .def("accepted",
            [](const std::shared_ptr<net::HttpSseServerWireStream>& self) {
              return FutureToPython(self->Accepted());
-           });
+           },
+           "Await acceptance of this server-side SSE wire stream. This is the "
+           "server counterpart delivered to your on_connect handler when a "
+           "client opens an SSE connection; await this future to know the "
+           "stream has been fully established before your agent starts "
+           "sending messages on it.");
 
   py::class_<net::HttpSseServer, std::shared_ptr<net::HttpSseServer>>(
       module, "HttpSseServer")
@@ -656,34 +792,48 @@ void BindHttp(py::module_& module) {
                 std::move(bind_address), port, std::move(callback),
                 std::move(options)));
           },
+          "Create and start an SSE server that accepts A11 wire streams, "
+          "invoking the optional async on_connect callback for each client.",
           py::arg("bind_address") = "127.0.0.1", py::arg("port") = 0,
           py::arg("on_connect") = py::none(),
           py::arg("options") = net::HttpSseOptions{})
       .def("wait_for_stream",
            [](const std::shared_ptr<net::HttpSseServer>& self) {
              return FutureToPython(self->WaitForStream());
-           })
+           },
+           "Await the next incoming SSE wire stream from a connecting client.")
       .def("stop",
            [](net::HttpSseServer& self) {
              CallWithoutGil([&self] { return self.Stop(); });
-           })
-      .def_property_readonly("port", &net::HttpSseServer::port)
-      .def_property_readonly("running", &net::HttpSseServer::running)
-      .def_property_readonly("http2_server", &net::HttpSseServer::http2_server);
+           },
+           "Stop the server and release its resources.")
+      .def_property_readonly("port", &net::HttpSseServer::port,
+                             "The port the server is listening on.")
+      .def_property_readonly("running", &net::HttpSseServer::running,
+                             "Whether the server is currently running.")
+      .def_property_readonly("http2_server", &net::HttpSseServer::http2_server,
+                             "The underlying HTTP/2 server.");
 
   module.attr("HttpSseWireStreamServer") = module.attr("HttpSseServer");
-  module.def("get_http_header",
-             [](const py::object& headers, std::string name) -> py::object {
-               std::optional<std::string> value = net::GetHttpHeader(
-                   ValueOrThrow(HttpHeadersFromPython(headers)), name);
-               if (!value.has_value())
-                 return py::none();
-               return py::str(*value);
-             });
-  module.def("validate_http_headers", [](const py::object& headers) {
-    ThrowIfNotOk(
-        net::ValidateHttpHeaders(ValueOrThrow(HttpHeadersFromPython(headers))));
-  });
+  module.def(
+      "get_http_header",
+      [](const py::object& headers, std::string name) -> py::object {
+        std::optional<std::string> value = net::GetHttpHeader(
+            ValueOrThrow(HttpHeadersFromPython(headers)), name);
+        if (!value.has_value())
+          return py::none();
+        return py::str(*value);
+      },
+      "Look up a header value by name, returning None if it is absent.",
+      py::arg("headers"), py::arg("name"));
+  module.def(
+      "validate_http_headers",
+      [](const py::object& headers) {
+        ThrowIfNotOk(net::ValidateHttpHeaders(
+            ValueOrThrow(HttpHeadersFromPython(headers))));
+      },
+      "Validate a collection of HTTP headers, raising on error.",
+      py::arg("headers"));
   module.attr("SSE_STREAM_ID_HEADER") = std::string(net::kSseStreamIdHeader);
   module.attr("SSE_HTTP_HEADER_PREFIX") =
       std::string(net::kSseHttpHeaderPrefix);

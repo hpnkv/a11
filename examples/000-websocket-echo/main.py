@@ -6,12 +6,7 @@ from typing import Sequence
 from absl import app as absl_app
 from absl import logging
 
-# Make the example directly runnable from a source checkout without requiring
-# an editable package installation.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
+import a11
 from a11.data import types
 from a11.net.websocket_wire_stream import (
     WebSocketClientOptions,
@@ -82,6 +77,8 @@ async def main(_argv: Sequence[str]):
 def sync_main(argv: Sequence[str]):
     logging.use_absl_handler()
     logging.set_verbosity(logging.INFO)
+
+    a11.observability.configure_langfuse_from_env()
 
     return asyncio.run(main(argv))
 

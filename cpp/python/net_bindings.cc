@@ -495,17 +495,25 @@ void BindNet(py::module_& module) {
             ValidateWireStreamOptions(options);
             return options;
           }),
+          "Construct wire-stream options controlling buffering and timeouts for "
+          "an agent stream. All arguments are keyword-friendly and validated on "
+          "construction.",
           py::arg("max_buffered_incoming_messages") = 100,
           py::arg("max_single_message_size") = net::kMaxSingleMessageSize,
           py::arg("max_buffered_incoming_bytes") = 32 * 1024 * 1024,
           py::arg("message_timeout_millis") = py::none(),
           py::arg("deadline") = py::none())
       .def_readwrite("max_buffered_incoming_messages",
-                     &net::WireStreamOptions::max_buffered_incoming_messages)
+                     &net::WireStreamOptions::max_buffered_incoming_messages,
+                     "Maximum number of inbound messages buffered before "
+                     "backpressure is applied.")
       .def_readwrite("max_buffered_incoming_bytes",
-                     &net::WireStreamOptions::max_buffered_incoming_bytes)
+                     &net::WireStreamOptions::max_buffered_incoming_bytes,
+                     "Maximum total bytes of buffered inbound messages before "
+                     "backpressure is applied.")
       .def_readwrite("max_single_message_size",
-                     &net::WireStreamOptions::max_single_message_size)
+                     &net::WireStreamOptions::max_single_message_size,
+                     "Maximum size, in bytes, of a single wire message.")
       .def_property(
           "message_timeout",
           [](const net::WireStreamOptions& options) {
@@ -513,7 +521,8 @@ void BindNet(py::module_& module) {
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.message_timeout = MessageTimeoutOption(value);
-          })
+          },
+          "Per-message inactivity timeout as a duration.")
       .def_property(
           "message_timeout_millis",
           [](const net::WireStreamOptions& options) {
@@ -521,7 +530,8 @@ void BindNet(py::module_& module) {
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.message_timeout = MessageTimeoutOption(value);
-          })
+          },
+          "Per-message inactivity timeout expressed in milliseconds.")
       .def_property(
           "deadline",
           [](const net::WireStreamOptions& options) {
@@ -529,37 +539,73 @@ void BindNet(py::module_& module) {
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.deadline = ValueOrThrow(TimeFromPython(value));
-          })
-      .def("validate", &ValidateWireStreamOptions);
+          },
+          "Absolute wall-clock deadline after which the stream is aborted.")
+      .def("validate", &ValidateWireStreamOptions,
+           "Validate the options, raising on invalid configuration.");
 
   py::class_<net::ChannelFramingOptions>(module, "ChannelFramingOptions")
-      .def(py::init<>())
-      .def_readwrite("split_size", &net::ChannelFramingOptions::split_size)
+      .def(py::init<>(), "Construct default channel framing options.")
+      .def_readwrite("split_size", &net::ChannelFramingOptions::split_size,
+                     "Maximum payload size before a message is split into "
+                     "multiple frames.")
       .def_readwrite("max_pending_messages",
-                     &net::ChannelFramingOptions::max_pending_messages)
+                     &net::ChannelFramingOptions::max_pending_messages,
+                     "Maximum number of in-flight (unacknowledged) frames.")
       .def_readwrite("max_pending_bytes",
-                     &net::ChannelFramingOptions::max_pending_bytes)
-      .def("validate", [](const net::ChannelFramingOptions& options) {
-        CheckStatus(options.Validate());
-      });
+                     &net::ChannelFramingOptions::max_pending_bytes,
+                     "Maximum total bytes of in-flight frames.")
+      .def(
+          "validate",
+          [](const net::ChannelFramingOptions& options) {
+            CheckStatus(options.Validate());
+          },
+          "Validate the framing options, raising on invalid configuration.");
 
   py::class_<net::WireStream, PyWireStream, std::shared_ptr<net::WireStream>>
       wire_stream(module, "WireStream");
-  wire_stream.def(py::init<>())
-      .def("send",
-           [](net::WireStream& self, data::WireMessage message) {
-             CheckStatus(self.Send(std::move(message)));
-           })
-      .def("start",
-           [](const std::shared_ptr<net::WireStream>& self,
-              const py::object& on_message, const py::object& on_done) {
-             return StartStream(self, false, on_message, on_done);
-           })
-      .def("accept",
-           [](const std::shared_ptr<net::WireStream>& self,
-              const py::object& on_message, const py::object& on_done) {
-             return StartStream(self, true, on_message, on_done);
-           })
+  wire_stream
+      .def(py::init<>(),
+           "Construct the abstract WireStream base. Subclass this in Python to "
+           "implement a custom asynchronous, bidirectional transport for an "
+           "agent; the abstract operations (send, start/accept, get_status, "
+           "get_trailers, ...) are dispatched to your overrides.")
+      .def(
+          "send",
+          [](net::WireStream& self, data::WireMessage message) {
+            CheckStatus(self.Send(std::move(message)));
+          },
+          "Queue a message for asynchronous delivery to the peer. This call is "
+          "non-blocking: the message enters this endpoint's ordered outbound "
+          "queue and is drained by the transport task, which applies "
+          "backpressure. Use it to push agent output onto the wire without "
+          "awaiting the peer.",
+          py::arg("message"))
+      .def(
+          "start",
+          [](const std::shared_ptr<net::WireStream>& self,
+             const py::object& on_message, const py::object& on_done) {
+            return StartStream(self, false, on_message, on_done);
+          },
+          "Begin driving the stream as the initiating (client) side, delivering "
+          "each inbound message to the asynchronous on_message callback and "
+          "end-of-stream to on_done. The callbacks are awaited as data arrives, "
+          "so this is the entry point for consuming a streaming agent "
+          "conversation. Returns an awaitable that resolves when the stream "
+          "terminates.",
+          py::arg("on_message"), py::arg("on_done"))
+      .def(
+          "accept",
+          [](const std::shared_ptr<net::WireStream>& self,
+             const py::object& on_message, const py::object& on_done) {
+            return StartStream(self, true, on_message, on_done);
+          },
+          "Begin driving the stream as the responding (server) side, delivering "
+          "each inbound message to the asynchronous on_message callback and "
+          "end-of-stream to on_done. Use this instead of start() when this "
+          "endpoint is answering an incoming agent connection. Returns an "
+          "awaitable that resolves when the stream terminates.",
+          py::arg("on_message"), py::arg("on_done"))
       .def(
           "half_close",
           [](const std::shared_ptr<net::WireStream>& self,
@@ -570,15 +616,29 @@ void BindNet(py::module_& module) {
               ThrowStatus(converted.status());
             CheckStatus(self->HalfClose(std::move(*converted)));
           },
+          "Signal that this endpoint has finished sending, optionally attaching "
+          "trailers (final metadata) for the peer. The stream stays open for "
+          "inbound messages, so use this to end your half of a duplex agent "
+          "exchange while still receiving the peer's remaining output.",
           py::arg("trailers") = py::none())
-      .def("drain_outgoing_messages",
-           [](const std::shared_ptr<net::WireStream>& self) {
-             return FutureToPython(self->DrainOutgoingMessages());
-           })
-      .def("abort",
-           [](net::WireStream& self, const py::handle& status) {
-             CheckStatus(self.Abort(StatusFromPython(status)));
-           })
+      .def(
+          "drain_outgoing_messages",
+          [](const std::shared_ptr<net::WireStream>& self) {
+            return FutureToPython(self->DrainOutgoingMessages());
+          },
+          "Await until every queued outbound message has been handed to the "
+          "transport. Call this before shutting down so buffered agent output "
+          "is actually flushed to the peer rather than dropped.")
+      .def(
+          "abort",
+          [](net::WireStream& self, const py::handle& status) {
+            CheckStatus(self.Abort(StatusFromPython(status)));
+          },
+          "Terminate the stream immediately with an error status, discarding "
+          "buffered messages and propagating the failure to the peer and to any "
+          "pending receivers. Use this to fail fast when an agent hits an "
+          "unrecoverable error.",
+          py::arg("status"))
       .def(
           "set_deadline",
           [](const std::shared_ptr<net::WireStream>& self,
@@ -588,26 +648,46 @@ void BindNet(py::module_& module) {
               ThrowStatus(converted.status());
             CheckStatus(self->SetDeadline(*converted));
           },
+          "Set an absolute wall-clock deadline after which the stream is "
+          "automatically aborted; pass None to clear it. Use this to bound how "
+          "long an agent interaction is allowed to run.",
           py::arg("deadline") = py::none())
-      .def_property_readonly("deadline",
-                             [](const net::WireStream& self) {
-                               return TimeToPython(self.deadline());
-                             })
-      .def("get_status",
-           [](const net::WireStream& self) {
-             return StatusToPython(self.GetStatus());
-           })
-      .def("get_trailers",
-           [](const net::WireStream& self) -> py::object {
-             std::optional<data::ByteMap> trailers = self.GetTrailers();
-             if (!trailers.has_value())
-               return py::none();
-             return ByteMapToPython(*trailers);
-           })
-      .def("get_id", &net::WireStream::GetId)
-      .def("get_impl", [](const net::WireStream& self) {
-        return VoidPointer(self.GetImpl(), "a11.WireStream.impl");
-      });
+      .def_property_readonly(
+          "deadline",
+          [](const net::WireStream& self) {
+            return TimeToPython(self.deadline());
+          },
+          "The stream's current absolute deadline, after which it is "
+          "automatically aborted.")
+      .def(
+          "get_status",
+          [](const net::WireStream& self) {
+            return StatusToPython(self.GetStatus());
+          },
+          "Return the stream's terminal status once it has finished, or OK "
+          "while it is still active. Inspect this after the stream completes to "
+          "learn whether the agent exchange succeeded or failed.")
+      .def(
+          "get_trailers",
+          [](const net::WireStream& self) -> py::object {
+            std::optional<data::ByteMap> trailers = self.GetTrailers();
+            if (!trailers.has_value())
+              return py::none();
+            return ByteMapToPython(*trailers);
+          },
+          "Return the trailers (final metadata) the peer sent at half-close, or "
+          "None if none were received. Read this after the stream ends to "
+          "recover end-of-turn metadata from the agent exchange.")
+      .def("get_id", &net::WireStream::GetId,
+           "Return the stream's stable identifier, which also seeds its tracing "
+           "trace id. Use it to correlate an agent stream with logs and traces.")
+      .def(
+          "get_impl",
+          [](const net::WireStream& self) {
+            return VoidPointer(self.GetImpl(), "a11.WireStream.impl");
+          },
+          "Return an opaque native handle to the underlying implementation, or "
+          "None. Intended for advanced interop, not normal agent code.");
 
   py::class_<net::InProcessWireStream, net::WireStream,
              std::shared_ptr<net::InProcessWireStream>>(
@@ -621,12 +701,23 @@ void BindNet(py::module_& module) {
                 std::move(options), std::move(first_options),
                 std::move(second_options)));
           },
+          "Create a connected pair of in-process wire streams that talk to each "
+          "other directly in memory, with no network involved. Use this to wire "
+          "an agent to a local service or test harness: one endpoint drives "
+          "start() while the other drives accept(). Pass shared options, or "
+          "per-endpoint first_options/second_options, to tune buffering and "
+          "timeouts.",
           py::arg("options") = std::nullopt,
           py::arg("first_options") = std::nullopt,
           py::arg("second_options") = std::nullopt)
-      .def("wait", [](const net::InProcessWireStream& self) {
-        return FutureToPython(self.Done());
-      });
+      .def(
+          "wait",
+          [](const net::InProcessWireStream& self) {
+            return FutureToPython(self.Done());
+          },
+          "Await until this in-process stream has fully finished. Block on this "
+          "to know a local agent exchange has completed before tearing the pair "
+          "down.");
   module.def(
       "create_in_process_wire_stream_pair",
       [](std::optional<net::WireStreamOptions> options,
@@ -636,6 +727,8 @@ void BindNet(py::module_& module) {
             std::move(options), std::move(first_options),
             std::move(second_options)));
       },
+      "Create a connected pair of in-process wire streams (free-function form "
+      "of InProcessWireStream.create_pair).",
       py::arg("options") = std::nullopt,
       py::arg("first_options") = std::nullopt,
       py::arg("second_options") = std::nullopt);
@@ -651,17 +744,25 @@ void BindNet(py::module_& module) {
              return ValueOrThrow(net::WireStreamWithRecv::Create(
                  value.cast<std::shared_ptr<net::WireStream>>()));
            }),
+           "Wrap a callback-based WireStream in a pull-oriented adapter that "
+           "exposes receive().",
            py::arg("stream"), py::keep_alive<1, 2>())
-      .def("start",
-           [](const std::shared_ptr<net::WireStreamWithRecv>& self) {
-             return FutureToPython(a11::SubmitTask(
-                 [self] { return self->Start().Await().status(); }));
-           })
-      .def("accept",
-           [](const std::shared_ptr<net::WireStreamWithRecv>& self) {
-             return FutureToPython(a11::SubmitTask(
-                 [self] { return self->Accept().Await().status(); }));
-           })
+      .def(
+          "start",
+          [](const std::shared_ptr<net::WireStreamWithRecv>& self) {
+            return FutureToPython(a11::SubmitTask(
+                [self] { return self->Start().Await().status(); }));
+          },
+          "Start the wrapped stream as the initiating side; returns an "
+          "awaitable.")
+      .def(
+          "accept",
+          [](const std::shared_ptr<net::WireStreamWithRecv>& self) {
+            return FutureToPython(a11::SubmitTask(
+                [self] { return self->Accept().Await().status(); }));
+          },
+          "Accept on the wrapped stream as the responding side; returns an "
+          "awaitable.")
       .def(
           "receive",
           [](const std::shared_ptr<net::WireStreamWithRecv>& self,
@@ -675,9 +776,12 @@ void BindNet(py::module_& module) {
             }
             return FutureToPython(self->Receive(*converted));
           },
+          "Await the next inbound message, or None at end of stream, honoring "
+          "the optional timeout.",
           py::arg("timeout") = py::none())
       .def_property_readonly("wrapped_stream",
-                             &net::WireStreamWithRecv::wrapped_stream);
+                             &net::WireStreamWithRecv::wrapped_stream,
+                             "The underlying WireStream being adapted.");
 
   module.attr("WIRE_STREAM_ABORT_STATUS_HEADER") =
       std::string(net::kAbortStatusHeader);
@@ -685,9 +789,10 @@ void BindNet(py::module_& module) {
       net::kMaxSingleMessageSize;
 
   py::class_<net::WebSocketClientOptions>(module, "WebSocketClientOptions")
-      .def(py::init<>())
+      .def(py::init<>(), "Construct default WebSocket client options.")
       .def_readwrite("http2_options",
-                     &net::WebSocketClientOptions::http2_options)
+                     &net::WebSocketClientOptions::http2_options,
+                     "HTTP/2 transport options for the client connection.")
       .def_property(
           "headers",
           [](const net::WebSocketClientOptions& options) {
@@ -715,11 +820,18 @@ void BindNet(py::module_& module) {
             }
             CheckStatus(net::ValidateHttpHeaders(headers));
             options.headers = std::move(headers);
-          })
-      .def_readwrite("framing", &net::WebSocketClientOptions::framing)
-      .def("validate", [](const net::WebSocketClientOptions& options) {
-        CheckStatus(options.Validate());
-      });
+          },
+          "Extra HTTP headers sent on the WebSocket handshake, as a list of "
+          "(name, value) string pairs.")
+      .def_readwrite("framing", &net::WebSocketClientOptions::framing,
+                     "Channel framing options controlling message splitting "
+                     "and buffering.")
+      .def(
+          "validate",
+          [](const net::WebSocketClientOptions& options) {
+            CheckStatus(options.Validate());
+          },
+          "Validate the client options, raising on invalid configuration.");
 
   py::class_<net::WebSocketWireStream, net::WireStream,
              std::shared_ptr<net::WebSocketWireStream>>(module,
@@ -731,19 +843,33 @@ void BindNet(py::module_& module) {
             return ValueOrThrow(net::WebSocketWireStream::CreateClient(
                 std::move(url), options, std::move(websocket_options)));
           },
+          "Open a client WebSocket connection to url and return a WireStream "
+          "over it. This is the standard way for an agent to dial out to a "
+          "remote A11 endpoint; the returned stream is then driven "
+          "asynchronously via start()/send(). Tune transport buffering with "
+          "options and the handshake (headers, framing, HTTP/2, TLS) with "
+          "websocket_options.",
           py::arg("url"), py::arg("options") = net::WireStreamOptions{},
           py::arg("websocket_options") = net::WebSocketClientOptions{});
 
   py::class_<net::WebSocketServerOptions>(module, "WebSocketServerOptions")
-      .def(py::init<>())
-      .def_readwrite("path", &net::WebSocketServerOptions::path)
+      .def(py::init<>(), "Construct default WebSocket server options.")
+      .def_readwrite("path", &net::WebSocketServerOptions::path,
+                     "URL path on which the server accepts WebSocket "
+                     "connections.")
       .def_readwrite("stream_options",
-                     &net::WebSocketServerOptions::stream_options)
-      .def_readwrite("framing", &net::WebSocketServerOptions::framing)
+                     &net::WebSocketServerOptions::stream_options,
+                     "Default WireStreamOptions applied to each accepted "
+                     "stream.")
+      .def_readwrite("framing", &net::WebSocketServerOptions::framing,
+                     "Channel framing options for accepted streams.")
       .def_readwrite("http2_options",
-                     &net::WebSocketServerOptions::http2_options)
-      .def_readwrite("port", &net::WebSocketServerOptions::port)
-      .def_readwrite("bind_address", &net::WebSocketServerOptions::bind_address)
+                     &net::WebSocketServerOptions::http2_options,
+                     "HTTP/2 transport options, including TLS settings.")
+      .def_readwrite("port", &net::WebSocketServerOptions::port,
+                     "TCP port to listen on; 0 selects an ephemeral port.")
+      .def_readwrite("bind_address", &net::WebSocketServerOptions::bind_address,
+                     "Local address the server binds to.")
       .def_property(
           "enable_tls",
           [](const net::WebSocketServerOptions& options) {
@@ -751,10 +877,14 @@ void BindNet(py::module_& module) {
           },
           [](net::WebSocketServerOptions& options, bool value) {
             options.http2_options.tls.enabled = value;
-          })
-      .def("validate", [](const net::WebSocketServerOptions& options) {
-        CheckStatus(options.Validate());
-      });
+          },
+          "Whether TLS is enabled (mirrors http2_options.tls.enabled).")
+      .def(
+          "validate",
+          [](const net::WebSocketServerOptions& options) {
+            CheckStatus(options.Validate());
+          },
+          "Validate the server options, raising on invalid configuration.");
 
   py::class_<net::WebSocketWireServer,
              std::shared_ptr<net::WebSocketWireServer>>(module,
@@ -773,20 +903,39 @@ void BindNet(py::module_& module) {
                 },
                 std::move(options)));
           },
+          "Start a WebSocket server that accepts incoming A11 connections, "
+          "invoking the asynchronous on_stream callback with a fresh WireStream "
+          "for each accepted client. This is the server-side entry point for "
+          "hosting an agent: each callback runs concurrently and typically "
+          "drives accept() on its stream. Configure the listen address, port, "
+          "path and TLS via options.",
           py::arg("on_stream"),
           py::arg("options") = net::WebSocketServerOptions{})
-      .def("stop",
-           [](net::WebSocketWireServer& self) {
-             CallWithoutGil([&self] { return self.Stop(); });
-           })
-      .def_property_readonly("port",
-                             [](const net::WebSocketWireServer& self) {
-                               return ValueOrThrow(self.port());
-                             })
-      .def_property_readonly("running", &net::WebSocketWireServer::running)
-      .def("get_impl", [](const net::WebSocketWireServer& self) {
-        return VoidPointer(self.GetImpl(), "a11.WebSocketWireServer.impl");
-      });
+      .def(
+          "stop",
+          [](net::WebSocketWireServer& self) {
+            CallWithoutGil([&self] { return self.Stop(); });
+          },
+          "Stop the server and close the listening socket, releasing the bound "
+          "port. Call this to shut the agent host down cleanly; it blocks until "
+          "shutdown completes.")
+      .def_property_readonly(
+          "port",
+          [](const net::WebSocketWireServer& self) {
+            return ValueOrThrow(self.port());
+          },
+          "The actual TCP port the server is listening on, resolved even when "
+          "an ephemeral port (0) was requested.")
+      .def_property_readonly(
+          "running", &net::WebSocketWireServer::running,
+          "Whether the server is currently accepting connections.")
+      .def(
+          "get_impl",
+          [](const net::WebSocketWireServer& self) {
+            return VoidPointer(self.GetImpl(), "a11.WebSocketWireServer.impl");
+          },
+          "Return an opaque native handle to the underlying implementation, or "
+          "None. Intended for advanced interop.");
 }
 
 }  // namespace a11::python

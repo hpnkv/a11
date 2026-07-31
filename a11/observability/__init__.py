@@ -3,7 +3,7 @@
 """Explicit OpenTelemetry configuration for A11.
 
 Tracing is emitted natively from the C++ runtime and is off until
-:func:`configure_otel` (or a backend helper such as :func:`langfuse`) is
+`configure_otel` (or a backend helper such as `langfuse`) is
 called. Spans are exported directly from C++ over OTLP/HTTP (JSON), so
 telemetry never depends on the Python layer being on the hot path.
 """
@@ -36,8 +36,8 @@ def _span_json(value: Any) -> str:
 class Span:
     """A standalone tracing span, e.g. to group work that isn't a single action.
 
-    Create one with :func:`start_span`, pass ``span.traceparent()`` to
-    :func:`enable_tracing` on child actions to nest them, and ``end()`` it (or
+    Create one with `start_span`, pass ``span.traceparent()`` to
+    `enable_tracing` on child actions to nest them, and ``end()`` it (or
     use it as a context manager). Mutators are no-ops when tracing is off.
     """
 
@@ -180,7 +180,7 @@ def langfuse(
     Langfuse is OTLP-compatible, so this just points the native exporter at the
     Langfuse traces endpoint with Basic auth. Additional ``resource_attributes``
     (and ``extra_headers``) let a Langfuse integration attach its own metadata.
-    ``baggage_span_attributes`` defaults to :data:`LANGFUSE_BAGGAGE_KEYS`, so
+    ``baggage_span_attributes`` defaults to `LANGFUSE_BAGGAGE_KEYS`, so
     request-scoped values set upstream via the ``x-otel-baggage`` header --
     e.g. ``langfuse.session.id`` -- are promoted to span attributes Langfuse
     reads, and still propagate across nested/remote actions.
@@ -210,7 +210,7 @@ def new_traceparent(*, sampled: bool = True) -> str:
 
     Use this when the action you run/call has no upstream context and you want
     it to start its own trace: set it as the ``TRACEPARENT_HEADER`` before
-    ``run()``/``call()`` (or just use :func:`enable_tracing`).
+    ``run()``/``call()`` (or just use `enable_tracing`).
     """
     trace_id = os.urandom(16).hex()
     span_id = os.urandom(8).hex()

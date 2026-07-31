@@ -1,9 +1,10 @@
-"""Nanosecond-aware time values backed by Abseil in :mod:`a11._native`."""
+"""Nanosecond-aware time values backed by Abseil in [a11._native][a11._native]
+."""
 
 from a11 import _native
 
-Duration = _native.Duration
-Time = _native.Time
+from a11._native import Duration
+from a11._native import Time
 
 
 def _copy_immutable(self):

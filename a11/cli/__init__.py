@@ -4,8 +4,10 @@
 
 This package hosts the ``a11`` console entry point (see ``pyproject.toml``'s
 ``[project.scripts]``) and its subcommands. Commands are self-registering: each
-module under :mod:`a11.cli.commands` exposes a :class:`~a11.cli.app.Command`
-that :mod:`a11.cli.app` discovers and wires into the top-level argument parser.
+module under [a11.cli.commands][a11.cli.commands] exposes a
+[Command][a11.cli.app.Command]
+that [a11.cli.app][a11.cli.app] discovers and wires into the top-level argument
+parser.
 
 Nothing here imports a specific LLM provider at module load time; provider SDKs
 (``anthropic``, ``google-genai``) are pulled in lazily by the backends that

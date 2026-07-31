@@ -1,28 +1,38 @@
-"""Native nghttp2 WebSocket wire streams."""
+"""Native nghttp2 WebSocket wire streams.
+
+A `WebSocketWireStream` carries A11 [WireMessage][a11.data.types.WireMessage]
+traffic over a WebSocket built on A11's nghttp2/HTTP2 stack -- the default
+transport for connecting agents across a network.
+`WebSocketWireServer` accepts inbound connections. See
+[a11.net.wire_stream][a11.net.wire_stream] for the transport-agnostic interface
+these implement.
+"""
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 
 from .http2 import Http2Options
 from .wire_stream import WireStream, WireStreamOptions
 
-ChannelFramingOptions = _native.ChannelFramingOptions
-WebSocketClientOptions = _native.WebSocketClientOptions
-WebSocketServerOptions = _native.WebSocketServerOptions
-WebSocketWireStream = _native.WebSocketWireStream
-WebSocketWireServer = _native.WebSocketWireServer
+from a11._native import ChannelFramingOptions
+from a11._native import WebSocketClientOptions
+from a11._native import WebSocketServerOptions
+from a11._native import WebSocketWireStream
+from a11._native import WebSocketWireServer
 
 
-def _server_enter(server: WebSocketWireServer) -> WebSocketWireServer:
-    return server
+class _WebSocketWireServerProtocol:
+    """Context-manager protocol for the server (``stop`` on exit)."""
+
+    def __enter__(self) -> "WebSocketWireServer":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.stop()
 
 
-def _server_exit(server: WebSocketWireServer, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    server.stop()
-
-
-WebSocketWireServer.__enter__ = _server_enter
-WebSocketWireServer.__exit__ = _server_exit
+attach_protocol(WebSocketWireServer, _WebSocketWireServerProtocol)
 
 for _class in (
     ChannelFramingOptions,

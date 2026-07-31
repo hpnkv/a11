@@ -269,9 +269,11 @@ VectorView<T> MakeVectorView(std::vector<T>* values, Parent* parent) {
 template <typename T>
 void BindVectorView(py::class_<VectorView<T>>& cls) {
   cls.def("__len__",
-          [](const VectorView<T>& view) { return view.values().size(); })
+          [](const VectorView<T>& view) { return view.values().size(); },
+          "Return the number of elements in the vector.")
       .def("__bool__",
-           [](const VectorView<T>& view) { return !view.values().empty(); })
+           [](const VectorView<T>& view) { return !view.values().empty(); },
+           "Return whether the vector contains any elements.")
       .def(
           "__iter__",
           [](VectorView<T>& view) {
@@ -279,15 +281,17 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                 py::return_value_policy::reference_internal>(
                 view.values().begin(), view.values().end());
           },
-          py::keep_alive<0, 1>())
+          "Return an iterator over the elements.", py::keep_alive<0, 1>())
       .def(
           "__getitem__",
           [](VectorView<T>& view, py::ssize_t index) -> T& {
             return view.values()[VectorIndex(index, view.values().size())];
           },
+          "Return the element at the given index.", py::arg("index"),
           py::return_value_policy::reference_internal)
-      .def("__getitem__",
-           [](VectorView<T>& view, const py::slice& slice) {
+      .def(
+          "__getitem__",
+          [](VectorView<T>& view, const py::slice& slice) {
              const SliceIndices indices =
                  ComputeSlice(slice, view.values().size());
              py::list result;
@@ -300,14 +304,20 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                index += indices.step;
              }
              return result;
-           })
-      .def("__setitem__",
-           [](VectorView<T>& view, py::ssize_t index, T value) {
+          },
+          "Return a list of the elements selected by the slice.",
+          py::arg("slice"))
+      .def(
+          "__setitem__",
+          [](VectorView<T>& view, py::ssize_t index, T value) {
              const size_t converted = VectorIndex(index, view.values().size());
              view.Mutate([&] { view.values()[converted] = std::move(value); });
-           })
-      .def("__setitem__",
-           [](VectorView<T>& view, const py::slice& slice,
+          },
+          "Assign a value to the element at the given index.", py::arg("index"),
+          py::arg("value"))
+      .def(
+          "__setitem__",
+          [](VectorView<T>& view, const py::slice& slice,
               const py::handle& replacements) {
              const SliceIndices indices =
                  ComputeSlice(slice, view.values().size());
@@ -335,17 +345,22 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                  index += indices.step;
                }
              });
-           })
-      .def("__delitem__",
-           [](VectorView<T>& view, py::ssize_t index) {
+          },
+          "Assign a sequence of values to the elements selected by the slice.",
+          py::arg("slice"), py::arg("replacements"))
+      .def(
+          "__delitem__",
+          [](VectorView<T>& view, py::ssize_t index) {
              const size_t converted = VectorIndex(index, view.values().size());
              view.Mutate([&] {
                view.values().erase(view.values().begin() +
                                    static_cast<std::ptrdiff_t>(converted));
              });
-           })
-      .def("__delitem__",
-           [](VectorView<T>& view, const py::slice& slice) {
+          },
+          "Delete the element at the given index.", py::arg("index"))
+      .def(
+          "__delitem__",
+          [](VectorView<T>& view, const py::slice& slice) {
              const SliceIndices indices =
                  ComputeSlice(slice, view.values().size());
              view.Mutate([&] {
@@ -366,9 +381,11 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                  view.values().erase(view.values().begin() +
                                      static_cast<std::ptrdiff_t>(item));
              });
-           })
-      .def("insert",
-           [](VectorView<T>& view, py::ssize_t index, T value) {
+          },
+          "Delete the elements selected by the slice.", py::arg("slice"))
+      .def(
+          "insert",
+          [](VectorView<T>& view, py::ssize_t index, T value) {
              const py::ssize_t size =
                  static_cast<py::ssize_t>(view.values().size());
              if (index < 0)
@@ -379,24 +396,33 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                view.values().insert(view.values().begin() + index,
                                     std::move(value));
              });
-           })
-      .def("append",
-           [](VectorView<T>& view, T value) {
+          },
+          "Insert a value before the given index.", py::arg("index"),
+          py::arg("value"))
+      .def(
+          "append",
+          [](VectorView<T>& view, T value) {
              view.Mutate([&] { view.values().push_back(std::move(value)); });
-           })
-      .def("extend",
-           [](VectorView<T>& view, const py::handle& values) {
+          },
+          "Append a value to the end of the vector.", py::arg("value"))
+      .def(
+          "extend",
+          [](VectorView<T>& view, const py::handle& values) {
              std::vector<T> converted = VectorFromPython<T>(values, "values");
              view.Mutate([&] {
                view.values().insert(view.values().end(),
                                     std::make_move_iterator(converted.begin()),
                                     std::make_move_iterator(converted.end()));
              });
-           })
-      .def("clear",
-           [](VectorView<T>& view) {
+          },
+          "Append every value from the iterable to the vector.",
+          py::arg("values"))
+      .def(
+          "clear",
+          [](VectorView<T>& view) {
              view.Mutate([&] { view.values().clear(); });
-           })
+          },
+          "Remove all elements from the vector.")
       .def(
           "pop",
           [](VectorView<T>& view, py::ssize_t index) {
@@ -408,9 +434,11 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
             });
             return result;
           },
+          "Remove and return the element at the given index (default last).",
           py::arg("index") = -1)
-      .def("remove",
-           [](VectorView<T>& view, const T& value) {
+      .def(
+          "remove",
+          [](VectorView<T>& view, const T& value) {
              const auto found =
                  std::find(view.values().begin(), view.values().end(), value);
              if (found == view.values().end())
@@ -421,49 +449,69 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
                view.values().erase(view.values().begin() +
                                    static_cast<std::ptrdiff_t>(index));
              });
-           })
-      .def("count",
-           [](const VectorView<T>& view, const T& value) {
+          },
+          "Remove the first element equal to the given value.",
+          py::arg("value"))
+      .def(
+          "count",
+          [](const VectorView<T>& view, const T& value) {
              return std::count(view.values().begin(), view.values().end(),
                                value);
-           })
-      .def("index",
-           [](const VectorView<T>& view, const T& value) {
+          },
+          "Return the number of elements equal to the given value.",
+          py::arg("value"))
+      .def(
+          "index",
+          [](const VectorView<T>& view, const T& value) {
              const auto found =
                  std::find(view.values().begin(), view.values().end(), value);
              if (found == view.values().end())
                throw py::value_error("value is not in vector");
              return static_cast<size_t>(found - view.values().begin());
-           })
-      .def("reverse",
-           [](VectorView<T>& view) {
+          },
+          "Return the index of the first element equal to the given value.",
+          py::arg("value"))
+      .def(
+          "reverse",
+          [](VectorView<T>& view) {
              view.Mutate([&] {
                std::reverse(view.values().begin(), view.values().end());
              });
-           })
-      .def("copy",
-           [](VectorView<T>& view) {
+          },
+          "Reverse the elements of the vector in place.")
+      .def(
+          "copy",
+          [](VectorView<T>& view) {
              return VectorToPython(
                  view.values(),
                  py::cast(&view, py::return_value_policy::reference));
-           })
-      .def("__contains__",
-           [](const VectorView<T>& view, const T& value) {
+          },
+          "Return a shallow copy of the elements as a list.")
+      .def(
+          "__contains__",
+          [](const VectorView<T>& view, const T& value) {
              return std::find(view.values().begin(), view.values().end(),
                               value) != view.values().end();
-           })
-      .def("__eq__",
-           [](VectorView<T>& view, const py::object& other) {
+          },
+          "Return whether the vector contains the given value.",
+          py::arg("value"))
+      .def(
+          "__eq__",
+          [](VectorView<T>& view, const py::object& other) {
              return VectorToPython(
                         view.values(),
                         py::cast(&view, py::return_value_policy::reference))
                  .equal(other);
-           })
-      .def("__repr__", [](VectorView<T>& view) {
-        return py::repr(VectorToPython(
-            view.values(),
-            py::cast(&view, py::return_value_policy::reference)));
-      });
+          },
+          "Return whether the vector equals the given object.", py::arg("other"))
+      .def(
+          "__repr__",
+          [](VectorView<T>& view) {
+            return py::repr(VectorToPython(
+                view.values(),
+                py::cast(&view, py::return_value_policy::reference)));
+          },
+          "Return the repr of the vector as a list.");
 }
 
 template <typename T>
@@ -478,15 +526,21 @@ T FromMsgpack(const py::handle& value) {
 
 template <typename T>
 void BindValueProtocol(py::class_<T>& cls) {
-  cls.def("validate", [](const T& value) { ValidateOrThrow(value); })
-      .def("to_msgpack", &ToMsgpack<T>)
-      .def_static("from_msgpack", &FromMsgpack<T>, py::arg("data"))
-      .def("__copy__", [](const T& value) { return value; })
+  cls.def("validate", [](const T& value) { ValidateOrThrow(value); },
+          "Raise if the value fails structural validation.")
+      .def("to_msgpack", &ToMsgpack<T>,
+           "Serialize the value to MessagePack bytes.")
+      .def_static("from_msgpack", &FromMsgpack<T>,
+                  "Deserialize a value from MessagePack bytes.",
+                  py::arg("data"))
+      .def("__copy__", [](const T& value) { return value; },
+           "Return a shallow copy of the value.")
       .def(
           "__deepcopy__", [](const T& value, const py::dict&) { return value; },
-          py::arg("memo"))
+          "Return a deep copy of the value.", py::arg("memo"))
       .def(
           "__eq__", [](const T& left, const T& right) { return left == right; },
+          "Return whether two values are equal.", py::arg("other"),
           py::is_operator());
 }
 
@@ -496,56 +550,79 @@ void BindData(py::module_& module) {
   module.attr("JSON_MIMETYPE") = std::string(data::kJsonMimetype);
   module.attr("MSGPACK_MIMETYPE") = std::string(data::kMsgpackMimetype);
   module.attr("WIRE_MESSAGE_VERSION") = data::WireMessage::kVersion;
-  module.def("validate_name_string", [](const std::string& name) {
-    const absl::Status status = data::ValidateName(name);
-    if (!status.ok())
-      ThrowStatus(status);
-    return name;
-  });
+  module.def(
+      "validate_name_string",
+      [](const std::string& name) {
+        const absl::Status status = data::ValidateName(name);
+        if (!status.ok())
+          ThrowStatus(status);
+        return name;
+      },
+      "Validate a name string and return it, raising if it is invalid.",
+      py::arg("name"));
 
-  py::class_<ByteMapView>(module, "_ByteMapView")
-      .def("__len__",
-           [](const ByteMapView& value) { return value.values().size(); })
-      .def("__iter__",
-           [](const ByteMapView& value) {
+  py::class_<ByteMapView>(module, "_ByteMapView",
+                          "Mutable mapping view over a byte-string map field.")
+      .def(
+          "__len__",
+          [](const ByteMapView& value) { return value.values().size(); },
+          "Return the number of entries in the mapping.")
+      .def(
+          "__iter__",
+          [](const ByteMapView& value) {
              return ByteMapToPython(value.values()).attr("__iter__")();
-           })
-      .def("__contains__",
-           [](const ByteMapView& value, const std::string& key) {
+          },
+          "Return an iterator over the keys.")
+      .def(
+          "__contains__",
+          [](const ByteMapView& value, const std::string& key) {
              return value.values().find(key) != value.values().end();
-           })
-      .def("__getitem__",
-           [](const ByteMapView& value, const std::string& key) {
+          },
+          "Return whether the mapping contains the given key.", py::arg("key"))
+      .def(
+          "__getitem__",
+          [](const ByteMapView& value, const std::string& key) {
              const auto found = value.values().find(key);
              if (found == value.values().end())
                throw py::key_error(key);
              return py::bytes(found->second);
-           })
-      .def("__setitem__",
-           [](ByteMapView& value, std::string key, const py::handle& item) {
+          },
+          "Return the bytes stored under the given key.", py::arg("key"))
+      .def(
+          "__setitem__",
+          [](ByteMapView& value, std::string key, const py::handle& item) {
              const absl::Status validation = data::ValidateName(key);
              if (!validation.ok())
                ThrowStatus(validation);
              value.values().insert_or_assign(
                  std::move(key), BytesFromPython(item, "mapping value"));
-           })
-      .def("__delitem__",
-           [](ByteMapView& value, const std::string& key) {
+          },
+          "Store bytes under the given key.", py::arg("key"), py::arg("item"))
+      .def(
+          "__delitem__",
+          [](ByteMapView& value, const std::string& key) {
              if (value.values().erase(key) == 0)
                throw py::key_error(key);
-           })
-      .def("keys",
-           [](const ByteMapView& value) {
+          },
+          "Delete the entry with the given key.", py::arg("key"))
+      .def(
+          "keys",
+          [](const ByteMapView& value) {
              return ByteMapToPython(value.values()).attr("keys")();
-           })
-      .def("values",
-           [](const ByteMapView& value) {
+          },
+          "Return a view of the mapping's keys.")
+      .def(
+          "values",
+          [](const ByteMapView& value) {
              return ByteMapToPython(value.values()).attr("values")();
-           })
-      .def("items",
-           [](const ByteMapView& value) {
+          },
+          "Return a view of the mapping's values.")
+      .def(
+          "items",
+          [](const ByteMapView& value) {
              return ByteMapToPython(value.values()).attr("items")();
-           })
+          },
+          "Return a view of the mapping's key/value pairs.")
       .def(
           "get",
           [](const ByteMapView& value, const std::string& key,
@@ -555,35 +632,52 @@ void BindData(py::module_& module) {
                        ? default_value
                        : py::object(py::bytes(found->second));
           },
+          "Return the bytes for a key, or the default if it is absent.",
           py::arg("key"), py::arg("default") = py::none())
-      .def("update",
-           [](ByteMapView& value, const py::handle& updates) {
+      .def(
+          "update",
+          [](ByteMapView& value, const py::handle& updates) {
              data::ByteMap converted = ByteMapValue(updates);
              for (auto& [key, item] : converted)
                value.values().insert_or_assign(std::move(key), std::move(item));
-           })
-      .def("clear", [](ByteMapView& value) { value.values().clear(); })
-      .def("copy",
-           [](const ByteMapView& value) {
+          },
+          "Merge entries from another mapping into this one.",
+          py::arg("updates"))
+      .def(
+          "clear", [](ByteMapView& value) { value.values().clear(); },
+          "Remove all entries from the mapping.")
+      .def(
+          "copy",
+          [](const ByteMapView& value) {
              return ByteMapToPython(value.values());
-           })
-      .def("__eq__",
-           [](const ByteMapView& value, const py::object& other) {
+          },
+          "Return a plain dict copy of the mapping.")
+      .def(
+          "__eq__",
+          [](const ByteMapView& value, const py::object& other) {
              return ByteMapToPython(value.values()).equal(other);
-           })
-      .def("__repr__", [](const ByteMapView& value) {
-        return py::repr(ByteMapToPython(value.values()));
-      });
+          },
+          "Return whether the mapping equals the given object.",
+          py::arg("other"))
+      .def(
+          "__repr__",
+          [](const ByteMapView& value) {
+            return py::repr(ByteMapToPython(value.values()));
+          },
+          "Return the repr of the mapping as a dict.");
 
-  py::class_<VectorView<data::Port>> port_vector_view(module,
-                                                      "_PortVectorView");
+  py::class_<VectorView<data::Port>> port_vector_view(
+      module, "_PortVectorView", "Mutable list view over a Port vector field.");
   py::class_<VectorView<data::NodeFragment>> fragment_vector_view(
-      module, "_NodeFragmentVectorView");
+      module, "_NodeFragmentVectorView",
+      "Mutable list view over a NodeFragment vector field.");
   py::class_<VectorView<data::ActionMessage>> action_vector_view(
-      module, "_ActionMessageVectorView");
+      module, "_ActionMessageVectorView",
+      "Mutable list view over an ActionMessage vector field.");
 
-  py::class_<data::ChunkMetadata> metadata(module, "ChunkMetadata",
-                                           py::dynamic_attr());
+  py::class_<data::ChunkMetadata> metadata(
+      module, "ChunkMetadata", "Metadata describing a chunk of node data.",
+      py::dynamic_attr());
   metadata
       .def(py::init([](std::string mimetype, const py::object& timestamp,
                        const py::object& attributes) {
@@ -594,9 +688,11 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create chunk metadata from a MIME type, timestamp, and attributes.",
            py::arg("mimetype"), py::arg("timestamp") = py::none(),
            py::arg("attributes") = py::dict())
-      .def_readwrite("mimetype", &data::ChunkMetadata::mimetype)
+      .def_readwrite("mimetype", &data::ChunkMetadata::mimetype,
+                     "MIME type describing the chunk payload.")
       .def_property(
           "timestamp",
           [](const data::ChunkMetadata& value) {
@@ -604,7 +700,8 @@ void BindData(py::module_& module) {
           },
           [](data::ChunkMetadata& value, const py::object& timestamp) {
             value.timestamp = TimestampFromPython(timestamp);
-          })
+          },
+          "Optional timestamp associated with the chunk.")
       .def_property(
           "attributes",
           [](data::ChunkMetadata& value) {
@@ -615,25 +712,38 @@ void BindData(py::module_& module) {
           [](data::ChunkMetadata& value, const py::object& attributes) {
             value.attributes = ByteMapValue(attributes);
             ValidateOrThrow(value);
-          })
-      .def_property_readonly("approx_bytes", &data::ChunkMetadata::ApproxBytes)
-      .def("get_attribute",
-           [](const data::ChunkMetadata& value, const std::string& key) {
+          },
+          "Byte-string attribute map attached to the chunk.")
+      .def_property_readonly("approx_bytes", &data::ChunkMetadata::ApproxBytes,
+                             "Approximate in-memory size of the metadata in "
+                             "bytes.")
+      .def(
+          "get_attribute",
+          [](const data::ChunkMetadata& value, const std::string& key) {
              return py::bytes(ValueOrThrow(value.GetAttribute(key)));
-           })
-      .def("set_attribute",
-           [](data::ChunkMetadata& value, std::string key,
+          },
+          "Return the attribute bytes for a key, raising if it is absent.",
+          py::arg("key"))
+      .def(
+          "set_attribute",
+          [](data::ChunkMetadata& value, std::string key,
               const py::handle& bytes) {
              const absl::Status status = value.SetAttribute(
                  std::move(key), BytesFromPython(bytes, "value"));
              if (!status.ok())
                ThrowStatus(status);
-           })
-      .def("debug_string", &data::ChunkMetadata::DebugString)
-      .def("__repr__", &data::ChunkMetadata::DebugString);
+          },
+          "Set the attribute bytes for a key.", py::arg("key"),
+          py::arg("bytes"))
+      .def("debug_string", &data::ChunkMetadata::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::ChunkMetadata::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(metadata);
 
-  py::class_<data::Chunk> chunk(module, "Chunk", py::dynamic_attr());
+  py::class_<data::Chunk> chunk(
+      module, "Chunk", "A unit of node data with optional metadata and ref.",
+      py::dynamic_attr());
   chunk
       .def(py::init([](const py::object& metadata, std::string ref,
                        const py::handle& raw_data) {
@@ -650,6 +760,7 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create a chunk from optional metadata, a ref, and payload data.",
            py::arg("metadata") = py::none(), py::arg("ref") = "",
            py::arg("data") = py::bytes())
       .def_property(
@@ -668,24 +779,35 @@ void BindData(py::module_& module) {
               value.metadata = metadata_value.cast<data::ChunkMetadata>();
             }
             ValidateOrThrow(value);
-          })
-      .def_readwrite("ref", &data::Chunk::ref)
+          },
+          "Optional metadata describing the chunk.")
+      .def_readwrite("ref", &data::Chunk::ref,
+                     "Reference identifying the chunk's stored payload.")
       .def_property(
           "data",
           [](const data::Chunk& value) { return py::bytes(value.data); },
           [](data::Chunk& value, const py::handle& raw_data) {
             value.data = ChunkDataFromPython(raw_data, value.GetMimetype());
             ValidateOrThrow(value);
-          })
-      .def_property_readonly("approx_bytes", &data::Chunk::ApproxBytes)
-      .def("get_mimetype", &data::Chunk::GetMimetype)
-      .def("is_empty", &data::Chunk::IsEmpty)
-      .def("is_null", &data::Chunk::IsNull)
-      .def("debug_string", &data::Chunk::DebugString)
-      .def("__repr__", &data::Chunk::DebugString);
+          },
+          "Raw payload bytes of the chunk.")
+      .def_property_readonly("approx_bytes", &data::Chunk::ApproxBytes,
+                             "Approximate in-memory size of the chunk in bytes.")
+      .def("get_mimetype", &data::Chunk::GetMimetype,
+           "Return the chunk's MIME type, or empty if it has no metadata.")
+      .def("is_empty", &data::Chunk::IsEmpty,
+           "Return whether the chunk has no payload data.")
+      .def("is_null", &data::Chunk::IsNull,
+           "Return whether the chunk is null (no metadata and no data).")
+      .def("debug_string", &data::Chunk::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::Chunk::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(chunk);
 
-  py::class_<data::NodeRef> node_ref(module, "NodeRef", py::dynamic_attr());
+  py::class_<data::NodeRef> node_ref(
+      module, "NodeRef",
+      "Reference to a byte range of another logical node.", py::dynamic_attr());
   node_ref
       .def(py::init([](std::string id, const py::handle& offset,
                        const py::handle& length) {
@@ -698,17 +820,26 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create a node reference from an id, byte offset, and length.",
            py::arg("id"), py::arg("offset") = 0, py::arg("length") = py::none())
-      .def_readwrite("id", &data::NodeRef::id)
-      .def_readwrite("offset", &data::NodeRef::offset)
-      .def_readwrite("length", &data::NodeRef::length)
-      .def_property_readonly("approx_bytes", &data::NodeRef::ApproxBytes)
-      .def("debug_string", &data::NodeRef::DebugString)
-      .def("__repr__", &data::NodeRef::DebugString);
+      .def_readwrite("id", &data::NodeRef::id,
+                     "Identifier of the referenced node.")
+      .def_readwrite("offset", &data::NodeRef::offset,
+                     "Byte offset into the referenced node.")
+      .def_readwrite("length", &data::NodeRef::length,
+                     "Optional byte length of the referenced range.")
+      .def_property_readonly("approx_bytes", &data::NodeRef::ApproxBytes,
+                             "Approximate in-memory size of the ref in bytes.")
+      .def("debug_string", &data::NodeRef::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::NodeRef::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(node_ref);
 
-  py::class_<data::NodeFragment> fragment(module, "NodeFragment",
-                                          py::dynamic_attr());
+  py::class_<data::NodeFragment> fragment(
+      module, "NodeFragment",
+      "A fragment of a logical node carrying a Chunk or NodeRef.",
+      py::dynamic_attr());
   fragment
       .def(py::init([](const py::object& value, std::string id,
                        const py::handle& seq, bool continued) {
@@ -728,9 +859,11 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create a node fragment from Chunk/NodeRef data and framing fields.",
            py::arg("data"), py::arg("id") = "", py::arg("seq") = py::none(),
            py::arg("continued") = false)
-      .def_readwrite("id", &data::NodeFragment::id)
+      .def_readwrite("id", &data::NodeFragment::id,
+                     "Identifier of the logical node this fragment belongs to.")
       .def_property(
           "data",
           [](data::NodeFragment& value) -> py::object {
@@ -754,42 +887,60 @@ void BindData(py::module_& module) {
                   "data must be a Chunk or NodeRef"));
             }
             ValidateOrThrow(value);
-          })
-      .def_readwrite("seq", &data::NodeFragment::seq)
-      .def_readwrite("continued", &data::NodeFragment::continued)
-      .def_property_readonly("approx_bytes", &data::NodeFragment::ApproxBytes)
+          },
+          "Payload of the fragment as either a Chunk or a NodeRef.")
+      .def_readwrite("seq", &data::NodeFragment::seq,
+                     "Optional sequence number of the fragment.")
+      .def_readwrite("continued", &data::NodeFragment::continued,
+                     "Whether more fragments follow for this node.")
+      .def_property_readonly("approx_bytes", &data::NodeFragment::ApproxBytes,
+                             "Approximate in-memory size of the fragment in "
+                             "bytes.")
       .def(
           "get_chunk",
           [](data::NodeFragment& value) -> data::Chunk& {
             return *ValueOrThrow(value.GetChunk());
           },
+          "Return the fragment's Chunk, raising if it holds a NodeRef.",
           py::return_value_policy::reference_internal)
       .def(
           "get_node_ref",
           [](data::NodeFragment& value) -> data::NodeRef& {
             return *ValueOrThrow(value.GetNodeRef());
           },
+          "Return the fragment's NodeRef, raising if it holds a Chunk.",
           py::return_value_policy::reference_internal)
-      .def("debug_string", &data::NodeFragment::DebugString)
-      .def("__repr__", &data::NodeFragment::DebugString);
+      .def("debug_string", &data::NodeFragment::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::NodeFragment::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(fragment);
 
-  py::class_<data::Port> port(module, "Port", py::dynamic_attr());
+  py::class_<data::Port> port(
+      module, "Port", "A named input or output port of an action.",
+      py::dynamic_attr());
   port.def(py::init([](std::string name, std::string id) {
              data::Port result{.name = std::move(name), .id = std::move(id)};
              ValidateOrThrow(result);
              return result;
            }),
-           py::arg("name") = "", py::arg("id") = "")
-      .def_readwrite("name", &data::Port::name)
-      .def_readwrite("id", &data::Port::id)
-      .def_property_readonly("approx_bytes", &data::Port::ApproxBytes)
-      .def("debug_string", &data::Port::DebugString)
-      .def("__repr__", &data::Port::DebugString);
+           "Create a port from a name and node id.", py::arg("name") = "",
+           py::arg("id") = "")
+      .def_readwrite("name", &data::Port::name, "Name of the port.")
+      .def_readwrite("id", &data::Port::id,
+                     "Identifier of the node bound to the port.")
+      .def_property_readonly("approx_bytes", &data::Port::ApproxBytes,
+                             "Approximate in-memory size of the port in bytes.")
+      .def("debug_string", &data::Port::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::Port::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(port);
 
-  py::class_<data::ActionMessage> action(module, "ActionMessage",
-                                         py::dynamic_attr());
+  py::class_<data::ActionMessage> action(
+      module, "ActionMessage",
+      "A message invoking a named action with input and output ports.",
+      py::dynamic_attr());
   action
       .def(py::init([](std::string id, std::string name,
                        const py::object& inputs, const py::object& outputs,
@@ -803,11 +954,14 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create an action message from id, name, ports, and headers.",
            py::arg("id") = "", py::arg("name") = "",
            py::arg("inputs") = py::list(), py::arg("outputs") = py::list(),
            py::arg("headers") = py::dict())
-      .def_readwrite("id", &data::ActionMessage::id)
-      .def_readwrite("name", &data::ActionMessage::name)
+      .def_readwrite("id", &data::ActionMessage::id,
+                     "Identifier of the action invocation.")
+      .def_readwrite("name", &data::ActionMessage::name,
+                     "Name of the action being invoked.")
       .def_property(
           "inputs",
           [](data::ActionMessage& value) {
@@ -816,7 +970,8 @@ void BindData(py::module_& module) {
           [](data::ActionMessage& value, const py::object& inputs) {
             value.inputs = VectorFromPython<data::Port>(inputs, "inputs");
             ValidateOrThrow(value);
-          })
+          },
+          "Input ports of the action.")
       .def_property(
           "outputs",
           [](data::ActionMessage& value) {
@@ -825,7 +980,8 @@ void BindData(py::module_& module) {
           [](data::ActionMessage& value, const py::object& outputs) {
             value.outputs = VectorFromPython<data::Port>(outputs, "outputs");
             ValidateOrThrow(value);
-          })
+          },
+          "Output ports of the action.")
       .def_property(
           "headers",
           [](data::ActionMessage& value) {
@@ -836,13 +992,21 @@ void BindData(py::module_& module) {
           [](data::ActionMessage& value, const py::object& headers) {
             value.headers = ByteMapValue(headers);
             ValidateOrThrow(value);
-          })
-      .def_property_readonly("approx_bytes", &data::ActionMessage::ApproxBytes)
-      .def("debug_string", &data::ActionMessage::DebugString)
-      .def("__repr__", &data::ActionMessage::DebugString);
+          },
+          "Byte-string header map attached to the action.")
+      .def_property_readonly("approx_bytes", &data::ActionMessage::ApproxBytes,
+                             "Approximate in-memory size of the message in "
+                             "bytes.")
+      .def("debug_string", &data::ActionMessage::DebugString,
+           "Return a human-readable debug string.")
+      .def("__repr__", &data::ActionMessage::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(action);
 
-  py::class_<data::WireMessage> wire(module, "WireMessage", py::dynamic_attr());
+  py::class_<data::WireMessage> wire(
+      module, "WireMessage",
+      "A wire-format message bundling node fragments and actions.",
+      py::dynamic_attr());
   wire.def(py::init([](const py::object& node_fragments,
                        const py::object& actions, const py::object& headers) {
              data::WireMessage result{
@@ -854,6 +1018,7 @@ void BindData(py::module_& module) {
              ValidateOrThrow(result);
              return result;
            }),
+           "Create a wire message from node fragments, actions, and headers.",
            py::arg("node_fragments") = py::list(),
            py::arg("actions") = py::list(), py::arg("headers") = py::dict())
       .def_property(
@@ -865,7 +1030,8 @@ void BindData(py::module_& module) {
             value.node_fragments = VectorFromPython<data::NodeFragment>(
                 fragments, "node_fragments");
             ValidateOrThrow(value);
-          })
+          },
+          "Node fragments carried by the message.")
       .def_property(
           "actions",
           [](data::WireMessage& value) {
@@ -875,7 +1041,8 @@ void BindData(py::module_& module) {
             value.actions =
                 VectorFromPython<data::ActionMessage>(actions, "actions");
             ValidateOrThrow(value);
-          })
+          },
+          "Action messages carried by the message.")
       .def_property(
           "headers",
           [](data::WireMessage& value) {
@@ -886,18 +1053,28 @@ void BindData(py::module_& module) {
           [](data::WireMessage& value, const py::object& headers) {
             value.headers = ByteMapValue(headers);
             ValidateOrThrow(value);
-          })
-      .def_property_readonly("approx_bytes", &data::WireMessage::ApproxBytes)
-      .def("debug_string", &data::WireMessage::DebugString)
-      .def("to_json",
-           [](const data::WireMessage& value) {
+          },
+          "Byte-string header map attached to the message.")
+      .def_property_readonly("approx_bytes", &data::WireMessage::ApproxBytes,
+                             "Approximate in-memory size of the message in "
+                             "bytes.")
+      .def("debug_string", &data::WireMessage::DebugString,
+           "Return a human-readable debug string.")
+      .def(
+          "to_json",
+          [](const data::WireMessage& value) {
              return ValueOrThrow(data::WireMessageToJson(value));
-           })
-      .def_static("from_json",
-                  [](const std::string& value) {
-                    return ValueOrThrow(data::WireMessageFromJson(value));
-                  })
-      .def("__repr__", &data::WireMessage::DebugString);
+          },
+          "Serialize the message to its JSON wire encoding.")
+      .def_static(
+          "from_json",
+          [](const std::string& value) {
+             return ValueOrThrow(data::WireMessageFromJson(value));
+          },
+          "Deserialize a message from its JSON wire encoding.",
+          py::arg("value"))
+      .def("__repr__", &data::WireMessage::DebugString,
+           "Return a human-readable debug string.");
   BindValueProtocol(wire);
   wire.attr("VERSION") = data::WireMessage::kVersion;
 
@@ -905,12 +1082,15 @@ void BindData(py::module_& module) {
   BindVectorView(fragment_vector_view);
   BindVectorView(action_vector_view);
 
-  module.def("is_half_close_message", &data::IsHalfCloseMessage);
+  module.def("is_half_close_message", &data::IsHalfCloseMessage,
+             "Return whether the message is a half-close signal.",
+             py::arg("message"));
   module.def(
       "make_half_close_message",
       [](const py::object& trailers) {
         return data::MakeHalfCloseMessage(ByteMapValue(trailers));
       },
+      "Build a half-close wire message carrying the given trailers.",
       py::arg("trailers") = py::dict());
 }
 

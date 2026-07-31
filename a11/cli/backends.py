@@ -28,7 +28,7 @@ class Provider:
     api_key_env: tuple[str, ...]
 
     def api_key(self) -> str:
-        """First non-empty value among :attr:`api_key_env`, or ``""``."""
+        """First non-empty value among `api_key_env`, or ``""``."""
         for env in self.api_key_env:
             if value := os.environ.get(env, ""):
                 return value

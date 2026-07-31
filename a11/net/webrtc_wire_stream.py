@@ -1,28 +1,39 @@
-"""Native WebRTC data-channel wire streams."""
+"""Native WebRTC data-channel wire streams.
+
+A `WebRtcWireStream` carries A11 [WireMessage][a11.data.types.WireMessage]
+traffic over a WebRTC data channel, enabling peer-to-peer (including
+NAT-traversed) connections between agents. It relies on a signalling channel
+(see [a11.net.signalling][a11.net.signalling] ) to establish the peer
+connection. See
+[a11.net.wire_stream][a11.net.wire_stream] for the transport-agnostic interface
+it implements.
+"""
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 
 from .signalling import SignallingService, SignallingTransport
 from .wire_stream import WireStream, WireStreamOptions
 
-TurnRelayType = _native.TurnRelayType
-TurnServer = _native.TurnServer
-WebRtcConfiguration = _native.WebRtcConfiguration
-WebRtcWireStream = _native.WebRtcWireStream
-WebRtcWireServer = _native.WebRtcWireServer
+from a11._native import TurnRelayType
+from a11._native import TurnServer
+from a11._native import WebRtcConfiguration
+from a11._native import WebRtcWireStream
+from a11._native import WebRtcWireServer
 
 
-def _server_enter(server: WebRtcWireServer) -> WebRtcWireServer:
-    return server
+class _WebRtcWireServerProtocol:
+    """Context-manager protocol for the server (``stop`` on exit)."""
+
+    def __enter__(self) -> "WebRtcWireServer":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.stop()
 
 
-def _server_exit(server: WebRtcWireServer, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    server.stop()
-
-
-WebRtcWireServer.__enter__ = _server_enter
-WebRtcWireServer.__exit__ = _server_exit
+attach_protocol(WebRtcWireServer, _WebRtcWireServerProtocol)
 
 for _class in (
     TurnRelayType,

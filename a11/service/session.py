@@ -18,8 +18,10 @@ OnSessionStreamDone = Callable[[WireStream, "Session"], Awaitable[None]]
 SESSION_STATUS_HEADER = _native.SESSION_STATUS_HEADER
 MAX_SINGLE_MESSAGE_SIZE = _native.SESSION_MAX_SINGLE_MESSAGE_SIZE
 
-SessionOptions = install_native_options(
-    _native.SessionOptions,
+from a11._native import SessionOptions
+
+install_native_options(
+    SessionOptions,
     {
         "max_buffered_messages_total": (int, 256),
         "max_buffered_messages_per_stream": (int, 32),

@@ -199,7 +199,10 @@ void BindObs(py::module_& module) {
   module.attr("OTEL_BAGGAGE_HEADER") = std::string(a11::obs::kBaggageHeader);
 
   module.def(
-      "obs_configure", &Configure, py::arg("service_name") = "a11",
+      "obs_configure", &Configure,
+      "Installs the global tracer provider with the given service name, "
+      "exporter, and OTLP options; replaces any existing provider.",
+      py::arg("service_name") = "a11",
       py::arg("resource_attributes") = std::map<std::string, std::string>{},
       py::arg("exporter") = "otlp_http",
       py::arg("use_simple_processor") = false, py::arg("otlp_endpoint") = "",
@@ -207,20 +210,33 @@ void BindObs(py::module_& module) {
       py::arg("otlp_timeout_millis") = 10000,
       py::arg("baggage_span_attributes") = std::vector<std::string>{});
   py::class_<PySpan>(module, "_Span")
-      .def("traceparent", &PySpan::Traceparent)
-      .def("set_attribute", &PySpan::SetAttribute, py::arg("key"),
-           py::arg("value"))
-      .def("set_name", &PySpan::SetName, py::arg("name"))
-      .def("set_status", &PySpan::SetStatus, py::arg("code"),
-           py::arg("description") = "")
-      .def("end", &PySpan::End);
-  module.def("obs_start_span", &StartSpan, py::arg("name"),
-             py::arg("kind") = "internal", py::arg("parent_traceparent") = "");
+      .def("traceparent", &PySpan::Traceparent,
+           "Returns the W3C traceparent for this span, so it can parent child "
+           "actions or spans.")
+      .def("set_attribute", &PySpan::SetAttribute,
+           "Sets an attribute on the span.", py::arg("key"), py::arg("value"))
+      .def("set_name", &PySpan::SetName, "Updates the span's name.",
+           py::arg("name"))
+      .def("set_status", &PySpan::SetStatus,
+           "Sets the span's status code ('ok', 'error', or 'unset') and an "
+           "optional description.",
+           py::arg("code"), py::arg("description") = "")
+      .def("end", &PySpan::End, "Ends the span.");
+  module.def("obs_start_span", &StartSpan,
+             "Starts a new span with the given name and kind, optionally "
+             "parented by a W3C traceparent.",
+             py::arg("name"), py::arg("kind") = "internal",
+             py::arg("parent_traceparent") = "");
 
-  module.def("obs_shutdown", &a11::obs::Shutdown);
-  module.def("obs_is_configured", &a11::obs::IsConfigured);
-  module.def("obs_recorded_spans", &RecordedSpans);
-  module.def("obs_clear_recorded_spans", &a11::obs::ClearRecordedSpans);
+  module.def("obs_shutdown", &a11::obs::Shutdown,
+             "Flushes and tears down the global tracer provider.");
+  module.def("obs_is_configured", &a11::obs::IsConfigured,
+             "Returns whether a tracer provider is currently installed.");
+  module.def("obs_recorded_spans", &RecordedSpans,
+             "Returns finished spans captured by the in-memory exporter, "
+             "oldest first.");
+  module.def("obs_clear_recorded_spans", &a11::obs::ClearRecordedSpans,
+             "Clears the in-memory span buffer.");
 }
 
 }  // namespace a11::python

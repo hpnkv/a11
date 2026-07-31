@@ -1,4 +1,21 @@
-"""Async Python protocols attached to A11's native wire streams."""
+"""The Python-facing protocol for A11's native wire streams.
+
+A `WireStream` is A11's transport abstraction: a bidirectional,
+ordered channel that carries [WireMessage][a11.data.types.WireMessage] values
+between
+two endpoints. Everything above it --
+[AsyncNode][a11.nodes.async_node.AsyncNode]
+mirroring, [Session][a11.service.session.Session] multiplexing, remote action
+dispatch -- is written against this one interface, so the concrete transport is
+a pluggable detail. A11 ships several implementations (in-process,
+WebSocket/HTTP2, HTTP SSE, WebRTC), and `WireStream` is a deliberate
+**extension point**: implement it to carry A11 traffic over a transport of your
+own.
+
+The classes exported here are the native ``a11._native`` wire-stream types; this
+module attaches the async context-manager protocol (draining outgoing messages
+on exit) via [attach_protocol][a11._native_protocol.attach_protocol].
+"""
 
 from __future__ import annotations
 
@@ -7,6 +24,7 @@ from typing import Self
 
 from a11 import _native, timing
 from a11._native_options import install_native_options
+from a11._native_protocol import attach_protocol
 from a11.data import types
 
 OnMessage = Callable[[types.WireMessage | None], Awaitable[None]]
@@ -15,8 +33,10 @@ OnDone = Callable[[], Awaitable[None]]
 MAX_SINGLE_MESSAGE_SIZE = _native.WIRE_STREAM_MAX_SINGLE_MESSAGE_SIZE
 ABORT_STATUS_HEADER = _native.WIRE_STREAM_ABORT_STATUS_HEADER
 
-WireStreamOptions = install_native_options(
-    _native.WireStreamOptions,
+from a11._native import WireStreamOptions
+
+install_native_options(
+    WireStreamOptions,
     {
         "max_buffered_incoming_messages": (int, 100),
         "max_single_message_size": (int, MAX_SINGLE_MESSAGE_SIZE),
@@ -28,21 +48,26 @@ WireStreamOptions = install_native_options(
         "deadline": (timing.Time | None, timing.infinite_future()),
     },
 )
-WireStream = _native.WireStream
-WireStreamWithRecv = _native.WireStreamWithRecv
+from a11._native import WireStream
+from a11._native import WireStreamWithRecv
 
 
-async def _aenter(stream: WireStream) -> Self:
-    return stream
+class _WireStreamProtocol:
+    """Async context-manager protocol shared by every wire stream.
+
+    Entering yields the stream; a clean exit drains any buffered outgoing
+    messages so nothing sent is lost when the ``async with`` block ends.
+    """
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        await self.drain_outgoing_messages()
 
 
-async def _aexit(stream: WireStream, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    await stream.drain_outgoing_messages()
-
-
-WireStream.__aenter__ = _aenter
-WireStream.__aexit__ = _aexit
+attach_protocol(WireStream, _WireStreamProtocol)
 
 for _class in (WireStream, WireStreamOptions, WireStreamWithRecv):
     _class.__module__ = __name__

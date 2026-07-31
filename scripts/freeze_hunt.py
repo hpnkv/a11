@@ -29,12 +29,21 @@ def main() -> int:
 
     clean = 0
     for i in range(1, args.runs + 1):
-        cmd = [py, "-X", "faulthandler", "-m", "pytest",
-               *args.pytest_args.split()]
+        cmd = [
+            py,
+            "-X",
+            "faulthandler",
+            "-m",
+            "pytest",
+            *args.pytest_args.split(),
+        ]
         start = time.monotonic()
         proc = subprocess.Popen(
-            cmd, cwd=repo, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cmd,
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         try:
@@ -45,12 +54,15 @@ def main() -> int:
                 sys.stdout.write(out.decode("utf-8", "replace"))
                 print(f"\n[run {i}] FAILED rc={rc} ({elapsed:.1f}s)")
                 return 2
-            print(f"[run {i}] ok {elapsed:.2f}s  (consecutive clean="
-                  f"{clean + 1})")
+            print(
+                f"[run {i}] ok {elapsed:.2f}s  (consecutive clean={clean + 1})"
+            )
             clean += 1
         except subprocess.TimeoutExpired:
-            print(f"\n[run {i}] *** FREEZE after {args.timeout:.0f}s — "
-                  f"dumping thread tracebacks ***")
+            print(
+                f"\n[run {i}] *** FREEZE after {args.timeout:.0f}s — "
+                "dumping thread tracebacks ***"
+            )
             # faulthandler dumps all threads on SIGABRT, then the process dies.
             os.killpg(proc.pid, signal.SIGABRT)
             try:

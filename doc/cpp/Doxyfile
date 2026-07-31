@@ -1,0 +1,64 @@
+# Doxygen configuration for A11's native C++ runtime.
+#
+# Only non-default options are set; Doxygen fills in the rest. Output is written
+# into the MkDocs site (../site/cpp) so the whole documentation set ships as one
+# GitHub Pages artifact. Build it with ../build.sh (runs after `mkdocs build`).
+#
+# The theme is doxygen-awesome-css, matching the wider A11 documentation look;
+# ../build.sh fetches it into ./doxygen-awesome-css if it is not already present
+# (e.g. as a git submodule).
+
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "A11 (C++ runtime)"
+PROJECT_BRIEF          = "Native C++ implementation of the A11 action and streaming runtime"
+
+# Run from doc/cpp/; sources live at the repository root under cpp/a11.
+INPUT                  = ../../cpp/a11
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.cc *.md
+EXCLUDE_PATTERNS       = */internal/* */tests/*
+EXCLUDE_SYMBOLS        = *::internal::* pybind11::* absl::*
+
+OUTPUT_DIRECTORY       = ../site
+HTML_OUTPUT            = cpp
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+
+# Document declared symbols; warn on gaps but do not fail the build on them.
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+EXTRACT_PRIVATE        = NO
+HIDE_UNDOC_MEMBERS     = NO
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 4
+AUTOLINK_SUPPORT       = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_AS_ERROR          = NO
+QUIET                  = YES
+
+# Interactive, modern look: sidebar treeview, client-side search, copy buttons,
+# foldable code, and OS-following light/dark via doxygen-awesome-css. The base
+# stylesheet needs no custom HTML header, so this stays robust across Doxygen
+# versions.
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_DYNAMIC_MENUS     = YES
+HTML_COPY_CLIPBOARD    = YES
+HTML_CODE_FOLDING      = YES
+SEARCHENGINE           = YES
+HTML_COLORSTYLE        = AUTO_LIGHT
+HTML_COLORSTYLE_HUE    = 232
+HTML_COLORSTYLE_SAT    = 60
+HTML_COLORSTYLE_GAMMA  = 90
+HTML_EXTRA_STYLESHEET  = doxygen-awesome-css/doxygen-awesome.css
+
+# Class diagrams when Graphviz is available (installed in CI).
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = NO

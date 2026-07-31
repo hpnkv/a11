@@ -2,7 +2,8 @@
 
 from a11 import _native
 
-ActionRegistry = _native.ActionRegistry
+from a11._native import ActionRegistry
+
 ActionRegistry.__module__ = __name__
 
 __all__ = ["ActionRegistry"]

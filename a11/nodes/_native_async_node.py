@@ -1,4 +1,21 @@
-"""Python conveniences for the native asynchronous node implementation."""
+"""The Python-facing async protocol for the native `AsyncNode`.
+
+An `AsyncNode` is A11's unit of streaming state: a single, ordered
+sequence of chunks that one side *writes* and another side *reads*, backed by a
+[ChunkStore][a11.stores.chunk_store.ChunkStore] and optionally mirrored across a
+[WireStream][a11.net.wire_stream.WireStream] to a remote peer. Nodes are how the
+inputs and outputs of an [Action][a11.actions.action.Action] carry data, and how
+an agent streams partial results (tokens, audio frames, tool calls) to its
+caller before the work is finished.
+
+The class exported here is the native ``a11._native.AsyncNode``; this module
+attaches its Python protocol -- awaiting produced values, ``async for`` over the
+stream, serializing arbitrary Python objects on the way in and deserializing
+them on the way out -- via
+[attach_protocol][a11._native_protocol.attach_protocol]. The
+methods below run bound to native instances; the ``_AsyncNodeProtocol`` class is
+only a readable description of them.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +25,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any, TypeVar, cast
 
 from a11 import _native, timing
+from a11._native_protocol import attach_protocol
 from a11.data import types
 from a11.data.serialization import (
     SerializationRegistry,
@@ -15,28 +33,34 @@ from a11.data.serialization import (
 )
 from a11.status import Status, StatusCode
 from a11.stores.chunk_store import ChunkStore, ChunkStoreFactory
-from a11.stores.chunk_store_reader import ChunkStoreReaderOptions
-from a11.stores.chunk_store_writer import ChunkStoreWriterOptions
+from a11.stores.chunk_store_reader import (
+    ChunkStoreReader,
+    ChunkStoreReaderOptions,
+)
+from a11.stores.chunk_store_writer import (
+    ChunkStoreWriter,
+    ChunkStoreWriterOptions,
+)
 from a11.stores.local_chunk_store import LocalChunkStore
-from a11 import timing
 
 T = TypeVar("T")
 
-_NativeAsyncNode = _native.AsyncNode
-_NativeNodeMap = _native.NodeMap
-_NativeReader = _native.ChunkStoreReader
-_NativeWriter = _native.ChunkStoreWriter
+from a11._native import AsyncNode
+from a11._native import NodeMap
 
-# Save native descriptors before installing the language-native facade on the
-# bound type. C++ always calls the implementation directly; these handles let
-# Python conveniences do the same without maintaining duplicate stream state.
-_native_node_init = _NativeAsyncNode.__init__
-_native_node_reader = _NativeAsyncNode.reader
-_native_node_writer = _NativeAsyncNode.writer
-_native_reader_options = _NativeAsyncNode.__dict__["reader_options"]
-_native_writer_options = _NativeAsyncNode.__dict__["writer_options"]
-_native_reset_reader = _NativeAsyncNode.reset_reader
-_native_writer_enqueue = _NativeWriter.enqueue_chunk
+# Native descriptors captured before ``attach_protocol`` overwrites them. C++
+# always calls the native implementation directly; these handles let the Python
+# conveniences reach it too, without maintaining duplicate stream state.
+_native_node_init = AsyncNode.__init__
+_native_node_reader = AsyncNode.reader
+_native_node_writer = AsyncNode.writer
+_native_reader_options = AsyncNode.__dict__["reader_options"]
+_native_writer_options = AsyncNode.__dict__["writer_options"]
+_native_reset_reader = AsyncNode.reset_reader
+_native_writer_enqueue = _native.ChunkStoreWriter.enqueue_chunk
+
+
+# --- Internal helpers (not part of the public class; never attached) ---------
 
 
 def _reader_options(
@@ -70,7 +94,7 @@ def _read_timeout(timeout: timing.Duration | None) -> timing.Duration:
     return timeout
 
 
-def _ensure_python_state(node: _NativeAsyncNode) -> None:
+def _ensure_python_state(node: AsyncNode) -> None:
     state = node.__dict__
     state.setdefault(
         "_serialization_registry", get_global_serialization_registry()
@@ -79,13 +103,13 @@ def _ensure_python_state(node: _NativeAsyncNode) -> None:
     state.setdefault("_expected_obj_type", None)
 
 
-def _serialization_registry(node: _NativeAsyncNode) -> SerializationRegistry:
+def _get_serialization_registry(node: AsyncNode) -> SerializationRegistry:
     _ensure_python_state(node)
     return cast(SerializationRegistry, node.__dict__["_serialization_registry"])
 
 
 def _set_serialization_registry(
-    node: _NativeAsyncNode, registry: SerializationRegistry
+    node: AsyncNode, registry: SerializationRegistry
 ) -> None:
     if not isinstance(registry, SerializationRegistry):
         raise Status(
@@ -94,13 +118,6 @@ def _set_serialization_registry(
         ).to_exception()
     _ensure_python_state(node)
     node.__dict__["_serialization_registry"] = registry
-
-
-def set_serialization_registry(
-    node: _NativeAsyncNode, registry: SerializationRegistry
-) -> _NativeAsyncNode:
-    _set_serialization_registry(node, registry)
-    return node
 
 
 def _validate_expected_types(
@@ -133,37 +150,8 @@ def _validate_expected_types(
     return patterns
 
 
-def set_expected_types(
-    node: _NativeAsyncNode,
-    mimetype_patterns: str | Sequence[str],
-    obj_type: type | None,
-) -> _NativeAsyncNode:
-    patterns = _validate_expected_types(mimetype_patterns, obj_type)
-    _ensure_python_state(node)
-    node.__dict__["_expected_mimetype_patterns"] = patterns
-    node.__dict__["_expected_obj_type"] = obj_type
-    return node
-
-
-@contextlib.contextmanager
-def expect_types(
-    node: _NativeAsyncNode,
-    mimetype_patterns: str | Sequence[str],
-    obj_type: type | None,
-) -> Iterator[_NativeAsyncNode]:
-    _ensure_python_state(node)
-    previous_patterns = node.__dict__["_expected_mimetype_patterns"]
-    previous_obj_type = node.__dict__["_expected_obj_type"]
-    set_expected_types(node, mimetype_patterns, obj_type)
-    try:
-        yield node
-    finally:
-        node.__dict__["_expected_mimetype_patterns"] = previous_patterns
-        node.__dict__["_expected_obj_type"] = previous_obj_type
-
-
 def _resolve_expected_types(
-    node: _NativeAsyncNode,
+    node: AsyncNode,
     mimetype_patterns: str | Sequence[str],
     obj_type: type[T] | None,
 ) -> tuple[str | Sequence[str], type[T] | None]:
@@ -179,206 +167,6 @@ def _resolve_expected_types(
         else cast(type[T] | None, node.__dict__["_expected_obj_type"])
     )
     return resolved_patterns, resolved_obj_type
-
-
-def _reader(node: _NativeAsyncNode) -> _NativeReader:
-    return _native_node_reader(node)
-
-
-def _writer(node: _NativeAsyncNode) -> _NativeWriter:
-    return _native_node_writer(node)
-
-
-def get_reader_options(node: _NativeAsyncNode) -> ChunkStoreReaderOptions:
-    return _native_reader_options.__get__(node, type(node)).model_copy(
-        deep=True
-    )
-
-
-def set_reader_options(
-    node: _NativeAsyncNode,
-    options: ChunkStoreReaderOptions | dict[str, Any],
-) -> _NativeAsyncNode:
-    _native_reader_options.__set__(node, _reader_options(options))
-    return node
-
-
-def reset_reader(
-    node: _NativeAsyncNode,
-    options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
-) -> _NativeAsyncNode:
-    converted = None if options is None else _reader_options(options)
-    _native_reset_reader(node, converted)
-    return node
-
-
-def get_writer_options(node: _NativeAsyncNode) -> ChunkStoreWriterOptions:
-    return _native_writer_options.__get__(node, type(node)).model_copy(
-        deep=True
-    )
-
-
-def set_writer_options(
-    node: _NativeAsyncNode,
-    options: ChunkStoreWriterOptions | dict[str, Any],
-) -> _NativeAsyncNode:
-    _native_writer_options.__set__(node, _writer_options(options))
-    return node
-
-
-async def put_chunk(
-    node: _NativeAsyncNode,
-    chunk: types.Chunk,
-    seq: int | None = None,
-    final: bool = False,
-) -> asyncio.Future[int]:
-    """Enqueue a native chunk and return its durable confirmation future."""
-
-    confirmation, admission = _native_writer_enqueue(
-        _writer(node), chunk, seq=seq, final=final
-    )
-    if admission is not None:
-        try:
-            await admission
-        except BaseException:
-            confirmation.cancel()
-            raise
-    return cast(asyncio.Future[int], confirmation)
-
-
-async def put_fragment(
-    node: _NativeAsyncNode, fragment: types.NodeFragment
-) -> asyncio.Future[int]:
-    if not isinstance(fragment, types.NodeFragment):
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message="fragment must be a NodeFragment.",
-        ).to_exception()
-    if not isinstance(fragment.data, types.Chunk):
-        raise Status(
-            code=StatusCode.UNIMPLEMENTED,
-            message="AsyncNode writers do not resolve NodeRef payloads.",
-        ).to_exception()
-    return await put_chunk(
-        node,
-        fragment.data,
-        seq=fragment.seq,
-        final=not fragment.continued,
-    )
-
-
-async def put(
-    node: _NativeAsyncNode,
-    value: Any,
-    seq: int | None = None,
-    final: bool = False,
-    mimetype: str = "",
-) -> asyncio.Future[int]:
-    if isinstance(value, types.NodeFragment):
-        if seq is not None or final or mimetype:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=(
-                    "seq, final, and mimetype are carried by a NodeFragment "
-                    "and cannot be supplied separately."
-                ),
-            ).to_exception()
-        return await put_fragment(node, value)
-    if isinstance(value, types.Chunk):
-        if mimetype:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="mimetype cannot be supplied with a raw Chunk.",
-            ).to_exception()
-        return await put_chunk(node, value, seq=seq, final=final)
-
-    chunk = await asyncio.to_thread(
-        _serialization_registry(node).to_chunk, value, mimetype
-    )
-    return await put_chunk(node, chunk, seq=seq, final=final)
-
-
-async def put_final(
-    node: _NativeAsyncNode,
-    value: Any,
-    seq: int | None = None,
-    mimetype: str = "",
-) -> asyncio.Future[int]:
-    return await put(node, value, seq=seq, final=True, mimetype=mimetype)
-
-
-async def put_null_final(
-    node: _NativeAsyncNode, seq: int | None = None
-) -> asyncio.Future[int]:
-    return await put_chunk(
-        node,
-        types.Chunk(
-            metadata=types.ChunkMetadata(mimetype="application/octet-stream")
-        ),
-        seq=seq,
-        final=True,
-    )
-
-
-async def next_fragment(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> types.NodeFragment | None:
-    return await _reader(node).next(_read_timeout(timeout))
-
-
-async def next_chunk(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> types.Chunk | None:
-    fragment = await next_fragment(node, timeout)
-    return None if fragment is None else fragment.get_chunk()
-
-
-async def _deserialize_fragment(
-    node: _NativeAsyncNode,
-    fragment: types.NodeFragment,
-    mimetype_patterns: str | Sequence[str],
-    obj_type: type[T] | None,
-) -> T | Any:
-    return await asyncio.to_thread(
-        _serialization_registry(node).from_chunk,
-        fragment.get_chunk(),
-        mimetype_patterns,
-        obj_type,
-    )
-
-
-async def next_object(
-    node: _NativeAsyncNode,
-    obj_type: type[T] | None = None,
-    timeout: timing.Duration | None = None,
-    mimetype_patterns: str | Sequence[str] = "",
-) -> T | Any | None:
-    fragment = await next_fragment(node, timeout)
-    if fragment is None:
-        return None
-    chunk = fragment.get_chunk()
-    if chunk.is_null():
-        if fragment.continued:
-            raise Status(
-                code=StatusCode.FAILED_PRECONDITION,
-                message="A null stream marker must be final.",
-            ).to_exception()
-        return None
-    mimetype_patterns, obj_type = _resolve_expected_types(
-        node, mimetype_patterns, obj_type
-    )
-    return await _deserialize_fragment(
-        node, fragment, mimetype_patterns, obj_type
-    )
-
-
-async def next_value(
-    node: _NativeAsyncNode,
-    obj_type: type[T] | None = None,
-    timeout: timing.Duration | None = None,
-    mimetype_patterns: str | Sequence[str] = "",
-) -> T | Any | None:
-    return await next_object(node, obj_type, timeout, mimetype_patterns)
 
 
 def _remaining_timeout(
@@ -398,256 +186,551 @@ def _remaining_timeout(
     return remaining
 
 
-async def consume_fragment(
-    node: _NativeAsyncNode,
-    timeout: timing.Duration | None = None,
-    allow_none: bool = False,
-) -> types.NodeFragment | None:
-    if not get_reader_options(node).ordered:
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message="consume() requires an ordered reader.",
-        ).to_exception()
+async def _deserialize_fragment(
+    node: AsyncNode,
+    fragment: types.NodeFragment,
+    mimetype_patterns: str | Sequence[str],
+    obj_type: type[T] | None,
+) -> T | Any:
+    return await asyncio.to_thread(
+        _get_serialization_registry(node).from_chunk,
+        fragment.get_chunk(),
+        mimetype_patterns,
+        obj_type,
+    )
 
-    converted_timeout = _read_timeout(timeout)
-    started_at = timing.now()
-    fragment = await next_fragment(node, converted_timeout)
-    if fragment is None:
-        if not allow_none:
+
+# --- The Python protocol attached onto the native AsyncNode ------------------
+
+
+class _AsyncNodeProtocol:
+    """An asynchronous, ordered stream of chunks read from and written to A11.
+
+    A node has two halves. The **writer** end accepts values -- native
+    [Chunk][a11.data.types.Chunk] objects,
+    [NodeFragment][a11.data.types.NodeFragment]
+    objects, or any Python object a serializer in the node's
+    [SerializationRegistry][a11.data.serialization.SerializationRegistry] can
+    encode -- and
+    admits them into the backing
+    [ChunkStore][a11.stores.chunk_store.ChunkStore] in
+    sequence. The **reader** end yields them back, deserializing on the way out.
+    Every ``put*`` coroutine resolves to a `asyncio.Future` that
+    completes once the chunk is durably stored (and, when a
+    [WireStream][a11.net.wire_stream.WireStream] is attached, sent), so a
+    producer
+    can apply backpressure by awaiting it.
+
+    Consume a node in whichever shape fits the work:
+
+    - ``await node.next()`` for the next value (``None`` at end of stream);
+    - ``async for value in node:`` to iterate to completion;
+    - ``await node.consume()`` when exactly one whole value is expected;
+    - the ``*_chunk`` / ``*_fragment`` variants to stay at the transport level.
+
+    Use it as an async context manager to guarantee the stream is finalised::
+
+        async with AsyncNode.create("output") as node:
+            await node.put("hello")
+            await node.put_final("world")
+
+    A clean exit drains and closes the writer; leaving via an exception aborts
+    the node with that error's [Status][a11.status.Status], so a reader on the
+    far end observes the failure instead of a truncated stream.
+    """
+
+    def __init__(
+        self,
+        chunk_store: ChunkStore,
+        node_map: NodeMap | None = None,
+        *,
+        serialization_registry: SerializationRegistry | None = None,
+        reader_options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
+        writer_options: ChunkStoreWriterOptions | dict[str, Any] | None = None,
+    ) -> None:
+        """Build a node over ``chunk_store``.
+
+        Prefer `create`, which constructs the store for you from a node
+        id. Pass ``reader_options`` / ``writer_options`` (as
+        `ChunkStoreReaderOptions` / `ChunkStoreWriterOptions` or plain dicts) to
+        tune buffering and ordering, and a custom ``serialization_registry`` to
+        control how Python objects map to chunks.
+        """
+        registry = (
+            get_global_serialization_registry()
+            if serialization_registry is None
+            else serialization_registry
+        )
+        if not isinstance(registry, SerializationRegistry):
             raise Status(
-                code=StatusCode.FAILED_PRECONDITION,
-                message="AsyncNode is empty at the current reader offset.",
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "serialization_registry must be a SerializationRegistry."
+                ),
             ).to_exception()
-        return None
+        _native_node_init(
+            self,
+            chunk_store,
+            None,
+            _reader_options(reader_options),
+            _writer_options(writer_options),
+        )
+        self._node_map = node_map
+        self._serialization_registry = registry
+        self._expected_mimetype_patterns = ""
+        self._expected_obj_type = None
 
-    chunk = fragment.get_chunk()
-    if chunk.is_null():
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message="AsyncNode cannot consume a null chunk as its value.",
-        ).to_exception()
-    if not fragment.continued:
-        return fragment
+    @classmethod
+    def create(
+        cls: type[AsyncNode],
+        node_id: str,
+        node_map: NodeMap | None = None,
+        *,
+        serialization_registry: SerializationRegistry | None = None,
+        reader_options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
+        writer_options: ChunkStoreWriterOptions | dict[str, Any] | None = None,
+        chunk_store_factory: ChunkStoreFactory = LocalChunkStore,
+    ) -> AsyncNode:
+        """Create a standalone node identified by ``node_id``.
 
-    terminator = await next_fragment(
-        node, _remaining_timeout(converted_timeout, started_at)
-    )
-    if terminator is None:
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message=(
-                "A continued consumed value must be followed by a null final "
-                "chunk."
-            ),
-        ).to_exception()
-    terminator_chunk = terminator.get_chunk()
-    if terminator.continued or not terminator_chunk.is_null():
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message=(
-                "The only fragment allowed after a consumed value is a null "
-                "final chunk."
-            ),
-        ).to_exception()
-    return fragment
+        ``chunk_store_factory`` builds the backing store from the id; it
+        defaults to an in-memory
+        [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
+        so overriding it is how you place a node's data in a different backend.
+        """
+        return cls(
+            chunk_store_factory(node_id),
+            node_map,
+            serialization_registry=serialization_registry,
+            reader_options=reader_options,
+            writer_options=writer_options,
+        )
 
+    @staticmethod
+    def _validate_expected_types(
+        mimetype_patterns: str | Sequence[str], obj_type: type | None
+    ) -> str | tuple[str, ...]:
+        return _validate_expected_types(mimetype_patterns, obj_type)
 
-async def consume_chunk(
-    node: _NativeAsyncNode,
-    timeout: timing.Duration | None = None,
-    allow_none: bool = False,
-) -> types.Chunk | None:
-    fragment = await consume_fragment(node, timeout, allow_none=allow_none)
-    if fragment is None:
-        return None
-    return fragment.get_chunk()
+    # --- Configuration -------------------------------------------------------
 
+    @property
+    def serialization_registry(self) -> SerializationRegistry:
+        """The registry used to (de)serialize Python objects for this node."""
+        return _get_serialization_registry(self)
 
-async def consume(
-    node: _NativeAsyncNode,
-    obj_type: type[T] | None = None,
-    timeout: timing.Duration | None = None,
-    mimetype_patterns: str | Sequence[str] = "",
-    allow_none: bool = False,
-) -> T | Any | None:
-    fragment = await consume_fragment(node, timeout, allow_none=allow_none)
-    if fragment is None:
-        return None
+    @serialization_registry.setter
+    def serialization_registry(self, registry: SerializationRegistry) -> None:
+        _set_serialization_registry(self, registry)
 
-    mimetype_patterns, obj_type = _resolve_expected_types(
-        node, mimetype_patterns, obj_type
-    )
-    if obj_type is types.NodeFragment:
-        return fragment
-    if obj_type is types.Chunk:
-        return fragment.get_chunk()
-    return await _deserialize_fragment(
-        node, fragment, mimetype_patterns, obj_type
-    )
+    def set_serialization_registry(
+        self, registry: SerializationRegistry
+    ) -> AsyncNode:
+        """Set the serialization registry and return ``self`` for chaining."""
+        _set_serialization_registry(self, registry)
+        return self
 
+    def set_expected_types(
+        self,
+        mimetype_patterns: str | Sequence[str],
+        obj_type: type | None,
+    ) -> AsyncNode:
+        """Set the default MIME patterns and object type for reads.
 
-async def iter_fragments(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> AsyncIterator[types.NodeFragment]:
-    while (fragment := await next_fragment(node, timeout)) is not None:
-        yield fragment
+        Once set, ``next()``/``consume()`` and ``async for`` deserialize to
+        ``obj_type`` (matching ``mimetype_patterns``) without repeating those
+        arguments on every call. Returns ``self`` for chaining.
+        """
+        patterns = _validate_expected_types(mimetype_patterns, obj_type)
+        _ensure_python_state(self)
+        self.__dict__["_expected_mimetype_patterns"] = patterns
+        self.__dict__["_expected_obj_type"] = obj_type
+        return self
 
-
-async def iter_chunks(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> AsyncIterator[types.Chunk]:
-    async for fragment in iter_fragments(node, timeout):
-        yield fragment.get_chunk()
-
-
-async def _aenter(node: _NativeAsyncNode) -> _NativeAsyncNode:
-    return node
-
-
-async def _aexit(
-    node: _NativeAsyncNode,
-    exc_type: type[BaseException] | None,
-    exc: BaseException | None,
-    traceback: Any,
-) -> None:
-    del exc_type, traceback
-    if exc is None:
-        await node.drain_and_close()
-    else:
-        await node.abort_with_status(Status.from_exception(exc))
-
-
-def _aiter(node: _NativeAsyncNode) -> _NativeAsyncNode:
-    return node
-
-
-async def _anext(
-    node: _NativeAsyncNode, timeout: timing.Duration | None = None
-) -> Any:
-    fragment = await next_fragment(node, timeout)
-    if fragment is None:
-        raise StopAsyncIteration
-    chunk = fragment.get_chunk()
-    if chunk.is_null():
-        if fragment.continued:
-            raise Status(
-                code=StatusCode.FAILED_PRECONDITION,
-                message="A null stream marker must be final.",
-            ).to_exception()
-        raise StopAsyncIteration
-    _ensure_python_state(node)
-    return await _deserialize_fragment(
-        node,
-        fragment,
-        node.__dict__["_expected_mimetype_patterns"],
-        node.__dict__["_expected_obj_type"],
-    )
-
-
-async def _iter_with_deadline(node: _NativeAsyncNode, deadline: timing.Time):
-    node.set_reader_options(ChunkStoreReaderOptions(ordered=True))
-    node = node.__aiter__()
-    while True:
+    @contextlib.contextmanager
+    def expect_types(
+        self,
+        mimetype_patterns: str | Sequence[str],
+        obj_type: type | None,
+    ) -> Iterator[AsyncNode]:
+        """Temporarily set the expected read types for the ``with`` block."""
+        _ensure_python_state(self)
+        previous_patterns = self.__dict__["_expected_mimetype_patterns"]
+        previous_obj_type = self.__dict__["_expected_obj_type"]
+        self.set_expected_types(mimetype_patterns, obj_type)
         try:
-            yield await _anext(node, deadline - timing.now())
-        except StopAsyncIteration:
-            return
+            yield self
+        finally:
+            self.__dict__["_expected_mimetype_patterns"] = previous_patterns
+            self.__dict__["_expected_obj_type"] = previous_obj_type
+
+    @property
+    def reader(self) -> ChunkStoreReader:
+        """The node's
+        [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader]."""
+        return _native_node_reader(self)
+
+    @property
+    def writer(self) -> ChunkStoreWriter:
+        """The node's
+        [ChunkStoreWriter][a11.stores.chunk_store_writer.ChunkStoreWriter]."""
+        return _native_node_writer(self)
+
+    def get_reader_options(self) -> ChunkStoreReaderOptions:
+        """Return a copy of the reader's current options."""
+        return _native_reader_options.__get__(self, type(self)).model_copy(
+            deep=True
+        )
+
+    def set_reader_options(
+        self, options: ChunkStoreReaderOptions | dict[str, Any]
+    ) -> AsyncNode:
+        """Replace the reader options and return ``self`` for chaining."""
+        _native_reader_options.__set__(self, _reader_options(options))
+        return self
+
+    def reset_reader(
+        self,
+        options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
+    ) -> AsyncNode:
+        """Rewind/reconfigure the reader (e.g. to re-read from an offset)."""
+        converted = None if options is None else _reader_options(options)
+        _native_reset_reader(self, converted)
+        return self
+
+    def get_writer_options(self) -> ChunkStoreWriterOptions:
+        """Return a copy of the writer's current options."""
+        return _native_writer_options.__get__(self, type(self)).model_copy(
+            deep=True
+        )
+
+    def set_writer_options(
+        self, options: ChunkStoreWriterOptions | dict[str, Any]
+    ) -> AsyncNode:
+        """Replace the writer options and return ``self`` for chaining."""
+        _native_writer_options.__set__(self, _writer_options(options))
+        return self
+
+    # --- Writing -------------------------------------------------------------
+
+    async def put_chunk(
+        self,
+        chunk: types.Chunk,
+        seq: int | None = None,
+        final: bool = False,
+    ) -> asyncio.Future[int]:
+        """Enqueue a native chunk and return its durable confirmation future."""
+        confirmation, admission = _native_writer_enqueue(
+            self.writer, chunk, seq=seq, final=final
+        )
+        if admission is not None:
+            try:
+                await admission
+            except BaseException:
+                confirmation.cancel()
+                raise
+        return cast(asyncio.Future[int], confirmation)
+
+    async def put_fragment(
+        self, fragment: types.NodeFragment
+    ) -> asyncio.Future[int]:
+        """Enqueue a [NodeFragment][a11.data.types.NodeFragment] (carrying its
+        seq/final)."""
+        if not isinstance(fragment, types.NodeFragment):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="fragment must be a NodeFragment.",
+            ).to_exception()
+        if not isinstance(fragment.data, types.Chunk):
+            raise Status(
+                code=StatusCode.UNIMPLEMENTED,
+                message="AsyncNode writers do not resolve NodeRef payloads.",
+            ).to_exception()
+        return await self.put_chunk(
+            fragment.data,
+            seq=fragment.seq,
+            final=not fragment.continued,
+        )
+
+    async def put(
+        self,
+        value: Any,
+        seq: int | None = None,
+        final: bool = False,
+        mimetype: str = "",
+    ) -> asyncio.Future[int]:
+        """Write ``value`` to the stream and confirm it durably.
+
+        ``value`` may be a [NodeFragment][a11.data.types.NodeFragment], a
+        [Chunk][a11.data.types.Chunk], or any Python object the node's
+        serialization registry can encode (``mimetype`` selects the encoding).
+        Set ``final=True`` on the last write to close the stream. Returns a
+        `asyncio.Future` that resolves to the stored sequence number;
+        await it for backpressure.
+        """
+        if isinstance(value, types.NodeFragment):
+            if seq is not None or final or mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "seq, final, and mimetype are carried by a "
+                        "NodeFragment and cannot be supplied separately."
+                    ),
+                ).to_exception()
+            return await self.put_fragment(value)
+        if isinstance(value, types.Chunk):
+            if mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="mimetype cannot be supplied with a raw Chunk.",
+                ).to_exception()
+            return await self.put_chunk(value, seq=seq, final=final)
+
+        chunk = await asyncio.to_thread(
+            _get_serialization_registry(self).to_chunk, value, mimetype
+        )
+        return await self.put_chunk(chunk, seq=seq, final=final)
+
+    async def put_final(
+        self,
+        value: Any,
+        seq: int | None = None,
+        mimetype: str = "",
+    ) -> asyncio.Future[int]:
+        """Write ``value`` as the final element, closing the stream."""
+        return await self.put(value, seq=seq, final=True, mimetype=mimetype)
+
+    async def put_null_final(
+        self, seq: int | None = None
+    ) -> asyncio.Future[int]:
+        """Close the stream with an explicit null terminator (no value)."""
+        return await self.put_chunk(
+            types.Chunk(
+                metadata=types.ChunkMetadata(
+                    mimetype="application/octet-stream"
+                )
+            ),
+            seq=seq,
+            final=True,
+        )
+
+    # --- Reading -------------------------------------------------------------
+
+    async def next_fragment(
+        self, timeout: timing.Duration | None = None
+    ) -> types.NodeFragment | None:
+        """Read the next raw fragment, or ``None`` at end of stream."""
+        return await self.reader.next(_read_timeout(timeout))
+
+    async def next_chunk(
+        self, timeout: timing.Duration | None = None
+    ) -> types.Chunk | None:
+        """Read the next raw chunk, or ``None`` at end of stream."""
+        fragment = await self.next_fragment(timeout)
+        return None if fragment is None else fragment.get_chunk()
+
+    async def next_object(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: timing.Duration | None = None,
+        mimetype_patterns: str | Sequence[str] = "",
+    ) -> T | Any | None:
+        """Read and deserialize the next value, or ``None`` at end of stream."""
+        fragment = await self.next_fragment(timeout)
+        if fragment is None:
+            return None
+        chunk = fragment.get_chunk()
+        if chunk.is_null():
+            if fragment.continued:
+                raise Status(
+                    code=StatusCode.FAILED_PRECONDITION,
+                    message="A null stream marker must be final.",
+                ).to_exception()
+            return None
+        mimetype_patterns, obj_type = _resolve_expected_types(
+            self, mimetype_patterns, obj_type
+        )
+        return await _deserialize_fragment(
+            self, fragment, mimetype_patterns, obj_type
+        )
+
+    async def next(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: timing.Duration | None = None,
+        mimetype_patterns: str | Sequence[str] = "",
+    ) -> T | Any | None:
+        """Alias for `next_object`: the next deserialized value or ``None``."""
+        return await self.next_object(obj_type, timeout, mimetype_patterns)
+
+    async def consume_fragment(
+        self,
+        timeout: timing.Duration | None = None,
+        allow_none: bool = False,
+    ) -> types.NodeFragment | None:
+        """Read exactly one whole value's fragment, enforcing the terminator.
+
+        Unlike `next_fragment`, this expects the node to hold a single
+        (possibly multi-part) value followed by a null final chunk, and raises
+        if that shape is violated. With ``allow_none`` an empty stream yields
+        ``None`` instead of raising. Requires an ordered reader.
+        """
+        if not self.get_reader_options().ordered:
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message="consume() requires an ordered reader.",
+            ).to_exception()
+
+        converted_timeout = _read_timeout(timeout)
+        started_at = timing.now()
+        fragment = await self.next_fragment(converted_timeout)
+        if fragment is None:
+            if not allow_none:
+                raise Status(
+                    code=StatusCode.FAILED_PRECONDITION,
+                    message="AsyncNode is empty at the current reader offset.",
+                ).to_exception()
+            return None
+
+        chunk = fragment.get_chunk()
+        if chunk.is_null():
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message="AsyncNode cannot consume a null chunk as its value.",
+            ).to_exception()
+        if not fragment.continued:
+            return fragment
+
+        terminator = await self.next_fragment(
+            _remaining_timeout(converted_timeout, started_at)
+        )
+        if terminator is None:
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message=(
+                    "A continued consumed value must be followed by a null "
+                    "final chunk."
+                ),
+            ).to_exception()
+        terminator_chunk = terminator.get_chunk()
+        if terminator.continued or not terminator_chunk.is_null():
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message=(
+                    "The only fragment allowed after a consumed value is a "
+                    "null final chunk."
+                ),
+            ).to_exception()
+        return fragment
+
+    async def consume_chunk(
+        self,
+        timeout: timing.Duration | None = None,
+        allow_none: bool = False,
+    ) -> types.Chunk | None:
+        """Consume exactly one whole value and return its raw chunk."""
+        fragment = await self.consume_fragment(timeout, allow_none=allow_none)
+        if fragment is None:
+            return None
+        return fragment.get_chunk()
+
+    async def consume(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: timing.Duration | None = None,
+        mimetype_patterns: str | Sequence[str] = "",
+        allow_none: bool = False,
+    ) -> T | Any | None:
+        """Consume exactly one whole value and return it deserialized.
+
+        Use this for a node that carries a single result (the common case for a
+        unary action output). Pass ``obj_type`` to deserialize to a specific
+        type, or request ``NodeFragment``/``Chunk`` to get the raw form.
+        """
+        fragment = await self.consume_fragment(timeout, allow_none=allow_none)
+        if fragment is None:
+            return None
+
+        mimetype_patterns, obj_type = _resolve_expected_types(
+            self, mimetype_patterns, obj_type
+        )
+        if obj_type is types.NodeFragment:
+            return fragment
+        if obj_type is types.Chunk:
+            return fragment.get_chunk()
+        return await _deserialize_fragment(
+            self, fragment, mimetype_patterns, obj_type
+        )
+
+    async def iter_fragments(
+        self, timeout: timing.Duration | None = None
+    ) -> AsyncIterator[types.NodeFragment]:
+        """Async-iterate raw fragments until the stream ends."""
+        while (fragment := await self.next_fragment(timeout)) is not None:
+            yield fragment
+
+    async def iter_chunks(
+        self, timeout: timing.Duration | None = None
+    ) -> AsyncIterator[types.Chunk]:
+        """Async-iterate raw chunks until the stream ends."""
+        async for fragment in self.iter_fragments(timeout):
+            yield fragment.get_chunk()
+
+    async def iter_with_deadline(self, deadline: timing.Time):
+        """Async-iterate deserialized values until ``deadline`` or end of
+        stream."""
+        self.set_reader_options(ChunkStoreReaderOptions(ordered=True))
+        node = self.__aiter__()
+        while True:
+            try:
+                yield await node.__anext__(deadline - timing.now())
+            except StopAsyncIteration:
+                return
+
+    # --- Lifecycle and async iteration --------------------------------------
+
+    async def __aenter__(self) -> AsyncNode:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: Any,
+    ) -> None:
+        del exc_type, traceback
+        if exc is None:
+            await self.drain_and_close()
+        else:
+            await self.abort_with_status(Status.from_exception(exc))
+
+    def __aiter__(self) -> AsyncNode:
+        return self
+
+    async def __anext__(self, timeout: timing.Duration | None = None) -> Any:
+        fragment = await self.next_fragment(timeout)
+        if fragment is None:
+            raise StopAsyncIteration
+        chunk = fragment.get_chunk()
+        if chunk.is_null():
+            if fragment.continued:
+                raise Status(
+                    code=StatusCode.FAILED_PRECONDITION,
+                    message="A null stream marker must be final.",
+                ).to_exception()
+            raise StopAsyncIteration
+        _ensure_python_state(self)
+        return await _deserialize_fragment(
+            self,
+            fragment,
+            self.__dict__["_expected_mimetype_patterns"],
+            self.__dict__["_expected_obj_type"],
+        )
 
 
-_NativeAsyncNode.serialization_registry = property(
-    _serialization_registry, _set_serialization_registry
-)
-_NativeAsyncNode.set_serialization_registry = set_serialization_registry
-_NativeAsyncNode.set_expected_types = set_expected_types
-_NativeAsyncNode.expect_types = expect_types
-_NativeAsyncNode._validate_expected_types = staticmethod(
-    _validate_expected_types
-)
-_NativeAsyncNode.reader = property(_reader)
-_NativeAsyncNode.writer = property(_writer)
-_NativeAsyncNode.get_reader_options = get_reader_options
-_NativeAsyncNode.set_reader_options = set_reader_options
-_NativeAsyncNode.reset_reader = reset_reader
-_NativeAsyncNode.get_writer_options = get_writer_options
-_NativeAsyncNode.set_writer_options = set_writer_options
-_NativeAsyncNode.put_chunk = put_chunk
-_NativeAsyncNode.put_fragment = put_fragment
-_NativeAsyncNode.put = put
-_NativeAsyncNode.put_final = put_final
-_NativeAsyncNode.put_null_final = put_null_final
-_NativeAsyncNode.next_fragment = next_fragment
-_NativeAsyncNode.next_chunk = next_chunk
-_NativeAsyncNode.next_object = next_object
-_NativeAsyncNode.next = next_value
-_NativeAsyncNode.consume_fragment = consume_fragment
-_NativeAsyncNode.consume_chunk = consume_chunk
-_NativeAsyncNode.consume = consume
-_NativeAsyncNode.iter_fragments = iter_fragments
-_NativeAsyncNode.iter_chunks = iter_chunks
-_NativeAsyncNode.iter_with_deadline = _iter_with_deadline
-_NativeAsyncNode.__aenter__ = _aenter
-_NativeAsyncNode.__aexit__ = _aexit
-_NativeAsyncNode.__aiter__ = _aiter
-_NativeAsyncNode.__anext__ = _anext
+attach_protocol(AsyncNode, _AsyncNodeProtocol)
+AsyncNode.__module__ = "a11.nodes.async_node"
 
-
-def _node_init(
-    node: _NativeAsyncNode,
-    chunk_store: ChunkStore,
-    node_map: _NativeNodeMap | None = None,
-    *,
-    serialization_registry: SerializationRegistry | None = None,
-    reader_options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
-    writer_options: ChunkStoreWriterOptions | dict[str, Any] | None = None,
-) -> None:
-    registry = (
-        get_global_serialization_registry()
-        if serialization_registry is None
-        else serialization_registry
-    )
-    if not isinstance(registry, SerializationRegistry):
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message="serialization_registry must be a SerializationRegistry.",
-        ).to_exception()
-    _native_node_init(
-        node,
-        chunk_store,
-        None,
-        _reader_options(reader_options),
-        _writer_options(writer_options),
-    )
-    node._node_map = node_map
-    node._serialization_registry = registry
-    node._expected_mimetype_patterns = ""
-    node._expected_obj_type = None
-
-
-def _create_node(
-    cls: type[_NativeAsyncNode],
-    node_id: str,
-    node_map: _NativeNodeMap | None = None,
-    *,
-    serialization_registry: SerializationRegistry | None = None,
-    reader_options: ChunkStoreReaderOptions | dict[str, Any] | None = None,
-    writer_options: ChunkStoreWriterOptions | dict[str, Any] | None = None,
-    chunk_store_factory: ChunkStoreFactory = LocalChunkStore,
-) -> _NativeAsyncNode:
-    return cls(
-        chunk_store_factory(node_id),
-        node_map,
-        serialization_registry=serialization_registry,
-        reader_options=reader_options,
-        writer_options=writer_options,
-    )
-
-
-_NativeAsyncNode.__init__ = _node_init
-_NativeAsyncNode.create = classmethod(_create_node)
-_NativeAsyncNode.__module__ = "a11.nodes.async_node"
-AsyncNode = _NativeAsyncNode
-
-NodeMap = _NativeNodeMap
 NodeMap.__module__ = "a11.nodes.async_node"
 NodeMap.__getitem__ = NodeMap.get
 

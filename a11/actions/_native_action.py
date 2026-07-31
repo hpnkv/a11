@@ -1,4 +1,19 @@
-"""Python protocol conveniences for the native Action implementation."""
+"""The Python-facing protocol for the native `Action`.
+
+An `Action` is A11's unit of work: a named, schema-described operation
+with typed input and output ports (each an
+[AsyncNode][a11.nodes.async_node.AsyncNode]) and a handler that runs
+asynchronously, streaming into its outputs as it goes. Actions compose --
+a handler can create and ``call`` nested actions -- and can run locally or be
+dispatched across a [WireStream][a11.net.wire_stream.WireStream] to another
+peer.
+
+The class exported here is the native ``a11._native.Action``; this module
+attaches the small Python conveniences layered on top of it (an
+`asyncio.Event`-shaped ``done``, header decoding, span helpers, and
+live-updating settings) via
+[attach_protocol][a11._native_protocol.attach_protocol].
+"""
 
 from __future__ import annotations
 
@@ -6,11 +21,13 @@ import json
 from typing import Any
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 from a11.status import StatusException
 
-Action = _native.Action
-ActionSettings = _native.ActionSettings
+from a11._native import Action
+from a11._native import ActionSettings
 
+# Native descriptors captured before ``attach_protocol`` overwrites them.
 _native_get_header = Action.get_header
 _native_run = Action.run
 _native_settings = Action.__dict__["settings"]
@@ -49,29 +66,10 @@ def _done(action: Action) -> _ActionDoneEvent:
     return event
 
 
-def _get_header(
-    action: Action, name: str, decode: bool = False
-) -> bytes | str | None:
-    value = _native_get_header(action, name)
-    if value is not None and decode:
-        return value.decode()
-    return value
-
-
 def _span_json(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, default=str)
-
-
-def _set_span_input(action: Action, value: Any) -> None:
-    """Record this action span's input (Langfuse observation input)."""
-    action.set_span_attribute(_LANGFUSE_INPUT_ATTR, _span_json(value))
-
-
-def _set_span_output(action: Action, value: Any) -> None:
-    """Record this action span's output (Langfuse observation output)."""
-    action.set_span_attribute(_LANGFUSE_OUTPUT_ATTR, _span_json(value))
 
 
 def _get_settings(action: Action) -> ActionSettings:
@@ -85,6 +83,13 @@ def _set_settings(action: Action, settings: ActionSettings) -> None:
 
 
 def _install_live_setting(name: str) -> None:
+    """Make an ``ActionSettings`` field write back to its owning Action.
+
+    ``action.settings`` returns a native value; mutating one of its fields must
+    propagate to the action it came from (and roll back if the native store
+    rejects the change), so each field is a property that re-applies the whole
+    settings object to its owner.
+    """
     descriptor = ActionSettings.__dict__[name]
 
     def get(settings: ActionSettings) -> Any:
@@ -113,12 +118,48 @@ for _field in (
 ):
     _install_live_setting(_field)
 
+
+class _ActionProtocol:
+    """Python conveniences layered on the native Action."""
+
+    # ``run_in_background`` exposes the native, non-awaiting ``run`` under a
+    # name that makes its fire-and-forget nature explicit; the async ``run``
+    # protocol lives in ``a11.actions.action``.
+    run_in_background = _native_run
+
+    @property
+    def done(self) -> _ActionDoneEvent:
+        """An `asyncio.Event`-shaped view of completion (``await
+        action.done.wait()``)."""
+        return _done(self)
+
+    def get_header(self, name: str, decode: bool = False) -> bytes | str | None:
+        """Return header ``name`` (``None`` if absent); ``decode`` UTF-8 to
+        ``str``."""
+        value = _native_get_header(self, name)
+        if value is not None and decode:
+            return value.decode()
+        return value
+
+    def set_span_input(self, value: Any) -> None:
+        """Record this action span's input (Langfuse observation input)."""
+        self.set_span_attribute(_LANGFUSE_INPUT_ATTR, _span_json(value))
+
+    def set_span_output(self, value: Any) -> None:
+        """Record this action span's output (Langfuse observation output)."""
+        self.set_span_attribute(_LANGFUSE_OUTPUT_ATTR, _span_json(value))
+
+    @property
+    def settings(self) -> ActionSettings:
+        """The action's live `ActionSettings` (field writes propagate back)."""
+        return _get_settings(self)
+
+    @settings.setter
+    def settings(self, settings: ActionSettings) -> None:
+        _set_settings(self, settings)
+
+
+attach_protocol(Action, _ActionProtocol)
 Action.__module__ = "a11.actions.action"
-Action.done = property(_done)
-Action.get_header = _get_header
-Action.run_in_background = _native_run
-Action.set_span_input = _set_span_input
-Action.set_span_output = _set_span_output
-Action.settings = property(_get_settings, _set_settings)
 
 __all__ = ["Action"]

@@ -260,7 +260,8 @@ class _StatusConvenience(BaseModel):
         return exc
 
 
-Status = _native.Status
+from a11._native import Status
+
 Status.__module__ = __name__
 
 

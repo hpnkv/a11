@@ -26,13 +26,13 @@ NameString = Annotated[
     str, Field(min_length=1, max_length=255, pattern=_NAME_STRING_PATTERN)
 ]
 
-ChunkMetadata = _native.ChunkMetadata
-Chunk = _native.Chunk
-NodeRef = _native.NodeRef
-NodeFragment = _native.NodeFragment
-Port = _native.Port
-ActionMessage = _native.ActionMessage
-WireMessage = _native.WireMessage
+from a11._native import ChunkMetadata
+from a11._native import Chunk
+from a11._native import NodeRef
+from a11._native import NodeFragment
+from a11._native import Port
+from a11._native import ActionMessage
+from a11._native import WireMessage
 
 _NATIVE_TYPES = (
     ChunkMetadata,
@@ -594,7 +594,7 @@ for _type in _NATIVE_TYPES:
     _type.__get_pydantic_json_schema__ = classmethod(_json_schema)
 
 
-EMPTY_WIRE_MESSAGE_SIZE = _native.EMPTY_WIRE_MESSAGE_SIZE
+from a11._native import EMPTY_WIRE_MESSAGE_SIZE
 
 
 def is_half_close_message(message: WireMessage) -> bool:

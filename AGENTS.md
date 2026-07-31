@@ -109,6 +109,35 @@
 - Synchronous binding methods returning `absl::Status` or `StatusOr` must use
   the shared status boundary so failures raise `a11.status.StatusException`;
   never expose a raw Abseil or pybind11 status exception to callers.
+- Attach the Python protocol as a readable `class` body and copy it onto the
+  bound native class with `a11._native_protocol.attach_protocol`, rather than a
+  flat list of `NativeClass.method = _fn` assignments. Keep native descriptor
+  captures (`_native_x = NativeClass.x`) as module globals before the attach,
+  and keep truly-internal helpers module-level so they stay out of the stub.
+  Export the public native classes with `from a11._native import X` (an import
+  alias griffe and type checkers resolve to the class), not `X = _native.X`
+  (an opaque attribute assignment). Field-driven option structs stay with
+  `a11._native_options.install_native_options`.
+
+## Documentation
+
+- Docs live in `doc/` and build to `doc/site` via `doc/build.sh` (see
+  `doc/README.md`): MkDocs Material + `mkdocstrings` for the Python API and
+  guides, Doxygen + doxygen-awesome-css for the C++ internals. The Python site
+  is static — `griffe` reads `a11/` and `a11/_native.pyi`, so no native build is
+  needed to generate it. CI builds and deploys it (`.github/workflows/docs.yml`).
+- Python: Google-style docstrings. Write for a developer *building an AI agent* —
+  explain the asynchronous, streaming intent and when to reach for a thing, not
+  just its mechanics. Maintain extended prose for the core surface (`ChunkStore`,
+  `WireStream` and implementations, `ChunkStoreReader`, `ChunkStoreWriter`,
+  `AsyncNode`, `Session`, `WebSocketSignallingServer`,
+  `WebSocketSignallingClient`); keep other symbols briefly but accurately
+  documented.
+- C++ / pybind11: give every `.def*` real parameter names (`py::arg("...")`, not
+  `arg0`) and a docstring; extended for the core surface, brief elsewhere. Prose
+  belongs in the C++ header doc-comments (`///` or `/** */`) where practical.
+  After changing bindings, rebuild the extension and regenerate `a11/_native.pyi`
+  with `scripts/generate_stubs.py`; `--check` gates it in CI.
 
 ## Dependencies, installation, and wheels
 

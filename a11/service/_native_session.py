@@ -1,14 +1,29 @@
-"""Python protocol conveniences for native Session implementations."""
+"""The Python-facing protocol for the native `Session`.
+
+A `Session` is A11's connection-scoped runtime: it multiplexes one or
+more [WireStream][a11.net.wire_stream.WireStream] transports, dispatches
+incoming
+[Action][a11.actions.action.Action] calls against a registry, and tracks their
+lifetimes so the connection can be drained and closed cleanly. It is the object
+you build a server or client agent around -- add a stream, and the session
+routes messages to and from action handlers for you.
+
+The class exported here is the native ``a11._native.Session``; this module
+attaches the asyncio-shaped completion and receive conveniences via
+[attach_protocol][a11._native_protocol.attach_protocol].
+"""
 
 from __future__ import annotations
 
 import asyncio
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 
-Session = _native.Session
-SessionWithRecv = _native.SessionWithRecv
+from a11._native import Session
+from a11._native import SessionWithRecv
 
+# Native descriptors captured before ``attach_protocol`` overwrites them.
 _native_wait_done = Session.wait_done
 _native_receive = SessionWithRecv.receive
 _native_receive_with_stream_id = SessionWithRecv.receive_with_stream_id
@@ -41,18 +56,30 @@ def _done(session: Session) -> _SessionDoneEvent:
     return event
 
 
-async def _receive(session: SessionWithRecv, deadline=None):
-    return await _native_receive(session, deadline)
+class _SessionProtocol:
+    """Completion protocol shared by every native Session."""
+
+    @property
+    def done(self) -> _SessionDoneEvent:
+        """An `asyncio.Event`-shaped view of the session's completion."""
+        return _done(self)
 
 
-async def _receive_with_stream_id(session: SessionWithRecv, deadline=None):
-    return await _native_receive_with_stream_id(session, deadline)
+class _SessionWithRecvProtocol:
+    """Adds coroutine ``receive`` methods for pull-style session consumption."""
+
+    async def receive(self, deadline=None):
+        """Await the next inbound [WireMessage][a11.data.types.WireMessage]."""
+        return await _native_receive(self, deadline)
+
+    async def receive_with_stream_id(self, deadline=None):
+        """Await the next inbound message paired with its stream id."""
+        return await _native_receive_with_stream_id(self, deadline)
 
 
+attach_protocol(Session, _SessionProtocol)
+attach_protocol(SessionWithRecv, _SessionWithRecvProtocol)
 Session.__module__ = "a11.service.session"
 SessionWithRecv.__module__ = "a11.service.session"
-Session.done = property(_done)
-SessionWithRecv.receive = _receive
-SessionWithRecv.receive_with_stream_id = _receive_with_stream_id
 
 __all__ = ["Session", "SessionWithRecv"]

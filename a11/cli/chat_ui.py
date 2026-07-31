@@ -3,12 +3,13 @@
 """Interactive chat loop for ``a11 chat``.
 
 The UI is deliberately state-agnostic: conversation history is just a flat
-``list[Interaction]`` that :class:`ChatUI` threads back into each turn. Input is
-read with :mod:`prompt_toolkit` (async-native, no opinion on how we hold state)
-and assistant output is streamed live with :mod:`rich`.
+``list[Interaction]`` that `ChatUI` threads back into each turn. Input is
+read with `prompt_toolkit` (async-native, no opinion on how we hold state)
+and assistant output is streamed live with `rich`.
 
 Backend selection is not the CLI's job: every turn runs the single
-:data:`~a11.sdk.interact_with_llm.INTERACT_WITH_LLM_SCHEMA` action with an
+[INTERACT_WITH_LLM_SCHEMA][a11.sdk.interact_with_llm.INTERACT_WITH_LLM_SCHEMA]
+action with an
 ``x-a11-llm-provider`` header, and that action routes to the concrete backend
 and imports its SDK lazily. The CLI just reads the ``text_output`` (and, when
 verbose, ``thoughts``) stream nodes it produces.

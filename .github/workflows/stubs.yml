@@ -1,0 +1,50 @@
+name: Stub freshness
+
+# Verifies that a11/_native.pyi matches what scripts/generate_stubs.py produces
+# from the built extension, so the checked-in stub (the contract IDEs and the
+# docs read) never drifts from the bindings. This requires compiling the native
+# module, so it reuses the same static-dependency bootstrap as the wheel build.
+
+on:
+  pull_request:
+    paths:
+      - "cpp/**"
+      - "a11/**"
+      - "scripts/generate_stubs.py"
+      - "a11/_native.pyi"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      A11_WHEEL_ARCH: x86_64
+      A11_DEPS_PREFIX: /tmp/a11-deps
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config perl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Bootstrap static C++ dependencies
+        run: |
+          echo "CMAKE_PREFIX_PATH=${A11_DEPS_PREFIX}" >> "$GITHUB_ENV"
+          echo "OPENSSL_ROOT_DIR=${A11_DEPS_PREFIX}" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${A11_DEPS_PREFIX}/lib/pkgconfig" >> "$GITHUB_ENV"
+          bash scripts/bootstrap_wheel_deps.sh
+
+      - name: Build the editable extension
+        env:
+          CMAKE_ARGS: "-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON"
+        run: uv sync --locked --group dev
+
+      - name: Verify the stub is fresh
+        run: uv run python scripts/generate_stubs.py --check

@@ -1,0 +1,57 @@
+name: Documentation
+
+# Builds the combined Python + C++ documentation and deploys it to GitHub Pages.
+# The Python site is produced statically by MkDocs + mkdocstrings (griffe reads
+# the a11/ source and a11/_native.pyi directly, so no native build is needed),
+# and the C++ reference by Doxygen. A separate job keeps a11/_native.pyi honest.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Doxygen and Graphviz
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install documentation tooling
+        run: pip install mkdocs-material "mkdocstrings[python]" griffe
+
+      - name: Build site (Python + C++)
+        run: doc/build.sh --strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/site
+
+  deploy:
+    # Only publish from the default branch; PRs just build to catch breakage.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

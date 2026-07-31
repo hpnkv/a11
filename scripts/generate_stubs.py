@@ -95,43 +95,59 @@ def _normalise_annotations(stub: str) -> str:
         "_NativeReader": "ChunkStoreReader",
         "_NativeWriter": "ChunkStoreWriter",
         "_native.WireStream": "WireStream",
-        "types.Chunk": "Chunk",
-        "types.NodeFragment": "NodeFragment",
-        "timing.Duration": "Duration",
-        "timing.Time": "Time",
         "_ActionDoneEvent": "_DoneEvent",
         "_SessionDoneEvent": "_DoneEvent",
         "ChunkStoreFactory": "typing.Callable[[str], ChunkStore]",
         "StatusExceptionCasters": "a11.status.StatusExceptionCasters",
+        # Raw C++ return/parameter types the bindings expose by name. The
+        # ``registry: ...`` rule is broad on purpose: it resolves the named
+        # ``registry`` parameter wherever it appears (Action.__init__,
+        # bind_registry, set_action_registry) and, as a tail match, the
+        # ``action_registry: ...`` constructor parameters too.
         "registry: ...": "registry: ActionRegistry | None",
-        "bind_registry(self, arg0: ...)": (
-            "bind_registry(self, arg0: ActionRegistry)"
-        ),
         "get_registry(self) -> ...": "get_registry(self) -> ActionRegistry",
-        "action_registry: ...": "action_registry: ActionRegistry | None",
         "expected: ... = None) -> ...": (
             "expected: AsyncNode | None = None) -> AsyncNode | None"
         ),
-        "get(self, arg0: str) -> ...": "get(self, arg0: str) -> AsyncNode",
-        "get_if_exists(self, arg0: str) -> ...": (
-            "get_if_exists(self, arg0: str) -> AsyncNode | None"
+        "get(self, node_id: str) -> ...": (
+            "get(self, node_id: str) -> AsyncNode"
+        ),
+        "get_if_exists(self, node_id: str) -> ...": (
+            "get_if_exists(self, node_id: str) -> AsyncNode | None"
         ),
         "actions(self) -> list[tuple[str, ...]]": (
             "actions(self) -> list[tuple[str, Action]]"
         ),
-        "get_action(self, arg0: str) -> ...": (
-            "get_action(self, arg0: str) -> Action"
+        "get_action(self, action_id: str) -> ...": (
+            "get_action(self, action_id: str) -> Action"
         ),
         "get_action_registry(self) -> ...": (
             "get_action_registry(self) -> ActionRegistry | None"
         ),
-        "set_action_registry(self, arg0: ...)": (
-            "set_action_registry(self, arg0: ActionRegistry)"
+        "action_registry(self) -> ...": (
+            "action_registry(self) -> ActionRegistry | None"
         ),
-        "http2_options: ...": "http2_options: Http2Options",
+        "action_registry(self, arg1: ...)": (
+            "action_registry(self, arg1: ActionRegistry)"
+        ),
+        "http2_options(self) -> ...": "http2_options(self) -> Http2Options",
+        "http2_options(self, arg0: ...)": (
+            "http2_options(self, arg0: Http2Options)"
+        ),
     }
     for old, new in replacements.items():
         stub = stub.replace(old, new)
+
+    # Shorten the module-qualified facade types in *annotations* to their bare
+    # names, but only when not already part of a longer dotted path (a
+    # docstring cross-reference such as ``a11.data.types.Chunk`` must survive).
+    for module, name in (
+        ("types", "Chunk"),
+        ("types", "NodeFragment"),
+        ("timing", "Duration"),
+        ("timing", "Time"),
+    ):
+        stub = re.sub(rf"(?<![.\w]){module}\.{name}\b", name, stub)
 
     stub = re.sub(r"\s+# value = .*?$", "", stub, flags=re.MULTILINE)
     stub = re.sub(

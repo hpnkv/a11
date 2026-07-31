@@ -97,18 +97,26 @@ T SchemaValueFromPython(const py::handle& value) {
 
 template <typename T>
 void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
-  cls.def("__len__",
-          [](const SchemaMapView<T>& view) { return view.values().size(); })
-      .def("__bool__",
-           [](const SchemaMapView<T>& view) { return !view.values().empty(); })
-      .def("__iter__",
-           [](SchemaMapView<T>& view) {
-             return SchemaMapToPython(view).attr("__iter__")();
-           })
-      .def("__contains__",
-           [](const SchemaMapView<T>& view, const std::string& key) {
-             return view.values().find(key) != view.values().end();
-           })
+  cls.def(
+         "__len__",
+         [](const SchemaMapView<T>& view) { return view.values().size(); },
+         "Return the number of entries in the map.")
+      .def(
+          "__bool__",
+          [](const SchemaMapView<T>& view) { return !view.values().empty(); },
+          "Return True when the map has at least one entry.")
+      .def(
+          "__iter__",
+          [](SchemaMapView<T>& view) {
+            return SchemaMapToPython(view).attr("__iter__")();
+          },
+          "Return an iterator over the map's keys.")
+      .def(
+          "__contains__",
+          [](const SchemaMapView<T>& view, const std::string& key) {
+            return view.values().find(key) != view.values().end();
+          },
+          "Return True when the map contains the given key.", py::arg("key"))
       .def(
           "__getitem__",
           [](SchemaMapView<T>& view, const std::string& key) -> T& {
@@ -117,6 +125,7 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
               throw py::key_error(key);
             return found->second;
           },
+          "Return the value stored under the given key.", py::arg("key"),
           py::return_value_policy::reference_internal)
       .def(
           "__setitem__",
@@ -126,13 +135,17 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
               view.values().insert_or_assign(std::move(key),
                                              std::move(converted));
             });
-          })
-      .def("__delitem__",
-           [](SchemaMapView<T>& view, const std::string& key) {
-             if (view.values().find(key) == view.values().end())
-               throw py::key_error(key);
-             view.Mutate([&] { view.values().erase(key); });
-           })
+          },
+          "Store a value under the given key, re-validating the schema.",
+          py::arg("key"), py::arg("value"))
+      .def(
+          "__delitem__",
+          [](SchemaMapView<T>& view, const std::string& key) {
+            if (view.values().find(key) == view.values().end())
+              throw py::key_error(key);
+            view.Mutate([&] { view.values().erase(key); });
+          },
+          "Remove the entry stored under the given key.", py::arg("key"))
       .def(
           "get",
           [](SchemaMapView<T>& view, const std::string& key,
@@ -141,21 +154,29 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
             return found == view.values().end() ? default_value
                                                 : py::cast(found->second);
           },
+          "Return the value for the key, or the default if it is absent.",
           py::arg("key"), py::arg("default") = py::none())
-      .def("keys",
-           [](SchemaMapView<T>& view) {
-             return SchemaMapToPython(view).attr("keys")();
-           })
-      .def("values",
-           [](SchemaMapView<T>& view) {
-             return SchemaMapToPython(view).attr("values")();
-           })
-      .def("items",
-           [](SchemaMapView<T>& view) {
-             return SchemaMapToPython(view).attr("items")();
-           })
-      .def("update",
-           [](SchemaMapView<T>& view, const py::object& updates) {
+      .def(
+          "keys",
+          [](SchemaMapView<T>& view) {
+            return SchemaMapToPython(view).attr("keys")();
+          },
+          "Return a view of the map's keys.")
+      .def(
+          "values",
+          [](SchemaMapView<T>& view) {
+            return SchemaMapToPython(view).attr("values")();
+          },
+          "Return a view of the map's values.")
+      .def(
+          "items",
+          [](SchemaMapView<T>& view) {
+            return SchemaMapToPython(view).attr("items")();
+          },
+          "Return a view of the map's (key, value) pairs.")
+      .def(
+          "update",
+          [](SchemaMapView<T>& view, const py::object& updates) {
              py::dict converted =
                  py::module_::import("builtins").attr("dict")(updates);
              typename SchemaMapView<T>::Map values;
@@ -167,20 +188,31 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
                  view.values().insert_or_assign(std::move(key),
                                                 std::move(value));
              });
-           })
-      .def("clear",
-           [](SchemaMapView<T>& view) {
-             view.Mutate([&] { view.values().clear(); });
-           })
-      .def("copy",
-           [](SchemaMapView<T>& view) { return SchemaMapToPython(view); })
-      .def("__eq__",
-           [](SchemaMapView<T>& view, const py::object& other) {
-             return SchemaMapToPython(view).equal(other);
-           })
-      .def("__repr__", [](SchemaMapView<T>& view) {
-        return py::repr(SchemaMapToPython(view));
-      });
+           },
+          "Merge the entries of another mapping into this map.",
+          py::arg("updates"))
+      .def(
+          "clear",
+          [](SchemaMapView<T>& view) {
+            view.Mutate([&] { view.values().clear(); });
+          },
+          "Remove all entries from the map.")
+      .def(
+          "copy",
+          [](SchemaMapView<T>& view) { return SchemaMapToPython(view); },
+          "Return a plain dict copy of the map's entries.")
+      .def(
+          "__eq__",
+          [](SchemaMapView<T>& view, const py::object& other) {
+            return SchemaMapToPython(view).equal(other);
+          },
+          "Return True when the map equals another mapping.", py::arg("other"))
+      .def(
+          "__repr__",
+          [](SchemaMapView<T>& view) {
+            return py::repr(SchemaMapToPython(view));
+          },
+          "Return the repr of the map's entries.");
 }
 
 template <typename T>
@@ -419,13 +451,18 @@ py::object StatusObject(const absl::Status& status) {
 
 void BindActions(py::module_& module) {
   py::class_<SchemaMapView<actions::ActionPortSchema>> port_schema_map(
-      module, "_ActionPortSchemaMapView");
+      module, "_ActionPortSchemaMapView",
+      "Mutable dict-like view over an action schema's port map.");
   py::class_<SchemaMapView<actions::ActionHeaderSchema>> header_schema_map(
-      module, "_ActionHeaderSchemaMapView");
+      module, "_ActionHeaderSchemaMapView",
+      "Mutable dict-like view over an action schema's header map.");
   py::class_<SchemaMapView<std::string>> string_schema_map(
-      module, "_StringSchemaMapView");
+      module, "_StringSchemaMapView",
+      "Mutable dict-like view over an action schema's string map.");
 
-  py::class_<actions::ActionPortSchema>(module, "ActionPortSchema")
+  py::class_<actions::ActionPortSchema>(
+      module, "ActionPortSchema",
+      "Schema describing a single input or output port of an action.")
       .def(
           py::init([](std::string name, std::string type,
                       std::string description, bool required, bool unary,
@@ -439,14 +476,20 @@ void BindActions(py::module_& module) {
                 .autofills = ActionAutofillsFromPython(autofills),
                 .typeinfo = PortSchemaTypeInfoFromPython(typeinfo)});
           }),
-          py::arg("name"), py::arg("type"), py::arg("description") = "",
-          py::arg("required") = false, py::arg("unary") = false,
-          py::arg("autofills") = std::nullopt, py::arg("typeinfo") = py::none())
-      .def_readwrite("name", &actions::ActionPortSchema::name)
-      .def_readwrite("type", &actions::ActionPortSchema::type)
-      .def_readwrite("description", &actions::ActionPortSchema::description)
-      .def_readwrite("required", &actions::ActionPortSchema::required)
-      .def_readwrite("unary", &actions::ActionPortSchema::unary)
+          "Create a validated port schema.", py::arg("name"), py::arg("type"),
+          py::arg("description") = "", py::arg("required") = false,
+          py::arg("unary") = false, py::arg("autofills") = std::nullopt,
+          py::arg("typeinfo") = py::none())
+      .def_readwrite("name", &actions::ActionPortSchema::name,
+                     "The port's name.")
+      .def_readwrite("type", &actions::ActionPortSchema::type,
+                     "The port's data type name.")
+      .def_readwrite("description", &actions::ActionPortSchema::description,
+                     "Human-readable description of the port.")
+      .def_readwrite("required", &actions::ActionPortSchema::required,
+                     "Whether the port must be provided.")
+      .def_readwrite("unary", &actions::ActionPortSchema::unary,
+                     "Whether the port carries a single value.")
       .def_property(
           "typeinfo",
           [](const actions::ActionPortSchema& schema) -> py::object {
@@ -454,7 +497,8 @@ void BindActions(py::module_& module) {
           },
           [](actions::ActionPortSchema& schema, const py::object& value) {
             schema.typeinfo = PortSchemaTypeInfoFromPython(value);
-          })
+          },
+          "Optional Python type associated with the port, or None.")
       .def_property(
           "autofills",
           [](const actions::ActionPortSchema& schema) -> py::object {
@@ -463,32 +507,41 @@ void BindActions(py::module_& module) {
           [](actions::ActionPortSchema& schema, const py::object& value) {
             schema.autofills = ActionAutofillsFromPython(value);
             (void)ValidateSchema(schema);
-          })
-      .def("validate",
-           [](const actions::ActionPortSchema& schema) {
-             (void)ValidateSchema(schema);
-           })
-      .def(py::self == py::self);
+          },
+          "Node fragments used to autofill the port, or None entries.")
+      .def(
+          "validate",
+          [](const actions::ActionPortSchema& schema) {
+            (void)ValidateSchema(schema);
+          },
+          "Validate the port schema, raising on error.")
+      .def(py::self == py::self,
+           "Return True when two port schemas are equal.");
 
-  py::class_<actions::ActionHeaderSchema>(module, "ActionHeaderSchema")
-      .def(py::init([](std::string name, std::string description,
-                       const py::object& default_value) {
-             actions::ActionHeaderSchema result{
-                 .name = std::move(name),
-                 .description = std::move(description)};
-             if (!default_value.is_none()) {
-               if (!py::isinstance<py::bytes>(default_value)) {
-                 ThrowStatus(absl::InvalidArgumentError(
-                     "Action header default must be bytes or None"));
-               }
-               result.default_value = default_value.cast<std::string>();
-             }
-             return ValidateSchema(std::move(result));
-           }),
-           py::arg("name"), py::arg("description") = "",
-           py::arg("default") = py::none())
-      .def_readwrite("name", &actions::ActionHeaderSchema::name)
-      .def_readwrite("description", &actions::ActionHeaderSchema::description)
+  py::class_<actions::ActionHeaderSchema>(
+      module, "ActionHeaderSchema",
+      "Schema describing a single header of an action.")
+      .def(
+          py::init([](std::string name, std::string description,
+                      const py::object& default_value) {
+            actions::ActionHeaderSchema result{
+                .name = std::move(name),
+                .description = std::move(description)};
+            if (!default_value.is_none()) {
+              if (!py::isinstance<py::bytes>(default_value)) {
+                ThrowStatus(absl::InvalidArgumentError(
+                    "Action header default must be bytes or None"));
+              }
+              result.default_value = default_value.cast<std::string>();
+            }
+            return ValidateSchema(std::move(result));
+          }),
+          "Create a validated header schema.", py::arg("name"),
+          py::arg("description") = "", py::arg("default") = py::none())
+      .def_readwrite("name", &actions::ActionHeaderSchema::name,
+                     "The header's name.")
+      .def_readwrite("description", &actions::ActionHeaderSchema::description,
+                     "Human-readable description of the header.")
       .def_property(
           "default",
           [](const actions::ActionHeaderSchema& schema) -> py::object {
@@ -505,14 +558,20 @@ void BindActions(py::module_& module) {
               ThrowStatus(absl::InvalidArgumentError(
                   "Action header default must be bytes or None"));
             }
-          })
-      .def("validate",
-           [](const actions::ActionHeaderSchema& schema) {
-             (void)ValidateSchema(schema);
-           })
-      .def(py::self == py::self);
+          },
+          "Default header value as bytes, or None when unset.")
+      .def(
+          "validate",
+          [](const actions::ActionHeaderSchema& schema) {
+            (void)ValidateSchema(schema);
+          },
+          "Validate the header schema, raising on error.")
+      .def(py::self == py::self,
+           "Return True when two header schemas are equal.");
 
-  py::class_<actions::ActionSchema>(module, "ActionSchema")
+  py::class_<actions::ActionSchema>(
+      module, "ActionSchema",
+      "Schema describing an action's ports, headers and output mappings.")
       .def(
           py::init([](std::string name, std::string description,
                       const py::object& inputs, const py::object& outputs,
@@ -531,7 +590,8 @@ void BindActions(py::module_& module) {
                         headers, "ActionHeaderSchema"),
                 .output_to_json_field = std::move(output_to_json_field)});
           }),
-          py::arg("name"), py::arg("description") = "",
+          "Create a validated action schema.", py::arg("name"),
+          py::arg("description") = "",
           py::arg("inputs") =
               absl::flat_hash_map<std::string, actions::ActionPortSchema>{},
           py::arg("outputs") =
@@ -540,8 +600,10 @@ void BindActions(py::module_& module) {
               absl::flat_hash_map<std::string, actions::ActionHeaderSchema>{},
           py::arg("output_to_json_field") =
               absl::flat_hash_map<std::string, std::string>{})
-      .def_readwrite("name", &actions::ActionSchema::name)
-      .def_readwrite("description", &actions::ActionSchema::description)
+      .def_readwrite("name", &actions::ActionSchema::name,
+                     "The action's name.")
+      .def_readwrite("description", &actions::ActionSchema::description,
+                     "Human-readable description of the action.")
       .def_property(
           "inputs",
           [](actions::ActionSchema& schema) {
@@ -557,7 +619,8 @@ void BindActions(py::module_& module) {
               schema = std::move(previous);
               ThrowStatus(status);
             }
-          })
+          },
+          "Mapping of input port names to their port schemas.")
       .def_property(
           "outputs",
           [](actions::ActionSchema& schema) {
@@ -573,7 +636,8 @@ void BindActions(py::module_& module) {
               schema = std::move(previous);
               ThrowStatus(status);
             }
-          })
+          },
+          "Mapping of output port names to their port schemas.")
       .def_property(
           "headers",
           [](actions::ActionSchema& schema) {
@@ -589,7 +653,8 @@ void BindActions(py::module_& module) {
               schema = std::move(previous);
               ThrowStatus(status);
             }
-          })
+          },
+          "Mapping of header names to their header schemas.")
       .def_property(
           "output_to_json_field",
           [](actions::ActionSchema& schema) {
@@ -604,11 +669,14 @@ void BindActions(py::module_& module) {
               schema = std::move(previous);
               ThrowStatus(status);
             }
-          })
-      .def("validate",
-           [](const actions::ActionSchema& schema) {
-             (void)ValidateSchema(schema);
-           })
+          },
+          "Mapping of output port names to JSON field names.")
+      .def(
+          "validate",
+          [](const actions::ActionSchema& schema) {
+            (void)ValidateSchema(schema);
+          },
+          "Validate the action schema, raising on error.")
       .def(
           "map_output_to_json",
           [](actions::ActionSchema& schema, std::string output_name,
@@ -618,43 +686,56 @@ void BindActions(py::module_& module) {
             if (!status.ok())
               ThrowStatus(status);
           },
+          "Map an output port to a JSON field in the action's response.",
           py::arg("output_name"), py::arg("field_name") = "")
-      .def(py::self == py::self);
+      .def(py::self == py::self,
+           "Return True when two action schemas are equal.");
   module.attr("WHOLE_JSON") = std::string(actions::ActionSchema::kWholeJson);
 
   BindSchemaMapView(port_schema_map);
   BindSchemaMapView(header_schema_map);
   BindSchemaMapView(string_schema_map);
 
-  py::class_<actions::ActionSettings>(module, "ActionSettings",
-                                      py::dynamic_attr())
-      .def(py::init([](std::optional<bool> bind_inputs,
-                       std::optional<bool> bind_outputs, bool clear_inputs,
-                       bool clear_outputs) {
-             return actions::ActionSettings{
-                 .bind_streams_on_inputs_by_default = bind_inputs,
-                 .bind_streams_on_outputs_by_default = bind_outputs,
-                 .clear_inputs_after_run = clear_inputs,
-                 .clear_outputs_after_run = clear_outputs};
-           }),
-           py::arg("bind_streams_on_inputs_by_default") = std::nullopt,
-           py::arg("bind_streams_on_outputs_by_default") = std::nullopt,
-           py::arg("clear_inputs_after_run") = false,
-           py::arg("clear_outputs_after_run") = false)
+  py::class_<actions::ActionSettings>(
+      module, "ActionSettings",
+      "Runtime settings controlling an action's stream binding and cleanup.",
+      py::dynamic_attr())
+      .def(
+          py::init([](std::optional<bool> bind_inputs,
+                      std::optional<bool> bind_outputs, bool clear_inputs,
+                      bool clear_outputs) {
+            return actions::ActionSettings{
+                .bind_streams_on_inputs_by_default = bind_inputs,
+                .bind_streams_on_outputs_by_default = bind_outputs,
+                .clear_inputs_after_run = clear_inputs,
+                .clear_outputs_after_run = clear_outputs};
+          }),
+          "Create action settings.",
+          py::arg("bind_streams_on_inputs_by_default") = std::nullopt,
+          py::arg("bind_streams_on_outputs_by_default") = std::nullopt,
+          py::arg("clear_inputs_after_run") = false,
+          py::arg("clear_outputs_after_run") = false)
       .def_readwrite(
           "bind_streams_on_inputs_by_default",
-          &actions::ActionSettings::bind_streams_on_inputs_by_default)
+          &actions::ActionSettings::bind_streams_on_inputs_by_default,
+          "Default stream-binding behaviour for input ports, or None.")
       .def_readwrite(
           "bind_streams_on_outputs_by_default",
-          &actions::ActionSettings::bind_streams_on_outputs_by_default)
+          &actions::ActionSettings::bind_streams_on_outputs_by_default,
+          "Default stream-binding behaviour for output ports, or None.")
       .def_readwrite("clear_inputs_after_run",
-                     &actions::ActionSettings::clear_inputs_after_run)
+                     &actions::ActionSettings::clear_inputs_after_run,
+                     "Whether input ports are cleared after the action runs.")
       .def_readwrite("clear_outputs_after_run",
-                     &actions::ActionSettings::clear_outputs_after_run)
-      .def(py::self == py::self);
+                     &actions::ActionSettings::clear_outputs_after_run,
+                     "Whether output ports are cleared after the action runs.")
+      .def(py::self == py::self,
+           "Return True when two settings objects are equal.");
 
   py::class_<actions::Action, std::shared_ptr<actions::Action>> action(
-      module, "Action", py::dynamic_attr());
+      module, "Action",
+      "A runnable unit of work with typed input/output ports and headers.",
+      py::dynamic_attr());
   action
       .def(py::init([](actions::ActionSchema schema, std::string action_id,
                        const py::object& handler,
@@ -671,6 +752,7 @@ void BindActions(py::module_& module) {
                  std::move(stream), std::move(session), std::move(registry),
                  max_concurrent_nested_actions));
            }),
+           "Create an action from a schema and optional bindings.",
            py::arg("schema"), py::arg("action_id") = "",
            py::arg("handler") = py::none(), py::kw_only(),
            py::arg("node_map") = nullptr, py::arg("stream") = nullptr,
@@ -683,169 +765,238 @@ void BindActions(py::module_& module) {
           [](const std::string& action_id, const std::string& node_name) {
             return ValueOrThrow(
                 actions::Action::MakeNodeId(action_id, node_name));
-          })
-      .def_property("id", &actions::Action::GetId,
-                    [](actions::Action& self, std::string action_id) {
-                      ThrowIfNotOk(self.SetId(std::move(action_id)));
-                    })
-      .def("get_id", &actions::Action::GetId)
-      .def("set_id",
-           [](const std::shared_ptr<actions::Action>& self,
-              std::string action_id) {
-             return ReturnAction(self, self->SetId(std::move(action_id)));
-           })
-      .def_property("schema", &actions::Action::GetSchema,
-                    [](actions::Action& self, actions::ActionSchema schema) {
-                      ThrowIfNotOk(self.SetSchema(std::move(schema)));
-                    })
-      .def("get_schema", &actions::Action::GetSchema)
-      .def("set_schema",
-           [](const std::shared_ptr<actions::Action>& self,
-              actions::ActionSchema schema) {
-             return ReturnAction(self, self->SetSchema(std::move(schema)));
-           })
-      .def("bind_handler",
-           [](const std::shared_ptr<actions::Action>& self,
-              const py::object& handler) {
-             return ReturnAction(
-                 self,
-                 self->BindHandler(ValueOrThrow(MakeActionHandler(handler))));
-           })
-      .def("get_handler",
-           [](const actions::Action& self) {
-             return ActionHandlerToPython(self.GetHandler());
-           })
-      .def("has_handler", &actions::Action::HasHandler)
+          },
+          "Build the node id for a named port of the given action.",
+          py::arg("action_id"), py::arg("node_name"))
+      .def_property(
+          "id", &actions::Action::GetId,
+          [](actions::Action& self, std::string action_id) {
+            ThrowIfNotOk(self.SetId(std::move(action_id)));
+          },
+          "The action's id.")
+      .def("get_id", &actions::Action::GetId, "Return the action's id.")
+      .def(
+          "set_id",
+          [](const std::shared_ptr<actions::Action>& self,
+             std::string action_id) {
+            return ReturnAction(self, self->SetId(std::move(action_id)));
+          },
+          "Set the action's id and return the action.", py::arg("action_id"))
+      .def_property(
+          "schema", &actions::Action::GetSchema,
+          [](actions::Action& self, actions::ActionSchema schema) {
+            ThrowIfNotOk(self.SetSchema(std::move(schema)));
+          },
+          "The action's schema.")
+      .def("get_schema", &actions::Action::GetSchema,
+           "Return the action's schema.")
+      .def(
+          "set_schema",
+          [](const std::shared_ptr<actions::Action>& self,
+             actions::ActionSchema schema) {
+            return ReturnAction(self, self->SetSchema(std::move(schema)));
+          },
+          "Set the action's schema and return the action.", py::arg("schema"))
+      .def(
+          "bind_handler",
+          [](const std::shared_ptr<actions::Action>& self,
+             const py::object& handler) {
+            return ReturnAction(
+                self,
+                self->BindHandler(ValueOrThrow(MakeActionHandler(handler))));
+          },
+          "Bind the action's handler and return the action.",
+          py::arg("handler"))
+      .def(
+          "get_handler",
+          [](const actions::Action& self) {
+            return ActionHandlerToPython(self.GetHandler());
+          },
+          "Return the action's Python handler, or None.")
+      .def("has_handler", &actions::Action::HasHandler,
+           "Return True when the action has a handler bound.")
       .def_property(
           "settings", &actions::Action::GetSettings,
           [](actions::Action& self, actions::ActionSettings settings) {
             ThrowIfNotOk(self.SetSettings(std::move(settings)));
-          })
-      .def("bind_streams_on_inputs_by_default",
-           [](const std::shared_ptr<actions::Action>& self, bool bind) {
-             return ReturnAction(self,
-                                 self->BindStreamsOnInputsByDefault(bind));
-           })
-      .def("bind_streams_on_outputs_by_default",
-           [](const std::shared_ptr<actions::Action>& self, bool bind) {
-             return ReturnAction(self,
-                                 self->BindStreamsOnOutputsByDefault(bind));
-           })
+          },
+          "The action's runtime settings.")
+      .def(
+          "bind_streams_on_inputs_by_default",
+          [](const std::shared_ptr<actions::Action>& self, bool bind) {
+            return ReturnAction(self,
+                                self->BindStreamsOnInputsByDefault(bind));
+          },
+          "Set default stream binding for inputs and return the action.",
+          py::arg("bind"))
+      .def(
+          "bind_streams_on_outputs_by_default",
+          [](const std::shared_ptr<actions::Action>& self, bool bind) {
+            return ReturnAction(self,
+                                self->BindStreamsOnOutputsByDefault(bind));
+          },
+          "Set default stream binding for outputs and return the action.",
+          py::arg("bind"))
       .def(
           "clear_inputs_after_run",
           [](const std::shared_ptr<actions::Action>& self, bool clear) {
             return ReturnAction(self, self->ClearInputsAfterRun(clear));
           },
+          "Set whether inputs are cleared after run and return the action.",
           py::arg("clear") = true)
       .def(
           "clear_outputs_after_run",
           [](const std::shared_ptr<actions::Action>& self, bool clear) {
             return ReturnAction(self, self->ClearOutputsAfterRun(clear));
           },
+          "Set whether outputs are cleared after run and return the action.",
           py::arg("clear") = true)
-      .def("bind_node_map",
-           [](const std::shared_ptr<actions::Action>& self,
-              std::shared_ptr<nodes::NodeMap> node_map) {
-             return ReturnAction(self, self->BindNodeMap(std::move(node_map)));
-           })
-      .def("get_node_map", &actions::Action::GetNodeMap)
+      .def(
+          "bind_node_map",
+          [](const std::shared_ptr<actions::Action>& self,
+             std::shared_ptr<nodes::NodeMap> node_map) {
+            return ReturnAction(self, self->BindNodeMap(std::move(node_map)));
+          },
+          "Bind the action's node map and return the action.",
+          py::arg("node_map"))
+      .def("get_node_map", &actions::Action::GetNodeMap,
+           "Return the action's bound node map.")
       .def(
           "bind_stream",
           [](const std::shared_ptr<actions::Action>& self,
              std::shared_ptr<net::WireStream> stream) {
             return ReturnAction(self, self->BindStream(std::move(stream)));
           },
-          py::keep_alive<1, 2>())
-      .def("get_stream", &actions::Action::GetStream)
-      .def("bind_registry",
-           [](const std::shared_ptr<actions::Action>& self,
-              std::shared_ptr<actions::ActionRegistry> registry) {
-             return ReturnAction(self, self->BindRegistry(std::move(registry)));
-           })
-      .def("get_registry", &actions::Action::GetRegistry)
+          "Bind the action's wire stream and return the action.",
+          py::arg("stream"), py::keep_alive<1, 2>())
+      .def("get_stream", &actions::Action::GetStream,
+           "Return the action's bound wire stream.")
+      .def(
+          "bind_registry",
+          [](const std::shared_ptr<actions::Action>& self,
+             std::shared_ptr<actions::ActionRegistry> registry) {
+            return ReturnAction(self, self->BindRegistry(std::move(registry)));
+          },
+          "Bind the action's registry and return the action.",
+          py::arg("registry"))
+      .def("get_registry", &actions::Action::GetRegistry,
+           "Return the action's bound registry.")
       .def(
           "bind_session",
           [](const std::shared_ptr<actions::Action>& self,
              std::shared_ptr<service::Session> session) {
             return ReturnAction(self, self->BindSession(std::move(session)));
           },
-          py::keep_alive<1, 2>())
-      .def("get_session", &actions::Action::GetSession)
-      .def("get_node",
-           [](actions::Action& self, std::string node_id) {
-             return ValueOrThrow(self.GetNode(std::move(node_id)));
-           })
+          "Bind the action's session and return the action.",
+          py::arg("session"), py::keep_alive<1, 2>())
+      .def("get_session", &actions::Action::GetSession,
+           "Return the action's bound session.")
+      .def(
+          "get_node",
+          [](actions::Action& self, std::string node_id) {
+            return ValueOrThrow(self.GetNode(std::move(node_id)));
+          },
+          "Return the async node with the given id.", py::arg("node_id"))
       .def(
           "get_input",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
             return ValueOrThrow(self.GetInput(std::move(name), bind_stream));
           },
-          py::arg("name"), py::arg("bind_stream") = std::nullopt)
+          "Return the input port node with the given name.", py::arg("name"),
+          py::arg("bind_stream") = std::nullopt)
       .def(
           "get_output",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
             return ValueOrThrow(self.GetOutput(std::move(name), bind_stream));
           },
-          py::arg("name"), py::arg("bind_stream") = std::nullopt)
-      .def("get_port",
-           [](actions::Action& self, std::string name) {
-             return ValueOrThrow(self.GetPort(std::move(name)));
-           })
-      .def("__getitem__",
-           [](actions::Action& self, std::string name) {
-             return ValueOrThrow(self.GetPort(std::move(name)));
-           })
-      .def("contains_port", &actions::Action::ContainsPort)
-      .def("__contains__", &actions::Action::ContainsPort)
-      .def("get_action_message", &actions::Action::GetActionMessage)
-      .def("map_ports_from_message",
-           [](const std::shared_ptr<actions::Action>& self,
-              const data::ActionMessage& message) {
-             return ReturnAction(self, self->MapPortsFromMessage(message));
-           })
-      .def_property_readonly("headers",
-                             [](const actions::Action& self) {
-                               return ByteMapToPython(self.Headers());
-                             })
-      .def("get_header",
-           [](const actions::Action& self,
-              const std::string& name) -> py::object {
-             absl::StatusOr<std::optional<data::Bytes>> value =
-                 self.GetHeader(name);
-             if (!value.ok())
-               ThrowStatus(value.status());
-             if (!value->has_value())
-               return py::none();
-             return py::bytes(**value);
-           })
-      .def("has_header", &actions::Action::HasHeader)
-      .def("set_header",
-           [](const std::shared_ptr<actions::Action>& self, std::string name,
-              const py::object& value) {
-             std::string bytes;
-             if (py::isinstance<py::bytes>(value)) {
-               bytes = value.cast<std::string>();
-             } else if (py::isinstance<py::str>(value)) {
-               bytes = py::str(value).attr("encode")().cast<std::string>();
-             } else {
-               ThrowStatus(absl::InvalidArgumentError(
-                   "header value must be str or bytes"));
-             }
-             return ReturnAction(
-                 self, self->SetHeader(std::move(name), std::move(bytes)));
-           })
-      .def("remove_header",
-           [](actions::Action& self, const std::string& name) {
-             ThrowIfNotOk(self.RemoveHeader(name));
-           })
-      .def("forward_header",
-           [](const actions::Action& self,
-              const std::shared_ptr<actions::Action>& target,
-              const std::string& name) {
-             ThrowIfNotOk(self.ForwardHeader(target, name));
-           })
+          "Return the output port node with the given name.", py::arg("name"),
+          py::arg("bind_stream") = std::nullopt)
+      .def(
+          "get_port",
+          [](actions::Action& self, std::string name) {
+            return ValueOrThrow(self.GetPort(std::move(name)));
+          },
+          "Return the port node with the given name.", py::arg("name"))
+      .def(
+          "__getitem__",
+          [](actions::Action& self, std::string name) {
+            return ValueOrThrow(self.GetPort(std::move(name)));
+          },
+          "Return the port node with the given name.", py::arg("name"))
+      .def("contains_port", &actions::Action::ContainsPort,
+           "Return True when the action has a port with the given name.",
+           py::arg("name"))
+      .def("__contains__", &actions::Action::ContainsPort,
+           "Return True when the action has a port with the given name.",
+           py::arg("name"))
+      .def("get_action_message", &actions::Action::GetActionMessage,
+           "Return the action's wire message representation.")
+      .def(
+          "map_ports_from_message",
+          [](const std::shared_ptr<actions::Action>& self,
+             const data::ActionMessage& message) {
+            return ReturnAction(self, self->MapPortsFromMessage(message));
+          },
+          "Map the action's ports from a wire message and return the action.",
+          py::arg("message"))
+      .def_property_readonly(
+          "headers",
+          [](const actions::Action& self) {
+            return ByteMapToPython(self.Headers());
+          },
+          "The action's headers as a mapping of name to bytes.")
+      .def(
+          "get_header",
+          [](const actions::Action& self,
+             const std::string& name) -> py::object {
+            absl::StatusOr<std::optional<data::Bytes>> value =
+                self.GetHeader(name);
+            if (!value.ok())
+              ThrowStatus(value.status());
+            if (!value->has_value())
+              return py::none();
+            return py::bytes(**value);
+          },
+          "Return the header value as bytes, or None when absent.",
+          py::arg("name"))
+      .def("has_header", &actions::Action::HasHeader,
+           "Return True when the action has a header with the given name.",
+           py::arg("name"))
+      .def(
+          "set_header",
+          [](const std::shared_ptr<actions::Action>& self, std::string name,
+             const py::object& value) {
+            std::string bytes;
+            if (py::isinstance<py::bytes>(value)) {
+              bytes = value.cast<std::string>();
+            } else if (py::isinstance<py::str>(value)) {
+              bytes = py::str(value).attr("encode")().cast<std::string>();
+            } else {
+              ThrowStatus(absl::InvalidArgumentError(
+                  "header value must be str or bytes"));
+            }
+            return ReturnAction(
+                self, self->SetHeader(std::move(name), std::move(bytes)));
+          },
+          "Set a header from a str or bytes value and return the action.",
+          py::arg("name"), py::arg("value"))
+      .def(
+          "remove_header",
+          [](actions::Action& self, const std::string& name) {
+            ThrowIfNotOk(self.RemoveHeader(name));
+          },
+          "Remove the header with the given name.", py::arg("name"))
+      .def(
+          "forward_header",
+          [](const actions::Action& self,
+             const std::shared_ptr<actions::Action>& target,
+             const std::string& name) {
+            ThrowIfNotOk(self.ForwardHeader(target, name));
+          },
+          "Copy a single header from this action to a target action.",
+          py::arg("target"), py::arg("name"))
       .def(
           "forward_headers_with_prefix",
           [](const actions::Action& self,
@@ -853,6 +1004,7 @@ void BindActions(py::module_& module) {
              const std::string& prefix) {
             ThrowIfNotOk(self.ForwardHeadersWithPrefix(target, prefix));
           },
+          "Copy all headers with the given prefix to a target action.",
           py::arg("target"),
           py::arg("prefix") = std::string(actions::kActionHeaderPrefix))
       .def(
@@ -862,8 +1014,8 @@ void BindActions(py::module_& module) {
             return ValueOrThrow(
                 self.MakeNested(schema, propagate_io, forward_headers));
           },
-          py::arg("schema"), py::arg("propagate_io") = true,
-          py::arg("forward_headers") = true)
+          "Create a nested child action from a schema.", py::arg("schema"),
+          py::arg("propagate_io") = true, py::arg("forward_headers") = true)
       .def(
           "make_nested",
           [](actions::Action& self, const std::string& action_name,
@@ -871,10 +1023,13 @@ void BindActions(py::module_& module) {
             return ValueOrThrow(
                 self.MakeNested(action_name, propagate_io, forward_headers));
           },
+          "Create a nested child action from a registered action name.",
           py::arg("action_name"), py::arg("propagate_io") = true,
           py::arg("forward_headers") = true)
-      .def("run",
-           [](actions::Action& self) { return ValueOrThrow(self.Run()); })
+      .def(
+          "run", [](actions::Action& self) { return ValueOrThrow(self.Run()); },
+          "Run the action's handler synchronously and return the action. The "
+          "Python layer also exposes this as run_in_background.")
       .def(
           "call",
           [](const std::shared_ptr<actions::Action>& self,
@@ -888,6 +1043,7 @@ void BindActions(py::module_& module) {
             }
             return FutureToPython(self->Call(std::move(*converted)));
           },
+          "Dispatch the action remotely and return a future of the action.",
           py::arg("wire_headers") = py::none())
       .def(
           "wait_for_dispatch",
@@ -901,6 +1057,7 @@ void BindActions(py::module_& module) {
             }
             return FutureToPython(self->WaitForDispatch(*converted));
           },
+          "Return a future that resolves when the action has been dispatched.",
           py::arg("timeout") = py::none())
       .def(
           "wait",
@@ -915,16 +1072,27 @@ void BindActions(py::module_& module) {
             }
             return FutureToPython(self->Wait(*converted));
           },
+          "Return a future that resolves when the action completes.",
           py::arg("timeout") = py::none())
-      .def("cancel", [](actions::Action& self) { ThrowIfNotOk(self.Cancel()); })
-      .def("set_on_cancelled",
-           [](actions::Action& self, const py::object& callback) {
-             actions::SyncActionHandler native =
-                 ValueOrThrow(MakeSyncActionHandler(callback));
-             ThrowIfNotOk(self.SetOnCancelled(std::move(native)));
-           })
-      .def_property_readonly("trace_id", &actions::Action::TraceId)
-      .def_property_readonly("span_id", &actions::Action::SpanId)
+      .def(
+          "cancel", [](actions::Action& self) { ThrowIfNotOk(self.Cancel()); },
+          "Cancel the action.")
+      .def(
+          "set_on_cancelled",
+          [](actions::Action& self, const py::object& callback) {
+            actions::SyncActionHandler native =
+                ValueOrThrow(MakeSyncActionHandler(callback));
+            ThrowIfNotOk(self.SetOnCancelled(std::move(native)));
+          },
+          "Register a synchronous callback invoked when the action is "
+          "cancelled.",
+          py::arg("callback"))
+      .def_property_readonly(
+          "trace_id", &actions::Action::TraceId,
+          "The action's trace id as lowercase hex, or empty when untraced.")
+      .def_property_readonly(
+          "span_id", &actions::Action::SpanId,
+          "The action's span id as lowercase hex, or empty when untraced.")
       .def(
           "set_span_attribute",
           [](actions::Action& self, const std::string& key,
@@ -940,13 +1108,14 @@ void BindActions(py::module_& module) {
               self.SetSpanAttribute(key, py::str(value).cast<std::string>());
             }
           },
+          "Set an attribute on the action's span; no-op when untraced.",
           py::arg("key"), py::arg("value"))
       .def(
           "set_span_name",
           [](actions::Action& self, const std::string& name) {
             self.SetSpanName(name);
           },
-          py::arg("name"))
+          "Set the name of the action's span.", py::arg("name"))
       .def(
           "set_span_status",
           [](actions::Action& self, const std::string& code,
@@ -962,24 +1131,35 @@ void BindActions(py::module_& module) {
             }
             self.SetSpanStatus(status, description);
           },
+          "Set the span status explicitly ('ok', 'error' or 'unset').",
           py::arg("code"), py::arg("description") = "")
-      .def("is_done", &actions::Action::IsDone)
-      .def("has_been_run", &actions::Action::HasBeenRun)
-      .def("has_been_called", &actions::Action::HasBeenCalled)
-      .def("cancelled", &actions::Action::Cancelled)
-      .def("get_status",
-           [](const actions::Action& self) {
-             return StatusObject(self.GetStatus());
-           })
-      .def("get_dispatch_status",
-           [](const actions::Action& self) -> py::object {
-             std::optional<absl::Status> status = self.GetDispatchStatus();
-             return status.has_value() ? StatusToPython(*status) : py::none();
-           });
+      .def("is_done", &actions::Action::IsDone,
+           "Return True when the action has finished.")
+      .def("has_been_run", &actions::Action::HasBeenRun,
+           "Return True when the action has been run locally.")
+      .def("has_been_called", &actions::Action::HasBeenCalled,
+           "Return True when the action has been dispatched remotely.")
+      .def("cancelled", &actions::Action::Cancelled,
+           "Return True when the action has been cancelled.")
+      .def(
+          "get_status",
+          [](const actions::Action& self) {
+            return StatusObject(self.GetStatus());
+          },
+          "Return the action's completion status.")
+      .def(
+          "get_dispatch_status",
+          [](const actions::Action& self) -> py::object {
+            std::optional<absl::Status> status = self.GetDispatchStatus();
+            return status.has_value() ? StatusToPython(*status) : py::none();
+          },
+          "Return the action's dispatch status, or None when not dispatched.");
 
   py::class_<actions::ActionRegistry, std::shared_ptr<actions::ActionRegistry>>(
-      module, "ActionRegistry", py::dynamic_attr())
-      .def(py::init<>())
+      module, "ActionRegistry",
+      "Registry mapping action names to their schemas and handlers.",
+      py::dynamic_attr())
+      .def(py::init<>(), "Create an empty action registry.")
       .def(
           "register",
           [](actions::ActionRegistry& self, std::string name,
@@ -988,6 +1168,7 @@ void BindActions(py::module_& module) {
                 self.Register(std::move(name), std::move(schema),
                               ValueOrThrow(MakeActionHandler(handler))));
           },
+          "Register an action with a schema and optional async handler.",
           py::arg("action_name"), py::arg("schema"),
           py::arg("handler") = py::none())
       .def(
@@ -998,20 +1179,32 @@ void BindActions(py::module_& module) {
                 std::move(name), std::move(schema),
                 ValueOrThrow(MakeSyncActionHandler(handler))));
           },
+          "Register an action with a schema and a synchronous handler.",
           py::arg("action_name"), py::arg("schema"), py::arg("handler"))
-      .def("unregister",
-           [](actions::ActionRegistry& self, const std::string& name) {
-             ThrowIfNotOk(self.Unregister(name));
-           })
-      .def("is_registered", &actions::ActionRegistry::IsRegistered)
-      .def("get_schema",
-           [](const actions::ActionRegistry& self, const std::string& name) {
-             return ValueOrThrow(self.GetSchema(name));
-           })
-      .def("get_handler",
-           [](const actions::ActionRegistry& self, const std::string& name) {
-             return ActionHandlerToPython(ValueOrThrow(self.GetHandler(name)));
-           })
+      .def(
+          "unregister",
+          [](actions::ActionRegistry& self, const std::string& name) {
+            ThrowIfNotOk(self.Unregister(name));
+          },
+          "Remove the action with the given name from the registry.",
+          py::arg("action_name"))
+      .def("is_registered", &actions::ActionRegistry::IsRegistered,
+           "Return True when an action with the given name is registered.",
+           py::arg("action_name"))
+      .def(
+          "get_schema",
+          [](const actions::ActionRegistry& self, const std::string& name) {
+            return ValueOrThrow(self.GetSchema(name));
+          },
+          "Return the schema registered under the given action name.",
+          py::arg("action_name"))
+      .def(
+          "get_handler",
+          [](const actions::ActionRegistry& self, const std::string& name) {
+            return ActionHandlerToPython(ValueOrThrow(self.GetHandler(name)));
+          },
+          "Return the Python handler registered under the given action name.",
+          py::arg("action_name"))
       .def(
           "make_action",
           [](actions::ActionRegistry& self, const std::string& action_name,
@@ -1022,6 +1215,7 @@ void BindActions(py::module_& module) {
                 action_name, std::move(action_id), std::move(node_map),
                 std::move(stream), std::move(session)));
           },
+          "Create an action instance from a registered action name.",
           py::arg("action_name"), py::arg("action_id") = "",
           py::arg("node_map") = nullptr, py::arg("stream") = nullptr,
           py::arg("session") = nullptr, py::keep_alive<0, 5>(),
@@ -1033,19 +1227,30 @@ void BindActions(py::module_& module) {
             return ValueOrThrow(
                 self.MakeActionMessage(action_name, std::move(action_id)));
           },
+          "Create a wire action message for a registered action name.",
           py::arg("action_name"), py::arg("action_id") = "")
       .def("list_registered_actions",
-           &actions::ActionRegistry::ListRegisteredActions)
+           &actions::ActionRegistry::ListRegisteredActions,
+           "Return the names of all registered actions.")
       .def("copy", &actions::ActionRegistry::Copy,
+           "Return a copy of the registry, optionally clearing autofills.",
            py::arg("clear_autofills") = true);
 
-  module.def("status_to_chunk", [](const py::handle& status) {
-    return ValueOrThrow(actions::StatusToChunk(StatusFromPython(status)));
-  });
-  module.def("status_from_chunk", [](const data::Chunk& chunk) {
-    return StatusToPython(ValueOrThrow(actions::StatusFromChunk(chunk)));
-  });
-  module.def("is_status_chunk", &actions::IsStatusChunk);
+  module.def(
+      "status_to_chunk",
+      [](const py::handle& status) {
+        return ValueOrThrow(actions::StatusToChunk(StatusFromPython(status)));
+      },
+      "Encode an absl Status as a data chunk.", py::arg("status"));
+  module.def(
+      "status_from_chunk",
+      [](const data::Chunk& chunk) {
+        return StatusToPython(ValueOrThrow(actions::StatusFromChunk(chunk)));
+      },
+      "Decode an absl Status from a data chunk.", py::arg("chunk"));
+  module.def("is_status_chunk", &actions::IsStatusChunk,
+             "Return True when the chunk carries an action status.",
+             py::arg("chunk"));
   module.attr("ACTION_STATUS_MIMETYPE") =
       std::string(actions::kActionStatusMimetype);
   module.attr("ACTION_STATUS_OUTPUT") =

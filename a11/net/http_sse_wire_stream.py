@@ -1,6 +1,15 @@
-"""Native HTTP/2 Server-Sent Events wire streams."""
+"""Native HTTP/2 Server-Sent Events wire streams.
+
+An HTTP SSE wire stream carries A11 [WireMessage][a11.data.types.WireMessage]
+traffic
+over an HTTP/2 Server-Sent-Events channel -- a firewall-friendly alternative to
+WebSockets when only ordinary HTTP is available. See
+[a11.net.wire_stream][a11.net.wire_stream]
+for the transport-agnostic interface these implement.
+"""
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 
 from .http2 import Http2Client, Http2Options, Http2Server
 from .wire_stream import WireStream, WireStreamOptions
@@ -10,25 +19,26 @@ DEFAULT_MESSAGE_ENDPOINT = _native.DEFAULT_SSE_MESSAGE_ENDPOINT
 HTTP_HEADER_PREFIX = _native.SSE_HTTP_HEADER_PREFIX
 STREAM_ID_HEADER = _native.SSE_STREAM_ID_HEADER
 
-HttpSseOptions = _native.HttpSseOptions
-HttpSseWireStream = _native.HttpSseWireStream
-HttpSseClientWireStream = _native.HttpSseClientWireStream
-HttpSseServerWireStream = _native.HttpSseServerWireStream
-HttpSseServer = _native.HttpSseServer
-HttpSseWireStreamServer = _native.HttpSseWireStreamServer
+from a11._native import HttpSseOptions
+from a11._native import HttpSseWireStream
+from a11._native import HttpSseClientWireStream
+from a11._native import HttpSseServerWireStream
+from a11._native import HttpSseServer
+from a11._native import HttpSseWireStreamServer
 
 
-def _server_enter(server: HttpSseServer) -> HttpSseServer:
-    return server
+class _HttpSseServerProtocol:
+    """Context-manager protocol for the SSE server (``stop`` on exit)."""
+
+    def __enter__(self) -> "HttpSseServer":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.stop()
 
 
-def _server_exit(server: HttpSseServer, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    server.stop()
-
-
-HttpSseServer.__enter__ = _server_enter
-HttpSseServer.__exit__ = _server_exit
+attach_protocol(HttpSseServer, _HttpSseServerProtocol)
 
 for _class in (
     HttpSseOptions,

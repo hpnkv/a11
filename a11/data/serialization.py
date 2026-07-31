@@ -1,4 +1,4 @@
-"""Serialization of Python objects to and from :class:`~a11.data.types.Chunk`.
+"""Serialization of Python objects to and from [Chunk][a11.data.types.Chunk].
 
 The registry deliberately separates a media type (the representation) from a
 Python type.  A serialized chunk combines the two by adding a stable ``type``
@@ -392,9 +392,9 @@ class SerializationRegistry:
     """A registry of serializers and deserializers indexed by type and MIME.
 
     New registries are empty.  Pass ``register_defaults=True`` or call
-    :meth:`register_defaults` to install the built-in JSON and MessagePack
+    `register_defaults` to install the built-in JSON and MessagePack
     codecs.  The process-wide registry returned by
-    :func:`get_global_serialization_registry` already contains them.
+    `get_global_serialization_registry` already contains them.
     """
 
     @_status_boundary
@@ -487,7 +487,7 @@ class SerializationRegistry:
 
         A deserializer may accept either ``data`` or ``data, obj_type``.  A
         callback whose first argument is named ``chunk`` (or is annotated as a
-        :class:`Chunk`) receives the complete chunk instead of ``chunk.data``.
+        `Chunk`) receives the complete chunk instead of ``chunk.data``.
         ``receives_chunk`` can be used to select that behavior explicitly.
         """
 

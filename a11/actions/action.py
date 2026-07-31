@@ -15,9 +15,10 @@ from a11.actions._native_action import Action
 from a11.data import types
 from a11.status import Status, StatusCode, StatusException
 
-ACTION_STATUS_MIMETYPE = _native.ACTION_STATUS_MIMETYPE
-ACTION_STATUS_OUTPUT = _native.ACTION_STATUS_OUTPUT
-ACTION_DISPATCH_STATUS_OUTPUT = _native.ACTION_DISPATCH_STATUS_OUTPUT
+from a11._native import ACTION_STATUS_MIMETYPE
+from a11._native import ACTION_STATUS_OUTPUT
+from a11._native import ACTION_DISPATCH_STATUS_OUTPUT
+
 CANCEL_ACTION_NAME = getattr(_native, "CANCEL_ACTION_NAME", "__cancel__")
 CANCEL_ACTION_HEADER = getattr(_native, "CANCEL_ACTION_HEADER", "__action")
 ACTION_HEADER_PREFIX = getattr(_native, "ACTION_HEADER_PREFIX", "x-a11-")
@@ -30,10 +31,10 @@ ActionHandler = Callable[["Action"], Awaitable[None] | None]
 OnActionCancelled = Callable[["Action"], Any]
 
 
-ActionPortSchema = _native.ActionPortSchema
-ActionHeaderSchema = _native.ActionHeaderSchema
-ActionSchema = _native.ActionSchema
-ActionSettings = _native.ActionSettings
+from a11._native import ActionPortSchema
+from a11._native import ActionHeaderSchema
+from a11._native import ActionSchema
+from a11._native import ActionSettings
 
 for _schema_type in (
     ActionPortSchema,

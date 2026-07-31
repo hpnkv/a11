@@ -2,15 +2,16 @@
 
 """Top-level argument parsing and command dispatch for the ``a11`` CLI.
 
-The CLI is intentionally thin: :func:`build_parser` assembles an
-:mod:`argparse` parser from a registry of :class:`Command` objects, and
-:func:`main` parses ``argv``, then runs the selected command's coroutine on a
+The CLI is intentionally thin: `build_parser` assembles an
+`argparse` parser from a registry of `Command` objects, and
+`main` parses ``argv``, then runs the selected command's coroutine on a
 fresh event loop. Commands are async by default so they compose naturally with
 A11's asyncio-based runtime.
 
 Adding a command is a two-step affair: write a module under
-:mod:`a11.cli.commands` that builds a :class:`Command`, then list it in
-:data:`a11.cli.commands.COMMANDS`. No changes here are required.
+[a11.cli.commands][a11.cli.commands] that builds a `Command`, then list it in
+[a11.cli.commands.COMMANDS][a11.cli.commands.COMMANDS]. No changes here are
+required.
 """
 
 from __future__ import annotations
@@ -31,10 +32,12 @@ class Command:
     Attributes:
         name: The subcommand token, e.g. ``"chat"``.
         help: One-line summary shown in ``a11 --help``.
-        run: Coroutine invoked with the parsed :class:`argparse.Namespace`.
+        run: Coroutine invoked with the parsed
+        [argparse.Namespace][argparse.Namespace].
             Returns a process exit code (0 for success).
         configure: Optional hook that receives the subcommand's
-            :class:`argparse.ArgumentParser` to declare its arguments.
+            [argparse.ArgumentParser][argparse.ArgumentParser] to declare its
+            arguments.
         description: Longer help shown in ``a11 <name> --help`` (defaults to
             ``help``).
     """

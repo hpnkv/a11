@@ -3,7 +3,8 @@
 """``a11 chat [claude|gemini] [model]`` — an interactive LLM chat.
 
 Thin wrapper: it parses the backend/model arguments and hands off to
-:func:`a11.cli.chat_ui.run_chat`, where the actual conversation loop lives.
+[a11.cli.chat_ui.run_chat][a11.cli.chat_ui.run_chat], where the actual
+conversation loop lives.
 """
 
 from __future__ import annotations

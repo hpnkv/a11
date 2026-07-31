@@ -1,4 +1,12 @@
-"""Python-facing nghttp2 client, server, and streaming primitives."""
+"""Python-facing nghttp2 client, server, and streaming primitives.
+
+These are A11's HTTP/2 building blocks -- an `Http2Client`,
+`Http2Server`, and the request/response body streams -- that underpin the
+WebSocket and HTTP SSE wire-stream transports. Most agents use them only
+indirectly through
+[a11.net.websocket_wire_stream][a11.net.websocket_wire_stream] or
+[a11.net.http_sse_wire_stream][a11.net.http_sse_wire_stream].
+"""
 
 from __future__ import annotations
 
@@ -6,68 +14,72 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TypeAlias
 
 from a11 import _native
+from a11._native_protocol import attach_protocol
 
 HttpHeaders: TypeAlias = Mapping[str, str] | Sequence[tuple[str, str]]
 HttpRequestHandler: TypeAlias = Callable[
     ["HttpRequest", "Http2ResponseWriter"], Awaitable[None]
 ]
 
-HttpRequest = _native.HttpRequest
-HttpResponseHead = _native.HttpResponseHead
-HttpResponse = _native.HttpResponse
-Http2TlsOptions = _native.Http2TlsOptions
-Http2Options = _native.Http2Options
-Http2RequestBodyStream = _native.Http2RequestBodyStream
-Http2ResponseStream = _native.Http2ResponseStream
-Http2DuplexStream = _native.Http2DuplexStream
-Http2ResponseWriter = _native.Http2ResponseWriter
-Http2Server = _native.Http2Server
-Http2Client = _native.Http2Client
+from a11._native import HttpRequest
+from a11._native import HttpResponseHead
+from a11._native import HttpResponse
+from a11._native import Http2TlsOptions
+from a11._native import Http2Options
+from a11._native import Http2RequestBodyStream
+from a11._native import Http2ResponseStream
+from a11._native import Http2DuplexStream
+from a11._native import Http2ResponseWriter
+from a11._native import Http2Server
+from a11._native import Http2Client
 
 get_http_header = _native.get_http_header
 validate_http_headers = _native.validate_http_headers
 
 
-def _server_enter(server: Http2Server) -> Http2Server:
-    return server
+class _Http2ServerProtocol:
+    """Context-manager protocol for the server (``stop`` on exit)."""
+
+    def __enter__(self) -> "Http2Server":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.stop()
 
 
-def _server_exit(server: Http2Server, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    server.stop()
+class _Http2ClientProtocol:
+    """Async context-manager protocol for the client (``close`` on exit)."""
+
+    async def __aenter__(self) -> "Http2Client":
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.close()
 
 
-async def _client_aenter(client: Http2Client) -> Http2Client:
-    return client
+class _Http2ByteStreamProtocol:
+    """Async-iteration protocol yielding body bytes until the stream ends."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        data = await self.read()
+        if data is None:
+            raise StopAsyncIteration
+        return data
 
 
-async def _client_aexit(client: Http2Client, exc_type, exc, traceback) -> None:
-    del exc_type, exc, traceback
-    client.close()
-
-
-def _stream_aiter(stream):
-    return stream
-
-
-async def _stream_anext(stream) -> bytes:
-    data = await stream.read()
-    if data is None:
-        raise StopAsyncIteration
-    return data
-
-
-Http2Server.__enter__ = _server_enter
-Http2Server.__exit__ = _server_exit
-Http2Client.__aenter__ = _client_aenter
-Http2Client.__aexit__ = _client_aexit
+attach_protocol(Http2Server, _Http2ServerProtocol)
+attach_protocol(Http2Client, _Http2ClientProtocol)
 for _stream_type in (
     Http2RequestBodyStream,
     Http2ResponseStream,
     Http2DuplexStream,
 ):
-    _stream_type.__aiter__ = _stream_aiter
-    _stream_type.__anext__ = _stream_anext
+    attach_protocol(_stream_type, _Http2ByteStreamProtocol)
 
 for _class in (
     HttpRequest,

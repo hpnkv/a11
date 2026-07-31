@@ -43,26 +43,32 @@ class CreateInteractionConfig(BaseModel):
             " transcript every turn (`full-history`), or try the former and"
             " fall back to the latter (`auto`)."
         ),
+        exclude_if=lambda x: x == "auto",
     )
     thinking_level: Literal["minimal", "low", "medium", "high"] | None = Field(
         default=None,
         description="How much internal reasoning the model may spend.",
+        exclude_if=lambda x: x is None,
     )
     thinking_summaries: bool = Field(
         default=False,
         description="Stream summaries of the model's reasoning as it thinks.",
+        exclude_if=lambda x: not x,
     )
     google_search: bool = Field(
         default=False,
         description="Enable the built-in Google Search grounding tool.",
+        exclude_if=lambda x: not x,
     )
     code_execution: bool = Field(
         default=False,
         description="Enable the built-in code execution tool.",
+        exclude_if=lambda x: not x,
     )
     url_context: bool = Field(
         default=False,
         description="Enable the built-in URL context tool.",
+        exclude_if=lambda x: not x,
     )
 
 
@@ -99,6 +105,16 @@ INTERACT_WITH_GEMINI_SCHEMA = a11.ActionSchema(
             typeinfo=dict,
             required=False,
         ),
+        "thoughts": a11.ActionPortSchema(
+            "thoughts",
+            "text/plain",
+            required=False,
+        ),
+        "text_output": a11.ActionPortSchema(
+            "text_output",
+            "text/plain",
+            required=False,
+        ),
         "new_interactions": a11.ActionPortSchema(
             "new_interactions",
             "application/json",
@@ -110,6 +126,10 @@ INTERACT_WITH_GEMINI_SCHEMA = a11.ActionSchema(
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "Gemini API key."
+        ),
+        LlmHeaders.ALLOWED_LLM_ACTIONS: a11.ActionHeaderSchema(
+            LlmHeaders.ALLOWED_LLM_ACTIONS,
+            "The allowed LLM action (tool) name patterns, comma-separated.",
         ),
     },
 )

@@ -1,6 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
-from typing import Any
+from typing import Any, Literal
 
 import a11
 from pydantic import BaseModel, Field
@@ -10,9 +10,54 @@ from a11.status import Status, StatusCode
 
 
 class CreateMessageConfig(BaseModel):
+    """Parameters for creating a Claude message.
+
+    These are the request-scoped knobs the Messages API expects on every
+    `messages.create` call (Claude does not carry them across turns), plus
+    toggles for the model's built-in, server-side tools. Registry-backed A11
+    actions are surfaced separately through the `tools` input port.
+    """
+
     max_tokens: int = Field(
         default=10240,
-        description="Maximum number of tokens to generate",
+        description="Maximum number of tokens to generate.",
+    )
+    thinking: bool = Field(
+        default=False,
+        description=(
+            "Enable adaptive thinking so the model decides when and how much"
+            " internal reasoning to spend. Unsupported alongside tools and on"
+            " Haiku models."
+        ),
+        exclude_if=lambda x: not x,
+    )
+    thinking_summaries: bool = Field(
+        default=False,
+        description="Stream summaries of the model's reasoning as it thinks.",
+        exclude_if=lambda x: not x,
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None,
+        description=(
+            "Overall thinking depth and token spend. Only honoured on models"
+            " that support the effort parameter."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    web_search: bool = Field(
+        default=False,
+        description="Enable the built-in web search tool.",
+        exclude_if=lambda x: not x,
+    )
+    web_fetch: bool = Field(
+        default=False,
+        description="Enable the built-in web fetch tool.",
+        exclude_if=lambda x: not x,
+    )
+    code_execution: bool = Field(
+        default=False,
+        description="Enable the built-in code execution tool.",
+        exclude_if=lambda x: not x,
     )
 
 
@@ -49,6 +94,16 @@ INTERACT_WITH_CLAUDE_SCHEMA = a11.ActionSchema(
             typeinfo=dict,
             required=False,
         ),
+        "thoughts": a11.ActionPortSchema(
+            "thoughts",
+            "text/plain",
+            required=False,
+        ),
+        "text_output": a11.ActionPortSchema(
+            "text_output",
+            "text/plain",
+            required=False,
+        ),
         "new_interactions": a11.ActionPortSchema(
             "new_interactions",
             "application/json",
@@ -60,6 +115,10 @@ INTERACT_WITH_CLAUDE_SCHEMA = a11.ActionSchema(
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "Anthropic API key."
+        ),
+        LlmHeaders.ALLOWED_LLM_ACTIONS: a11.ActionHeaderSchema(
+            LlmHeaders.ALLOWED_LLM_ACTIONS,
+            "The allowed action (tool) name patterns, comma-separated.",
         ),
     },
 )

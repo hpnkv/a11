@@ -16,8 +16,18 @@ dependencies = [
     "httpx>=0.28.1",
     "msgpack>=1.2.1",
     "ormsgpack>=1.12.2",
+    "prompt-toolkit>=3.0.0",
     "pydantic>=2.13.4",
+    "rich>=13.0.0",
 ]
+
+[project.scripts]
+a11 = "a11.cli.__main__:main"
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.120.0"]
+gemini = ["google-genai>=1.55.0"]
+llm = ["anthropic>=0.120.0", "google-genai>=1.55.0"]
 
 [tool.scikit-build]
 cmake.source-dir = "cpp"

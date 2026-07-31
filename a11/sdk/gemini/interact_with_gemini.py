@@ -59,6 +59,12 @@ _STEP_TYPES = frozenset(
 _MODEL_STEP_TYPES = frozenset({"model_output", "function_call", "thought"})
 
 
+async def _close_stream(node: a11.AsyncNode) -> None:
+    """Terminate a streaming output node and flush it to its store."""
+    await node.put_null_final()
+    await node.drain_and_close()
+
+
 def _content_to_steps(content: Any) -> list[dict[str, Any]]:
     """Normalize an interaction's content into a list of Interactions steps.
 
@@ -931,6 +937,20 @@ async def interact_with_gemini(action: a11.Action):
                 elif event_type == "step.delta":
                     accumulator.delta(event.index, event.delta)
 
+                    delta = event.delta
+                    delta_type = getattr(delta, "type", None)
+                    if delta_type == "text":
+                        if delta.text:
+                            await action["text_output"].put(delta.text)
+                    elif delta_type == "thought_summary":
+                        content = getattr(delta, "content", None)
+                        if (
+                            content is not None
+                            and getattr(content, "type", None) == "text"
+                            and getattr(content, "text", None)
+                        ):
+                            await action["thoughts"].put(content.text)
+
                 elif event_type == "interaction.completed":
                     snapshot = event.interaction
 
@@ -1023,8 +1043,9 @@ async def interact_with_gemini(action: a11.Action):
         raise Status(code=StatusCode.INTERNAL, message=tb).to_exception() from e
 
     else:
-        await action["event_stream"].put_null_final()
-        await action["event_stream"].drain_and_close()
+        await _close_stream(action["event_stream"])
+        await _close_stream(action["text_output"])
+        await _close_stream(action["thoughts"])
         await action["new_interactions"].drain_and_close()
 
     finally:

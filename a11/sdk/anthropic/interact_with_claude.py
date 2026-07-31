@@ -23,6 +23,12 @@ from a11.sdk import llm
 from a11.sdk.llm_tools import runner
 
 
+async def _close_stream(node: a11.AsyncNode) -> None:
+    """Terminate a streaming output node and flush it to its store."""
+    await node.put_null_final()
+    await node.drain_and_close()
+
+
 def _stringify_content(content: Any) -> str:
     """Flatten a tool-result content payload into plain text."""
     if content is None:
@@ -598,6 +604,39 @@ def _build_backend_specific_metadata(
     return metadata
 
 
+def _build_thinking(
+    config: CreateMessageConfig, model: str, has_tools: bool
+) -> Any:
+    """Adaptive thinking config, guarded by model and tool constraints."""
+    if not config.thinking or "haiku" in model or has_tools:
+        return anthropic.Omit()
+    thinking: dict[str, Any] = {"type": "adaptive"}
+    if config.thinking_summaries:
+        thinking["display"] = "summarized"
+    return thinking
+
+
+def _build_output_config(config: CreateMessageConfig, model: str) -> Any:
+    """Output effort config, honoured only where the model supports it."""
+    if config.effort is None or "haiku" in model:
+        return anthropic.Omit()
+    return {"effort": config.effort}
+
+
+def _build_server_tools(config: CreateMessageConfig) -> list[dict[str, Any]]:
+    """Claude's built-in, server-side tools enabled via config toggles."""
+    tools: list[dict[str, Any]] = []
+    if config.web_search:
+        tools.append({"type": "web_search_20260209", "name": "web_search"})
+    if config.web_fetch:
+        tools.append({"type": "web_fetch_20260209", "name": "web_fetch"})
+    if config.code_execution:
+        tools.append(
+            {"type": "code_execution_20260521", "name": "code_execution"}
+        )
+    return tools
+
+
 async def interact_with_claude(action: a11.Action):
     deadline = a11.get_deadline(action)
 
@@ -643,19 +682,15 @@ async def interact_with_claude(action: a11.Action):
             )
             continue
         tools.append(tool)
+    tools.extend(_build_server_tools(config))
+
+    thinking = _build_thinking(config, model, bool(tools))
+    output_config = _build_output_config(config, model)
 
     try:
         while True:
             snapshot = None
             try:
-                thinking = anthropic.Omit()
-                if "haiku" not in model and not tools:
-                    thinking = {"type": "adaptive"}
-
-                output_config = {"effort": "medium"}
-                if "haiku" in model or "4-5" not in model:
-                    output_config = anthropic.Omit()
-
                 messages = [
                     {"role": message["role"], "content": message["content"]}
                     for message in conversation.messages
@@ -702,6 +737,12 @@ async def interact_with_claude(action: a11.Action):
                         pending_tool_calls[event.index].apply_input_delta(
                             delta.partial_json
                         )
+                    elif delta.type == "text_delta":
+                        if delta.text:
+                            await action["text_output"].put(delta.text)
+                    elif delta.type == "thinking_delta":
+                        if delta.thinking:
+                            await action["thoughts"].put(delta.thinking)
 
                 if (
                     event.type == "content_block_stop"
@@ -781,8 +822,9 @@ async def interact_with_claude(action: a11.Action):
         raise Status(code=StatusCode.INTERNAL, message=tb).to_exception() from e
 
     else:
-        await action["event_stream"].put_null_final()
-        await action["event_stream"].drain_and_close()
+        await _close_stream(action["event_stream"])
+        await _close_stream(action["text_output"])
+        await _close_stream(action["thoughts"])
         await action["new_interactions"].drain_and_close()
 
     finally:

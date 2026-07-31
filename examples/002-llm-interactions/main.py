@@ -1,27 +1,17 @@
 import asyncio
-import dataclasses
 import os
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Sequence
 
 import a11
 from absl import app as absl_app
 from absl import logging
 
-from a11.sdk.anthropic.interact_with_claude import interact_with_claude
-from a11.sdk.anthropic.interact_with_claude_schema import (
-    ClaudeInteractionAdapter,
-    CreateMessageConfig,
-    INTERACT_WITH_CLAUDE_SCHEMA,
+from a11.sdk.interact_with_llm import (
+    INTERACT_WITH_LLM_SCHEMA,
+    interact_with_llm,
 )
-from a11.sdk.gemini.interact_with_gemini import interact_with_gemini
-from a11.sdk.gemini.interact_with_gemini_schema import (
-    CreateInteractionConfig,
-    GeminiInteractionAdapter,
-    INTERACT_WITH_GEMINI_SCHEMA,
-)
-from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
+from a11.sdk.llm import Interaction, LlmHeaders, Role
 from a11.sdk.llm_tools import runner
-from a11.status import Status, StatusCode, StatusException
 
 
 async def get_weather(action: a11.Action):
@@ -66,83 +56,48 @@ def _make_client_action_registry() -> a11.ActionRegistry:
     return registry
 
 
-@dataclasses.dataclass(frozen=True)
-class BackendSpec:
-    """Everything that differs between the two interaction backends.
-
-    A single conversation history (a flat list of `Interaction`s) is threaded
-    across backends: each turn feeds the whole history into whichever backend
-    is active, and the backends normalise any interactions the *other* produced.
-    """
-
-    name: str
-    schema: a11.ActionSchema
-    handler: Callable[[a11.Action], Awaitable[None]]
-    adapter: type[InteractionAdapter]
-    make_config: Callable[[], Any]
-    default_model: str
-    api_key_env: tuple[str, ...]
-
-
-BACKENDS: dict[str, BackendSpec] = {
-    "claude": BackendSpec(
-        name="claude",
-        schema=INTERACT_WITH_CLAUDE_SCHEMA,
-        handler=interact_with_claude,
-        adapter=ClaudeInteractionAdapter,
-        make_config=lambda: CreateMessageConfig(max_tokens=1024),
-        default_model="claude-sonnet-4-6",
-        api_key_env=("ANTHROPIC_API_KEY",),
-    ),
-    "gemini": BackendSpec(
-        name="gemini",
-        schema=INTERACT_WITH_GEMINI_SCHEMA,
-        handler=interact_with_gemini,
-        adapter=GeminiInteractionAdapter,
-        make_config=lambda: CreateInteractionConfig(max_output_tokens=1024),
-        default_model="gemini-3.5-flash",
-        api_key_env=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    ),
+# Everything the driver needs to know per backend now fits in a tiny table: the
+# `interact_with_llm` action routes to the concrete backend by header and
+# imports its SDK lazily, so there is no per-provider schema/handler/adapter to
+# select here.
+DEFAULT_MODEL: dict[str, str] = {
+    "claude": "claude-sonnet-4-6",
+    "gemini": "gemini-3.5-flash",
+}
+API_KEY_ENV: dict[str, tuple[str, ...]] = {
+    "claude": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
 }
 
 
-def _api_key_for(spec: BackendSpec) -> str:
-    for env in spec.api_key_env:
+def _api_key_for(provider: str) -> str:
+    for env in API_KEY_ENV.get(provider, ()):
         if value := os.environ.get(env, ""):
             return value
     return ""
 
 
-async def _listen_to_events(
-    node: a11.AsyncNode,
-    on_event: Callable[[object], Awaitable[None]] | None = None,
-    deadline: a11.Time = a11.infinite_future(),
-):
-    try:
-        async for event in node.iter_with_deadline(deadline):
-            if on_event is not None:
-                await on_event(event)
-
-    except StatusException:
-        raise
-
-    except Exception as e:
-        raise Status(
-            code=StatusCode.INTERNAL, message=str(e)
-        ).to_exception() from e
-
-
-async def log_events(event: object) -> None:
-    logging.info("event: %s", event)
+def _make_user_interaction(text: str) -> Interaction:
+    """A backend-neutral user text message understood by every backend."""
+    return Interaction(
+        role=Role.USER,
+        content=[
+            a11.to_chunk(
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                }
+            )
+        ],
+    )
 
 
 async def send_text_message(
-    spec: BackendSpec,
+    provider: str,
     model: str,
     text: str,
     previous_interactions: list[Interaction] | None = None,
     *,
-    on_event: Callable[[object], Awaitable[None]] | None = None,
     available_actions: a11.ActionRegistry | None = None,
 ) -> list[Interaction]:
     available_action_names = []
@@ -151,10 +106,11 @@ async def send_text_message(
             available_action_names.append(action_name)
 
     interact = (
-        a11.Action(spec.schema)
-        .bind_handler(spec.handler)
+        a11.Action(INTERACT_WITH_LLM_SCHEMA)
+        .bind_handler(interact_with_llm)
         .bind_registry(available_actions)
-        .set_header(LlmHeaders.API_KEY.value, _api_key_for(spec))
+        .set_header(LlmHeaders.PROVIDER.value, provider)
+        .set_header(LlmHeaders.API_KEY.value, _api_key_for(provider))
         .set_header(LlmHeaders.MODEL.value, model)
         .set_header(
             LlmHeaders.ALLOWED_LLM_ACTIONS.value,
@@ -164,23 +120,23 @@ async def send_text_message(
     )
 
     previous_interactions = previous_interactions or []
+    text_interaction = _make_user_interaction(text)
 
-    log_task = asyncio.create_task(
-        _listen_to_events(interact["event_stream"], on_event)
-    )
+    # The assistant's visible text now arrives, already extracted, on the
+    # `text_output` node — no need to parse the raw provider event stream.
+    async def stream_text() -> None:
+        async for chunk in interact["text_output"]:
+            print(chunk, end="", flush=True)
+
+    stream_task = asyncio.create_task(stream_text())
 
     async with (
         interact["interactions"] as interactions,
-        interact["config"] as config_node,
+        interact["config"],
         interact["tools"] as tools,
     ):
-        await config_node.put_final(spec.make_config())
-
         for interaction in previous_interactions:
             await interactions.put(interaction)
-        text_interaction = spec.adapter.make_text_message_interaction(
-            text, "", Role.USER
-        )
         await interactions.put_final(text_interaction)
 
         tool_definitions = runner.get_tool_definitions(
@@ -194,16 +150,16 @@ async def send_text_message(
     try:
         async for interaction in interact["new_interactions"]:
             new_interactions.append(interaction)
+        await stream_task
         return [text_interaction] + new_interactions
 
     finally:
-        if not log_task.done():
-            log_task.cancel()
-
-        try:
-            await log_task
-        except asyncio.CancelledError:
-            pass
+        if not stream_task.done():
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
 
 
 _HELP = (
@@ -214,34 +170,34 @@ _HELP = (
 
 
 def _handle_model_command(
-    parts: list[str], spec: BackendSpec, model: str
-) -> tuple[BackendSpec, str]:
-    if len(parts) < 2 or parts[1] not in BACKENDS:
-        print(f"usage: /model [{'|'.join(BACKENDS)}] [model]")
-        return spec, model
+    parts: list[str], provider: str, model: str
+) -> tuple[str, str]:
+    if len(parts) < 2 or parts[1] not in DEFAULT_MODEL:
+        print(f"usage: /model [{'|'.join(DEFAULT_MODEL)}] [model]")
+        return provider, model
 
-    new_spec = BACKENDS[parts[1]]
-    new_model = parts[2] if len(parts) > 2 else new_spec.default_model
-    if not _api_key_for(new_spec):
+    new_provider = parts[1]
+    new_model = parts[2] if len(parts) > 2 else DEFAULT_MODEL[new_provider]
+    if not _api_key_for(new_provider):
         print(
-            f"warning: no API key set for {new_spec.name} (expected one of"
-            f" {', '.join(new_spec.api_key_env)})."
+            f"warning: no API key set for {new_provider} (expected one of"
+            f" {', '.join(API_KEY_ENV[new_provider])})."
         )
-    print(f"switched to {new_spec.name} / {new_model}")
-    return new_spec, new_model
+    print(f"switched to {new_provider} / {new_model}")
+    return new_provider, new_model
 
 
 async def main(_argv: Sequence[str]):
     interactions: list[Interaction] = []
-    spec = BACKENDS["gemini"]
-    model = spec.default_model
+    provider = "gemini"
+    model = DEFAULT_MODEL[provider]
     registry = _make_client_action_registry()
 
     print(_HELP)
-    print(f"backend: {spec.name} / {model}")
+    print(f"backend: {provider} / {model}")
 
     while True:
-        text = (await asyncio.to_thread(input, f"[{spec.name}] > ")).strip()
+        text = (await asyncio.to_thread(input, f"[{provider}] > ")).strip()
         if not text:
             continue
         if text.casefold() in ("/exit", "/quit"):
@@ -250,21 +206,21 @@ async def main(_argv: Sequence[str]):
             print(_HELP)
             continue
         if text.startswith("/model"):
-            spec, model = _handle_model_command(text.split(), spec, model)
+            provider, model = _handle_model_command(
+                text.split(), provider, model
+            )
             continue
 
         print()
         new_interactions = await send_text_message(
-            spec,
+            provider,
             model,
             text,
             interactions,
-            on_event=log_events,
             available_actions=registry,
         )
         interactions.extend(new_interactions)
         print()
-        print(spec.adapter(new_interactions[-1]).get_message_text())
         print()
 
 

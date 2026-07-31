@@ -24,7 +24,7 @@ absl::Status ValidateName(std::string_view name);
 
 struct ChunkMetadata {
   std::string mimetype;
-  std::optional<absl::Time> timestamp;
+  std::optional<absl::Time> timestamp{};
   ByteMap attributes{};
 
   [[nodiscard]] size_t ApproxBytes() const;
@@ -45,9 +45,9 @@ struct ChunkMetadata {
 };
 
 struct Chunk {
-  std::optional<ChunkMetadata> metadata;
-  std::string ref;
-  Bytes data;
+  std::optional<ChunkMetadata> metadata{};
+  std::string ref{};
+  Bytes data{};
 
   [[nodiscard]] size_t ApproxBytes() const;
   [[nodiscard]] std::string DebugString() const;

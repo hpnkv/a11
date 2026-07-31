@@ -22,6 +22,8 @@ option(A11_FETCH_MISSING_DEPS "Fetch required dependencies not installed" ON)
 option(A11_REQUIRE_STATIC_DEPS
         "Fail configuration when a non-system dependency is only shared" ON)
 option(A11_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(A11_WITH_OTLP_HTTP
+        "Build the native OTLP/HTTP (JSON) span exporter (needs libcurl)" ON)
 set(A11_PYBIND11_ABSEIL_SOURCE_DIR "" CACHE PATH
         "Optional local pybind11_abseil checkout")
 
@@ -96,6 +98,63 @@ a11_require_static_target(absl::log)
 a11_require_static_target(absl::status)
 a11_require_static_target(absl::strings)
 a11_require_static_target(absl::time)
+
+# OpenTelemetry C++ supplies A11's span/trace/context model. It is built
+# statically from source (like Abseil) so the shipped extension stays
+# self-contained and relocatable. Only the API + SDK and the local
+# in-memory/ostream exporters are needed for now; the OTLP/protobuf exporters
+# are introduced by a later phase and stay OFF here to avoid pulling in
+# protobuf. WITH_STL=CXX20 resolves OTel's nostd:: aliases to std:: types
+# (span/variant/string_view) instead of its vendored Abseil copy, which fails
+# to compile under C++20 libc++ (ambiguous is_trivially_destructible); it also
+# avoids coupling to A11's pinned Abseil ABI, so WITH_ABSEIL stays OFF.
+set(WITH_STL CXX20 CACHE STRING "" FORCE)
+set(WITH_ABSEIL OFF CACHE BOOL "" FORCE)
+set(WITH_OTLP_HTTP OFF CACHE BOOL "" FORCE)
+set(WITH_OTLP_GRPC OFF CACHE BOOL "" FORCE)
+set(WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_FUNC_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(OPENTELEMETRY_INSTALL OFF CACHE BOOL "" FORCE)
+# Use the non-deprecated SDK factory path (A11 builds the provider from a
+# TracerContext), silencing opentelemetry-cpp's temporary migration warning.
+set(WITH_DEPRECATED_SDK_FACTORY OFF CACHE BOOL "" FORCE)
+# opentelemetry-cpp gates a Windows-only DLL build purely on whether
+# OPENTELEMETRY_BUILD_DLL is *defined* (any value), fataling on non-Windows.
+# A11 never wants that here (Linux/macOS now, Windows later can opt in), so
+# clear any lingering cache entry -- e.g. one an earlier configure or IDE tree
+# wrote -- before OTel's CMake reads it. Fresh trees are unaffected.
+unset(OPENTELEMETRY_BUILD_DLL CACHE)
+# opentelemetry-cpp keys its own test targets off the top-level BUILD_TESTING.
+# Suppress them (they need GTest wired the OTel way) while it is added, then
+# restore A11's setting for our suite.
+set(A11_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+set(BUILD_TESTING OFF)
+FetchContent_Declare(
+        opentelemetry-cpp
+        GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
+        GIT_TAG v1.16.1
+        GIT_SHALLOW TRUE
+        SYSTEM)
+FetchContent_MakeAvailable(opentelemetry-cpp)
+set(BUILD_TESTING "${A11_SAVED_BUILD_TESTING}")
+unset(A11_SAVED_BUILD_TESTING)
+# Consumed via FetchContent, so the raw (non-namespaced) target names are used;
+# opentelemetry-cpp only defines its opentelemetry-cpp:: aliases when installed.
+a11_require_static_target(opentelemetry_api)
+a11_require_static_target(opentelemetry_trace)
+a11_require_static_target(opentelemetry_resources)
+a11_require_static_target(opentelemetry_exporter_in_memory)
+a11_require_static_target(opentelemetry_exporter_ostream_span)
+
+if (A11_WITH_OTLP_HTTP)
+    # The native OTLP/HTTP exporter posts OTLP-JSON via libcurl. In wheels the
+    # deps prefix supplies a static libcurl (built against A11's static
+    # OpenSSL); for local builds the system libcurl is used. Static linkage is
+    # verified for shipped wheels by scripts/audit_wheel.py rather than forced
+    # here, so a dynamic system libcurl remains fine for development.
+    find_package(CURL REQUIRED)
+endif ()
 
 find_package(nlohmann_json CONFIG REQUIRED)
 set(Boost_USE_STATIC_LIBS ON)
@@ -200,6 +259,7 @@ add_subdirectory(a11/actions)
 add_subdirectory(a11/concurrency)
 add_subdirectory(a11/data)
 add_subdirectory(a11/net)
+add_subdirectory(a11/obs)
 add_subdirectory(a11/nodes)
 add_subdirectory(a11/service)
 add_subdirectory(a11/stores)
@@ -248,6 +308,29 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
+# Observability (tracing) core. OpenTelemetry is linked PRIVATE and never
+# appears in a11_obs's public headers (they use a fast pImpl), so it is fully
+# absorbed into the static archive and does not leak into the exported package
+# interface.
+add_library(a11_obs STATIC ${A11_OBS_SOURCES})
+add_library(a11::obs ALIAS a11_obs)
+set_target_properties(a11_obs PROPERTIES EXPORT_NAME obs)
+target_include_directories(
+        a11_obs PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+        a11_obs
+        PUBLIC a11::data $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+        PRIVATE opentelemetry_trace opentelemetry_exporter_in_memory
+        opentelemetry_exporter_ostream_span
+        $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> $<BUILD_INTERFACE:absl::synchronization> $<INSTALL_INTERFACE:absl::synchronization>
+        a11::warnings)
+if (A11_WITH_OTLP_HTTP)
+    target_compile_definitions(a11_obs PRIVATE A11_WITH_OTLP_HTTP)
+    target_link_libraries(a11_obs PRIVATE CURL::libcurl)
+endif ()
+
 # Remaining components are added by their own source lists below as the public
 # targets are intentionally independently linkable.
 add_library(a11_concurrency STATIC ${A11_CONCURRENCY_SOURCES})
@@ -288,7 +371,7 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(
         a11_net PUBLIC a11::concurrency a11::data $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        PRIVATE $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
+        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
 )
 if (A11_BUILD_WEBRTC)
     target_link_libraries(a11_net PUBLIC LibDataChannel::LibDataChannel)
@@ -322,7 +405,11 @@ target_include_directories(
 target_link_libraries(
         a11_actions PUBLIC a11::data a11::net a11::nodes a11::stores
         $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        PRIVATE $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings)
+        # a11::obs (and the OpenTelemetry it privately links) is an
+        # implementation detail carried only in the build interface for now, so
+        # it stays out of the exported/installed package. The full relocatable
+        # install + OTLP story lands in a later phase.
+        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings)
 
 add_library(a11_service STATIC ${A11_SERVICE_SOURCES})
 add_library(a11::service ALIAS a11_service)
@@ -334,7 +421,7 @@ target_include_directories(
 target_link_libraries(
         a11_service PUBLIC a11::actions a11::data a11::net a11::nodes
         $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        PRIVATE $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
+        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
         nlohmann_json::nlohmann_json)
 
 # Action method bodies call Session hooks, while Session owns Actions. Static
@@ -490,8 +577,9 @@ if (A11_BUILD_PYTHON)
     target_link_libraries(
             a11_python
             PRIVATE a11::actions a11::concurrency a11::core a11::data a11::net
-            a11::nodes a11::service a11::stores pybind11_abseil::status_casters
-            a11::warnings)
+            a11::nodes a11::obs a11::service a11::stores
+            pybind11_abseil::status_casters a11::warnings
+            absl::failure_signal_handler absl::symbolize)
 
     # pybind11_abseil's status caster imports this extension by its canonical
     # package path. Keep direct-CMake outputs beside the source package and

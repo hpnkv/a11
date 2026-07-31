@@ -97,6 +97,25 @@ download_and_extract \
   make install_sw
 )
 
+# libcurl backs the native OTLP/HTTP span exporter. Built static against the
+# OpenSSL above, with optional protocols disabled, so the wheel gains no new
+# dynamic dependency (verified by scripts/audit_wheel.py). HTTP/1.1 is
+# sufficient for OTLP-compatible endpoints such as Langfuse.
+download_and_extract \
+  "https://github.com/curl/curl/releases/download/curl-8_11_0/curl-8.11.0.tar.gz" \
+  curl.tar.gz
+cmake -S "${work}/curl-8.11.0" -B "${work}/curl-build" \
+  -G Ninja -DBUILD_SHARED_LIBS=OFF -DBUILD_CURL_EXE=OFF \
+  -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON \
+  -DOPENSSL_ROOT_DIR="${prefix}" -DCURL_ZLIB=OFF -DCURL_BROTLI=OFF \
+  -DCURL_ZSTD=OFF -DUSE_NGHTTP2=OFF -DUSE_LIBIDN2=OFF \
+  -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF -DCURL_DISABLE_LDAP=ON \
+  -DCURL_DISABLE_LDAPS=ON -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
+  "${cmake_arch_args[@]}"
+cmake --build "${work}/curl-build" --target install -j "${jobs}"
+
 download_and_extract \
   "https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.bz2" \
   boost.tar.bz2

@@ -25,6 +25,8 @@
 #include "a11/data/msgpack.h"
 #include "a11/data/types.h"
 #include "a11/net/wire_stream.h"
+#include "a11/obs/span.h"
+#include "a11/obs/tracer.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
@@ -110,12 +112,16 @@ struct InProcessWireStream::State {
   const a11::Task terminal_future;
   const std::shared_ptr<a11::Promise<a11::Unit>> done_promise;
   const a11::Task done_future;
+  // Span covering this endpoint. Both endpoints share the stream id, so its
+  // trace groups the two sides of the stream.
+  obs::Span span ABSL_GUARDED_BY(mu);
 };
 
 absl::StatusOr<InProcessWireStream::Pair> InProcessWireStream::CreatePair(
     std::optional<WireStreamOptions> options,
     std::optional<WireStreamOptions> first_options,
-    std::optional<WireStreamOptions> second_options) {
+    std::optional<WireStreamOptions> second_options,
+    std::string preassigned_id) {
   if (options.has_value() &&
       (first_options.has_value() || second_options.has_value())) {
     return absl::InvalidArgumentError(
@@ -133,7 +139,8 @@ absl::StatusOr<InProcessWireStream::Pair> InProcessWireStream::CreatePair(
   status = second_options->Validate();
   if (!status.ok())
     return status;
-  const std::string id = NewStreamId();
+  const std::string id =
+      preassigned_id.empty() ? NewStreamId() : std::move(preassigned_id);
   auto first_state = std::make_shared<State>(*first_options, id);
   auto second_state = std::make_shared<State>(*second_options, id);
   first_state->peer = second_state;
@@ -199,6 +206,15 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
         state_->status =
             absl::AbortedError("The stream was aborted by this endpoint");
       }
+      if (state_->span.IsRecording()) {
+        state_->span.AddEvent(
+            "a11.wire.send",
+            {{"a11.wire.action_messages",
+              absl::StrCat(message.actions.size())},
+             {"a11.wire.node_fragments",
+              absl::StrCat(message.node_fragments.size())},
+             {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
+      }
       state_->outbound.push_back(
           State::Outbound{.message = std::move(message), .end = end});
       state_->cv.SignalAll();
@@ -236,6 +252,11 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
     state_->on_done = std::move(on_done);
     state_->last_activity = absl::Now();
     expired = state_->deadline <= absl::Now();
+    state_->span = obs::Tracer::StartRootSpan(
+        "a11.wire_stream", obs::SpanKind::kInternal, state_->id);
+    if (state_->span.IsRecording()) {
+      state_->span.SetAttribute("a11.stream.id", state_->id);
+    }
     state_->cv.SignalAll();
   }
   a11::Schedule([state = state_]() { Sender(std::move(state)); });
@@ -628,6 +649,8 @@ void InProcessWireStream::MaybeFinish(const std::shared_ptr<State>& state) {
 
 void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
   OnDone callback;
+  obs::Span span;
+  absl::Status span_status;
   {
     thread::MutexLock lock(&state->mu);
     if (state->transport_finished)
@@ -639,6 +662,12 @@ void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
       state->done_called = true;
       callback = state->on_done;
     }
+    span = std::move(state->span);
+    span_status = state->status;
+  }
+  if (span.IsRecording()) {
+    span.SetStatus(span_status);
+    span.End();
   }
   const absl::Status callback_status =
       callback ? InvokeDoneCallback(callback) : absl::OkStatus();

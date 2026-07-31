@@ -21,6 +21,7 @@
 #include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/obs/span.h"
 #include "thread/boost_primitives.h"
 
 namespace thread {
@@ -148,6 +149,24 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::Status Cancel();
   absl::Status SetOnCancelled(OnActionCancelled callback);
 
+  // This action's tracing identifiers as lowercase hex, or empty strings when
+  // the action is not traced (no OTel context / tracing not configured). Valid
+  // once the action has started and until it finishes.
+  [[nodiscard]] std::string TraceId() const;
+  [[nodiscard]] std::string SpanId() const;
+
+  // Sets an attribute on this action's span. No-op when the action is not
+  // traced. Intended to be called from the handler while the span is active
+  // (e.g. langfuse.observation.input / .output).
+  void SetSpanAttribute(std::string_view key, std::string_view value);
+  void SetSpanAttribute(std::string_view key, std::int64_t value);
+  void SetSpanAttribute(std::string_view key, bool value);
+  void SetSpanAttribute(std::string_view key, double value);
+  void SetSpanName(std::string_view name);
+  // Sets the span status explicitly; this suppresses the automatic status the
+  // framework would otherwise record from the action's completion status.
+  void SetSpanStatus(obs::SpanStatus status, std::string_view description = {});
+
   [[nodiscard]] bool IsDone() const;
   [[nodiscard]] bool HasBeenRun() const;
   [[nodiscard]] bool HasBeenCalled() const;
@@ -194,6 +213,16 @@ class Action : public std::enable_shared_from_this<Action> {
   void SetDispatchStatus(absl::Status status);
   void SetCompletionStatus(absl::Status status);
 
+  // Tracing hooks (a11::obs). StartActionSpan opens this action's span after a
+  // successful Begin(); it fails (so the action fails) when the reserved OTel
+  // headers are present but inconsistent, and is a no-op when none are present.
+  // EndActionSpan closes it with the final status. MakeChildSpan lets a child
+  // action open a span parented to this (parent) action's live span.
+  absl::Status StartActionSpan(Mode mode);
+  void EndActionSpan(const absl::Status& status);
+  obs::Span MakeChildSpan(std::string_view name, obs::SpanKind kind);
+  void RecordActionCallEvent(std::string_view name, std::string_view id);
+
   mutable thread::Mutex mu_;
   ActionSchema schema_ ABSL_GUARDED_BY(mu_);
   ActionHandler handler_ ABSL_GUARDED_BY(mu_);
@@ -217,6 +246,8 @@ class Action : public std::enable_shared_from_this<Action> {
   Mode mode_ ABSL_GUARDED_BY(mu_) = Mode::kNone;
   bool input_autofills_applied_ ABSL_GUARDED_BY(mu_) = false;
   a11::Task task_ ABSL_GUARDED_BY(mu_);
+  obs::Span span_ ABSL_GUARDED_BY(mu_);
+  bool span_status_set_by_user_ ABSL_GUARDED_BY(mu_) = false;
   bool cancel_requested_ ABSL_GUARDED_BY(mu_) = false;
   bool finishing_ ABSL_GUARDED_BY(mu_) = false;
   std::optional<absl::Status> completion_status_ ABSL_GUARDED_BY(mu_);

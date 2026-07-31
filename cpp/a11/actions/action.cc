@@ -33,6 +33,9 @@
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "a11/obs/span.h"
+#include "a11/obs/trace_context.h"
+#include "a11/obs/tracer.h"
 #include "a11/service/session.h"
 #include "a11/status.h"
 #include "thread/boost_primitives.h"
@@ -66,6 +69,16 @@ absl::Time TimeoutDeadline(absl::Duration timeout) {
 void KeepFirstError(absl::Status candidate, absl::Status* first) {
   if (first->ok() && !candidate.ok())
     *first = std::move(candidate);
+}
+
+// Records an action's outcome on its span: OTel status + description from the
+// absl::Status message, plus an `error.type` attribute holding the canonical
+// upper-case status code (e.g. "INVALID_ARGUMENT") on failure.
+void RecordSpanOutcome(obs::Span& span, const absl::Status& status) {
+  span.SetStatus(status);
+  if (!status.ok()) {
+    span.SetAttribute("error.type", absl::StatusCodeToString(status.code()));
+  }
 }
 
 }  // namespace
@@ -702,6 +715,12 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
     }
   }
   ABSL_RETURN_IF_ERROR(Begin(Mode::kRun));
+  if (const absl::Status span_status = StartActionSpan(Mode::kRun);
+      !span_status.ok()) {
+    thread::MutexLock lock(&mu_);
+    mode_ = Mode::kNone;
+    return span_status;
+  }
   const std::shared_ptr<service::Session> session = GetSession();
   bool nested = false;
   std::shared_ptr<ActionLimiter> nested_limiter;
@@ -746,6 +765,18 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
   absl::Status status = Begin(Mode::kCall);
   if (!status.ok()) {
     return a11::FailedFuture<std::shared_ptr<Action>>(status);
+  }
+  if (const absl::Status span_status = StartActionSpan(Mode::kCall);
+      !span_status.ok()) {
+    thread::MutexLock lock(&mu_);
+    mode_ = Mode::kNone;
+    return a11::FailedFuture<std::shared_ptr<Action>>(span_status);
+  }
+  {
+    // Propagate this call's span context to the callee through the action's
+    // headers, which travel inside the ActionMessage built below.
+    thread::MutexLock lock(&mu_);
+    span_.InjectContext(headers_).IgnoreError();
   }
   std::shared_ptr<service::Session> session = GetSession();
   if (session != nullptr) {
@@ -957,6 +988,127 @@ absl::Status Action::Begin(Mode mode) {
   return absl::OkStatus();
 }
 
+obs::Span Action::MakeChildSpan(std::string_view name, obs::SpanKind kind) {
+  thread::MutexLock lock(&mu_);
+  return obs::Tracer::StartChildSpan(name, kind, span_);
+}
+
+absl::Status Action::StartActionSpan(Mode mode) {
+  std::shared_ptr<Action> parent;
+  data::ByteMap headers;
+  std::string name;
+  {
+    thread::MutexLock lock(&mu_);
+    if (span_.IsRecording())
+      return absl::OkStatus();
+    parent = parent_.lock();
+    headers = headers_;
+    name = schema_.name;
+  }
+  // Call is always a client span; a nested run is internal to its parent; a
+  // root run driven from an inbound wire message is the server span.
+  const obs::SpanKind kind = mode == Mode::kCall ? obs::SpanKind::kClient
+                             : parent != nullptr ? obs::SpanKind::kInternal
+                                                 : obs::SpanKind::kServer;
+  const std::string id = GetId();
+
+  obs::Span span;
+  if (parent != nullptr) {
+    // In-process parentage: continue the parent's live span regardless of
+    // whether the reserved headers were forwarded to this child.
+    span = parent->MakeChildSpan(name, kind);
+  } else {
+    absl::StatusOr<std::optional<obs::TraceContext>> context =
+        obs::ExtractTraceContext(headers);
+    if (!context.ok()) {
+      // Reserved OTel headers are present but inconsistent -> fail the action.
+      return context.status();
+    }
+    if (!context->has_value()) {
+      // No trace context -> emit no telemetry.
+      return absl::OkStatus();
+    }
+    span = obs::Tracer::StartSpan(name, kind, &context->value());
+  }
+
+  if (span.IsRecording()) {
+    span.SetAttribute("a11.action.name", name);
+    span.SetAttribute("a11.action.id", id);
+    span.SetAttribute("a11.action.mode",
+                      (mode == Mode::kCall) ? "call" : "run");
+  }
+  {
+    thread::MutexLock lock(&mu_);
+    span_ = std::move(span);
+  }
+  // A nested Call is a call the parent made: record it as an event on the
+  // caller's span too (requirement: action calls are registered as events).
+  if (mode == Mode::kCall && parent != nullptr) {
+    parent->RecordActionCallEvent(name, id);
+  }
+  return absl::OkStatus();
+}
+
+void Action::RecordActionCallEvent(std::string_view name, std::string_view id) {
+  thread::MutexLock lock(&mu_);
+  span_.AddEvent("a11.action.call", {{"a11.action.name", std::string(name)},
+                                     {"a11.action.id", std::string(id)}});
+}
+
+std::string Action::TraceId() const {
+  thread::MutexLock lock(&mu_);
+  return span_.TraceIdHex();
+}
+
+std::string Action::SpanId() const {
+  thread::MutexLock lock(&mu_);
+  return span_.SpanIdHex();
+}
+
+void Action::SetSpanAttribute(std::string_view key, std::string_view value) {
+  thread::MutexLock lock(&mu_);
+  span_.SetAttribute(key, value);
+}
+
+void Action::SetSpanAttribute(std::string_view key, std::int64_t value) {
+  thread::MutexLock lock(&mu_);
+  span_.SetAttribute(key, value);
+}
+
+void Action::SetSpanAttribute(std::string_view key, bool value) {
+  thread::MutexLock lock(&mu_);
+  span_.SetAttribute(key, value);
+}
+
+void Action::SetSpanAttribute(std::string_view key, double value) {
+  thread::MutexLock lock(&mu_);
+  span_.SetAttribute(key, value);
+}
+
+void Action::SetSpanName(std::string_view name) {
+  thread::MutexLock lock(&mu_);
+  span_.UpdateName(name);
+}
+
+void Action::SetSpanStatus(obs::SpanStatus status,
+                           std::string_view description) {
+  thread::MutexLock lock(&mu_);
+  span_.SetStatus(status, description);
+  span_status_set_by_user_ = true;
+}
+
+void Action::EndActionSpan(const absl::Status& status) {
+  obs::Span span;
+  {
+    thread::MutexLock lock(&mu_);
+    span = std::move(span_);
+  }
+  if (span.IsRecording()) {
+    span.SetStatus(status);
+    span.End();
+  }
+}
+
 absl::Status Action::RemapDefaultPorts() {
   input_ids_.clear();
   output_ids_.clear();
@@ -1099,8 +1251,8 @@ absl::Status Action::ApplyInputAutofills() {
                           node_map->Get(node_id));
     ABSL_ASSIGN_OR_RETURN(bool writable, node->IsWritable().Await());
     if (!writable) {
-      return absl::FailedPreconditionError(absl::StrCat(
-          "Autofilled input '", node_id, "' is not writable"));
+      return absl::FailedPreconditionError(
+          absl::StrCat("Autofilled input '", node_id, "' is not writable"));
     }
     ABSL_ASSIGN_OR_RETURN(size_t size, node->GetChunkStore()->Size().Await());
     if (size != 0) {
@@ -1216,11 +1368,21 @@ absl::Status Action::FinishRun(absl::Status status) {
 
   std::shared_ptr<a11::Promise<a11::Unit>> promise;
   std::shared_ptr<Action> parent;
+  obs::Span span;
+  bool user_status = false;
   {
     thread::MutexLock lock(&mu_);
     completion_status_ = final_status;
     promise = done_promise_;
     parent = parent_.lock();
+    span = std::move(span_);
+    user_status = span_status_set_by_user_;
+  }
+  if (span.IsRecording()) {
+    if (!user_status) {
+      RecordSpanOutcome(span, final_status);
+    }
+    span.End();
   }
   promise->SetValue(a11::Unit{}).IgnoreError();
   if (parent != nullptr) {
@@ -1463,15 +1625,25 @@ absl::Status Action::SendRemoteCancel() {
 void Action::CompleteCall(absl::Status status, bool remove_from_session) {
   std::shared_ptr<a11::Promise<a11::Unit>> promise;
   bool completed = false;
+  obs::Span span;
+  bool user_status = false;
   {
     thread::MutexLock lock(&mu_);
     if (!completion_status_.has_value()) {
-      completion_status_ = std::move(status);
+      completion_status_ = status;
       promise = done_promise_;
       completed = true;
+      span = std::move(span_);
+      user_status = span_status_set_by_user_;
     }
   }
   if (completed) {
+    if (span.IsRecording()) {
+      if (!user_status) {
+        RecordSpanOutcome(span, status);
+      }
+      span.End();
+    }
     DetachBoundStreamNodes().IgnoreError();
     promise->SetValue(a11::Unit{}).IgnoreError();
   }

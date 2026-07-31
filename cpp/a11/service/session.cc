@@ -37,6 +37,8 @@
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "a11/obs/span.h"
+#include "a11/obs/tracer.h"
 #include "a11/status.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
@@ -181,6 +183,10 @@ struct Session::State {
   const std::shared_ptr<a11::Promise<a11::Unit>> done_promise;
   const a11::Task done_future;
   std::shared_ptr<thread::PermanentEvent> changed ABSL_GUARDED_BY(mu);
+
+  // Span covering the session lifetime. Each session is its own trace, pinned
+  // (when possible) to the session id so external systems can correlate.
+  obs::Span span ABSL_GUARDED_BY(mu);
 };
 
 absl::Status SessionOptions::Validate() const {
@@ -298,6 +304,18 @@ absl::Status Session::Initialize(
       std::move(node_map), std::move(action_registry), std::move(*root),
       std::move(*nested), std::move(message_callback),
       std::move(done_callback));
+
+  {
+    // Open the session span. Its trace id is pinned to the session id (a 32
+    // hex-char value), giving each session its own trace.
+    thread::MutexLock lock(&state_->mu);
+    state_->span = obs::Tracer::StartRootSpan("a11.session",
+                                              obs::SpanKind::kServer,
+                                              state_->id);
+    if (state_->span.IsRecording()) {
+      state_->span.SetAttribute("a11.session.id", state_->id);
+    }
+  }
 
   std::weak_ptr<State> weak_state = state_;
   a11::Schedule([weak_self, weak_state]() mutable {
@@ -1290,6 +1308,8 @@ void Session::RemoveStream(const std::shared_ptr<StreamState>& stream_state) {
 
 void Session::FinishIfPossible() {
   std::shared_ptr<a11::Promise<a11::Unit>> promise;
+  obs::Span span;
+  absl::Status status;
   {
     thread::MutexLock lock(&state_->mu);
     if ((state_->phase == Phase::kOpen && !state_->remote_closed) ||
@@ -1298,6 +1318,12 @@ void Session::FinishIfPossible() {
     }
     state_->destroyed = true;
     promise = state_->done_promise;
+    span = std::move(state_->span);
+    status = state_->status;
+  }
+  if (span.IsRecording()) {
+    span.SetStatus(status);
+    span.End();
   }
   (void)promise->SetValue(a11::Unit{});
   NotifyStateChanged();

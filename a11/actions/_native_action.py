@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from a11 import _native
@@ -13,6 +14,10 @@ ActionSettings = _native.ActionSettings
 _native_get_header = Action.get_header
 _native_run = Action.run
 _native_settings = Action.__dict__["settings"]
+
+# Langfuse reads a span/observation's input and output from these attributes.
+_LANGFUSE_INPUT_ATTR = "langfuse.observation.input"
+_LANGFUSE_OUTPUT_ATTR = "langfuse.observation.output"
 
 
 class _ActionDoneEvent:
@@ -51,6 +56,22 @@ def _get_header(
     if value is not None and decode:
         return value.decode()
     return value
+
+
+def _span_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, default=str)
+
+
+def _set_span_input(action: Action, value: Any) -> None:
+    """Record this action span's input (Langfuse observation input)."""
+    action.set_span_attribute(_LANGFUSE_INPUT_ATTR, _span_json(value))
+
+
+def _set_span_output(action: Action, value: Any) -> None:
+    """Record this action span's output (Langfuse observation output)."""
+    action.set_span_attribute(_LANGFUSE_OUTPUT_ATTR, _span_json(value))
 
 
 def _get_settings(action: Action) -> ActionSettings:
@@ -96,6 +117,8 @@ Action.__module__ = "a11.actions.action"
 Action.done = property(_done)
 Action.get_header = _get_header
 Action.run_in_background = _native_run
+Action.set_span_input = _set_span_input
+Action.set_span_output = _set_span_output
 Action.settings = property(_get_settings, _set_settings)
 
 __all__ = ["Action"]

@@ -15,6 +15,7 @@
 #include <absl/base/thread_annotations.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
@@ -25,6 +26,8 @@
 #include "a11/net/byte_chunking.h"
 #include "a11/net/internal/binary_channel.h"
 #include "a11/net/wire_stream.h"
+#include "a11/obs/span.h"
+#include "a11/obs/tracer.h"
 #include "a11/status.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
@@ -112,6 +115,8 @@ struct ChannelWireStream::State {
   const std::shared_ptr<a11::Promise<a11::Unit>> drain_promise;
   const a11::Task drain_future;
   std::shared_ptr<thread::PermanentEvent> changed ABSL_GUARDED_BY(mu);
+  // Span covering this endpoint; its trace is pinned to the stream id.
+  obs::Span span ABSL_GUARDED_BY(mu);
 };
 
 absl::Status ChannelFramingOptions::Validate() const {
@@ -205,6 +210,15 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
         state_->status =
             absl::AbortedError("The stream was aborted by this endpoint");
       }
+      if (state_->span.IsRecording()) {
+        state_->span.AddEvent(
+            "a11.wire.send",
+            {{"a11.wire.action_messages",
+              absl::StrCat(message.actions.size())},
+             {"a11.wire.node_fragments",
+              absl::StrCat(message.node_fragments.size())},
+             {"a11.wire.bytes", absl::StrCat(bytes->size())}});
+      }
       const std::uint64_t message_id = state_->next_outgoing_message_id++;
       state_->outgoing.push_back(State::Outbound{
           .bytes = std::move(*bytes), .end = end, .message_id = message_id});
@@ -251,6 +265,14 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
     state_->on_message = std::move(on_message);
     state_->on_done = std::move(on_done);
     state_->last_activity = absl::Now();
+    state_->span = obs::Tracer::StartRootSpan(
+        "a11.wire_stream", obs::SpanKind::kInternal, state_->id);
+    if (state_->span.IsRecording()) {
+      state_->span.SetAttribute("a11.stream.id", state_->id);
+      state_->span.SetAttribute(
+          "a11.stream.role",
+          state_->role == ChannelEndpointRole::kClient ? "client" : "server");
+    }
   }
   std::weak_ptr<State> weak = state_;
   internal::BinaryChannelCallbacks callbacks{
@@ -782,6 +804,8 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
   OnDone callback;
   std::shared_ptr<a11::Promise<a11::Unit>> startup;
   bool close_channel = terminal_error.has_value();
+  obs::Span span;
+  absl::Status span_status;
   {
     thread::MutexLock lock(&state->mu);
     if (state->finished)
@@ -798,6 +822,12 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
       state->done_called = true;
       callback = state->on_done;
     }
+    span = std::move(state->span);
+    span_status = state->status;
+  }
+  if (span.IsRecording()) {
+    span.SetStatus(span_status);
+    span.End();
   }
   if (terminal_error.has_value()) {
     (void)startup->SetStatus(*terminal_error);

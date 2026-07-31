@@ -668,6 +668,22 @@ async def interact_with_claude(action: a11.Action):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
+    # Record the LLM span's model and input for tracing backends (e.g.
+    # Langfuse). Guarded: tracing must never affect the interaction.
+    if action.trace_id:
+        try:
+            action.set_span_name("Claude interaction")
+            action.set_span_attribute("gen_ai.system", "anthropic")
+            action.set_span_attribute("gen_ai.request.model", model)
+            action.set_span_input(
+                [
+                    {"role": message["role"], "content": message["content"]}
+                    for message in conversation.messages
+                ]
+            )
+        except Exception:
+            logging.debug("failed to record LLM span input", exc_info=True)
+
     client = get_anthropic_client(api_key)
 
     allowed_patterns = llm.get_allowed_llm_action_patterns(action)
@@ -782,6 +798,15 @@ async def interact_with_claude(action: a11.Action):
 
             await action["new_interactions"].put(interaction)
             if not interaction.action_calls:
+                if action.trace_id:
+                    try:
+                        action.set_span_output(
+                            snapshot.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        logging.debug(
+                            "failed to record LLM span output", exc_info=True
+                        )
                 break
 
             outputs = await runner.execute_actions_from_interaction(

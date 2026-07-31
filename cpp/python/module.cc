@@ -1,8 +1,12 @@
 // Copyright 2026 The A11 Authors.
 
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <string>
 
+#include <absl/debugging/failure_signal_handler.h>
+#include <absl/debugging/symbolize.h>
 #include <absl/status/status.h>
 #include <pybind11/pybind11.h>
 #include <pybind11_abseil/status_casters.h>
@@ -14,7 +18,31 @@
 
 namespace py = pybind11;
 
+namespace {
+
+// Installs Abseil's failure signal handler so fatal signals (SIGSEGV, SIGABRT,
+// ...) print a symbolized stack trace instead of a bare crash. Opt out with
+// A11_DISABLE_FAILURE_SIGNAL_HANDLER for environments (debuggers, some test
+// harnesses) that want to own signal handling.
+void InstallFailureSignalHandler() {
+  if (std::getenv("A11_DISABLE_FAILURE_SIGNAL_HANDLER") != nullptr) {
+    return;
+  }
+  std::string program;
+  try {
+    program =
+        py::module_::import("sys").attr("executable").cast<std::string>();
+  } catch (...) {
+    program.clear();
+  }
+  absl::InitializeSymbolizer(program.c_str());
+  absl::InstallFailureSignalHandler(absl::FailureSignalHandlerOptions{});
+}
+
+}  // namespace
+
 PYBIND11_MODULE(_native, module) {
+  InstallFailureSignalHandler();
   py::google::ImportStatusModule();
 
   module.doc() = "Native C++ backend for A11";
@@ -55,4 +83,5 @@ PYBIND11_MODULE(_native, module) {
   // conversions happen after module initialization has completed.
   a11::python::BindService(module);
   a11::python::BindActions(module);
+  a11::python::BindObs(module);
 }

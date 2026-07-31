@@ -16,6 +16,7 @@ void BindWebRtc(pybind11::module_& module);
 void BindNodes(pybind11::module_& module);
 void BindActions(pybind11::module_& module);
 void BindService(pybind11::module_& module);
+void BindObs(pybind11::module_& module);
 
 }  // namespace a11::python
 

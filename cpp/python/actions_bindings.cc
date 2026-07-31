@@ -923,6 +923,46 @@ void BindActions(py::module_& module) {
                  ValueOrThrow(MakeSyncActionHandler(callback));
              ThrowIfNotOk(self.SetOnCancelled(std::move(native)));
            })
+      .def_property_readonly("trace_id", &actions::Action::TraceId)
+      .def_property_readonly("span_id", &actions::Action::SpanId)
+      .def(
+          "set_span_attribute",
+          [](actions::Action& self, const std::string& key,
+             const py::object& value) {
+            // bool is a subclass of int in Python, so test it first.
+            if (py::isinstance<py::bool_>(value)) {
+              self.SetSpanAttribute(key, value.cast<bool>());
+            } else if (py::isinstance<py::int_>(value)) {
+              self.SetSpanAttribute(key, value.cast<std::int64_t>());
+            } else if (py::isinstance<py::float_>(value)) {
+              self.SetSpanAttribute(key, value.cast<double>());
+            } else {
+              self.SetSpanAttribute(key, py::str(value).cast<std::string>());
+            }
+          },
+          py::arg("key"), py::arg("value"))
+      .def(
+          "set_span_name",
+          [](actions::Action& self, const std::string& name) {
+            self.SetSpanName(name);
+          },
+          py::arg("name"))
+      .def(
+          "set_span_status",
+          [](actions::Action& self, const std::string& code,
+             const std::string& description) {
+            obs::SpanStatus status = obs::SpanStatus::kUnset;
+            if (code == "ok") {
+              status = obs::SpanStatus::kOk;
+            } else if (code == "error") {
+              status = obs::SpanStatus::kError;
+            } else if (code != "unset") {
+              ThrowStatus(absl::InvalidArgumentError(
+                  "span status must be 'ok', 'error' or 'unset'"));
+            }
+            self.SetSpanStatus(status, description);
+          },
+          py::arg("code"), py::arg("description") = "")
       .def("is_done", &actions::Action::IsDone)
       .def("has_been_run", &actions::Action::HasBeenRun)
       .def("has_been_called", &actions::Action::HasBeenCalled)

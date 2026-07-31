@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "a11-kit"
-version = "0.1.1"
+version = "0.1.2"
 description = "Concurrent action and streaming runtime with a native C++ backend"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -71,6 +71,9 @@ sdist.exclude = [
 [tool.scikit-build.cmake.define]
 A11_BUILD_PYTHON = "ON"
 BUILD_TESTING = "OFF"
+# Ship the native OTLP/HTTP span exporter; the deps prefix supplies a static
+# libcurl (see scripts/bootstrap_wheel_deps.sh).
+A11_WITH_OTLP_HTTP = "ON"
 
 [tool.cibuildwheel]
 build = "cp311-* cp312-* cp313-* cp314-*"

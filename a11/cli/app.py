@@ -76,6 +76,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Imported here (not at module top) so the command registry — and any
     # provider probing it does — is only built when the CLI actually runs.
     from a11.cli.commands import COMMANDS
+    from a11 import observability
+
+    otlp_configured = observability.configure_langfuse_from_env()
+
+    if not otlp_configured:
+        observability.configure_otel_from_env()
 
     parser = build_parser(COMMANDS)
     args = parser.parse_args(argv)

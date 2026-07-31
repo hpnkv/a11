@@ -17,6 +17,8 @@ verbose, ``thoughts``) stream nodes it produces.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 
 import a11
 from prompt_toolkit import PromptSession
@@ -28,13 +30,14 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
 
+from a11 import observability
 from a11.cli.backends import PROVIDERS, Provider, make_user_interaction
 from a11.sdk.interact_with_llm import (
     INTERACT_WITH_LLM_SCHEMA,
     interact_with_llm,
 )
 from a11.sdk.llm import Interaction, LlmHeaders
-from a11.status import StatusException
+from a11.status import Status, StatusCode, StatusException
 
 _HELP = (
     "Commands:\n"
@@ -59,30 +62,59 @@ class ChatUI:
         self._session: PromptSession[str] = PromptSession(
             history=InMemoryHistory()
         )
+        self._traceparent: str | None = None
+        self._chat_span: observability.Span | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
     async def run(self) -> int:
         """Run the read-eval-print loop until the user exits. Returns 0."""
+        # One "A11 Chat" span for the whole session; each turn's interaction is
+        # parented to it (via its traceparent), so turns nest under it.
+        self._chat_span = observability.start_span("A11 Chat", kind="server")
+        self._traceparent = self._chat_span.traceparent()
         self._console.print(_HELP, style="dim", markup=False)
         self._print_status()
         if not self._provider.api_key():
             self._warn_missing_key()
 
-        while True:
-            try:
-                with patch_stdout():
-                    text = await self._session.prompt_async(
-                        HTML(f"<ansicyan>{self._provider.name}</ansicyan> › ")
-                    )
-            except (EOFError, KeyboardInterrupt):
-                break
+        self._chat_span.set_input(
+            f"Interactive chat started at {datetime.datetime.now().isoformat()}"
+        )
 
-            text = text.strip()
-            if not text:
-                continue
-            if not await self._handle(text):
-                break
+        try:
+            while True:
+                try:
+                    with patch_stdout():
+                        text = await self._session.prompt_async(
+                            HTML(
+                                f"<ansicyan>{self._provider.name}</ansicyan> › "
+                            )
+                        )
+                except (EOFError, KeyboardInterrupt):
+                    break
+
+                text = text.strip()
+                if not text:
+                    continue
+                if not await self._handle(text):
+                    break
+        except StatusException as exc:
+            self._apply_span_error(self._chat_span, exc.status)
+            self._chat_span.set_output(exc.status.model_dump())
+        except Exception as exc:
+            status = Status(code=StatusCode.INTERNAL, message=str(exc))
+            self._apply_span_error(self._chat_span, status)
+            self._chat_span.set_output(status.model_dump())
+            raise status.to_exception() from exc
+        else:
+            self._chat_span.set_status("ok")
+            self._chat_span.set_output(
+                "Interactive chat ended at"
+                f" {datetime.datetime.now().isoformat()}"
+            )
+        finally:
+            self._chat_span.end()
 
         self._console.print("bye", style="dim")
         return 0
@@ -141,8 +173,13 @@ class ChatUI:
             .set_header(LlmHeaders.MODEL.value, self._model)
             .set_header(LlmHeaders.API_KEY.value, self._provider.api_key())
             .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, "")
-            .run()
         )
+        observability.enable_tracing(
+            interact,
+            traceparent=self._traceparent,
+            baggage={"langfuse.trace.name": "chat_ui"},
+        )
+        interact.run()
 
         user_interaction = make_user_interaction(text)
 
@@ -223,6 +260,17 @@ class ChatUI:
             self._console.print()
 
     # -- small helpers -----------------------------------------------------
+
+    @staticmethod
+    def _apply_span_error(span: observability.Span, status: Status) -> None:
+        """Mirror an A11 Status onto a span: error status + error.type, plus
+        error.details when the status carries any."""
+        span.set_status("error", status.message)
+        span.set_attribute("error.type", status.code.name)
+        if status.details:
+            span.set_attribute(
+                "error.details", json.dumps(status.details, default=str)
+            )
 
     def _print_status(self) -> None:
         self._console.print(

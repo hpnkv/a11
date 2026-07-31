@@ -70,6 +70,15 @@ from .net.websocket_wire_stream import (
 )
 from .net.wire_stream import WireStream, WireStreamOptions, WireStreamWithRecv
 from .nodes.async_node import AsyncNode, NodeMap
+from .observability import (
+    configure_langfuse_from_env,
+    configure_otel,
+    configure_otel_from_env,
+    enable_tracing,
+    langfuse,
+    new_traceparent,
+    shutdown_otel,
+)
 from .service.session import (
     normalise_headers,
     Session,

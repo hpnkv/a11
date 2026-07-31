@@ -29,10 +29,15 @@ class InProcessWireStream final : public WireStream {
   using Pair = std::pair<std::shared_ptr<InProcessWireStream>,
                          std::shared_ptr<InProcessWireStream>>;
 
+  // `preassigned_id`, when non-empty, fixes the shared stream id (and hence the
+  // tracing trace id) instead of generating one. This is the implementation-
+  // level hook for preassigning a stream's trace id without widening the
+  // WireStream interface.
   static absl::StatusOr<Pair> CreatePair(
       std::optional<WireStreamOptions> options = std::nullopt,
       std::optional<WireStreamOptions> first_options = std::nullopt,
-      std::optional<WireStreamOptions> second_options = std::nullopt);
+      std::optional<WireStreamOptions> second_options = std::nullopt,
+      std::string preassigned_id = {});
 
   ~InProcessWireStream() override = default;
 

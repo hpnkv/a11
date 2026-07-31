@@ -16,9 +16,13 @@ add_executable(a11_core_test
   in_process_wire_stream_test.cc
   wire_stream_with_recv_test.cc
   websocket_wire_stream_test.cc
-  local_chunk_store_test.cc)
+  local_chunk_store_test.cc
+  obs_trace_context_test.cc
+  obs_tracer_test.cc
+  obs_action_span_test.cc
+  obs_session_stream_test.cc)
 target_link_libraries(
   a11_core_test PRIVATE a11::concurrency a11::data a11::net a11::nodes
-                        a11::stores a11::actions a11::service
+                        a11::stores a11::actions a11::service a11::obs
                         GTest::gtest_main)
 add_test(NAME a11_core_test COMMAND a11_core_test)

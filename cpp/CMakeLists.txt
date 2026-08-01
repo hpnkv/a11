@@ -6,7 +6,7 @@ endif ()
 
 project(
         a11
-        VERSION 0.1.0
+        VERSION 0.1.3
         DESCRIPTION "A11 action and streaming runtime"
         LANGUAGES CXX)
 

@@ -69,8 +69,10 @@ export OPENSSL_ROOT_DIR="${A11_DEPS_PREFIX}"
 export PKG_CONFIG_PATH="${A11_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 # Keep this set on macOS so the dependencies and extension have the same
-# deployment target.
-export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+# deployment target. 14.4 is the minimum for the Boost.Fiber futex spinlock
+# (os_sync_wait_on_address); it must match between this bootstrap and the CMake
+# build below.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.4}"
 
 scripts/bootstrap_wheel_deps.sh
 ```
@@ -79,6 +81,15 @@ That script builds Boost, OpenSSL, nghttp2, nlohmann-json, and uvw. GoogleTest
 must still be installed separately for `BUILD_TESTING=ON`. Keep the exported
 paths in the shell used for CMake, `uv sync`, and editable rebuilds.
 
+On macOS the script also applies `scripts/patches/boost-fiber-macos-futex.patch`
+to enable Boost.Fiber's futex spinlock, and builds Boost with
+`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`. `cpp/CMakeLists.txt` defines the
+same macro for the isolated static-deps build (`A11_REQUIRE_STATIC_DEPS=ON`), so
+the two agree — this is why the deployment target and `A11_FIBER_SPINLOCK` (see
+below) must be identical in the bootstrap shell and the CMake build. Set
+`A11_FIBER_SPINLOCK=BOOST_FIBERS_SPINLOCK_TTAS_FUTEX` in both to use the plain
+(non-adaptive) futex spinlock instead of the default adaptive one.
+
 ## Editable Python build
 
 Create an environment and install the project in editable mode:
@@ -86,9 +97,23 @@ Create an environment and install the project in editable mode:
 ```sh
 uv venv --python 3.12
 
-export CMAKE_ARGS="-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON"
+# Point the build at the bootstrapped static-deps prefix. The dependency
+# discovery paths must go through CMAKE_ARGS, not the CMAKE_PREFIX_PATH /
+# OPENSSL_ROOT_DIR environment variables the Prerequisites block exports:
+# uv builds the extension in an isolated environment and overwrites
+# CMAKE_PREFIX_PATH with its own build venv, so an exported value never reaches
+# the static-deps configure and Boost is not found. Values passed as -D flags in
+# CMAKE_ARGS land on the cmake command line and survive.
+export CMAKE_ARGS="-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON \
+  -DCMAKE_PREFIX_PATH=${A11_DEPS_PREFIX} -DOPENSSL_ROOT_DIR=${A11_DEPS_PREFIX}"
 uv sync --locked --group dev
 ```
+
+`PKG_CONFIG_PATH` (exported in the Prerequisites block) is *not* overwritten by
+uv, so nghttp2, curl, and uvw are still discovered through it. If a system or
+Homebrew Boost/OpenSSL is present and you omit the two `-D` flags above, the
+configure either fails to find Boost or silently links the wrong copy; keep them
+in `CMAKE_ARGS` whenever `A11_REQUIRE_STATIC_DEPS=ON`.
 
 Any supported Python from 3.11 onward can replace 3.12. `uv sync` maps the
 Python modules directly to `a11/`, while scikit-build compiles and installs the
@@ -219,6 +244,62 @@ When changing toolchains or dependency prefixes, rerun the full configure
 command above with `cmake --fresh` in place of `cmake`. A normal source edit
 only needs `cmake --build`.
 
+## Developing in CLion (or another CMake IDE)
+
+The IDE drives raw CMake, so it needs the same discovery settings the wheel and
+editable flows inject — otherwise the static-deps configure fails with
+`Boost_DIR-NOTFOUND` (the isolated build is pinned to the prefix) or, on macOS,
+`"futex not supported"` (the deployment target is unset). `CMakePresets.json` at
+the repository root encodes all of it, so CLion, VS Code, and the command line
+share one configuration.
+
+1. **Bootstrap the dependency prefix once** (see [Prerequisites](#prerequisites))
+   and note the `A11_DEPS_PREFIX` you used. Prefer a persistent location over
+   `/tmp` (which is cleared on reboot), e.g.
+   `export A11_DEPS_PREFIX="$HOME/.cache/a11-deps/$(uname -m)"`.
+
+2. **Let the IDE see `A11_DEPS_PREFIX`.** A GUI-launched CLion does *not* inherit
+   your shell, so pick one:
+   - launch it from a terminal that has `A11_DEPS_PREFIX` exported; or
+   - add `A11_DEPS_PREFIX` to the CMake profile's *Environment* field
+     (Settings → Build, Execution, Deployment → CMake); or
+   - create a git-ignored `CMakeUserPresets.json` that hard-codes the absolute
+     paths, for example:
+
+     ```json
+     {
+       "version": 6,
+       "configurePresets": [
+         {
+           "name": "debug-local",
+           "inherits": "debug",
+           "cacheVariables": {
+             "CMAKE_PREFIX_PATH": "/Users/me/.cache/a11-deps/arm64",
+             "OPENSSL_ROOT_DIR": "/Users/me/.cache/a11-deps/arm64"
+           },
+           "environment": {
+             "PKG_CONFIG_PATH": "/Users/me/.cache/a11-deps/arm64/lib/pkgconfig"
+           }
+         }
+       ]
+     }
+     ```
+
+3. **Select a preset.** CLion detects `CMakePresets.json` and lists `debug` and
+   `release` under Settings → CMake (enable them); the command-line equivalents
+   are `cmake --preset debug`, `cmake --build --preset debug`, and
+   `ctest --preset debug`.
+
+The presets set `A11_REQUIRE_STATIC_DEPS=ON`, the macOS deployment target and
+`A11_FIBER_SPINLOCK` to `14.4`/`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`
+(these must match the values the prefix was bootstrapped with — see
+[Prerequisites](#prerequisites)), enable `BUILD_TESTING`, and emit
+`compile_commands.json`. They default `A11_BUILD_PYTHON=OFF` so CLion builds the
+C++ libraries and native test targets without the Python toolchain; build the
+importable extension with `uv sync` (see [Editable Python build](#editable-python-build)).
+To compile the extension inside CLion too, set `A11_BUILD_PYTHON=ON` (it needs
+Homebrew's `pybind11` and a Python 3.11+ interpreter).
+
 ## Testing both layers
 
 `pytest` alone does not rebuild C++. For a change that touches C++ or a
@@ -271,80 +352,76 @@ bash -n scripts/bootstrap_wheel_deps.sh scripts/smoke_cmake_install.sh
 The matrix is configured in `pyproject.toml` and orchestrated by
 `scripts/build_wheels.py`:
 
-- CPython 3.11, 3.12, 3.13, 3.14, and 3.15;
-- macOS x86_64 and arm64;
+- CPython 3.11, 3.12, 3.13, and 3.14 (3.15 is added automatically once
+  cibuildwheel ships stable images; `enable = ["cpython-prerelease"]` is already
+  set);
+- macOS x86_64 and arm64 (deployment target 14.4, required by the Boost.Fiber
+  futex spinlock — see [Prerequisites](#prerequisites));
 - manylinux x86_64 and aarch64.
 
 The wheels are architecture-specific. Do not create `universal2` wheels:
 Boost.Context includes architecture-specific assembly.
 
-Install the development tools first:
+`build_wheels.py` needs no environment set up by hand. It exports the deps
+prefix per platform/arch; `scripts/bootstrap_wheel_deps.sh` (run automatically
+as cibuildwheel's `before-all`) builds the static dependencies (Boost, OpenSSL,
+curl, nghttp2, nlohmann-json, uvw) into that prefix, and CMake discovers them
+from it. It also preflights prerequisites and prints a clear message instead of
+failing deep in a build.
+
+### Before you build
 
 ```sh
+# Development tools (cibuildwheel, stub generators, linters).
 uv sync --locked --group dev
 ```
 
-macOS wheels are built against the official python.org CPython framework
-builds, which carry the correct deployment target for portable wheels.
-cibuildwheel uses them in place and refuses to install them system-wide
-outside CI, so install each targeted version from python.org before building
-on macOS — CPython 3.11, 3.12, 3.13, 3.14, and 3.15, under
-`/Library/Frameworks/Python.framework/Versions/`. The uv-managed interpreters
-in `.venv` cannot stand in for them. Confirm what is present with:
+- **Linux wheels** need Docker running. `build_wheels.py` checks this up front
+  and stops with a clear message if it is not. Building a *non-native* Linux
+  architecture (for example x86_64 on Apple silicon) additionally needs
+  QEMU/binfmt and is slow; prefer building Linux wheels on a Linux/CI host.
+- **macOS wheels** are built against the official python.org CPython framework
+  builds under `/Library/Frameworks/Python.framework/Versions/` (the uv-managed
+  interpreters in `.venv` cannot stand in for them). `build_wheels.py` skips any
+  targeted version whose framework is missing and prints which — install the
+  version from python.org for a complete matrix. Check what is present with:
+
+  ```sh
+  ls /Library/Frameworks/Python.framework/Versions/
+  ```
+
+### Commands
 
 ```sh
-ls /Library/Frameworks/Python.framework/Versions/
-```
-
-To iterate on a subset locally without every framework installed, skip the
-missing macOS versions (this produces an incomplete matrix, not a release):
-
-```sh
-CIBW_SKIP="cp311-macosx_* cp314-macosx_*" \
-  .venv/bin/python scripts/build_wheels.py --platform macos
-```
-
-Then build the host-required matrix:
-
-```sh
+# Iterate: build only the host OS's wheels, native architecture first.
 .venv/bin/python scripts/build_wheels.py
-```
 
-On macOS, this builds both macOS architectures and both Linux architectures.
-Docker must be running for Linux builds. On Linux, it builds the Linux matrix
-only. Building a non-native Linux architecture requires Docker with the
-appropriate binfmt/QEMU support.
-
-Build only one platform when iterating:
-
-```sh
+# One platform explicitly.
 .venv/bin/python scripts/build_wheels.py --platform macos
 .venv/bin/python scripts/build_wheels.py --platform linux
-```
 
-Linux cannot build the macOS matrix. An alternative output directory can be
-selected with `--output-dir`; the default is `dist/`:
+# Full release matrix (macOS + Linux). Linux needs Docker; run on a Linux/CI
+# host to avoid QEMU. macOS wheels can only be built on macOS.
+.venv/bin/python scripts/build_wheels.py --platform all
 
-```sh
-.venv/bin/python scripts/build_wheels.py \
-  --platform linux --output-dir dist/linux
+# Alternate output directory (default is dist/).
+.venv/bin/python scripts/build_wheels.py --platform linux --output-dir dist/linux
 ```
 
 List the builds without compiling them:
 
 ```sh
-.venv/bin/python -m cibuildwheel \
-  --print-build-identifiers --platform macos
-.venv/bin/python -m cibuildwheel \
-  --print-build-identifiers --platform linux
+.venv/bin/python -m cibuildwheel --print-build-identifiers --platform macos
+.venv/bin/python -m cibuildwheel --print-build-identifiers --platform linux
 ```
 
-Python 3.15 is enabled through cibuildwheel's `cpython-prerelease` group until
-stable images are available. Each platform/architecture gets an isolated
-static dependency prefix and ABI-specific `build/wheel/<wheel-tag>` directory,
-while editable builds use `build/editable/<wheel-tag>`. A temporary wheel
-interpreter therefore cannot invalidate the editable rebuild tree, and a
-native module from one interpreter cannot leak into another wheel.
+Each platform/architecture gets an isolated static dependency prefix and
+ABI-specific `build/wheel/<wheel-tag>` directory, while editable builds use
+`build/editable/<wheel-tag>`. A temporary wheel interpreter therefore cannot
+invalidate the editable rebuild tree, and a native module from one interpreter
+cannot leak into another wheel.
+
+### Audit
 
 Every wheel is tested by `scripts/audit_wheel.py` inside cibuildwheel's clean
 test environment. The audit:
@@ -355,7 +432,19 @@ test environment. The audit:
 - rejects non-system dynamic dependencies; and
 - rejects absolute or otherwise non-relocatable RPATH/RUNPATH entries.
 
-Cross-compiled macOS wheels cannot be executed on the opposite host
-architecture, so their runtime test is skipped there. Run the matrix on both
-macOS architectures when release policy requires a native execution test for
-each wheel.
+`build_wheels.py` audits every wheel it can execute on the build host: native
+wheels always, and an x86_64 wheel cross-built on Apple silicon when Rosetta 2
+is present. Only genuinely unrunnable wheels (an arm64 wheel on an x86_64 host)
+have their audit skipped, and the script prints a notice naming them — run the
+matrix on that architecture to audit those.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Could NOT find Boost` (or another dep) at CMake configure | The deps prefix is missing or incomplete. Delete it (`rm -rf /tmp/a11-wheel-deps-*` on macOS, `/opt/a11-wheel-deps-*` on Linux) and rebuild; `before-all` re-bootstraps it. Static builds are pinned to the prefix, so this fails loudly instead of silently using a system/Homebrew Boost. |
+| `symbol not found in flat namespace '_jump_fcontext'` at import/audit | A Boost.Context prefix built before the assembly-ABI fix. Delete the prefix and rebuild (the stamp file `.a11-wheel-deps-vN-<arch>` gates rebuilds; bumping the script's version forces one). |
+| `"futex not supported on this platform"` at CMake/compile on macOS | The macOS deployment target is below 14.4. Keep `MACOSX_DEPLOYMENT_TARGET=14.4` in both the bootstrap shell and the CMake build. |
+| Fiber crashes/corruption only in a hand-rolled build | The Boost.Fiber spinlock macro differs between the deps prefix and the A11 compile. Use the same `A11_FIBER_SPINLOCK` (default `BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`) for both, and rebuild the prefix if you change it. |
+| Linux build stops immediately citing Docker | Start Docker (or Colima) and retry, or build Linux wheels on a Linux host. |
+| A macOS CPython version is skipped with a notice | Its python.org framework is not installed; install that version from python.org. |

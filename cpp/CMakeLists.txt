@@ -159,10 +159,46 @@ endif ()
 find_package(nlohmann_json CONFIG REQUIRED)
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
-find_package(Boost 1.82 REQUIRED COMPONENTS context fiber thread)
+# For isolated static builds (wheels) the deps prefix on CMAKE_PREFIX_PATH is the
+# single source of truth. Restrict Boost's upstream CMake config to that prefix
+# (NO_DEFAULT_PATH + PATHS) so an incomplete prefix fails loudly with "could not
+# find Boost" instead of silently resolving a system/Homebrew Boost -- which on a
+# cross build is the wrong architecture, and elsewhere hides a broken prefix.
+# Boost_NO_SYSTEM_PATHS is a module-mode variable and does not constrain config
+# mode, so the search paths must be pinned on the call itself. Developer builds
+# (static deps not required) keep the default search so a system Boost works.
+if (A11_REQUIRE_STATIC_DEPS)
+    find_package(Boost 1.82 REQUIRED CONFIG COMPONENTS context fiber thread
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+else ()
+    find_package(Boost 1.82 REQUIRED COMPONENTS context fiber thread)
+endif ()
 a11_require_static_target(Boost::context)
 a11_require_static_target(Boost::fiber)
 a11_require_static_target(Boost::thread)
+
+# The deps prefix builds Boost.Fiber with a futex spinlock on macOS (see
+# scripts/bootstrap_wheel_deps.sh). Boost.Fiber selects its spinlock in headers,
+# so every A11 translation unit must define the SAME macro the prefix's library
+# was built with; otherwise boost::fibers::mutex has different layouts in the
+# archive and this extension (an ODR violation). Only apply this for the
+# isolated static-deps build that uses that prefix -- a system/Homebrew Boost is
+# unpatched (no BOOST_FIBERS_HAS_FUTEX on macOS) and would fail to compile with a
+# futex spinlock requested. A11_FIBER_SPINLOCK must match the value bootstrap
+# used, and needs a >= 14.4 deployment target for futex availability.
+if (APPLE AND A11_REQUIRE_STATIC_DEPS)
+    set(A11_FIBER_SPINLOCK "$ENV{A11_FIBER_SPINLOCK}")
+    if (NOT A11_FIBER_SPINLOCK)
+        set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX)
+    endif ()
+    if (NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
+            AND NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_FUTEX")
+        message(FATAL_ERROR
+                "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
+                " or BOOST_FIBERS_SPINLOCK_TTAS_FUTEX (got ${A11_FIBER_SPINLOCK})")
+    endif ()
+    add_compile_definitions(${A11_FIBER_SPINLOCK})
+endif ()
 
 if (A11_BUILD_HTTP)
     # Resolve OpenSSL before libdatachannel so its transitive crypto linkage uses

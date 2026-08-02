@@ -1,0 +1,68 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "hidden": true,
+      "displayName": "A11 static-deps base",
+      "description": "Configures against the bootstrapped static dependency prefix. Set A11_DEPS_PREFIX (see BUILDING.md) before selecting this preset.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-${presetName}",
+      "cacheVariables": {
+        "A11_REQUIRE_STATIC_DEPS": "ON",
+        "A11_FETCH_MISSING_DEPS": "ON",
+        "BUILD_TESTING": "ON",
+        "A11_BUILD_PYTHON": "OFF",
+        "CMAKE_PREFIX_PATH": "$env{A11_DEPS_PREFIX}",
+        "OPENSSL_ROOT_DIR": "$env{A11_DEPS_PREFIX}",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "environment": {
+        "PKG_CONFIG_PATH": "$env{A11_DEPS_PREFIX}/lib/pkgconfig",
+        "MACOSX_DEPLOYMENT_TARGET": "14.4",
+        "A11_FIBER_SPINLOCK": "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "dev",
+      "displayName": "Debug (static deps)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "dev",
+      "displayName": "Release (static deps)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

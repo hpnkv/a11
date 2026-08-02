@@ -1,0 +1,113 @@
+# Enable Boost.Fiber's futex fast path on macOS using the Darwin
+# os_sync_wait_on_address / os_sync_wake_by_address_any primitives.
+#
+# Upstream Boost.Fiber only defines BOOST_FIBERS_HAS_FUTEX on Linux, OpenBSD,
+# and Windows; on macOS it falls back to the generic spinlock. This backports
+# the futex support from https://github.com/hpnkv/fiber (compared against
+# boostorg/fiber develop) as a small build-time patch rather than vendoring a
+# whole Boost.Fiber fork.
+#
+# Applied to the Boost 1.90.0 release tree (headers live under boost/) by
+# scripts/bootstrap_wheel_deps.sh before b2 runs. Regenerate against a new Boost
+# release by re-diffing the two headers if the surrounding context shifts.
+#
+# GATING: os_sync_wait_on_address requires macOS 14.4, so the path only compiles
+# in when the deployment target is >= 14.4 (__MAC_OS_X_VERSION_MIN_REQUIRED).
+# A11 builds default MACOSX_DEPLOYMENT_TARGET to 14.4 and select a futex spinlock
+# (BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX) in both this script and
+# cpp/CMakeLists.txt, so futex is active by default; lowering the deployment
+# target below 14.4 reverts Boost.Fiber to its pre-patch behaviour.
+#
+# MEMORY-ORDERING FIX (spinlock_ttas_futex.hpp / spinlock_ttas_adaptive_futex.hpp):
+# Both futex spinlocks release the lock on their uncontended unlock fast path with
+# value_.fetch_sub(1, memory_order_acquire). For a read-modify-write, memory_order_
+# acquire makes only the LOAD acquire; the STORE part is relaxed, so the 1 -> 0
+# transition that releases the lock carries no release semantics. The next holder
+# acquires with acquire (compare_exchange / exchange), but with no paired release
+# there is no happens-before edge, so writes made inside the critical section
+# (boost::fibers::mutex::owner_, the intrusive wait-/ready-queue links the spinlock
+# protects) are not guaranteed visible to it. On x86 this is masked because lock-
+# prefixed RMWs are full barriers; on arm64 (Apple silicon) it is a real data race,
+# corrupting the fiber mutex owner and the scheduler queues under contention
+# (a11_core_test: boost::fibers::mutex unlock "operation not permitted"). The non-
+# futex spinlocks are unaffected because they unlock with store(release). The fix
+# uses memory_order_acq_rel so the releasing store publishes the critical section,
+# matching the acquire on the lock side. Verified: a shared_work + fiber mutex +
+# condition_variable stress reproducer fails 30/30 without this hunk and passes
+# 60/60 with it (identical to the non-futex spinlock).
+--- a/boost/fiber/detail/config.hpp
++++ b/boost/fiber/detail/config.hpp
+@@ -12,6 +12,12 @@
+ #include <boost/config.hpp>
+ #include <boost/predef.h>
+ #include <boost/detail/workaround.hpp>
++
++#if BOOST_OS_MACOS
++#include <Availability.h>
++#define BOOST_OS_SYNC_WAIT_ON_ADDRESS_AVAILABLE \
++    __MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_VERSION_14_4
++#endif
+
+ #ifdef BOOST_FIBERS_DECL
+ # undef BOOST_FIBERS_DECL
+@@ -38,7 +44,8 @@
+ # include <boost/config/auto_link.hpp>
+ #endif
+
+-#if BOOST_OS_LINUX || BOOST_OS_BSD_OPEN || BOOST_OS_WINDOWS
++#if BOOST_OS_LINUX || BOOST_OS_BSD_OPEN || BOOST_OS_WINDOWS || (BOOST_OS_MACOS && \
++    BOOST_OS_SYNC_WAIT_ON_ADDRESS_AVAILABLE)
+ # define BOOST_FIBERS_HAS_FUTEX
+ #endif
+
+--- a/boost/fiber/detail/futex.hpp
++++ b/boost/fiber/detail/futex.hpp
+@@ -27,6 +27,8 @@
+ }
+ #elif BOOST_OS_WINDOWS
+ #include <windows.h>
++#elif (BOOST_OS_MACOS && BOOST_OS_SYNC_WAIT_ON_ADDRESS_AVAILABLE)
++#include <os/os_sync_wait_on_address.h>
+ #endif
+
+ namespace boost {
+@@ -71,6 +73,17 @@
+     ::WaitOnAddress( static_cast< volatile void * >( addr), & x, sizeof( x), INFINITE);
+     return 0;
+ }
++#elif (BOOST_OS_MACOS && BOOST_OS_SYNC_WAIT_ON_ADDRESS_AVAILABLE)
++BOOST_FORCEINLINE
++int futex_wake( std::atomic< std::int32_t > * addr) {
++    return 0 <= os_sync_wake_by_address_any(addr, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE) ? 0 : -1;
++}
++
++BOOST_FORCEINLINE
++int futex_wait( std::atomic< std::int32_t > * addr, std::int32_t x) {
++    return 0 <= os_sync_wait_on_address(static_cast< void * >( addr), x, sizeof(x),
++                                  OS_SYNC_WAIT_ON_ADDRESS_NONE) ? 0 : -1;
++}
+ #else
+ # warn "no futex support on this platform"
+ #endif
+--- a/boost/fiber/detail/spinlock_ttas_futex.hpp
++++ b/boost/fiber/detail/spinlock_ttas_futex.hpp
+@@ -116,7 +116,7 @@
+     }
+
+     void unlock() noexcept {
+-        if ( 1 != value_.fetch_sub( 1, std::memory_order_acquire) ) {
++        if ( 1 != value_.fetch_sub( 1, std::memory_order_acq_rel) ) {
+             value_.store( 0, std::memory_order_release);
+             futex_wake( & value_);
+         }
+--- a/boost/fiber/detail/spinlock_ttas_adaptive_futex.hpp
++++ b/boost/fiber/detail/spinlock_ttas_adaptive_futex.hpp
+@@ -125,7 +125,7 @@
+     }
+
+     void unlock() noexcept {
+-        if ( 1 != value_.fetch_sub( 1, std::memory_order_acquire) ) {
++        if ( 1 != value_.fetch_sub( 1, std::memory_order_acq_rel) ) {
+             value_.store( 0, std::memory_order_release);
+             futex_wake( & value_);
+         }

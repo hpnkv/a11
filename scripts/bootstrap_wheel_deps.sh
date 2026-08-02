@@ -1,15 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "$0")" && pwd)
 prefix=${A11_DEPS_PREFIX:?A11_DEPS_PREFIX must name an installation prefix}
 arch=${A11_WHEEL_ARCH:-$(uname -m)}
 host_os=$(uname -s)
 deployment_tag=
 if [[ "${host_os}" == Darwin ]]; then
-  export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-13.0}
+  # 14.4 is the minimum for os_sync_wait_on_address, which the Boost.Fiber futex
+  # spinlock (selected below) relies on. Lowering it disables futex on macOS.
+  export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-14.4}
   deployment_tag="-macos-${MACOSX_DEPLOYMENT_TARGET}"
 fi
-stamp="${prefix}/.a11-wheel-deps-v6-${arch}${deployment_tag}"
+
+# Boost.Fiber spinlock policy. Default to the adaptive TTAS futex spinlock;
+# A11_FIBER_SPINLOCK may switch it to the plain TTAS futex spinlock. The same
+# value MUST be used when compiling A11 (cpp/CMakeLists.txt reads
+# A11_FIBER_SPINLOCK identically), because Boost.Fiber selects the spinlock in
+# headers -- a mismatch changes boost::fibers::mutex's layout across the deps
+# library and the extension.
+fiber_spinlock=${A11_FIBER_SPINLOCK:-BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX}
+case "${fiber_spinlock}" in
+  BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX | BOOST_FIBERS_SPINLOCK_TTAS_FUTEX) ;;
+  *)
+    echo "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX" \
+         "or BOOST_FIBERS_SPINLOCK_TTAS_FUTEX (got '${fiber_spinlock}')" >&2
+    exit 2
+    ;;
+esac
+
+stamp="${prefix}/.a11-wheel-deps-v9-${arch}${deployment_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -33,24 +53,40 @@ case "${host_os}:${arch}" in
   Darwin:x86_64|Darwin:amd64)
     cmake_arch_args=(-DCMAKE_OSX_ARCHITECTURES=x86_64
                      -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}")
-    boost_arch_args=(toolset=clang target-os=darwin architecture=x86
+    # Pin every property Boost.Context keys its assembly sources on
+    # (architecture/address-model/abi/binary-format). Passing only
+    # architecture=x86 lets b2 inherit the host's abi -- aapcs on an Apple
+    # silicon runner -- and the impossible x86+aapcs pair makes Boost.Context
+    # silently skip its jump/make/ontop_fcontext assembly, yielding a
+    # libboost_context.a that link-fails at dlopen (missing _jump_fcontext).
+    boost_arch_args=(toolset=clang target-os=darwin
+                     architecture=x86 address-model=64 abi=sysv
+                     binary-format=mach-o
+                     "define=${fiber_spinlock}"
                      'cxxflags=-arch x86_64' 'linkflags=-arch x86_64')
     openssl_target=darwin64-x86_64-cc
     ;;
   Darwin:arm64|Darwin:aarch64)
     cmake_arch_args=(-DCMAKE_OSX_ARCHITECTURES=arm64
                      -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}")
-    boost_arch_args=(toolset=clang target-os=darwin architecture=arm
+    boost_arch_args=(toolset=clang target-os=darwin
+                     architecture=arm address-model=64 abi=aapcs
+                     binary-format=mach-o
+                     "define=${fiber_spinlock}"
                      'cxxflags=-arch arm64' 'linkflags=-arch arm64')
     openssl_target=darwin64-arm64-cc
     ;;
   Linux:x86_64|Linux:amd64)
-    boost_arch_args=(toolset=gcc target-os=linux architecture=x86
+    boost_arch_args=(toolset=gcc target-os=linux
+                     architecture=x86 address-model=64 abi=sysv
+                     binary-format=elf
                      cxxflags=-fPIC cflags=-fPIC)
     openssl_target=linux-x86_64
     ;;
   Linux:aarch64|Linux:arm64)
-    boost_arch_args=(toolset=gcc target-os=linux architecture=arm
+    boost_arch_args=(toolset=gcc target-os=linux
+                     architecture=arm address-model=64 abi=aapcs
+                     binary-format=elf
                      cxxflags=-fPIC cflags=-fPIC)
     openssl_target=linux-aarch64
     ;;
@@ -121,6 +157,11 @@ download_and_extract \
   boost.tar.bz2
 (
   cd "${work}/boost_1_90_0"
+  # Backport Boost.Fiber's macOS futex fast path (os_sync_wait_on_address). The
+  # added code is guarded by BOOST_OS_MACOS and a >=14.4 deployment target, so
+  # applying it on every platform is harmless. Fail loudly if it no longer
+  # applies (e.g. after a Boost bump) rather than silently building without it.
+  patch -p1 < "${script_dir}/patches/boost-fiber-macos-futex.patch"
   ./bootstrap.sh --prefix="${prefix}" \
     --with-libraries=atomic,chrono,container,context,date_time,fiber,filesystem,thread
   ./b2 -j "${jobs}" "${boost_arch_args[@]}" cxxstd=20 variant=release \

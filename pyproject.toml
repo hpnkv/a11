@@ -81,13 +81,10 @@ skip = "*-musllinux* *-win32"
 enable = ["cpython-prerelease"]
 before-all = "bash {project}/scripts/bootstrap_wheel_deps.sh"
 test-command = "python {project}/scripts/audit_wheel.py {wheel}"
+environment = { MACOSX_DEPLOYMENT_TARGET = "14.4", CMAKE_BUILD_PARALLEL_LEVEL = "4", CMAKE_PREFIX_PATH = "$A11_DEPS_PREFIX", OPENSSL_ROOT_DIR = "$A11_DEPS_PREFIX", PKG_CONFIG_PATH = "$A11_DEPS_PREFIX/lib/pkgconfig", CMAKE_ARGS = "-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON -DCMAKE_PREFIX_PATH=$A11_DEPS_PREFIX -DOPENSSL_ROOT_DIR=$A11_DEPS_PREFIX" }
 environment-pass = [
     "A11_DEPS_PREFIX",
     "A11_WHEEL_ARCH",
-    "CMAKE_ARGS",
-    "CMAKE_PREFIX_PATH",
-    "OPENSSL_ROOT_DIR",
-    "PKG_CONFIG_PATH",
 ]
 
 [tool.cibuildwheel.linux]
@@ -95,11 +92,9 @@ archs = ["x86_64", "aarch64"]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 container-engine = { name = "docker", create-args = ["--memory", "16g", "--memory-swap", "16g", "--shm-size", "2g"] }
-environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]
-environment = { MACOSX_DEPLOYMENT_TARGET = "13.0" }
 
 [tool.black]
 line-length = 80

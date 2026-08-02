@@ -2,7 +2,9 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-build_dir=${1:-"${root}/build"}
+# Defaults to the preset-configured native tree (see BUILDING.md); pass an
+# explicit path to smoke-test a different build directory.
+build_dir=${1:-"${root}/cmake-build-debug"}
 work=$(mktemp -d "${TMPDIR:-/tmp}/a11-install-smoke.XXXXXX")
 trap 'rm -rf "${work}"' EXIT
 

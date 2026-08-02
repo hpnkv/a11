@@ -38,32 +38,40 @@ cross the boundary as
 
 ## Prerequisites
 
-The local build needs:
+A11 does **not** take its C++ libraries from the system package manager. From
+Homebrew (or apt/dnf/…) you install only the *tools*:
 
 - Python 3.11 or newer and [uv](https://docs.astral.sh/uv/);
-- CMake 3.28 or newer, Ninja, a C++20 compiler, Git, `pkg-config`, Curl, Make,
+- CMake 3.28 or newer, Ninja, a C++20 compiler, Git, `pkg-config`, `curl`, Make,
   and Perl;
-- static Boost.Context/Fiber/Thread, OpenSSL, nghttp2, nlohmann-json, and uvw;
 - GoogleTest for the native test build;
 - pybind11 if `A11_BUILD_PYTHON=ON` in a direct CMake build.
 
-CMake fetches the pinned Abseil version and, when it is not installed,
-libdatachannel. The latter is only used for WebRTC.
+The C++ **libraries** — Boost.Context/Fiber/Thread, OpenSSL, libcurl, nghttp2,
+nlohmann-json, and uvw — are built from source by
+`scripts/bootstrap_wheel_deps.sh` into a per-architecture prefix, and every A11
+build (editable, presets, and wheels) links that prefix exclusively. This is
+required on Linux **and** macOS: the build pins Boost to the prefix
+(`find_package(... NO_DEFAULT_PATH)`) and, on macOS, depends on the
+futex/memory-ordering patch the bootstrap applies to Boost.Fiber — a Homebrew
+Boost lacks it and is rejected. CMake additionally fetches the pinned Abseil and,
+for WebRTC, libdatachannel.
 
-On macOS, a suitable Homebrew setup is:
+On macOS, install the tools with Homebrew:
 
 ```sh
-brew install \
-  boost cmake googletest libnghttp2 ninja nlohmann-json openssl@3 \
-  pkg-config pybind11 uv uvw
+brew install cmake googletest ninja pkg-config pybind11 uv
 ```
 
-Linux package names vary by distribution. The project can build the main
-static dependencies reproducibly instead of relying on system packages:
+Then build the libraries into the prefix (the tool package names vary by Linux
+distribution, but this library step is identical on every platform):
 
 ```sh
 export A11_WHEEL_ARCH="$(uname -m)"
-export A11_DEPS_PREFIX="/tmp/a11-editable-deps-${A11_WHEEL_ARCH}"
+# One persistent, per-architecture dependency prefix, shared by the editable
+# build, the CMake presets, and (on macOS) the wheel build. Avoid /tmp, which is
+# cleared on reboot.
+export A11_DEPS_PREFIX="$HOME/.cache/a11-deps/${A11_WHEEL_ARCH}"
 export CMAKE_PREFIX_PATH="${A11_DEPS_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 export OPENSSL_ROOT_DIR="${A11_DEPS_PREFIX}"
 export PKG_CONFIG_PATH="${A11_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
@@ -77,9 +85,9 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.4}"
 scripts/bootstrap_wheel_deps.sh
 ```
 
-That script builds Boost, OpenSSL, nghttp2, nlohmann-json, and uvw. GoogleTest
-must still be installed separately for `BUILD_TESTING=ON`. Keep the exported
-paths in the shell used for CMake, `uv sync`, and editable rebuilds.
+That script builds Boost, OpenSSL, libcurl, nghttp2, nlohmann-json, and uvw.
+GoogleTest must still be installed separately for `BUILD_TESTING=ON`. Keep the
+exported paths in the shell used for CMake, `uv sync`, and editable rebuilds.
 
 On macOS the script also applies `scripts/patches/boost-fiber-macos-futex.patch`
 to enable Boost.Fiber's futex spinlock, and builds Boost with
@@ -104,16 +112,23 @@ uv venv --python 3.12
 # CMAKE_PREFIX_PATH with its own build venv, so an exported value never reaches
 # the static-deps configure and Boost is not found. Values passed as -D flags in
 # CMAKE_ARGS land on the cmake command line and survive.
+#
+# CMAKE_OSX_DEPLOYMENT_TARGET travels the same way: pass it as a cache variable
+# (not only the MACOSX_DEPLOYMENT_TARGET export, which CMake may not pick up) so
+# the extension is compiled with the same >= 14.4 target the prefix's Boost.Fiber
+# was built with. A lower target drops the futex spinlock and fails with
+# "futex not supported on this platform". Ignored on Linux.
 export CMAKE_ARGS="-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON \
-  -DCMAKE_PREFIX_PATH=${A11_DEPS_PREFIX} -DOPENSSL_ROOT_DIR=${A11_DEPS_PREFIX}"
+  -DCMAKE_PREFIX_PATH=${A11_DEPS_PREFIX} -DOPENSSL_ROOT_DIR=${A11_DEPS_PREFIX} \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4"
 uv sync --locked --group dev
 ```
 
 `PKG_CONFIG_PATH` (exported in the Prerequisites block) is *not* overwritten by
-uv, so nghttp2, curl, and uvw are still discovered through it. If a system or
-Homebrew Boost/OpenSSL is present and you omit the two `-D` flags above, the
-configure either fails to find Boost or silently links the wrong copy; keep them
-in `CMAKE_ARGS` whenever `A11_REQUIRE_STATIC_DEPS=ON`.
+uv, so nghttp2, curl, and uvw are still discovered through it. Because Boost is
+pinned to the prefix (`NO_DEFAULT_PATH`), omitting the two `-D` flags above makes
+the configure fail loudly with "could not find Boost" rather than fall back to a
+system copy — keep them in `CMAKE_ARGS`.
 
 Any supported Python from 3.11 onward can replace 3.12. `uv sync` maps the
 Python modules directly to `a11/`, while scikit-build compiles and installs the
@@ -137,8 +152,7 @@ replaced within that same process.
 The hook only runs `cmake --build` and `cmake --install` against the build tree
 that `uv sync` already configured under `build/editable/<wheel-tag>`; it does
 not configure that tree. When the tree is absent — a fresh clone before the
-first `uv sync`, or after `build/` was deleted or cleaned (see the note in
-[Native C++ build](#native-c-build)) — the rebuild fails with:
+first `uv sync`, or after `build/` was deleted — the rebuild fails with:
 
 ```
 Error: not a CMake build directory (missing CMakeCache.txt)
@@ -187,76 +201,59 @@ explicit rebuild above installs the current C++ output there.
 
 ## Native C++ build
 
-Use a separate Debug tree for C++ tests. Turning the Python module off here
-keeps this build independent of the editable extension; the editable workflow
-above compiles and tests the binding layer separately.
+Build the native libraries and C++ tests through the CMake presets in
+`CMakePresets.json`. A preset encodes every discovery setting the static-deps
+build needs — the prefix on `CMAKE_PREFIX_PATH`/`OPENSSL_ROOT_DIR`,
+`PKG_CONFIG_PATH`, the macOS deployment target, and `A11_FIBER_SPINLOCK` — so the
+command line, CLion, and VS Code all share one configuration. The presets set
+`A11_BUILD_PYTHON=OFF`, keeping this build independent of the editable extension
+(the editable workflow above compiles and tests the binding layer separately).
 
-This Debug tree and the editable extension's tree both live under `build/`
-(`build/` itself and `build/editable/<wheel-tag>`, respectively). Removing or
-cleaning `build/` — for example to reconfigure this Debug tree from scratch —
-therefore also destroys the editable tree, so the next `native.__loader__.rebuild()`
-reports a missing `CMakeCache.txt`. Recreate the editable tree with
-`uv sync --locked --group dev --reinstall-package a11-kit` afterward (use the
-distribution name `a11-kit`, not the import name `a11` — see the note in
-[Editable Python build](#editable-python-build)).
+Export `A11_DEPS_PREFIX` first (see [Prerequisites](#prerequisites)); the presets
+read it from the environment.
 
 ```sh
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DA11_BUILD_PYTHON=OFF \
-  -DA11_REQUIRE_STATIC_DEPS=ON \
-  -DA11_FETCH_MISSING_DEPS=ON
-
-cmake --build build -j 8
-ctest --test-dir build --output-on-failure
+cmake --preset debug            # configures cmake-build-debug/
+cmake --build --preset debug -j 8
+ctest --preset debug
 ```
 
-If `CMAKE_PREFIX_PATH` was not exported, pass the dependency prefix explicitly
-while configuring:
-
-```sh
-cmake -S . -B build -G Ninja \
-  -DCMAKE_PREFIX_PATH="${A11_DEPS_PREFIX}" \
-  -DOPENSSL_ROOT_DIR="${A11_DEPS_PREFIX}" \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DA11_BUILD_PYTHON=OFF
-```
+The `release` preset works the same way (`RelWithDebInfo`, into
+`cmake-build-release/`). These two preset trees are the only hand-driven native
+build directories; scikit-build keeps its own trees under `build/` (see
+[Editable Python build](#editable-python-build)), so reconfiguring or deleting a
+`cmake-build-*` tree never disturbs the editable extension.
 
 The native suite consists of `thread_test`, which exercises the cooperative
 runtime, and `a11_core_test`, which aggregates the A11 component tests. A
 focused test can be run directly with a GoogleTest filter, for example:
 
 ```sh
-build/cpp/thread/thread_test \
+cmake-build-debug/cpp/thread/thread_test \
   --gtest_filter='ThreadSelectTest.*:ThreadFiberTest.*'
 ```
 
 To verify that the installed CMake package can be consumed outside the source
-tree, run:
+tree, run (the script defaults to `cmake-build-debug`):
 
 ```sh
-scripts/smoke_cmake_install.sh build
+scripts/smoke_cmake_install.sh
 ```
 
-When changing toolchains or dependency prefixes, rerun the full configure
-command above with `cmake --fresh` in place of `cmake`. A normal source edit
-only needs `cmake --build`.
+When changing toolchains or dependency prefixes, reconfigure from scratch with
+`cmake --preset debug --fresh`. A normal source edit only needs
+`cmake --build --preset debug`.
 
 ## Developing in CLion (or another CMake IDE)
 
-The IDE drives raw CMake, so it needs the same discovery settings the wheel and
-editable flows inject — otherwise the static-deps configure fails with
+CLion, VS Code, and the command line all use the same presets (see
+[Native C++ build](#native-c-build)), so the only extra step for an IDE is making
+`A11_DEPS_PREFIX` visible — without it the static-deps configure fails with
 `Boost_DIR-NOTFOUND` (the isolated build is pinned to the prefix) or, on macOS,
-`"futex not supported"` (the deployment target is unset). `CMakePresets.json` at
-the repository root encodes all of it, so CLion, VS Code, and the command line
-share one configuration.
+`"futex not supported"` (the deployment target is unset).
 
 1. **Bootstrap the dependency prefix once** (see [Prerequisites](#prerequisites))
-   and note the `A11_DEPS_PREFIX` you used. Prefer a persistent location over
-   `/tmp` (which is cleared on reboot), e.g.
-   `export A11_DEPS_PREFIX="$HOME/.cache/a11-deps/$(uname -m)"`.
+   and note the `A11_DEPS_PREFIX` you used.
 
 2. **Let the IDE see `A11_DEPS_PREFIX`.** A GUI-launched CLion does *not* inherit
    your shell, so pick one:
@@ -290,13 +287,11 @@ share one configuration.
    are `cmake --preset debug`, `cmake --build --preset debug`, and
    `ctest --preset debug`.
 
-The presets set `A11_REQUIRE_STATIC_DEPS=ON`, the macOS deployment target and
-`A11_FIBER_SPINLOCK` to `14.4`/`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`
-(these must match the values the prefix was bootstrapped with — see
-[Prerequisites](#prerequisites)), enable `BUILD_TESTING`, and emit
-`compile_commands.json`. They default `A11_BUILD_PYTHON=OFF` so CLion builds the
-C++ libraries and native test targets without the Python toolchain; build the
-importable extension with `uv sync` (see [Editable Python build](#editable-python-build)).
+The macOS deployment target and `A11_FIBER_SPINLOCK` baked into the presets
+(`14.4`/`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`) must match the values the
+prefix was bootstrapped with — see [Prerequisites](#prerequisites). The presets
+build the C++ libraries and native test targets only; build the importable
+extension with `uv sync` (see [Editable Python build](#editable-python-build)).
 To compile the extension inside CLion too, set `A11_BUILD_PYTHON=ON` (it needs
 Homebrew's `pybind11` and a Python 3.11+ interpreter).
 
@@ -307,8 +302,8 @@ binding, use this sequence:
 
 ```sh
 # 1. Compile and test the C++ implementation.
-cmake --build build -j 8
-ctest --test-dir build --output-on-failure
+cmake --build --preset debug -j 8
+ctest --preset debug
 
 # 2. Compile and install that source revision for the editable Python package.
 #    This command must finish before pytest starts in its separate process.
@@ -323,7 +318,7 @@ ctest --test-dir build --output-on-failure
 .venv/bin/python -m pytest -q
 
 # 4. Check exported native targets when public headers or linkage changed.
-scripts/smoke_cmake_install.sh build
+scripts/smoke_cmake_install.sh
 ```
 
 Use the following minimum checks for each kind of change:
@@ -442,8 +437,8 @@ matrix on that architecture to audit those.
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could NOT find Boost` (or another dep) at CMake configure | The deps prefix is missing or incomplete. Delete it (`rm -rf /tmp/a11-wheel-deps-*` on macOS, `/opt/a11-wheel-deps-*` on Linux) and rebuild; `before-all` re-bootstraps it. Static builds are pinned to the prefix, so this fails loudly instead of silently using a system/Homebrew Boost. |
-| `symbol not found in flat namespace '_jump_fcontext'` at import/audit | A Boost.Context prefix built before the assembly-ABI fix. Delete the prefix and rebuild (the stamp file `.a11-wheel-deps-vN-<arch>` gates rebuilds; bumping the script's version forces one). |
+| `Could NOT find Boost` (or another dep) at CMake configure | The deps prefix is missing or incomplete. Delete it (`rm -rf "$HOME/.cache/a11-deps/"*` for editable/macOS-wheel builds; Linux wheels rebuild `/opt/a11-deps-*` inside the container automatically) and rebuild; the bootstrap re-runs. Static builds are pinned to the prefix, so this fails loudly instead of silently using a system/Homebrew Boost. |
+| `symbol not found in flat namespace '_jump_fcontext'` at import/audit | A Boost.Context prefix built before the assembly-ABI fix. Delete the prefix and rebuild. The stamp file (`.a11-wheel-deps-v9-<arch>`, plus the deployment target and `A11_FIBER_SPINLOCK` on macOS) gates rebuilds; bumping the script's version forces one. |
 | `"futex not supported on this platform"` at CMake/compile on macOS | The macOS deployment target is below 14.4. Keep `MACOSX_DEPLOYMENT_TARGET=14.4` in both the bootstrap shell and the CMake build. |
 | Fiber crashes/corruption only in a hand-rolled build | The Boost.Fiber spinlock macro differs between the deps prefix and the A11 compile. Use the same `A11_FIBER_SPINLOCK` (default `BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`) for both, and rebuild the prefix if you change it. |
 | Linux build stops immediately citing Docker | Start Docker (or Colima) and retry, or build Linux wheels on a Linux host. |

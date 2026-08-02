@@ -715,7 +715,7 @@ async def test_remote_cancel_action_cancels_handler_and_aborts_outputs():
         for _ in range(100):
             if not list(client.actions()) and not list(server.actions()):
                 break
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
         assert list(client.actions()) == []
         assert list(server.actions()) == []
         assert client_stream.get_status().is_ok()
@@ -761,7 +761,7 @@ async def test_remote_cancel_immediately_after_call_is_not_lost():
         for _ in range(100):
             if not list(client.actions()) and not list(server.actions()):
                 break
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
         assert list(client.actions()) == []
         assert list(server.actions()) == []
         assert client_stream.get_status().is_ok()

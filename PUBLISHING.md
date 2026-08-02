@@ -26,16 +26,18 @@ install them outside CI, and the uv-managed interpreters cannot substitute for
 them. Install any that are missing from python.org before building; a partial
 set yields an incomplete matrix that must not be released.
 
-Prepare and verify the release:
+Prepare and verify the release (export `A11_DEPS_PREFIX` first, as in
+[BUILDING.md](BUILDING.md#prerequisites), so the presets find the static deps):
 
 ```sh
 uv sync --locked --group dev
 .venv/bin/python scripts/generate_stubs.py
 .venv/bin/python scripts/generate_stubs.py --check
-cmake --build build -j 8
-ctest --test-dir build --output-on-failure
+cmake --preset debug
+cmake --build --preset debug -j 8
+ctest --preset debug
 .venv/bin/python -m pytest -q
-scripts/smoke_cmake_install.sh build
+scripts/smoke_cmake_install.sh
 ```
 
 Start with an empty `dist/`, then build the wheel matrix and source

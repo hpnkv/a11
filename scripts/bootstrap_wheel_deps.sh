@@ -29,7 +29,16 @@ case "${fiber_spinlock}" in
     ;;
 esac
 
-stamp="${prefix}/.a11-wheel-deps-v9-${arch}${deployment_tag}"
+# The spinlock macro only changes the build on macOS (cpp/CMakeLists.txt applies
+# it under APPLE), so it is part of the cache key there. Folding it into the
+# stamp -- like the deployment target -- means switching A11_FIBER_SPINLOCK
+# rebuilds Boost against the new spinlock instead of silently reusing a prefix
+# whose boost::fibers::mutex layout no longer matches the extension.
+spinlock_tag=
+if [[ "${host_os}" == Darwin ]]; then
+  spinlock_tag="-${fiber_spinlock}"
+fi
+stamp="${prefix}/.a11-wheel-deps-v9-${arch}${deployment_tag}${spinlock_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -93,6 +102,21 @@ case "${host_os}:${arch}" in
   *)
     echo "Unsupported wheel dependency target: ${host_os} ${arch}" >&2
     exit 2
+    ;;
+esac
+
+# Opt-in sanitizer support for the prefix's Boost. Set A11_DEPS_SANITIZE=address
+# (into a *separate* A11_DEPS_PREFIX from your normal one) to build Boost.Context
+# with BOOST_USE_ASAN, which emits __sanitizer_start/finish_switch_fiber around
+# fiber stack switches. Without it, ASan treats every write to a boost.context
+# fiber stack (a malloc'd block) as a heap-buffer-overflow and nested-aborts its
+# own report, making ASan useless on A11's fiber-heavy paths. The switch symbols
+# resolve from the ASan runtime the extension is preloaded with, so Boost itself
+# need not be compiled with -fsanitize=address.
+case "${A11_DEPS_SANITIZE:-}" in
+  *address*|*undefined*)
+    echo "A11_DEPS_SANITIZE=${A11_DEPS_SANITIZE}: building Boost with BOOST_USE_ASAN" >&2
+    boost_arch_args+=(define=BOOST_USE_ASAN)
     ;;
 esac
 

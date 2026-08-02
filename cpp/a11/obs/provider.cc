@@ -179,7 +179,7 @@ void ShutdownLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(g_mu) {
 namespace internal {
 
 otel::nostd::shared_ptr<otel::trace::Tracer> GlobalTracer() {
-  return otel::trace::Provider::GetTracerProvider()->GetTracer("a11", "0.1.3");
+  return otel::trace::Provider::GetTracerProvider()->GetTracer("a11", "0.1.4");
 }
 
 std::shared_ptr<otel::exporter::memory::InMemorySpanData> InMemoryData() {

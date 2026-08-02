@@ -213,9 +213,17 @@ def main() -> None:
 
     for target in targets:
         for arch in _architectures(target, host_arch):
-            prefix = f"/tmp/a11-wheel-deps-{target}-{arch}"
+            # One deps-prefix convention. macOS builds on the host, so they use
+            # the same persistent per-arch cache as editable/preset builds
+            # (BUILDING.md) -- the native-arch wheel then reuses the Boost/
+            # OpenSSL the dev prefix already compiled instead of rebuilding
+            # them. Linux builds run inside the manylinux container, where that
+            # host cache is not mounted, so they use an internal container path
+            # the user never types.
             if target == "linux":
-                prefix = f"/opt/a11-wheel-deps-{arch}"
+                prefix = f"/opt/a11-deps-{arch}"
+            else:
+                prefix = str(Path.home() / ".cache" / "a11-deps" / arch)
             env = os.environ.copy()
             env["A11_DEPS_PREFIX"] = prefix
             env["A11_WHEEL_ARCH"] = arch

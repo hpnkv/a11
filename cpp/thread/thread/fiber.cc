@@ -55,8 +55,12 @@ struct ThreadLocalFiber {
     // null, there is no dynamic fiber for this thread.
     DVLOG(2) << "PerThreadDynamicFiber destructor called: " << f.get();
     if (f != nullptr) {
-      f->MarkFinished();
-      f->InternalJoin();
+      // Retire the placeholder without touching the fiber scheduler: at this
+      // point the thread's TLS is being torn down, so the normal join path
+      // (MarkFinished()/InternalJoin() -> fiber-aware Mutex/Select) would
+      // dereference Boost's thread_local active-context through already-freed
+      // TLS. See RetireUnstarted().
+      f->RetireUnstarted();
       f.reset();
     }
   }
@@ -213,6 +217,29 @@ void Fiber::MarkJoined() {
 void Fiber::InternalJoin() {
   Select({joinable_.OnEvent()});
   MarkJoined();
+}
+
+void Fiber::RetireUnstarted() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  // Called only from ~ThreadLocalFiber, on the per-thread placeholder that
+  // Current() creates for a thread which never ran under a real fiber. That
+  // destructor fires during OS-thread teardown, when the thread's TLS block may
+  // already be freed. The normal teardown path is unsafe there: MarkFinished()
+  // and InternalJoin() take the fiber-aware mu_ and Select() on joinable_, both
+  // of which read Boost's thread_local active-context via __tls_get_addr and so
+  // touch freed TLS (surfacing later as heap/GC corruption).
+  //
+  // A placeholder is never Start()ed (its Boost context is never scheduled), has
+  // no parent, and -- in correct use -- has no live children, so it is
+  // reachable only from this exiting thread. No synchronization is needed to
+  // retire it: transition straight to JOINED so ~Fiber()'s invariant holds,
+  // bypassing the scheduler entirely.
+  CHECK(parent_ == nullptr)
+      << "F " << this << " RetireUnstarted() on a non-root fiber.";
+  CHECK(first_child_ == nullptr)
+      << "F " << this << " RetireUnstarted() with live child fibers.";
+  CHECK_EQ(state_, RUNNING)
+      << "F " << this << " RetireUnstarted() on a started fiber.";
+  state_ = JOINED;
 }
 
 void Fiber::Cancel() ABSL_NO_THREAD_SAFETY_ANALYSIS {

@@ -6,7 +6,7 @@ endif ()
 
 project(
         a11
-        VERSION 0.1.3
+        VERSION 0.1.4
         DESCRIPTION "A11 action and streaming runtime"
         LANGUAGES CXX)
 
@@ -26,6 +26,16 @@ option(A11_WITH_OTLP_HTTP
         "Build the native OTLP/HTTP (JSON) span exporter (needs libcurl)" ON)
 set(A11_PYBIND11_ABSEIL_SOURCE_DIR "" CACHE PATH
         "Optional local pybind11_abseil checkout")
+# Semicolon- or comma-separated sanitizer list for debugging memory/UB bugs,
+# e.g. "address" or "address;undefined". Applied to every target configured
+# under this project (A11 and fetched deps) plus the link line, so the whole
+# extension shares one sanitizer runtime. Loading the resulting _native.so from
+# a non-instrumented python needs the runtime preloaded, e.g.
+#   LD_PRELOAD=$(gcc -print-file-name=libasan.so) \
+#   ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+#   A11_DISABLE_FAILURE_SIGNAL_HANDLER=1 python -m pytest ...
+set(A11_SANITIZE "" CACHE STRING
+        "Sanitizers to enable (e.g. address, undefined, 'address;undefined')")
 
 function(a11_require_static_target target_name)
     if (NOT A11_REQUIRE_STATIC_DEPS OR NOT TARGET ${target_name})
@@ -63,6 +73,23 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build bundled dependencies statically"
         FORCE)
 if (APPLE)
+    # A11's macOS floor is 14.4 -- the minimum for os_sync_wait_on_address, which
+    # the Boost.Fiber futex spinlock (and the deps prefix's Boost) require. Pin it
+    # here, before any target or fetched dependency is configured, so an unset
+    # target does not silently inherit an arbitrary host/SDK default that drops
+    # below 14.4 and fails deep in Boost.Fiber's headers with "futex not supported
+    # on this platform". An explicit lower value is a hard configure error instead.
+    # A higher value (a newer prefix) is fine and passes through untouched.
+    if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 14.4 CACHE STRING
+                "Minimum macOS version (Boost.Fiber futex spinlock needs >= 14.4)"
+                FORCE)
+    elseif (CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.4)
+        message(FATAL_ERROR
+                "A11 on macOS needs CMAKE_OSX_DEPLOYMENT_TARGET >= 14.4 for the "
+                "Boost.Fiber futex spinlock (got ${CMAKE_OSX_DEPLOYMENT_TARGET}). "
+                "Rebuild the deps prefix at the same target.")
+    endif ()
     set(CMAKE_INSTALL_RPATH "@loader_path;@loader_path/.libs;@loader_path/../lib")
 elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/.libs;$ORIGIN/../lib")
@@ -77,6 +104,18 @@ endif ()
 add_compile_options(
         $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>)
 add_compile_definitions(A11_CPP_SOURCE_ROOT="${CMAKE_CURRENT_LIST_DIR}")
+
+# Sanitizer wiring. Set directory-wide before any FetchContent_MakeAvailable()
+# below so fetched dependencies are instrumented too; a partially instrumented
+# process gives ASan false negatives across the boundary. Keep frame pointers so
+# the reports carry readable stacks.
+if (A11_SANITIZE)
+    string(REPLACE ";" "," A11_SANITIZE_FLAG "${A11_SANITIZE}")
+    message(STATUS "A11 sanitizers enabled: ${A11_SANITIZE_FLAG}")
+    add_compile_options(-fsanitize=${A11_SANITIZE_FLAG}
+            -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${A11_SANITIZE_FLAG})
+endif ()
 
 # A11 uses APIs first released with Abseil 20260526 (notably the upstream
 # status macros). Pinning the source archive keeps every build, including
@@ -159,20 +198,16 @@ endif ()
 find_package(nlohmann_json CONFIG REQUIRED)
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
-# For isolated static builds (wheels) the deps prefix on CMAKE_PREFIX_PATH is the
-# single source of truth. Restrict Boost's upstream CMake config to that prefix
-# (NO_DEFAULT_PATH + PATHS) so an incomplete prefix fails loudly with "could not
-# find Boost" instead of silently resolving a system/Homebrew Boost -- which on a
-# cross build is the wrong architecture, and elsewhere hides a broken prefix.
-# Boost_NO_SYSTEM_PATHS is a module-mode variable and does not constrain config
-# mode, so the search paths must be pinned on the call itself. Developer builds
-# (static deps not required) keep the default search so a system Boost works.
-if (A11_REQUIRE_STATIC_DEPS)
-    find_package(Boost 1.82 REQUIRED CONFIG COMPONENTS context fiber thread
-            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
-else ()
-    find_package(Boost 1.82 REQUIRED COMPONENTS context fiber thread)
-endif ()
+# The bootstrapped deps prefix on CMAKE_PREFIX_PATH is the single source of truth
+# for Boost (see scripts/bootstrap_wheel_deps.sh). Restrict Boost's upstream
+# CMake config to that prefix (NO_DEFAULT_PATH + PATHS) so an incomplete prefix
+# fails loudly with "could not find Boost" instead of silently resolving a
+# system/Homebrew Boost -- which on a cross build is the wrong architecture,
+# elsewhere hides a broken prefix, and on macOS lacks the futex/memory-ordering
+# patch this build depends on. Boost_NO_SYSTEM_PATHS is a module-mode variable
+# and does not constrain config mode, so the search paths are pinned on the call.
+find_package(Boost 1.82 REQUIRED CONFIG COMPONENTS context fiber thread
+        NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
 a11_require_static_target(Boost::context)
 a11_require_static_target(Boost::fiber)
 a11_require_static_target(Boost::thread)
@@ -181,15 +216,23 @@ a11_require_static_target(Boost::thread)
 # scripts/bootstrap_wheel_deps.sh). Boost.Fiber selects its spinlock in headers,
 # so every A11 translation unit must define the SAME macro the prefix's library
 # was built with; otherwise boost::fibers::mutex has different layouts in the
-# archive and this extension (an ODR violation). Only apply this for the
-# isolated static-deps build that uses that prefix -- a system/Homebrew Boost is
-# unpatched (no BOOST_FIBERS_HAS_FUTEX on macOS) and would fail to compile with a
-# futex spinlock requested. A11_FIBER_SPINLOCK must match the value bootstrap
-# used, and needs a >= 14.4 deployment target for futex availability.
-if (APPLE AND A11_REQUIRE_STATIC_DEPS)
-    set(A11_FIBER_SPINLOCK "$ENV{A11_FIBER_SPINLOCK}")
+# archive and this extension (an ODR violation). A11 always links the patched
+# prefix Boost, so the macro applies on every macOS build. A11_FIBER_SPINLOCK
+# must match the value bootstrap used, and needs a >= 14.4 deployment target for
+# futex availability.
+if (APPLE)
+    # Precedence: an explicit -DA11_FIBER_SPINLOCK wins (build frontends that
+    # cannot pass the environment through -- e.g. uv, which overwrites
+    # CMAKE_PREFIX_PATH -- inject it via CMAKE_ARGS like the other discovery
+    # flags), then the environment (CMake presets set it there), then the
+    # adaptive futex default. Whatever resolves here MUST match the value the
+    # deps prefix's Boost.Fiber was built with.
     if (NOT A11_FIBER_SPINLOCK)
-        set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX)
+        if (DEFINED ENV{A11_FIBER_SPINLOCK})
+            set(A11_FIBER_SPINLOCK "$ENV{A11_FIBER_SPINLOCK}")
+        else ()
+            set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX)
+        endif ()
     endif ()
     if (NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
             AND NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_FUTEX")
@@ -272,15 +315,10 @@ if (A11_BUILD_HTTP)
                 INTERFACE_INCLUDE_DIRECTORIES "${NGHTTP2_INCLUDE_DIRS}"
                 INTERFACE_LINK_OPTIONS "${NGHTTP2_STATIC_LDFLAGS_OTHER}")
         add_library(a11::nghttp2 ALIAS a11_nghttp2)
-    elseif (A11_REQUIRE_STATIC_DEPS)
+    else ()
         message(FATAL_ERROR
                 "A static libnghttp2 archive is required but was not found in: "
                 "${NGHTTP2_LIBRARY_DIRS}")
-    else ()
-        pkg_check_modules(NGHTTP2_SHARED REQUIRED IMPORTED_TARGET libnghttp2)
-        add_library(a11::nghttp2 ALIAS PkgConfig::NGHTTP2_SHARED)
-        message(WARNING
-                "Using shared libnghttp2; consumers must place it on the loader path")
     endif ()
 endif ()
 

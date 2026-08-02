@@ -107,6 +107,10 @@ class Fiber {
   bool MarkFinished();
   void MarkJoined();
   void InternalJoin();
+  // Retire a never-started, per-thread placeholder fiber without entering the
+  // fiber scheduler. See the definition for why the normal join path is unsafe
+  // during thread-local teardown.
+  void RetireUnstarted();
 
   void PushBackChild(Fiber* absl_nonnull child)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {

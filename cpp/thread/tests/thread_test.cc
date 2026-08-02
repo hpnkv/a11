@@ -203,6 +203,40 @@ TEST(ThreadFiberTest, JoinedAndDetachedFibersReleaseCapturedState) {
   EXPECT_EQ(internal::LiveFiberCountForTesting(), baseline);
 }
 
+TEST(ThreadFiberTest, PlaceholderFibersRetireCleanlyOnThreadExit) {
+  // A thread that touches the fiber API without being a fiber gets a per-thread
+  // placeholder from Fiber::Current(). It must be retired when the OS thread
+  // exits -- from a thread_local destructor, while the thread's TLS is being
+  // torn down -- without re-entering the fiber scheduler (which would read
+  // Boost's thread_local active-context through freed TLS). Spawning many such
+  // threads exercises that teardown; a clean live-fiber count afterwards proves
+  // each placeholder was constructed and destroyed rather than leaked or
+  // crashing the thread on exit.
+  (void)Fiber::Current();
+  const size_t baseline = internal::LiveFiberCountForTesting();
+  const size_t before_created = internal::CreatedFiberCountForTesting();
+
+  constexpr int kThreads = 32;
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int index = 0; index < kThreads; ++index) {
+    threads.emplace_back([] {
+      // Adopt the per-thread placeholder and take a fiber-aware lock, so the
+      // thread has exercised Boost's thread_local scheduler before it exits.
+      EXPECT_NE(Fiber::Current(), nullptr);
+      thread::Mutex mu;
+      thread::MutexLock lock(&mu);
+    });
+  }
+  for (std::thread& worker : threads) {
+    worker.join();
+  }
+
+  EXPECT_EQ(internal::LiveFiberCountForTesting(), baseline);
+  EXPECT_GE(internal::CreatedFiberCountForTesting() - before_created,
+            static_cast<size_t>(kThreads));
+}
+
 TEST(ThreadSleepTest, SleepSuspendsOnlyTheCallingFiber) {
   PermanentEvent sleeper_started;
   PermanentEvent peer_ran;

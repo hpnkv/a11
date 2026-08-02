@@ -550,8 +550,7 @@ a11::Task Session::AwaitAllActions(absl::Duration timeout) {
             code,
             absl::StrCat(failures.size(), " Actions completed with errors."),
             std::move(details));
-      },
-      {.stack_size = 2048});
+      });
 }
 
 absl::Status Session::TrackAction(
@@ -788,7 +787,7 @@ a11::Task Session::DispatchActionMessage(
         }
         return dispatch_status;
       },
-      {.stack_size = 2048});
+      {.stack_size = 16384});
 }
 
 a11::Task Session::DispatchAction(std::shared_ptr<actions::Action> action) {
@@ -883,7 +882,7 @@ a11::Task Session::DispatchWireMessage(
                          " WireMessage elements"),
             std::move(details));
       },
-      {.stack_size = 2048});
+      {.stack_size = 16384});
 }
 
 bool Session::IsClosed() const {
@@ -1134,9 +1133,14 @@ a11::Task Session::HandleStreamMessage(
       }
     }
     if (start_pump) {
+      // The pump runs the session message callback synchronously (msgpack
+      // decode, action creation, exception unwinding, and any tracing spans)
+      // before Await()-ing, so it needs a full-size stack. Unlike the other
+      // per-stream fibers, which only do small bookkeeping before suspending, a
+      // tiny stack here overflows into the adjacent pooled stack's heap block
+      // and corrupts neighbouring fibers. Use the default stack size.
       std::function<void()> cancel = a11::ScheduleCancelable(
-          [self, stream_state] { self->ProcessStreamMessages(stream_state); },
-          {.stack_size = 2048});
+          [self, stream_state] { self->ProcessStreamMessages(stream_state); });
       thread::MutexLock lock(&self->state_->mu);
       if (stream_state->message_pump_running) {
         stream_state->message_pump_cancel = std::move(cancel);

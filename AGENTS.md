@@ -164,13 +164,15 @@
 
 ## Verification
 
-- Use `build` as the normal native build tree:
+- Build the native tree through the CMake presets (see BUILDING.md); export
+  `A11_DEPS_PREFIX` first:
 
   ```sh
-  cmake --build build-codex -j 8
-  ctest --test-dir build-codex --output-on-failure
+  cmake --preset debug
+  cmake --build --preset debug -j 8
+  ctest --preset debug
   .venv/bin/pytest -q
-  scripts/smoke_cmake_install.sh build-codex
+  scripts/smoke_cmake_install.sh
   ```
 
 - Format C++ with the root `.clang-format`; run the configured `.clang-tidy`

@@ -118,33 +118,51 @@ Python**. The steps below are self-contained; for the editable Python build,
 wheel matrix, testing workflow, and architecture, see
 [BUILDING.md](BUILDING.md).
 
-**1. Install the build tools and libraries.** On macOS with Homebrew:
+**1. Install the tools, then build the C++ libraries.** A11 links a pinned set
+of statically-built libraries (Boost, OpenSSL, libcurl, nghttp2, nlohmann-json,
+uvw) rather than system copies; `scripts/bootstrap_wheel_deps.sh` builds them
+into a per-architecture prefix. From Homebrew you install only the tools (a C++20
+compiler, CMake ≥ 3.28, Ninja; Linux tool package names vary):
 
 ```sh
-brew install boost cmake googletest libnghttp2 ninja \
-  nlohmann-json openssl@3 pkg-config uvw
+brew install cmake googletest ninja pkg-config
+
+export A11_DEPS_PREFIX="$HOME/.cache/a11-deps/$(uname -m)"
+export CMAKE_PREFIX_PATH="$A11_DEPS_PREFIX"
+export OPENSSL_ROOT_DIR="$A11_DEPS_PREFIX"
+export PKG_CONFIG_PATH="$A11_DEPS_PREFIX/lib/pkgconfig"
+export MACOSX_DEPLOYMENT_TARGET=14.4   # macOS only
+scripts/bootstrap_wheel_deps.sh
 ```
 
-You need a C++20 compiler, CMake ≥ 3.28, and Ninja. CMake fetches the pinned
-Abseil (and libdatachannel, for WebRTC) automatically. On Linux the package
-names vary; `scripts/bootstrap_wheel_deps.sh` builds the static dependencies
-reproducibly (see [BUILDING.md](BUILDING.md)).
+CMake still fetches the pinned Abseil (and libdatachannel, for WebRTC)
+automatically. See [BUILDING.md](BUILDING.md#prerequisites) for the full rundown.
 
-**2. Configure, build, and install to a prefix:**
+**2. Configure, build, and install to a prefix** (the exports above point CMake
+at the dependency prefix):
 
 ```sh
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DA11_BUILD_PYTHON=OFF \
-  -DA11_FETCH_MISSING_DEPS=ON \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 \
   -DCMAKE_INSTALL_PREFIX="$PWD/install"
 
 cmake --build build -j
 cmake --install build
 ```
 
+On macOS, pass `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.4` as shown — it must match the
+value the prefix was bootstrapped with. Setting it as a cache variable here (not
+only via the `MACOSX_DEPLOYMENT_TARGET` environment export, which CMake may not
+pick up) is what enables the Boost.Fiber futex spinlock; a lower target compiles
+Boost.Fiber without futex support and fails with
+`"futex not supported on this platform"`. The flag is ignored on Linux.
+
 **3. Use it from your own CMake project.** The install exports a CMake package
-named `a11` with per-component targets (`a11::service` links the whole runtime):
+named `a11` with per-component targets (`a11::service` links the whole runtime).
+Point your consumer's `CMAKE_PREFIX_PATH` at both the install prefix and the
+dependency prefix from step 1, so the transitive static Boost/OpenSSL/… resolve:
 
 ```cmake
 find_package(a11 CONFIG REQUIRED)

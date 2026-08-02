@@ -304,14 +304,14 @@ async def test_action_messages_from_one_stream_keep_arrival_order():
         )
     )
     await asyncio.wait_for(first_started.wait(), timeout=1)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     assert received == [b"first"]
 
     release_first.set()
     for _ in range(100):
         if received == [b"first", b"second"]:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     assert received == [b"first", b"second"]
 
     session.half_close()
@@ -334,7 +334,7 @@ async def test_default_stream_reports_action_dispatch_failure_without_abort():
     for _ in range(100):
         if stream.sent:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert stream.abort_statuses == []
     assert len(stream.sent) == 1
@@ -360,7 +360,7 @@ async def test_default_stream_callback_converts_unexpected_dispatch_errors():
     for _ in range(100):
         if stream.abort_statuses:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert len(stream.abort_statuses) == 1
     assert stream.abort_statuses[0].code == StatusCode.UNKNOWN
@@ -560,20 +560,20 @@ async def test_limits_apply_until_callbacks_finish_and_half_close_drains():
 
     message = types.WireMessage(headers={"message": b"value"})
     await first.on_message(message)
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.01)
 
     blocked = asyncio.create_task(second.on_message(message))
     remote_half_close = asyncio.create_task(first.on_message(None))
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     assert not blocked.done()
     assert not remote_half_close.done()
 
     gates[0].set()
     await asyncio.wait_for(remote_half_close, timeout=1)
     await asyncio.wait_for(blocked, timeout=1)
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.01)
     gates[1].set()
 
     assert first.on_done is not None
@@ -607,14 +607,14 @@ async def test_explicit_remote_session_half_close_delivers_none_after_drain():
 
     message = types.WireMessage(headers={"message": b"value"})
     await stream.on_message(message)
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.01)
 
     stream.trailers = {
         SESSION_STATUS_HEADER.upper(): msgpack_utils.pack_status(Status.ok())
     }
     half_close = asyncio.create_task(stream.on_message(None))
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     assert not half_close.done()
     assert received == [message]
 
@@ -758,7 +758,7 @@ async def test_done_sees_stream_and_message_errors_abort_only_stream():
     for _ in range(100):
         if stream.abort_statuses:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert stream.abort_statuses == [
         Status(
@@ -826,7 +826,7 @@ async def test_cancelling_startup_before_first_step_detaches_stream():
     startup.cancel()
     with pytest.raises(asyncio.CancelledError):
         await startup
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
 
     assert list(session.streams()) == []
     session.half_close()
@@ -864,7 +864,7 @@ async def test_session_with_recv_returns_remote_half_close_exactly_once():
         }
 
     receivers = [asyncio.create_task(session.receive()) for _ in range(3)]
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     await asyncio.gather(
         *(stream.on_message(None) for stream in streams if stream.on_message)
     )
@@ -899,7 +899,7 @@ async def test_session_with_recv_drains_messages_before_remote_half_close():
         }
 
     receivers = [asyncio.create_task(session.receive()) for _ in range(4)]
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     messages = [
         types.WireMessage(headers={"message": b"first"}),
         types.WireMessage(headers={"message": b"second"}),
@@ -950,7 +950,7 @@ async def test_session_with_recv_abort_fails_all_pending_receivers():
         asyncio.create_task(session.receive_with_stream_id()),
         asyncio.create_task(session.receive()),
     ]
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     abort_status = Status(
         code=StatusCode.DATA_LOSS,
         message="the Session failed",
@@ -980,7 +980,7 @@ async def test_session_with_recv_remote_abort_fails_pending_receivers():
     await session.add_stream(stream)
 
     receivers = [asyncio.create_task(session.receive()) for _ in range(2)]
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     remote_abort = Status(
         code=StatusCode.ABORTED,
         message="Session has aborted its streams",
@@ -1010,7 +1010,7 @@ async def test_session_with_recv_deadline_does_not_change_session_state():
     assert stream.abort_statuses == []
 
     cancelled = asyncio.create_task(session.receive())
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
     cancelled.cancel()
     with pytest.raises(asyncio.CancelledError):
         await cancelled

@@ -114,6 +114,21 @@ void CallWithoutGil(Operation&& operation) {
   CheckStatus(status);
 }
 
+// Like CallWithoutGil, but for a blocking operation returning absl::StatusOr<T>:
+// releases the GIL while it runs, then unwraps the value (or throws) with the
+// GIL re-held. Blocking calls that reach Http2Server::Create (RunOnUv ->
+// Future::Await) must release the GIL, or the libuv loop thread deadlocks trying
+// to take the GIL to complete the work. Convert any Python arguments before
+// calling this, while the GIL is still held.
+template <typename Operation>
+auto ValueWithoutGil(Operation&& operation) {
+  auto result = [&] {
+    py::gil_scoped_release release;
+    return std::forward<Operation>(operation)();
+  }();
+  return ValueOrThrow(std::move(result));
+}
+
 class AsyncPythonCallback {
  public:
   static absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> Create(
@@ -896,12 +911,16 @@ void BindNet(py::module_& module) {
                 AsyncPythonCallback::Create(on_stream);
             if (!callback.ok())
               ThrowStatus(callback.status());
-            return ValueOrThrow(net::WebSocketWireServer::Create(
-                [callback = std::move(*callback)](
-                    std::shared_ptr<net::WebSocketWireStream> stream) {
-                  return callback->Call(std::move(stream));
-                },
-                std::move(options)));
+            // Create() blocks on the libuv loop (Http2Server::Create ->
+            // RunOnUv), so release the GIL while it runs.
+            return ValueWithoutGil([&] {
+              return net::WebSocketWireServer::Create(
+                  [callback = std::move(*callback)](
+                      std::shared_ptr<net::WebSocketWireStream> stream) {
+                    return callback->Call(std::move(stream));
+                  },
+                  std::move(options));
+            });
           },
           "Start a WebSocket server that accepts incoming A11 connections, "
           "invoking the asynchronous on_stream callback with a fresh WireStream "

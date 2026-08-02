@@ -259,6 +259,21 @@ void CallWithoutGil(Operation&& operation) {
   ThrowIfNotOk(status);
 }
 
+// Like CallWithoutGil, but for a blocking operation returning absl::StatusOr<T>:
+// releases the GIL while it runs, then unwraps the value (or throws) with the
+// GIL re-held. Blocking calls that reach Http2Server::Create (RunOnUv ->
+// Future::Await) must release the GIL, or the libuv loop thread deadlocks trying
+// to take the GIL to complete the work. Convert any Python arguments before
+// calling this, while the GIL is still held.
+template <typename Operation>
+auto ValueWithoutGil(Operation&& operation) {
+  auto result = [&] {
+    py::gil_scoped_release release;
+    return std::forward<Operation>(operation)();
+  }();
+  return ValueOrThrow(std::move(result));
+}
+
 }  // namespace
 
 void BindWebRtc(py::module_& module) {
@@ -654,8 +669,12 @@ void BindWebRtc(py::module_& module) {
           "create",
           [](std::shared_ptr<net::SignallingService> service,
              net::WebSocketSignallingServerOptions options) {
-            return ValueOrThrow(net::WebSocketSignallingServer::Create(
-                std::move(service), std::move(options)));
+            // Create() blocks on the libuv loop (Http2Server::Create ->
+            // RunOnUv), so release the GIL while it runs.
+            return ValueWithoutGil([&] {
+              return net::WebSocketSignallingServer::Create(
+                  std::move(service), std::move(options));
+            });
           },
           "Create a WebSocket signalling server that fronts the given "
           "in-process signalling service.",

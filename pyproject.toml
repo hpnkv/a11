@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "a11-kit"
-version = "0.1.4"
+version = "0.1.5"
 description = "Concurrent action and streaming runtime with a native C++ backend"
 readme = "README.md"
 requires-python = ">=3.11"

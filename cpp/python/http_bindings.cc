@@ -161,6 +161,23 @@ void CallWithoutGil(Operation&& operation) {
   ThrowIfNotOk(status);
 }
 
+// Like CallWithoutGil, but for a blocking operation that yields an
+// absl::StatusOr<T>: the GIL is released while it runs, then the value is
+// unwrapped (or thrown) with the GIL re-held. Releasing is essential for calls
+// that block on the libuv loop (RunOnUv/RunStatusOnUv -> Future::Await): the uv
+// thread completes work by touching Python objects (FutureToPython callbacks,
+// py::object destructors) and must be able to take the GIL, so a caller that
+// blocked while holding it would deadlock the loop. Any argument conversion that
+// touches Python must happen before calling this, while the GIL is still held.
+template <typename Operation>
+auto ValueWithoutGil(Operation&& operation) {
+  auto result = [&] {
+    py::gil_scoped_release release;
+    return std::forward<Operation>(operation)();
+  }();
+  return ValueOrThrow(std::move(result));
+}
+
 }  // namespace
 
 void BindHttp(py::module_& module) {
@@ -547,15 +564,17 @@ void BindHttp(py::module_& module) {
              const py::object& handler, net::Http2Options options) {
             std::shared_ptr<PythonHttpCallback> callback =
                 ValueOrThrow(PythonHttpCallback::Create(handler, "handler"));
-            return ValueOrThrow(net::Http2Server::Create(
-                std::move(bind_address), port,
-                [callback = std::move(callback)](
-                    net::HttpRequest request,
-                    std::shared_ptr<net::Http2ResponseWriter> response) {
-                  return callback->Call(std::move(request),
-                                        std::move(response));
-                },
-                options));
+            return ValueWithoutGil([&] {
+              return net::Http2Server::Create(
+                  std::move(bind_address), port,
+                  [callback = std::move(callback)](
+                      net::HttpRequest request,
+                      std::shared_ptr<net::Http2ResponseWriter> response) {
+                    return callback->Call(std::move(request),
+                                          std::move(response));
+                  },
+                  options);
+            });
           },
           "Create and start an HTTP/2 server bound to the given address and "
           "port, dispatching each request to the async handler.",
@@ -599,10 +618,17 @@ void BindHttp(py::module_& module) {
           [](net::Http2Client& self, std::string method, std::string path,
              const py::object& headers, const py::object& body,
              std::string scheme) {
-            return ValueOrThrow(self.RequestStream(
-                std::move(method), std::move(path),
-                ValueOrThrow(HttpHeadersFromPython(headers)),
-                ValueOrThrow(HttpBodyFromPython(body)), std::move(scheme)));
+            // Convert Python arguments before releasing the GIL; the call then
+            // blocks on the libuv loop and must not hold the GIL (see
+            // ValueWithoutGil).
+            auto native_headers = ValueOrThrow(HttpHeadersFromPython(headers));
+            auto native_body = ValueOrThrow(HttpBodyFromPython(body));
+            return ValueWithoutGil([&] {
+              return self.RequestStream(std::move(method), std::move(path),
+                                        std::move(native_headers),
+                                        std::move(native_body),
+                                        std::move(scheme));
+            });
           },
           "Open a request and return a pull-oriented response stream for "
           "reading the response body incrementally.",
@@ -625,10 +651,15 @@ void BindHttp(py::module_& module) {
           "extended_connect",
           [](net::Http2Client& self, std::string protocol, std::string path,
              const py::object& headers, std::string scheme) {
-            return ValueOrThrow(self.ExtendedConnect(
-                std::move(protocol), std::move(path),
-                ValueOrThrow(HttpHeadersFromPython(headers)),
-                std::move(scheme)));
+            // Convert headers under the GIL, then block on the libuv loop with
+            // the GIL released so the uv thread can take it (see
+            // ValueWithoutGil); otherwise the loop deadlocks against this call.
+            auto native_headers = ValueOrThrow(HttpHeadersFromPython(headers));
+            return ValueWithoutGil([&] {
+              return self.ExtendedConnect(std::move(protocol), std::move(path),
+                                          std::move(native_headers),
+                                          std::move(scheme));
+            });
           },
           "Open an extended CONNECT duplex stream for bidirectional data.",
           py::arg("protocol"), py::arg("path"), py::arg("headers") = py::none(),
@@ -788,9 +819,11 @@ void BindHttp(py::module_& module) {
                     return owner->Call(std::move(stream));
                   };
             }
-            return ValueOrThrow(net::HttpSseServer::Create(
-                std::move(bind_address), port, std::move(callback),
-                std::move(options)));
+            return ValueWithoutGil([&] {
+              return net::HttpSseServer::Create(std::move(bind_address), port,
+                                                std::move(callback),
+                                                std::move(options));
+            });
           },
           "Create and start an SSE server that accepts A11 wire streams, "
           "invoking the optional async on_connect callback for each client.",

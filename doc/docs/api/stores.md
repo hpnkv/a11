@@ -15,6 +15,16 @@ storage. Readers and writers are its cursors.
 
 ::: a11.stores.local_chunk_store.LocalChunkStore
 
+## RedisChunkStore
+
+::: a11.stores.redis_chunk_store.RedisChunkStore
+
+::: a11.stores.redis_chunk_store.RedisChunkStoreOptions
+
+::: a11.stores.redis_chunk_store.RedisChunkStoreMetadata
+
+::: a11.stores.redis_chunk_store.RedisChunkStoreKeys
+
 ## ChunkStoreReader
 
 ::: a11.stores.chunk_store_reader.ChunkStoreReader

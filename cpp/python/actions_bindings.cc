@@ -426,7 +426,19 @@ std::shared_ptr<actions::Action> ReturnAction(
   return self;
 }
 
-void* PortSchemaTypeInfoFromPython(const py::handle& value) {
+void ReleasePortSchemaTypeInfo(void* type_object) {
+  if (type_object == nullptr)
+    return;
+  if (Py_IsInitialized() == 0)
+    return;
+  const PyGILState_STATE gil = PyGILState_Ensure();
+  Py_DECREF(static_cast<PyObject*>(type_object));
+  PyGILState_Release(gil);
+}
+
+// Takes an *owning* reference to the type object so the schema keeps it alive
+// for its whole lifetime; the shared_ptr deleter returns that reference.
+std::shared_ptr<void> PortSchemaTypeInfoFromPython(const py::handle& value) {
   if (value.is_none()) {
     return nullptr;
   }
@@ -434,13 +446,15 @@ void* PortSchemaTypeInfoFromPython(const py::handle& value) {
     ThrowStatus(absl::InvalidArgumentError(
         "ActionPortSchema typeinfo must be a Python type or None"));
   }
-  return value.ptr();
+  Py_INCREF(value.ptr());
+  return std::shared_ptr<void>(value.ptr(), &ReleasePortSchemaTypeInfo);
 }
 
-py::object PortSchemaTypeInfoToPython(void* typeinfo) {
+py::object PortSchemaTypeInfoToPython(const std::shared_ptr<void>& typeinfo) {
   if (typeinfo == nullptr)
     return py::none();
-  return py::reinterpret_borrow<py::object>(static_cast<PyObject*>(typeinfo));
+  return py::reinterpret_borrow<py::object>(
+      static_cast<PyObject*>(typeinfo.get()));
 }
 
 py::object StatusObject(const absl::Status& status) {

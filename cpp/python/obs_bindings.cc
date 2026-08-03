@@ -148,14 +148,31 @@ void Configure(const std::string& service_name,
   } else {
     ThrowStatus(absl::InvalidArgumentError("Unknown exporter: " + exporter));
   }
-  if (const absl::Status status = obs::Configure(options); !status.ok()) {
+  // Reconfiguring tears down the previous provider, which joins the batch span
+  // processor's worker thread (and may block on a final export). Release the
+  // GIL across the native call so a worker thread that needs the GIL to finish
+  // destroying an in-flight action (PyGILState_Ensure) is not starved -- see
+  // obs_shutdown below for why that starvation is fatal at interpreter exit.
+  absl::Status status;
+  {
+    py::gil_scoped_release release;
+    status = obs::Configure(options);
+  }
+  if (!status.ok()) {
     ThrowStatus(status);
   }
 }
 
 py::list RecordedSpans() {
+  // GetRecordedSpans() force-flushes the processor, which can block on the
+  // exporter; drop the GIL for that and re-take it to build the Python list.
+  std::vector<obs::RecordedSpan> spans;
+  {
+    py::gil_scoped_release release;
+    spans = obs::GetRecordedSpans();
+  }
   py::list result;
-  for (const obs::RecordedSpan& span : obs::GetRecordedSpans()) {
+  for (const obs::RecordedSpan& span : spans) {
     py::dict entry;
     entry["name"] = span.name;
     entry["trace_id"] = span.trace_id;
@@ -228,8 +245,24 @@ void BindObs(py::module_& module) {
              py::arg("name"), py::arg("kind") = "internal",
              py::arg("parent_traceparent") = "");
 
-  module.def("obs_shutdown", &a11::obs::Shutdown,
-             "Flushes and tears down the global tracer provider.");
+  module.def(
+      "obs_shutdown",
+      []() {
+        // Shutdown() flushes and joins the batch span processor's worker
+        // thread, which can block on a final OTLP export. It must run with the
+        // GIL released: a native worker thread finishing an in-flight action
+        // destroys the last shared_ptr<Action>, whose Python members require
+        // the GIL (PyGILState_Ensure). If this (typically the atexit) call held
+        // the GIL while blocking, that worker would only acquire it once we
+        // return -- by which point the interpreter is finalizing, so CPython
+        // force-exits the thread via pthread_exit. The forced unwind then tears
+        // through a noexcept destructor and std::terminate aborts the process
+        // ("terminate called without an active exception"). Dropping the GIL
+        // lets the worker complete its teardown before finalization.
+        py::gil_scoped_release release;
+        a11::obs::Shutdown();
+      },
+      "Flushes and tears down the global tracer provider.");
   module.def("obs_is_configured", &a11::obs::IsConfigured,
              "Returns whether a tracer provider is currently installed.");
   module.def("obs_recorded_spans", &RecordedSpans,

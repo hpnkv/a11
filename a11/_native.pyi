@@ -79,6 +79,15 @@ __all__: list[str] = [
     "OTEL_TRACEPARENT_HEADER",
     "OTEL_TRACESTATE_HEADER",
     "Port",
+    "RedisChunkStore",
+    "RedisChunkStoreKeys",
+    "RedisChunkStoreMetadata",
+    "RedisChunkStoreOptions",
+    "RedisClient",
+    "RedisClientOptions",
+    "RedisReply",
+    "RedisReplyType",
+    "RedisSubscription",
     "SESSION_MAX_SINGLE_MESSAGE_SIZE",
     "SESSION_STATUS_HEADER",
     "SSE_HTTP_HEADER_PREFIX",
@@ -121,6 +130,7 @@ __all__: list[str] = [
     "WireStreamOptions",
     "WireStreamWithRecv",
     "create_in_process_wire_stream_pair",
+    "default_redis_client",
     "get_http_header",
     "is_half_close_message",
     "is_status_chunk",
@@ -132,6 +142,8 @@ __all__: list[str] = [
     "obs_recorded_spans",
     "obs_shutdown",
     "obs_start_span",
+    "reset_default_redis_client",
+    "set_default_redis_client",
     "status_code_from_http",
     "status_code_from_websocket",
     "status_code_to_http",
@@ -3316,6 +3328,571 @@ class Port:
     @name.setter
     def name(self, arg0: str) -> None: ...
 
+class RedisChunkStore(ChunkStore):
+    """
+    A persistent, multi-process ChunkStore backed by Redis Streams.
+    """
+
+    @staticmethod
+    def create(
+        id: str,
+        client: RedisClient | None = None,
+        options: RedisChunkStoreOptions | dict[str, typing.Any] | None = None,
+    ) -> RedisChunkStore:
+        """
+        Create a Redis store with optional client and options.
+        """
+
+    def __init__(
+        self,
+        id: str,
+        client: RedisClient | None = None,
+        options: RedisChunkStoreOptions | dict[str, typing.Any] | None = None,
+    ) -> None:
+        """
+        Open one node's persistent stream with an injected Redis client.
+        """
+
+    async def clear_data(self, seq: int) -> NodeFragment: ...
+    async def close_writes_with_status(
+        self, status: Status, return_status_if_already_closed: bool = False
+    ) -> Status: ...
+    async def get(
+        self, seq: int, deadline: Time | None = None
+    ) -> NodeFragment: ...
+    async def get_by_arrival_order(
+        self, arrival_order: int, deadline: Time | None = None
+    ) -> NodeFragment: ...
+    async def get_final_seq(self) -> int | None: ...
+    async def get_metadata(self) -> RedisChunkStoreMetadata:
+        """
+        Read node state without walking the chunk stream.
+        """
+
+    async def get_seq_for_arrival_order(self, arrival_order: int) -> int: ...
+    async def initialize(self) -> None:
+        """
+        Ensure metadata exists without writing a chunk.
+        """
+
+    async def next(
+        self, deadline: Time | None = None, limit: int = 1
+    ) -> list[NodeFragment | None]: ...
+    async def put(self, fragment: NodeFragment) -> int: ...
+    async def put_many(
+        self, fragments: typing.Sequence[NodeFragment]
+    ) -> list[int]: ...
+    async def size(self) -> int: ...
+    @property
+    def client(self) -> RedisClient:
+        """
+        The explicitly composed RedisClient.
+        """
+
+    @property
+    def keys(self) -> RedisChunkStoreKeys:
+        """
+        A copy of the sharding-safe Redis key layout.
+        """
+
+    @property
+    def options(self) -> RedisChunkStoreOptions:
+        """
+        A copy of this store's key and payload policy.
+        """
+
+class RedisChunkStoreKeys:
+    """
+    The sharding-safe Redis keys owned by one node stream.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __eq__(self, arg0: object) -> bool: ...
+    def script_keys(self) -> list[str]:
+        """
+        Return keys in the stable order used by the Lua state machine.
+        """
+
+    @property
+    def arrival_index(self) -> str:
+        """
+        Arrival-order-to-sequence hash.
+        """
+
+    @property
+    def blobs(self) -> str:
+        """
+        Hash containing large encoded chunk payloads.
+        """
+
+    @property
+    def events(self) -> str:
+        """
+        Pub/Sub channel used for invalidation notifications.
+        """
+
+    @property
+    def metadata(self) -> str:
+        """
+        Hash containing node-level metadata.
+        """
+
+    @property
+    def sequence_index(self) -> str:
+        """
+        Sequence-to-stream-entry hash.
+        """
+
+    @property
+    def stream(self) -> str:
+        """
+        Redis Stream containing chunk and control entries.
+        """
+
+class RedisChunkStoreMetadata:
+    """
+    Node-level Redis state read without iterating over chunk entries.
+    """
+
+    @property
+    def closed(self) -> bool:
+        """
+        Whether the store rejects new writes.
+        """
+
+    @property
+    def final_seq(self) -> int | None:
+        """
+        The declared final sequence, if one has arrived.
+        """
+
+    @property
+    def id(self) -> str:
+        """
+        The owning AsyncNode identifier.
+        """
+
+    @property
+    def max_seq(self) -> int | None:
+        """
+        Largest sequence currently present.
+        """
+
+    @property
+    def next_cursor(self) -> int:
+        """
+        Global SPMC cursor used by next().
+        """
+
+    @property
+    def revision(self) -> int:
+        """
+        Monotonic mutation generation published to waiters.
+        """
+
+    @property
+    def size(self) -> int:
+        """
+        Number of chunk slots in the store.
+        """
+
+    @property
+    def status(self) -> Status | None:
+        """
+        Return the terminal status when closed, otherwise ``None``.
+        """
+
+    @property
+    def total_chunks_put(self) -> int:
+        """
+        Number of chunks appended over the store lifetime.
+        """
+
+class RedisChunkStoreOptions:
+    """
+    Key layout and inline-payload policy for RedisChunkStore.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def from_environment() -> RedisChunkStoreOptions:
+        """
+        Read the A11_REDIS_CHUNK_STORE_* environment variables.
+        """
+
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        key_prefix: str = "a11:",
+        inline_data_threshold: typing.Any = 262144,
+    ) -> None:
+        """
+        Construct validated Redis chunk-store options.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+    def validate(self) -> None:
+        """
+        Raise if the key layout policy is invalid.
+        """
+
+    @property
+    def inline_data_threshold(self) -> int:
+        """
+        Chunk data larger than this many bytes uses the blob hash.
+        """
+    @inline_data_threshold.setter
+    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def key_prefix(self) -> str:
+        """
+        Prefix before the per-node Redis Cluster hash tag.
+        """
+    @key_prefix.setter
+    def key_prefix(self, arg0: str) -> None: ...
+
+class RedisClient:
+    """
+    An asynchronous, binary-safe hiredis/libuv client using A11 futures.
+    """
+
+    @staticmethod
+    def create(
+        options: RedisClientOptions | dict[str, typing.Any] | None = None,
+    ) -> RedisClient:
+        """
+        Create a client and begin connecting without blocking.
+        """
+
+    async def __aenter__(self) -> typing.Self: ...
+    async def __aexit__(self, exc_type, exc, traceback) -> None: ...
+    def __init__(
+        self, options: RedisClientOptions | dict[str, typing.Any] | None = None
+    ) -> None:
+        """
+        Begin connecting with validated native options.
+
+                A plain mapping is validated into the same bound options object used
+                by C++, rather than creating a second Python configuration model.
+
+        """
+
+    def close(self) -> None:
+        """
+        Begin an idempotent asynchronous disconnect.
+        """
+
+    async def command(
+        self,
+        parts: typing.Sequence[str | bytes | bytearray | memoryview],
+        deadline: Time | None = None,
+    ) -> RedisReply:
+        """
+        Execute one binary-safe Redis command.
+        """
+
+    async def eval(
+        self,
+        script: str | bytes,
+        keys: typing.Sequence[str | bytes],
+        arguments: typing.Sequence[
+            str | bytes | bytearray | memoryview
+        ] = tuple(),
+        deadline: Time | None = None,
+    ) -> RedisReply:
+        """
+        Execute Lua with every cluster-sensitive key declared.
+        """
+
+    async def ready(self) -> None:
+        """
+        Wait until command and Pub/Sub connections are initialized.
+        """
+
+    async def subscribe(
+        self, channel: str, deadline: Time | None = None
+    ) -> RedisSubscription:
+        """
+        Subscribe and wait for Redis's acknowledgement.
+        """
+
+    @property
+    def options(self) -> RedisClientOptions:
+        """
+        A copy of the client's connection options.
+        """
+
+class RedisClientOptions:
+    """
+    Connection and timeout policy for Redis.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def from_environment() -> RedisClientOptions:
+        """
+        Read A11_REDIS_URL or the individual A11_REDIS_* variables.
+        """
+
+    @staticmethod
+    def from_url(url: str) -> RedisClientOptions:
+        """
+        Parse a `redis://[user:password@]host[:port][/database]` URL.
+        """
+
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: typing.SupportsInt = 6379,
+        username: str = "",
+        password: str = "",
+        database: typing.SupportsInt = 0,
+        client_name: str = "a11",
+        connect_timeout: typing.Any | None = None,
+        command_timeout: typing.Any | None = None,
+    ) -> None:
+        """
+        Construct validated Redis connection options.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+    def validate(self) -> None:
+        """
+        Raise if these connection options are invalid.
+        """
+
+    @property
+    def client_name(self) -> str:
+        """
+        Name reported through CLIENT SETNAME.
+        """
+    @client_name.setter
+    def client_name(self, arg0: str) -> None: ...
+
+    @property
+    def command_timeout(self) -> typing.Any:
+        """
+        Default maximum time allowed for one command.
+        """
+    @command_timeout.setter
+    def command_timeout(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def connect_timeout(self) -> typing.Any:
+        """
+        Maximum time allowed for establishing a connection.
+        """
+    @connect_timeout.setter
+    def connect_timeout(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def database(self) -> int:
+        """
+        Logical Redis database selected after connection.
+        """
+    @database.setter
+    def database(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def host(self) -> str:
+        """
+        Redis host name or IP address.
+        """
+    @host.setter
+    def host(self, arg0: str) -> None: ...
+
+    @property
+    def password(self) -> str:
+        """
+        ACL password, if authentication is enabled.
+        """
+    @password.setter
+    def password(self, arg0: str) -> None: ...
+
+    @property
+    def port(self) -> int:
+        """
+        Redis TCP port.
+        """
+    @port.setter
+    def port(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def username(self) -> str:
+        """
+        ACL username, if authentication is enabled.
+        """
+    @username.setter
+    def username(self, arg0: str) -> None: ...
+
+class RedisReply:
+    """
+    An owned, binary-safe RESP value returned by RedisClient.
+    """
+
+    def __bytes__(self) -> bytes:
+        """
+        Return the bytes held by a string reply.
+        """
+
+    def __repr__(self) -> str:
+        """
+        Return a diagnostic representation of the RESP value.
+        """
+
+    def as_boolean(self) -> bool:
+        """
+        Return the boolean payload, raising for another RESP kind.
+        """
+
+    def as_bytes(self) -> bytes:
+        """
+        Return string payload bytes, raising for another RESP kind.
+        """
+
+    def as_elements(self) -> list[RedisReply]:
+        """
+        Return aggregate children; maps alternate key and value entries.
+        """
+
+    def as_float(self) -> float:
+        """
+        Return the double payload, raising for another RESP kind.
+        """
+
+    def as_integer(self) -> int:
+        """
+        Return the integer payload, raising for another RESP kind.
+        """
+
+    def debug_string(self) -> str:
+        """
+        Return a diagnostic representation of the RESP value.
+        """
+
+    @property
+    def is_null(self) -> bool:
+        """
+        Whether this is a null RESP value.
+        """
+
+    @property
+    def type(self) -> RedisReplyType:
+        """
+        The RESP kind of this value.
+        """
+
+class RedisReplyType:
+    """
+    The RESP value kind held by RedisReply.
+
+    Members:
+
+      NULL
+
+      STRING
+
+      INTEGER
+
+      DOUBLE
+
+      BOOLEAN
+
+      ARRAY
+
+      MAP
+
+      SET
+    """
+
+    ARRAY: typing.ClassVar[RedisReplyType]
+    BOOLEAN: typing.ClassVar[RedisReplyType]
+    DOUBLE: typing.ClassVar[RedisReplyType]
+    INTEGER: typing.ClassVar[RedisReplyType]
+    MAP: typing.ClassVar[RedisReplyType]
+    NULL: typing.ClassVar[RedisReplyType]
+    SET: typing.ClassVar[RedisReplyType]
+    STRING: typing.ClassVar[RedisReplyType]
+    __members__: typing.ClassVar[dict[str, RedisReplyType]]
+    def __eq__(self, other: object) -> bool: ...
+    def __getstate__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __int__(self) -> int: ...
+    def __ne__(self, other: typing.Any) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __str__(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def value(self) -> int: ...
+
+class RedisSubscription:
+    """
+    A non-buffering broadcast subscription for invalidation events.
+    """
+
+    async def wait(self, after: int, deadline: Time | None = None) -> int:
+        """
+        Wait until a message advances the generation beyond ``after``.
+        """
+
+    @property
+    def channel(self) -> str:
+        """
+        The subscribed Redis channel.
+        """
+
+    @property
+    def generation(self) -> int:
+        """
+        The current broadcast generation.
+        """
+
 class SerializationRegistry:
     def __init__(self, register_defaults: bool = False) -> None:
         """
@@ -5681,6 +6258,11 @@ def create_in_process_wire_stream_pair(
     Create a connected pair of in-process wire streams (free-function form of InProcessWireStream.create_pair).
     """
 
+def default_redis_client() -> RedisClient:
+    """
+    Return the process-global client configured from A11_REDIS_*.
+    """
+
 def get_http_header(headers: typing.Any, name: str) -> typing.Any:
     """
     Look up a header value by name, returning None if it is absent.
@@ -5745,6 +6327,16 @@ def obs_start_span(
 ) -> _Span:
     """
     Starts a new span with the given name and kind, optionally parented by a W3C traceparent.
+    """
+
+def reset_default_redis_client() -> None:
+    """
+    Clear the global Redis client so its environment is reread.
+    """
+
+def set_default_redis_client(client: RedisClient) -> None:
+    """
+    Replace the process-global Redis client.
     """
 
 def status_code_from_http(arg0: typing.SupportsInt) -> int: ...

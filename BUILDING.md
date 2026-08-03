@@ -48,7 +48,7 @@ Homebrew (or apt/dnf/…) you install only the *tools*:
 - pybind11 if `A11_BUILD_PYTHON=ON` in a direct CMake build.
 
 The C++ **libraries** — Boost.Context/Fiber/Thread, OpenSSL, libcurl, nghttp2,
-nlohmann-json, and uvw — are built from source by
+hiredis, nlohmann-json, and uvw — are built from source by
 `scripts/bootstrap_wheel_deps.sh` into a per-architecture prefix, and every A11
 build (editable, presets, and wheels) links that prefix exclusively. This is
 required on Linux **and** macOS: the build pins Boost to the prefix
@@ -85,7 +85,8 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.4}"
 scripts/bootstrap_wheel_deps.sh
 ```
 
-That script builds Boost, OpenSSL, libcurl, nghttp2, nlohmann-json, and uvw.
+That script builds Boost, OpenSSL, libcurl, nghttp2, hiredis, nlohmann-json,
+and uvw.
 GoogleTest must still be installed separately for `BUILD_TESTING=ON`. Keep the
 exported paths in the shell used for CMake, `uv sync`, and editable rebuilds.
 
@@ -360,7 +361,7 @@ Boost.Context includes architecture-specific assembly.
 `build_wheels.py` needs no environment set up by hand. It exports the deps
 prefix per platform/arch; `scripts/bootstrap_wheel_deps.sh` (run automatically
 as cibuildwheel's `before-all`) builds the static dependencies (Boost, OpenSSL,
-curl, nghttp2, nlohmann-json, uvw) into that prefix, and CMake discovers them
+curl, nghttp2, hiredis, nlohmann-json, uvw) into that prefix, and CMake discovers them
 from it. It also preflights prerequisites and prints a clear message instead of
 failing deep in a build.
 

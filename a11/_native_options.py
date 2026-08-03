@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, get_args
 
 from pydantic_core import core_schema
 
-from a11.status import Status, StatusCode
+from a11.status import Status, StatusCode, StatusException
 
 
 def install_native_options(
@@ -34,7 +34,15 @@ def install_native_options(
                     f"{option_cls.__name__} must be validated from a mapping."
                 ),
             ).to_exception()
-        return option_cls(**dict(value))
+        try:
+            return option_cls(**dict(value))
+        except StatusException:
+            raise
+        except Exception as error:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Invalid {option_cls.__name__}: {error}",
+            ).to_exception() from None
 
     def model_dump(self, **_: Any) -> dict[str, Any]:
         return {
@@ -59,9 +67,28 @@ def install_native_options(
     def model_json_schema(option_cls, **_: Any) -> dict[str, Any]:
         properties: dict[str, Any] = {}
         for name, (annotation, default) in fields.items():
-            value_type = "boolean" if annotation is bool else "integer"
-            properties[name] = {"type": value_type}
-            if default is not None:
+            candidates = get_args(annotation) or (annotation,)
+            json_types = []
+            unknown_type = False
+            for candidate in candidates:
+                value_type = {
+                    bool: "boolean",
+                    int: "integer",
+                    float: "number",
+                    str: "string",
+                    type(None): "null",
+                }.get(candidate)
+                if value_type is None:
+                    unknown_type = True
+                    break
+                if value_type not in json_types:
+                    json_types.append(value_type)
+            properties[name] = {}
+            if not unknown_type and json_types:
+                properties[name]["type"] = (
+                    json_types[0] if len(json_types) == 1 else json_types
+                )
+            if default is None or isinstance(default, (bool, int, float, str)):
                 properties[name]["default"] = default
         return {
             "title": option_cls.__name__,

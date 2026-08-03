@@ -26,3 +26,13 @@ target_link_libraries(
                         a11::stores a11::actions a11::service a11::obs
                         GTest::gtest_main)
 add_test(NAME a11_core_test COMMAND a11_core_test)
+
+if (A11_BUILD_REDIS)
+  add_executable(a11_redis_test
+    redis_client_test.cc
+    redis_chunk_store_test.cc)
+  target_link_libraries(
+    a11_redis_test PRIVATE a11::concurrency a11::data a11::redis a11::stores
+                           GTest::gtest_main)
+  add_test(NAME a11_redis_test COMMAND a11_redis_test)
+endif ()

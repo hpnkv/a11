@@ -8,7 +8,7 @@ project(
         a11
         VERSION 0.1.5
         DESCRIPTION "A11 action and streaming runtime"
-        LANGUAGES CXX)
+        LANGUAGES C CXX)
 
 include(CTest)
 include(CMakePackageConfigHelpers)
@@ -18,6 +18,7 @@ include(GNUInstallDirs)
 option(A11_BUILD_PYTHON "Build the pybind11 extension" ON)
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
 option(A11_BUILD_WEBRTC "Build WebRTC wire streams and signalling" ON)
+option(A11_BUILD_REDIS "Build the Redis client and Redis ChunkStore" ON)
 option(A11_FETCH_MISSING_DEPS "Fetch required dependencies not installed" ON)
 option(A11_REQUIRE_STATIC_DEPS
         "Fail configuration when a non-system dependency is only shared" ON)
@@ -60,6 +61,42 @@ function(a11_require_static_target target_name)
     unset(A11_DEPENDENCY_LOCATION)
     unset(A11_DEPENDENCY_TYPE)
     unset(A11_LOCATION_PROPERTY)
+endfunction()
+
+# Fails configuration when a resolved dependency artifact lives outside the
+# bootstrapped deps prefix (CMAKE_PREFIX_PATH). The config-mode find_package
+# calls below already pin their search to the prefix with NO_DEFAULT_PATH; this
+# covers the pkg-config-driven finds (OpenSSL, nghttp2) whose search path CMake
+# cannot restrict as cleanly, guaranteeing that no system-installed library is
+# ever linked on any platform. Enforced only in the hermetic static-deps mode.
+function(a11_require_from_prefix what artifact_path)
+    if (NOT A11_REQUIRE_STATIC_DEPS)
+        return()
+    endif ()
+    if (NOT artifact_path)
+        message(FATAL_ERROR "${what}: expected a resolved path, got none")
+    endif ()
+    if (NOT CMAKE_PREFIX_PATH)
+        message(FATAL_ERROR
+                "${what} resolved to '${artifact_path}' but CMAKE_PREFIX_PATH is "
+                "empty; a hermetic build must point it at the bootstrapped deps "
+                "prefix so no system library can be linked.")
+    endif ()
+    file(REAL_PATH "${artifact_path}" A11_ARTIFACT_REAL)
+    set(A11_ARTIFACT_IN_PREFIX FALSE)
+    foreach (A11_PREFIX_ENTRY IN LISTS CMAKE_PREFIX_PATH)
+        file(REAL_PATH "${A11_PREFIX_ENTRY}" A11_PREFIX_REAL)
+        string(FIND "${A11_ARTIFACT_REAL}" "${A11_PREFIX_REAL}/" A11_PREFIX_POS)
+        if (A11_PREFIX_POS EQUAL 0)
+            set(A11_ARTIFACT_IN_PREFIX TRUE)
+        endif ()
+    endforeach ()
+    if (NOT A11_ARTIFACT_IN_PREFIX)
+        message(FATAL_ERROR
+                "${what} resolved to '${A11_ARTIFACT_REAL}', outside the pinned "
+                "deps prefix (CMAKE_PREFIX_PATH='${CMAKE_PREFIX_PATH}'). Refusing "
+                "to link a system library; rebuild the deps prefix instead.")
+    endif ()
 endfunction()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -187,39 +224,30 @@ a11_require_static_target(opentelemetry_exporter_in_memory)
 a11_require_static_target(opentelemetry_exporter_ostream_span)
 
 if (A11_WITH_OTLP_HTTP)
-    # The native OTLP/HTTP exporter posts OTLP-JSON via libcurl. In wheels the
-    # deps prefix supplies a static libcurl (built against A11's static
-    # OpenSSL); for local builds the system libcurl is used. Static linkage is
-    # verified for shipped wheels by scripts/audit_wheel.py rather than forced
-    # here, so a dynamic system libcurl remains fine for development.
-    find_package(CURL REQUIRED)
+    # The native OTLP/HTTP exporter posts OTLP-JSON via libcurl. The deps prefix
+    # supplies a static libcurl (built against A11's static OpenSSL); resolve it
+    # in CONFIG mode restricted to that prefix so a system libcurl is never
+    # picked up -- neither on macOS nor Linux, and neither for wheels nor local
+    # builds -- and require it to be static like every other bundled dependency.
+    find_package(CURL CONFIG REQUIRED NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    a11_require_static_target(CURL::libcurl)
 endif ()
 
-find_package(nlohmann_json CONFIG REQUIRED)
+# Pin nlohmann_json to the bootstrapped prefix (like Boost below). Its type
+# shows up in a11_core's public interface (an inline-namespaced json_abi_v3_x_y
+# symbol), so a system copy at a different version is an ABI mismatch, not just a
+# version drift. NO_DEFAULT_PATH keeps the search off system prefixes entirely.
+find_package(nlohmann_json CONFIG REQUIRED
+        NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
-# The bootstrapped deps prefix on CMAKE_PREFIX_PATH is the single source of truth
-# for Boost (see scripts/bootstrap_wheel_deps.sh). Restrict Boost's upstream
-# CMake config to that prefix (NO_DEFAULT_PATH + PATHS) so an incomplete prefix
-# fails loudly with "could not find Boost" instead of silently resolving a
-# system/Homebrew Boost -- which on a cross build is the wrong architecture,
-# elsewhere hides a broken prefix, and on macOS lacks the futex/memory-ordering
-# patch this build depends on. Boost_NO_SYSTEM_PATHS is a module-mode variable
-# and does not constrain config mode, so the search paths are pinned on the call.
+
 find_package(Boost 1.82 REQUIRED CONFIG COMPONENTS context fiber thread
         NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
 a11_require_static_target(Boost::context)
 a11_require_static_target(Boost::fiber)
 a11_require_static_target(Boost::thread)
 
-# The deps prefix builds Boost.Fiber with a futex spinlock on macOS (see
-# scripts/bootstrap_wheel_deps.sh). Boost.Fiber selects its spinlock in headers,
-# so every A11 translation unit must define the SAME macro the prefix's library
-# was built with; otherwise boost::fibers::mutex has different layouts in the
-# archive and this extension (an ODR violation). A11 always links the patched
-# prefix Boost, so the macro applies on every macOS build. A11_FIBER_SPINLOCK
-# must match the value bootstrap used, and needs a >= 14.4 deployment target for
-# futex availability.
 if (APPLE)
     # Precedence: an explicit -DA11_FIBER_SPINLOCK wins (build frontends that
     # cannot pass the environment through -- e.g. uv, which overwrites
@@ -243,6 +271,37 @@ if (APPLE)
     add_compile_definitions(${A11_FIBER_SPINLOCK})
 endif ()
 
+if (A11_BUILD_HTTP OR A11_BUILD_REDIS)
+    find_package(uvw CONFIG REQUIRED NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    a11_require_static_target(uvw::uvw)
+    a11_require_static_target(uvw::uv_a)
+endif ()
+
+if (A11_BUILD_REDIS)
+    find_package(hiredis 1.3 CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    if (NOT hiredis_FOUND AND A11_FETCH_MISSING_DEPS)
+        set(DISABLE_TESTS ON CACHE BOOL "" FORCE)
+        set(ENABLE_SSL OFF CACHE BOOL "" FORCE)
+        set(ENABLE_SSL_TESTS OFF CACHE BOOL "" FORCE)
+        set(ENABLE_ASYNC_TESTS OFF CACHE BOOL "" FORCE)
+        set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(ENABLE_NUGET OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+                hiredis
+                GIT_REPOSITORY https://github.com/redis/hiredis.git
+                GIT_TAG v1.3.0
+                GIT_SHALLOW TRUE
+                SYSTEM)
+        FetchContent_MakeAvailable(hiredis)
+    elseif (NOT hiredis_FOUND)
+        message(FATAL_ERROR
+                "hiredis >= 1.3 is required; install it or enable "
+                "A11_FETCH_MISSING_DEPS")
+    endif ()
+    a11_require_static_target(hiredis::hiredis)
+endif ()
+
 if (A11_BUILD_HTTP)
     # Resolve OpenSSL before libdatachannel so its transitive crypto linkage uses
     # the same static archives as A11's HTTP implementation.
@@ -260,6 +319,10 @@ if (A11_BUILD_HTTP)
                 NAMES libssl.a ssl_static
                 HINTS ${OPENSSL_PC_STATIC_LIBRARY_DIRS} ${OPENSSL_PC_LIBRARY_DIRS}
                 NO_DEFAULT_PATH REQUIRED)
+        a11_require_from_prefix("OpenSSL crypto archive"
+                "${A11_OPENSSL_CRYPTO_STATIC_LIBRARY}")
+        a11_require_from_prefix("OpenSSL SSL archive"
+                "${A11_OPENSSL_SSL_STATIC_LIBRARY}")
         set(OPENSSL_CRYPTO_LIBRARY "${A11_OPENSSL_CRYPTO_STATIC_LIBRARY}"
                 CACHE FILEPATH "Static OpenSSL crypto archive" FORCE)
         set(OPENSSL_SSL_LIBRARY "${A11_OPENSSL_SSL_STATIC_LIBRARY}"
@@ -271,7 +334,8 @@ if (A11_BUILD_HTTP)
 endif ()
 
 if (A11_BUILD_WEBRTC)
-    find_package(LibDataChannel CONFIG QUIET)
+    find_package(LibDataChannel CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
 endif ()
 if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
     set(NO_MEDIA ON CACHE BOOL "" FORCE)
@@ -299,8 +363,6 @@ if (A11_BUILD_WEBRTC AND NOT A11_BUILD_HTTP)
             "A11_BUILD_WEBRTC requires A11_BUILD_HTTP for nghttp2 signalling")
 endif ()
 if (A11_BUILD_HTTP)
-    find_package(uvw CONFIG REQUIRED)
-    a11_require_static_target(uvw::uvw)
     pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
     find_library(
             A11_NGHTTP2_STATIC_LIBRARY
@@ -308,6 +370,7 @@ if (A11_BUILD_HTTP)
             HINTS ${NGHTTP2_STATIC_LIBRARY_DIRS} ${NGHTTP2_LIBRARY_DIRS}
             NO_DEFAULT_PATH)
     if (A11_NGHTTP2_STATIC_LIBRARY)
+        a11_require_from_prefix("nghttp2 archive" "${A11_NGHTTP2_STATIC_LIBRARY}")
         add_library(a11_nghttp2 STATIC IMPORTED GLOBAL)
         set_target_properties(
                 a11_nghttp2 PROPERTIES
@@ -337,6 +400,9 @@ add_subdirectory(a11/obs)
 add_subdirectory(a11/nodes)
 add_subdirectory(a11/service)
 add_subdirectory(a11/stores)
+if (A11_BUILD_REDIS)
+    add_subdirectory(redis)
+endif ()
 add_subdirectory(python)
 
 # The bundled thread library is the scheduling substrate for every A11 task.
@@ -419,6 +485,28 @@ target_link_libraries(
         $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
         PRIVATE $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log> a11::warnings)
 
+if (A11_BUILD_REDIS)
+    add_library(a11_redis STATIC ${A11_REDIS_SOURCES})
+    add_library(a11::redis ALIAS a11_redis)
+    set_target_properties(a11_redis PROPERTIES EXPORT_NAME redis)
+    target_include_directories(
+            a11_redis PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_redis
+            PUBLIC a11::concurrency
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            PRIVATE hiredis::hiredis uvw::uv_a uvw::uvw
+            $<BUILD_INTERFACE:absl::flat_hash_map>
+            $<INSTALL_INTERFACE:absl::flat_hash_map>
+            $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            a11::warnings)
+endif ()
+
 add_library(a11_stores STATIC ${A11_STORES_SOURCES})
 add_library(a11::stores ALIAS a11_stores)
 set_target_properties(a11_stores PROPERTIES EXPORT_NAME stores)
@@ -429,6 +517,9 @@ target_include_directories(
 target_link_libraries(
         a11_stores PUBLIC a11::concurrency a11::data $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
         PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings)
+if (A11_BUILD_REDIS)
+    target_link_libraries(a11_stores PUBLIC a11::redis)
+endif ()
 
 add_library(a11_net STATIC ${A11_NET_SOURCES})
 if (A11_BUILD_HTTP)
@@ -634,6 +725,9 @@ if (A11_BUILD_PYTHON)
 
     pybind11_add_module(a11_python MODULE ${A11_PYTHON_SOURCES})
     set_target_properties(a11_python PROPERTIES OUTPUT_NAME "_native")
+    if (A11_BUILD_REDIS)
+        target_compile_definitions(a11_python PRIVATE A11_BUILD_REDIS=1)
+    endif ()
     # Direct CMake builds place the module beside the Python sources for a fast
     # edit/build/test loop. scikit-build keeps every ABI in its isolated build
     # directory and installs it into the wheel, avoiding cross-ABI artifacts in
@@ -696,9 +790,14 @@ if (A11_BUILD_PYTHON)
     endif ()
 endif ()
 
+set(A11_INSTALL_TARGETS
+        a11_warnings a11_core a11_data a11_concurrency a11_stores a11_net
+        a11_nodes a11_actions a11_service Thread)
+if (A11_BUILD_REDIS)
+    list(APPEND A11_INSTALL_TARGETS a11_redis)
+endif ()
 install(
-        TARGETS a11_warnings a11_core a11_data a11_concurrency a11_stores a11_net
-        a11_nodes a11_actions a11_service Thread
+        TARGETS ${A11_INSTALL_TARGETS}
         EXPORT a11Targets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -712,6 +811,12 @@ install(
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/thread
         FILES_MATCHING PATTERN "*.h"
         PATTERN "thread_pool.h" EXCLUDE)
+if (A11_BUILD_REDIS)
+    install(
+            DIRECTORY redis/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/redis
+            FILES_MATCHING PATTERN "*.h")
+endif ()
 configure_package_config_file(
         cmake/a11Config.cmake.in
         "${CMAKE_CURRENT_BINARY_DIR}/a11Config.cmake"

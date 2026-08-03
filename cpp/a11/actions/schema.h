@@ -17,6 +17,7 @@
 #ifndef A11_ACTIONS_SCHEMA_H_
 #define A11_ACTIONS_SCHEMA_H_
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -62,7 +63,14 @@ struct ActionPortSchema {
   /// Default fragments injected when the port is not otherwise populated.
   std::vector<std::optional<data::NodeFragment>> autofills;
 
-  void* typeinfo = nullptr;  ///< Opaque language-binding type handle.
+  /// Opaque, owning language-binding type handle (e.g. a Python type object).
+  /// The a11::actions layer stays language-agnostic: it only holds the handle
+  /// and never dereferences it. Ownership is real -- the binding that populates
+  /// it installs a custom deleter (which reacquires its runtime's lock as
+  /// needed), so the referent is kept alive for exactly as long as any copy of
+  /// this schema, instead of being a borrowed pointer that can dangle once the
+  /// caller drops its own reference. Empty when the port has no bound type.
+  std::shared_ptr<void> typeinfo;
 
   /** @brief Validates the port schema. */
   absl::Status Validate() const;

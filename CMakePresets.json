@@ -17,7 +17,7 @@
         "A11_REQUIRE_STATIC_DEPS": "ON",
         "A11_FETCH_MISSING_DEPS": "ON",
         "BUILD_TESTING": "ON",
-        "A11_BUILD_PYTHON": "OFF",
+        "A11_BUILD_PYTHON": "ON",
         "CMAKE_PREFIX_PATH": "$env{A11_DEPS_PREFIX}",
         "OPENSSL_ROOT_DIR": "$env{A11_DEPS_PREFIX}",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4",

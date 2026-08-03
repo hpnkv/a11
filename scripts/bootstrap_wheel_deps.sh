@@ -38,7 +38,12 @@ spinlock_tag=
 if [[ "${host_os}" == Darwin ]]; then
   spinlock_tag="-${fiber_spinlock}"
 fi
-stamp="${prefix}/.a11-wheel-deps-v9-${arch}${deployment_tag}${spinlock_tag}"
+
+sanitize_tag=
+if [[ -n "${A11_DEPS_SANITIZE:-}" ]]; then
+  sanitize_tag="-sanitize-${A11_DEPS_SANITIZE//[^a-zA-Z0-9]/}"
+fi
+stamp="${prefix}/.a11-wheel-deps-v10-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -210,6 +215,18 @@ cmake -S "${work}/nghttp2-1.69.0" -B "${work}/nghttp2-build" \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
   "${cmake_arch_args[@]}"
 cmake --build "${work}/nghttp2-build" --target install -j "${jobs}"
+
+download_and_extract \
+  "https://github.com/redis/hiredis/archive/refs/tags/v1.3.0.tar.gz" \
+  hiredis.tar.gz
+cmake -S "${work}/hiredis-1.3.0" -B "${work}/hiredis-build" \
+  -G Ninja -DBUILD_SHARED_LIBS=OFF -DDISABLE_TESTS=ON \
+  -DENABLE_SSL=OFF -DENABLE_SSL_TESTS=OFF -DENABLE_ASYNC_TESTS=OFF \
+  -DENABLE_EXAMPLES=OFF -DENABLE_NUGET=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
+  "${cmake_arch_args[@]}"
+cmake --build "${work}/hiredis-build" --target install -j "${jobs}"
 
 download_and_extract \
   "https://github.com/skypjack/uvw/archive/refs/tags/v3.4.0_libuv_v1.48.tar.gz" \

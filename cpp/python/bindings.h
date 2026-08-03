@@ -9,6 +9,9 @@ namespace a11::python {
 
 void BindCore(pybind11::module_& module);
 void BindData(pybind11::module_& module);
+#ifdef A11_BUILD_REDIS
+void BindRedis(pybind11::module_& module);
+#endif
 void BindStores(pybind11::module_& module);
 void BindNet(pybind11::module_& module);
 void BindHttp(pybind11::module_& module);

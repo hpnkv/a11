@@ -24,9 +24,9 @@ node = a11.AsyncNode.create("tokens")
 
 ## Write to it
 
-`put()` appends a value. Awaiting it resolves once the value is durably stored,
-so **awaiting applies backpressure** — a fast producer waits for a slow consumer
-instead of buffering without bound.
+`put()` appends a value. Awaiting it once more resolves once the value is durably
+stored, so **awaiting applies backpressure** — a fast producer waits for a slow
+consumer instead of buffering without bound.
 
 When you are the *authoritative* writer — the one who decides the stream is done
 — finish in two steps: mark the last value **final**, then **seal** the store:
@@ -34,8 +34,8 @@ When you are the *authoritative* writer — the one who decides the stream is do
 ```python
 await node.put("A11")
 await node.put("streams")
-await node.put_final("everything")   # mark where the data ends
-await node.drain_and_close()         # flush, forbid further writes, record OK
+await node.put_final("everything")  # mark where the data ends
+await node.drain_and_close()  # flush, forbid further writes, record OK
 ```
 
 These do different jobs, and a correct writer usually wants **both**:

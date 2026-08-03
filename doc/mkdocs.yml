@@ -103,6 +103,7 @@ nav:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
       - Stores: api/stores.md
+      - Redis client: api/redis.md
       - Transports: api/net.md
       - Sessions: api/service.md
       - Data & serialization: api/data.md

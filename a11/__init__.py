@@ -79,6 +79,16 @@ from .observability import (
     new_traceparent,
     shutdown_otel,
 )
+from .redis.client import (
+    RedisClient,
+    RedisClientOptions,
+    RedisReply,
+    RedisReplyType,
+    RedisSubscription,
+    default_client as default_redis_client,
+    reset_default_client as reset_default_redis_client,
+    set_default_client as set_default_redis_client,
+)
 from .service.session import (
     normalise_headers,
     Session,
@@ -90,6 +100,12 @@ from .stores.chunk_store import ChunkStore, ChunkStoreFactory
 from .stores.chunk_store_reader import ChunkStoreReader, ChunkStoreReaderOptions
 from .stores.chunk_store_writer import ChunkStoreWriter, ChunkStoreWriterOptions
 from .stores.local_chunk_store import LocalChunkStore
+from .stores.redis_chunk_store import (
+    RedisChunkStore,
+    RedisChunkStoreKeys,
+    RedisChunkStoreMetadata,
+    RedisChunkStoreOptions,
+)
 from .timing import (
     Duration,
     Time,

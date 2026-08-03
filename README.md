@@ -119,8 +119,8 @@ wheel matrix, testing workflow, and architecture, see
 [BUILDING.md](BUILDING.md).
 
 **1. Install the tools, then build the C++ libraries.** A11 links a pinned set
-of statically-built libraries (Boost, OpenSSL, libcurl, nghttp2, nlohmann-json,
-uvw) rather than system copies; `scripts/bootstrap_wheel_deps.sh` builds them
+of statically-built libraries (Boost, OpenSSL, libcurl, nghttp2, hiredis,
+nlohmann-json, uvw) rather than system copies; `scripts/bootstrap_wheel_deps.sh` builds them
 into a per-architecture prefix. From Homebrew you install only the tools (a C++20
 compiler, CMake ≥ 3.28, Ninja; Linux tool package names vary):
 

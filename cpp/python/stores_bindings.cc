@@ -24,6 +24,10 @@
 #include "a11/stores/chunk_store_reader.h"
 #include "a11/stores/chunk_store_writer.h"
 #include "a11/stores/local_chunk_store.h"
+#ifdef A11_BUILD_REDIS
+#include "a11/stores/redis_chunk_store.h"
+#include "redis/client.h"
+#endif
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
@@ -423,6 +427,180 @@ void BindStores(py::module_& module) {
           "Create a LocalChunkStore for the given node id. Equivalent to the "
           "constructor; use whichever reads more clearly at the call site.",
           py::arg("node_id"));
+
+#ifdef A11_BUILD_REDIS
+  py::class_<stores::RedisChunkStoreOptions>(
+      module, "RedisChunkStoreOptions",
+      "Key layout and inline-payload policy for RedisChunkStore.")
+      .def(
+          py::init([](std::string key_prefix,
+                      const py::handle& inline_data_threshold) {
+            stores::RedisChunkStoreOptions options{
+                .key_prefix = std::move(key_prefix),
+                .inline_data_threshold = static_cast<size_t>(UnsignedOption(
+                    inline_data_threshold,
+                    std::numeric_limits<size_t>::max(),
+                    "inline_data_threshold")),
+            };
+            const absl::Status status = options.Validate();
+            if (!status.ok())
+              ThrowStatus(status);
+            return options;
+          }),
+          "Construct validated Redis chunk-store options.",
+          py::arg("key_prefix") = "a11:",
+          py::arg("inline_data_threshold") = 256 * 1024)
+      .def_readwrite("key_prefix",
+                     &stores::RedisChunkStoreOptions::key_prefix,
+                     "Prefix before the per-node Redis Cluster hash tag.")
+      .def_readwrite(
+          "inline_data_threshold",
+          &stores::RedisChunkStoreOptions::inline_data_threshold,
+          "Chunk data larger than this many bytes uses the blob hash.")
+      .def(
+          "validate",
+          [](const stores::RedisChunkStoreOptions& self) {
+            const absl::Status status = self.Validate();
+            if (!status.ok())
+              ThrowStatus(status);
+          },
+          "Raise if the key layout policy is invalid.")
+      .def_static(
+          "from_environment",
+          [] {
+            return ValueOrThrow(
+                stores::RedisChunkStoreOptions::FromEnvironment());
+          },
+          "Read the A11_REDIS_CHUNK_STORE_* environment variables.")
+      .def(
+          "__eq__",
+          [](const stores::RedisChunkStoreOptions& self,
+             const stores::RedisChunkStoreOptions& other) {
+            return self == other;
+          },
+          py::is_operator());
+
+  py::class_<stores::RedisChunkStoreKeys>(
+      module, "RedisChunkStoreKeys",
+      "The sharding-safe Redis keys owned by one node stream.")
+      .def_readonly("metadata", &stores::RedisChunkStoreKeys::metadata,
+                    "Hash containing node-level metadata.")
+      .def_readonly("stream", &stores::RedisChunkStoreKeys::stream,
+                    "Redis Stream containing chunk and control entries.")
+      .def_readonly("sequence_index",
+                    &stores::RedisChunkStoreKeys::sequence_index,
+                    "Sequence-to-stream-entry hash.")
+      .def_readonly("arrival_index",
+                    &stores::RedisChunkStoreKeys::arrival_index,
+                    "Arrival-order-to-sequence hash.")
+      .def_readonly("blobs", &stores::RedisChunkStoreKeys::blobs,
+                    "Hash containing large encoded chunk payloads.")
+      .def_readonly("events", &stores::RedisChunkStoreKeys::events,
+                    "Pub/Sub channel used for invalidation notifications.")
+      .def("script_keys", &stores::RedisChunkStoreKeys::ScriptKeys,
+           "Return keys in the stable order used by the Lua state machine.")
+      .def(
+          "__eq__",
+          [](const stores::RedisChunkStoreKeys& self,
+             const stores::RedisChunkStoreKeys& other) {
+            return self == other;
+          },
+          py::is_operator());
+
+  py::class_<stores::RedisChunkStoreMetadata>(
+      module, "RedisChunkStoreMetadata",
+      "Node-level Redis state read without iterating over chunk entries.")
+      .def_readonly("id", &stores::RedisChunkStoreMetadata::id,
+                    "The owning AsyncNode identifier.")
+      .def_readonly("closed", &stores::RedisChunkStoreMetadata::closed,
+                    "Whether the store rejects new writes.")
+      .def_property_readonly(
+          "status",
+          [](const stores::RedisChunkStoreMetadata& self) -> py::object {
+            return self.status.has_value() ? StatusToPython(*self.status)
+                                           : py::none();
+          },
+          "The terminal Status when closed, otherwise None.")
+      .def_readonly("final_seq",
+                    &stores::RedisChunkStoreMetadata::final_seq,
+                    "The declared final sequence, if one has arrived.")
+      .def_readonly("size", &stores::RedisChunkStoreMetadata::size,
+                    "Number of chunk slots in the store.")
+      .def_readonly("total_chunks_put",
+                    &stores::RedisChunkStoreMetadata::total_chunks_put,
+                    "Number of chunks appended over the store lifetime.")
+      .def_readonly("next_cursor",
+                    &stores::RedisChunkStoreMetadata::next_cursor,
+                    "Global SPMC cursor used by next().")
+      .def_readonly("max_seq", &stores::RedisChunkStoreMetadata::max_seq,
+                    "Largest sequence currently present.")
+      .def_readonly("revision", &stores::RedisChunkStoreMetadata::revision,
+                    "Monotonic mutation generation published to waiters.");
+
+  py::class_<stores::RedisChunkStore, ChunkStore,
+             std::shared_ptr<stores::RedisChunkStore>>(
+      module, "RedisChunkStore",
+      "A persistent, multi-process ChunkStore backed by Redis Streams.")
+      .def(
+          py::init([](std::string id, const py::object& client_value,
+                      const py::object& options_value) {
+            std::shared_ptr<redis::Client> client;
+            if (client_value.is_none())
+              client = ValueOrThrow(redis::DefaultClient());
+            else
+              client = client_value.cast<std::shared_ptr<redis::Client>>();
+            stores::RedisChunkStoreOptions options =
+                options_value.is_none()
+                    ? ValueOrThrow(
+                          stores::RedisChunkStoreOptions::FromEnvironment())
+                    : options_value.cast<stores::RedisChunkStoreOptions>();
+            return ValueOrThrow(stores::RedisChunkStore::Create(
+                std::move(id), std::move(client), std::move(options)));
+          }),
+          "Create a Redis store. By default it composes the process-global "
+          "environment-configured RedisClient.",
+          py::arg("id"), py::arg("client") = py::none(),
+          py::arg("options") = py::none(), py::keep_alive<1, 2>())
+      .def_static(
+          "create",
+          [](std::string id, const py::object& client_value,
+             const py::object& options_value) {
+            std::shared_ptr<redis::Client> client;
+            if (client_value.is_none())
+              client = ValueOrThrow(redis::DefaultClient());
+            else
+              client = client_value.cast<std::shared_ptr<redis::Client>>();
+            stores::RedisChunkStoreOptions options =
+                options_value.is_none()
+                    ? ValueOrThrow(
+                          stores::RedisChunkStoreOptions::FromEnvironment())
+                    : options_value.cast<stores::RedisChunkStoreOptions>();
+            return ValueOrThrow(stores::RedisChunkStore::Create(
+                std::move(id), std::move(client), std::move(options)));
+          },
+          "Create a Redis store with optional injected client and options.",
+          py::arg("id"), py::arg("client") = py::none(),
+          py::arg("options") = py::none(), py::keep_alive<0, 2>())
+      .def("initialize",
+           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
+             return StoreFuture(self->Initialize());
+           },
+           "Ensure node metadata exists without writing chunk data.")
+      .def("get_metadata",
+           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
+             return StoreFuture(self->GetMetadata());
+           },
+           "Read node-level state without iterating over chunks.")
+      .def_property_readonly("client", &stores::RedisChunkStore::client,
+                             "The explicitly composed RedisClient.")
+      .def_property_readonly(
+          "options",
+          [](const stores::RedisChunkStore& self) { return self.options(); },
+          "A copy of this store's key and payload policy.")
+      .def_property_readonly(
+          "keys", [](const stores::RedisChunkStore& self) { return self.keys(); },
+          "A copy of the sharding-safe Redis key layout.");
+#endif
 
   py::class_<stores::ChunkStoreReader,
              std::shared_ptr<stores::ChunkStoreReader>>(

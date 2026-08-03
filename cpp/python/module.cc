@@ -70,6 +70,9 @@ PYBIND11_MODULE(_native, module) {
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);
   a11::python::BindData(module);
+#ifdef A11_BUILD_REDIS
+  a11::python::BindRedis(module);
+#endif
 
   // Net is registered first because store writers and later runtime classes
   // accept WireStream base pointers in their signatures.

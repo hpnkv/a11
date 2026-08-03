@@ -718,6 +718,13 @@ std::int32_t Http2ResponseStream::stream_id() const {
   return state_->stream_id;
 }
 
+void NormalizeHttpHeaders(HttpHeaders* headers) {
+  for (auto& [name, value] : *headers) {
+    (void)value;
+    absl::AsciiStrToLower(&name);
+  }
+}
+
 std::optional<std::string> GetHttpHeader(const HttpHeaders& headers,
                                          std::string_view name) {
   std::string normalized(name);
@@ -1397,6 +1404,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
           "This HTTP/2 connection requires scheme '", expected_scheme, "'"));
     }
     absl::AsciiStrToUpper(&method);
+    NormalizeHttpHeaders(&headers);
     ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
     if (body.size() > options_.max_request_body_size) {
       return absl::OutOfRangeError(
@@ -1499,6 +1507,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       return absl::InvalidArgumentError(absl::StrCat(
           "This HTTP/2 connection requires scheme '", expected_scheme, "'"));
     }
+    NormalizeHttpHeaders(&headers);
     ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
 
     auto stream = std::make_unique<Stream>();
@@ -1580,6 +1589,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     if (status < 100 || status > 599) {
       return absl::InvalidArgumentError("HTTP response status is invalid");
     }
+    NormalizeHttpHeaders(&headers);
     ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
     Stream* stream = FindStream(stream_id);
     if (stream == nullptr) {
@@ -1856,8 +1866,11 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     if (stream == nullptr)
       return 0;
     try {
+      std::string normalized_name(reinterpret_cast<const char*>(name),
+                                  name_length);
+      absl::AsciiStrToLower(&normalized_name);
       stream->inbound_headers.emplace_back(
-          std::string(reinterpret_cast<const char*>(name), name_length),
+          std::move(normalized_name),
           std::string(reinterpret_cast<const char*>(value), value_length));
       return 0;
     } catch (const std::exception& error) {

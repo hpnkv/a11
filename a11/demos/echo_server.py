@@ -57,18 +57,7 @@ async def serve(
 
     async def accept(stream: a11.HttpSseServerWireStream) -> None:
         logging.info("Accepting SSE stream %s", stream.get_id())
-
-        async def close_after_peer(
-            message: a11.WireMessage | None,
-            _stream: a11.WireStream,
-            session: a11.Session,
-        ) -> None:
-            if message is None:
-                session.half_close()
-
-        session = a11.Session(
-            action_registry=registry, on_stream_message=close_after_peer
-        )
+        session = a11.Session(action_registry=registry)
         await session.add_stream(stream, mode="accept")
         logging.info("Accepted SSE stream %s", stream.get_id())
         await session.done.wait()
@@ -79,6 +68,7 @@ async def serve(
     options.cors_allow_origin = "*"
     options.cors_allow_methods = "*"
     options.cors_allow_headers = "*"
+    options.cors_expose_headers = "x-a11-stream-id"
     if certificate:
         http2_options = options.http2_options
         tls_options = http2_options.tls

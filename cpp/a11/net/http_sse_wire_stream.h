@@ -38,7 +38,7 @@
 namespace a11::net {
 
 /** Response header naming the stream id assigned to an SSE connection. */
-inline constexpr std::string_view kSseStreamIdHeader = "X-A11-Stream-Id";
+inline constexpr std::string_view kSseStreamIdHeader = "x-a11-stream-id";
 /** Prefix under which application HTTP headers are tunneled over SSE. */
 inline constexpr std::string_view kSseHttpHeaderPrefix = "x-a11-http-";
 /** Default path on which a client opens the SSE event stream. */
@@ -62,6 +62,7 @@ struct HttpSseOptions {
   std::string cors_allow_origin;
   std::string cors_allow_methods;
   std::string cors_allow_headers;
+  std::string cors_expose_headers;
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

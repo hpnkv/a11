@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/strings/ascii.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
@@ -60,6 +61,7 @@ TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
   options.cors_allow_origin = "*";
   options.cors_allow_methods = "*";
   options.cors_allow_headers = "*";
+  options.cors_expose_headers = "x-a11-stream-id";
   auto server = HttpSseServer::Create("127.0.0.1", 0, {}, options);
   ASSERT_TRUE(server.ok()) << server.status();
 
@@ -80,6 +82,9 @@ TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
   EXPECT_EQ(GetHttpHeader(response->head.headers,
                           "access-control-allow-headers"),
             "*");
+  EXPECT_EQ(GetHttpHeader(response->head.headers,
+                          "access-control-expose-headers"),
+            "x-a11-stream-id");
   EXPECT_TRUE((*client)->Close().ok());
   EXPECT_TRUE((*server)->Stop().ok());
 }
@@ -89,7 +94,7 @@ TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {
   ASSERT_TRUE(server.ok()) << server.status();
   auto client = HttpSseClientWireStream::Create(
       "http://127.0.0.1:" + std::to_string((*server)->port()), {}, nullptr,
-      {{"x-client", "native"}});
+      {{"X-Client", "native"}, {"X-A11-HTTP-Trace", "once"}});
   ASSERT_TRUE(client.ok()) << client.status();
 
   auto client_recorder = std::make_shared<SseRecorder>();
@@ -100,8 +105,12 @@ TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {
   ASSERT_TRUE(accepted.ok()) << accepted.status();
   EXPECT_EQ(GetHttpHeader((*accepted)->GetHttpRequestHeaders(), "x-client"),
             "native");
+  for (const auto& [name, value] : (*accepted)->GetHttpRequestHeaders()) {
+    (void)value;
+    EXPECT_EQ(name, absl::AsciiStrToLower(name));
+  }
   ASSERT_TRUE(
-      (*accepted)->SetHttpResponseHeaders({{"x-server", "native"}}).ok());
+      (*accepted)->SetHttpResponseHeaders({{"X-Server", "native"}}).ok());
   auto server_recorder = std::make_shared<SseRecorder>();
   a11::Task server_started = (*accepted)->Accept(
       RecordMessages(server_recorder), RecordDone(server_recorder));
@@ -110,6 +119,12 @@ TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {
   auto response_headers = (*client)->GetHttpResponseHeaders();
   ASSERT_TRUE(response_headers.has_value());
   EXPECT_EQ(GetHttpHeader(*response_headers, "x-server"), "native");
+  EXPECT_EQ(GetHttpHeader(*response_headers, "x-a11-stream-id"),
+            (*accepted)->GetId());
+  for (const auto& [name, value] : *response_headers) {
+    (void)value;
+    EXPECT_EQ(name, absl::AsciiStrToLower(name));
+  }
   EXPECT_EQ((*client)->GetId(), (*accepted)->GetId());
 
   data::WireMessage to_server;
@@ -146,6 +161,11 @@ TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {
     EXPECT_EQ(server_recorder->messages[0].headers.at("application"), "client");
     EXPECT_EQ(server_recorder->messages[0].headers.at("x-a11-http-x-client"),
               "native");
+    EXPECT_EQ(server_recorder->messages[0].headers.at("x-a11-http-trace"),
+              "once");
+    EXPECT_EQ(server_recorder->messages[0].headers.count(
+                  "x-a11-http-x-a11-http-trace"),
+              0);
     EXPECT_TRUE(server_recorder->half_closed);
   }
   {

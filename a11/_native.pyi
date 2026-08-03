@@ -2830,6 +2830,12 @@ class HttpSseOptions:
     def cors_allow_origin(self, arg0: str) -> None: ...
 
     @property
+    def cors_expose_headers(self) -> str:
+        """Value for Access-Control-Expose-Headers."""
+    @cors_expose_headers.setter
+    def cors_expose_headers(self, arg0: str) -> None: ...
+
+    @property
     def connect_endpoint(self) -> str:
         """
         The endpoint path used to open the SSE connection.

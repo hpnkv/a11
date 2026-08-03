@@ -44,6 +44,8 @@ class Http2RequestBodyStream;
  */
 using HttpHeaders = std::vector<std::pair<std::string, std::string>>;
 
+/** Lowercases every field name in @p headers in place. */
+void NormalizeHttpHeaders(HttpHeaders* absl_nonnull headers);
 /** @return The first value for @p name, or nullopt if absent. */
 std::optional<std::string> GetHttpHeader(const HttpHeaders& headers,
                                          std::string_view name);

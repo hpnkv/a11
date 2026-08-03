@@ -206,8 +206,8 @@ absl::Status HttpSseOptions::Validate() const {
     return absl::InvalidArgumentError(
         "message_endpoint must be an absolute path containing {id}");
   }
-  for (const auto* value :
-       {&cors_allow_origin, &cors_allow_methods, &cors_allow_headers}) {
+  for (const auto* value : {&cors_allow_origin, &cors_allow_methods,
+                            &cors_allow_headers, &cors_expose_headers}) {
     if (value->find_first_of("\r\n") != std::string::npos) {
       return absl::InvalidArgumentError(
           "CORS option values must not contain newlines");
@@ -463,6 +463,7 @@ std::optional<HttpHeaders> HttpSseWireStream::GetHttpResponseHeaders() const {
 }
 
 absl::Status HttpSseWireStream::SetHttpRequestHeaders(HttpHeaders headers) {
+  NormalizeHttpHeaders(&headers);
   absl::Status status = ValidateHttpHeaders(headers);
   if (!status.ok())
     return status;
@@ -480,6 +481,7 @@ absl::Status HttpSseWireStream::SetHttpRequestHeaders(HttpHeaders headers) {
 }
 
 absl::Status HttpSseWireStream::SetHttpResponseHeaders(HttpHeaders headers) {
+  NormalizeHttpHeaders(&headers);
   absl::Status status = ValidateHttpHeaders(headers);
   if (!status.ok())
     return status;
@@ -575,6 +577,7 @@ HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
   absl::Status validation = options.Validate();
   if (!validation.ok())
     return validation;
+  NormalizeHttpHeaders(&request_headers);
   validation = ValidateHttpHeaders(request_headers);
   if (!validation.ok())
     return validation;
@@ -957,6 +960,10 @@ HttpHeaders CorsHeaders(const HttpSseOptions& options) {
     SetHttpHeader(&headers, "access-control-allow-headers",
                   options.cors_allow_headers);
   }
+  if (!options.cors_expose_headers.empty()) {
+    SetHttpHeader(&headers, "access-control-expose-headers",
+                  options.cors_expose_headers);
+  }
   return headers;
 }
 
@@ -1207,11 +1214,15 @@ a11::Task HttpSseServer::HandleMessage(
         iterator->second = absl::StrCat(iterator->second, ", ", value);
     }
     for (auto& [name, value] : combined) {
-      // Content-Type describes the SSE framing request itself, not user
-      // metadata carried by the logical WireMessage.
-      if (absl::EqualsIgnoreCase(name, "content-type"))
+      // Framing headers describe the POST itself and are not application
+      // metadata. Other HTTP headers are namespaced exactly once.
+      if (name == "content-type" || name == "content-length" ||
+          name == kSseStreamIdHeader) {
         continue;
-      std::string wire_name = absl::StrCat(kSseHttpHeaderPrefix, name);
+      }
+      std::string wire_name = absl::StartsWith(name, kSseHttpHeaderPrefix)
+                                  ? name
+                                  : absl::StrCat(kSseHttpHeaderPrefix, name);
       absl::Status valid_name = data::ValidateName(wire_name);
       if (!valid_name.ok()) {
         stream->FailTransport(valid_name);

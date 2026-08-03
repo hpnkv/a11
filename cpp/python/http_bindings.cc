@@ -54,6 +54,7 @@ absl::StatusOr<net::HttpHeaders> HttpHeadersFromPython(
       result.emplace_back(pair[0].cast<std::string>(),
                           pair[1].cast<std::string>());
     }
+    net::NormalizeHttpHeaders(&result);
     ABSL_RETURN_IF_ERROR(net::ValidateHttpHeaders(result));
     return result;
   } catch (py::error_already_set& error) {
@@ -703,6 +704,9 @@ void BindHttp(py::module_& module) {
       .def_readwrite("cors_allow_headers",
                      &net::HttpSseOptions::cors_allow_headers,
                      "Value for Access-Control-Allow-Headers.")
+      .def_readwrite("cors_expose_headers",
+                     &net::HttpSseOptions::cors_expose_headers,
+                     "Value for Access-Control-Expose-Headers.")
       .def(
           "validate",
           [](const net::HttpSseOptions& options) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the complete A11 documentation site (Python + C++) into doc/site.
+# Build the complete A11 documentation site (Python + TypeScript + C++).
 #
 #   doc/build.sh              # build into doc/site
 #   doc/build.sh --strict     # fail on any MkDocs warning (used in CI)
@@ -17,11 +17,19 @@ if [[ "${1:-}" == "--strict" ]]; then
   STRICT="--strict"
 fi
 
-# 1. Python site (MkDocs Material + mkdocstrings). This clears doc/site first.
+# 1. Compile the browser guide client. MkDocs copies it as a normal asset.
+echo "==> Building browser guide client"
+npm --prefix "$HERE/../js" run build:demo
+
+# 2. Python site (MkDocs Material + mkdocstrings). This clears doc/site first.
 echo "==> Building Python documentation (mkdocs)"
 mkdocs build $STRICT
 
-# 2. C++ reference (Doxygen + doxygen-awesome-css) into doc/site/cpp.
+# 3. TypeScript API. It must run after MkDocs, which clears doc/site.
+echo "==> Building TypeScript documentation (TypeDoc)"
+npm --prefix "$HERE/../js" run build:docs
+
+# 4. C++ reference (Doxygen + doxygen-awesome-css) into doc/site/cpp.
 if command -v doxygen >/dev/null 2>&1; then
   echo "==> Building C++ documentation (doxygen)"
   AWESOME_DIR="$HERE/cpp/doxygen-awesome-css"

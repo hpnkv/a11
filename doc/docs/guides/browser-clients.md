@@ -1,0 +1,180 @@
+# Browser clients
+
+This guide builds a browser client for a minimal A11 `echo` service over
+HTTP/2 Server-Sent Events (SSE). The action has one `text/plain` input named
+`input` and one `text/plain` output named `output`. The Python server and the
+TypeScript browser use the same `ActionSchema`, `Action`, `AsyncNode`,
+`Session`, and wire-message concepts; only the transport-facing syntax differs.
+
+!!! note "Before you start"
+
+    Install the Python package and
+    `npm install a11@npm:@curiositystack/a11`. Browsers
+    negotiate HTTP/2 when TLS is used in production. The native development
+    server also supports local clear-text testing at
+    `http://localhost/demos/echo`.
+
+## 1. Define the action contract
+
+Both peers must agree on this schema. The Python service declares:
+
+```python
+ECHO_SCHEMA = a11.ActionSchema(
+    name="echo",
+    description="Return the supplied text unchanged.",
+    inputs={"input": a11.ActionPortSchema(
+        name="input", type="text/plain", typeinfo=str, required=True
+    )},
+    outputs={"output": a11.ActionPortSchema(
+        name="output", type="text/plain", typeinfo=str, required=True
+    )},
+)
+```
+
+The browser creates the equivalent `ActionSchema` and `ActionPortSchema`.
+These are not HTTP request DTOs: they describe the same runnable action and
+streaming ports on each side.
+
+```ts
+const echoSchema = new ActionSchema({
+  name: 'echo',
+  inputs: { input: new ActionPortSchema({ name: 'input', type: 'text/plain', required: true }) },
+  outputs: { output: new ActionPortSchema({ name: 'output', type: 'text/plain', required: true }) },
+});
+```
+
+## 2. Implement the server-only handler
+
+Only the server registers a handler. Inputs and outputs are `AsyncNode`s, so
+the handler consumes the final input value and puts the same value into the
+output node:
+
+```python
+async def echo(action: a11.Action) -> None:
+    value = await action["input"].consume(str)
+    await action["output"].put(value, final=True)
+```
+
+The browser registers the schema without a handler. Calling it therefore
+creates an action message for the remote session instead of executing code in
+the page.
+
+## 3. Prepare and run the Python service
+
+Each SSE connection becomes an accepting `Session` whose registry knows how to
+run `echo`. The endpoint pair shares the `/demos/echo` prefix:
+
+```python
+registry = a11.ActionRegistry()
+registry.register("echo", ECHO_SCHEMA, echo)
+
+async def accept(stream):
+    session = a11.Session(action_registry=registry)
+    await session.add_stream(stream, mode="accept")
+    await session.done.wait()
+
+options = a11.HttpSseOptions()
+options.connect_endpoint = "/demos/echo/connect"
+options.message_endpoint = "/demos/echo/streams/{id}/message"
+server = a11.HttpSseServer.create("127.0.0.1", 80, accept, options)
+```
+
+The complete deployable module is
+[`a11/demos/echo_server.py`](https://github.com/curiosity-ai/a11/blob/main/a11/demos/echo_server.py).
+Run it locally (port 80 may require suitable permissions):
+
+```sh
+python -m a11.demos.echo_server --host 127.0.0.1 --port 80
+```
+
+## 4. Create a browser session and connect
+
+Create the client registry and session, then attach an SSE stream in `START`
+mode. The server attaches the other end in `ACCEPT` mode. Because the service
+URL includes a path, pass its endpoint paths explicitly:
+
+```ts
+const registry = new ActionRegistry();
+need(registry.register('echo', echoSchema));
+const session = need(Session.create({ actionRegistry: registry }));
+const stream = need(HttpSseClientWireStream.create(server.origin, {
+  connectEndpoint: '/demos/echo/connect',
+  messageEndpoint: '/demos/echo/streams/{id}/message',
+}));
+need(await session.addStream(stream, StreamMode.START));
+```
+
+## 5. Wire the interface through `AsyncNode`s
+
+Make the action against the session's shared node map and stream. `call()`
+sends the action description; writing the input and marking it final sends its
+node fragments. The response arrives through the output `AsyncNode`:
+
+```ts
+const action = need(registry.makeAction('echo', {
+  nodeMap: session.getNodeMap(), stream, session,
+}));
+need(await action.call());
+const input = need(await action.getInput('input'));
+need(await input.putFinal(text));
+need(await action.waitForDispatch(10_000));
+need(await action.wait(30_000));
+const output = need(await action.getOutput('output', false));
+const reply = need(await output.next({ timeoutMs: 10_000 }));
+```
+
+This symmetry is the useful part: an interface field is not translated into a
+special REST body. It remains an A11 node, and the action and session retain
+their identities and lifecycle on both peers.
+
+## 6. Display failures
+
+A11 APIs return a `StatusOr<T>`: success values pass `isOk`, while failures
+carry a status code, message, and structured details. Convert failures at the
+UI boundary and render them in a live error region:
+
+```ts
+const need = <T>(value: T | Status): T => {
+  if (!isOk(value)) throw new Error(`${value.code}: ${value.message}`);
+  return value as T;
+};
+
+try {
+  await sendEcho(text);
+} catch (error) {
+  errorRegion.textContent = error instanceof Error ? error.message : String(error);
+}
+```
+
+## Try it
+
+The default deployment URL is intentionally not live yet. Change it to
+`http://localhost/demos/echo` while running the Python module above. The wire
+inspector records both action messages and node fragments; select a row to see
+its action names, node IDs, and encoded byte size. **Half-close** says that the
+client will send no more data while allowing already-sent work to drain.
+**Reconnect** creates a fresh transport and session.
+
+<link rel="stylesheet" href="../assets/browser-clients.css">
+<div id="echo-demo" class="echo-demo">
+  <div class="echo-toolbar">
+    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services/demos/echo">
+    <button id="echo-half-close" type="button">Half-close</button>
+    <button id="echo-reconnect" type="button">Reconnect</button>
+  </div>
+  <div id="echo-errors" class="echo-errors" role="alert" aria-live="polite"></div>
+  <div class="echo-workspace">
+    <section class="echo-chat" aria-label="Echo chat">
+      <div id="echo-messages" class="echo-messages"></div>
+      <form id="echo-form" class="echo-compose">
+        <input id="echo-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+    <aside class="echo-side" aria-label="Wire inspector">
+      <div id="echo-wire-log" class="echo-wire-log"></div>
+      <div id="echo-wire-details" class="echo-wire-details">Select a wire message to inspect it.</div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="../assets/browser-clients.js"></script>

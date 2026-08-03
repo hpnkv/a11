@@ -94,6 +94,7 @@ nav:
   - Overview: index.md
   - Principles: principles.md
   - Guides:
+      - Browser clients: guides/browser-clients.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
@@ -110,4 +111,5 @@ nav:
       - Data & serialization: api/data.md
       - Observability: api/observability.md
       - Status & timing: api/status-timing.md
+  - TypeScript API: typescript.md
   - C++ internals: cpp.md

@@ -1,6 +1,6 @@
 # A11 documentation
 
-The hosted documentation is built from two generators into one site:
+The hosted documentation is built from three generators into one site:
 
 - **Python API + guides** — [MkDocs Material](https://squidfunk.github.io/mkdocs-material/)
   with [mkdocstrings](https://mkdocstrings.github.io/) (`griffe` backend). Prose
@@ -12,6 +12,9 @@ The hosted documentation is built from two generators into one site:
   [doxygen-awesome-css](https://github.com/jothepro/doxygen-awesome-css), over
   `cpp/a11/`. Output is written into `site/cpp` so the whole set deploys as one
   artifact.
+- **TypeScript API** — [TypeDoc](https://typedoc.org/) over `js/src/`, written
+  to `site/typescript`. The compile-checked browser guide client in `js/demo/`
+  is bundled with esbuild and copied into the MkDocs assets.
 
 ## Build
 
@@ -19,10 +22,11 @@ Install the docs tooling and build:
 
 ```sh
 uv sync --group docs
+npm ci --prefix js
 doc/build.sh            # -> doc/site  (add --strict to fail on warnings)
 ```
 
-`doc/build.sh` runs `mkdocs build` and then Doxygen. Doxygen and Graphviz
+`doc/build.sh` runs esbuild, MkDocs, TypeDoc, and then Doxygen. Doxygen and Graphviz
 (`dot`) must be on `PATH` for the C++ reference; if they are absent the Python
 site is still built (the C++ pages are simply omitted). The
 `doxygen-awesome-css` theme is fetched automatically into

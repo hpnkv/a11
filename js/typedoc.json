@@ -1,0 +1,24 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "../doc/site/typescript",
+  "name": "A11 TypeScript API",
+  "readme": "none",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "intentionallyNotExported": [
+    "NormalizedReaderOptions",
+    "NormalizedWriterOptions",
+    "HeaderCollection",
+    "PortCollection",
+    "StringCollection",
+    "WebSocketEventLike"
+  ],
+  "cleanOutputDir": true,
+  "navigationLinks": {
+    "A11 guides": "../index.html",
+    "Python API": "../api/nodes.html",
+    "C++ internals": "../cpp/index.html"
+  }
+}

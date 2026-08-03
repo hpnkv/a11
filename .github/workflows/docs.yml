@@ -1,6 +1,6 @@
 name: Documentation
 
-# Builds the combined Python + C++ documentation and deploys it to GitHub Pages.
+# Builds Python, TypeScript, and C++ documentation and deploys one Pages site.
 # The Python site is produced statically by MkDocs + mkdocstrings (griffe reads
 # the a11/ source and a11/_native.pyi directly, so no native build is needed),
 # and the C++ reference by Doxygen. A separate job keeps a11/_native.pyi honest.
@@ -31,10 +31,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Install TypeScript documentation tooling
+        run: npm ci --prefix js
+
       - name: Install documentation tooling
         run: pip install mkdocs-material "mkdocstrings[python]" griffe
 
-      - name: Build site (Python + C++)
+      - name: Build site (Python + TypeScript + C++)
         run: doc/build.sh --strict
 
       - uses: actions/upload-pages-artifact@v3

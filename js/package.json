@@ -17,8 +17,11 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.json",
+    "build:demo": "esbuild demo/browser_clients.ts --bundle --format=esm --outfile=../doc/docs/assets/browser-clients.js",
+    "build:docs": "typedoc --options typedoc.json",
     "clean": "tsc --build --clean",
     "test": "npm run build && node --test test/*.test.mjs",
+    "publish:registries": "npm run build && node scripts/publish_registries.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
@@ -35,6 +38,8 @@
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.12",
+    "typedoc": "^0.28.0",
     "typescript": "^5.9.3"
   }
 }

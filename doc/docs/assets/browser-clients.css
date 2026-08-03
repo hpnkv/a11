@@ -1,0 +1,17 @@
+.echo-demo { border: 1px solid var(--md-default-fg-color--lightest); border-radius: .5rem; overflow: hidden; margin: 1.5rem 0; }
+.echo-toolbar, .echo-compose { display: flex; gap: .5rem; padding: .75rem; background: var(--md-code-bg-color); }
+.echo-toolbar input, .echo-compose input { min-width: 0; flex: 1; padding: .5rem .65rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); }
+.echo-toolbar button, .echo-compose button { padding: .45rem .75rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; }
+.echo-workspace { display: grid; grid-template-columns: minmax(0, 3fr) minmax(16rem, 2fr); min-height: 28rem; }
+.echo-chat { display: flex; flex-direction: column; border-right: 1px solid var(--md-default-fg-color--lightest); }
+.echo-messages { flex: 1; padding: 1rem; overflow: auto; }
+.echo-bubble { max-width: 80%; width: fit-content; margin: .5rem 0; padding: .55rem .75rem; border-radius: .8rem; background: var(--md-code-bg-color); }
+.echo-bubble.request { margin-left: auto; color: white; background: var(--md-primary-fg-color); }
+.echo-side { display: grid; grid-template-rows: 1fr 1fr; min-width: 0; }
+.echo-wire-log { overflow: auto; border-bottom: 1px solid var(--md-default-fg-color--lightest); }
+.echo-wire-row { display: block; width: 100%; padding: .55rem .75rem; border: 0; border-bottom: 1px solid var(--md-default-fg-color--lightest); text-align: left; color: inherit; background: transparent; cursor: pointer; }
+.echo-wire-row:hover { background: var(--md-code-bg-color); }
+.echo-wire-details { padding: .75rem; overflow: auto; }
+.echo-wire-details dl { margin: 0; } .echo-wire-details dt { font-weight: 700; } .echo-wire-details dd { margin: 0 0 .6rem; overflow-wrap: anywhere; }
+.echo-errors { min-height: 1.5rem; padding: 0 .75rem; color: var(--md-typeset-color); background: color-mix(in srgb, #d32f2f 12%, transparent); }
+@media (max-width: 700px) { .echo-workspace { grid-template-columns: 1fr; } .echo-chat { min-height: 22rem; border-right: 0; border-bottom: 1px solid var(--md-default-fg-color--lightest); } .echo-side { min-height: 22rem; } .echo-toolbar { flex-wrap: wrap; } .echo-toolbar input { flex-basis: 100%; } }

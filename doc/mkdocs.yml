@@ -99,6 +99,7 @@ nav:
       - Talk to a model: guides/llm.md
       - From a local run to a remote call: guides/local-to-remote.md
       - A toy agent with a tool: guides/agent-tool.md
+      - Going distributed: guides/going-distributed.md
   - Python API:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

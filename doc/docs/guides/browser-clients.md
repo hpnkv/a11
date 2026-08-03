@@ -166,7 +166,7 @@ client will send no more data while allowing already-sent work to drain.
 <link rel="stylesheet" href="../assets/browser-clients.css">
 <div id="echo-demo" class="echo-demo">
   <div class="echo-toolbar">
-    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services/demos/echo">
+    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services:9443/demos/echo">
     <button id="echo-half-close" type="button">Half-close</button>
     <button id="echo-reconnect" type="button">Reconnect</button>
   </div>

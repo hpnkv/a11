@@ -135,7 +135,9 @@ UI boundary and render them in a live error region:
 
 ```ts
 const need = <T>(value: T | Status): T => {
-  if (!isOk(value)) throw new Error(`${value.code}: ${value.message}`);
+  if (!isOk(value)) {
+    throw new Error(`${StatusCode[value.code]}: ${value.message}`);
+  }
   return value as T;
 };
 

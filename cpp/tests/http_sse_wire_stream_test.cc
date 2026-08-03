@@ -55,6 +55,35 @@ OnDone RecordDone(const std::shared_ptr<SseRecorder>& recorder) {
   };
 }
 
+TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
+  HttpSseOptions options;
+  options.cors_allow_origin = "*";
+  options.cors_allow_methods = "*";
+  options.cors_allow_headers = "*";
+  auto server = HttpSseServer::Create("127.0.0.1", 0, {}, options);
+  ASSERT_TRUE(server.ok()) << server.status();
+
+  auto client = Http2Client::Connect("127.0.0.1", (*server)->port())
+                    .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+  auto response = (*client)
+                      ->Request("OPTIONS", "/connect")
+                      .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(response.ok()) << response.status();
+  EXPECT_EQ(response->head.status, 204);
+  EXPECT_EQ(GetHttpHeader(response->head.headers,
+                          "access-control-allow-origin"),
+            "*");
+  EXPECT_EQ(GetHttpHeader(response->head.headers,
+                          "access-control-allow-methods"),
+            "*");
+  EXPECT_EQ(GetHttpHeader(response->head.headers,
+                          "access-control-allow-headers"),
+            "*");
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
 TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {
   auto server = HttpSseServer::Create("127.0.0.1", 0);
   ASSERT_TRUE(server.ok()) << server.status();

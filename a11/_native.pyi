@@ -2812,6 +2812,24 @@ class HttpSseOptions:
         """
 
     @property
+    def cors_allow_headers(self) -> str:
+        """Value for Access-Control-Allow-Headers."""
+    @cors_allow_headers.setter
+    def cors_allow_headers(self, arg0: str) -> None: ...
+
+    @property
+    def cors_allow_methods(self) -> str:
+        """Value for Access-Control-Allow-Methods."""
+    @cors_allow_methods.setter
+    def cors_allow_methods(self, arg0: str) -> None: ...
+
+    @property
+    def cors_allow_origin(self) -> str:
+        """Value for Access-Control-Allow-Origin; empty disables CORS."""
+    @cors_allow_origin.setter
+    def cors_allow_origin(self, arg0: str) -> None: ...
+
+    @property
     def connect_endpoint(self) -> str:
         """
         The endpoint path used to open the SSE connection.

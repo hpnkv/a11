@@ -76,7 +76,7 @@ plugins:
           # griffe reads the package (and the sibling a11/_native.pyi stub)
           # statically, so building the docs does not require the compiled
           # native extension.
-          paths: [..]
+          paths: [ .. ]
           options:
             docstring_style: google
             show_source: false
@@ -88,19 +88,19 @@ plugins:
             signature_crossrefs: true
             merge_init_into_class: true
             members_order: source
-            filters: ["!^_"]
+            filters: [ "!^_" ]
 
 nav:
   - Overview: index.md
   - Principles: principles.md
   - Guides:
-      - Browser clients: guides/browser-clients.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
       - From a local run to a remote call: guides/local-to-remote.md
       - A toy agent with a tool: guides/agent-tool.md
       - Going distributed: guides/going-distributed.md
+      - Browser clients: guides/browser-clients.md
   - Python API:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

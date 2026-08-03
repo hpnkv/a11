@@ -31,8 +31,10 @@ ECHO_SCHEMA = a11.ActionSchema(
 async def echo(action: a11.Action) -> None:
     """Copy the final input value to the action's output node."""
 
+    logging.info("Running echo action %s", action.get_id())
     value = await action["input"].consume(str)
     await action["output"].put(value, final=True)
+    logging.info("Completed echo action %s", action.get_id())
 
 
 def make_registry() -> a11.ActionRegistry:
@@ -49,6 +51,8 @@ async def serve(host: str = "127.0.0.1", port: int = 80) -> None:
     registry = make_registry()
 
     async def accept(stream: a11.HttpSseServerWireStream) -> None:
+        logging.info("Accepting SSE stream %s", stream.get_id())
+
         async def close_after_peer(
             message: a11.WireMessage | None,
             _stream: a11.WireStream,
@@ -61,11 +65,15 @@ async def serve(host: str = "127.0.0.1", port: int = 80) -> None:
             action_registry=registry, on_stream_message=close_after_peer
         )
         await session.add_stream(stream, mode="accept")
+        logging.info("Accepted SSE stream %s", stream.get_id())
         await session.done.wait()
 
     options = a11.HttpSseOptions()
     options.connect_endpoint = "/demos/echo/connect"
     options.message_endpoint = "/demos/echo/streams/{id}/message"
+    options.cors_allow_origin = "*"
+    options.cors_allow_methods = "*"
+    options.cors_allow_headers = "*"
     server = a11.HttpSseServer.create(host, port, accept, options)
     logging.info(
         "Echo server listening at http://%s:%d/demos/echo", host, server.port
@@ -77,6 +85,8 @@ async def serve(host: str = "127.0.0.1", port: int = 80) -> None:
 
 
 def main() -> None:
+    logging.use_absl_handler()
+    logging.set_verbosity(logging.DEBUG)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=80, type=int)

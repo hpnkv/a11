@@ -694,6 +694,15 @@ void BindHttp(py::module_& module) {
                      "The endpoint path used to open the SSE connection.")
       .def_readwrite("message_endpoint", &net::HttpSseOptions::message_endpoint,
                      "The endpoint path template used to post messages.")
+      .def_readwrite("cors_allow_origin",
+                     &net::HttpSseOptions::cors_allow_origin,
+                     "Value for Access-Control-Allow-Origin; empty disables CORS.")
+      .def_readwrite("cors_allow_methods",
+                     &net::HttpSseOptions::cors_allow_methods,
+                     "Value for Access-Control-Allow-Methods.")
+      .def_readwrite("cors_allow_headers",
+                     &net::HttpSseOptions::cors_allow_headers,
+                     "Value for Access-Control-Allow-Headers.")
       .def(
           "validate",
           [](const net::HttpSseOptions& options) {

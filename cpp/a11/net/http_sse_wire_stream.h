@@ -59,6 +59,9 @@ struct HttpSseOptions {
   Http2Options http2_options;
   std::string connect_endpoint = std::string(kDefaultSseConnectEndpoint);
   std::string message_endpoint = std::string(kDefaultSseMessageEndpoint);
+  std::string cors_allow_origin;
+  std::string cors_allow_methods;
+  std::string cors_allow_headers;
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

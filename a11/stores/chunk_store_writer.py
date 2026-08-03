@@ -34,6 +34,7 @@ install_native_options(
         "offset": (int, 0),
         "max_chunks_to_write_at_once": (int, 8),
         "num_chunks_to_buffer": (int | None, None),
+        "sticky_mimetype": (bool, False),
     },
 )
 ChunkStoreWriterOptions.__module__ = __name__
@@ -56,7 +57,8 @@ class _ChunkStoreWriterProtocol:
         """Open a writer over ``chunk_store``.
 
         ``options`` (a `ChunkStoreWriterOptions` or plain dict) tunes the
-        starting offset and how much is buffered/flushed at once.
+        starting offset, sticky mimetypes, and how much is buffered/flushed at
+        once.
         """
         if options is None:
             options = ChunkStoreWriterOptions()

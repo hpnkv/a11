@@ -308,6 +308,50 @@ async def test_pop_returns_original_chunk_and_leaves_tombstone():
 
 
 @pytest.mark.asyncio
+async def test_sticky_mimetype_expands_ordered_chunk_metadata():
+    store = LocalChunkStore("sticky-reader")
+    await store.put_many([
+        types.NodeFragment(
+            data=types.Chunk(
+                metadata=types.ChunkMetadata(mimetype="text/plain"),
+                data=b"anchor",
+            ),
+            seq=0,
+            continued=True,
+        ),
+        types.NodeFragment(
+            data=types.Chunk(
+                metadata=types.ChunkMetadata(
+                    mimetype="", attributes={"role": b"assistant"}
+                ),
+                data=b"attributes",
+            ),
+            seq=1,
+            continued=True,
+        ),
+        types.NodeFragment(
+            data=types.Chunk(data=b"missing"),
+            seq=2,
+            continued=False,
+        ),
+    ])
+    reader = ChunkStoreReader(
+        store, ChunkStoreReaderOptions(sticky_mimetype=True)
+    )
+
+    chunks = [(await reader.next()).get_chunk() for _ in range(3)]
+    assert [chunk.get_mimetype() for chunk in chunks] == [
+        "text/plain",
+        "text/plain",
+        "text/plain",
+    ]
+    assert chunks[1].metadata.attributes == {"role": b"assistant"}
+    assert chunks[2].metadata is not None
+    assert await reader.next() is None
+    await reader.wait()
+
+
+@pytest.mark.asyncio
 async def test_unexpected_read_exception_is_converted_to_status():
     reader = ChunkStoreReader(_RuntimeErrorStore("runtime"))
 

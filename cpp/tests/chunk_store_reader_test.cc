@@ -121,6 +121,100 @@ TEST(ChunkStoreReaderTest, ConcurrentRequestsUsePrefetchedResultsInOrder) {
   EXPECT_FALSE(end.Await()->has_value());
 }
 
+TEST(ChunkStoreReaderTest, StickyMimetypeExpandsOrderedChunkMetadata) {
+  auto store = *LocalChunkStore::Create("reader-sticky-mimetype");
+  ASSERT_TRUE(
+      store
+          ->PutMany({
+              data::NodeFragment{.data = data::Chunk{.data = "before-anchor"},
+                                 .seq = 0,
+                                 .continued = true},
+              data::NodeFragment{
+                  .data = data::Chunk{.metadata =
+                                          data::ChunkMetadata{.mimetype =
+                                                                  "text/plain"},
+                                      .data = "anchor"},
+                  .seq = 1,
+                  .continued = true},
+              data::NodeFragment{
+                  .data = data::Chunk{.metadata =
+                                          data::ChunkMetadata{
+                                              .attributes = {{"role",
+                                                              "assistant"}}},
+                                      .data = "attributes"},
+                  .seq = 2,
+                  .continued = true},
+              data::NodeFragment{
+                  .data = data::Chunk{.data = "missing-metadata"},
+                  .seq = 3,
+                  .continued = true},
+              data::NodeFragment{
+                  .data = data::Chunk{.metadata =
+                                          data::ChunkMetadata{
+                                              .mimetype = "application/json"},
+                                      .data = "new-anchor"},
+                  .seq = 4,
+                  .continued = true},
+              data::NodeFragment{
+                  .data = data::Chunk{.data = "inherits-new-anchor"},
+                  .seq = 5,
+                  .continued = false},
+          })
+          .Await()
+          .ok());
+  auto reader = *ChunkStoreReader::Create(
+      store, ChunkStoreReaderOptions{.sticky_mimetype = true});
+
+  std::vector<data::Chunk> chunks;
+  for (int index = 0; index < 6; ++index) {
+    auto fragment = reader->Next(absl::Seconds(1)).Await();
+    ASSERT_TRUE(fragment.ok()) << fragment.status();
+    ASSERT_TRUE(fragment->has_value());
+    chunks.push_back(std::get<data::Chunk>((*fragment)->data));
+  }
+
+  EXPECT_FALSE(chunks[0].metadata.has_value());
+  EXPECT_EQ(chunks[1].GetMimetype(), "text/plain");
+  EXPECT_EQ(chunks[2].GetMimetype(), "text/plain");
+  ASSERT_TRUE(chunks[2].metadata.has_value());
+  EXPECT_EQ(*chunks[2].metadata->GetAttribute("role"), "assistant");
+  EXPECT_EQ(chunks[3].GetMimetype(), "text/plain");
+  ASSERT_TRUE(chunks[3].metadata.has_value());
+  EXPECT_EQ(chunks[4].GetMimetype(), "application/json");
+  EXPECT_EQ(chunks[5].GetMimetype(), "application/json");
+  EXPECT_FALSE(reader->Next(absl::Seconds(1)).Await()->has_value());
+}
+
+TEST(ChunkStoreReaderTest, UnorderedReaderDoesNotExpandStickyMimetype) {
+  auto store = *LocalChunkStore::Create("reader-unordered-sticky");
+  ASSERT_TRUE(store
+                  ->PutMany({
+                      data::NodeFragment{
+                          .data = data::Chunk{.metadata =
+                                                  data::ChunkMetadata{
+                                                      .mimetype = "text/plain"},
+                                              .data = "anchor"},
+                          .seq = 0,
+                          .continued = true},
+                      data::NodeFragment{.data = data::Chunk{.data = "missing"},
+                                         .seq = 1,
+                                         .continued = false},
+                  })
+                  .Await()
+                  .ok());
+  auto reader = *ChunkStoreReader::Create(
+      store,
+      ChunkStoreReaderOptions{.ordered = false,
+                              .max_chunks_to_read = 2,
+                              .sticky_mimetype = true});
+
+  ASSERT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
+  auto second = reader->Next(absl::Seconds(1)).Await();
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(second->has_value());
+  EXPECT_FALSE(std::get<data::Chunk>((*second)->data).metadata.has_value());
+}
+
 TEST(ChunkStoreReaderTest, ManyReadersShareStacklessPump) {
   (void)thread::Fiber::Current();
   const size_t created = thread::internal::CreatedFiberCountForTesting();

@@ -33,6 +33,7 @@ install_native_options(
         "num_chunks_to_buffer": (int, 32),
         "offset": (int, 0),
         "max_chunks_to_read": (int | None, None),
+        "sticky_mimetype": (bool, False),
     },
 )
 ChunkStoreReaderOptions.__module__ = __name__
@@ -55,8 +56,8 @@ class _ChunkStoreReaderProtocol:
         """Open a reader over ``store``.
 
         ``options`` (a `ChunkStoreReaderOptions` or plain dict) tunes
-        ordering, buffering, starting offset, and whether chunks are popped as
-        they are read.
+        ordering, buffering, starting offset, sticky mimetypes, and whether
+        chunks are popped as they are read.
         """
         if options is None:
             options = ChunkStoreReaderOptions()

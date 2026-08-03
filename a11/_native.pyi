@@ -1815,8 +1815,8 @@ class ChunkStoreReader:
         Open a reader over ``store``.
 
                 ``options`` (a `ChunkStoreReaderOptions` or plain dict) tunes
-                ordering, buffering, starting offset, and whether chunks are popped as
-                they are read.
+                ordering, buffering, starting offset, sticky mimetypes, and whether
+                chunks are popped as they are read.
 
         """
 
@@ -1886,6 +1886,7 @@ class ChunkStoreReaderOptions:
         num_chunks_to_buffer: typing.Any = 32,
         offset: typing.Any = 0,
         max_chunks_to_read: typing.Any | None = None,
+        sticky_mimetype: bool = False,
     ) -> None:
         """
         Construct validated options for a ChunkStoreReader.
@@ -1944,6 +1945,14 @@ class ChunkStoreReaderOptions:
     @pop_chunks.setter
     def pop_chunks(self, arg0: bool) -> None: ...
 
+    @property
+    def sticky_mimetype(self) -> bool:
+        """
+        Whether ordered chunks inherit the last explicitly set mimetype.
+        """
+    @sticky_mimetype.setter
+    def sticky_mimetype(self, arg0: bool) -> None: ...
+
 class ChunkStoreWriter:
     def __init__(
         self,
@@ -1954,7 +1963,8 @@ class ChunkStoreWriter:
         Open a writer over ``chunk_store``.
 
                 ``options`` (a `ChunkStoreWriterOptions` or plain dict) tunes the
-                starting offset and how much is buffered/flushed at once.
+                starting offset, sticky mimetypes, and how much is buffered/flushed at
+                once.
 
         """
 
@@ -2074,6 +2084,7 @@ class ChunkStoreWriterOptions:
         offset: typing.Any = 0,
         max_chunks_to_write_at_once: typing.Any = 8,
         num_chunks_to_buffer: typing.Any | None = None,
+        sticky_mimetype: bool = False,
     ) -> None:
         """
         Construct validated options for a ChunkStoreWriter.
@@ -2115,6 +2126,14 @@ class ChunkStoreWriterOptions:
         """
     @offset.setter
     def offset(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def sticky_mimetype(self) -> bool:
+        """
+        Whether repeated contiguous chunk mimetypes are omitted.
+        """
+    @sticky_mimetype.setter
+    def sticky_mimetype(self, arg0: bool) -> None: ...
 
 class Duration:
     @staticmethod

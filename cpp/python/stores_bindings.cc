@@ -210,7 +210,8 @@ void BindStores(py::module_& module) {
       .def(py::init([](bool ordered, bool pop_chunks,
                        const py::handle& num_chunks_to_buffer,
                        const py::handle& offset,
-                       const py::handle& max_chunks_to_read) {
+                       const py::handle& max_chunks_to_read,
+                       bool sticky_mimetype) {
              constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
              stores::ChunkStoreReaderOptions options{
                  .ordered = ordered,
@@ -221,14 +222,16 @@ void BindStores(py::module_& module) {
                      offset, std::numeric_limits<std::uint32_t>::max(),
                      "offset")),
                  .max_chunks_to_read = OptionalUnsignedOption(
-                     max_chunks_to_read, kMaximum, "max_chunks_to_read")};
+                     max_chunks_to_read, kMaximum, "max_chunks_to_read"),
+                 .sticky_mimetype = sticky_mimetype};
              ValidateReaderOptions(options);
              return options;
            }),
            "Construct validated options for a ChunkStoreReader.",
            py::arg("ordered") = true, py::arg("pop_chunks") = false,
            py::arg("num_chunks_to_buffer") = 32, py::arg("offset") = 0,
-           py::arg("max_chunks_to_read") = py::none())
+           py::arg("max_chunks_to_read") = py::none(),
+           py::arg("sticky_mimetype") = false)
       .def_readwrite("ordered", &stores::ChunkStoreReaderOptions::ordered,
                      "Whether chunks are delivered strictly in sequence order.")
       .def_readwrite("pop_chunks", &stores::ChunkStoreReaderOptions::pop_chunks,
@@ -242,13 +245,17 @@ void BindStores(py::module_& module) {
       .def_readwrite("max_chunks_to_read",
                      &stores::ChunkStoreReaderOptions::max_chunks_to_read,
                      "Optional cap on the total number of chunks to read.")
+      .def_readwrite(
+          "sticky_mimetype", &stores::ChunkStoreReaderOptions::sticky_mimetype,
+          "Whether ordered chunks inherit the last explicitly set mimetype.")
       .def("validate", &ValidateReaderOptions,
            "Raise if the options are not internally consistent.");
 
   py::class_<stores::ChunkStoreWriterOptions>(module, "ChunkStoreWriterOptions")
       .def(py::init([](const py::handle& offset,
                        const py::handle& max_chunks_to_write_at_once,
-                       const py::handle& num_chunks_to_buffer) {
+                       const py::handle& num_chunks_to_buffer,
+                       bool sticky_mimetype) {
              constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
              stores::ChunkStoreWriterOptions options{
                  .offset = static_cast<std::uint32_t>(UnsignedOption(
@@ -258,13 +265,15 @@ void BindStores(py::module_& module) {
                      UnsignedOption(max_chunks_to_write_at_once, kMaximum,
                                     "max_chunks_to_write_at_once"),
                  .num_chunks_to_buffer = OptionalUnsignedOption(
-                     num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer")};
+                     num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
+                 .sticky_mimetype = sticky_mimetype};
              ValidateWriterOptions(options);
              return options;
            }),
            "Construct validated options for a ChunkStoreWriter.",
            py::arg("offset") = 0, py::arg("max_chunks_to_write_at_once") = 8,
-           py::arg("num_chunks_to_buffer") = py::none())
+           py::arg("num_chunks_to_buffer") = py::none(),
+           py::arg("sticky_mimetype") = false)
       .def_readwrite("offset", &stores::ChunkStoreWriterOptions::offset,
                      "Sequence number at which writing begins.")
       .def_readwrite(
@@ -274,6 +283,9 @@ void BindStores(py::module_& module) {
       .def_readwrite("num_chunks_to_buffer",
                      &stores::ChunkStoreWriterOptions::num_chunks_to_buffer,
                      "Optional bound on the in-flight write buffer size.")
+      .def_readwrite("sticky_mimetype",
+                     &stores::ChunkStoreWriterOptions::sticky_mimetype,
+                     "Whether repeated contiguous chunk mimetypes are omitted.")
       .def("validate", &ValidateWriterOptions,
            "Raise if the options are not internally consistent.");
 

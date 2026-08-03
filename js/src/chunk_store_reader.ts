@@ -1,6 +1,6 @@
 import { Deferred, storeCallbackScheduler } from './concurrency.js';
 import { hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
-import { NodeFragment } from './data.js';
+import { Chunk, ChunkMetadata, NodeFragment } from './data.js';
 import {
   abortedError,
   dataLossError,
@@ -25,6 +25,7 @@ export interface ChunkStoreReaderOptions {
   numChunksToBuffer?: number;
   offset?: number;
   maxChunksToRead?: number | null;
+  stickyMimetype?: boolean;
 }
 
 interface NormalizedReaderOptions {
@@ -33,6 +34,7 @@ interface NormalizedReaderOptions {
   numChunksToBuffer: number;
   offset: number;
   maxChunksToRead: number | null;
+  stickyMimetype: boolean;
 }
 
 function normalizeOptions(options: ChunkStoreReaderOptions): StatusOr<NormalizedReaderOptions> {
@@ -46,9 +48,14 @@ function normalizeOptions(options: ChunkStoreReaderOptions): StatusOr<Normalized
       numChunksToBuffer: options.numChunksToBuffer ?? 32,
       offset: options.offset ?? 0,
       maxChunksToRead: options.maxChunksToRead ?? null,
+      stickyMimetype: options.stickyMimetype ?? false,
     };
-    if (typeof result.ordered !== 'boolean' || typeof result.popChunks !== 'boolean') {
-      return invalidArgumentError('Reader ordered and popChunks options must be boolean.');
+    if (
+      typeof result.ordered !== 'boolean' ||
+      typeof result.popChunks !== 'boolean' ||
+      typeof result.stickyMimetype !== 'boolean'
+    ) {
+      return invalidArgumentError('Reader ordered, popChunks, and stickyMimetype options must be boolean.');
     }
     if (!Number.isSafeInteger(result.numChunksToBuffer) || result.numChunksToBuffer < 0 || result.numChunksToBuffer > UINT32_RANGE) {
       return outOfRangeError('numChunksToBuffer must be between 0 and 2^32.');
@@ -82,6 +89,7 @@ export class ChunkStoreReader {
 
   private position: number;
   private chunksRead = 0;
+  private currentMimetype = '';
   private status: Status | null = null;
   private readonly buffer: NodeFragment[] = [];
   private readonly pendingReads: ReadRequest[] = [];
@@ -294,6 +302,15 @@ export class ChunkStoreReader {
   }
 
   private finishFragment(fragment: NodeFragment): void {
+    if (this.options.ordered && this.options.stickyMimetype && fragment.data instanceof Chunk) {
+      const mimetype = fragment.data.mimetype;
+      if (mimetype !== '') {
+        if (mimetype !== this.currentMimetype) this.currentMimetype = mimetype;
+      } else if (this.currentMimetype !== '') {
+        if (fragment.data.metadata === null) fragment.data.metadata = new ChunkMetadata();
+        fragment.data.metadata.mimetype = this.currentMimetype;
+      }
+    }
     this.buffer.push(fragment);
     ++this.chunksRead;
     ++this.position;

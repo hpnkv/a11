@@ -196,6 +196,42 @@ async def test_explicit_sequence_is_returned_from_store():
 
 
 @pytest.mark.asyncio
+async def test_sticky_mimetype_preserves_gap_anchors_and_other_metadata():
+    store = LocalChunkStore("sticky-writer")
+    writer = ChunkStoreWriter(
+        store, ChunkStoreWriterOptions(sticky_mimetype=True)
+    )
+
+    def chunk(value: bytes, *, with_attribute: bool = False):
+        return types.Chunk(
+            metadata=types.ChunkMetadata(
+                mimetype="text/plain",
+                attributes={"role": b"assistant"} if with_attribute else {},
+            ),
+            data=value,
+        )
+
+    confirmations = [
+        await writer.put_chunk(chunk(b"first")),
+        await writer.put_chunk(chunk(b"gap-anchor"), seq=3),
+        await writer.put_chunk(chunk(b"details", with_attribute=True), seq=4),
+        await writer.put_chunk(chunk(b"stripped"), seq=5),
+        await writer.put_chunk(chunk(b"second-gap-anchor"), seq=7, final=True),
+    ]
+    assert await asyncio.gather(*confirmations) == [0, 3, 4, 5, 7]
+    await writer.drain_and_close()
+
+    chunks = [(await store.get(seq)).get_chunk() for seq in [0, 3, 4, 5, 7]]
+    assert chunks[0].get_mimetype() == "text/plain"
+    assert chunks[1].get_mimetype() == "text/plain"
+    assert chunks[2].metadata is not None
+    assert chunks[2].metadata.mimetype == ""
+    assert chunks[2].metadata.attributes == {"role": b"assistant"}
+    assert chunks[3].metadata is None
+    assert chunks[4].get_mimetype() == "text/plain"
+
+
+@pytest.mark.asyncio
 async def test_implicit_sequence_returned_by_store_is_preserved():
     store = _NonzeroImplicitSequenceStore("implicit")
     writer = ChunkStoreWriter(store)

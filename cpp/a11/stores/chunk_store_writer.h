@@ -34,7 +34,8 @@ namespace a11::stores {
  *
  * Configures the starting offset, how many chunks are flushed to the store per
  * batch, and an optional bound on the in-flight write buffer that governs
- * backpressure.
+ * backpressure. Sticky mimetypes can omit repeated MIME metadata while keeping
+ * explicit sequence discontinuities self-describing.
  */
 struct ChunkStoreWriterOptions {
   /// Sequence number at which writing begins.
@@ -43,6 +44,8 @@ struct ChunkStoreWriterOptions {
   std::uint64_t max_chunks_to_write_at_once = 8;
   /// Optional bound on the in-flight write buffer size.
   std::optional<std::uint64_t> num_chunks_to_buffer;
+  /// Whether repeated contiguous chunk mimetypes are omitted when writing.
+  bool sticky_mimetype = false;
 
   /** @brief
    *    Validate that the options are internally consistent.
@@ -88,7 +91,8 @@ class ChunkStoreWriter {
    *  @param store
    *    The store to persist chunks to.
    *  @param options
-   *    Tuning for offset and how much is buffered/flushed at once.
+   *    Tuning for offset, sticky-mimetype compression, and how much is
+   *    buffered/flushed at once.
    *  @return
    *    A shared, ready-to-use writer, or an error status if the options are
    *    invalid.

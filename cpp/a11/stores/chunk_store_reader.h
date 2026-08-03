@@ -31,8 +31,8 @@ namespace a11::stores {
  *   fragments.
  *
  * Configures ordering, prefetch depth, the starting offset, whether fragments
- * are removed from the store as they are read, and an optional cap on the
- * total number read.
+ * are removed from the store as they are read, an optional cap on the total
+ * number read, and whether ordered reads expand sticky mimetypes.
  */
 struct ChunkStoreReaderOptions {
   /// Whether fragments are delivered strictly in sequence order.
@@ -45,6 +45,8 @@ struct ChunkStoreReaderOptions {
   std::uint32_t offset = 0;
   /// Optional cap on the total number of fragments to read.
   std::optional<std::uint64_t> max_chunks_to_read;
+  /// Whether ordered reads inherit the last explicitly set chunk mimetype.
+  bool sticky_mimetype = false;
 
   /** @brief
    *    Validate that the options are internally consistent.
@@ -73,7 +75,8 @@ class ChunkStoreReader {
    *  @param store
    *    The store to read fragments from.
    *  @param options
-   *    Tuning for ordering, buffering, offset, and pop-on-read behavior.
+   *    Tuning for ordering, buffering, offset, pop-on-read behavior, and
+   *    sticky-mimetype expansion.
    *  @return
    *    A shared, ready-to-use reader, or an error status if the options are
    *    invalid.

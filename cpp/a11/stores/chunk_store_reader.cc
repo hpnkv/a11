@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -352,6 +353,22 @@ struct ChunkStoreReader::State
   void FinishFragmentLocked(data::NodeFragment fragment,
                             std::vector<Completion>* completions)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    if (options.ordered && options.sticky_mimetype) {
+      data::Chunk* chunk = std::get_if<data::Chunk>(&fragment.data);
+      if (chunk != nullptr) {
+        const std::string mimetype = chunk->GetMimetype();
+        if (!mimetype.empty()) {
+          if (mimetype != current_mimetype) {
+            current_mimetype = mimetype;
+          }
+        } else if (!current_mimetype.empty()) {
+          if (!chunk->metadata.has_value()) {
+            chunk->metadata.emplace();
+          }
+          chunk->metadata->mimetype = current_mimetype;
+        }
+      }
+    }
     const bool continued = fragment.continued;
     // Fetches are serialised through the operation guard, so fragments finish
     // in strictly increasing position order and the freshly read one always
@@ -468,6 +485,7 @@ struct ChunkStoreReader::State
   mutable thread::Mutex mu;
   std::uint64_t position ABSL_GUARDED_BY(mu);
   std::uint64_t chunks_read ABSL_GUARDED_BY(mu) = 0;
+  std::string current_mimetype ABSL_GUARDED_BY(mu);
   std::optional<absl::Status> status ABSL_GUARDED_BY(mu);
   std::deque<data::NodeFragment> buffer ABSL_GUARDED_BY(mu);
   std::deque<std::shared_ptr<Request>> pending_reads ABSL_GUARDED_BY(mu);

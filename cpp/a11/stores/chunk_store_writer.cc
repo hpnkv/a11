@@ -98,7 +98,25 @@ struct ChunkStoreWriter::State
         ChunkStoreWriterOptions writer_options)
       : store(std::move(chunk_store)),
         options(writer_options),
-        next_offset_seq(writer_options.offset) {}
+        next_offset_seq(writer_options.offset),
+        next_sticky_seq(writer_options.offset) {}
+
+  void ApplyStickyMimetypeLocked(data::Chunk& chunk, bool explicit_sequence_gap)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    const std::string mimetype = chunk.GetMimetype();
+    if (explicit_sequence_gap || mimetype != current_mimetype) {
+      current_mimetype = mimetype;
+      return;
+    }
+    if (!chunk.metadata.has_value()) {
+      return;
+    }
+    chunk.metadata->mimetype.clear();
+    if (!chunk.metadata->timestamp.has_value() &&
+        chunk.metadata->attributes.empty()) {
+      chunk.metadata.reset();
+    }
+  }
 
   static a11::internal::CallbackScheduler& Scheduler() {
     static absl::NoDestructor<a11::internal::CallbackScheduler> scheduler;
@@ -522,6 +540,8 @@ struct ChunkStoreWriter::State
   const ChunkStoreWriterOptions options;
   mutable thread::Mutex mu;
   std::uint64_t next_offset_seq ABSL_GUARDED_BY(mu);
+  std::uint64_t next_sticky_seq ABSL_GUARDED_BY(mu);
+  std::string current_mimetype ABSL_GUARDED_BY(mu);
   std::deque<Element> queue ABSL_GUARDED_BY(mu);
   std::deque<Element> pending_queue ABSL_GUARDED_BY(mu);
   size_t outstanding ABSL_GUARDED_BY(mu) = 0;
@@ -604,12 +624,23 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
       return failed_write(state_->stop_status.value_or(
           absl::FailedPreconditionError("ChunkStoreWriter is closing")));
     }
+    const std::optional<std::uint32_t> requested_seq = seq;
     if (!seq.has_value() && state_->options.offset != 0) {
       if (state_->next_offset_seq > std::numeric_limits<std::uint32_t>::max()) {
         return failed_write(absl::ResourceExhaustedError(
             "Maximum writer sequence number exceeded"));
       }
       seq = static_cast<std::uint32_t>(state_->next_offset_seq++);
+    }
+    if (state_->options.sticky_mimetype) {
+      const bool explicit_sequence_gap =
+          requested_seq.has_value() &&
+          static_cast<std::uint64_t>(*requested_seq) != state_->next_sticky_seq;
+      state_->ApplyStickyMimetypeLocked(chunk, explicit_sequence_gap);
+      state_->next_sticky_seq =
+          requested_seq.has_value()
+              ? static_cast<std::uint64_t>(*requested_seq) + 1
+              : state_->next_sticky_seq + 1;
     }
     State::Element element(std::move(chunk), seq, !final, admission,
                            std::move(promise));

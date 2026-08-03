@@ -6,15 +6,76 @@ import {
   BytePacketType,
   ByteReassembler,
   Chunk,
+  ChunkMetadata,
   ChunkStoreReader,
   ChunkStoreWriter,
   LocalChunkStore,
+  NodeFragment,
   StatusCode,
   isOk,
   parseBytePacket,
   splitBytesIntoPackets,
   unavailableError,
 } from '../dist/index.js';
+
+test('sticky mimetypes compress writes and expand ordered reads', async () => {
+  const store = LocalChunkStore.create('sticky-mimetype');
+  assert.equal(isOk(store), true);
+  const writer = ChunkStoreWriter.create(store, { stickyMimetype: true });
+  assert.equal(isOk(writer), true);
+  const chunk = (value, withAttribute = false) => new Chunk({
+    metadata: new ChunkMetadata({
+      mimetype: 'text/plain',
+      attributes: withAttribute
+        ? new Map([['role', new TextEncoder().encode('assistant')]])
+        : new Map(),
+    }),
+    data: new TextEncoder().encode(value),
+  });
+
+  assert.equal(await writer.putChunk(chunk('first')), 0);
+  assert.equal(await writer.putChunk(chunk('gap-anchor'), 3), 3);
+  assert.equal(await writer.putChunk(chunk('details', true), 4), 4);
+  assert.equal(await writer.putChunk(chunk('stripped'), 5), 5);
+  assert.equal(await writer.putChunk(chunk('second-gap-anchor'), 7, true), 7);
+  assert.equal(isOk(await writer.drainAndClose()), true);
+
+  const raw = [];
+  for (const seq of [0, 3, 4, 5, 7]) raw.push((await store.get(seq)).data);
+  assert.equal(raw[0].mimetype, 'text/plain');
+  assert.equal(raw[1].mimetype, 'text/plain');
+  assert.equal(raw[2].mimetype, '');
+  assert.equal(raw[2].metadata.attributes.size, 1);
+  assert.equal(raw[3].metadata, null);
+  assert.equal(raw[4].mimetype, 'text/plain');
+
+  const readStore = LocalChunkStore.create('sticky-reader');
+  assert.equal(isOk(readStore), true);
+  const put = await readStore.putMany([
+    new NodeFragment({ data: chunk('anchor'), seq: 0, continued: true }),
+    new NodeFragment({
+      data: new Chunk({
+        metadata: new ChunkMetadata({
+          attributes: new Map([['role', new TextEncoder().encode('assistant')]]),
+        }),
+      }),
+      seq: 1,
+      continued: true,
+    }),
+    new NodeFragment({ data: new Chunk(), seq: 2, continued: false }),
+  ]);
+  assert.deepEqual(put, [0, 1, 2]);
+  const reader = ChunkStoreReader.create(readStore, { stickyMimetype: true });
+  assert.equal(isOk(reader), true);
+  const read = [await reader.next(), await reader.next(), await reader.next()];
+  assert.deepEqual(read.map((fragment) => fragment.data.mimetype), [
+    'text/plain',
+    'text/plain',
+    'text/plain',
+  ]);
+  assert.equal(read[1].data.metadata.attributes.size, 1);
+  assert.equal(read[2].data.metadata instanceof ChunkMetadata, true);
+});
 
 test('byte chunking reassembles out-of-order interleaved messages', () => {
   const first = Uint8Array.from({ length: 137 }, (_, index) => index & 0xff);

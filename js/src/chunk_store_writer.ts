@@ -1,5 +1,5 @@
 import { Deferred, storeCallbackScheduler } from './concurrency.js';
-import { hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
+import { cloneChunk, hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
 import { Chunk, NodeFragment, WireMessage } from './data.js';
 import {
   abortedError,
@@ -24,12 +24,14 @@ export interface ChunkStoreWriterOptions {
   offset?: number;
   maxChunksToWriteAtOnce?: number;
   numChunksToBuffer?: number | null;
+  stickyMimetype?: boolean;
 }
 
 interface NormalizedWriterOptions {
   offset: number;
   maxChunksToWriteAtOnce: number;
   numChunksToBuffer: number | null;
+  stickyMimetype: boolean;
 }
 
 function normalizeOptions(options: ChunkStoreWriterOptions): StatusOr<NormalizedWriterOptions> {
@@ -41,7 +43,11 @@ function normalizeOptions(options: ChunkStoreWriterOptions): StatusOr<Normalized
       offset: options.offset ?? 0,
       maxChunksToWriteAtOnce: options.maxChunksToWriteAtOnce ?? 8,
       numChunksToBuffer: options.numChunksToBuffer ?? null,
+      stickyMimetype: options.stickyMimetype ?? false,
     };
+    if (typeof result.stickyMimetype !== 'boolean') {
+      return invalidArgumentError('stickyMimetype must be boolean.');
+    }
     if (!Number.isSafeInteger(result.offset) || result.offset < 0 || result.offset > UINT32_MAX) {
       return outOfRangeError('offset must be a uint32 integer.');
     }
@@ -89,6 +95,8 @@ export class ChunkStoreWriter {
   readonly options: Readonly<NormalizedWriterOptions>;
 
   private nextOffsetSeq: number;
+  private nextStickySeq: number;
+  private currentMimetype = '';
   private readonly queue: WriteElement[] = [];
   private readonly pendingQueue: WriteElement[] = [];
   private outstanding = 0;
@@ -108,6 +116,7 @@ export class ChunkStoreWriter {
     this.store = store;
     this.options = Object.freeze({ ...options });
     this.nextOffsetSeq = options.offset;
+    this.nextStickySeq = options.offset;
   }
 
   static create(
@@ -156,9 +165,24 @@ export class ChunkStoreWriter {
       return failed(isOk(this.status) ? failedPreconditionError('ChunkStoreWriter is closed') : this.status);
     }
     if (this.closing) return failed(this.stopStatus ?? failedPreconditionError('ChunkStoreWriter is closing'));
+    const requestedSeq = seq;
     if (seq === null && this.options.offset !== 0) {
       if (this.nextOffsetSeq > UINT32_MAX) return failed(resourceExhaustedError('Maximum writer sequence number exceeded'));
       seq = this.nextOffsetSeq++;
+    }
+    if (this.options.stickyMimetype) {
+      chunk = cloneChunk(chunk);
+      const explicitSequenceGap = requestedSeq !== null && requestedSeq !== this.nextStickySeq;
+      const mimetype = chunk.mimetype;
+      if (explicitSequenceGap || mimetype !== this.currentMimetype) {
+        this.currentMimetype = mimetype;
+      } else if (chunk.metadata !== null) {
+        chunk.metadata.mimetype = '';
+        if (chunk.metadata.timestamp === null && chunk.metadata.attributes.size === 0) {
+          chunk.metadata = null;
+        }
+      }
+      this.nextStickySeq = requestedSeq === null ? this.nextStickySeq + 1 : requestedSeq + 1;
     }
     const element: WriteElement = {
       chunk,

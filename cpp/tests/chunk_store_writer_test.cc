@@ -9,6 +9,7 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/time/time.h>
 #include <gtest/gtest.h>
 
 #include "a11/data/types.h"
@@ -112,6 +113,63 @@ TEST(ChunkStoreWriterTest, OffsetAssignsExplicitSequences) {
   EXPECT_EQ(*first.Await(), 7);
   EXPECT_EQ(*second.Await(), 8);
   EXPECT_TRUE(writer->DrainAndClose().Await().ok());
+}
+
+TEST(ChunkStoreWriterTest, StickyMimetypeCompressesOnlyContiguousWrites) {
+  auto store = *LocalChunkStore::Create("writer-sticky-mimetype");
+  auto writer = *ChunkStoreWriter::Create(
+      store, ChunkStoreWriterOptions{.sticky_mimetype = true});
+  const auto chunk = [](std::string value, bool with_details = false) {
+    return data::Chunk{
+        .metadata =
+            data::ChunkMetadata{
+                .mimetype = "text/plain",
+                .timestamp = with_details ? std::optional(absl::UnixEpoch())
+                                          : std::nullopt,
+                .attributes = with_details
+                                  ? data::ByteMap{{"role", "assistant"}}
+                                  : data::ByteMap{}},
+        .data = std::move(value),
+    };
+  };
+
+  auto first = writer->PutChunk(chunk("first"));
+  auto gap_anchor = writer->PutChunk(chunk("gap-anchor"), 3);
+  auto detailed = writer->PutChunk(chunk("detailed", true), 4);
+  auto stripped = writer->PutChunk(chunk("stripped"), 5);
+  auto second_gap_anchor =
+      writer->PutChunk(chunk("second-gap-anchor"), 7, true);
+  EXPECT_EQ(*first.Await(), 0);
+  EXPECT_EQ(*gap_anchor.Await(), 3);
+  EXPECT_EQ(*detailed.Await(), 4);
+  EXPECT_EQ(*stripped.Await(), 5);
+  EXPECT_EQ(*second_gap_anchor.Await(), 7);
+  ASSERT_TRUE(writer->DrainAndClose().Await().ok());
+
+  auto stored_first = store->Get(0).Await();
+  auto stored_gap_anchor = store->Get(3).Await();
+  auto stored_detailed = store->Get(4).Await();
+  auto stored_stripped = store->Get(5).Await();
+  auto stored_second_gap_anchor = store->Get(7).Await();
+  ASSERT_TRUE(stored_first.ok());
+  ASSERT_TRUE(stored_gap_anchor.ok());
+  ASSERT_TRUE(stored_detailed.ok());
+  ASSERT_TRUE(stored_stripped.ok());
+  ASSERT_TRUE(stored_second_gap_anchor.ok());
+  const auto& first_chunk = std::get<data::Chunk>(stored_first->data);
+  const auto& gap_chunk = std::get<data::Chunk>(stored_gap_anchor->data);
+  const auto& detailed_chunk = std::get<data::Chunk>(stored_detailed->data);
+  const auto& stripped_chunk = std::get<data::Chunk>(stored_stripped->data);
+  const auto& second_gap_chunk =
+      std::get<data::Chunk>(stored_second_gap_anchor->data);
+  EXPECT_EQ(first_chunk.GetMimetype(), "text/plain");
+  EXPECT_EQ(gap_chunk.GetMimetype(), "text/plain");
+  ASSERT_TRUE(detailed_chunk.metadata.has_value());
+  EXPECT_TRUE(detailed_chunk.metadata->mimetype.empty());
+  EXPECT_TRUE(detailed_chunk.metadata->timestamp.has_value());
+  EXPECT_EQ(*detailed_chunk.metadata->GetAttribute("role"), "assistant");
+  EXPECT_FALSE(stripped_chunk.metadata.has_value());
+  EXPECT_EQ(second_gap_chunk.GetMimetype(), "text/plain");
 }
 
 TEST(ChunkStoreWriterTest, AbortFailsQueuedWritesAndClosesProducer) {

@@ -49,10 +49,28 @@ def test_default_codecs_round_trip_required_types(mimetype, value):
 
     chunk = registry.to_chunk(value, mimetype)
 
-    assert chunk.get_mimetype() == f"{mimetype};type={type(value).__name__}"
+    canonical_tags = {
+        dict: "object",
+        list: "array",
+        tuple: "array",
+        int: "integer",
+        float: "number",
+        str: "string",
+        bool: "boolean",
+        type(None): "null",
+    }
+    expected_tag = canonical_tags.get(type(value), type(value).__name__)
+    assert chunk.get_mimetype() == f"{mimetype};type={expected_tag}"
     result = registry.from_chunk(chunk)
-    assert type(result) is type(value)
-    assert result == value
+    if type(value) is tuple:
+        # A language-neutral JSON array decodes to each language's native
+        # array representation unless the caller explicitly requests tuple.
+        assert type(result) is list
+        assert result == list(value)
+        assert registry.from_chunk(chunk, obj_type=tuple) == value
+    else:
+        assert type(result) is type(value)
+        assert result == value
 
 
 class _NestedModel(pydantic.BaseModel):

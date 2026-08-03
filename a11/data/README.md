@@ -7,12 +7,13 @@ MIME type to serializer and deserializer callbacks.
 The registry adds a stable `type` parameter to every chunk it creates:
 
 ```text
-application/json;type=dict
+application/json;type=object
 application/x-msgpack;type=Reading
 ```
 
-This lets one representation support many Python types while still allowing a
-consumer to recover the correct type.
+JSON-native values use language-neutral tags (`object`, `array`, `integer`,
+`number`, `string`, `boolean`, and `null`). Other values retain an explicit
+application type so one representation can still recover the correct type.
 
 ## Quick start
 
@@ -30,7 +31,7 @@ chunk = registry.to_chunk(
 )
 
 print(chunk.get_mimetype())
-# application/json;type=dict
+# application/json;type=object
 
 reading = registry.from_chunk(chunk)
 assert reading == {"sensor": "outside", "temperature": 18.5}
@@ -38,15 +39,20 @@ assert type(reading) is dict
 ```
 
 `Chunk.data` is bytes. `Chunk.metadata.mimetype` records both the selected
-representation and the serialized Python type.
+representation and the serialized, language-neutral type where possible.
 
 If no output MIME type is supplied, registration order selects the preferred
 representation. The standard registry registers JSON first:
 
 ```python
 chunk = registry.to_chunk([1, 2, 3])
-assert chunk.get_mimetype() == "application/json;type=list"
+assert chunk.get_mimetype() == "application/json;type=array"
 ```
+
+At the wire boundary, a top-level Python `tuple` is the same JSON `array` as a
+`list`, so default decoding returns a `list`. Pass `obj_type=tuple` when a
+Python consumer specifically needs a tuple. Nested extended values can still
+retain their application type as described below.
 
 ## Standard codecs
 
@@ -91,7 +97,7 @@ type wins, followed by registration order:
 
 ```python
 chunk = registry.to_chunk({"answer": 42}, "application/*")
-assert chunk.get_mimetype() == "application/json;type=dict"
+assert chunk.get_mimetype() == "application/json;type=object"
 ```
 
 Normally `from_chunk()` reads the exact MIME type from the chunk:

@@ -120,7 +120,9 @@ async def test_async_iteration_skips_a_null_final_marker():
     null_write = await node.put_null_final()
     assert await _confirm(value_write, null_write) == [0, 1]
 
-    assert [value async for value in node] == [("only", "value")]
+    # The language-neutral JSON ``array`` tag deliberately does not retain
+    # whether Python supplied a list or tuple; default JSON decoding uses list.
+    assert [value async for value in node] == [["only", "value"]]
 
 
 def _json_chunk(data: bytes) -> types.Chunk:

@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "clean": "tsc --build --clean",
+    "test": "npm run build && node --test test/*.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
@@ -27,7 +28,13 @@
     "node": ">=20"
   },
   "license": "Apache-2.0",
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "ws": "^8.18.3"
+  },
   "devDependencies": {
+    "@types/node": "^24.1.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"
   }
 }

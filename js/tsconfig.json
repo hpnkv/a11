@@ -12,9 +12,22 @@
     "strict": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmitOnError": true
   },
   "include": [
     "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/src_old/**"
   ]
 }

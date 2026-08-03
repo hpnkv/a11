@@ -1,8 +1,10 @@
 """Serialization of Python objects to and from [Chunk][a11.data.types.Chunk].
 
 The registry deliberately separates a media type (the representation) from a
-Python type.  A serialized chunk combines the two by adding a stable ``type``
-parameter to its MIME type, for example ``application/json;type=dict``.
+value type. A serialized chunk combines the two by adding a stable ``type``
+parameter to its MIME type, for example ``application/json;type=object``.
+JSON-native types use language-neutral names; application-specific types use
+stable Python-qualified names unless explicitly configured otherwise.
 """
 
 import asyncio
@@ -429,19 +431,39 @@ class SerializationRegistry:
                 code=StatusCode.INVALID_ARGUMENT,
                 message="tag must be a non-empty string.",
             ).to_exception()
+        self._set_type_tag(obj_type, tag, allow_shared=False)
+
+    @_status_boundary
+    def _set_type_tag(
+        self, obj_type: type, tag: str, *, allow_shared: bool
+    ) -> None:
+        """Set a tag, optionally sharing a language-neutral JSON tag."""
+        if not isinstance(obj_type, type):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="obj_type must be a type.",
+            ).to_exception()
+        if not isinstance(tag, str) or not tag:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="tag must be a non-empty string.",
+            ).to_exception()
         existing = self._tag_to_type.get(tag)
         if existing is not None and existing is not obj_type:
-            raise Status(
-                code=StatusCode.ALREADY_EXISTS,
-                message=(
-                    f"Tag {tag!r} is already assigned to {existing.__name__}."
-                ),
-            ).to_exception()
+            if not allow_shared:
+                raise Status(
+                    code=StatusCode.ALREADY_EXISTS,
+                    message=(
+                        f"Tag {tag!r} is already assigned to"
+                        f" {existing.__name__}."
+                    ),
+                ).to_exception()
         previous = self._type_tags.get(obj_type)
         if previous is not None and previous != tag:
-            self._tag_to_type.pop(previous, None)
+            if self._tag_to_type.get(previous) is obj_type:
+                self._tag_to_type.pop(previous, None)
         self._type_tags[obj_type] = tag
-        self._tag_to_type[tag] = obj_type
+        self._tag_to_type.setdefault(tag, obj_type)
         self._remember_type(obj_type)
 
     @_status_boundary
@@ -960,6 +982,11 @@ class SerializationRegistry:
         if requested is None:
             return encoded
         if encoded_name is None:
+            return requested
+        # Language-neutral tags can intentionally be shared.  For example,
+        # both list and tuple use the JSON wire type "array"; an explicit
+        # requested type disambiguates them without leaking Python names.
+        if encoded_name == self._type_tag(requested):
             return requested
         if encoded is None:
             accepted = {
@@ -1636,13 +1663,29 @@ def _register_default_serializers(registry: SerializationRegistry) -> None:
             deserialize_msgpack,
         )
 
-    # The framework's own well-known types keep their historical bare-name wire
-    # tags (this preserves stored data and cross-language interop); every other
-    # type falls back to a fully-qualified, collision-free tag by default.
+    # JSON-native values use language-neutral tags.  Legacy bare Python tags
+    # remain accepted through _resolve_type's class-name compatibility path.
+    canonical_json_tags = {
+        dict: "object",
+        list: "array",
+        tuple: "array",
+        int: "integer",
+        float: "number",
+        str: "string",
+        bool: "boolean",
+        type(None): "null",
+    }
+
+    # The framework's other well-known types retain their historical bare-name
+    # tags; user-defined types use qualified, collision-free tags by default.
     for obj_type in DEFAULT_SERIALIZABLE_TYPES:
         if obj_type is pydantic.BaseModel:
             continue
-        registry.set_type_tag(obj_type, obj_type.__name__)
+        registry._set_type_tag(
+            obj_type,
+            canonical_json_tags.get(obj_type, obj_type.__name__),
+            allow_shared=obj_type in (list, tuple),
+        )
 
 
 def register_default_serializers(registry: SerializationRegistry) -> None:

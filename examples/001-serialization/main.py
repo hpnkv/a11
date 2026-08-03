@@ -65,8 +65,8 @@ def default_json_example(registry: SerializationRegistry) -> None:
     describe_chunk(chunk)
     print(f"JSON payload: {chunk.data.decode('utf-8')}")
 
-    # The exact Python type is carried by ";type=dict", so no obj_type hint is
-    # needed when reading a chunk produced by the registry.
+    # The language-neutral JSON type is carried by ";type=object", so no
+    # obj_type hint is needed when reading a chunk produced by the registry.
     restored = registry.from_chunk(chunk)
     assert type(restored) is dict
     assert restored == value
@@ -178,7 +178,7 @@ def explicit_mimetype_example(registry: SerializationRegistry) -> None:
     # Explicit selectors are authoritative. Here the data is JSON even though
     # stale metadata says MessagePack. The useful type tag is still retained.
     stale = types.Chunk(
-        metadata=types.ChunkMetadata(mimetype=f"{MSGPACK_MIMETYPE};type=dict"),
+        metadata=types.ChunkMetadata(mimetype=f"{MSGPACK_MIMETYPE};type=object"),
         data=b'{"metadata":"overridden"}',
     )
     restored = registry.from_chunk(stale, JSON_MIMETYPE)

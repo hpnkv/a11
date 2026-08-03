@@ -38,7 +38,7 @@
 namespace a11::net {
 
 /** Response header naming the stream id assigned to an SSE connection. */
-inline constexpr std::string_view kSseStreamIdHeader = "x-a11-stream-id";
+inline constexpr std::string_view kSseStreamIdHeader = "X-A11-Stream-Id";
 /** Prefix under which application HTTP headers are tunneled over SSE. */
 inline constexpr std::string_view kSseHttpHeaderPrefix = "x-a11-http-";
 /** Default path on which a client opens the SSE event stream. */

@@ -45,7 +45,12 @@ def make_registry() -> a11.ActionRegistry:
     return registry
 
 
-async def serve(host: str = "127.0.0.1", port: int = 80) -> None:
+async def serve(
+    host: str = "127.0.0.1",
+    port: int = 80,
+    certificate: str = "",
+    private_key: str = "",
+) -> None:
     """Serve echo sessions until interrupted."""
 
     registry = make_registry()
@@ -74,9 +79,21 @@ async def serve(host: str = "127.0.0.1", port: int = 80) -> None:
     options.cors_allow_origin = "*"
     options.cors_allow_methods = "*"
     options.cors_allow_headers = "*"
+    if certificate:
+        http2_options = options.http2_options
+        tls_options = http2_options.tls
+        tls_options.enabled = True
+        tls_options.certificate_pem_file = certificate
+        tls_options.key_pem_file = private_key
+        http2_options.tls = tls_options
+        options.http2_options = http2_options
     server = a11.HttpSseServer.create(host, port, accept, options)
+    scheme = "https" if certificate else "http"
     logging.info(
-        "Echo server listening at http://%s:%d/demos/echo", host, server.port
+        "Echo server listening at %s://%s:%d/demos/echo",
+        scheme,
+        host,
+        server.port,
     )
     try:
         await asyncio.Event().wait()
@@ -90,8 +107,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=80, type=int)
+    parser.add_argument("--certificate", default="", help="TLS certificate PEM")
+    parser.add_argument("--private-key", default="", help="TLS private-key PEM")
     args = parser.parse_args()
-    asyncio.run(serve(args.host, args.port))
+    if bool(args.certificate) != bool(args.private_key):
+        parser.error(
+            "--certificate and --private-key must be supplied together"
+        )
+    asyncio.run(serve(args.host, args.port, args.certificate, args.private_key))
 
 
 if __name__ == "__main__":

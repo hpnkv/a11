@@ -10,9 +10,9 @@ TypeScript browser use the same `ActionSchema`, `Action`, `AsyncNode`,
 
     Install the Python package and
     `npm install a11@npm:@curiositystack/a11`. Browsers
-    negotiate HTTP/2 when TLS is used in production. The native development
-    server also supports local clear-text testing at
-    `http://localhost/demos/echo`.
+    negotiate HTTP/2 through TLS. Browsers do not support clear-text HTTP/2
+    prior knowledge (`h2c`), so local browser testing also requires a trusted
+    development certificate.
 
 ## 1. Define the action contract
 
@@ -37,9 +37,9 @@ streaming ports on each side.
 
 ```ts
 const echoSchema = new ActionSchema({
-  name: 'echo',
-  inputs: { input: new ActionPortSchema({ name: 'input', type: 'text/plain', required: true }) },
-  outputs: { output: new ActionPortSchema({ name: 'output', type: 'text/plain', required: true }) },
+    name: 'echo',
+    inputs: {input: new ActionPortSchema({name: 'input', type: 'text/plain', required: true})},
+    outputs: {output: new ActionPortSchema({name: 'output', type: 'text/plain', required: true})},
 });
 ```
 
@@ -68,10 +68,12 @@ run `echo`. The endpoint pair shares the `/demos/echo` prefix:
 registry = a11.ActionRegistry()
 registry.register("echo", ECHO_SCHEMA, echo)
 
+
 async def accept(stream):
     session = a11.Session(action_registry=registry)
     await session.add_stream(stream, mode="accept")
     await session.done.wait()
+
 
 options = a11.HttpSseOptions()
 options.connect_endpoint = "/demos/echo/connect"
@@ -81,10 +83,15 @@ server = a11.HttpSseServer.create("127.0.0.1", 80, accept, options)
 
 The complete deployable module is
 [`a11/demos/echo_server.py`](https://github.com/curiosity-ai/a11/blob/main/a11/demos/echo_server.py).
-Run it locally (port 80 may require suitable permissions):
+Create and trust a localhost certificate with
+[mkcert](https://github.com/FiloSottile/mkcert), then run the service with TLS:
 
 ```sh
-python -m a11.demos.echo_server --host 127.0.0.1 --port 80
+mkcert localhost 127.0.0.1 ::1
+python -m a11.demos.echo_server \
+  --host 127.0.0.1 --port 9000 \
+  --certificate ./localhost+2.pem \
+  --private-key ./localhost+2-key.pem
 ```
 
 ## 4. Create a browser session and connect
@@ -96,10 +103,10 @@ URL includes a path, pass its endpoint paths explicitly:
 ```ts
 const registry = new ActionRegistry();
 need(registry.register('echo', echoSchema));
-const session = need(Session.create({ actionRegistry: registry }));
+const session = need(Session.create({actionRegistry: registry}));
 const stream = need(HttpSseClientWireStream.create(server.origin, {
-  connectEndpoint: '/demos/echo/connect',
-  messageEndpoint: '/demos/echo/streams/{id}/message',
+    connectEndpoint: '/demos/echo/connect',
+    messageEndpoint: '/demos/echo/streams/{id}/message',
 }));
 need(await session.addStream(stream, StreamMode.START));
 ```
@@ -112,7 +119,7 @@ node fragments. The response arrives through the output `AsyncNode`:
 
 ```ts
 const action = need(registry.makeAction('echo', {
-  nodeMap: session.getNodeMap(), stream, session,
+    nodeMap: session.getNodeMap(), stream, session,
 }));
 need(await action.call());
 const input = need(await action.getInput('input'));
@@ -120,7 +127,7 @@ need(await input.putFinal(text));
 need(await action.waitForDispatch(10_000));
 need(await action.wait(30_000));
 const output = need(await action.getOutput('output', false));
-const reply = need(await output.next({ timeoutMs: 10_000 }));
+const reply = need(await output.next({timeoutMs: 10_000}));
 ```
 
 This symmetry is the useful part: an interface field is not translated into a
@@ -135,23 +142,22 @@ UI boundary and render them in a live error region:
 
 ```ts
 const need = <T>(value: T | Status): T => {
-  if (!isOk(value)) {
-    throw new Error(`${StatusCode[value.code]}: ${value.message}`);
-  }
-  return value as T;
+    if (!isOk(value)) {
+        throw new Error(`${StatusCode[value.code]}: ${value.message}`);
+    }
+    return value as T;
 };
 
 try {
-  await sendEcho(text);
+    await sendEcho(text);
 } catch (error) {
-  errorRegion.textContent = error instanceof Error ? error.message : String(error);
+    errorRegion.textContent = error instanceof Error ? error.message : String(error);
 }
 ```
 
 ## Try it
 
-The default deployment URL is intentionally not live yet. Change it to
-`http://localhost/demos/echo` while running the Python module above. The wire
+The wire
 inspector records both action messages and node fragments; select a row to see
 its action names, node IDs, and encoded byte size. **Half-close** says that the
 client will send no more data while allowing already-sent work to drain.

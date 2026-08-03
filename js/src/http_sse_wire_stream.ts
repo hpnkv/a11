@@ -30,7 +30,7 @@ import {
   type WireStreamOptions,
 } from './wire_stream.js';
 
-export const SSE_STREAM_ID_HEADER = 'x-a11-stream-id';
+export const SSE_STREAM_ID_HEADER = 'X-A11-Stream-Id';
 export const SSE_HTTP_HEADER_PREFIX = 'x-a11-http-';
 export const DEFAULT_SSE_CONNECT_ENDPOINT = '/connect';
 export const DEFAULT_SSE_MESSAGE_ENDPOINT = '/streams/{id}/message';

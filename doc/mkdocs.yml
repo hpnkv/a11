@@ -101,6 +101,7 @@ nav:
       - A toy agent with a tool: guides/agent-tool.md
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
+      - Local models on the web: guides/local-models-web.md
   - State machines:
       - WireStream lifecycle: lifecycles/wire-stream.md
       - AsyncNode lifecycle: lifecycles/async-node.md

@@ -28,3 +28,5 @@ export * from './websocket_wire_stream.js';
 export * from './signalling.js';
 export * from './webrtc_wire_stream.js';
 export * from './http_sse_wire_stream.js';
+
+export * from './sdk/index.js';

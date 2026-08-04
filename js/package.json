@@ -23,6 +23,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "build:demo": "esbuild demo/browser_clients.ts --bundle --format=esm --outfile=../doc/docs/assets/browser-clients.js",
+    "build:demo:local": "esbuild demo/local_models.ts --bundle --format=esm --outfile=../doc/docs/assets/local-models.js",
     "build:docs": "typedoc --options typedoc.json",
     "clean": "tsc --build --clean",
     "test": "npm run build && node --test test/*.test.mjs",
@@ -38,7 +39,8 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.1.0",

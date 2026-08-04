@@ -17,9 +17,10 @@ if [[ "${1:-}" == "--strict" ]]; then
   STRICT="--strict"
 fi
 
-# 1. Compile the browser guide client. MkDocs copies it as a normal asset.
-echo "==> Building browser guide client"
+# 1. Compile the browser guide clients. MkDocs copies them as normal assets.
+echo "==> Building browser guide clients"
 npm --prefix "$HERE/../js" run build:demo
+npm --prefix "$HERE/../js" run build:demo:local
 
 # 2. Python site (MkDocs Material + mkdocstrings). This clears doc/site first.
 echo "==> Building Python documentation (mkdocs)"

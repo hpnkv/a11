@@ -49,6 +49,9 @@ jobs:
       - name: Install wheel builder
         run: python -m pip install "cibuildwheel==4.1.1"
       - name: Build and audit wheels
+        env:
+          A11_DEPS_PREFIX: ${{ runner.temp }}/a11-deps-${{ matrix.arch }}
+          A11_WHEEL_ARCH: ${{ matrix.arch }}
         run: python -m cibuildwheel --platform "${{ matrix.platform }}" --archs "${{ matrix.arch }}" --output-dir wheelhouse
       - uses: actions/upload-artifact@v4
         with:

@@ -15,19 +15,29 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** Trailer/header carrying a peer's structured non-OK terminal status. */
 export const ABORT_STATUS_HEADER = 'x-a11-abort-status';
+/** Hard ceiling for one reassembled A11 wire message. */
 export const MAX_SINGLE_WIRE_MESSAGE_SIZE = 32 * 1024 * 1024;
 
+/** Absolute JavaScript epoch deadline; `null` disables the deadline. */
 export type WireDeadline = Date | number | null;
 
+/** Limits applied by each endpoint of a {@link WireStream}. */
 export interface WireStreamOptions {
+  /** Maximum messages waiting for the application callback. */
   maxBufferedIncomingMessages?: number;
+  /** Maximum encoded size of one reassembled {@link WireMessage}. */
   maxSingleMessageSize?: number;
+  /** Maximum aggregate encoded bytes waiting for the application. */
   maxBufferedIncomingBytes?: number;
+  /** Delivery timeout for one buffered message, or `null` for none. */
   messageTimeoutMs?: number | null;
+  /** Absolute endpoint deadline, or `null` for none. */
   deadline?: WireDeadline;
 }
 
+/** Validated, default-filled form of {@link WireStreamOptions}. */
 export interface NormalizedWireStreamOptions {
   maxBufferedIncomingMessages: number;
   maxSingleMessageSize: number;
@@ -36,29 +46,60 @@ export interface NormalizedWireStreamOptions {
   deadline: number | null;
 }
 
+/**
+ * Consumes one inbound message; `null` announces the peer's half-close.
+ * The stream awaits the result before delivering more, providing backpressure.
+ */
 export type OnWireMessage = (
   message: WireMessage | null,
 ) => void | Status | Promise<void | Status>;
 
+/** Runs once after both directions finish, or after an abort. */
 export type OnWireDone = () => void | Status | Promise<void | Status>;
 
-/** Message-oriented A11 transport shared by sessions and actions. */
+/**
+ * Message-oriented transport shared by sessions, actions, and node mirroring.
+ *
+ * A wire stream is bidirectional and deliberately does not promise global
+ * message ordering. Ordered application data travels as sequenced
+ * {@link NodeFragment}s above this layer. The lifecycle does promise a closure
+ * barrier: messages accepted before a half-close are observed before the peer
+ * is told that direction has ended.
+ *
+ * Call {@link start} on the initiating endpoint or {@link accept} on the
+ * responding endpoint exactly once. Finish normally with {@link halfClose} and
+ * {@link drainOutgoingMessages}; use {@link abort} for a failed exchange.
+ */
 export interface WireStream {
+  /** Queue a message for asynchronous transport; this does not await delivery. */
   send(message: WireMessage): Status;
+  /** Drive the initiating side and install inbound lifecycle callbacks. */
   start(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status>;
+  /** Drive the responding side and install inbound lifecycle callbacks. */
   accept(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status>;
+  /** Stop sending after queued messages, while continuing to receive. */
   halfClose(trailers?: ByteMapInput): Status;
+  /** Await queued outbound delivery after requesting a half-close. */
   drainOutgoingMessages(): Promise<Status>;
+  /** End both directions with a structured non-OK status. */
   abort(status: Status): Status;
+  /** Change the absolute deadline; omit it to disable the deadline. */
   setDeadline(deadline?: WireDeadline): Status;
+  /** Return the normalized epoch deadline, or `null` when disabled. */
   getDeadline(): number | null;
+  /** Return the current terminal error, or OK while healthy/cleanly done. */
   getStatus(): Status;
+  /** Return peer half-close trailers once received. */
   getTrailers(): ByteMap | null;
+  /** Return the transport-assigned stream identifier. */
   getId(): string;
+  /** Return an advanced transport handle, when the implementation has one. */
   getImpl(): unknown | null;
+  /** Await full stream completion rather than only the startup handshake. */
   wait(): Promise<Status>;
 }
 
+/** Convert a Date/epoch value into the normalized millisecond deadline. */
 export function wireDeadlineMillis(
   value: WireDeadline | undefined,
 ): StatusOr<number | null> {
@@ -78,6 +119,7 @@ export function wireDeadlineMillis(
   }
 }
 
+/** Validate endpoint limits and apply defaults before opening a transport. */
 export function normalizeWireStreamOptions(
   options: WireStreamOptions = {},
 ): StatusOr<NormalizedWireStreamOptions> {
@@ -174,6 +216,7 @@ function returnedStatus(value: unknown, operation: string): Status {
     : internalError(`${operation} returned a non-Status value.`);
 }
 
+/** Invoke a user callback and convert throws or invalid returns into Status. */
 export async function invokeWireCallback(
   callback: OnWireMessage | OnWireDone | undefined,
   message?: WireMessage | null,
@@ -223,7 +266,14 @@ interface ReceiveWaiter {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-/** Pull-oriented, one-slot backpressure adapter for a callback WireStream. */
+/**
+ * Pull-oriented, one-slot adapter for a callback-driven {@link WireStream}.
+ *
+ * Use this in an agent loop that wants to `await receive()` rather than own a
+ * callback. The one-slot handoff retains transport backpressure. A remote
+ * abort takes priority over buffered data and remains visible to all future
+ * receivers.
+ */
 export class WireStreamWithRecv implements WireStream {
   private readonly id: string;
   private slot: WireMessage | null | undefined;
@@ -238,6 +288,7 @@ export class WireStreamWithRecv implements WireStream {
     this.id = id;
   }
 
+  /** Wrap a stream while preserving its id, status, trailers, and transport. */
   static create(stream: unknown): StatusOr<WireStreamWithRecv> {
     if (!hasWireStreamShape(stream)) {
       return invalidArgumentError('stream must implement WireStream.');
@@ -411,6 +462,7 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
+  /** Await one message, or `null` once for the peer's clean half-close. */
   receive(timeoutMs?: number): Promise<StatusOr<WireMessage | null>> {
     this.recordCurrentStatus();
     if (

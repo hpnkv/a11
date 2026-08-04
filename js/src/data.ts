@@ -29,6 +29,7 @@ const INT64_MIN = -(1n << 63n);
 const INT64_MAX = (1n << 63n) - 1n;
 const NAME_PATTERN = /^[A-Za-z0-9_](?:[A-Za-z0-9_#-]{0,253}[A-Za-z0-9_])?$/;
 
+/** Validate an action, port, node, session, stream, or metadata identifier. */
 export function validateName(name: string): Status {
   if (typeof name !== 'string' || name.length < 1 || name.length > 255) {
     return invalidArgumentError(
@@ -151,12 +152,18 @@ function isValidDate(value: Date): boolean {
   }
 }
 
+/** Descriptive fields accepted by {@link ChunkMetadata}. */
 export interface ChunkMetadataOptions {
   mimetype?: string;
   timestamp?: Date | null;
   attributes?: ReadonlyMap<string, Uint8Array>;
 }
 
+/**
+ * MIME type, timestamp, and binary attributes describing one {@link Chunk}.
+ * Metadata travels with streamed values so a receiving agent can choose the
+ * correct codec and retain application-specific context.
+ */
 export class ChunkMetadata {
   mimetype: string;
   timestamp: Date | null;
@@ -172,6 +179,7 @@ export class ChunkMetadata {
       : copyByteMap(options.attributes);
   }
 
+  /** Construct and validate metadata while normalizing byte-like attributes. */
   static create(options: Omit<ChunkMetadataOptions, 'attributes'> & {
     attributes?: ByteMapInput;
   } = {}): StatusOr<ChunkMetadata> {
@@ -293,12 +301,21 @@ export class ChunkMetadata {
   }
 }
 
+/** Inline payload, reference, and metadata accepted by {@link Chunk}. */
 export interface ChunkOptions {
   metadata?: ChunkMetadata | null;
   ref?: string;
   data?: Uint8Array;
 }
 
+/**
+ * Smallest typed payload carried through an A11 node.
+ *
+ * A chunk contains owned bytes plus optional metadata, or a `ref` to data held
+ * elsewhere. Serialization registries turn application objects into chunks;
+ * NodeFragments add identity, sequence, and finality for streaming. An empty
+ * octet-stream chunk is the explicit null/end marker used by unary flows.
+ */
 export class Chunk {
   metadata: ChunkMetadata | null;
   ref: string;
@@ -341,6 +358,7 @@ export class Chunk {
     return this.ref === '' && this.data.byteLength === 0;
   }
 
+  /** Whether this is the explicit null chunk used as a final terminator. */
   get isNull(): boolean {
     return this.isEmpty && this.mimetype === 'application/octet-stream';
   }
@@ -388,12 +406,14 @@ export class Chunk {
   }
 }
 
+/** Node id and optional window accepted by {@link NodeRef}. */
 export interface NodeRefOptions {
   id: string;
   offset?: number;
   length?: number | null;
 }
 
+/** Reference to all or part of another logical node instead of inline bytes. */
 export class NodeRef {
   id: string;
   offset: number;
@@ -468,6 +488,7 @@ export class NodeRef {
   }
 }
 
+/** Stream identity, payload, sequence, and continuation fields. */
 export interface NodeFragmentOptions {
   id?: string;
   data?: Chunk | NodeRef;
@@ -475,6 +496,13 @@ export interface NodeFragmentOptions {
   continued?: boolean;
 }
 
+/**
+ * One sequenced piece of an AsyncNode's ordered stream.
+ *
+ * `id` selects the node, `seq` establishes logical order independently of
+ * transport arrival, and `continued=false` declares this fragment final.
+ * Payload is either an inline {@link Chunk} or a {@link NodeRef}.
+ */
 export class NodeFragment {
   id: string;
   data: Chunk | NodeRef;
@@ -571,6 +599,7 @@ export class NodeFragment {
   }
 }
 
+/** Maps one schema port name onto the concrete node id for an action instance. */
 export class Port {
   constructor(public name: string = '', public id: string = '') {}
 
@@ -610,6 +639,7 @@ export class Port {
   }
 }
 
+/** Action call identity, port mappings, and headers accepted on the wire. */
 export interface ActionMessageOptions {
   id?: string;
   name?: string;
@@ -618,6 +648,13 @@ export interface ActionMessageOptions {
   headers?: ReadonlyMap<string, Uint8Array>;
 }
 
+/**
+ * Wire description of one action invocation.
+ *
+ * The receiving session resolves `name` through its registry, maps the
+ * concrete input/output node ids, applies headers, and then starts the handler.
+ * Streamed values travel separately as NodeFragments in WireMessages.
+ */
 export class ActionMessage {
   id: string;
   name: string;
@@ -724,13 +761,23 @@ export class ActionMessage {
   }
 }
 
+/** Fragments, calls, and connection metadata batched into a WireMessage. */
 export interface WireMessageOptions {
   nodeFragments?: readonly NodeFragment[];
   actions?: readonly ActionMessage[];
   headers?: ReadonlyMap<string, Uint8Array>;
 }
 
+/**
+ * Atomic application message exchanged by every A11 transport.
+ *
+ * It batches independent node fragments and action calls to reduce transport
+ * overhead. Ordering belongs to each fragment's node sequence, not to the
+ * WireMessage or transport. An otherwise empty message with headers is also
+ * used for lifecycle metadata such as session completion.
+ */
 export class WireMessage {
+  /** Current MessagePack/JSON wire schema version. */
   static readonly VERSION = 1;
   nodeFragments: NodeFragment[];
   actions: ActionMessage[];
@@ -796,6 +843,7 @@ export class WireMessage {
     }
   }
 
+  /** Whether this carries only headers and can serve as a lifecycle marker. */
   get isHalfClose(): boolean {
     return this.actions.length === 0 && this.nodeFragments.length === 0;
   }
@@ -875,10 +923,12 @@ export class WireMessage {
   }
 }
 
+/** Build an empty lifecycle message carrying optional terminal headers. */
 export function makeHalfCloseMessage(headers: ReadonlyMap<string, Uint8Array> = new Map()): WireMessage {
   return new WireMessage({ headers });
 }
 
+/** Build the explicit octet-stream null chunk used to terminate unary data. */
 export function makeNullChunk(): Chunk {
   return new Chunk({ metadata: new ChunkMetadata({ mimetype: 'application/octet-stream' }) });
 }
@@ -930,6 +980,7 @@ function actionToJson(action: ActionMessage): Record<string, unknown> {
   };
 }
 
+/** Convert a WireMessage into the interoperable JSON object representation. */
 export function wireMessageToJsonValue(
   message: WireMessage,
 ): StatusOr<Record<string, unknown>> {
@@ -1054,6 +1105,7 @@ function actionFromJson(value: unknown): StatusOr<ActionMessage> {
   return ActionMessage.create({ id, name, inputs: ports[0], outputs: ports[1], headers });
 }
 
+/** Validate and build a WireMessage from its decoded JSON representation. */
 export function wireMessageFromJsonValue(value: unknown): StatusOr<WireMessage> {
   try {
     return wireMessageFromJsonValueUnchecked(value);

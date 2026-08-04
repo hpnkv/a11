@@ -40,9 +40,9 @@ namespace a11::net {
  * governs message splitting and buffering.
  */
 struct WebSocketClientOptions {
-  Http2Options http2_options;
-  HttpHeaders headers;
-  ChannelFramingOptions framing;
+  Http2Options http2_options;     ///< HTTP/2 connection and TLS policy.
+  HttpHeaders headers;            ///< Extra WebSocket handshake headers.
+  ChannelFramingOptions framing;  ///< Packet splitting and reassembly bounds.
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;
@@ -95,12 +95,12 @@ class WebSocketWireStream final : public ChannelWireStream {
  * settings.
  */
 struct WebSocketServerOptions {
-  std::string path = "/a11";
-  std::string bind_address = "127.0.0.1";
-  std::uint16_t port = 0;
-  WireStreamOptions stream_options;
-  ChannelFramingOptions framing;
-  Http2Options http2_options;
+  std::string path = "/a11";               ///< WebSocket endpoint path.
+  std::string bind_address = "127.0.0.1";  ///< Local listen address.
+  std::uint16_t port = 0;  ///< Listen port; zero requests an ephemeral port.
+  WireStreamOptions stream_options;  ///< Defaults for accepted streams.
+  ChannelFramingOptions framing;     ///< Framing for accepted streams.
+  Http2Options http2_options;        ///< Server HTTP/2 and TLS policy.
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

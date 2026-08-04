@@ -75,10 +75,11 @@ using OnDone = std::function<a11::Task()>;
  * transports (e.g. an unreliable WebRTC data channel) make that explicit. The
  * one synchronisation point the interface does promise is **closure**: every
  * message accepted for delivery is observed by the reader before the stream
- * reports done, and a HalfClose (optionally carrying trailers) settles only
- * after the endpoint's buffered messages have drained. Callers that need
- * ordering must impose it above the transport (an AsyncNode/ChunkStore log,
- * which *is* ordered by sequence number, is the usual way).
+ * reports done, and the half-close marker follows messages already queued by
+ * that endpoint. HalfClose() queues that transition; DrainOutgoingMessages()
+ * is the explicit local delivery barrier. Callers that need ordering must
+ * impose it above the transport (an AsyncNode/ChunkStore log, which *is*
+ * ordered by sequence number, is the usual way).
  *
  * Implement this interface to carry A11 traffic over a transport A11 does not
  * ship; the runtime treats every implementation identically.
@@ -126,9 +127,10 @@ class WireStream {
   /**
    * @brief Signal that this side will send no more messages.
    *
-   * The stream drains any buffered outbound messages and, once the peer also
-   * half-closes, completes. Inbound messages continue to be delivered until
-   * then.
+   * The terminal marker is queued after buffered outbound messages and, once
+   * the peer also half-closes, the stream completes. Inbound messages continue
+   * to be delivered until then. Call DrainOutgoingMessages() to await local
+   * transport delivery.
    * @param trailers Optional closing metadata delivered to the peer.
    * @return OK, or a non-OK status if the stream cannot be half-closed.
    */

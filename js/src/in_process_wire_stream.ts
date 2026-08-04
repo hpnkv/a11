@@ -190,10 +190,25 @@ function makeMemoryChannelPair(): [MemoryBinaryChannel, MemoryBinaryChannel] {
   return [first, second];
 }
 
-/** A paired WireStream transport with no network dependency. */
+/**
+ * A paired WireStream transport with no network dependency.
+ *
+ * Use this for tests, local agent composition, and bridges that need ordinary
+ * WireStream lifecycle/backpressure semantics without a socket. Packets cross
+ * an asynchronous in-memory boundary, so callbacks, half-close, drain, and
+ * completion behave like the network transports rather than like direct
+ * function calls.
+ */
 export class InProcessWireStream implements WireStream {
   private constructor(private readonly stream: ChannelWireStream) {}
 
+  /**
+   * Create client/server endpoints sharing one stream id.
+   *
+   * Call {@link WireStream.start} on the first endpoint and
+   * {@link WireStream.accept} on the second. `options` applies to both sides;
+   * `firstOptions` and `secondOptions` provide endpoint-specific overrides.
+   */
   static createPair(
     options: WireStreamOptions = {},
     firstOptions: WireStreamOptions = {},

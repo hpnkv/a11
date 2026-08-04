@@ -355,7 +355,7 @@ void BindStores(py::module_& module) {
           },
           "Append a single fragment and await its assigned sequence number. "
           "Use this to feed an agent's output into the store; the returned "
-          "future resolves once the write is durably accepted.",
+          "future resolves once the backing store accepts the write.",
           py::arg("fragment"))
       .def(
           "put_many",
@@ -386,13 +386,14 @@ void BindStores(py::module_& module) {
           "order. Use this to translate ingestion-order references into the "
           "sequence numbers the rest of the API expects.",
           py::arg("arrival_order"))
-      .def("get_final_seq",
-           [](const std::shared_ptr<ChunkStore>& self) {
-             return StoreFuture(self->GetFinalSeq());
-           },
-           "Await the sequence number of the final chunk, or None if the "
-           "store is still open. An agent can await this to learn when a "
-           "stream has been fully closed and how many chunks it contains.")
+      .def(
+          "get_final_seq",
+          [](const std::shared_ptr<ChunkStore>& self) {
+            return StoreFuture(self->GetFinalSeq());
+          },
+          "Await the explicitly marked final sequence, or None if no "
+          "fragment has declared finality. Finality is independent of write "
+          "closure: closing the store does not create a final sequence.")
       .def(
           "close_writes_with_status",
           [](const std::shared_ptr<ChunkStore>& self, const py::handle& status,
@@ -406,30 +407,32 @@ void BindStores(py::module_& module) {
           "`return_status_if_already_closed` is set, a second close returns "
           "the status recorded by the first instead of overwriting it.",
           py::arg("status"), py::arg("return_status_if_already_closed") = false)
-      .def("size",
-           [](const std::shared_ptr<ChunkStore>& self) {
-             return StoreFuture(self->Size());
-           },
-           "Await the number of fragments currently in the store. Useful for "
-           "an agent to gauge backlog or progress without reading chunks.")
-      .def("get_id",
-           [](const ChunkStore& self) { return ValueOrThrow(self.GetId()); },
-           "Return the store's node identifier. Raises if a Python subclass "
-           "does not override `get_id`.");
+      .def(
+          "size",
+          [](const std::shared_ptr<ChunkStore>& self) {
+            return StoreFuture(self->Size());
+          },
+          "Await the number of fragments currently in the store. Useful for "
+          "an agent to gauge backlog or progress without reading chunks.")
+      .def(
+          "get_id",
+          [](const ChunkStore& self) { return ValueOrThrow(self.GetId()); },
+          "Return the store's node identifier. Raises if a Python subclass "
+          "does not override `get_id`.");
 
   py::class_<stores::LocalChunkStore, ChunkStore,
              std::shared_ptr<stores::LocalChunkStore>>(module,
                                                        "LocalChunkStore")
-      .def(py::init([](std::string id) {
-             return ValueOrThrow(
-                 stores::LocalChunkStore::Create(std::move(id)));
-           }),
-           "Create an in-memory ChunkStore identified by `id`. This is the "
-           "default backing store for an agent running in a single process: "
-           "all reads and writes stay in local memory yet still return "
-           "awaitables, so it composes with the same async reader and writer "
-           "as remote stores.",
-           py::arg("id"))
+      .def(
+          py::init([](std::string id) {
+            return ValueOrThrow(stores::LocalChunkStore::Create(std::move(id)));
+          }),
+          "Create an in-memory ChunkStore identified by `id`. This is the "
+          "default backing store for an agent running in a single process: "
+          "all reads and writes stay in local memory yet still return "
+          "awaitables, so it composes with the same async reader and writer "
+          "as remote stores.",
+          py::arg("id"))
       .def_static(
           "create",
           [](std::string node_id) {
@@ -444,26 +447,23 @@ void BindStores(py::module_& module) {
   py::class_<stores::RedisChunkStoreOptions>(
       module, "RedisChunkStoreOptions",
       "Key layout and inline-payload policy for RedisChunkStore.")
-      .def(
-          py::init([](std::string key_prefix,
-                      const py::handle& inline_data_threshold) {
-            stores::RedisChunkStoreOptions options{
-                .key_prefix = std::move(key_prefix),
-                .inline_data_threshold = static_cast<size_t>(UnsignedOption(
-                    inline_data_threshold,
-                    std::numeric_limits<size_t>::max(),
-                    "inline_data_threshold")),
-            };
-            const absl::Status status = options.Validate();
-            if (!status.ok())
-              ThrowStatus(status);
-            return options;
-          }),
-          "Construct validated Redis chunk-store options.",
-          py::arg("key_prefix") = "a11:",
-          py::arg("inline_data_threshold") = 256 * 1024)
-      .def_readwrite("key_prefix",
-                     &stores::RedisChunkStoreOptions::key_prefix,
+      .def(py::init([](std::string key_prefix,
+                       const py::handle& inline_data_threshold) {
+             stores::RedisChunkStoreOptions options{
+                 .key_prefix = std::move(key_prefix),
+                 .inline_data_threshold = static_cast<size_t>(UnsignedOption(
+                     inline_data_threshold, std::numeric_limits<size_t>::max(),
+                     "inline_data_threshold")),
+             };
+             const absl::Status status = options.Validate();
+             if (!status.ok())
+               ThrowStatus(status);
+             return options;
+           }),
+           "Construct validated Redis chunk-store options.",
+           py::arg("key_prefix") = "a11:",
+           py::arg("inline_data_threshold") = 256 * 1024)
+      .def_readwrite("key_prefix", &stores::RedisChunkStoreOptions::key_prefix,
                      "Prefix before the per-node Redis Cluster hash tag.")
       .def_readwrite(
           "inline_data_threshold",
@@ -533,8 +533,7 @@ void BindStores(py::module_& module) {
                                            : py::none();
           },
           "The terminal Status when closed, otherwise None.")
-      .def_readonly("final_seq",
-                    &stores::RedisChunkStoreMetadata::final_seq,
+      .def_readonly("final_seq", &stores::RedisChunkStoreMetadata::final_seq,
                     "The declared final sequence, if one has arrived.")
       .def_readonly("size", &stores::RedisChunkStoreMetadata::size,
                     "Number of chunk slots in the store.")
@@ -553,26 +552,25 @@ void BindStores(py::module_& module) {
              std::shared_ptr<stores::RedisChunkStore>>(
       module, "RedisChunkStore",
       "A persistent, multi-process ChunkStore backed by Redis Streams.")
-      .def(
-          py::init([](std::string id, const py::object& client_value,
-                      const py::object& options_value) {
-            std::shared_ptr<redis::Client> client;
-            if (client_value.is_none())
-              client = ValueOrThrow(redis::DefaultClient());
-            else
-              client = client_value.cast<std::shared_ptr<redis::Client>>();
-            stores::RedisChunkStoreOptions options =
-                options_value.is_none()
-                    ? ValueOrThrow(
-                          stores::RedisChunkStoreOptions::FromEnvironment())
-                    : options_value.cast<stores::RedisChunkStoreOptions>();
-            return ValueOrThrow(stores::RedisChunkStore::Create(
-                std::move(id), std::move(client), std::move(options)));
-          }),
-          "Create a Redis store. By default it composes the process-global "
-          "environment-configured RedisClient.",
-          py::arg("id"), py::arg("client") = py::none(),
-          py::arg("options") = py::none(), py::keep_alive<1, 2>())
+      .def(py::init([](std::string id, const py::object& client_value,
+                       const py::object& options_value) {
+             std::shared_ptr<redis::Client> client;
+             if (client_value.is_none())
+               client = ValueOrThrow(redis::DefaultClient());
+             else
+               client = client_value.cast<std::shared_ptr<redis::Client>>();
+             stores::RedisChunkStoreOptions options =
+                 options_value.is_none()
+                     ? ValueOrThrow(
+                           stores::RedisChunkStoreOptions::FromEnvironment())
+                     : options_value.cast<stores::RedisChunkStoreOptions>();
+             return ValueOrThrow(stores::RedisChunkStore::Create(
+                 std::move(id), std::move(client), std::move(options)));
+           }),
+           "Create a Redis store. By default it composes the process-global "
+           "environment-configured RedisClient.",
+           py::arg("id"), py::arg("client") = py::none(),
+           py::arg("options") = py::none(), py::keep_alive<1, 2>())
       .def_static(
           "create",
           [](std::string id, const py::object& client_value,
@@ -593,16 +591,18 @@ void BindStores(py::module_& module) {
           "Create a Redis store with optional injected client and options.",
           py::arg("id"), py::arg("client") = py::none(),
           py::arg("options") = py::none(), py::keep_alive<0, 2>())
-      .def("initialize",
-           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
-             return StoreFuture(self->Initialize());
-           },
-           "Ensure node metadata exists without writing chunk data.")
-      .def("get_metadata",
-           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
-             return StoreFuture(self->GetMetadata());
-           },
-           "Read node-level state without iterating over chunks.")
+      .def(
+          "initialize",
+          [](const std::shared_ptr<stores::RedisChunkStore>& self) {
+            return StoreFuture(self->Initialize());
+          },
+          "Ensure node metadata exists without writing chunk data.")
+      .def(
+          "get_metadata",
+          [](const std::shared_ptr<stores::RedisChunkStore>& self) {
+            return StoreFuture(self->GetMetadata());
+          },
+          "Read node-level state without iterating over chunks.")
       .def_property_readonly("client", &stores::RedisChunkStore::client,
                              "The explicitly composed RedisClient.")
       .def_property_readonly(
@@ -610,7 +610,8 @@ void BindStores(py::module_& module) {
           [](const stores::RedisChunkStore& self) { return self.options(); },
           "A copy of this store's key and payload policy.")
       .def_property_readonly(
-          "keys", [](const stores::RedisChunkStore& self) { return self.keys(); },
+          "keys",
+          [](const stores::RedisChunkStore& self) { return self.keys(); },
           "A copy of the sharding-safe Redis key layout.");
 #endif
 
@@ -637,18 +638,20 @@ void BindStores(py::module_& module) {
       .def("cancel", &stores::ChunkStoreReader::Cancel,
            "Stop the background read pump. Pending `next` awaitables are "
            "resolved and no further chunks are fetched.")
-      .def("get_status",
-           [](const stores::ChunkStoreReader& self) {
-             return StatusToPython(self.GetStatus());
-           },
-           "Return the reader's current status. An agent can inspect this to "
-           "distinguish a healthy stream from one that has failed or ended.")
-      .def("wait",
-           [](const stores::ChunkStoreReader& self) {
-             return StoreFuture(self.Done());
-           },
-           "Await completion of the background read pump. The returned future "
-           "resolves once the reader has drained the store or been cancelled.")
+      .def(
+          "get_status",
+          [](const stores::ChunkStoreReader& self) {
+            return StatusToPython(self.GetStatus());
+          },
+          "Return the reader's current status. An agent can inspect this to "
+          "distinguish a healthy stream from one that has failed or ended.")
+      .def(
+          "wait",
+          [](const stores::ChunkStoreReader& self) {
+            return StoreFuture(self.Done());
+          },
+          "Await completion of the background read pump. The returned future "
+          "resolves once the reader has drained the store or been cancelled.")
       .def(
           "next",
           [](const std::shared_ptr<stores::ChunkStoreReader>& self,
@@ -713,7 +716,7 @@ void BindStores(py::module_& module) {
                                    : std::nullopt,
                                final));
           },
-          "Write one chunk and await its durable sequence number. This is the "
+          "Write one chunk and await its assigned sequence number. This is the "
           "simple producer path for an agent: the returned future resolves "
           "only once the chunk is confirmed by the store. Provide `seq` to "
           "pin an explicit sequence number, and set `final` to mark this "
@@ -755,44 +758,48 @@ void BindStores(py::module_& module) {
           "awaitables. Unlike `put_chunk`, this exposes backpressure "
           "explicitly: `admission` resolves when the chunk is accepted into "
           "the bounded queue (None if it fit immediately) and `confirmation` "
-          "resolves with its durable sequence number. An agent awaits "
-          "admission to pace production and confirmation to know the write "
-          "landed.",
+          "resolves with the sequence assigned by the backing store. An agent "
+          "awaits admission to pace production and confirmation to know the "
+          "store accepted the write.",
           py::arg("chunk"), py::arg("seq") = py::none(),
           py::arg("final") = false)
-      .def("get_status",
-           [](const stores::ChunkStoreWriter& self) -> py::object {
-             std::optional<absl::Status> status = self.GetStatus();
-             return status.has_value() ? StatusToPython(*status) : py::none();
-           },
-           "Return the writer's terminal status, or None while it is still "
-           "open. An agent can poll this to detect that the stream has "
-           "closed or failed.")
-      .def("get_abort_status",
-           [](const stores::ChunkStoreWriter& self) -> py::object {
-             std::optional<absl::Status> status = self.GetAbortStatus();
-             return status.has_value() ? StatusToPython(*status) : py::none();
-           },
-           "Return the status the writer was aborted with, or None if it was "
-           "not aborted. Use this to distinguish a clean close from an "
-           "error-driven abort.")
+      .def(
+          "get_status",
+          [](const stores::ChunkStoreWriter& self) -> py::object {
+            std::optional<absl::Status> status = self.GetStatus();
+            return status.has_value() ? StatusToPython(*status) : py::none();
+          },
+          "Return the writer's terminal status, or None while it is still "
+          "open. An agent can poll this to detect that the stream has "
+          "closed or failed.")
+      .def(
+          "get_abort_status",
+          [](const stores::ChunkStoreWriter& self) -> py::object {
+            std::optional<absl::Status> status = self.GetAbortStatus();
+            return status.has_value() ? StatusToPython(*status) : py::none();
+          },
+          "Return the status the writer was aborted with, or None if it was "
+          "not aborted. Use this to distinguish a clean close from an "
+          "error-driven abort.")
       .def("is_writable", &stores::ChunkStoreWriter::IsWritable,
            "Return whether the writer still accepts chunks. False once the "
            "stream has been drained, closed, or aborted.")
-      .def("cancel",
-           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-             return StoreFuture(self->Cancel());
-           },
-           "Stop the writer immediately and await teardown, discarding any "
-           "chunks still queued. Use this to abandon a stream an agent no "
-           "longer needs.")
-      .def("drain_and_close",
-           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-             return StoreFuture(self->DrainAndClose());
-           },
-           "Flush every queued chunk, then close the stream, and await "
-           "completion. This is the graceful shutdown path once an agent has "
-           "finished producing output.")
+      .def(
+          "cancel",
+          [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
+            return StoreFuture(self->Cancel());
+          },
+          "Stop the writer immediately and await teardown, discarding any "
+          "chunks still queued. Use this to abandon a stream an agent no "
+          "longer needs.")
+      .def(
+          "drain_and_close",
+          [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
+            return StoreFuture(self->DrainAndClose());
+          },
+          "Flush every queued chunk, close the writer, and await completion. "
+          "This does not append a final fragment: mark the last chunk final "
+          "before draining when readers need a final sequence number.")
       .def(
           "abort_with_status",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
@@ -803,12 +810,13 @@ void BindStores(py::module_& module) {
           "to propagate a failure downstream so readers observe the error "
           "instead of a clean end-of-stream.",
           py::arg("status"))
-      .def("wait_for_buffer_to_drain",
-           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-             return StoreFuture(self->WaitForBufferToDrain());
-           },
-           "Await until the in-flight write buffer empties. An agent can use "
-           "this as a backpressure checkpoint before enqueuing more chunks.")
+      .def(
+          "wait_for_buffer_to_drain",
+          [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
+            return StoreFuture(self->WaitForBufferToDrain());
+          },
+          "Await until the in-flight write buffer empties. An agent can use "
+          "this as a backpressure checkpoint before enqueuing more chunks.")
       .def(
           "attach_stream",
           [](stores::ChunkStoreWriter& self,
@@ -817,22 +825,24 @@ void BindStores(py::module_& module) {
             if (!status.ok())
               ThrowStatus(status);
           },
-          "Mirror persisted fragments to an additional wire stream. Each "
-          "confirmed chunk is copied to every attached stream, letting an "
-          "agent fan its output out to remote peers. A transport failure "
-          "stops later writes but never revokes confirmations already "
-          "returned. The writer keeps the stream alive while attached.",
+          "Tee stored fragments to an additional wire stream. After the store "
+          "accepts a batch, the writer calls send on attached streams; a "
+          "successful send confirms local transport admission, not peer "
+          "delivery. A transport failure stops later writes but cannot revoke "
+          "the current batch's store confirmations. The writer keeps the "
+          "stream alive while attached.",
           py::arg("stream"), py::keep_alive<1, 2>())
-      .def("detach_stream",
-           [](stores::ChunkStoreWriter& self,
-              const std::shared_ptr<net::WireStream>& stream) {
-             const absl::Status status = self.DetachStream(stream);
-             if (!status.ok())
-               ThrowStatus(status);
-           },
-           "Stop mirroring fragments to a previously attached wire stream. "
-           "Raises if the stream was not attached.",
-           py::arg("stream"))
+      .def(
+          "detach_stream",
+          [](stores::ChunkStoreWriter& self,
+             const std::shared_ptr<net::WireStream>& stream) {
+            const absl::Status status = self.DetachStream(stream);
+            if (!status.ok())
+              ThrowStatus(status);
+          },
+          "Stop mirroring fragments to a previously attached wire stream. "
+          "Raises if the stream was not attached.",
+          py::arg("stream"))
       .def_property_readonly("store", &stores::ChunkStoreWriter::store,
                              "The ChunkStore this writer persists chunks to.")
       .def_property_readonly("options", &stores::ChunkStoreWriter::options,

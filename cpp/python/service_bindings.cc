@@ -334,23 +334,25 @@ void BindService(py::module_& module) {
            py::arg("on_stream_done") = py::none(),
            py::arg("headers") = py::none(), py::arg("options") = std::nullopt,
            py::arg("node_map") = nullptr, py::arg("action_registry") = nullptr)
-      .def("streams",
-           [](const service::Session& self) {
-             return ValueOrThrow(self.Streams());
-           },
-           "Return the (stream_id, stream) pairs currently attached to the "
-           "session. Streams are added and removed asynchronously as peers "
-           "connect and disconnect, so treat the result as a snapshot taken at "
-           "call time.")
-      .def("get_stream",
-           [](const service::Session& self, const std::string& stream_id) {
-             return ValueOrThrow(self.GetStream(stream_id));
-           },
-           "Look up an attached stream by its id, raising if no such stream "
-           "exists. Because streams come and go over the session's lifetime, "
-           "guard against a stream having been removed since you last observed "
-           "it.",
-           py::arg("stream_id"))
+      .def(
+          "streams",
+          [](const service::Session& self) {
+            return ValueOrThrow(self.Streams());
+          },
+          "Return the (stream_id, stream) pairs currently attached to the "
+          "session. Streams are added and removed asynchronously as peers "
+          "connect and disconnect, so treat the result as a snapshot taken at "
+          "call time.")
+      .def(
+          "get_stream",
+          [](const service::Session& self, const std::string& stream_id) {
+            return ValueOrThrow(self.GetStream(stream_id));
+          },
+          "Look up an attached stream by its id, raising if no such stream "
+          "exists. Because streams come and go over the session's lifetime, "
+          "guard against a stream having been removed since you last observed "
+          "it.",
+          py::arg("stream_id"))
       .def("get_id", &service::Session::GetId,
            "Return the session's unique identifier string. Use it to correlate "
            "this session with logs, traces, and external bookkeeping while it "
@@ -374,53 +376,61 @@ void BindService(py::module_& module) {
             ThrowIfNotOk(self.SetNodeMap(std::move(node_map)));
           },
           "Replace the NodeMap backing this session's node state, raising on "
-          "failure. Set this before streaming node fragments so dispatched "
-          "fragments land in the map you expect.",
+          "failure. Active actions are rebound, but existing fragments are "
+          "not migrated; set it before traffic to avoid splitting state "
+          "between maps.",
           py::arg("node_map"))
       .def("get_action_registry", &service::Session::GetActionRegistry,
            "Return the ActionRegistry used to resolve incoming action messages "
            "into runnable actions.")
-      .def_property("action_registry", &service::Session::GetActionRegistry,
-                    [](service::Session& self,
-                       std::shared_ptr<actions::ActionRegistry> registry) {
-                      ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
-                    },
-                    "The ActionRegistry used to resolve action messages; "
-                    "assigning replaces it.")
-      .def("set_action_registry",
-           [](service::Session& self,
-              std::shared_ptr<actions::ActionRegistry> registry) {
-             ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
-           },
-           "Replace the ActionRegistry used to resolve incoming action "
-           "messages, raising on failure. Configure this before actions arrive "
-           "so the session knows how to construct them.",
-           py::arg("registry"))
-      .def("actions", &service::Session::Actions,
-           "Return the (action_id, action) pairs currently running in the "
-           "session. Actions execute asynchronously, so this is a point-in-time "
-           "snapshot of in-flight work.")
-      .def("get_action",
-           [](const service::Session& self, const std::string& action_id) {
-             return ValueOrThrow(self.GetAction(action_id));
-           },
-           "Look up a running action by its id, raising if none matches. Useful "
-           "for inspecting or awaiting a specific asynchronous action you "
-           "previously dispatched.",
-           py::arg("action_id"))
-      .def("cancel_action",
-           [](service::Session& self, const std::string& action_id) {
-             ThrowIfNotOk(self.CancelAction(action_id));
-           },
-           "Request cancellation of the running action with the given id, "
-           "raising if it is unknown. Cancellation is cooperative and completes "
-           "asynchronously as the action unwinds.",
-           py::arg("action_id"))
+      .def_property(
+          "action_registry", &service::Session::GetActionRegistry,
+          [](service::Session& self,
+             std::shared_ptr<actions::ActionRegistry> registry) {
+            ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
+          },
+          "The ActionRegistry used to resolve action messages; "
+          "assigning replaces it.")
+      .def(
+          "set_action_registry",
+          [](service::Session& self,
+             std::shared_ptr<actions::ActionRegistry> registry) {
+            ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
+          },
+          "Replace the ActionRegistry used to resolve incoming action "
+          "messages, raising on failure. Active actions are rebound for "
+          "later nested-name resolution; configure it before dispatch to "
+          "avoid mixing registry versions.",
+          py::arg("registry"))
+      .def(
+          "actions", &service::Session::Actions,
+          "Return the (action_id, action) pairs currently running in the "
+          "session. Actions execute asynchronously, so this is a point-in-time "
+          "snapshot of in-flight work.")
+      .def(
+          "get_action",
+          [](const service::Session& self, const std::string& action_id) {
+            return ValueOrThrow(self.GetAction(action_id));
+          },
+          "Look up a running action by its id, raising if none matches. Useful "
+          "for inspecting or awaiting a specific asynchronous action you "
+          "previously dispatched.",
+          py::arg("action_id"))
+      .def(
+          "cancel_action",
+          [](service::Session& self, const std::string& action_id) {
+            ThrowIfNotOk(self.CancelAction(action_id));
+          },
+          "Request cancellation of the running action with the given id, "
+          "raising if it is unknown. Cancellation is cooperative and completes "
+          "asynchronously as the action unwinds.",
+          py::arg("action_id"))
       .def(
           "cancel_all_actions",
           [](service::Session& self) { ThrowIfNotOk(self.CancelAllActions()); },
           "Request cancellation of every action currently running in the "
-          "session. Each action unwinds asynchronously; await await_all_actions "
+          "session. Each action unwinds asynchronously; await "
+          "await_all_actions "
           "to observe completion.")
       .def(
           "await_all_actions",
@@ -434,20 +444,22 @@ void BindService(py::module_& module) {
             return FutureToPython(self->AwaitAllActions(*converted));
           },
           "Return an awaitable that resolves once all in-flight actions have "
-          "finished, or the optional timeout elapses. Await this to synchronize "
+          "finished, or the optional timeout elapses. Await this to "
+          "synchronize "
           "on the session's outstanding asynchronous work before proceeding.",
           py::arg("timeout") = py::none())
-      .def("dispatch_node_fragment",
-           [](const std::shared_ptr<service::Session>& self,
-              data::NodeFragment fragment) {
-             return FutureToPython(
-                 self->DispatchNodeFragment(std::move(fragment)));
-           },
-           "Dispatch a node fragment into the session's NodeMap and return an "
-           "awaitable resolving to the applied revision. Fragments are applied "
-           "asynchronously in order, letting an agent stream incremental "
-           "document updates.",
-           py::arg("fragment"))
+      .def(
+          "dispatch_node_fragment",
+          [](const std::shared_ptr<service::Session>& self,
+             data::NodeFragment fragment) {
+            return FutureToPython(
+                self->DispatchNodeFragment(std::move(fragment)));
+          },
+          "Dispatch a node fragment into the session's NodeMap and return an "
+          "awaitable resolving to the applied revision. Fragments are applied "
+          "asynchronously in order, letting an agent stream incremental "
+          "document updates.",
+          py::arg("fragment"))
       .def(
           "dispatch_action_message",
           [](const std::shared_ptr<service::Session>& self,
@@ -456,25 +468,28 @@ void BindService(py::module_& module) {
             return FutureToPython(self->DispatchActionMessage(
                 std::move(message), std::move(origin_stream)));
           },
-          "Dispatch an action message, resolving it against the action registry "
+          "Dispatch an action message, resolving it against the action "
+          "registry "
           "and running the resulting action. Returns an awaitable that "
-          "completes when the action has been handled; origin_stream attributes "
+          "completes when the action has been handled; origin_stream "
+          "attributes "
           "the message to a source stream.",
           py::arg("action_message"), py::arg("origin_stream") = nullptr)
-      .def("dispatch_action",
-           [](const std::shared_ptr<service::Session>& self,
-              const py::object& action) {
-             if (!py::isinstance<actions::Action>(action)) {
-               return FutureToPython(a11::FailedTask(absl::InvalidArgumentError(
-                   "action must be an Action instance")));
-             }
-             return FutureToPython(self->DispatchAction(
-                 action.cast<std::shared_ptr<actions::Action>>()));
-           },
-           "Dispatch an already-constructed Action to run within the session, "
-           "returning an awaitable for its handling. Use this to inject actions "
-           "programmatically rather than via an incoming wire message.",
-           py::arg("action"))
+      .def(
+          "dispatch_action",
+          [](const std::shared_ptr<service::Session>& self,
+             const py::object& action) {
+            if (!py::isinstance<actions::Action>(action)) {
+              return FutureToPython(a11::FailedTask(absl::InvalidArgumentError(
+                  "action must be an Action instance")));
+            }
+            return FutureToPython(self->DispatchAction(
+                action.cast<std::shared_ptr<actions::Action>>()));
+          },
+          "Dispatch an already-constructed Action to run within the session, "
+          "returning an awaitable for its handling. Use this to inject actions "
+          "programmatically rather than via an incoming wire message.",
+          py::arg("action"))
       .def(
           "dispatch_wire_message",
           [](const std::shared_ptr<service::Session>& self,
@@ -494,25 +509,28 @@ void BindService(py::module_& module) {
            "Return whether the session has fully finished, including all "
            "streams and actions. Prefer awaiting done for asynchronous "
            "completion rather than polling this flag.")
-      .def_property_readonly("done",
-                             [](const std::shared_ptr<service::Session>& self) {
-                               return FutureToPython(self->Done());
-                             },
-                             "An awaitable that resolves when the session has "
-                             "fully finished all streams and actions.")
-      .def("wait_done",
-           [](const std::shared_ptr<service::Session>& self) {
-             return FutureToPython(self->Done());
-           },
-           "Return an awaitable that resolves when the session has fully "
-           "finished. Await this to block until every stream and action has "
-           "completed asynchronously.")
-      .def("get_status",
-           [](const service::Session& self) {
-             return StatusToPython(self.GetStatus());
-           },
-           "Return the session's terminal status, indicating whether it "
-           "completed successfully or was aborted.")
+      .def_property_readonly(
+          "done",
+          [](const std::shared_ptr<service::Session>& self) {
+            return FutureToPython(self->Done());
+          },
+          "An awaitable that resolves when the session has "
+          "fully finished all streams and actions.")
+      .def(
+          "wait_done",
+          [](const std::shared_ptr<service::Session>& self) {
+            return FutureToPython(self->Done());
+          },
+          "Return an awaitable that resolves when the session has fully "
+          "finished. Await this to block until every stream and action has "
+          "completed asynchronously.")
+      .def(
+          "get_status",
+          [](const service::Session& self) {
+            return StatusToPython(self.GetStatus());
+          },
+          "Return the session's terminal status, indicating whether it "
+          "completed successfully or was aborted.")
       .def(
           "add_stream",
           [](const std::shared_ptr<service::Session>& self,
@@ -528,19 +546,21 @@ void BindService(py::module_& module) {
           "mode selects whether this side starts ('start') or accepts "
           "('accept') the stream.",
           py::arg("stream"), py::arg("mode") = "start", py::keep_alive<1, 2>())
-      .def("half_close",
-           [](service::Session& self) { ThrowIfNotOk(self.HalfClose()); },
-           "Signal that this side will send no more messages, allowing the "
-           "session to drain and finish once peers do the same. Remaining "
-           "inbound messages continue to be processed asynchronously.")
-      .def("abort",
-           [](service::Session& self, const py::handle& status) {
-             ThrowIfNotOk(self.Abort(StatusFromPython(status)));
-           },
-           "Abort the session immediately with the given error status, "
-           "cancelling streams and actions. Use this to tear down the session "
-           "when an unrecoverable error occurs.",
-           py::arg("status"))
+      .def(
+          "half_close",
+          [](service::Session& self) { ThrowIfNotOk(self.HalfClose()); },
+          "Signal that this side will send no more messages, allowing the "
+          "session to drain and finish once peers do the same. Remaining "
+          "inbound messages continue to be processed asynchronously.")
+      .def(
+          "abort",
+          [](service::Session& self, const py::handle& status) {
+            ThrowIfNotOk(self.Abort(StatusFromPython(status)));
+          },
+          "Abort the session immediately with the given error status, "
+          "cancelling streams and actions. Use this to tear down the session "
+          "when an unrecoverable error occurs.",
+          py::arg("status"))
       .def(
           "send",
           [](service::Session& self, data::WireMessage message,
@@ -548,15 +568,17 @@ void BindService(py::module_& module) {
             ThrowIfNotOk(self.Send(std::move(message), stream_id));
           },
           "Enqueue a wire message for delivery on the named stream (or the "
-          "default stream), raising on failure. Delivery happens asynchronously "
+          "default stream), raising on failure. Delivery happens "
+          "asynchronously "
           "as the stream drains.",
           py::arg("message"), py::arg("stream_id") = "")
-      .def_property_readonly("deadline",
-                             [](const service::Session& self) {
-                               return TimeToPython(self.deadline());
-                             },
-                             "The absolute time after which the session will be "
-                             "aborted.")
+      .def_property_readonly(
+          "deadline",
+          [](const service::Session& self) {
+            return TimeToPython(self.deadline());
+          },
+          "The absolute time after which the session will be "
+          "aborted.")
       .def(
           "set_deadline",
           [](service::Session& self, const py::object& deadline) {
@@ -610,7 +632,8 @@ void BindService(py::module_& module) {
                 });
           },
           "Return an awaitable that resolves to the next (message, stream_id) "
-          "tuple, or None once the session is done. Await this to pull messages "
+          "tuple, or None once the session is done. Await this to pull "
+          "messages "
           "one at a time along with the stream they arrived on, honoring the "
           "optional deadline.",
           py::arg("deadline") = py::none())

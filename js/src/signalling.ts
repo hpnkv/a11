@@ -22,32 +22,59 @@ import {
 } from './status.js';
 import type { WebSocketFactory, WebSocketLike } from './websocket_wire_stream.js';
 
+/** Control-message kind exchanged while establishing a WebRTC connection. */
 export enum SignallingMessageType {
+  /** SDP offer, answer, or related session description. */
   DESCRIPTION = 'description',
+  /** One trickled ICE network candidate. */
   CANDIDATE = 'candidate',
+  /** Structured terminal negotiation failure. */
   ERROR = 'error',
 }
 
+/** Fields used to construct a {@link SignallingMessage}. */
 export interface SignallingMessageOptions {
+  /** Control-message kind. */
   type?: SignallingMessageType;
+  /** Identity of the peer that emitted the message. */
   sender?: string;
+  /** Identity of the peer that should consume the message. */
   recipient?: string;
+  /** SDP text for a description message. */
   description?: string;
+  /** SDP description subtype, such as `offer` or `answer`. */
   descriptionType?: RTCSdpType | '';
+  /** ICE candidate line for a candidate message. */
   candidate?: string;
+  /** Media/data-channel id associated with an ICE candidate. */
   mid?: string;
+  /** Non-OK A11 status for an error message. */
   error?: Status;
 }
 
-/** SDP, ICE, or error control message used to negotiate WebRTC. */
+/**
+ * SDP, ICE, or error control message used to negotiate WebRTC.
+ *
+ * These messages establish the peer connection only; agent data begins on the
+ * resulting {@link WebRtcWireStream}. Use {@link create} for validated local
+ * construction and the JSON helpers at a custom signalling boundary.
+ */
 export class SignallingMessage {
+  /** Control-message kind. */
   type: SignallingMessageType;
+  /** Sending peer identity. */
   sender: string;
+  /** Destination peer identity. */
   recipient: string;
+  /** SDP payload for description messages. */
   description: string;
+  /** SDP description subtype. */
   descriptionType: RTCSdpType | '';
+  /** ICE candidate payload. */
   candidate: string;
+  /** ICE media/data-channel id. */
   mid: string;
+  /** Structured status carried by error messages. */
   error: Status;
 
   constructor(options: SignallingMessageOptions = {}) {
@@ -61,6 +88,7 @@ export class SignallingMessage {
     this.error = options.error ?? okStatus();
   }
 
+  /** Construct and validate a message before sending it to a peer. */
   static create(options: SignallingMessageOptions = {}): StatusOr<SignallingMessage> {
     try {
       if (typeof options !== 'object' || options === null) {
@@ -74,6 +102,7 @@ export class SignallingMessage {
     }
   }
 
+  /** Check fields required by the selected message kind. */
   validate(): Status {
     try {
       const sender = validateName(this.sender);
@@ -117,6 +146,7 @@ export class SignallingMessage {
     }
   }
 
+  /** Convert to the interoperable signalling JSON object. */
   toJsonValue(): StatusOr<Record<string, unknown>> {
     const validation = this.validate();
     if (!isOk(validation)) return validation;
@@ -140,6 +170,7 @@ export class SignallingMessage {
     return result;
   }
 
+  /** Encode the signalling message as JSON text. */
   toJson(): StatusOr<string> {
     const value = this.toJsonValue();
     if (!isOk(value)) return value;
@@ -150,6 +181,7 @@ export class SignallingMessage {
     }
   }
 
+  /** Parse and validate signalling JSON text from an untrusted peer. */
   static fromJson(encoded: string): StatusOr<SignallingMessage> {
     if (typeof encoded !== 'string') {
       return invalidArgumentError('Signalling JSON must be a string.');
@@ -161,6 +193,7 @@ export class SignallingMessage {
     }
   }
 
+  /** Parse and validate an already-decoded signalling JSON value. */
   static fromJsonValue(value: unknown): StatusOr<SignallingMessage> {
     try {
       return SignallingMessage.fromJsonValueUnchecked(value);
@@ -254,29 +287,58 @@ function decodeStatusJson(value: unknown): StatusOr<DecodedJsonStatus> {
   };
 }
 
+/** Callback that feeds negotiation messages into a WebRTC state machine. */
 export type OnSignallingMessage = (
   message: SignallingMessage,
 ) => void | Status | Promise<void | Status>;
 
+/**
+ * Identity-aware control channel used to negotiate WebRTC peers.
+ *
+ * A transport routes SDP, ICE, and structured failures; it does not carry A11
+ * action or node data. {@link WebRtcWireStream} installs its message callback
+ * and uses the resulting peer connection as the data path.
+ */
 export interface SignallingTransport {
+  /** Route one control message to its recipient. */
   send(message: SignallingMessage): Status;
+  /** Replace the callback that consumes inbound negotiation messages. */
   setOnMessage(onMessage: OnSignallingMessage): Status;
+  /** End signalling and release its network resources. */
   close(): Status;
+  /** Return the local routing identity. */
   getIdentity(): string;
+  /** Return whether messages can currently be exchanged. */
   isConnected(): boolean;
+  /** Return current or terminal status; an explicit close may be CANCELLED. */
   getStatus(): Status;
+  /** Expose the implementation-specific channel, when available. */
   getImpl?(): unknown | null;
 }
 
+/** Connection and handshake options for WebSocket signalling. */
 export interface WebSocketSignallingClientOptions {
+  /** Absolute time by which the socket must open. */
   deadline?: Date | number | null;
+  /** Maximum UTF-8 bytes in one signalling JSON message. */
   maxMessageSize?: number;
+  /** Extra handshake headers; browser WebSockets may reject these. */
   headers?: Readonly<Record<string, string>>;
+  /** WebSocket subprotocol or preference list. */
   protocols?: string | readonly string[];
+  /** Custom socket constructor for tests or non-browser runtimes. */
   webSocketFactory?: WebSocketFactory;
 }
 
-/** Network signalling client used by the browser WebRTC transport. */
+/**
+ * Identity-aware WebSocket signalling client for WebRTC negotiation.
+ *
+ * Connect this control channel first, then pass it to
+ * {@link WebRtcWireStream.createClient}. Messages for the same socket are
+ * delivered serially so SDP and trickled ICE transitions cannot race inside
+ * the peer-connection state machine. Closing signalling does not itself
+ * half-close an established A11 data stream.
+ */
 export class WebSocketSignallingClient implements SignallingTransport {
   private socket: WebSocketLike;
   private callback: OnSignallingMessage;
@@ -294,6 +356,7 @@ export class WebSocketSignallingClient implements SignallingTransport {
     this.callback = callback;
   }
 
+  /** Open the signalling socket and bind it to a validated local identity. */
   static async connect(
     url: string,
     identity: string,
@@ -439,6 +502,7 @@ export class WebSocketSignallingClient implements SignallingTransport {
     }
   }
 
+  /** Send a message as this client's identity. */
   send(message: SignallingMessage): Status {
     try {
       if (!this.connectedInternal || this.socket.readyState !== 1) {
@@ -475,6 +539,7 @@ export class WebSocketSignallingClient implements SignallingTransport {
     }
   }
 
+  /** Replace the serial inbound negotiation callback. */
   setOnMessage(onMessage: OnSignallingMessage): Status {
     if (typeof onMessage !== 'function') {
       return invalidArgumentError('onMessage must be callable.');
@@ -484,6 +549,7 @@ export class WebSocketSignallingClient implements SignallingTransport {
     return okStatus();
   }
 
+  /** Close signalling after negotiation or when abandoning the peer. */
   close(): Status {
     if (!this.connectedInternal) return okStatus();
     this.connectedInternal = false;
@@ -499,7 +565,9 @@ export class WebSocketSignallingClient implements SignallingTransport {
     }
   }
 
+  /** Return the local identity embedded in outgoing messages. */
   getIdentity(): string { return this.identityValue; }
+  /** Return whether the signalling socket is open and usable. */
   isConnected(): boolean {
     try { return this.connectedInternal && this.socket.readyState === 1; }
     catch (error) {
@@ -510,7 +578,9 @@ export class WebSocketSignallingClient implements SignallingTransport {
       return false;
     }
   }
+  /** Return the first terminal signalling failure, or OK while healthy. */
   getStatus(): Status { return this.status; }
+  /** Return the underlying browser-like WebSocket. */
   getImpl(): unknown | null { return this.socket; }
 
   private handleRaw(data: unknown): void {

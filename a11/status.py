@@ -1,3 +1,13 @@
+"""Structured outcomes shared by A11 actions, streams, stores, and services.
+
+Expected runtime failures cross language and transport boundaries as a
+[Status][a11.status.Status]: a portable code, a short message, and optional
+structured details. Native methods raise
+[StatusException][a11.status.StatusException] at Python's synchronous/async
+boundary, while helpers here convert application and framework exceptions back
+to statuses that a remote agent can understand.
+"""
+
 import asyncio
 import contextlib
 import copy
@@ -16,7 +26,14 @@ from a11 import _native
 
 
 class StatusCode(IntEnum):
-    """Canonical gRPC / Abseil status codes, mapped to HTTP status codes."""
+    """Portable gRPC/Abseil outcome codes used throughout A11.
+
+    Pick the most specific code a caller can act on: for example,
+    ``INVALID_ARGUMENT`` for input that can never work,
+    ``FAILED_PRECONDITION`` for a lifecycle state that could change, and
+    ``UNAVAILABLE`` for a dependency worth retrying. The conversion methods
+    preserve that intent at HTTP and WebSocket boundaries.
+    """
 
     OK = 0
     CANCELLED = 1
@@ -46,22 +63,26 @@ class StatusCode(IntEnum):
 
     @staticmethod
     def from_http_code(http_code: int) -> "StatusCode":
+        """Map an HTTP response code to the nearest portable status code."""
         from a11 import _native
 
         return StatusCode(_native.status_code_from_http(http_code))
 
     @staticmethod
     def from_ws_code(code: int) -> "StatusCode":
+        """Decode standard and A11-private WebSocket close codes."""
         from a11 import _native
 
         return StatusCode(_native.status_code_from_websocket(code))
 
     def to_ws_code(self) -> int:
+        """Encode this outcome as a WebSocket close code."""
         from a11 import _native
 
         return _native.status_code_to_websocket(self.value)
 
     def to_http_code(self) -> int:
+        """Map this outcome to the corresponding HTTP response code."""
         from a11 import _native
 
         return _native.status_code_to_http(self.value)
@@ -71,6 +92,14 @@ class StatusCode(IntEnum):
 
 
 class StatusException(Exception):
+    """Python exception carrying a structured non-OK A11 status.
+
+    Catch this at an action or service boundary when you want to inspect or
+    forward ``status.code``, ``status.message``, and ``status.details``. A11's
+    native Python bindings raise this type consistently rather than exposing an
+    Abseil or pybind11-specific exception.
+    """
+
     def __init__(self, status: "Status"):
         if status.is_ok():
             raise ValueError(
@@ -88,13 +117,22 @@ class StatusException(Exception):
 
 
 class StatusParseResult(BaseModel):
-    # status of validation
-    validation_status: "Status"
+    """Result of parsing untrusted status JSON without throwing.
 
-    # actual parsed status; in case of failed validation is set to UNKNOWN
-    parsed: "Status"
+    Inspect `is_ok` before using `parsed`; on failure, ``parsed`` is an UNKNOWN
+    placeholder and ``validation_status.details`` retains diagnostic input.
+    """
+
+    validation_status: "Status" = Field(
+        description="Whether the input contained a valid encoded Status."
+    )
+
+    parsed: "Status" = Field(
+        description="The decoded Status, or UNKNOWN when validation failed."
+    )
 
     def is_ok(self):
+        """Return whether parsing succeeded and ``parsed`` is authoritative."""
         return self.validation_status.is_ok()
 
 
@@ -128,6 +166,12 @@ class _StatusConvenience(BaseModel):
     def from_exception(
         exc: BaseException, casters: "StatusExceptionCasters | None" = None
     ) -> "Status":
+        """Convert an application exception to a transportable status.
+
+        Existing `StatusException` values retain their structured status;
+        registered casters handle framework-specific types, and unknown
+        exceptions become ``UNKNOWN``.
+        """
         casters = casters or StatusExceptionCasters.global_instance()
         return casters.cast(exc)
 
@@ -135,6 +179,7 @@ class _StatusConvenience(BaseModel):
     def from_http_exception(
         http_exception: fastapi.HTTPException | httpx.HTTPStatusError,
     ) -> "Status":
+        """Convert a FastAPI/httpx HTTP exception to an A11 status."""
         if isinstance(http_exception, fastapi.HTTPException):
             return _make_status_from_fastapi_exception(http_exception)
         if isinstance(http_exception, httpx.HTTPStatusError):
@@ -149,6 +194,7 @@ class _StatusConvenience(BaseModel):
     def get_fastapi_response_dict_for_codes(
         *codes: StatusCode,
     ) -> dict[int, dict]:
+        """Build FastAPI response documentation for portable status codes."""
         responses = {}
         for code in codes:
             responses[code.to_http_code()] = {
@@ -185,6 +231,7 @@ class _StatusConvenience(BaseModel):
     def get_fastapi_response_dict_for_http_codes(
         *codes: int,
     ) -> dict[int, dict]:
+        """Build FastAPI response documentation for explicit HTTP codes."""
         responses = {}
         for http_code in codes:
             responses[http_code] = {"model": Status}
@@ -192,6 +239,7 @@ class _StatusConvenience(BaseModel):
 
     @staticmethod
     def ok(message: str | None = None) -> "Status":
+        """Create a successful status with an optional descriptive message."""
         return Status(
             code=StatusCode.OK,
             message="OK" if message is None else message,
@@ -200,6 +248,7 @@ class _StatusConvenience(BaseModel):
 
     @staticmethod
     def parse_from_json(data: str | bytes) -> StatusParseResult:
+        """Parse status JSON and return validation state without throwing."""
         if isinstance(data, bytes):
             data = data.decode("utf-8")
 
@@ -230,6 +279,7 @@ class _StatusConvenience(BaseModel):
             )
 
     def to_msgpack(self, packer: msgpack.Packer) -> None:
+        """Append this status to an A11 MessagePack encoder."""
         try:
             packer.pack([self.code, self.message])
         except Exception as exc:
@@ -243,13 +293,16 @@ class _StatusConvenience(BaseModel):
         return f"{self.code}: {self.message}"
 
     def is_ok(self) -> bool:
+        """Return whether this status represents successful completion."""
         return self.code == StatusCode.OK
 
     def raise_if_not_ok(self) -> None:
+        """Raise `StatusException` when this status is non-OK."""
         if not self.is_ok():
             raise self.to_exception()
 
     def to_exception(self) -> StatusException:
+        """Convert a non-OK status to its Python boundary exception."""
         if self.is_ok():
             raise Status(
                 code=StatusCode.INTERNAL,
@@ -385,6 +438,13 @@ StatusParseResult.model_rebuild()
 
 
 class StatusExceptionCasters:
+    """Registry that maps application exception types to A11 statuses.
+
+    Register casters near an integration boundary (for example, for a model
+    SDK's quota exception) so action failures retain useful portable meaning
+    instead of becoming a generic ``UNKNOWN`` status.
+    """
+
     def __init__(self):
         self._casters: dict[
             type[BaseException], Callable[[BaseException], Status]
@@ -392,6 +452,7 @@ class StatusExceptionCasters:
 
     @staticmethod
     def global_instance() -> "StatusExceptionCasters":
+        """Return the process-wide registry with A11's framework mappings."""
         if not hasattr(StatusExceptionCasters, "_global_instance"):
             StatusExceptionCasters._global_instance = StatusExceptionCasters()
 
@@ -407,6 +468,7 @@ class StatusExceptionCasters:
         return StatusExceptionCasters._global_instance
 
     def cast(self, exc: BaseException) -> Status:
+        """Convert ``exc`` using its nearest registered base class."""
         if isinstance(exc, StatusException):
             return exc.status
 
@@ -427,6 +489,11 @@ class StatusExceptionCasters:
         exception_type: type[BaseException],
         caster: Callable[[BaseException], Status],
     ):
+        """Register one exception-to-status converter.
+
+        A type may be registered once. `StatusException` is deliberately
+        fixed because its existing status must always be preserved.
+        """
         if exception_type is StatusException:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
@@ -449,6 +516,11 @@ class StatusExceptionCasters:
 
 @contextlib.contextmanager
 def reraise_exceptions_as_status(casters: StatusExceptionCasters | None = None):
+    """Re-raise exceptions from a block as structured `StatusException`.
+
+    This is useful around agent SDK or tool code that throws provider-specific
+    exceptions while the surrounding A11 action expects a portable failure.
+    """
     casters = casters or StatusExceptionCasters.global_instance()
     try:
         yield
@@ -561,6 +633,7 @@ def _make_status_from_httpx_exception(exc: httpx.HTTPStatusError) -> Status:
 
 
 def make_status_from_pydantic_validation_error(exc: pydantic.ValidationError):
+    """Convert Pydantic field errors to an ``INVALID_ARGUMENT`` status."""
     errors = []
     for e in exc.errors():
         error = {}

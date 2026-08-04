@@ -41,25 +41,41 @@ import {
   type WireStreamOptions,
 } from './wire_stream.js';
 
+/** Transport used between a peer and a TURN relay. */
 export enum TurnRelayType {
+  /** Prefer low-latency UDP relay traffic. */
   UDP = 'udp',
+  /** Carry relay traffic over TCP. */
   TCP = 'tcp',
+  /** Carry relay traffic over TLS/TCP. */
   TLS = 'tls',
 }
 
+/** Structured TURN endpoint and optional long-term credentials. */
 export interface TurnServerOptions {
+  /** DNS name or IP address without URI brackets. */
   hostname: string;
+  /** Relay port; defaults to 3478. */
   port?: number;
+  /** TURN username, when authentication is required. */
   username?: string;
+  /** TURN credential paired with {@link username}. */
   password?: string;
+  /** Relay transport; defaults to UDP. */
   relayType?: TurnRelayType;
 }
 
+/** Validated TURN configuration that can be passed to WebRTC ICE setup. */
 export class TurnServer {
+  /** DNS name or IP address of the relay. */
   hostname: string;
+  /** Relay port. */
   port: number;
+  /** TURN username. */
   username: string;
+  /** TURN password/credential. */
   password: string;
+  /** Network transport used to reach the relay. */
   relayType: TurnRelayType;
 
   constructor(options: TurnServerOptions) {
@@ -70,6 +86,7 @@ export class TurnServer {
     this.relayType = options.relayType ?? TurnRelayType.UDP;
   }
 
+  /** Parse a `turn:` or `turns:` URI into a structured server. */
   static fromString(value: string): StatusOr<TurnServer> {
     if (typeof value !== 'string' || value.length === 0) {
       return invalidArgumentError('TURN server must be a non-empty string.');
@@ -134,6 +151,7 @@ export class TurnServer {
     }
   }
 
+  /** Validate host, port, credentials, and relay transport. */
   validate(): Status {
     try {
       if (typeof this.hostname !== 'string' || this.hostname.length === 0) {
@@ -154,6 +172,7 @@ export class TurnServer {
     }
   }
 
+  /** Convert this server to the browser `RTCIceServer` representation. */
   toIceServer(): StatusOr<RTCIceServer> {
     try {
       const validation = this.validate();
@@ -177,18 +196,28 @@ export class TurnServer {
   }
 }
 
+/** Injectable peer-connection constructor for tests and Node runtimes. */
 export type PeerConnectionFactory = (
   configuration: RTCConfiguration,
 ) => RTCPeerConnection;
 
+/** ICE, data-channel, and resource options for one WebRTC connection. */
 export interface WebRtcConfiguration {
+  /** Maximum complete data-channel message, or `null` to use A11's ceiling. */
   maxMessageSize?: number | null;
+  /** A11 packet size; keep this below practical SCTP message limits. */
   channelSplitSize?: number;
+  /** STUN URLs used for public candidate discovery. */
   stunServers?: readonly string[];
+  /** TURN relays used when a direct path cannot be established. */
   turnServers?: readonly TurnServer[];
+  /** Additional native `RTCPeerConnection` configuration. */
   rtcConfiguration?: RTCConfiguration;
+  /** Client data-channel options; `ordered` defaults to true but may be overridden. */
   dataChannelOptions?: RTCDataChannelInit;
+  /** Abort when the data channel buffers more than this many bytes. */
   maxBufferedAmount?: number;
+  /** Custom peer-connection constructor when no browser global is available. */
   peerConnectionFactory?: PeerConnectionFactory;
 }
 
@@ -779,13 +808,26 @@ async function applyClientSignal(
   }
 }
 
-/** Client-side WireStream over a browser-compatible WebRTC data channel. */
+/**
+ * Client-side WireStream over a browser-compatible WebRTC data channel.
+ *
+ * WebRTC negotiation runs through a connected {@link SignallingTransport};
+ * application messages then use the peer-to-peer data channel. The signalling
+ * endpoint must remain alive while ICE candidates and descriptions are being
+ * exchanged. A11 packetizes messages below SCTP limits and applies the same
+ * half-close, drain, abort, and deadline lifecycle as its WebSocket transport.
+ *
+ * Create the endpoint, call {@link start}, and await {@link wait} for full
+ * completion. The returned stream is client-side; accepting server-side data
+ * channels is handled by the native service transport.
+ */
 export class WebRtcWireStream implements WireStream {
   private constructor(
     private readonly stream: ChannelWireStream,
     private readonly channel: RtcBinaryChannel,
   ) {}
 
+  /** Configure a peer connection and register signalling before startup. */
   static createClient(
     peerIdentity: string,
     signalling: SignallingTransport,
@@ -1018,8 +1060,11 @@ export class WebRtcWireStream implements WireStream {
     return new WebRtcWireStream(framed, channel);
   }
 
+  /** Underlying data channel for advanced browser integration. */
   get dataChannel(): RTCDataChannel { return this.channel.dataChannel; }
+  /** Underlying peer connection for diagnostics and browser statistics. */
   get peerConnection(): RTCPeerConnection { return this.channel.connection; }
+  /** Signalling transport used to negotiate this peer connection. */
   get signallingEndpoint(): SignallingTransport { return this.channel.signalling; }
 
   send(message: WireMessage): Status { return this.stream.send(message); }

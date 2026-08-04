@@ -19,12 +19,19 @@ import {
 const UINT32_MAX = 0xffff_ffff;
 const UINT32_RANGE = 0x1_0000_0000;
 
+/** Select how a reader follows and retains a {@link ChunkStore} sequence. */
 export interface ChunkStoreReaderOptions {
+  /** Read logical sequence order; false follows ingestion/arrival order. */
   ordered?: boolean;
+  /** Clear each payload after reading while retaining its store tombstone. */
   popChunks?: boolean;
+  /** Number of fragments to prefetch beyond active callers. */
   numChunksToBuffer?: number;
+  /** Sequence or arrival position at which this cursor begins. */
   offset?: number;
+  /** Stop after this many fragments, or continue to final when `null`. */
   maxChunksToRead?: number | null;
+  /** Expand omitted MIME types from the preceding contiguous chunk. */
   stickyMimetype?: boolean;
 }
 
@@ -82,7 +89,16 @@ interface ReadRequest {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-/** Fair, stackless, prefetching cursor over a ChunkStore. */
+/**
+ * Fair, stackless, prefetching cursor over a {@link ChunkStore}.
+ *
+ * A reader turns the store's waitable log operations into a simple `next()` or
+ * async-iterator interface. Ordered mode stops after the final fragment, a
+ * clean store closure, or its configured read limit; arrival mode is useful
+ * when inspecting interleaved network ingestion. The bounded prefetch buffer
+ * lets consumers overlap storage latency without allocating a task or fiber
+ * per node.
+ */
 export class ChunkStoreReader {
   readonly store: ChunkStore;
   readonly options: Readonly<NormalizedReaderOptions>;
@@ -104,6 +120,7 @@ export class ChunkStoreReader {
     this.position = options.offset;
   }
 
+  /** Validate options, create the cursor, and start its lazy fetch pump. */
   static create(
     store: ChunkStore,
     options: ChunkStoreReaderOptions = {},
@@ -122,12 +139,16 @@ export class ChunkStoreReader {
     }
   }
 
+  /** Number of prefetched fragments currently ready for callers. */
   get bufferSize(): number { return this.buffer.length; }
 
+  /** Reader terminal status, or OK while it is healthy and still running. */
   getStatus(): Status { return this.status ?? okStatus(); }
 
+  /** Schedule fetching before the first `next()`; safe to call repeatedly. */
   ensureStarted(): Status { return this.wake(); }
 
+  /** Stop fetching and release pending readers with cancellation. */
   cancel(): Status {
     if (this.status === null) this.status = abortedError('ChunkStoreReader was cancelled');
     this.collectAvailable();
@@ -135,8 +156,10 @@ export class ChunkStoreReader {
     return okStatus();
   }
 
+  /** Await end-of-sequence, cancellation, or a store error. */
   wait(): Promise<Status> { return this.done.promise; }
 
+  /** Await the next fragment; `null` is a clean logical end of the sequence. */
   next(timeoutMs?: number): Promise<StatusOr<NodeFragment | null>> {
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
       return Promise.resolve(invalidArgumentError('timeoutMs must be non-negative or omitted.'));
@@ -159,6 +182,7 @@ export class ChunkStoreReader {
     return request.deferred.promise;
   }
 
+  /** Iterate to the clean reader end, yielding one terminal error when needed. */
   async *values(timeoutMs?: number): AsyncGenerator<StatusOr<NodeFragment>, void, void> {
     while (true) {
       const result = await this.next(timeoutMs);

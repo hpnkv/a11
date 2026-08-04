@@ -1,4 +1,12 @@
-"""Native Action types with Python validation and protocol conveniences."""
+"""Action schemas, lifecycle types, and Python validation conveniences.
+
+An [Action][a11.actions.action.Action] is one schema-described unit of agent
+work. Its input and output ports map to AsyncNodes, so a handler can consume and
+produce streaming values locally or across a Session. This module keeps the
+native runtime objects as the public model while adding Pydantic-style schema
+validation and helpers for the structured status chunks used during dispatch
+and completion.
+"""
 
 from __future__ import annotations
 
@@ -19,15 +27,21 @@ from a11._native import ACTION_STATUS_MIMETYPE
 from a11._native import ACTION_STATUS_OUTPUT
 from a11._native import ACTION_DISPATCH_STATUS_OUTPUT
 
+#: Reserved remote action name used to request cooperative cancellation.
 CANCEL_ACTION_NAME = getattr(_native, "CANCEL_ACTION_NAME", "__cancel__")
+#: Header on a cancellation message containing the target action id.
 CANCEL_ACTION_HEADER = getattr(_native, "CANCEL_ACTION_HEADER", "__action")
+#: Prefix reserved for A11 runtime metadata forwarded between nested actions.
 ACTION_HEADER_PREFIX = getattr(_native, "ACTION_HEADER_PREFIX", "x-a11-")
 
+#: Default concurrency ceiling for child actions under one runtime context.
 DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS = getattr(
     _native, "DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS", 64
 )
 
+#: Async/sync application callable invoked by ``Action.run()``.
 ActionHandler = Callable[["Action"], Awaitable[None] | None]
+#: Hook invoked once when cooperative action cancellation is requested.
 OnActionCancelled = Callable[["Action"], Any]
 
 
@@ -357,6 +371,12 @@ for _schema_type in _ACTION_VALIDATORS:
 
 
 def status_to_chunk(status: Status) -> types.Chunk:
+    """Encode an action dispatch/completion status as a typed Chunk.
+
+    A11 writes these chunks to its reserved action status output nodes so a
+    remote caller can distinguish dispatch acknowledgement from eventual
+    completion without losing structured status details.
+    """
     if not isinstance(status, Status):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -366,6 +386,7 @@ def status_to_chunk(status: Status) -> types.Chunk:
 
 
 def status_from_chunk(chunk: types.Chunk) -> Status:
+    """Decode a reserved action status chunk from a remote runtime."""
     if not isinstance(chunk, types.Chunk):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -375,20 +396,33 @@ def status_from_chunk(chunk: types.Chunk) -> Status:
 
 
 def is_status_chunk(chunk: types.Chunk) -> bool:
+    """Return whether ``chunk`` carries A11's action-status mimetype."""
     return isinstance(chunk, types.Chunk) and _native.is_status_chunk(chunk)
 
 
 class DefaultHeaders(enum.StrEnum):
-    """Default header names for A11 actions."""
+    """Well-known action metadata understood by A11 integrations.
 
+    Headers describe one call and normally flow into nested actions. Use these
+    names instead of ad-hoc equivalents so deadlines, tool policy, user logs,
+    and tracing remain connected across agent boundaries.
+    """
+
+    #: Absolute execution deadline propagated through an action tree.
     DEADLINE = "x-a11-deadline"
+    #: Policy describing which actions an LLM may expose as tools.
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
+    #: Node id to which handlers may stream user-visible progress.
     USER_LOG_NODE = "x-a11-user-log-node"
+    #: W3C/OpenTelemetry trace-parent context.
     OTEL_TRACEPARENT = "x-otel-traceparent"
+    #: Vendor trace-state accompanying ``OTEL_TRACEPARENT``.
     OTEL_TRACESTATE = "x-otel-tracestate"
+    #: OpenTelemetry baggage propagated to nested work.
     OTEL_BAGGAGE = "x-otel-baggage"
 
 
+#: Header schemas applications can merge into an ``ActionSchema``.
 DEFAULT_HEADERS = {
     DefaultHeaders.DEADLINE: ActionHeaderSchema(
         DefaultHeaders.DEADLINE,

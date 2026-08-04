@@ -215,11 +215,12 @@ class _AsyncNodeProtocol:
     admits them into the backing
     [ChunkStore][a11.stores.chunk_store.ChunkStore] in
     sequence. The **reader** end yields them back, deserializing on the way out.
-    Every ``put*`` coroutine resolves to a `asyncio.Future` that
-    completes once the chunk is durably stored (and, when a
-    [WireStream][a11.net.wire_stream.WireStream] is attached, sent), so a
-    producer
-    can apply backpressure by awaiting it.
+    Every ``put*`` coroutine admits the write and returns an `asyncio.Future`
+    that completes once the backing store accepts the chunk. The writer also
+    attempts or queues sends to attached
+    [WireStreams][a11.net.wire_stream.WireStream] while processing the batch,
+    but those sends are not a separate delivery-acknowledgement barrier and a
+    later tee failure cannot revoke an already confirmed store write.
 
     Consume a node in whichever shape fits the work:
 
@@ -228,15 +229,18 @@ class _AsyncNodeProtocol:
     - ``await node.consume()`` when exactly one whole value is expected;
     - the ``*_chunk`` / ``*_fragment`` variants to stay at the transport level.
 
-    Use it as an async context manager to guarantee the stream is finalised::
+    Use it as an async context manager to guarantee buffered writes are
+    drained and the writer is closed::
 
         async with AsyncNode.create("output") as node:
             await node.put("hello")
             await node.put_final("world")
 
-    A clean exit drains and closes the writer; leaving via an exception aborts
-    the node with that error's [Status][a11.status.Status], so a reader on the
-    far end observes the failure instead of a truncated stream.
+    A clean exit drains and closes the writer; it does not invent a final
+    fragment, so write one with `put_final` or `put_null_final` before leaving
+    the block. Leaving via an exception aborts the node with that error's
+    [Status][a11.status.Status], so a reader on the far end observes the
+    failure instead of a truncated stream.
     """
 
     def __init__(
@@ -419,7 +423,14 @@ class _AsyncNodeProtocol:
         seq: int | None = None,
         final: bool = False,
     ) -> asyncio.Future[int]:
-        """Enqueue a native chunk and return its durable confirmation future."""
+        """Admit a native chunk and return its store-confirmation future.
+
+        Await this coroutine to respect the writer's bounded admission buffer,
+        then await the returned future when the backing store must have
+        accepted the fragment. Attached stream sends are attempted or queued
+        as the writer processes the batch, but do not add a second delivery
+        confirmation.
+        """
         confirmation, admission = _native_writer_enqueue(
             self.writer, chunk, seq=seq, final=final
         )
@@ -459,14 +470,17 @@ class _AsyncNodeProtocol:
         final: bool = False,
         mimetype: str = "",
     ) -> asyncio.Future[int]:
-        """Write ``value`` to the stream and confirm it durably.
+        """Write ``value`` and return its store-confirmation future.
 
         ``value`` may be a [NodeFragment][a11.data.types.NodeFragment], a
         [Chunk][a11.data.types.Chunk], or any Python object the node's
         serialization registry can encode (``mimetype`` selects the encoding).
-        Set ``final=True`` on the last write to close the stream. Returns a
-        `asyncio.Future` that resolves to the stored sequence number;
-        await it for backpressure.
+        Set ``final=True`` on the last data fragment so readers know where the
+        logical value ends. Finality does not close the writer: call
+        `drain_and_close` after the confirmation future resolves. The returned
+        `asyncio.Future` resolves to the stored sequence number after the
+        backing store accepts the fragment. Attached WireStream sends are
+        attempted or queued by the writer but are not separately acknowledged.
         """
         if isinstance(value, types.NodeFragment):
             if seq is not None or final or mimetype:
@@ -497,13 +511,23 @@ class _AsyncNodeProtocol:
         seq: int | None = None,
         mimetype: str = "",
     ) -> asyncio.Future[int]:
-        """Write ``value`` as the final element, closing the stream."""
+        """Write ``value`` as the logical final element.
+
+        This marks the final sequence but leaves the writer open. Await the
+        returned confirmation, then call `drain_and_close` to flush attached
+        streams and prevent further writes.
+        """
         return await self.put(value, seq=seq, final=True, mimetype=mimetype)
 
     async def put_null_final(
         self, seq: int | None = None
     ) -> asyncio.Future[int]:
-        """Close the stream with an explicit null terminator (no value)."""
+        """Write an explicit null fragment as the logical terminator.
+
+        Use this after a non-final value when `consume` should treat that value
+        as one complete unary result. It does not close the writer; finish with
+        `drain_and_close` after the confirmation resolves.
+        """
         return await self.put_chunk(
             types.Chunk(
                 metadata=types.ChunkMetadata(

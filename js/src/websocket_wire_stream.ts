@@ -41,30 +41,45 @@ interface WebSocketEventLike {
   reason?: string;
 }
 
+/** Minimum browser/`ws` socket surface required by the A11 adapter. */
 export interface WebSocketLike {
+  /** Native WebSocket ready-state value. */
   readonly readyState: number;
+  /** Bytes accepted by `send` but not yet transmitted. */
   readonly bufferedAmount: number;
+  /** Requested representation for inbound binary messages. */
   binaryType: string;
+  /** Subscribe to transport lifecycle events. */
   addEventListener(
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: WebSocketEventLike) => void,
   ): void;
+  /** Queue one binary packet (or signalling string for shared factories). */
   send(data: Uint8Array | string): void;
+  /** Close the underlying WebSocket. */
   close(code?: number, reason?: string): void;
 }
 
+/** Factory used to construct browser-like sockets in different runtimes. */
 export type WebSocketFactory = (
   url: string,
   protocols: string | readonly string[] | undefined,
   headers: Readonly<Record<string, string>>,
 ) => WebSocketLike | Promise<WebSocketLike>;
 
+/** HTTP handshake, framing, and socket backpressure options. */
 export interface WebSocketClientOptions {
+  /** Extra handshake headers; browsers cannot set arbitrary headers. */
   headers?: Readonly<Record<string, string>>;
+  /** WebSocket subprotocol or ordered preference list. */
   protocols?: string | readonly string[];
+  /** Packetization and reassembly bounds. */
   framing?: ChannelFramingOptions;
+  /** Abort sends if the socket buffers more than this many bytes. */
   maxBufferedAmount?: number;
+  /** Low-water threshold used to resume a backpressured sender. */
   bufferedAmountLowThreshold?: number;
+  /** Custom constructor for tests or non-browser runtimes. */
   webSocketFactory?: WebSocketFactory;
 }
 
@@ -494,10 +509,19 @@ class WebSocketBinaryChannel implements BinaryChannel {
   }
 }
 
-/** Client-side A11 WireStream over an isomorphic WebSocket. */
+/**
+ * Client-side A11 WireStream over an isomorphic WebSocket.
+ *
+ * The adapter works with the browser WebSocket API and the Node `ws` package,
+ * then delegates packet framing, bounded reassembly, half-close, and abort to
+ * {@link ChannelWireStream}. Create the endpoint, call {@link start} once, and
+ * await {@link wait} for full bidirectional completion. `start()` only waits
+ * for transport startup; it is not the stream's completion future.
+ */
 export class WebSocketWireStream implements WireStream {
   private constructor(private readonly stream: ChannelWireStream) {}
 
+  /** Create a client endpoint without opening its socket until {@link start}. */
   static createClient(
     url: string,
     options: WireStreamOptions = {},
@@ -522,6 +546,7 @@ export class WebSocketWireStream implements WireStream {
     }
   }
 
+  /** Alias for {@link createClient}; connection still begins in {@link start}. */
   static connect(
     url: string,
     options: WireStreamOptions = {},

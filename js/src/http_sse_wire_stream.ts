@@ -30,23 +30,36 @@ import {
   type WireStreamOptions,
 } from './wire_stream.js';
 
+/** Response header that assigns the connected A11 stream id. */
 export const SSE_STREAM_ID_HEADER = 'X-A11-Stream-Id';
+/** Prefix reserved for carrying HTTP metadata through A11 headers. */
 export const SSE_HTTP_HEADER_PREFIX = 'x-a11-http-';
+/** Default POST endpoint that opens the inbound event stream. */
 export const DEFAULT_SSE_CONNECT_ENDPOINT = '/connect';
+/** Default POST template used to send one outbound WireMessage. */
 export const DEFAULT_SSE_MESSAGE_ENDPOINT = '/streams/{id}/message';
 
+/** Immutable HTTP header names and values used during SSE connection setup. */
 export type HttpHeaders = Readonly<Record<string, string>>;
+/** Injectable Fetch-compatible function, primarily for runtimes and tests. */
 export type FetchFunction = (
   input: string | URL | Request,
   init?: RequestInit,
 ) => Promise<Response>;
 
+/** HTTP endpoints and resource bounds for an SSE client stream. */
 export interface HttpSseOptions {
+  /** Wire-level buffering, timeout, and message-size limits. */
   streamOptions?: WireStreamOptions;
+  /** Absolute POST path used to open the inbound `text/event-stream` response. */
   connectEndpoint?: string;
+  /** Absolute path template containing one `{id}` for outbound messages. */
   messageEndpoint?: string;
+  /** Maximum UTF-8 bytes accepted in one SSE event. */
   maxEventSize?: number;
+  /** Fetch implementation; defaults to `globalThis.fetch`. */
   fetch?: FetchFunction;
+  /** Extra Fetch options applied without overriding A11 method/body fields. */
   requestInit?: Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>;
 }
 
@@ -166,7 +179,20 @@ function hasResponseShape(value: unknown): value is Response {
   }
 }
 
-/** Fetch-based client for A11's HTTP/2 Server-Sent Events transport. */
+/**
+ * Fetch-based client for A11's HTTP/2 Server-Sent Events transport.
+ *
+ * The long-lived connect response carries messages from the service as SSE
+ * events; separate POST requests carry client messages back to the assigned
+ * stream id. The class still presents the ordinary {@link WireStream}
+ * lifecycle, so sessions and actions do not need to know that each direction
+ * uses a different HTTP request.
+ *
+ * This is a client-only transport: call {@link start}, not {@link accept}.
+ * Wait for {@link waitForHttpHeaders} before reading response metadata. A
+ * normal shutdown still requires {@link halfClose},
+ * {@link drainOutgoingMessages}, and eventual peer termination.
+ */
 export class HttpSseClientWireStream implements WireStream {
   private id = randomId('sse-');
   private started = false;
@@ -190,6 +216,7 @@ export class HttpSseClientWireStream implements WireStream {
     this.requestHeaders = requestHeaders;
   }
 
+  /** Configure a client without issuing the connect request yet. */
   static create(
     url: string,
     options: HttpSseOptions = {},
@@ -288,14 +315,17 @@ export class HttpSseClientWireStream implements WireStream {
   getImpl(): unknown | null { return this.response; }
   wait(): Promise<Status> { return this.application.wait(); }
 
+  /** Return the headers that will be, or were, sent on HTTP requests. */
   getHttpRequestHeaders(): Readonly<Record<string, string>> {
     return { ...this.requestHeaders };
   }
 
+  /** Return connect-response headers after they arrive, otherwise `null`. */
   getHttpResponseHeaders(): Readonly<Record<string, string>> | null {
     return this.responseHeaders === null ? null : { ...this.responseHeaders };
   }
 
+  /** Replace request headers before {@link start}; headers then become fixed. */
   setHttpRequestHeaders(headers: HttpHeaders): Status {
     if (this.started) {
       return failedPreconditionError(
@@ -308,6 +338,7 @@ export class HttpSseClientWireStream implements WireStream {
     return okStatus();
   }
 
+  /** Await connect response headers or the transport failure that prevented them. */
   waitForHttpHeaders(): Promise<Status> {
     return this.headersReady.promise;
   }

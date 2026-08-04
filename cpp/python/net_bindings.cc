@@ -510,8 +510,10 @@ void BindNet(py::module_& module) {
             ValidateWireStreamOptions(options);
             return options;
           }),
-          "Construct wire-stream options controlling buffering and timeouts for "
-          "an agent stream. All arguments are keyword-friendly and validated on "
+          "Construct wire-stream options controlling buffering and timeouts "
+          "for "
+          "an agent stream. All arguments are keyword-friendly and validated "
+          "on "
           "construction.",
           py::arg("max_buffered_incoming_messages") = 100,
           py::arg("max_single_message_size") = net::kMaxSingleMessageSize,
@@ -602,12 +604,14 @@ void BindNet(py::module_& module) {
              const py::object& on_message, const py::object& on_done) {
             return StartStream(self, false, on_message, on_done);
           },
-          "Begin driving the stream as the initiating (client) side, delivering "
+          "Begin driving the stream as the initiating (client) side, "
+          "delivering "
           "each inbound message to the asynchronous on_message callback and "
-          "end-of-stream to on_done. The callbacks are awaited as data arrives, "
+          "end-of-stream to on_done. The callbacks are awaited as data "
+          "arrives, "
           "so this is the entry point for consuming a streaming agent "
-          "conversation. Returns an awaitable that resolves when the stream "
-          "terminates.",
+          "conversation. Returns an awaitable that resolves when the startup "
+          "handshake completes; use on_done as the terminal barrier.",
           py::arg("on_message"), py::arg("on_done"))
       .def(
           "accept",
@@ -615,11 +619,13 @@ void BindNet(py::module_& module) {
              const py::object& on_message, const py::object& on_done) {
             return StartStream(self, true, on_message, on_done);
           },
-          "Begin driving the stream as the responding (server) side, delivering "
+          "Begin driving the stream as the responding (server) side, "
+          "delivering "
           "each inbound message to the asynchronous on_message callback and "
           "end-of-stream to on_done. Use this instead of start() when this "
           "endpoint is answering an incoming agent connection. Returns an "
-          "awaitable that resolves when the stream terminates.",
+          "awaitable that resolves when acceptance completes; use on_done as "
+          "the terminal barrier.",
           py::arg("on_message"), py::arg("on_done"))
       .def(
           "half_close",
@@ -631,7 +637,8 @@ void BindNet(py::module_& module) {
               ThrowStatus(converted.status());
             CheckStatus(self->HalfClose(std::move(*converted)));
           },
-          "Signal that this endpoint has finished sending, optionally attaching "
+          "Signal that this endpoint has finished sending, optionally "
+          "attaching "
           "trailers (final metadata) for the peer. The stream stays open for "
           "inbound messages, so use this to end your half of a duplex agent "
           "exchange while still receiving the peer's remaining output.",
@@ -642,15 +649,16 @@ void BindNet(py::module_& module) {
             return FutureToPython(self->DrainOutgoingMessages());
           },
           "Await until every queued outbound message has been handed to the "
-          "transport. Call this before shutting down so buffered agent output "
-          "is actually flushed to the peer rather than dropped.")
+          "transport. Call half_close() first, then await this before shutting "
+          "down so buffered agent output is not dropped.")
       .def(
           "abort",
           [](net::WireStream& self, const py::handle& status) {
             CheckStatus(self.Abort(StatusFromPython(status)));
           },
           "Terminate the stream immediately with an error status, discarding "
-          "buffered messages and propagating the failure to the peer and to any "
+          "buffered messages and propagating the failure to the peer and to "
+          "any "
           "pending receivers. Use this to fail fast when an agent hits an "
           "unrecoverable error.",
           py::arg("status"))
@@ -680,7 +688,8 @@ void BindNet(py::module_& module) {
             return StatusToPython(self.GetStatus());
           },
           "Return the stream's terminal status once it has finished, or OK "
-          "while it is still active. Inspect this after the stream completes to "
+          "while it is still active. Inspect this after the stream completes "
+          "to "
           "learn whether the agent exchange succeeded or failed.")
       .def(
           "get_trailers",
@@ -690,12 +699,14 @@ void BindNet(py::module_& module) {
               return py::none();
             return ByteMapToPython(*trailers);
           },
-          "Return the trailers (final metadata) the peer sent at half-close, or "
+          "Return the trailers (final metadata) the peer sent at half-close, "
+          "or "
           "None if none were received. Read this after the stream ends to "
           "recover end-of-turn metadata from the agent exchange.")
-      .def("get_id", &net::WireStream::GetId,
-           "Return the stream's stable identifier, which also seeds its tracing "
-           "trace id. Use it to correlate an agent stream with logs and traces.")
+      .def(
+          "get_id", &net::WireStream::GetId,
+          "Return the stream's stable identifier, which also seeds its tracing "
+          "trace id. Use it to correlate an agent stream with logs and traces.")
       .def(
           "get_impl",
           [](const net::WireStream& self) {
@@ -716,8 +727,10 @@ void BindNet(py::module_& module) {
                 std::move(options), std::move(first_options),
                 std::move(second_options)));
           },
-          "Create a connected pair of in-process wire streams that talk to each "
-          "other directly in memory, with no network involved. Use this to wire "
+          "Create a connected pair of in-process wire streams that talk to "
+          "each "
+          "other directly in memory, with no network involved. Use this to "
+          "wire "
           "an agent to a local service or test harness: one endpoint drives "
           "start() while the other drives accept(). Pass shared options, or "
           "per-endpoint first_options/second_options, to tune buffering and "
@@ -730,8 +743,10 @@ void BindNet(py::module_& module) {
           [](const net::InProcessWireStream& self) {
             return FutureToPython(self.Done());
           },
-          "Await until this in-process stream has fully finished. Block on this "
-          "to know a local agent exchange has completed before tearing the pair "
+          "Await until this in-process stream has fully finished. Block on "
+          "this "
+          "to know a local agent exchange has completed before tearing the "
+          "pair "
           "down.");
   module.def(
       "create_in_process_wire_stream_pair",
@@ -923,7 +938,8 @@ void BindNet(py::module_& module) {
             });
           },
           "Start a WebSocket server that accepts incoming A11 connections, "
-          "invoking the asynchronous on_stream callback with a fresh WireStream "
+          "invoking the asynchronous on_stream callback with a fresh "
+          "WireStream "
           "for each accepted client. This is the server-side entry point for "
           "hosting an agent: each callback runs concurrently and typically "
           "drives accept() on its stream. Configure the listen address, port, "
@@ -936,7 +952,8 @@ void BindNet(py::module_& module) {
             CallWithoutGil([&self] { return self.Stop(); });
           },
           "Stop the server and close the listening socket, releasing the bound "
-          "port. Call this to shut the agent host down cleanly; it blocks until "
+          "port. Call this to shut the agent host down cleanly; it blocks "
+          "until "
           "shutdown completes.")
       .def_property_readonly(
           "port",

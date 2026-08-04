@@ -59,16 +59,16 @@ struct ChunkStoreWriterOptions {
 /**
  * @brief
  *   The pair of awaitables returned when enqueuing a chunk, separating queue
- *   admission from durable confirmation.
+ *   admission from backing-store confirmation.
  *
  * The Python API distinguishes admission to the bounded native queue from
- * durable store confirmation. Native callers that only need confirmation can
+ * backing-store confirmation. Native callers that only need confirmation can
  * continue to use ChunkStoreWriter::PutChunk.
  */
 struct ChunkStoreWrite {
   /// Resolves once the chunk is admitted into the bounded queue (backpressure).
   a11::Task admitted;
-  /// Resolves with the durable sequence number once the chunk is stored.
+  /// Resolves with the assigned sequence once the backing store accepts it.
   a11::Future<std::uint32_t> confirmation;
 };
 
@@ -115,15 +115,16 @@ class ChunkStoreWriter {
    *
    *  Unlike PutChunk(), this returns both awaitables: `admitted` resolves once
    *  the chunk is accepted into the bounded queue and `confirmation` resolves
-   *  with its durable sequence number. Await admission to pace production and
-   *  confirmation to know the write landed.
+   *  with the sequence assigned by the backing store. Await admission to pace
+   *  production and confirmation to know the store accepted the write.
    *
    *  @param chunk
    *    The chunk to enqueue.
    *  @param seq
    *    Optional explicit sequence number; assigned automatically if unset.
    *  @param final
-   *    Whether this chunk closes the stream.
+   *    Whether this chunk establishes the logical final sequence. This does
+   *    not close the writer or backing store.
    *  @param ensure_started
    *    Whether to start the flush loop as part of enqueuing.
    *  @return
@@ -134,7 +135,7 @@ class ChunkStoreWriter {
                                bool final = false, bool ensure_started = true);
 
   /** @brief
-   *    Write a chunk and await its durable confirmation.
+   *    Write a chunk and await backing-store confirmation.
    *
    *  Convenience path for callers that only need confirmation, without
    *  observing queue admission separately.
@@ -144,7 +145,8 @@ class ChunkStoreWriter {
    *  @param seq
    *    Optional explicit sequence number; assigned automatically if unset.
    *  @param final
-   *    Whether this chunk closes the stream.
+   *    Whether this chunk establishes the logical final sequence. This does
+   *    not close the writer or backing store.
    *  @return
    *    An awaitable that resolves with the stored sequence number.
    */
@@ -169,12 +171,15 @@ class ChunkStoreWriter {
   a11::Task Cancel();
 
   /** @brief
-   *    Flush every queued chunk, then close the stream.
+   *    Flush every queued chunk, then close the writer.
    *
-   *  The graceful shutdown path once a producer has finished.
+   *  This closes the backing store to further writes, but it does not append a
+   *  final fragment. The producer must mark its last chunk `final=true` (or
+   *  write a null final chunk through AsyncNode) before draining when readers
+   *  need a final sequence number to identify the logical end of the stream.
    *
    *  @return
-   *    An awaitable that resolves once the flush and close complete.
+   *    An awaitable that resolves once the flush and storage close complete.
    */
   a11::Task DrainAndClose();
 
@@ -204,10 +209,11 @@ class ChunkStoreWriter {
   /** @brief
    *    Mirror persisted fragments to an additional wire stream.
    *
-   *  Each confirmed fragment is copied to every attached stream. A transport
-   *  failure stops subsequent writes but cannot revoke store confirmations
-   *  already returned for the current batch. The writer keeps the stream alive
-   *  while attached.
+   *  After the store accepts a batch, the writer calls `WireStream::Send()` on
+   *  each attached stream. A successful send means local transport admission,
+   *  not remote delivery. A transport failure stops subsequent writes but
+   *  cannot revoke store confirmations returned for the current batch. The
+   *  writer keeps the stream alive while attached.
    *
    *  @param stream
    *    The wire stream to fan output out to.

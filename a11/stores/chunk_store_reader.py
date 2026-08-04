@@ -66,8 +66,16 @@ class _ChunkStoreReaderProtocol:
         _native_init(self, store, options)
 
     def next(self, timeout: timing.Duration = timing.infinite_duration()):
-        """Await the next fragment (``None`` at end of stream), up to ``
-        timeout``."""
+        """Return an awaitable for the next fragment in this reader's view.
+
+        It resolves to ``None`` after the configured range or final sequence is
+        exhausted. ``timeout`` bounds this wait only; a timed-out read does not
+        close the store or prevent a later call from continuing the stream.
+
+        Raises:
+            StatusException: If the timeout expires, the store closes with an
+                error, or the reader encounters invalid stream state.
+        """
         if not isinstance(timeout, timing.Duration):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,

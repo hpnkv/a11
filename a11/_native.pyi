@@ -1195,7 +1195,7 @@ class AsyncNode:
 
     def drain_and_close(self) -> typing.Any:
         """
-        Returns a future that resolves once all buffered chunks have been flushed and the stream is closed. Await it for a graceful shutdown that guarantees every produced chunk reaches consumers.
+        Returns a future that resolves once all buffered chunks have been flushed and the writer is closed. This does not mark a chunk as final: call put_final() or put_null_final() first when readers must synchronise on the logical end of the stream.
         """
 
     def get_chunk_store(self) -> ChunkStore:
@@ -1298,14 +1298,17 @@ class AsyncNode:
         mimetype: str = "",
     ) -> asyncio.Future[int]:
         """
-        Write ``value`` to the stream and confirm it durably.
+        Write ``value`` and return its store-confirmation future.
 
                 ``value`` may be a [NodeFragment][a11.data.types.NodeFragment], a
                 [Chunk][a11.data.types.Chunk], or any Python object the node's
                 serialization registry can encode (``mimetype`` selects the encoding).
-                Set ``final=True`` on the last write to close the stream. Returns a
-                `asyncio.Future` that resolves to the stored sequence number;
-                await it for backpressure.
+                Set ``final=True`` on the last data fragment so readers know where the
+                logical value ends. Finality does not close the writer: call
+                `drain_and_close` after the confirmation future resolves. The returned
+                `asyncio.Future` resolves to the stored sequence number after the
+                backing store accepts the fragment. Attached WireStream sends are
+                attempted or queued by the writer but are not separately acknowledged.
 
         """
 
@@ -1313,14 +1316,26 @@ class AsyncNode:
         self, chunk: Chunk, seq: int | None = None, final: bool = False
     ) -> asyncio.Future[int]:
         """
-        Enqueue a native chunk and return its durable confirmation future.
+        Admit a native chunk and return its store-confirmation future.
+
+                Await this coroutine to respect the writer's bounded admission buffer,
+                then await the returned future when the backing store must have
+                accepted the fragment. Attached stream sends are attempted or queued
+                as the writer processes the batch, but do not add a second delivery
+                confirmation.
+
         """
 
     async def put_final(
         self, value: typing.Any, seq: int | None = None, mimetype: str = ""
     ) -> asyncio.Future[int]:
         """
-        Write ``value`` as the final element, closing the stream.
+        Write ``value`` as the logical final element.
+
+                This marks the final sequence but leaves the writer open. Await the
+                returned confirmation, then call `drain_and_close` to flush attached
+                streams and prevent further writes.
+
         """
 
     async def put_fragment(self, fragment: NodeFragment) -> asyncio.Future[int]:
@@ -1333,7 +1348,12 @@ class AsyncNode:
         self, seq: int | None = None
     ) -> asyncio.Future[int]:
         """
-        Close the stream with an explicit null terminator (no value).
+        Write an explicit null fragment as the logical terminator.
+
+                Use this after a non-final value when `consume` should treat that value
+                as one complete unary result. It does not close the writer; finish with
+                `drain_and_close` after the confirmation resolves.
+
         """
 
     def reset_reader(
@@ -1764,7 +1784,7 @@ class ChunkStore:
 
     def get_final_seq(self) -> typing.Any:
         """
-        Await the sequence number of the final chunk, or None if the store is still open. An agent can await this to learn when a stream has been fully closed and how many chunks it contains.
+        Await the explicitly marked final sequence, or None if no fragment has declared finality. Finality is independent of write closure: closing the store does not create a final sequence.
         """
 
     def get_id(self) -> str:
@@ -1837,8 +1857,16 @@ class ChunkStoreReader:
 
     def next(self, timeout: Duration = ...):
         """
-        Await the next fragment (``None`` at end of stream), up to ``
-                timeout``.
+        Return an awaitable for the next fragment in this reader's view.
+
+                It resolves to ``None`` after the configured range or final sequence is
+                exhausted. ``timeout`` bounds this wait only; a timed-out read does not
+                close the store or prevent a later call from continuing the stream.
+
+                Raises:
+                    StatusException: If the timeout expires, the store closes with an
+                        error, or the reader encounters invalid stream state.
+
         """
 
     def wait(self) -> typing.Any:
@@ -1990,7 +2018,7 @@ class ChunkStoreWriter:
 
     def drain_and_close(self) -> typing.Any:
         """
-        Flush every queued chunk, then close the stream, and await completion. This is the graceful shutdown path once an agent has finished producing output.
+        Flush every queued chunk, close the writer, and await completion. This does not append a final fragment: mark the last chunk final before draining when readers need a final sequence number.
         """
 
     def enqueue_chunk(
@@ -2024,7 +2052,7 @@ class ChunkStoreWriter:
         self, obj: typing.Any, seq: int | None = None, final: bool = False
     ) -> asyncio.Future[int]:
         """
-        Write a [Chunk][a11.data.types.Chunk] and confirm it durably.
+        Write a chunk and return its store-confirmation future.
 
                 The writer operates at the chunk level; pass an already-serialized
                 [Chunk][a11.data.types.Chunk] (use
@@ -2038,7 +2066,12 @@ class ChunkStoreWriter:
         self, chunk: Chunk, seq: int | None = None, final: bool = False
     ) -> asyncio.Future[int]:
         """
-        Enqueue a native chunk and return its durable confirmation future.
+        Enqueue a native chunk and return its store-confirmation future.
+
+                Set ``final=True`` on the last chunk when readers must know the logical
+                end of the sequence. Calling `drain_and_close` later only flushes and
+                closes the writer; it does not add that final marker for you.
+
         """
 
     def wait_for_buffer_to_drain(self) -> typing.Any:
@@ -2812,36 +2845,44 @@ class HttpSseOptions:
         """
 
     @property
-    def cors_allow_headers(self) -> str:
-        """Value for Access-Control-Allow-Headers."""
-    @cors_allow_headers.setter
-    def cors_allow_headers(self, arg0: str) -> None: ...
-
-    @property
-    def cors_allow_methods(self) -> str:
-        """Value for Access-Control-Allow-Methods."""
-    @cors_allow_methods.setter
-    def cors_allow_methods(self, arg0: str) -> None: ...
-
-    @property
-    def cors_allow_origin(self) -> str:
-        """Value for Access-Control-Allow-Origin; empty disables CORS."""
-    @cors_allow_origin.setter
-    def cors_allow_origin(self, arg0: str) -> None: ...
-
-    @property
-    def cors_expose_headers(self) -> str:
-        """Value for Access-Control-Expose-Headers."""
-    @cors_expose_headers.setter
-    def cors_expose_headers(self, arg0: str) -> None: ...
-
-    @property
     def connect_endpoint(self) -> str:
         """
         The endpoint path used to open the SSE connection.
         """
     @connect_endpoint.setter
     def connect_endpoint(self, arg0: str) -> None: ...
+
+    @property
+    def cors_allow_headers(self) -> str:
+        """
+        Value for Access-Control-Allow-Headers.
+        """
+    @cors_allow_headers.setter
+    def cors_allow_headers(self, arg0: str) -> None: ...
+
+    @property
+    def cors_allow_methods(self) -> str:
+        """
+        Value for Access-Control-Allow-Methods.
+        """
+    @cors_allow_methods.setter
+    def cors_allow_methods(self, arg0: str) -> None: ...
+
+    @property
+    def cors_allow_origin(self) -> str:
+        """
+        Value for Access-Control-Allow-Origin; empty disables CORS.
+        """
+    @cors_allow_origin.setter
+    def cors_allow_origin(self, arg0: str) -> None: ...
+
+    @property
+    def cors_expose_headers(self) -> str:
+        """
+        Value for Access-Control-Expose-Headers.
+        """
+    @cors_expose_headers.setter
+    def cors_expose_headers(self, arg0: str) -> None: ...
 
     @property
     def http2_options(self) -> Http2Options:
@@ -3383,7 +3424,7 @@ class RedisChunkStore(ChunkStore):
         options: RedisChunkStoreOptions | dict[str, typing.Any] | None = None,
     ) -> RedisChunkStore:
         """
-        Create a Redis store with optional client and options.
+        Create a Redis-backed fragment log for one node id.
         """
 
     def __init__(
@@ -3394,38 +3435,104 @@ class RedisChunkStore(ChunkStore):
     ) -> None:
         """
         Open one node's persistent stream with an injected Redis client.
+
+                Stores for the same id address the same Redis state. Pass a shared
+                `RedisClient` in production so many nodes reuse one connection pool;
+                call `initialize` when metadata must exist before the first write.
+
         """
 
-    async def clear_data(self, seq: int) -> NodeFragment: ...
+    async def clear_data(self, seq: int) -> NodeFragment:
+        """
+        Tombstone one payload while retaining ordering metadata.
+        """
+
     async def close_writes_with_status(
         self, status: Status, return_status_if_already_closed: bool = False
-    ) -> Status: ...
-    async def get(
-        self, seq: int, deadline: Time | None = None
-    ) -> NodeFragment: ...
-    async def get_by_arrival_order(
-        self, arrival_order: int, deadline: Time | None = None
-    ) -> NodeFragment: ...
-    async def get_final_seq(self) -> int | None: ...
-    async def get_metadata(self) -> RedisChunkStoreMetadata:
+    ) -> Status:
         """
-        Read node state without walking the chunk stream.
+        Atomically seal writes with a terminal status and wake readers.
+
+                This closes the producer side but does not mark data final. Write a
+                final fragment first when consumers use whole-value semantics such as
+                `AsyncNode.consume`.
+
         """
 
-    async def get_seq_for_arrival_order(self, arrival_order: int) -> int: ...
+    async def get(self, seq: int, deadline: Time | None = None) -> NodeFragment:
+        """
+        Wait for and return a fragment by sequence number.
+
+                The deadline bounds both Redis work and the wait for a future fragment.
+
+        """
+
+    async def get_by_arrival_order(
+        self, arrival_order: int, deadline: Time | None = None
+    ) -> NodeFragment:
+        """
+        Wait for a fragment by its zero-based Redis ingestion order.
+        """
+
+    async def get_final_seq(self) -> int | None:
+        """
+        Return the logical final sequence, if one has been written.
+
+                The final marker is independent of Redis write closure. Closing a store
+                does not synthesize it, and a final fragment does not close the store.
+
+        """
+
+    async def get_metadata(self) -> RedisChunkStoreMetadata:
+        """
+        Read size, finality, and closure state without scanning fragments.
+        """
+
+    async def get_seq_for_arrival_order(self, arrival_order: int) -> int:
+        """
+        Translate a zero-based ingestion position to its sequence number.
+        """
+
     async def initialize(self) -> None:
         """
-        Ensure metadata exists without writing a chunk.
+        Ensure node metadata exists without writing a fragment.
+
+                This is useful during provisioning or health checks; ordinary writes
+                initialize the store lazily.
+
         """
 
     async def next(
         self, deadline: Time | None = None, limit: int = 1
-    ) -> list[NodeFragment | None]: ...
-    async def put(self, fragment: NodeFragment) -> int: ...
+    ) -> list[NodeFragment | None]:
+        """
+        Read from the persistent shared logical-sequence cursor.
+
+                The cursor advances through sequence numbers and waits at gaps;
+                ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
+                ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
+                it adds buffering, offsets, and final-sequence handling above this
+                primitive.
+
+        """
+
+    async def put(self, fragment: NodeFragment) -> int:
+        """
+        Atomically append one fragment and return its sequence number.
+        """
+
     async def put_many(
         self, fragments: typing.Sequence[NodeFragment]
-    ) -> list[int]: ...
-    async def size(self) -> int: ...
+    ) -> list[int]:
+        """
+        Atomically append a batch and return its assigned sequences.
+        """
+
+    async def size(self) -> int:
+        """
+        Return the number of fragment entries recorded for this node.
+        """
+
     @property
     def client(self) -> RedisClient:
         """
@@ -4126,7 +4233,12 @@ class Session:
     @property
     def done(self) -> _DoneEvent:
         """
-        An `asyncio.Event`-shaped view of the session's completion.
+        An `asyncio.Event`-shaped view of full session completion.
+
+                `Session.is_closed` can become true as soon as shutdown starts. Await
+                this event (or ``wait_done``) when streams and actions must all have
+                released their runtime state.
+
         """
 
     @property
@@ -4281,12 +4393,22 @@ class SessionWithRecv(Session):
 
     async def receive(self, deadline=None):
         """
-        Await the next inbound [WireMessage][a11.data.types.WireMessage].
+        Await the next inbound message, or ``None`` when the session ends.
+
+                Use this when one receive loop handles every attached stream. Choose
+                `receive_with_stream_id` when replies or diagnostics must retain their
+                transport identity. The optional absolute deadline limits only this
+                wait; it does not change the session deadline.
+
         """
 
     async def receive_with_stream_id(self, deadline=None):
         """
-        Await the next inbound message paired with its stream id.
+        Await ``(message, stream_id)``, or ``None`` after completion.
+
+                This is the pull-style counterpart to ``OnSessionStreamMessage`` and
+                is useful when an agent multiplexes several transports in one loop.
+
         """
 
 class SignallingEndpoint(SignallingTransport):
@@ -4503,25 +4625,54 @@ class Status:
     def from_exception(
         exc: BaseException,
         casters: a11.status.StatusExceptionCasters | None = None,
-    ) -> Status: ...
+    ) -> Status:
+        """
+        Convert an application exception to a transportable status.
+
+                Existing `StatusException` values retain their structured status;
+                registered casters handle framework-specific types, and unknown
+                exceptions become ``UNKNOWN``.
+
+        """
+
     @staticmethod
     def from_http_exception(
         http_exception: (
             fastapi.exceptions.HTTPException | httpx.HTTPStatusError
         ),
-    ) -> Status: ...
+    ) -> Status:
+        """
+        Convert a FastAPI/httpx HTTP exception to an A11 status.
+        """
+
     @staticmethod
     def get_fastapi_response_dict_for_codes(
         *codes: a11.status.StatusCode,
-    ) -> dict[int, dict]: ...
+    ) -> dict[int, dict]:
+        """
+        Build FastAPI response documentation for portable status codes.
+        """
+
     @staticmethod
     def get_fastapi_response_dict_for_http_codes(
         *codes: int,
-    ) -> dict[int, dict]: ...
+    ) -> dict[int, dict]:
+        """
+        Build FastAPI response documentation for explicit HTTP codes.
+        """
+
     @staticmethod
-    def ok(message: str | None = None) -> Status: ...
+    def ok(message: str | None = None) -> Status:
+        """
+        Create a successful status with an optional descriptive message.
+        """
+
     @staticmethod
-    def parse_from_json(data: str | bytes) -> a11.status.StatusParseResult: ...
+    def parse_from_json(data: str | bytes) -> a11.status.StatusParseResult:
+        """
+        Parse status JSON and return validation state without throwing.
+        """
+
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
     @classmethod
@@ -4581,9 +4732,20 @@ class Status:
         self, *, mode: str = "python", **_: typing.Any
     ) -> dict[str, typing.Any]: ...
     def model_dump_json(self, **kwargs: typing.Any) -> str: ...
-    def raise_if_not_ok(self) -> None: ...
-    def to_exception(self) -> a11.status.StatusException: ...
-    def to_msgpack(self, packer: msgpack._cmsgpack.Packer) -> None: ...
+    def raise_if_not_ok(self) -> None:
+        """
+        Raise `StatusException` when this status is non-OK.
+        """
+
+    def to_exception(self) -> a11.status.StatusException:
+        """
+        Convert a non-OK status to its Python boundary exception.
+        """
+
+    def to_msgpack(self, packer: msgpack._cmsgpack.Packer) -> None:
+        """
+        Append this status to an A11 MessagePack encoder.
+        """
 
     @property
     def code(self) -> typing.Any:
@@ -5395,12 +5557,12 @@ class WireStream:
 
     def accept(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
         """
-        Begin driving the stream as the responding (server) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. Use this instead of start() when this endpoint is answering an incoming agent connection. Returns an awaitable that resolves when the stream terminates.
+        Begin driving the stream as the responding (server) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. Use this instead of start() when this endpoint is answering an incoming agent connection. Returns an awaitable that resolves when acceptance completes; use on_done as the terminal barrier.
         """
 
     def drain_outgoing_messages(self) -> typing.Any:
         """
-        Await until every queued outbound message has been handed to the transport. Call this before shutting down so buffered agent output is actually flushed to the peer rather than dropped.
+        Await until every queued outbound message has been handed to the transport. Call half_close() first, then await this before shutting down so buffered agent output is not dropped.
         """
 
     def get_id(self) -> str:
@@ -5440,7 +5602,7 @@ class WireStream:
 
     def start(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
         """
-        Begin driving the stream as the initiating (client) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. The callbacks are awaited as data arrives, so this is the entry point for consuming a streaming agent conversation. Returns an awaitable that resolves when the stream terminates.
+        Begin driving the stream as the initiating (client) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. The callbacks are awaited as data arrives, so this is the entry point for consuming a streaming agent conversation. Returns an awaitable that resolves when the startup handshake completes; use on_done as the terminal barrier.
         """
 
     @property

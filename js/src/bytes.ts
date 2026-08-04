@@ -4,15 +4,19 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** Synchronous byte-like values accepted at A11's JavaScript boundary. */
 export type ByteSource =
   | Uint8Array
   | ArrayBuffer
   | ArrayBufferView
   | string;
 
+/** Byte source that may require asynchronously reading a browser Blob. */
 export type AsyncByteSource = ByteSource | Blob;
 
+/** Owned binary metadata map used for headers and chunk attributes. */
 export type ByteMap = Map<string, Uint8Array>;
+/** Map/object input whose values are normalized into owned bytes. */
 export type ByteMapInput =
   | ReadonlyMap<string, ByteSource>
   | Readonly<Record<string, ByteSource>>;
@@ -20,6 +24,7 @@ export type ByteMapInput =
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
+/** Copy a supported byte source; strings are encoded as UTF-8. */
 export function toBytes(value: ByteSource): StatusOr<Uint8Array> {
   try {
     if (typeof value === 'string') return encoder.encode(value);
@@ -39,6 +44,7 @@ export function toBytes(value: ByteSource): StatusOr<Uint8Array> {
   }
 }
 
+/** Copy a byte source, awaiting Blob contents when necessary. */
 export async function toBytesAsync(
   value: AsyncByteSource,
 ): Promise<StatusOr<Uint8Array>> {
@@ -52,10 +58,12 @@ export async function toBytesAsync(
   return toBytes(value as ByteSource);
 }
 
+/** Encode application/header text as UTF-8 bytes. */
 export function utf8Encode(value: string): Uint8Array {
   return encoder.encode(value);
 }
 
+/** Decode strict UTF-8, returning InvalidArgument instead of replacement text. */
 export function utf8Decode(value: Uint8Array): StatusOr<string> {
   try {
     return decoder.decode(value);
@@ -64,6 +72,7 @@ export function utf8Decode(value: Uint8Array): StatusOr<string> {
   }
 }
 
+/** Join packet or serialized-record pieces into one owned byte array. */
 export function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
   let length = 0;
   for (const part of parts) length += part.byteLength;
@@ -79,6 +88,7 @@ export function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
 const base64Alphabet =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
+/** Encode binary A11 values for JSON-only metadata channels. */
 export function base64Encode(bytes: Uint8Array): string {
   let result = '';
   for (let index = 0; index < bytes.length; index += 3) {
@@ -96,6 +106,7 @@ export function base64Encode(bytes: Uint8Array): string {
   return result;
 }
 
+/** Decode canonical base64 and reject malformed input. */
 export function base64Decode(value: string): StatusOr<Uint8Array> {
   if (
     typeof value !== 'string' ||
@@ -122,6 +133,7 @@ export function base64Decode(value: string): StatusOr<Uint8Array> {
   return output;
 }
 
+/** Convert a map/object boundary into an owned byte map with optional key checks. */
 export function normalizeByteMap(
   values: ByteMapInput | undefined,
   validateKey?: (key: string) => boolean,
@@ -148,12 +160,14 @@ export function normalizeByteMap(
   return result;
 }
 
+/** Deep-copy a byte map so caller mutation cannot change retained headers. */
 export function copyByteMap(values: ReadonlyMap<string, Uint8Array>): ByteMap {
   return new Map(
     [...values].map(([key, value]) => [key, new Uint8Array(value)]),
   );
 }
 
+/** Generate a validated-name-friendly id for actions, nodes, sessions, or streams. */
 export function randomId(prefix: string): string {
   try {
     const value = globalThis.crypto?.randomUUID?.();

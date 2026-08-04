@@ -16,51 +16,43 @@
 
 namespace a11::obs {
 
-// Reserved W3C trace-context header names. These mirror the action header slots
-// declared in the Python layer (a11/actions/action.py DefaultHeaders) and are
-// the sole channel A11 uses to propagate trace context across the C++/Python
-// boundary and across the wire.
+/// Reserved action header carrying the W3C traceparent value.
 inline constexpr std::string_view kTraceparentHeader = "x-otel-traceparent";
+/// Reserved action header carrying the W3C tracestate value.
 inline constexpr std::string_view kTracestateHeader = "x-otel-tracestate";
+/// Reserved action header carrying request-scoped W3C baggage.
 inline constexpr std::string_view kBaggageHeader = "x-otel-baggage";
 
-// A single W3C baggage member. `key` and `value` are already percent-decoded;
-// `properties` holds any trailing ";"-separated properties verbatim.
+/// One decoded W3C baggage member propagated through nested and remote actions.
 struct BaggageEntry {
-  std::string key;
-  std::string value;
-  std::string properties;
+  std::string key;    ///< Trimmed member key; percent escapes stay encoded.
+  std::string value;  ///< Percent-decoded member value.
+  std::string properties;  ///< Trailing semicolon-separated properties.
 
   friend bool operator==(const BaggageEntry&, const BaggageEntry&) = default;
 };
 
-// Trace context recovered from the reserved headers. Holds only serialized W3C
-// values: no OpenTelemetry type is exposed here, so callers never need to
-// include the OTel SDK.
+/// SDK-independent W3C parent context recovered from reserved action headers.
 struct TraceContext {
-  std::string trace_id;    // 32 lowercase hex chars.
-  std::string span_id;     // 16 lowercase hex chars.
-  std::uint8_t trace_flags = 0;
-  std::string tracestate;  // Raw tracestate header value; may be empty.
-  std::vector<BaggageEntry> baggage;
+  std::string trace_id;               ///< 32 lowercase hex characters.
+  std::string span_id;                ///< 16 lowercase hex characters.
+  std::uint8_t trace_flags = 0;       ///< W3C trace flags byte.
+  std::string tracestate;             ///< Raw tracestate header; may be empty.
+  std::vector<BaggageEntry> baggage;  ///< Request-scoped propagated values.
 
+  /// Whether the W3C sampled flag is set.
   [[nodiscard]] bool sampled() const { return (trace_flags & 0x01U) != 0; }
 
   friend bool operator==(const TraceContext&, const TraceContext&) = default;
 };
 
-// Extracts trace context from the reserved headers. The three possible
-// outcomes map directly onto A11's telemetry contract:
-//   * error         -> a reserved header is present but malformed, or the set
-//                      is internally inconsistent (e.g. tracestate/baggage
-//                      without a traceparent). The caller MUST fail.
-//   * std::nullopt  -> no reserved header is present. Emit no telemetry.
-//   * TraceContext  -> a valid remote parent context to continue.
+/// Extract a remote parent; nullopt means no tracing headers were supplied.
+/// Malformed or inconsistent reserved headers return an error so an action
+/// cannot silently detach from the caller's requested trace.
 absl::StatusOr<std::optional<TraceContext>> ExtractTraceContext(
     const data::ByteMap& headers);
 
-// Serializes `context` into the reserved headers, overwriting any existing
-// reserved values. Baggage is only written when non-empty.
+/// Serialize @p context into reserved headers, replacing existing values.
 absl::Status InjectTraceContext(const TraceContext& context,
                                 data::ByteMap& headers);
 

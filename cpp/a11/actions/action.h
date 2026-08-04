@@ -232,8 +232,14 @@ class Action : public std::enable_shared_from_this<Action> {
 
   /**
    * @brief Creates a nested action from a schema, parented to this action.
+   *
+   * The child always receives a new action id and therefore new derived port
+   * ids. With @p propagate_io it shares this action's NodeMap, stream, and
+   * Session; it does not copy this action's port mappings. Registry and nested
+   * concurrency context are inherited in either mode.
+   *
    * @param schema Schema for the nested action.
-   * @param propagate_io Wire the child's I/O through this action's nodes.
+   * @param propagate_io Share this action's NodeMap, stream, and Session.
    * @param forward_headers Copy this action's framework headers to the child.
    * @return The nested action.
    */
@@ -242,8 +248,12 @@ class Action : public std::enable_shared_from_this<Action> {
       bool forward_headers = true);
   /**
    * @brief Creates a nested action by name from the bound registry.
+   *
+   * The child has its own id and port ids. With @p propagate_io it shares this
+   * action's NodeMap, stream, and Session, but not its port mappings.
+   *
    * @param action_name Registered action to instantiate.
-   * @param propagate_io Wire the child's I/O through this action's nodes.
+   * @param propagate_io Share this action's NodeMap, stream, and Session.
    * @param forward_headers Copy this action's framework headers to the child.
    * @return The nested action, or NotFound when @p action_name is unknown.
    */
@@ -354,7 +364,8 @@ class Action : public std::enable_shared_from_this<Action> {
       std::string_view kind) const;
   void RunHandler(std::shared_ptr<ActionLimiter> limiter);
   absl::Status ApplyInputAutofills();
-  [[nodiscard]] std::vector<data::NodeFragment> CollectAutofillFragments() const;
+  [[nodiscard]] std::vector<data::NodeFragment> CollectAutofillFragments()
+      const;
   void StartFinish(absl::Status status);
   absl::Status FinishRun(absl::Status status);
   absl::Status FinishOutputNodes(const absl::Status& status);

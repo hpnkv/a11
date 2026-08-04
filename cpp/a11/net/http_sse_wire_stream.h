@@ -50,19 +50,22 @@ inline constexpr std::string_view kDefaultSseMessageEndpoint =
 /**
  * @brief Endpoint paths and transport tuning for an HTTP SSE wire stream.
  *
- * `connect_endpoint` opens the SSE event stream; `message_endpoint` (a path
- * template containing the stream id) receives posted outbound messages.
+ * A POST to `connect_endpoint` opens the SSE event stream;
+ * `message_endpoint` (a path template containing the stream id) receives
+ * posted outbound messages.
  * `http2_options` and `stream_options` tune the underlying transport.
  */
 struct HttpSseOptions {
-  WireStreamOptions stream_options;
-  Http2Options http2_options;
-  std::string connect_endpoint = std::string(kDefaultSseConnectEndpoint);
-  std::string message_endpoint = std::string(kDefaultSseMessageEndpoint);
-  std::string cors_allow_origin;
-  std::string cors_allow_methods;
-  std::string cors_allow_headers;
-  std::string cors_expose_headers;
+  WireStreamOptions stream_options;  ///< Per-stream buffering and deadline.
+  Http2Options http2_options;  ///< Shared HTTP/2 transport and TLS policy.
+  std::string connect_endpoint =
+      std::string(kDefaultSseConnectEndpoint);  ///< SSE connect POST path.
+  std::string message_endpoint =
+      std::string(kDefaultSseMessageEndpoint);  ///< Outbound POST template.
+  std::string cors_allow_origin;    ///< Access-Control-Allow-Origin value.
+  std::string cors_allow_methods;   ///< Access-Control-Allow-Methods value.
+  std::string cors_allow_headers;   ///< Access-Control-Allow-Headers value.
+  std::string cors_expose_headers;  ///< Access-Control-Expose-Headers value.
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

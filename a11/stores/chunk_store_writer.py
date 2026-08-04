@@ -3,11 +3,10 @@
 A `ChunkStoreWriter` is the write cursor over a
 [ChunkStore][a11.stores.chunk_store.ChunkStore]: it admits
 [Chunk][a11.data.types.Chunk] values into the store in sequence, applying
-backpressure through its `ChunkStoreWriterOptions` buffer. Each write
-returns a `asyncio.Future` that completes once the chunk is durably
-stored, so a producer can pace itself by awaiting it. Most code reaches a writer
-through an [AsyncNode][a11.nodes.async_node.AsyncNode], but it is usable
-directly.
+backpressure through its `ChunkStoreWriterOptions` buffer. Each write returns
+an `asyncio.Future` that completes once the backing store accepts the chunk, so
+a producer can pace itself by awaiting it. Most code reaches a writer through
+an [AsyncNode][a11.nodes.async_node.AsyncNode], but it is usable directly.
 
 The class exported here is the native ``a11._native.ChunkStoreWriter``; this
 module attaches its validating constructor and async ``put`` protocol via
@@ -72,7 +71,7 @@ class _ChunkStoreWriterProtocol:
         seq: int | None = None,
         final: bool = False,
     ) -> asyncio.Future[int]:
-        """Write a [Chunk][a11.data.types.Chunk] and confirm it durably.
+        """Write a chunk and return its store-confirmation future.
 
         The writer operates at the chunk level; pass an already-serialized
         [Chunk][a11.data.types.Chunk] (use
@@ -96,7 +95,12 @@ class _ChunkStoreWriterProtocol:
         seq: int | None = None,
         final: bool = False,
     ) -> asyncio.Future[int]:
-        """Enqueue a native chunk and return its durable confirmation future."""
+        """Enqueue a native chunk and return its store-confirmation future.
+
+        Set ``final=True`` on the last chunk when readers must know the logical
+        end of the sequence. Calling `drain_and_close` later only flushes and
+        closes the writer; it does not add that final marker for you.
+        """
         confirmation, admission = _native_enqueue_chunk(
             self, chunk, seq=seq, final=final
         )

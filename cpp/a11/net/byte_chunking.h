@@ -1,5 +1,13 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief Bounded packetisation and reassembly for binary channel transports.
+ *
+ * WebSocket and WebRTC channels use this Action Engine-compatible format so a
+ * large WireMessage cannot monopolise a channel or exceed transport limits.
+ */
+
 #ifndef A11_NET_BYTE_CHUNKING_H_
 #define A11_NET_BYTE_CHUNKING_H_
 
@@ -16,18 +24,21 @@
 
 namespace a11::net {
 
+/// Packet shapes in the Action Engine byte-chunking wire format.
 enum class BytePacketType : std::uint8_t {
   kCompleteBytes = 0x00,
   kByteChunk = 0x01,
   kLengthSuffixedByteChunk = 0x02,
 };
 
+/// Parsed packet metadata plus the owned piece of application payload.
 struct BytePacket {
-  BytePacketType type = BytePacketType::kCompleteBytes;
-  std::string payload;
-  std::uint64_t transient_id = 0;
-  std::uint32_t sequence = 0;
-  std::uint32_t packet_count = 0;
+  BytePacketType type = BytePacketType::kCompleteBytes;  ///< Packet shape.
+  std::string payload;             ///< Bytes contributed by this packet.
+  std::uint64_t transient_id = 0;  ///< Id used to interleave messages safely.
+  std::uint32_t sequence = 0;      ///< Zero-based position in the message.
+  std::uint32_t packet_count =
+      0;  ///< Total count, when supplied by the first packet.
 
   template <typename Sink>
   friend void AbslStringify(Sink& sink, const BytePacket& packet) {
@@ -47,35 +58,49 @@ struct BytePacket {
   }
 };
 
+/** Bounds packet size and incomplete-message memory during reassembly. */
 struct ByteChunkingOptions {
-  size_t packet_size = 64 * 1024;
-  size_t max_message_size = 32 * 1024 * 1024;
-  size_t max_pending_messages = 64;
-  size_t max_pending_bytes = 64 * 1024 * 1024;
+  size_t packet_size = 64 * 1024;              ///< Maximum encoded packet size.
+  size_t max_message_size = 32 * 1024 * 1024;  ///< Reassembled message limit.
+  size_t max_pending_messages = 64;  ///< Simultaneous incomplete messages.
+  size_t max_pending_bytes =
+      64 * 1024 * 1024;  ///< Aggregate pending payload limit.
 
+  /// Validate that all limits can represent at least one useful packet.
   absl::Status Validate() const;
 };
 
-// Packet metadata is appended as fixed-width little-endian suffixes, matching
-// Action Engine's complete/chunk/length-suffixed-first-chunk wire contract.
+/// Split bytes into Action Engine packets with fixed little-endian suffixes.
 absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
     std::string_view bytes, std::uint64_t transient_id, size_t packet_size);
+/// Parse and validate one packet without retaining the input view.
 absl::StatusOr<BytePacket> ParseBytePacket(std::string_view packet);
 
-// Bounded, thread-safe reassembly. Chunks may arrive out of order and messages
-// with different transient IDs may be interleaved.
+/**
+ * @brief Bounded, thread-safe reassembly for interleaved binary messages.
+ *
+ * Feed packets as a transport receives them. Packets for one message may be
+ * out of order and packets for several messages may interleave; Feed() returns
+ * an owned message only when all its pieces are present. Configured bounds
+ * protect an agent endpoint from unbounded partial-message memory.
+ */
 class ByteReassembler {
  public:
+  /// Construct a reassembler with already validated limits.
   explicit ByteReassembler(ByteChunkingOptions options);
   ~ByteReassembler();
 
   ByteReassembler(const ByteReassembler&) = delete;
   ByteReassembler& operator=(const ByteReassembler&) = delete;
 
+  /// Admit one packet and return a complete message when this finishes one.
   absl::StatusOr<std::optional<std::string>> Feed(std::string packet);
+  /// Discard every incomplete message, for example when a channel aborts.
   void Clear();
 
+  /// Number of message ids currently awaiting more packets.
   [[nodiscard]] size_t pending_message_count() const;
+  /// Aggregate payload bytes retained by incomplete messages.
   [[nodiscard]] size_t pending_byte_count() const;
 
  private:

@@ -20,10 +20,15 @@ import {
 const UINT32_MAX = 0xffff_ffff;
 const UINT32_RANGE = 0x1_0000_0000;
 
+/** Control sequence assignment, batching, and producer backpressure. */
 export interface ChunkStoreWriterOptions {
+  /** First automatically assigned sequence number. */
   offset?: number;
+  /** Maximum fragments committed in one store batch. */
   maxChunksToWriteAtOnce?: number;
+  /** Outstanding chunk limit; `null` admits without a queue bound. */
   numChunksToBuffer?: number | null;
+  /** Omit repeated MIME types on contiguous chunks to reduce wire size. */
   stickyMimetype?: boolean;
 }
 
@@ -69,6 +74,7 @@ function normalizeOptions(options: ChunkStoreWriterOptions): StatusOr<Normalized
   }
 }
 
+/** Minimal transport seam used to tee stored node fragments to peers. */
 export interface WritableWireStream {
   getId(): string;
   send(message: WireMessage): Status;
@@ -82,14 +88,27 @@ interface WriteElement {
   confirmation: Deferred<StatusOr<number>>;
 }
 
+/** Separate queue-admission backpressure from backing-store confirmation. */
 export interface ChunkStoreWrite {
+  /** Resolves once the bounded writer queue admits the chunk. */
   admitted: Promise<Status>;
+  /** Resolves to its sequence after the backing store accepts the fragment. */
   confirmation: Promise<StatusOr<number>>;
 }
 
 type Lifecycle = 'none' | 'close' | 'abort' | 'cancel';
 
-/** Bounded, batched, stackless writer over a ChunkStore. */
+/**
+ * Bounded, batched, stackless writer over a {@link ChunkStore}.
+ *
+ * Producers enqueue chunks in logical sequence order. Await `admitted` to
+ * respect queue backpressure and `confirmation` to know storage accepted the
+ * fragment. The writer also calls `send` on attached wire streams; that call
+ * confirms local transport admission, not delivery by the remote agent.
+ *
+ * A final write fixes the logical end of the sequence. Lifecycle methods then
+ * either drain and seal storage, propagate an error, or cancel immediately.
+ */
 export class ChunkStoreWriter {
   readonly store: ChunkStore;
   readonly options: Readonly<NormalizedWriterOptions>;
@@ -119,6 +138,7 @@ export class ChunkStoreWriter {
     this.nextStickySeq = options.offset;
   }
 
+  /** Validate options and create a writer over the supplied store. */
   static create(
     store: ChunkStore,
     options: ChunkStoreWriterOptions = {},
@@ -134,13 +154,19 @@ export class ChunkStoreWriter {
     }
   }
 
+  /** Number of admitted and backpressured chunks still awaiting completion. */
   get queueSize(): number { return this.queue.length + this.pendingQueue.length; }
+  /** Terminal status, or `null` while the writer remains open. */
   getStatus(): Status | null { return this.status; }
+  /** Requested abort/cancel status, or `null` for a graceful lifecycle. */
   getAbortStatus(): Status | null { return this.stopStatus; }
+  /** Whether ordinary writes can still be accepted. */
   isWritable(): boolean { return this.status === null && !this.closing; }
 
+  /** Schedule the flush pump before the first write; safe to call repeatedly. */
   ensureStarted(): Status { return this.wake(); }
 
+  /** Enqueue a chunk and expose admission and persistence as separate promises. */
   enqueueChunk(
     chunk: Chunk,
     seq: number | null = null,
@@ -202,6 +228,7 @@ export class ChunkStoreWriter {
     return { admitted: admission.promise, confirmation: confirmation.promise };
   }
 
+  /** Apply backpressure, persist a chunk, and return its confirmed sequence. */
   async putChunk(
     chunk: Chunk,
     seq: number | null = null,
@@ -213,10 +240,12 @@ export class ChunkStoreWriter {
     return write.confirmation;
   }
 
+  /** Alias for {@link putChunk}. */
   put(chunk: Chunk, seq: number | null = null, final = false): Promise<StatusOr<number>> {
     return this.putChunk(chunk, seq, final);
   }
 
+  /** Await all currently outstanding writes without closing the writer. */
   waitForBufferToDrain(): Promise<Status> {
     if (this.status !== null && !isOk(this.status)) return Promise.resolve(this.status);
     if (this.outstanding === 0 && this.pendingQueue.length === 0) return Promise.resolve(okStatus());
@@ -226,6 +255,13 @@ export class ChunkStoreWriter {
     return waiter.promise;
   }
 
+  /**
+   * Flush queued chunks and close the backing store to further writes.
+   *
+   * This does not append a final fragment. Mark the last write `final` (or use
+   * {@link AsyncNode.putNullFinal}) before draining when readers need a final
+   * sequence number to identify the logical end of the stream.
+   */
   drainAndClose(): Promise<Status> {
     if (this.lifecycle !== 'none') {
       return this.lifecycle === 'close' && this.lifecycleDone !== null
@@ -244,6 +280,7 @@ export class ChunkStoreWriter {
     return this.lifecycleDone.promise;
   }
 
+  /** Reject queued writes and seal the store with a non-OK producer status. */
   abortWithStatus(status: Status): Promise<Status> {
     if (!isStatus(status)) {
       return Promise.resolve(invalidArgumentError('Abort status must be an A11 Status'));
@@ -263,6 +300,7 @@ export class ChunkStoreWriter {
     return this.lifecycleDone.promise;
   }
 
+  /** Abandon queued work immediately without persisting a store error status. */
   cancel(): Promise<Status> {
     if (this.lifecycle !== 'none') {
       return this.lifecycle === 'cancel' && this.lifecycleDone !== null
@@ -278,6 +316,7 @@ export class ChunkStoreWriter {
     return this.lifecycleDone.promise;
   }
 
+  /** Tee stored fragments to a stream; a send failure stops later writes. */
   attachStream(stream: WritableWireStream): Status {
     try {
       if (
@@ -299,6 +338,7 @@ export class ChunkStoreWriter {
     return okStatus();
   }
 
+  /** Stop teeing future stored fragments to a previously attached stream. */
   detachStream(stream: WritableWireStream): Status {
     const index = this.streams.indexOf(stream);
     if (index >= 0) this.streams.splice(index, 1);

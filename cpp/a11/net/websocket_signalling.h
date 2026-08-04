@@ -38,9 +38,9 @@ namespace a11::net {
  * and the maximum accepted inbound signalling message size.
  */
 struct WebSocketSignallingClientOptions {
-  Http2Options http2_options;
-  absl::Time deadline = absl::InfiniteFuture();
-  size_t max_message_size = 1024 * 1024;
+  Http2Options http2_options;  ///< HTTP/2 connection and TLS policy.
+  absl::Time deadline = absl::InfiniteFuture();  ///< Registration deadline.
+  size_t max_message_size = 1024 * 1024;  ///< Inbound JSON message limit.
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;
@@ -106,11 +106,12 @@ class WebSocketSignallingClient final
  * and TLS settings, and `max_message_size` bounds inbound signalling frames.
  */
 struct WebSocketSignallingServerOptions {
-  std::string path_prefix = "/";
-  std::string bind_address = "127.0.0.1";
-  std::uint16_t port = 0;
-  Http2Options http2_options;
-  size_t max_message_size = 1024 * 1024;
+  std::string path_prefix =
+      "/";  ///< Prefix before identity registration paths.
+  std::string bind_address = "127.0.0.1";  ///< Local listen address.
+  std::uint16_t port = 0;  ///< Listen port; zero requests an ephemeral port.
+  Http2Options http2_options;             ///< Server HTTP/2 and TLS policy.
+  size_t max_message_size = 1024 * 1024;  ///< Inbound JSON message limit.
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

@@ -57,11 +57,11 @@ struct TurnServer {
    * @return The parsed server, or an error status. */
   static absl::StatusOr<TurnServer> FromString(std::string_view value);
 
-  std::string hostname;
-  std::uint16_t port = 3478;
-  std::string username;
-  std::string password;
-  TurnRelayType relay_type = TurnRelayType::kUdp;
+  std::string hostname;       ///< TURN host name or address.
+  std::uint16_t port = 3478;  ///< TURN service port.
+  std::string username;       ///< Relay credential username.
+  std::string password;       ///< Relay credential password.
+  TurnRelayType relay_type = TurnRelayType::kUdp;  ///< Transport to the relay.
 
   friend bool operator==(const TurnServer&, const TurnServer&) = default;
 };
@@ -75,13 +75,18 @@ struct TurnServer {
 struct WebRtcConfiguration {
   // Large logical WireMessages are fragmented by A11 before reaching SCTP;
   // this remains the advertised local libdatachannel message ceiling.
-  std::optional<size_t> max_message_size = 64 * 1024;
-  size_t channel_split_size = 48 * 1024;
-  bool enable_ice_udp_mux = false;
-  std::vector<std::string> stun_servers;
-  std::vector<TurnServer> turn_servers;
+  std::optional<size_t> max_message_size =
+      64 * 1024;  ///< Advertised channel ceiling.
+  size_t channel_split_size =
+      48 * 1024;  ///< A11 packet size below SCTP limits.
+  bool enable_ice_udp_mux =
+      false;  ///< Reuse one UDP socket for ICE candidates.
+  std::vector<std::string> stun_servers;  ///< STUN URLs used for NAT discovery.
+  std::vector<TurnServer> turn_servers;   ///< Fallback relay servers.
+  /// Optional inclusive local UDP port range for ICE.
   std::optional<std::pair<std::uint16_t, std::uint16_t>> preferred_port_range;
-  std::optional<std::string> bind_address;
+  std::optional<std::string>
+      bind_address;  ///< Optional local candidate address.
 
   /** @return OK if the configuration is internally consistent. */
   absl::Status Validate() const;

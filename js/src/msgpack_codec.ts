@@ -45,6 +45,7 @@ export function decodeMsgpackFields(
   }
 }
 
+/** Convert byte-map entries to the plain object shape accepted by MessagePack. */
 export function msgpackByteMap(
   values: ReadonlyMap<string, Uint8Array>,
 ): Record<string, Uint8Array> {
@@ -52,4 +53,3 @@ export function msgpackByteMap(
   for (const [key, value] of values) result[key] = value;
   return result;
 }
-

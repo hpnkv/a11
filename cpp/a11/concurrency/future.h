@@ -1,5 +1,15 @@
 // Copyright 2026 The A11 Authors.
 
+/**
+ * @file
+ * @brief Completion values used by every asynchronous A11 operation.
+ *
+ * Future and Promise carry an `absl::StatusOr<T>` between producers and
+ * consumers without exposing the fiber scheduler. Runtime code can await a
+ * Future from an A11 fiber or an ordinary OS thread, attach a non-blocking
+ * callback, or request cooperative cancellation.
+ */
+
 #ifndef A11_CONCURRENCY_FUTURE_H_
 #define A11_CONCURRENCY_FUTURE_H_
 
@@ -26,6 +36,7 @@
 
 namespace a11 {
 
+/// Empty success value used by Future<Unit> operations that return no data.
 struct Unit {
   friend bool operator==(Unit, Unit) = default;
 };
@@ -65,6 +76,15 @@ void InvokeFutureCallback(
 
 }  // namespace internal
 
+/**
+ * @brief Run work on A11's fiber pool with application-specific cancellation.
+ *
+ * The returned Future requests both @p cancellation_hook and cancellation of
+ * the scheduled fiber when Future::Cancel() is called. Use this for operations
+ * that must also interrupt an external SDK or transport; ordinary cooperative
+ * A11 work can use Submit(). Cancellation remains a request, so consumers must
+ * still observe the Future's eventual result.
+ */
 template <typename T>
 Future<T> SubmitWithCancellationHook(
     absl::AnyInvocable<absl::StatusOr<T>() &&> work,
@@ -75,13 +95,26 @@ template <typename T>
 Future<T> Submit(absl::AnyInvocable<absl::StatusOr<T>() &&> work,
                  thread::TreeOptions tree_options = {});
 
+/**
+ * @brief Shared handle to one asynchronous result.
+ *
+ * Futures are cheap to copy and may have several waiters. Await() integrates
+ * with A11 fibers when called inside the runtime and parks an ordinary thread
+ * otherwise. OnReady() is the callback-oriented path used by high-cardinality
+ * pumps and language bindings.
+ *
+ * Cancellation is a request to the producing operation; callers must still
+ * observe the future to learn its eventual result.
+ */
 template <typename T>
 class Future {
  public:
   Future() = default;
 
+  /// Whether this handle refers to shared completion state.
   [[nodiscard]] bool valid() const { return state_ != nullptr; }
 
+  /// Whether the producer has published either a value or an error.
   [[nodiscard]] bool IsReady() const {
     if (state_ == nullptr) {
       return false;
@@ -90,6 +123,11 @@ class Future {
     return state_->ready;
   }
 
+  /**
+   * @brief Request cancellation from the operation producing this result.
+   * @return OK when the request was delivered, or Unimplemented when the
+   *   producer did not install a cancellation source.
+   */
   absl::Status Cancel() const {
     if (state_ == nullptr) {
       return absl::FailedPreconditionError("Future is not valid");
@@ -119,6 +157,12 @@ class Future {
     }
   }
 
+  /**
+   * @brief Wait for and return the result up to an absolute deadline.
+   *
+   * A timeout or cancellation of the waiting fiber does not itself overwrite
+   * the producer's result; another observer may continue waiting.
+   */
   absl::StatusOr<T> Await(absl::Time deadline = absl::InfiniteFuture()) const {
     if (state_ == nullptr) {
       return absl::FailedPreconditionError("Future is not valid");
@@ -162,6 +206,12 @@ class Future {
     return *state_->result;
   }
 
+  /**
+   * @brief Run @p callback once when the result becomes available.
+   *
+   * The callback runs immediately when the future is already ready. It must
+   * not retain the referenced StatusOr beyond the callback invocation.
+   */
   void OnReady(
       absl::AnyInvocable<void(const absl::StatusOr<T>&)> callback) const {
     if (callback == nullptr) {
@@ -212,6 +262,14 @@ class Future {
       thread::TreeOptions tree_options);
 };
 
+/**
+ * @brief Move-only producer for a Future result.
+ *
+ * Obtain the consumer handle with future(), then complete the promise exactly
+ * once with SetValue(), SetStatus(), or SetResult(). Destroying an incomplete
+ * promise publishes a Cancelled status so agent pipelines cannot wait forever
+ * on an abandoned operation.
+ */
 template <typename T>
 class Promise {
  public:
@@ -220,8 +278,10 @@ class Promise {
   Promise(const Promise&) = delete;
   Promise& operator=(const Promise&) = delete;
 
+  /// Transfer responsibility for completing or abandoning the shared state.
   Promise(Promise&& other) noexcept : state_(std::move(other.state_)) {}
 
+  /// Abandon this state, then take responsibility for @p other's state.
   Promise& operator=(Promise&& other) noexcept {
     if (this != &other) {
       Abandon();
@@ -232,8 +292,10 @@ class Promise {
 
   ~Promise() { Abandon(); }
 
+  /// Return a consumer handle sharing this promise's completion state.
   [[nodiscard]] Future<T> future() const { return Future<T>(state_); }
 
+  /// Install the operation invoked when a consumer calls Future::Cancel().
   absl::Status SetCancellationCallback(std::function<void()> cancel) {
     if (state_ == nullptr) {
       return absl::FailedPreconditionError("Promise is not valid");
@@ -246,10 +308,12 @@ class Promise {
     return absl::OkStatus();
   }
 
+  /// Complete successfully with @p value.
   absl::Status SetValue(T value) {
     return SetResult(absl::StatusOr<T>(std::move(value)));
   }
 
+  /// Complete with a non-OK status.
   absl::Status SetStatus(absl::Status status) {
     if (status.ok()) {
       return absl::InvalidArgumentError(
@@ -260,6 +324,7 @@ class Promise {
     return SetResult(std::move(result));
   }
 
+  /// Complete with either a value or an error, waking every observer.
   absl::Status SetResult(absl::StatusOr<T> result) {
     if (state_ == nullptr) {
       return absl::FailedPreconditionError("Promise is not valid");
@@ -307,6 +372,7 @@ class Promise {
   std::shared_ptr<internal::FutureState<T>> state_;
 };
 
+/// Return an already-successful future containing @p value.
 template <typename T>
 Future<T> ReadyFuture(T value) {
   Promise<T> promise;
@@ -315,6 +381,7 @@ Future<T> ReadyFuture(T value) {
   return future;
 }
 
+/// Return an already-completed future containing @p result.
 template <typename T>
 Future<T> CompletedFuture(absl::StatusOr<T> result) {
   Promise<T> promise;
@@ -323,6 +390,7 @@ Future<T> CompletedFuture(absl::StatusOr<T> result) {
   return future;
 }
 
+/// Return an already-failed future containing @p status.
 template <typename T>
 Future<T> FailedFuture(absl::Status status) {
   Promise<T> promise;
@@ -331,12 +399,15 @@ Future<T> FailedFuture(absl::Status status) {
   return future;
 }
 
+/// Asynchronous operation whose only successful result is completion itself.
 using Task = Future<Unit>;
 
+/// Return an already-successful Task.
 inline Task ReadyTask() {
   return ReadyFuture(Unit{});
 }
 
+/// Return an already-failed Task.
 inline Task FailedTask(absl::Status status) {
   return FailedFuture<Unit>(std::move(status));
 }

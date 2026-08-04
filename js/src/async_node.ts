@@ -26,20 +26,42 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** Creates the backing log when a {@link NodeMap} first sees a node id. */
 export type ChunkStoreFactory = (
   nodeId: string,
 ) => StatusOr<ChunkStore> | Promise<StatusOr<ChunkStore>>;
 
+/** Collaborators and cursor policy for an {@link AsyncNode}. */
 export interface AsyncNodeOptions {
+  /** Registry used to turn application objects into typed chunks. */
   serializationRegistry?: SerializationRegistry;
+  /** Ordering, offset, and prefetch policy for the consuming half. */
   readerOptions?: ChunkStoreReaderOptions;
+  /** Batching and backpressure policy for the producing half. */
   writerOptions?: ChunkStoreWriterOptions;
+  /** Owning map, used when the node participates in action/session state. */
   nodeMap?: NodeMap;
 }
 
-/** A single ordered, typed, asynchronously streamed A11 value sequence. */
+/**
+ * One ordered, typed value sequence flowing through an A11 application.
+ *
+ * Action inputs and outputs are AsyncNodes. The writer serializes application
+ * values into sequenced chunks, persists them through a {@link ChunkStore},
+ * and optionally tees stored fragments over a wire stream. The reader
+ * follows that same ordered log and deserializes values as they arrive, so an
+ * agent can expose tokens, audio frames, tool events, or a unary result through
+ * one protocol.
+ *
+ * Mark the logical end explicitly with {@link putFinal} or
+ * {@link putNullFinal}. Afterwards, {@link drainAndClose} waits for buffered
+ * work and closes storage. Failures should use {@link abortWithStatus} so local
+ * and remote readers see why the sequence ended.
+ */
 export class AsyncNode {
+  /** Ordered storage shared by the node's reader and writer. */
   readonly chunkStore: ChunkStore;
+  /** Owning node map, or `null` for a standalone node. */
   readonly nodeMap: NodeMap | null;
   private registry: SerializationRegistry;
   private readerOptions: ChunkStoreReaderOptions;
@@ -64,6 +86,7 @@ export class AsyncNode {
     this.writerInternal = writer;
   }
 
+  /** Build a node over an existing store, preserving its data and id. */
   static fromStore(
     store: ChunkStore,
     options: AsyncNodeOptions = {},
@@ -88,6 +111,7 @@ export class AsyncNode {
     }
   }
 
+  /** Create a backing store for `nodeId`, then build its reader and writer. */
   static async create(
     nodeId: string,
     options: AsyncNodeOptions & { chunkStoreFactory?: ChunkStoreFactory } = {},
@@ -104,6 +128,7 @@ export class AsyncNode {
     }
   }
 
+  /** Return the stable id used by fragments, actions, and sessions. */
   getId(): StatusOr<string> {
     try {
       const id = this.chunkStore.getId();
@@ -115,16 +140,21 @@ export class AsyncNode {
       return statusFromUnknown(error, 'ChunkStore.getId() raised an exception.');
     }
   }
+  /** Low-level consuming cursor; prefer `next` for typed values. */
   get reader(): ChunkStoreReader { return this.readerInternal; }
+  /** Low-level producing cursor; prefer `put` for typed values. */
   get writer(): ChunkStoreWriter { return this.writerInternal; }
+  /** Codec registry currently used at the application boundary. */
   get serializationRegistry(): SerializationRegistry { return this.registry; }
 
+  /** Replace the codecs used by subsequent typed reads and writes. */
   setSerializationRegistry(registry: SerializationRegistry): Status {
     if (!(registry instanceof SerializationRegistry)) return invalidArgumentError('registry must be a SerializationRegistry.');
     this.registry = registry;
     return okStatus();
   }
 
+  /** Set default MIME/type constraints for subsequent typed reads. */
   setExpectedTypes(
     mimetypePatterns: string | readonly string[] = '',
     expectedTag?: string,
@@ -150,6 +180,7 @@ export class AsyncNode {
   getReaderOptions(): ChunkStoreReaderOptions { return { ...this.readerOptions }; }
   getWriterOptions(): ChunkStoreWriterOptions { return { ...this.writerOptions }; }
 
+  /** Replace and rewind the independent read cursor, optionally from an offset. */
   resetReader(options?: ChunkStoreReaderOptions): Status {
     try {
       const nextOptions = options ?? this.readerOptions;
@@ -168,6 +199,7 @@ export class AsyncNode {
     return this.resetReader(options);
   }
 
+  /** Replace writer policy before any write has started. */
   setWriterOptions(options: ChunkStoreWriterOptions): Status {
     try {
       if (this.writerInternal.queueSize !== 0 || !this.writerInternal.isWritable()) {
@@ -189,16 +221,19 @@ export class AsyncNode {
   getWriterAbortStatus(): Status | null { return this.writerInternal.getAbortStatus(); }
   async isWritable(): Promise<StatusOr<boolean>> { return this.writerInternal.isWritable(); }
 
+  /** Persist a raw chunk, optionally at an explicit sequence and/or as final. */
   putChunk(chunk: Chunk, seq: number | null = null, final = false): Promise<StatusOr<number>> {
     return this.writerInternal.putChunk(chunk, seq, final);
   }
 
+  /** Persist a fragment carrying its own sequence and continuation marker. */
   putFragment(fragment: NodeFragment): Promise<StatusOr<number>> {
     if (!(fragment instanceof NodeFragment)) return Promise.resolve(invalidArgumentError('fragment must be a NodeFragment.'));
     if (!(fragment.data instanceof Chunk)) return Promise.resolve(unimplementedError('AsyncNode writers do not resolve NodeRef payloads.'));
     return this.putChunk(fragment.data, fragment.seq, !fragment.continued);
   }
 
+  /** Serialize and persist one application value, respecting writer backpressure. */
   async put(
     value: unknown,
     options: { seq?: number | null; final?: boolean; mimetype?: string } = {},
@@ -229,24 +264,29 @@ export class AsyncNode {
     }
   }
 
+  /** Write the last application value and establish the final sequence. */
   putFinal(value: unknown, seq: number | null = null, mimetype = ''): Promise<StatusOr<number>> {
     return this.put(value, { seq, final: true, mimetype });
   }
 
+  /** Establish a final sequence with an explicit null marker and no value. */
   putNullFinal(seq: number | null = null): Promise<StatusOr<number>> {
     return this.putChunk(makeNullChunk(), seq, true);
   }
 
+  /** Read the next raw fragment, or `null` at the clean end of sequence. */
   nextFragment(timeoutMs?: number): Promise<StatusOr<NodeFragment | null>> {
     return this.readerInternal.next(timeoutMs);
   }
 
+  /** Read the next inline chunk without deserializing its payload. */
   async nextChunk(timeoutMs?: number): Promise<StatusOr<Chunk | null>> {
     const fragment = await this.nextFragment(timeoutMs);
     if (!isOk(fragment) || fragment === null) return fragment;
     return fragment.getChunk();
   }
 
+  /** Read one value, or `null` at finality, clean closure, or the reader limit. */
   async next<T = unknown>(
     optionsOrTimeout: {
       timeoutMs?: number;
@@ -280,6 +320,10 @@ export class AsyncNode {
     }
   }
 
+  /**
+   * Consume exactly one whole value's fragment and validate its terminator.
+   * Use this for unary action ports; streaming ports should call `next`.
+   */
   async consumeFragment(
     options: { timeoutMs?: number; allowNone?: boolean } = {},
   ): Promise<StatusOr<NodeFragment | null>> {
@@ -332,6 +376,7 @@ export class AsyncNode {
     return fragment.getChunk();
   }
 
+  /** Consume and deserialize exactly one whole unary value. */
   async consume<T = unknown>(
     options: {
       timeoutMs?: number;
@@ -365,6 +410,7 @@ export class AsyncNode {
     }
   }
 
+  /** Iterate to the clean reader end, yielding at most one terminal error. */
   async *values<T = unknown>(options: {
     timeoutMs?: number;
     mimetypePatterns?: string | readonly string[];
@@ -380,25 +426,46 @@ export class AsyncNode {
 
   [Symbol.asyncIterator](): AsyncGenerator<StatusOr<unknown>, void, void> { return this.values(); }
 
+  /** Await outstanding writes without closing or adding a final marker. */
   waitForBufferToDrain(): Promise<Status> { return this.writerInternal.waitForBufferToDrain(); }
+  /**
+   * Flush queued writes and close the writer without adding a final fragment.
+   *
+   * Call {@link putFinal} or {@link putNullFinal} first when readers must
+   * synchronise on a definite end-of-stream sequence.
+   */
   drainAndClose(): Promise<Status> { return this.writerInternal.drainAndClose(); }
+  /** Fail the producing half so readers observe a structured terminal error. */
   abortWithStatus(status: Status): Promise<Status> { return this.writerInternal.abortWithStatus(status); }
+  /** Tee stored writes to a transport; `send` admission is not peer delivery. */
   attachStream(stream: WritableWireStream): Status { return this.writerInternal.attachStream(stream); }
+  /** Stop mirroring writes to one transport. */
   detachStream(stream: WritableWireStream): Status { return this.writerInternal.detachStream(stream); }
+  /** Stop this node's independent consuming cursor. */
   cancelReader(): Status { return this.readerInternal.cancel(); }
+  /** Abandon queued writes and stop the producing cursor. */
   cancelWriter(): Promise<Status> { return this.writerInternal.cancel(); }
+  /** Cancel both halves of this local node object. */
   async cancel(): Promise<Status> {
     this.readerInternal.cancel();
     return this.writerInternal.cancel();
   }
 }
 
-/** Registry of lazily-created AsyncNodes, keyed by validated node id. */
+/**
+ * Registry of lazily created {@link AsyncNode}s keyed by stable node id.
+ *
+ * Sessions share a NodeMap so fragments arriving before or after an action
+ * port is opened converge on the same store and node object. The factory is
+ * the persistence extension point: use an in-memory store locally or inject a
+ * distributed store when several agent processes must share stream state.
+ */
 export class NodeMap {
   private readonly nodes = new Map<string, AsyncNode>();
 
   constructor(private readonly factory: ChunkStoreFactory = (id) => LocalChunkStore.create(id)) {}
 
+  /** Return the canonical node, creating its store on first access. */
   async get(nodeId: string): Promise<StatusOr<AsyncNode>> {
     const validation = validateName(nodeId);
     if (!isOk(validation)) return validation;
@@ -418,11 +485,13 @@ export class NodeMap {
     }
   }
 
+  /** Return an existing node without invoking the store factory. */
   getIfExists(nodeId: string): StatusOr<AsyncNode | null> {
     const validation = validateName(nodeId);
     return isOk(validation) ? this.nodes.get(nodeId) ?? null : validation;
   }
 
+  /** Remove a node, optionally only if it is the expected instance. */
   discard(nodeId: string, expected?: AsyncNode): StatusOr<AsyncNode | null> {
     const validation = validateName(nodeId);
     if (!isOk(validation)) return validation;

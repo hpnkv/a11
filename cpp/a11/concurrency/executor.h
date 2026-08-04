@@ -16,14 +16,13 @@
 
 namespace a11 {
 
-// Schedule on the included fiber pool. Work may block on another A11 Future
-// without consuming a worker thread, while callers from Python/libuv receive a
-// callback-driven Future and never need to enter the fiber scheduler.
+/// Schedule work on A11's fiber pool without returning a completion handle.
+/// Work may await another A11 Future without consuming an OS worker thread.
 void Schedule(absl::AnyInvocable<void() &&> work,
               thread::TreeOptions tree_options = {});
 
-// Like Schedule, but retains ownership of the root fiber until it is joined.
-// The returned function can safely race completion and is idempotent.
+/// Schedule work and return an idempotent cooperative-cancellation function.
+/// The scheduler retains the root fiber until it has been joined.
 std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
                                          thread::TreeOptions tree_options = {});
 
@@ -62,6 +61,7 @@ Future<T> SubmitWithCancellationHook(
   return future;
 }
 
+/// Run status-returning work on the fiber pool and expose its Future.
 template <typename T>
 Future<T> Submit(absl::AnyInvocable<absl::StatusOr<T>() &&> work,
                  thread::TreeOptions tree_options) {
@@ -69,6 +69,7 @@ Future<T> Submit(absl::AnyInvocable<absl::StatusOr<T>() &&> work,
                                        std::move(tree_options));
 }
 
+/// Run an operation that returns only a completion status.
 inline Task SubmitTask(absl::AnyInvocable<absl::Status() &&> work,
                        thread::TreeOptions tree_options = {}) {
   return Submit<Unit>(

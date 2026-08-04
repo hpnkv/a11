@@ -50,6 +50,7 @@ function cloneMetadata(metadata: ChunkMetadata | null): ChunkMetadata | null {
       });
 }
 
+/** Copy a chunk and its mutable metadata/bytes before retaining or forwarding it. */
 export function cloneChunk(chunk: Chunk): Chunk {
   return new Chunk({
     metadata: cloneMetadata(chunk.metadata),
@@ -58,6 +59,7 @@ export function cloneChunk(chunk: Chunk): Chunk {
   });
 }
 
+/** Copy a fragment and its inline chunk or node-reference payload. */
 export function cloneFragment(fragment: NodeFragment): NodeFragment {
   const data = fragment.data instanceof Chunk
     ? cloneChunk(fragment.data)
@@ -74,21 +76,48 @@ export function cloneFragment(fragment: NodeFragment): NodeFragment {
   });
 }
 
-/** Pluggable asynchronous backing store for an A11 node stream. */
+/**
+ * Pluggable ordered log behind an A11 node stream.
+ *
+ * {@link AsyncNode}, {@link ChunkStoreReader}, and {@link ChunkStoreWriter}
+ * depend on this contract rather than a particular database. Implement it to
+ * keep an agent's stream data in a durable or distributed backend. Sequence
+ * order is the logical order consumed by nodes; arrival order is retained
+ * separately so out-of-order network fragments can also be inspected.
+ *
+ * A final fragment (`continued === false`) establishes the stream's final
+ * sequence. Closing writes records producer success/failure and releases
+ * waiters, but does not create that final fragment itself.
+ */
 export interface ChunkStore {
+  /** Read a sequence, waiting until it arrives, closes, or the deadline passes. */
   get(seq: number, deadline?: Deadline): Promise<StatusOr<NodeFragment>>;
+  /** Read by ingestion order rather than logical sequence. */
   getByArrivalOrder(arrivalOrder: number, deadline?: Deadline): Promise<StatusOr<NodeFragment>>;
+  /**
+   * Read the shared logical-sequence cursor, waiting at gaps.
+   * A clean end may append `null`; use {@link getByArrivalOrder} for ingestion order.
+   */
   next(deadline?: Deadline, limit?: number): Promise<StatusOr<Array<NodeFragment | null>>>;
+  /** Persist one fragment and return its assigned sequence number. */
   put(fragment: NodeFragment): Promise<StatusOr<number>>;
+  /** Atomically persist a batch and return corresponding sequence numbers. */
   putMany(fragments: readonly NodeFragment[]): Promise<StatusOr<number[]>>;
+  /** Reclaim a payload while retaining its sequence/metadata tombstone. */
   clearData(seq: number): Promise<StatusOr<NodeFragment>>;
+  /** Translate a zero-based arrival position to its logical sequence. */
   getSeqForArrivalOrder(arrivalOrder: number): Promise<StatusOr<number>>;
+  /** Return the declared final sequence, or `null` while none is known. */
   getFinalSeq(): Promise<StatusOr<number | null>>;
+  /** Seal writes with a producer terminal status and release waiting readers. */
   closeWritesWithStatus(status: Status, returnStatusIfAlreadyClosed?: boolean): Promise<Status>;
+  /** Return the number of fragment slots currently retained. */
   size(): Promise<StatusOr<number>>;
+  /** Return the node id this log belongs to. */
   getId(): StatusOr<string>;
 }
 
+/** Narrow an injected object to the runtime ChunkStore protocol. */
 export function hasChunkStoreShape(value: unknown): value is ChunkStore {
   if (typeof value !== 'object' || value === null) return false;
   try {
@@ -116,7 +145,14 @@ interface ChangeWaiter {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-/** In-memory ChunkStore with out-of-order writes and deadline-aware reads. */
+/**
+ * In-memory {@link ChunkStore} for single-process agents and tests.
+ *
+ * It supports out-of-order writes, blocking deadline-aware reads, final
+ * sequence enforcement, and payload tombstones with the same contract a
+ * persistent implementation must provide. Swap it for a distributed store
+ * without changing the node/reader/writer layers above it.
+ */
 export class LocalChunkStore implements ChunkStore {
   private readonly chunks = new Map<number, Chunk>();
   private readonly seqToArrivalOrder = new Map<number, number>();
@@ -129,6 +165,7 @@ export class LocalChunkStore implements ChunkStore {
 
   private constructor(private readonly nodeId: string) {}
 
+  /** Create an empty stream log for a validated node id. */
   static create(nodeId: string): StatusOr<LocalChunkStore> {
     const status = validateName(nodeId);
     return isOk(status) ? new LocalChunkStore(nodeId) : status;

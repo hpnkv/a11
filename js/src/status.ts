@@ -1,22 +1,47 @@
 /* eslint-disable no-redeclare -- TypeScript overload signatures. */
 
+/**
+ * Portable outcome codes used across actions, stores, transports, and HTTP.
+ *
+ * A11 returns these structured outcomes from expected operational failures so
+ * an agent can preserve the same meaning across process and language
+ * boundaries. Reserve thrown JavaScript errors for code that explicitly opts
+ * into the exception helpers below.
+ */
 export enum StatusCode {
+  /** The operation completed successfully. */
   OK = 0,
+  /** The caller or owning task cancelled the operation. */
   CANCELLED = 1,
+  /** No more specific failure code is known. */
   UNKNOWN = 2,
+  /** Input is invalid regardless of current runtime state. */
   INVALID_ARGUMENT = 3,
+  /** The operation did not finish before its deadline. */
   DEADLINE_EXCEEDED = 4,
+  /** The requested entity does not exist. */
   NOT_FOUND = 5,
+  /** The entity being created already exists. */
   ALREADY_EXISTS = 6,
+  /** The authenticated caller lacks permission. */
   PERMISSION_DENIED = 7,
+  /** A bounded queue, quota, or other resource is exhausted. */
   RESOURCE_EXHAUSTED = 8,
+  /** Runtime state must change before this operation is valid. */
   FAILED_PRECONDITION = 9,
+  /** The operation was aborted, commonly due to a conflict. */
   ABORTED = 10,
+  /** A requested offset or value lies outside its valid range. */
   OUT_OF_RANGE = 11,
+  /** This endpoint does not implement the requested operation. */
   UNIMPLEMENTED = 12,
+  /** An A11 invariant or implementation failed. */
   INTERNAL = 13,
+  /** A transient service or transport is unavailable. */
   UNAVAILABLE = 14,
+  /** Data was corrupted or irrecoverably lost. */
   DATA_LOSS = 15,
+  /** The caller's identity could not be established. */
   UNAUTHENTICATED = 16,
 }
 
@@ -40,8 +65,11 @@ const kDefaultStatusMessages = {
   [StatusCode.UNAUTHENTICATED]: 'Unauthenticated',
 };
 
+/** Policy used by legacy {@link getValue} when given a non-OK status. */
 export enum InvalidStatusAccessBehaviour {
+  /** Abort the Node process when possible. */
   TERMINATE = 'TERMINATE',
+  /** Throw the code-specific {@link StatusException}. */
   THROW = 'THROW',
 }
 
@@ -49,23 +77,31 @@ let _invalidStatusAccessBehaviour: InvalidStatusAccessBehaviour =
   InvalidStatusAccessBehaviour.TERMINATE;
 
 interface StatusBase {
+  /** Machine-readable portable outcome. */
   code: StatusCode;
+  /** Concise description suitable for logs and user-facing diagnostics. */
   message: string;
+  /** Structured, serializable application or validation context. */
   details?: object[];
 
+  /** Local exception/diagnostic cause; omitted at serialized boundaries. */
   cause?: unknown;
 }
 
+/** Successful operation result. */
 export interface OkStatus extends StatusBase {
   code: StatusCode.OK;
 }
 
+/** Failed operation result with any non-OK {@link StatusCode}. */
 export interface NonOkStatus extends StatusBase {
   code: Exclude<StatusCode, StatusCode.OK>;
 }
 
+/** Structured success or failure carried across A11 boundaries. */
 export type Status = OkStatus | NonOkStatus;
 
+/** A direct value on success, or a structured status on failure. */
 export type StatusOr<Type> = NonOkStatus | Type;
 
 const isStatusAndIsOk = (val: unknown): [boolean, boolean] => {
@@ -109,10 +145,12 @@ const isStatusAndIsOk = (val: unknown): [boolean, boolean] => {
   }
 };
 
+/** Return whether an unknown value has A11's Status shape. */
 export const isStatus = (val: unknown): val is Status => {
   return isStatusAndIsOk(val)[0];
 };
 
+/** Narrow a Status to OK, or a StatusOr to its successful value. */
 export function isOk(val: Status): val is OkStatus;
 
 export function isOk<T>(val: StatusOr<T>): val is T;
@@ -121,6 +159,7 @@ export function isOk(val: unknown) {
   return isStatusAndIsOk(val)[1];
 }
 
+/** Return the failure from a StatusOr, or `null` when it contains a value. */
 export function getError<T>(val: StatusOr<T>): NonOkStatus | null {
   const [valIsStatus, valIsOk] = isStatusAndIsOk(val);
   if (!valIsStatus) {
@@ -132,6 +171,11 @@ export function getError<T>(val: StatusOr<T>): NonOkStatus | null {
   return val as NonOkStatus;
 }
 
+/**
+ * Extract a successful value using the configured invalid-access policy.
+ * Prefer {@link valueOrThrow} in application code because its failure mode is
+ * explicit at the call site.
+ */
 export function getValue<T>(val: StatusOr<T>): T {
   if (_invalidStatusAccessBehaviour === InvalidStatusAccessBehaviour.THROW) {
     return valueOrThrow(val);
@@ -139,6 +183,7 @@ export function getValue<T>(val: StatusOr<T>): T {
   return valueOrTerminate(val);
 }
 
+/** Log a fatal status/message, abort Node when possible, and never return. */
 export function terminate(message_or_status: Status | string): never {
   let paramIsStatus = isStatus(message_or_status);
   let codeRepr: string = 'UNKNOWN';
@@ -162,7 +207,15 @@ export function terminate(message_or_status: Status | string): never {
   throw new Error(message);
 }
 
+/**
+ * JavaScript exception carrying the original structured A11 status.
+ *
+ * Most low-level APIs return {@link StatusOr} so expected failures stay in the
+ * data flow. Use {@link valueOrThrow} or {@link throwForError} at an application
+ * boundary when exception-style control flow is more convenient.
+ */
 export class StatusException extends Error {
+  /** Clean copy of the status represented by this exception. */
   public _status: Status;
 
   constructor(status: Status, options?: ErrorOptions) {
@@ -196,15 +249,18 @@ export class StatusException extends Error {
     this._status = cleanStatus;
   }
 
+  /** Return the structured status for forwarding to another A11 boundary. */
   status() {
     return this._status;
   }
 }
 
+/** Failure indicating that the caller or owning task stopped the work. */
 export interface CancelledError extends NonOkStatus {
   code: StatusCode.CANCELLED;
 }
 
+/** Construct a CANCELLED status for cooperative cancellation. */
 export const cancelledError = (
   message: string = kDefaultStatusMessages[StatusCode.CANCELLED],
   details?: object[],
@@ -223,12 +279,14 @@ export const cancelledError = (
   return status;
 };
 
+/** Narrow a Status/StatusOr to {@link CancelledError}. */
 export function isCancelledError(val: Status): val is CancelledError;
 
 export function isCancelledError<T>(val: StatusOr<T>): val is CancelledError {
   return isStatus(val) && (val as Status).code === StatusCode.CANCELLED;
 }
 
+/** Exception form of a CANCELLED status. */
 export class CancelledException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.CANCELLED],
@@ -239,16 +297,19 @@ export class CancelledException extends StatusException {
   }
 }
 
+/** Failure for which no more specific portable code is known. */
 export interface UnknownError extends NonOkStatus {
   code: StatusCode.UNKNOWN;
 }
 
+/** Narrow a Status/StatusOr to {@link UnknownError}. */
 export function isUnknownError(val: Status): val is UnknownError;
 
 export function isUnknownError<T>(val: StatusOr<T>): val is UnknownError {
   return isStatus(val) && (val as Status).code === StatusCode.UNKNOWN;
 }
 
+/** Construct an UNKNOWN status, usually at an unclassified error boundary. */
 export const unknownError = (
   message: string = kDefaultStatusMessages[StatusCode.UNKNOWN],
   details?: object[],
@@ -267,6 +328,7 @@ export const unknownError = (
   return status;
 };
 
+/** Exception form of an UNKNOWN status. */
 export class UnknownException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.UNKNOWN],
@@ -277,10 +339,12 @@ export class UnknownException extends StatusException {
   }
 }
 
+/** Failure indicating input that cannot be valid in any runtime state. */
 export interface InvalidArgumentError extends NonOkStatus {
   code: StatusCode.INVALID_ARGUMENT;
 }
 
+/** Narrow a Status/StatusOr to {@link InvalidArgumentError}. */
 export function isInvalidArgumentError(
   val: Status,
 ): val is InvalidArgumentError;
@@ -290,6 +354,7 @@ export function isInvalidArgumentError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.INVALID_ARGUMENT;
 }
 
+/** Construct an INVALID_ARGUMENT status for validation failures. */
 export const invalidArgumentError = (
   message: string = kDefaultStatusMessages[StatusCode.INVALID_ARGUMENT],
   details?: object[],
@@ -308,6 +373,7 @@ export const invalidArgumentError = (
   return status;
 };
 
+/** Exception form of an INVALID_ARGUMENT status. */
 export class InvalidArgumentException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.INVALID_ARGUMENT],
@@ -318,10 +384,12 @@ export class InvalidArgumentException extends StatusException {
   }
 }
 
+/** Failure indicating that work did not finish before its deadline. */
 export interface DeadlineExceededError extends NonOkStatus {
   code: StatusCode.DEADLINE_EXCEEDED;
 }
 
+/** Narrow a Status/StatusOr to {@link DeadlineExceededError}. */
 export function isDeadlineExceededError(
   val: Status,
 ): val is DeadlineExceededError;
@@ -331,6 +399,7 @@ export function isDeadlineExceededError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.DEADLINE_EXCEEDED;
 }
 
+/** Construct a DEADLINE_EXCEEDED status for timed operations. */
 export const deadlineExceededError = (
   message: string = kDefaultStatusMessages[StatusCode.DEADLINE_EXCEEDED],
   details?: object[],
@@ -349,6 +418,7 @@ export const deadlineExceededError = (
   return status;
 };
 
+/** Exception form of a DEADLINE_EXCEEDED status. */
 export class DeadlineExceededException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.DEADLINE_EXCEEDED],
@@ -359,16 +429,19 @@ export class DeadlineExceededException extends StatusException {
   }
 }
 
+/** Failure indicating that a requested action, node, or resource is absent. */
 export interface NotFoundError extends NonOkStatus {
   code: StatusCode.NOT_FOUND;
 }
 
+/** Narrow a Status/StatusOr to {@link NotFoundError}. */
 export function isNotFoundError(val: Status): val is NotFoundError;
 
 export function isNotFoundError<T>(val: StatusOr<T>): val is NotFoundError {
   return isStatus(val) && (val as Status).code === StatusCode.NOT_FOUND;
 }
 
+/** Construct a NOT_FOUND status for a missing resource. */
 export const notFoundError = (
   message: string = kDefaultStatusMessages[StatusCode.NOT_FOUND],
   details?: object[],
@@ -387,6 +460,7 @@ export const notFoundError = (
   return status;
 };
 
+/** Exception form of a NOT_FOUND status. */
 export class NotFoundException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.NOT_FOUND],
@@ -397,10 +471,12 @@ export class NotFoundException extends StatusException {
   }
 }
 
+/** Failure indicating that a requested creation conflicts with existing state. */
 export interface AlreadyExistsError extends NonOkStatus {
   code: StatusCode.ALREADY_EXISTS;
 }
 
+/** Narrow a Status/StatusOr to {@link AlreadyExistsError}. */
 export function isAlreadyExistsError(val: Status): val is AlreadyExistsError;
 export function isAlreadyExistsError<T>(
   val: StatusOr<T>,
@@ -408,6 +484,7 @@ export function isAlreadyExistsError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.ALREADY_EXISTS;
 }
 
+/** Construct an ALREADY_EXISTS status for duplicate creation. */
 export const alreadyExistsError = (
   message: string = kDefaultStatusMessages[StatusCode.ALREADY_EXISTS],
   details?: object[],
@@ -426,6 +503,7 @@ export const alreadyExistsError = (
   return status;
 };
 
+/** Exception form of an ALREADY_EXISTS status. */
 export class AlreadyExistsException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.ALREADY_EXISTS],
@@ -436,10 +514,12 @@ export class AlreadyExistsException extends StatusException {
   }
 }
 
+/** Failure indicating that an authenticated caller lacks authorization. */
 export interface PermissionDeniedError extends NonOkStatus {
   code: StatusCode.PERMISSION_DENIED;
 }
 
+/** Narrow a Status/StatusOr to {@link PermissionDeniedError}. */
 export function isPermissionDeniedError(
   val: Status,
 ): val is PermissionDeniedError;
@@ -449,6 +529,7 @@ export function isPermissionDeniedError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.PERMISSION_DENIED;
 }
 
+/** Construct a PERMISSION_DENIED status for an authorization failure. */
 export const permissionDeniedError = (
   message: string = kDefaultStatusMessages[StatusCode.PERMISSION_DENIED],
   details?: object[],
@@ -467,6 +548,7 @@ export const permissionDeniedError = (
   return status;
 };
 
+/** Exception form of a PERMISSION_DENIED status. */
 export class PermissionDeniedException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.PERMISSION_DENIED],
@@ -477,10 +559,12 @@ export class PermissionDeniedException extends StatusException {
   }
 }
 
+/** Failure indicating a queue, quota, memory, or capacity bound was reached. */
 export interface ResourceExhaustedError extends NonOkStatus {
   code: StatusCode.RESOURCE_EXHAUSTED;
 }
 
+/** Narrow a Status/StatusOr to {@link ResourceExhaustedError}. */
 export function isResourceExhaustedError(
   val: Status,
 ): val is ResourceExhaustedError;
@@ -492,6 +576,7 @@ export function isResourceExhaustedError<T>(
   );
 }
 
+/** Construct a RESOURCE_EXHAUSTED status for bounded agent resources. */
 export const resourceExhaustedError = (
   message: string = kDefaultStatusMessages[StatusCode.RESOURCE_EXHAUSTED],
   details?: object[],
@@ -510,6 +595,7 @@ export const resourceExhaustedError = (
   return status;
 };
 
+/** Exception form of a RESOURCE_EXHAUSTED status. */
 export class ResourceExhaustedException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.RESOURCE_EXHAUSTED],
@@ -520,10 +606,12 @@ export class ResourceExhaustedException extends StatusException {
   }
 }
 
+/** Failure indicating that runtime state must change before retrying. */
 export interface FailedPreconditionError extends NonOkStatus {
   code: StatusCode.FAILED_PRECONDITION;
 }
 
+/** Narrow a Status/StatusOr to {@link FailedPreconditionError}. */
 export function isFailedPreconditionError(
   val: Status,
 ): val is FailedPreconditionError;
@@ -535,6 +623,7 @@ export function isFailedPreconditionError<T>(
   );
 }
 
+/** Construct a FAILED_PRECONDITION status for an invalid lifecycle transition. */
 export const failedPreconditionError = (
   message: string = kDefaultStatusMessages[StatusCode.FAILED_PRECONDITION],
   details?: object[],
@@ -553,6 +642,7 @@ export const failedPreconditionError = (
   return status;
 };
 
+/** Exception form of a FAILED_PRECONDITION status. */
 export class FailedPreconditionException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.FAILED_PRECONDITION],
@@ -566,15 +656,18 @@ export class FailedPreconditionException extends StatusException {
   }
 }
 
+/** Failure indicating an operation was abandoned, often after a conflict. */
 export interface AbortedError extends NonOkStatus {
   code: StatusCode.ABORTED;
 }
 
+/** Narrow a Status/StatusOr to {@link AbortedError}. */
 export function isAbortedError(val: Status): val is AbortedError;
 export function isAbortedError<T>(val: StatusOr<T>): val is AbortedError {
   return isStatus(val) && (val as Status).code === StatusCode.ABORTED;
 }
 
+/** Construct an ABORTED status for a failed transaction or exchange. */
 export const abortedError = (
   message: string = kDefaultStatusMessages[StatusCode.ABORTED],
   details?: object[],
@@ -593,6 +686,7 @@ export const abortedError = (
   return status;
 };
 
+/** Exception form of an ABORTED status. */
 export class AbortedException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.ABORTED],
@@ -603,15 +697,18 @@ export class AbortedException extends StatusException {
   }
 }
 
+/** Failure indicating that an offset, sequence, or value exceeds its range. */
 export interface OutOfRangeError extends NonOkStatus {
   code: StatusCode.OUT_OF_RANGE;
 }
 
+/** Narrow a Status/StatusOr to {@link OutOfRangeError}. */
 export function isOutOfRangeError(val: Status): val is OutOfRangeError;
 export function isOutOfRangeError<T>(val: StatusOr<T>): val is OutOfRangeError {
   return isStatus(val) && (val as Status).code === StatusCode.OUT_OF_RANGE;
 }
 
+/** Construct an OUT_OF_RANGE status for invalid bounds or exhausted iteration. */
 export const outOfRangeError = (
   message: string = kDefaultStatusMessages[StatusCode.OUT_OF_RANGE],
   details?: object[],
@@ -630,6 +727,7 @@ export const outOfRangeError = (
   return status;
 };
 
+/** Exception form of an OUT_OF_RANGE status. */
 export class OutOfRangeException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.OUT_OF_RANGE],
@@ -640,10 +738,12 @@ export class OutOfRangeException extends StatusException {
   }
 }
 
+/** Failure indicating that this endpoint does not provide an operation. */
 export interface UnimplementedError extends NonOkStatus {
   code: StatusCode.UNIMPLEMENTED;
 }
 
+/** Narrow a Status/StatusOr to {@link UnimplementedError}. */
 export function isUnimplementedError(val: Status): val is UnimplementedError;
 export function isUnimplementedError<T>(
   val: StatusOr<T>,
@@ -651,6 +751,7 @@ export function isUnimplementedError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.UNIMPLEMENTED;
 }
 
+/** Construct a status with code `UNIMPLEMENTED` for an unsupported capability. */
 export const unimplementedError = (
   message: string = kDefaultStatusMessages[StatusCode.UNIMPLEMENTED],
   details?: object[],
@@ -669,6 +770,7 @@ export const unimplementedError = (
   return status;
 };
 
+/** Exception form of a status with code `UNIMPLEMENTED`. */
 export class UnimplementedException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.UNIMPLEMENTED],
@@ -679,15 +781,18 @@ export class UnimplementedException extends StatusException {
   }
 }
 
+/** Failure indicating an A11 invariant or implementation defect. */
 export interface InternalError extends NonOkStatus {
   code: StatusCode.INTERNAL;
 }
 
+/** Narrow a Status/StatusOr to {@link InternalError}. */
 export function isInternalError(val: Status): val is InternalError;
 export function isInternalError<T>(val: StatusOr<T>): val is InternalError {
   return isStatus(val) && (val as Status).code === StatusCode.INTERNAL;
 }
 
+/** Construct an INTERNAL status at an invariant boundary. */
 export const internalError = (
   message: string = kDefaultStatusMessages[StatusCode.INTERNAL],
   details?: object[],
@@ -706,6 +811,7 @@ export const internalError = (
   return status;
 };
 
+/** Exception form of an INTERNAL status. */
 export class InternalException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.INTERNAL],
@@ -716,10 +822,12 @@ export class InternalException extends StatusException {
   }
 }
 
+/** Failure indicating a transient service or network outage. */
 export interface UnavailableError extends NonOkStatus {
   code: StatusCode.UNAVAILABLE;
 }
 
+/** Narrow a Status/StatusOr to {@link UnavailableError}. */
 export function isUnavailableError(val: Status): val is UnavailableError;
 export function isUnavailableError<T>(
   val: StatusOr<T>,
@@ -727,6 +835,7 @@ export function isUnavailableError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.UNAVAILABLE;
 }
 
+/** Construct an UNAVAILABLE status for a temporarily unreachable dependency. */
 export const unavailableError = (
   message: string = kDefaultStatusMessages[StatusCode.UNAVAILABLE],
   details?: object[],
@@ -745,6 +854,7 @@ export const unavailableError = (
   return status;
 };
 
+/** Exception form of an UNAVAILABLE status. */
 export class UnavailableException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.UNAVAILABLE],
@@ -755,15 +865,18 @@ export class UnavailableException extends StatusException {
   }
 }
 
+/** Failure indicating corrupted, incomplete, or irrecoverably lost data. */
 export interface DataLossError extends NonOkStatus {
   code: StatusCode.DATA_LOSS;
 }
 
+/** Narrow a Status/StatusOr to {@link DataLossError}. */
 export function isDataLossError(val: Status): val is DataLossError;
 export function isDataLossError<T>(val: StatusOr<T>): val is DataLossError {
   return isStatus(val) && (val as Status).code === StatusCode.DATA_LOSS;
 }
 
+/** Construct a DATA_LOSS status for corrupt or incomplete boundary data. */
 export const dataLossError = (
   message: string = kDefaultStatusMessages[StatusCode.DATA_LOSS],
   details?: object[],
@@ -782,6 +895,7 @@ export const dataLossError = (
   return status;
 };
 
+/** Exception form of a DATA_LOSS status. */
 export class DataLossException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.DATA_LOSS],
@@ -792,10 +906,12 @@ export class DataLossException extends StatusException {
   }
 }
 
+/** Failure indicating that a caller's identity could not be verified. */
 export interface UnauthenticatedError extends NonOkStatus {
   code: StatusCode.UNAUTHENTICATED;
 }
 
+/** Narrow a Status/StatusOr to {@link UnauthenticatedError}. */
 export function isUnauthenticatedError(
   val: Status,
 ): val is UnauthenticatedError;
@@ -805,6 +921,7 @@ export function isUnauthenticatedError<T>(
   return isStatus(val) && (val as Status).code === StatusCode.UNAUTHENTICATED;
 }
 
+/** Construct an UNAUTHENTICATED status for a missing or invalid identity. */
 export const unauthenticatedError = (
   message: string = kDefaultStatusMessages[StatusCode.UNAUTHENTICATED],
   details?: object[],
@@ -823,6 +940,7 @@ export const unauthenticatedError = (
   return status;
 };
 
+/** Exception form of an UNAUTHENTICATED status. */
 export class UnauthenticatedException extends StatusException {
   constructor(
     message: string = kDefaultStatusMessages[StatusCode.UNAUTHENTICATED],
@@ -833,11 +951,13 @@ export class UnauthenticatedException extends StatusException {
   }
 }
 
+/** Construct an OK status, optionally with a more specific message. */
 export const okStatus = (message?: string): Status => ({
   code: StatusCode.OK,
   message: message ?? 'OK',
 });
 
+/** Throw a code-specific StatusException if a Status/StatusOr is non-OK. */
 export function throwForError<T>(val: StatusOr<T>): asserts val is T;
 
 export function throwForError(val: Status) {
@@ -884,6 +1004,7 @@ export function throwForError(val: Status) {
 
 const kOkStatusSingleton = okStatus();
 
+/** Split a StatusOr into a status and optional successful value. */
 export function getStatusAndValue<T>(val: StatusOr<T>): [Status, T | unknown] {
   if (!isOk(val)) {
     return [val as Status, undefined];
@@ -891,6 +1012,7 @@ export function getStatusAndValue<T>(val: StatusOr<T>): [Status, T | unknown] {
   return [{ ...kOkStatusSingleton }, val];
 }
 
+/** Return the successful value or throw a code-specific StatusException. */
 export function valueOrThrow<T>(val: StatusOr<T>): T {
   const [valIsStatus] = isStatusAndIsOk(val);
   if (!valIsStatus) {
@@ -900,6 +1022,7 @@ export function valueOrThrow<T>(val: StatusOr<T>): T {
   return val as T;
 }
 
+/** Return the successful value or terminate the process on failure. */
 export function valueOrTerminate<T>(val: StatusOr<T>): T {
   const [valIsStatus, valIsOk] = isStatusAndIsOk(val);
   if (valIsStatus && !valIsOk) {
@@ -916,6 +1039,7 @@ function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
   );
 }
 
+/** Preserve a StatusException or convert an unknown thrown value to Status. */
 export function statusFromUnknown(
   err: unknown,
   message?: string,
@@ -942,6 +1066,7 @@ export function statusFromUnknown(
   };
 }
 
+/** Run sync or async JavaScript and convert a rejection/throw into StatusOr. */
 export function noexcept<T>(callback: () => T, message?: string): StatusOr<T>;
 
 export function noexcept<T>(
@@ -964,6 +1089,7 @@ export function noexcept<T>(
   }
 }
 
+/** Fetch without throwing, with common browser/network failures mapped to Status. */
 export async function noexceptFetch(
   input: string | URL | globalThis.Request,
   init?: RequestInit,
@@ -996,6 +1122,7 @@ export interface StatusJson {
   details: object[];
 }
 
+/** Convert a Status to its language-neutral HTTP/signalling JSON object. */
 export function statusToJson(status: Status): StatusJson {
   return {
     code: status.code,
@@ -1004,6 +1131,7 @@ export function statusToJson(status: Status): StatusJson {
   };
 }
 
+/** Validate and decode a Status received from a JSON boundary. */
 export function statusFromJson(value: unknown): StatusOr<Status> {
   try {
     if (typeof value !== 'object' || value === null) {
@@ -1041,6 +1169,7 @@ export function statusFromJson(value: unknown): StatusOr<Status> {
   }
 }
 
+/** Map an HTTP response code to the nearest portable A11 outcome. */
 export function statusCodeFromHttp(httpCode: number): StatusCode {
   if (httpCode >= 200 && httpCode < 300) return StatusCode.OK;
   switch (httpCode) {
@@ -1069,6 +1198,7 @@ export function statusCodeFromHttp(httpCode: number): StatusCode {
   }
 }
 
+/** Decode standard and A11-private WebSocket close codes. */
 export function statusCodeFromWebSocket(closeCode: number): StatusCode {
   const privateCode = closeCode - 3999;
   if (closeCode === 1000) return StatusCode.OK;
@@ -1097,6 +1227,7 @@ export function statusCodeFromWebSocket(closeCode: number): StatusCode {
   }
 }
 
+/** Encode a portable status as a standard or A11-private WebSocket close code. */
 export function statusCodeToWebSocket(code: StatusCode): number {
   if (code === StatusCode.OK) return 1000;
   if (code >= StatusCode.CANCELLED && code <= StatusCode.DATA_LOSS) {

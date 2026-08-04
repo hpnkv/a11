@@ -61,7 +61,12 @@ class _SessionProtocol:
 
     @property
     def done(self) -> _SessionDoneEvent:
-        """An `asyncio.Event`-shaped view of the session's completion."""
+        """An `asyncio.Event`-shaped view of full session completion.
+
+        `Session.is_closed` can become true as soon as shutdown starts. Await
+        this event (or ``wait_done``) when streams and actions must all have
+        released their runtime state.
+        """
         return _done(self)
 
 
@@ -69,11 +74,21 @@ class _SessionWithRecvProtocol:
     """Adds coroutine ``receive`` methods for pull-style session consumption."""
 
     async def receive(self, deadline=None):
-        """Await the next inbound [WireMessage][a11.data.types.WireMessage]."""
+        """Await the next inbound message, or ``None`` when the session ends.
+
+        Use this when one receive loop handles every attached stream. Choose
+        `receive_with_stream_id` when replies or diagnostics must retain their
+        transport identity. The optional absolute deadline limits only this
+        wait; it does not change the session deadline.
+        """
         return await _native_receive(self, deadline)
 
     async def receive_with_stream_id(self, deadline=None):
-        """Await the next inbound message paired with its stream id."""
+        """Await ``(message, stream_id)``, or ``None`` after completion.
+
+        This is the pull-style counterpart to ``OnSessionStreamMessage`` and
+        is useful when an agent multiplexes several transports in one loop.
+        """
         return await _native_receive_with_stream_id(self, deadline)
 
 

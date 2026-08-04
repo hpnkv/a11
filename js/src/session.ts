@@ -53,28 +53,42 @@ import {
   type WireStream,
 } from './wire_stream.js';
 
+/** Terminal trailer/header carrying a session's structured completion status. */
 export const SESSION_STATUS_HEADER = 'x-a11-session-status';
+/** Hard upper bound for one message admitted by a session. */
 export const MAX_SINGLE_MESSAGE_SIZE = MAX_SINGLE_WIRE_MESSAGE_SIZE;
 
 const SESSION_STREAM_ABORT_MESSAGE = 'Session has aborted its streams';
 
+/** Which endpoint role a session asks an attached stream to drive. */
 export enum StreamMode {
   START = 'start',
   ACCEPT = 'accept',
 }
 
+/** Buffer, concurrency, and lifetime bounds for one agent connection. */
 export interface SessionOptions {
+  /** Messages buffered across every attached stream. */
   maxBufferedMessagesTotal?: number;
+  /** Messages buffered for any one attached stream. */
   maxBufferedMessagesPerStream?: number;
+  /** Top-level action handlers allowed to run concurrently. */
   maxConcurrentRootActions?: number;
+  /** Child action handlers allowed to run concurrently. */
   maxConcurrentNestedActions?: number;
+  /** Maximum encoded size of one incoming wire message. */
   maxSingleMessageSize?: number;
+  /** Encoded bytes buffered across every attached stream. */
   maxBufferedBytesTotal?: number;
+  /** Encoded bytes buffered for any one attached stream. */
   maxBufferedBytesPerStream?: number;
+  /** Grace period with no streams before clean half-close; `null` disables it. */
   noStreamTimeoutMs?: number | null;
+  /** Absolute connection deadline. */
   deadline?: WireDeadline;
 }
 
+/** Validated, default-filled form of {@link SessionOptions}. */
 export interface NormalizedSessionOptions {
   maxBufferedMessagesTotal: number;
   maxBufferedMessagesPerStream: number;
@@ -87,17 +101,23 @@ export interface NormalizedSessionOptions {
   deadline: number | null;
 }
 
+/**
+ * Consumes one inbound message with its transport and owning session.
+ * `null` marks that transport's remote half-close.
+ */
 export type OnSessionStreamMessage = (
   message: WireMessage | null,
   stream: WireStream,
   session: Session,
 ) => void | Status | Promise<void | Status>;
 
+/** Runs after an attached stream has completely terminated. */
 export type OnSessionStreamDone = (
   stream: WireStream,
   session: Session,
 ) => void | Status | Promise<void | Status>;
 
+/** Identity, callbacks, and shared registries used to create a Session. */
 export interface SessionCreateOptions extends SessionOptions {
   id?: string;
   onStreamMessage?: OnSessionStreamMessage;
@@ -227,6 +247,7 @@ function isPositiveIntegerInRange(
   return Number.isSafeInteger(value) && value >= 1 && value <= maximum;
 }
 
+/** Validate session limits and apply defaults before timers are scheduled. */
 export function normalizeSessionOptions(
   options: SessionOptions = {},
 ): StatusOr<NormalizedSessionOptions> {
@@ -300,6 +321,7 @@ export function normalizeSessionOptions(
   }
 }
 
+/** Validate session metadata, lowercase names, and copy byte values. */
 export function normalizeSessionHeaders(
   headers: ByteMapInput | undefined = undefined,
 ): StatusOr<ByteMap> {
@@ -458,7 +480,21 @@ async function invokeSessionDoneCallback(
   }
 }
 
-/** Connection-scoped A11 runtime for streams, nodes, and Actions. */
+/**
+ * Connection-scoped runtime that turns wire traffic into agent work.
+ *
+ * A session owns a shared {@link NodeMap}, optional {@link ActionRegistry}, one
+ * or more {@link WireStream}s, and every action running across them. Incoming
+ * WireMessages are split into action calls and node fragments; bounded,
+ * per-stream pumps preserve backpressure while handlers run asynchronously.
+ * Outgoing messages may target a stream explicitly or use round-robin routing.
+ *
+ * The session starts open. {@link halfClose} stops new sends/actions and asks
+ * every transport to drain normally. {@link abort} cancels actions and carries
+ * a structured failure to peers. The promise returned by {@link done} resolves
+ * only after all attached stream state has been removed; `isClosed()` can
+ * therefore become true before `isDone()`.
+ */
 export class Session {
   private readonly id: string;
   private readonly headers: ByteMap;
@@ -507,6 +543,7 @@ export class Session {
     this.scheduleNoStreamTimer();
   }
 
+  /** Create an open session and start deadline/no-stream supervision. */
   static create(options: SessionCreateOptions = {}): StatusOr<Session> {
     try {
       const initialized = initializeSession(options);
@@ -534,6 +571,11 @@ export class Session {
   getNodeMap(): NodeMap { return this.nodeMap; }
   getActionRegistry(): ActionRegistry | null { return this.actionRegistry; }
 
+  /**
+   * Replace the node map and rebind active actions.
+   * Existing fragments remain in the old map, so prefer configuring this
+   * before traffic starts rather than splitting a live action's state.
+   */
   setNodeMap(nodeMap: NodeMap): Status {
     if (!(nodeMap instanceof NodeMap)) {
       return invalidArgumentError('nodeMap must be a NodeMap.');
@@ -546,6 +588,11 @@ export class Session {
     return first;
   }
 
+  /**
+   * Replace the registry and rebind active actions for later name resolution.
+   * Prefer configuring it before dispatch so one operation does not observe
+   * registrations from different registry versions.
+   */
   setActionRegistry(registry: ActionRegistry | null): Status {
     if (registry !== null && !(registry instanceof ActionRegistry)) {
       return invalidArgumentError(
@@ -560,6 +607,7 @@ export class Session {
     return first;
   }
 
+  /** Snapshot the streams currently attached to this session. */
   streams(): StatusOr<Array<[string, WireStream]>> {
     try {
       const result: Array<[string, WireStream]> = [];
@@ -584,6 +632,7 @@ export class Session {
     }
   }
 
+  /** Snapshot actions currently tracked as in-flight. */
   actions(): Array<[string, Action]> {
     try { return [...this.activeActions]; }
     catch { return []; }
@@ -599,11 +648,13 @@ export class Session {
     }
   }
 
+  /** Request cooperative cancellation of one active action. */
   cancelAction(actionId: string): Status {
     const action = this.getAction(actionId);
     return isOk(action) ? action.cancel() : action;
   }
 
+  /** Request cancellation of every action without waiting for teardown. */
   cancelAllActions(): Status {
     let first: Status = okStatus();
     for (const action of this.activeActions.values()) {
@@ -612,6 +663,7 @@ export class Session {
     return first;
   }
 
+  /** Await all actions observed during the wait and aggregate their failures. */
   async awaitAllActions(timeoutMs?: number): Promise<Status> {
     try {
       if (
@@ -659,6 +711,7 @@ export class Session {
     }
   }
 
+  /** Track an action so concurrency, cancellation, and shutdown include it. */
   trackAction(action: Action): Status {
     if (!(action instanceof Action)) {
       return invalidArgumentError('action must be an Action.');
@@ -707,6 +760,7 @@ export class Session {
     catch { /* A limiter release is best-effort cleanup. */ }
   }
 
+  /** Apply a received fragment, including reserved action-status nodes. */
   async dispatchNodeFragment(
     fragment: NodeFragment,
   ): Promise<StatusOr<number>> {
@@ -779,6 +833,7 @@ export class Session {
     }
   }
 
+  /** Resolve, acknowledge, and start one inbound registered action call. */
   async dispatchActionMessage(
     message: import('./data.js').ActionMessage,
     originStream: WireStream | null = null,
@@ -906,6 +961,7 @@ export class Session {
     }
   }
 
+  /** Dispatch every action and fragment in one validated inbound message. */
   async dispatchWireMessage(
     message: WireMessage,
     originStream: WireStream | null = null,
@@ -956,6 +1012,12 @@ export class Session {
     }
   }
 
+  /**
+   * Attach and drive one transport endpoint.
+   *
+   * The returned status covers the stream startup handshake. The session keeps
+   * pumping it afterwards; await {@link done} for connection-wide completion.
+   */
   async addStream(
     stream: WireStream,
     mode: StreamMode = StreamMode.START,
@@ -1029,6 +1091,7 @@ export class Session {
     }
   }
 
+  /** Queue a message on a named stream or round-robin across active streams. */
   send(message: WireMessage, streamId = ''): Status {
     try {
       if (!(message instanceof WireMessage)) {
@@ -1078,6 +1141,11 @@ export class Session {
     }
   }
 
+  /**
+   * Begin clean shutdown and half-close every active stream with OK trailers.
+   * Existing inbound work may still arrive and attached streams must still
+   * finish before {@link done} resolves.
+   */
   halfClose(): Status {
     try {
       if (this.phase !== 'open') return okStatus();
@@ -1114,6 +1182,7 @@ export class Session {
     }
   }
 
+  /** Cancel actions and end the session with a structured non-OK status. */
   abort(status: Status): Status {
     try {
       if (!isStatus(status) || isOk(status)) {
@@ -1178,12 +1247,15 @@ export class Session {
     }
   }
 
+  /** Whether either endpoint has ended the session for new work. */
   isClosed(): boolean {
     return this.remoteClosed || this.phase !== 'open';
   }
 
+  /** Whether every attached stream has completed and state is fully quiescent. */
   isDone(): boolean { return this.destroyed; }
 
+  /** Await full cleanup and receive the session's terminal status. */
   done(): Promise<Status> { return this.doneDeferred.promise; }
 
   getStatus(): Status {
@@ -1538,12 +1610,20 @@ export class Session {
   }
 }
 
+/** Pull-mode message paired with the transport that delivered it. */
 export interface ReceivedSessionMessage {
   message: WireMessage;
   streamId: string;
 }
 
-/** Pull-oriented Session variant with one-slot inbound backpressure. */
+/**
+ * Pull-oriented Session with a one-slot inbound backpressure handoff.
+ *
+ * Use this when an agent owns an explicit `while (await receive())` loop. It
+ * replaces stream callbacks with {@link receiveWithStreamId}; action and node
+ * auto-dispatch are therefore the caller's choice. A clean session half-close
+ * produces `null` once, while an abort remains a structured error.
+ */
 export class SessionWithRecv extends Session {
   private readonly receiveQueue: Array<ReceivedSessionMessage | null> = [];
   private receiveError: NonOkStatus | null = null;
@@ -1581,6 +1661,7 @@ export class SessionWithRecv extends Session {
     }
   }
 
+  /** Await one inbound message and its stream id, or `null` at clean EOF. */
   async receiveWithStreamId(
     timeoutMs?: number,
   ): Promise<StatusOr<ReceivedSessionMessage | null>> {
@@ -1622,6 +1703,7 @@ export class SessionWithRecv extends Session {
     }
   }
 
+  /** Await one inbound message without exposing its stream id. */
   async receive(timeoutMs?: number): Promise<StatusOr<WireMessage | null>> {
     const received = await this.receiveWithStreamId(timeoutMs);
     return isOk(received) && received !== null ? received.message : received;

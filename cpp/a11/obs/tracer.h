@@ -10,22 +10,25 @@
 
 namespace a11::obs {
 
-// Factory for spans. Every method returns an inactive Span when tracing is not
-// configured (see provider.h), so call sites never branch on configuration.
-//
-// A11 runs handlers on migrating fibers, so OpenTelemetry's implicit
-// thread-local "current span" is unusable here. Parentage is therefore always
-// passed explicitly -- either as a remote TraceContext recovered from headers
-// or as an in-process parent Span.
+/**
+ * @brief Factory that makes parentage explicit for A11's migrating fibers.
+ *
+ * A remote TraceContext or in-process Span is always supplied explicitly;
+ * OpenTelemetry's thread-local current span cannot represent handlers that
+ * migrate between workers. Every method returns an inactive Span when tracing
+ * is unconfigured, so instrumentation needs no conditional path.
+ */
 class Tracer {
  public:
   // Starts a span continuing a remote parent recovered from headers. When
   // `parent` is null (or points at an empty context), the span begins a fresh
   // root trace. Baggage carried by the parent is retained for propagation.
+  /// Continue @p parent, or begin a root when it is null or empty.
   static Span StartSpan(std::string_view name, SpanKind kind,
                         const TraceContext* parent);
 
   // Starts a span parented to an in-process span, inheriting its baggage.
+  /// Start an in-process child and inherit the parent's baggage.
   static Span StartChildSpan(std::string_view name, SpanKind kind,
                              const Span& parent);
 
@@ -33,6 +36,7 @@ class Tracer {
   // id (32 lowercase hex chars). An empty `preassigned_trace_id` lets the SDK
   // generate one. This is the implementation-level hook for preassigning trace
   // ids without widening any public transport interface.
+  /// Start a root span, optionally using a preassigned 32-character trace id.
   static Span StartRootSpan(std::string_view name, SpanKind kind,
                             std::string_view preassigned_trace_id = {});
 };

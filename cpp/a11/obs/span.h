@@ -17,69 +17,81 @@
 
 namespace a11::obs {
 
-// OpenTelemetry span kinds, mirrored so this header stays free of OTel types.
+/// OpenTelemetry span relationships, mirrored to keep OTel out of this API.
 enum class SpanKind { kInternal, kServer, kClient, kProducer, kConsumer };
 
-// OpenTelemetry span status codes, mirrored to keep OTel out of this header.
+/// OpenTelemetry outcome states, mirrored to keep OTel out of this API.
 enum class SpanStatus { kUnset, kOk, kError };
 
-// Move-only RAII handle to a tracing span.
-//
-// A default-constructed or moved-from Span is "inactive": IsRecording() is
-// false and every mutator is a no-op. Tracer factory methods also return an
-// inactive Span when tracing is not configured, so instrumentation call sites
-// need no conditionals. The span is ended on End() (idempotent) or on
-// destruction.
-//
-// The OpenTelemetry span is held in a fixed-size inline buffer -- a "fast
-// pImpl". This keeps every OTel type out of this header (satisfying the rule
-// that A11's public headers never expose third-party implementation types) and
-// avoids a per-span heap allocation. tracer.cc static_asserts that the buffer
-// is large enough and suitably aligned for the implementation object.
+/**
+ * @brief Move-only RAII handle to one action, session, or transport span.
+ *
+ * A default-constructed or moved-from Span is inactive: IsRecording() is
+ * false and every mutator is a no-op. Tracer also returns an inactive span
+ * when tracing is not configured, so agent runtime call sites need no feature
+ * branches. End() is idempotent, and destruction ends a live span.
+ *
+ * OpenTelemetry types remain hidden in fixed inline storage so this public
+ * header does not expose the SDK or allocate a separate pImpl for every span.
+ */
 class Span {
  public:
   Span() noexcept = default;
   ~Span();
 
+  /// Transfer ownership without ending the span.
   Span(Span&& other) noexcept;
+  /// End the currently owned span, then transfer @p other.
   Span& operator=(Span&& other) noexcept;
   Span(const Span&) = delete;
   Span& operator=(const Span&) = delete;
 
+  /// Whether this handle currently records attributes and events.
   [[nodiscard]] bool IsRecording() const noexcept;
 
   // This span's identifiers as lowercase hex (32 chars / 16 chars), or empty
   // strings for an inactive span or an invalid context.
+  /// Return the 32-character trace id, or empty when inactive.
   [[nodiscard]] std::string TraceIdHex() const;
+  /// Return the 16-character span id, or empty when inactive.
   [[nodiscard]] std::string SpanIdHex() const;
 
+  /// Set or replace a string attribute on the live span.
   void SetAttribute(std::string_view key, std::string_view value);
+  /// Set or replace a C-string attribute on the live span.
   void SetAttribute(std::string_view key, const char* value);
+  /// Set or replace an integer attribute on the live span.
   void SetAttribute(std::string_view key, std::int64_t value);
+  /// Set or replace a boolean attribute on the live span.
   void SetAttribute(std::string_view key, bool value);
+  /// Set or replace a floating-point attribute on the live span.
   void SetAttribute(std::string_view key, double value);
 
+  /// Record a named point-in-time event.
   void AddEvent(std::string_view name);
+  /// Record an event with string attributes.
   void AddEvent(
       std::string_view name,
       const std::vector<std::pair<std::string, std::string>>& attributes);
 
-  // Records the span's outcome from an absl::Status: Ok clears to a non-error
-  // status, any error maps to the OTel error status with the message.
+  /// Map an A11 operation status onto the span's OTel outcome.
   void SetStatus(const absl::Status& status);
 
-  // Sets the span status explicitly. `description` is used for kError.
+  /// Set an explicit OTel outcome; @p description explains kError.
   void SetStatus(SpanStatus status, std::string_view description = {});
 
   // Renames the span (OTel UpdateName). The exported name is whatever it is at
   // End(). No-op for an inactive span.
+  /// Replace the name that will be exported when the span ends.
   void UpdateName(std::string_view name);
 
+  /// Finish the span and release its implementation; safe to call repeatedly.
   void End() noexcept;
 
   // Serializes this span's context (and any inherited baggage) into the
   // reserved headers so nested or remote actions continue the same trace.
   // A no-op that returns OkStatus for an inactive span.
+  /// Inject trace context and inherited baggage into reserved A11 headers.
   absl::Status InjectContext(data::ByteMap& headers) const;
 
  private:

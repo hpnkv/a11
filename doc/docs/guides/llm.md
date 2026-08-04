@@ -77,7 +77,7 @@ async with (
     interact["config"],
     interact["tools"] as tools,
 ):
-    await interactions.put_final(user_turn)   # closes the input turn
+    await interactions.put_final(user_turn)   # marks the input turn final
     await tools.put_null_final()              # "no tools this time"
 ```
 

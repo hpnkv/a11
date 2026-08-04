@@ -12,8 +12,11 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** Default interoperable text codec media type. */
 export const JSON_MIMETYPE = 'application/json';
+/** Default compact binary object codec media type. */
 export const MSGPACK_MIMETYPE = 'application/x-msgpack';
+/** Raw byte/blob codec media type. */
 export const OCTET_STREAM_MIMETYPE = 'application/octet-stream';
 
 const WIRE_TAG = '__a11_serialized_type__';
@@ -110,8 +113,14 @@ function registrationMatches(
   return true;
 }
 
+/** Bytes/blob or a prebuilt Chunk returned by an application serializer. */
 export type SerializedData = AsyncByteSource | Chunk;
 
+/**
+ * Bidirectional application-value codec registered at the node boundary.
+ * `tag` is stable across languages and is written into the MIME `type`
+ * parameter so a remote peer can select the matching decoder.
+ */
 export interface SerializationCodec<T = unknown> {
   /** Stable, cross-language value tag written as the MIME `type` parameter. */
   readonly tag: string;
@@ -385,6 +394,15 @@ function deserializeBytes(
     : invalidArgumentError('Serialized bytes did not decode to byte data.');
 }
 
+/**
+ * Ordered collection of codecs between application values and A11 chunks.
+ *
+ * AsyncNodes use a registry on every typed put/read. Register domain codecs
+ * (model messages, audio frames, tool events) before generic defaults when
+ * they need a distinct MIME/tag contract. MIME patterns and stable type tags
+ * let consumers constrain what they will decode instead of trusting arbitrary
+ * peer data.
+ */
 export class SerializationRegistry {
   private readonly codecs: RegisteredCodec[] = [];
   private nextOrder = 0;
@@ -393,6 +411,7 @@ export class SerializationRegistry {
     if (options.registerDefaults ?? false) this.installDefaults();
   }
 
+  /** Add one codec; duplicate tag/media-type pairs are rejected. */
   register<T>(codec: SerializationCodec<T>): Status {
     try {
       if (typeof codec.tag !== 'string' || codec.tag === '') return invalidArgumentError('Serialization codec tag must be non-empty.');
@@ -411,6 +430,7 @@ export class SerializationRegistry {
     }
   }
 
+  /** Install JSON, MessagePack, bytes, Blob, Date, Set, Map, and bigint codecs. */
   registerDefaults(): Status {
     return this.installDefaults();
   }
@@ -488,6 +508,7 @@ export class SerializationRegistry {
     return { code: 0, message: 'OK' };
   }
 
+  /** Select a matching serializer and produce a tagged, owned Chunk. */
   async toChunk(value: unknown, mimetype = ''): Promise<StatusOr<Chunk>> {
     try {
       const selection = mimetype === '' ? null : parseMimetype(mimetype, true);
@@ -536,6 +557,7 @@ export class SerializationRegistry {
     }
   }
 
+  /** Validate MIME/type constraints, select a decoder, and return a typed value. */
   async fromChunk<T = unknown>(
     chunk: Chunk,
     mimetypePatterns: string | readonly string[] = '',
@@ -609,20 +631,24 @@ function mediaTypeOf(mimetype: string): string {
 
 let globalRegistry = new SerializationRegistry({ registerDefaults: true });
 
+/** Return the process-wide registry used by nodes that receive no override. */
 export function getGlobalSerializationRegistry(): SerializationRegistry {
   return globalRegistry;
 }
 
+/** Replace the process-wide default for subsequently created/used nodes. */
 export function setGlobalSerializationRegistry(registry: SerializationRegistry): Status {
   if (!(registry instanceof SerializationRegistry)) return invalidArgumentError('registry must be a SerializationRegistry.');
   globalRegistry = registry;
   return { code: 0, message: 'OK' };
 }
 
+/** Serialize through the current process-wide registry. */
 export async function toChunk(value: unknown, mimetype = ''): Promise<StatusOr<Chunk>> {
   return globalRegistry.toChunk(value, mimetype);
 }
 
+/** Deserialize through the current process-wide registry. */
 export async function fromChunk<T = unknown>(
   chunk: Chunk,
   mimetypePatterns: string | readonly string[] = '',

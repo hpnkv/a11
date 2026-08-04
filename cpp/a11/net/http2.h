@@ -62,50 +62,55 @@ absl::Status ValidateHttpHeaders(const HttpHeaders& headers);
  * `body_stream` is present only for a request that remains open after its
  * headers (an extended CONNECT stream). */
 struct HttpRequest {
-  std::string method;
-  std::string protocol;
-  std::string scheme;
-  std::string authority;
-  std::string path;
-  HttpHeaders headers;
-  std::string body;
+  std::string method;     ///< HTTP method pseudo-header.
+  std::string protocol;   ///< Extended CONNECT protocol, if present.
+  std::string scheme;     ///< Request scheme pseudo-header.
+  std::string authority;  ///< Target authority/host.
+  std::string path;       ///< Request path and query.
+  HttpHeaders headers;    ///< Normal application headers.
+  std::string body;       ///< Fully buffered body for an ordinary request.
+  /// Pull stream for an open extended CONNECT request, otherwise null.
   std::shared_ptr<Http2RequestBodyStream> body_stream;
 };
 
 /** @brief Status line and headers of an HTTP/2 response, without the body. */
 struct HttpResponseHead {
-  int status = 0;
-  HttpHeaders headers;
+  int status = 0;       ///< Numeric HTTP response status.
+  HttpHeaders headers;  ///< Response headers, preserving repetitions.
 };
 
 /** @brief A fully buffered HTTP/2 response: head plus complete body. */
 struct HttpResponse {
-  HttpResponseHead head;
-  std::string body;
+  HttpResponseHead head;  ///< Status and headers.
+  std::string body;       ///< Complete response body.
 };
 
 /** @brief TLS settings for an HTTP/2 client or server (certificates, peer
  * verification). */
 struct Http2TlsOptions {
-  bool enabled = false;
-  bool verify_peer = true;
-  std::string certificate_pem_file;
-  std::string key_pem_file;
-  std::string ca_certificate_pem_file;
+  bool enabled = false;     ///< Negotiate TLS instead of clear-text HTTP/2.
+  bool verify_peer = true;  ///< Validate the remote certificate and hostname.
+  std::string certificate_pem_file;  ///< Local certificate chain, if needed.
+  std::string key_pem_file;  ///< Private key matching the local certificate.
+  std::string ca_certificate_pem_file;  ///< Optional custom trust roots.
 
+  /// Validate certificate/key combinations before opening a socket.
   absl::Status Validate() const;
 };
 
 /** @brief Body-size limits, buffering thresholds, deadline, and TLS for an
  * HTTP/2 client or server. */
 struct Http2Options {
-  size_t max_request_body_size = 32 * 1024 * 1024;
-  size_t max_response_body_size = 32 * 1024 * 1024;
-  size_t max_buffered_request_bytes = 4 * 1024 * 1024;
-  size_t max_buffered_response_bytes = 4 * 1024 * 1024;
-  absl::Time deadline = absl::InfiniteFuture();
-  Http2TlsOptions tls;
+  size_t max_request_body_size = 32 * 1024 * 1024;   ///< Request hard limit.
+  size_t max_response_body_size = 32 * 1024 * 1024;  ///< Response hard limit.
+  size_t max_buffered_request_bytes =
+      4 * 1024 * 1024;  ///< Request backpressure bound.
+  size_t max_buffered_response_bytes =
+      4 * 1024 * 1024;  ///< Response backpressure bound.
+  absl::Time deadline = absl::InfiniteFuture();  ///< Connection-wide deadline.
+  Http2TlsOptions tls;  ///< TLS and certificate policy.
 
+  /// Validate size relationships, deadline, and TLS settings.
   absl::Status Validate() const;
 };
 

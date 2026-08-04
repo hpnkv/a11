@@ -25,26 +25,36 @@ namespace internal {
 class BinaryChannel;
 }  // namespace internal
 
+/// Handshake role a binary channel endpoint is permitted to assume.
 enum class ChannelEndpointRole { kClient, kServer, kEither };
 
+/** Packetisation and incomplete-message bounds for a binary WireStream. */
 struct ChannelFramingOptions {
   // Serialized byte packets never exceed split_size. Complete messages carry
   // a small suffix; larger messages use length-suffixed first chunks followed
   // by ordinary chunks, matching Action Engine's byte-chunking protocol.
-  size_t split_size = 64 * 1024;
-  size_t max_pending_messages = 64;
-  size_t max_pending_bytes = 64 * 1024 * 1024;
+  size_t split_size = 64 * 1024;     ///< Maximum encoded channel packet size.
+  size_t max_pending_messages = 64;  ///< Incomplete inbound message limit.
+  size_t max_pending_bytes = 64 * 1024 * 1024;  ///< Pending inbound byte limit.
 
+  /// Validate the framing limits before a transport starts.
   absl::Status Validate() const;
 };
 
-// WireStream implementation for libdatachannel WebRTC DataChannels.
-// libdatachannel callbacks run on ordinary external threads; this adapter
-// hands all protocol and user work to the bundled fiber runtime.
+/**
+ * @brief Shared WireStream lifecycle and framing for binary channels.
+ *
+ * WebRTC data channels and WebSocket channels supply a small BinaryChannel
+ * adapter; this class supplies Action Engine packetisation, bounded reassembly,
+ * backpressure, deadlines, half-close, and abort semantics. External channel
+ * callbacks are handed into A11's scheduler before protocol or application
+ * work runs.
+ */
 class ChannelWireStream
     : public WireStream,
       public std::enable_shared_from_this<ChannelWireStream> {
  public:
+  /// Transport-specific operation that initiates or accepts the channel.
   using OpenOperation = std::function<absl::Status()>;
 
   using WireStream::HalfClose;

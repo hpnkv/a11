@@ -84,7 +84,12 @@ class _RedisChunkStoreProtocol:
         client: RedisClient | None = None,
         options: RedisChunkStoreOptions | dict[str, Any] | None = None,
     ) -> None:
-        """Open one node's persistent stream with an injected Redis client."""
+        """Open one node's persistent stream with an injected Redis client.
+
+        Stores for the same id address the same Redis state. Pass a shared
+        `RedisClient` in production so many nodes reuse one connection pool;
+        call `initialize` when metadata must exist before the first write.
+        """
         if not isinstance(id, str):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
@@ -107,7 +112,7 @@ class _RedisChunkStoreProtocol:
         client: RedisClient | None = None,
         options: RedisChunkStoreOptions | dict[str, Any] | None = None,
     ) -> RedisChunkStore:
-        """Create a Redis store with optional client and options."""
+        """Create a Redis-backed fragment log for one node id."""
         return RedisChunkStore(id, client, options)
 
     async def get(
@@ -115,6 +120,10 @@ class _RedisChunkStoreProtocol:
         seq: int,
         deadline: timing.Time | None = None,
     ) -> types.NodeFragment:
+        """Wait for and return a fragment by sequence number.
+
+        The deadline bounds both Redis work and the wait for a future fragment.
+        """
         return await _native_get(
             self, _unsigned(seq, "seq", _MAX_UINT32), deadline
         )
@@ -124,6 +133,7 @@ class _RedisChunkStoreProtocol:
         arrival_order: int,
         deadline: timing.Time | None = None,
     ) -> types.NodeFragment:
+        """Wait for a fragment by its zero-based Redis ingestion order."""
         return await _native_get_by_arrival_order(
             self,
             _unsigned(arrival_order, "arrival_order", _MAX_UINT64),
@@ -135,6 +145,14 @@ class _RedisChunkStoreProtocol:
         deadline: timing.Time | None = None,
         limit: int = 1,
     ) -> list[types.NodeFragment | None]:
+        """Read from the persistent shared logical-sequence cursor.
+
+        The cursor advances through sequence numbers and waits at gaps;
+        ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
+        ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
+        it adds buffering, offsets, and final-sequence handling above this
+        primitive.
+        """
         converted_limit = _unsigned(limit, "limit", _MAX_UINT64)
         if converted_limit == 0:
             raise Status(
@@ -144,11 +162,13 @@ class _RedisChunkStoreProtocol:
         return await _native_next(self, deadline, converted_limit)
 
     async def put(self, fragment: types.NodeFragment) -> int:
+        """Atomically append one fragment and return its sequence number."""
         return await _native_put(self, _fragment(fragment))
 
     async def put_many(
         self, fragments: Sequence[types.NodeFragment]
     ) -> list[int]:
+        """Atomically append a batch and return its assigned sequences."""
         try:
             values = list(fragments)
         except Exception as error:
@@ -161,17 +181,24 @@ class _RedisChunkStoreProtocol:
         return await _native_put_many(self, values)
 
     async def clear_data(self, seq: int) -> types.NodeFragment:
+        """Tombstone one payload while retaining ordering metadata."""
         return await _native_clear_data(
             self, _unsigned(seq, "seq", _MAX_UINT32)
         )
 
     async def get_seq_for_arrival_order(self, arrival_order: int) -> int:
+        """Translate a zero-based ingestion position to its sequence number."""
         return await _native_get_seq_for_arrival_order(
             self,
             _unsigned(arrival_order, "arrival_order", _MAX_UINT64),
         )
 
     async def get_final_seq(self) -> int | None:
+        """Return the logical final sequence, if one has been written.
+
+        The final marker is independent of Redis write closure. Closing a store
+        does not synthesize it, and a final fragment does not close the store.
+        """
         return await _native_get_final_seq(self)
 
     async def close_writes_with_status(
@@ -179,6 +206,12 @@ class _RedisChunkStoreProtocol:
         status: Status,
         return_status_if_already_closed: bool = False,
     ) -> Status:
+        """Atomically seal writes with a terminal status and wake readers.
+
+        This closes the producer side but does not mark data final. Write a
+        final fragment first when consumers use whole-value semantics such as
+        `AsyncNode.consume`.
+        """
         if not isinstance(status, Status):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
@@ -194,14 +227,19 @@ class _RedisChunkStoreProtocol:
         )
 
     async def size(self) -> int:
+        """Return the number of fragment entries recorded for this node."""
         return await _native_size(self)
 
     async def initialize(self) -> None:
-        """Ensure metadata exists without writing a chunk."""
+        """Ensure node metadata exists without writing a fragment.
+
+        This is useful during provisioning or health checks; ordinary writes
+        initialize the store lazily.
+        """
         await _native_initialize(self)
 
     async def get_metadata(self) -> RedisChunkStoreMetadata:
-        """Read node state without walking the chunk stream."""
+        """Read size, finality, and closure state without scanning fragments."""
         return await _native_get_metadata(self)
 
 

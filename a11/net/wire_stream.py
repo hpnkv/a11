@@ -6,9 +6,11 @@ message-oriented channel that carries
 two endpoints. Delivery is **unordered** -- the transport makes no promise that
 messages arrive in the order they were sent -- with a single guarantee that
 matters: it is **synchronised on closure**, so a reader observes every delivered
-message before the stream reports done, and a half-close settles only once
-buffered messages have drained. When you need ordering, impose it above the
-transport (an [AsyncNode][a11.nodes.async_node.AsyncNode] /
+message before the stream reports done, and a half-close marker follows messages
+already queued by that endpoint. `half_close` queues that transition;
+`drain_outgoing_messages` is the explicit delivery barrier. When you need
+ordering, impose it above the transport (an
+[AsyncNode][a11.nodes.async_node.AsyncNode] /
 [ChunkStore][a11.stores.chunk_store.ChunkStore] log *is* ordered, by sequence
 number). Everything above it -- ``AsyncNode``
 mirroring, [Session][a11.service.session.Session] multiplexing, remote action
@@ -61,8 +63,10 @@ from a11._native import WireStreamWithRecv
 class _WireStreamProtocol:
     """Async context-manager protocol shared by every wire stream.
 
-    Entering yields the stream; a clean exit drains any buffered outgoing
-    messages so nothing sent is lost when the ``async with`` block ends.
+    Entering yields the stream; a clean exit calls
+    `drain_outgoing_messages`. Request `half_close` inside the block first:
+    draining is a synchronization step after half-close, not an implicit close.
+    Use `abort` for a failed exchange.
     """
 
     async def __aenter__(self) -> Self:

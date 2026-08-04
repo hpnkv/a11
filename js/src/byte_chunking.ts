@@ -14,16 +14,19 @@ import {
 const COMPLETE_METADATA_SIZE = 9;
 const CHUNK_METADATA_SIZE = 13;
 const FIRST_CHUNK_METADATA_SIZE = 17;
+/** Smallest packet that can carry first-chunk metadata and one payload byte. */
 export const MINIMUM_BYTE_PACKET_SIZE = FIRST_CHUNK_METADATA_SIZE + 1;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
+/** Packet shapes in the Action Engine-compatible byte framing format. */
 export enum BytePacketType {
   COMPLETE_BYTES = 0x00,
   BYTE_CHUNK = 0x01,
   LENGTH_SUFFIXED_BYTE_CHUNK = 0x02,
 }
 
+/** Parsed packet metadata plus an owned payload slice. */
 export interface BytePacket {
   type: BytePacketType;
   payload: Uint8Array;
@@ -32,13 +35,19 @@ export interface BytePacket {
   packetCount: number;
 }
 
+/** Packet and incomplete-message memory bounds for a binary channel. */
 export interface ByteChunkingOptions {
+  /** Maximum encoded size of each transport packet. */
   packetSize?: number;
+  /** Maximum reassembled logical message size. */
   maxMessageSize?: number;
+  /** Simultaneous incomplete message ids retained. */
   maxPendingMessages?: number;
+  /** Aggregate bytes retained by incomplete messages. */
   maxPendingBytes?: number;
 }
 
+/** Validated, default-filled form of {@link ByteChunkingOptions}. */
 export interface NormalizedByteChunkingOptions {
   packetSize: number;
   maxMessageSize: number;
@@ -46,6 +55,7 @@ export interface NormalizedByteChunkingOptions {
   maxPendingBytes: number;
 }
 
+/** Validate packet/memory relationships and apply channel defaults. */
 export function normalizeByteChunkingOptions(
   options: ByteChunkingOptions = {},
 ): StatusOr<NormalizedByteChunkingOptions> {
@@ -254,7 +264,14 @@ interface PendingMessage {
   byteCount: number;
 }
 
-/** Bounded out-of-order and interleaved byte-message reassembly. */
+/**
+ * Bounded out-of-order and interleaved byte-message reassembly.
+ *
+ * Feed packets as WebSocket/WebRTC callbacks deliver them. Packets belonging
+ * to several transient message ids may interleave and arrive out of sequence;
+ * a complete owned byte array is returned only when every piece is present.
+ * Limits prevent an untrusted peer from retaining unbounded partial data.
+ */
 export class ByteReassembler {
   readonly options: Readonly<NormalizedByteChunkingOptions>;
   private readonly pending = new Map<bigint, PendingMessage>();
@@ -264,6 +281,7 @@ export class ByteReassembler {
     this.options = Object.freeze({ ...options });
   }
 
+  /** Validate limits and create an empty reassembly table. */
   static create(options: ByteChunkingOptions = {}): StatusOr<ByteReassembler> {
     try {
       const normalized = normalizeByteChunkingOptions(options);
@@ -273,20 +291,24 @@ export class ByteReassembler {
     }
   }
 
+  /** Number of transient ids still waiting for packets. */
   get pendingMessageCount(): number {
     return this.pending.size;
   }
 
+  /** Aggregate payload bytes retained for incomplete messages. */
   get pendingByteCount(): number {
     return this.pendingBytesInternal;
   }
 
+  /** Discard partial messages when a channel resets or aborts. */
   clear(): Status {
     this.pending.clear();
     this.pendingBytesInternal = 0;
     return okStatus();
   }
 
+  /** Admit one packet and return a full message when this completes one. */
   feed(source: ByteSource): StatusOr<Uint8Array | null> {
     const serialized = toBytes(source);
     if (!isOk(serialized)) return serialized;

@@ -34,7 +34,9 @@ struct RedisChunkStoreOptions {
   /** Raw chunk bytes larger than this are moved to the separate blob hash. */
   size_t inline_data_threshold = 256 * 1024;
 
+  /// Validate the key prefix and inline-data threshold.
   absl::Status Validate() const;
+  /// Read storage policy from the A11_REDIS_CHUNK_STORE_* environment values.
   static absl::StatusOr<RedisChunkStoreOptions> FromEnvironment();
 
   friend bool operator==(const RedisChunkStoreOptions&,
@@ -43,12 +45,12 @@ struct RedisChunkStoreOptions {
 
 /** The sharding-safe Redis keys owned by one node stream. */
 struct RedisChunkStoreKeys {
-  std::string metadata;
-  std::string stream;
-  std::string sequence_index;
-  std::string arrival_index;
-  std::string blobs;
-  std::string events;
+  std::string metadata;        ///< Node state hash.
+  std::string stream;          ///< Ordered chunk/control Redis Stream.
+  std::string sequence_index;  ///< Sequence-to-stream-entry hash.
+  std::string arrival_index;   ///< Arrival-order-to-sequence hash.
+  std::string blobs;           ///< Encoded chunks stored outside stream fields.
+  std::string events;  ///< Pub/Sub invalidation channel for waiting readers.
 
   /** Keys in the stable order expected by the store's Lua state machine. */
   [[nodiscard]] std::vector<std::string> ScriptKeys() const;
@@ -59,15 +61,16 @@ struct RedisChunkStoreKeys {
 
 /** Node-level state read directly from the metadata hash, without chunks. */
 struct RedisChunkStoreMetadata {
-  std::string id;
-  bool closed = false;
-  std::optional<absl::Status> status;
-  std::optional<std::uint32_t> final_seq;
-  size_t size = 0;
-  std::uint64_t total_chunks_put = 0;
-  std::uint64_t next_cursor = 0;
-  std::optional<std::uint32_t> max_seq;
-  std::uint64_t revision = 0;
+  std::string id;                      ///< Node id persisted with the key set.
+  bool closed = false;                 ///< Whether writes have been sealed.
+  std::optional<absl::Status> status;  ///< Terminal status when closed.
+  std::optional<std::uint32_t>
+      final_seq;    ///< Logical final fragment, if marked.
+  size_t size = 0;  ///< Number of fragment slots currently indexed.
+  std::uint64_t total_chunks_put = 0;    ///< Lifetime successful write count.
+  std::uint64_t next_cursor = 0;         ///< Cursor used by Next() reads.
+  std::optional<std::uint32_t> max_seq;  ///< Greatest assigned sequence.
+  std::uint64_t revision = 0;            ///< Monotonic state-change revision.
 };
 
 /**
@@ -92,10 +95,12 @@ class RedisChunkStore final : public ChunkStore {
   struct ConstructorToken {};
 
  public:
+  /// Create a store with an injected client and explicit storage policy.
   static absl::StatusOr<std::shared_ptr<RedisChunkStore>> Create(
       std::string node_id, std::shared_ptr<redis::Client> client,
       RedisChunkStoreOptions options);
 
+  /// Create a store with an injected client and environment/default policy.
   static absl::StatusOr<std::shared_ptr<RedisChunkStore>> Create(
       std::string node_id, std::shared_ptr<redis::Client> client);
 
@@ -134,14 +139,17 @@ class RedisChunkStore final : public ChunkStore {
   /** Read all node-level metadata without iterating over stream entries. */
   a11::Future<RedisChunkStoreMetadata> GetMetadata();
 
+  /// Return the shared Redis client used for commands and subscriptions.
   [[nodiscard]] std::shared_ptr<redis::Client> client() const {
     return client_;
   }
 
+  /// Return the validated storage policy captured at construction.
   [[nodiscard]] const RedisChunkStoreOptions& options() const {
     return options_;
   }
 
+  /// Return the sharding-safe key set owned by this node.
   [[nodiscard]] const RedisChunkStoreKeys& keys() const { return keys_; }
 
   RedisChunkStore(ConstructorToken, std::string node_id,

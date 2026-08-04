@@ -6,7 +6,7 @@
  *
  * An `AsyncNode` is a single, ordered sequence of chunks (keyed by
  * sequence number) that one side writes and another side reads. It is
- * backed by a `stores::ChunkStore` -- the durable, ordered buffer the
+ * backed by a `stores::ChunkStore` -- the ordered storage boundary the
  * reader and writer stream through -- and can optionally be mirrored
  * across a `net::WireStream` to a remote peer.
  *
@@ -57,9 +57,12 @@ namespace a11::nodes {
  * A node has two halves. The writer end admits values into the backing
  * `stores::ChunkStore` in sequence; the reader end yields them back,
  * optionally deserializing typed objects on the way out. Every `Put*`
- * resolves once the chunk is durably stored (and, when a `net::WireStream`
- * is attached, sent), so a producer can apply backpressure by awaiting it.
- * A null final chunk marks the end of the stream.
+ * resolves once the backing store accepts the chunk. During the same flush,
+ * the writer attempts to enqueue the batch on attached `net::WireStream`s;
+ * this is not a remote-delivery acknowledgement, and a later tee failure
+ * cannot revoke the current batch's store confirmation. A null final chunk
+ * marks the logical end of the data. The producer closes the writer separately
+ * with DrainAndClose().
  *
  * Instances are always heap-allocated and shared via `Create`; the class
  * is non-copyable and derives from `enable_shared_from_this`.
@@ -101,9 +104,9 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
 
   /**
    * @brief Return the underlying chunk store backing this node.
-   * @return The durable, ordered buffer the reader and writer stream
-   *   through; reach for it when you need lower-level access than the
-   *   Put/Next API provides.
+   * @return The ordered storage boundary the reader and writer stream through;
+   *   reach for it when you need lower-level access than the Put/Next API
+   *   provides.
    */
   [[nodiscard]] std::shared_ptr<stores::ChunkStore> GetChunkStore() const;
 
@@ -202,9 +205,11 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @param chunk The chunk to admit.
    * @param seq Optional explicit sequence number; assigned in order when
    *   omitted.
-   * @param final Set true on the last chunk to close the stream.
-   * @return An awaitable that resolves to the stored sequence number once
-   *   the chunk is durably stored (and sent, if a stream is attached).
+   * @param final Set true on the last chunk to establish the logical final
+   *   sequence. This does not close the writer.
+   * @return An awaitable that resolves to the sequence number once the backing
+   *   store accepts the chunk. Attached stream sends are attempted during the
+   *   flush but do not acknowledge remote delivery.
    */
   a11::Future<std::uint32_t> PutChunk(
       data::Chunk chunk, std::optional<std::uint32_t> seq = std::nullopt,
@@ -227,7 +232,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @param value The value to encode and write.
    * @param seq Optional explicit sequence number; assigned in order when
    *   omitted.
-   * @param final Set true on the last write to close the stream.
+   * @param final Set true on the last write to establish the logical final
+   *   sequence. This does not close the writer.
    * @param mimetype Optional MIME type selecting the encoding.
    * @return An awaitable that resolves to the stored sequence number, or a
    *   failed future if serialization fails.
@@ -329,9 +335,15 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   a11::Task WaitForBufferToDrain();
 
   /**
-   * @brief Flush all buffered chunks and close the stream.
+   * @brief Flush all buffered chunks and close the writer.
+   *
+   * This is a storage-lifecycle operation, not an end-of-data marker. It does
+   * not append a final fragment or choose a final sequence number. A producer
+   * should first call PutChunk(..., final=true) or PutNullFinal() so readers
+   * can synchronise on the logical end of the node, then call DrainAndClose()
+   * to wait for persistence and release the writer.
    * @return An awaitable that resolves once every produced chunk has been
-   *   flushed and the stream is closed -- a graceful shutdown.
+   *   flushed and the backing store is closed to further writes.
    */
   a11::Task DrainAndClose();
 
@@ -344,7 +356,11 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   a11::Task AbortWithStatus(absl::Status status);
 
   /**
-   * @brief Mirror this node's chunks over a wire stream to a remote peer.
+   * @brief Tee this node's stored chunks onto a wire stream.
+   *
+   * `WireStream::Send()` confirms local transport admission, not receipt by
+   * the remote agent. A send failure stops later writes but cannot revoke the
+   * current batch's store confirmations.
    * @param stream The transport to attach; kept alive for the node's
    *   lifetime.
    * @return OK, or an error status on failure.

@@ -51,8 +51,9 @@ inline constexpr std::string_view kActionHeaderPrefix = "x-a11-";
  *
  * Describes the port's @c name and payload @c type, whether it is @c required
  * and @c unary (a single value rather than a stream), an optional
- * @c description, and default @c autofills injected when the port is left
- * unset.
+ * @c description, and input @c autofills. Before applying autofills the
+ * runtime requires that input to be writable and empty; existing data causes
+ * the action to fail rather than overriding a receiver-owned default.
  */
 struct ActionPortSchema {
   std::string name;         ///< Port name (unique within its direction).
@@ -60,7 +61,7 @@ struct ActionPortSchema {
   std::string description;  ///< Human-readable description.
   bool required = false;    ///< Whether the port must be supplied.
   bool unary = false;       ///< Whether the port carries a single value.
-  /// Default fragments injected when the port is not otherwise populated.
+  /// Input-default fragments; an autofilled input must otherwise be empty.
   std::vector<std::optional<data::NodeFragment>> autofills;
 
   /// Opaque, owning language-binding type handle (e.g. a Python type object).
@@ -85,8 +86,8 @@ struct ActionPortSchema {
  * @c default_value applied when the caller omits it.
  */
 struct ActionHeaderSchema {
-  std::string name;         ///< Header name.
-  std::string description;  ///< Human-readable description.
+  std::string name;                          ///< Header name.
+  std::string description;                   ///< Human-readable description.
   std::optional<data::Bytes> default_value;  ///< Value used when omitted.
 
   /** @brief Validates the header schema. */
@@ -108,8 +109,9 @@ struct ActionSchema {
 
   std::string name;         ///< Action name.
   std::string description;  ///< Human-readable description.
-  absl::flat_hash_map<std::string, ActionPortSchema> inputs;   ///< Input ports.
-  absl::flat_hash_map<std::string, ActionPortSchema> outputs;  ///< Output ports.
+  absl::flat_hash_map<std::string, ActionPortSchema> inputs;  ///< Input ports.
+  absl::flat_hash_map<std::string, ActionPortSchema>
+      outputs;  ///< Output ports.
   absl::flat_hash_map<std::string, ActionHeaderSchema> headers;  ///< Headers.
   /// Maps output port names to JSON result fields.
   absl::flat_hash_map<std::string, std::string> output_to_json_field;

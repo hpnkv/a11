@@ -46,34 +46,55 @@ import {
   type WireStream,
 } from './wire_stream.js';
 
+/** Asynchronous application work invoked by {@link Action.run}. */
 export type ActionHandler = (
   action: Action,
 ) => void | Status | Promise<void | Status>;
 
+/** Synchronous hook run when cancellation is first requested. */
 export type OnActionCancelled = (action: Action) => void | Status;
 
+/** Minimal registry contract used to resolve a nested action by name. */
 export interface ActionRegistryLike {
+  /** Return the registered callable interface. */
   getSchema(actionName: string): StatusOr<ActionSchema>;
+  /** Return its local handler, if this process can execute it. */
   getHandler(actionName: string): StatusOr<ActionHandler>;
 }
 
+/** Session operations an Action needs for dispatch and lifetime tracking. */
 export interface ActionSessionContext {
+  /** Shared node namespace into which action ports are mapped. */
   getNodeMap(): NodeMap;
+  /** Registry used for inbound and nested work. */
   getActionRegistry(): ActionRegistryLike | null;
+  /** Route a call/cancellation message over an attached session stream. */
   send(message: WireMessage, streamId?: string): Status;
+  /** Add one running action to session shutdown/concurrency accounting. */
   trackAction(action: Action): Status;
+  /** Remove a terminal action from session accounting. */
   untrackAction(action: Action): void;
+  /** Await a root/nested concurrency slot before invoking a handler. */
   acquireActionSlot?(nested: boolean, signal?: AbortSignal): Promise<Status>;
+  /** Release the concurrency slot after the handler unwinds. */
   releaseActionSlot?(nested: boolean): void;
 }
 
+/** Collaborators and instance policy supplied when creating an Action. */
 export interface ActionCreateOptions {
+  /** Stable call id; generated when omitted. */
   id?: string;
+  /** Local implementation; may be bound later or absent for remote-only calls. */
   handler?: ActionHandler | null;
+  /** Node namespace backing input/output port ids. */
   nodeMap?: NodeMap;
+  /** Direct transport used by `call`, when no session routes it. */
   stream?: WireStream | null;
+  /** Optional connection runtime that tracks and routes this action. */
   session?: ActionSessionContext | null;
+  /** Registry used to resolve nested action names. */
   registry?: ActionRegistryLike | null;
+  /** Port binding and post-run retention policy. */
   settings?: ActionSettings;
 }
 
@@ -139,7 +160,22 @@ function validateActionSettings(settings: unknown): Status {
   }
 }
 
-/** A schema-described local run or remote A11 action call. */
+/**
+ * One schema-described unit of local work or remote agent work.
+ *
+ * An action binds an {@link ActionSchema} to input/output {@link AsyncNode}s
+ * and, for a local run, an application handler. It is a one-shot state machine:
+ * configure the id, schema, collaborators, headers, and port mappings; then
+ * choose {@link run} for local execution or {@link call} for remote dispatch.
+ * Configuration that changes identity or port shape is frozen after start.
+ *
+ * Remote calls have two milestones. {@link waitForDispatch} reports whether
+ * the peer accepted the action, while {@link wait} follows its eventual status
+ * after handler and output-writer cleanup. Local handlers can create children
+ * with {@link makeNested}; a shared session applies nested limits and includes
+ * tracked children in session-wide abort, but each child has an independent
+ * cancellation signal.
+ */
 export class Action {
   private schema: ActionSchema;
   private id: string;
@@ -185,6 +221,7 @@ export class Action {
     this.remapDefaultPorts();
   }
 
+  /** Validate a schema/options bundle and create a configurable action. */
   static create(
     schema: ActionSchema,
     options: ActionCreateOptions = {},
@@ -217,6 +254,7 @@ export class Action {
     }
   }
 
+  /** Derive the stable `action-id#port-name` id for one action port node. */
   static makeNodeId(actionId: string, nodeName: string): StatusOr<string> {
     const validAction = validateName(actionId);
     if (!isOk(validAction)) return validAction;
@@ -227,6 +265,7 @@ export class Action {
     return isOk(validResult) ? result : validResult;
   }
 
+  /** AbortSignal a handler can observe for cooperative cancellation. */
   get signal(): AbortSignal { return this.cancelController.signal; }
   getId(): string { return this.id; }
   getSchema(): ActionSchema { return this.schema; }
@@ -237,7 +276,9 @@ export class Action {
   getStream(): WireStream | null { return this.stream; }
   getRegistry(): ActionRegistryLike | null { return this.registry; }
   getSession(): ActionSessionContext | null { return this.session; }
+  /** Completion status; OK is provisional until `isDone()` becomes true. */
   getStatus(): Status { return this.completionStatus ?? okStatus(); }
+  /** Remote acknowledgement status, or `null` before it arrives. */
   getDispatchStatus(): Status | null { return this.dispatchStatus; }
   isDone(): boolean { return this.completionStatus !== null; }
   hasBeenRun(): boolean { return this.mode === 'run'; }
@@ -246,6 +287,7 @@ export class Action {
     return this.cancelRequested || this.completionStatus?.code === cancelledError().code;
   }
 
+  /** Replace the call id and remap default port ids before starting. */
   setId(id: string): Status {
     const validation = validateName(id);
     if (!isOk(validation)) return validation;
@@ -262,6 +304,7 @@ export class Action {
     return remapped;
   }
 
+  /** Replace the callable contract and remap ports before starting. */
   setSchema(schema: ActionSchema): Status {
     if (!(schema instanceof ActionSchema)) return invalidArgumentError('schema must be an ActionSchema.');
     const validation = schema.validate();
@@ -273,6 +316,7 @@ export class Action {
     return this.remapDefaultPorts();
   }
 
+  /** Bind the application implementation invoked by a local run. */
   bindHandler(handler: ActionHandler): Status {
     if (typeof handler !== 'function') return invalidArgumentError('handler must be callable.');
     if (this.mode !== 'none') {
@@ -331,6 +375,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Move lifetime/routing ownership to a session, retaining active tracking. */
   bindSession(session: ActionSessionContext | null): Status {
     if (session !== null && !hasSessionShape(session)) {
       return invalidArgumentError('session must implement ActionSessionContext or be null.');
@@ -366,6 +411,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Bind remote dispatch and reattach all already stream-bound port nodes. */
   bindStream(stream: WireStream | null): Status {
     if (stream === this.stream) return okStatus();
     const previous = this.stream;
@@ -390,6 +436,7 @@ export class Action {
     return this.nodeMap.get(nodeId);
   }
 
+  /** Open a named input node and optionally mirror local writes to the peer. */
   async getInput(name: string, bindStream?: boolean): Promise<StatusOr<AsyncNode>> {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -405,6 +452,7 @@ export class Action {
     return isOk(attached) ? node : attached;
   }
 
+  /** Open a named output node and optionally mirror local writes to the peer. */
   async getOutput(name: string, bindStream?: boolean): Promise<StatusOr<AsyncNode>> {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -440,6 +488,7 @@ export class Action {
     return this.inputIds.has(name) || this.outputIds.has(name);
   }
 
+  /** Snapshot the call id, name, port mappings, and headers for dispatch. */
   getActionMessage(): ActionMessage {
     return new ActionMessage({
       id: this.id,
@@ -454,6 +503,7 @@ export class Action {
     });
   }
 
+  /** Adopt validated caller-supplied port node ids before local execution. */
   mapPortsFromMessage(message: ActionMessage): Status {
     if (!(message instanceof ActionMessage)) return invalidArgumentError('message must be an ActionMessage.');
     if (this.mode !== 'none') {
@@ -506,6 +556,7 @@ export class Action {
     return value === null ? okStatus() : target.setHeader(name, value);
   }
 
+  /** Copy framework-scoped metadata to a nested action. */
   forwardHeadersWithPrefix(target: Action, prefix = ACTION_HEADER_PREFIX): Status {
     if (!(target instanceof Action)) return invalidArgumentError('target must be an Action.');
     const folded = prefix.toLowerCase();
@@ -518,6 +569,15 @@ export class Action {
     return okStatus();
   }
 
+  /**
+   * Create a child action from a schema or registered name.
+   *
+   * With `propagateIo`, the child shares the parent's node map, stream, and
+   * session, while retaining its own id, derived port ids, and AbortSignal.
+   * The registry is shared in either mode, and framework headers are forwarded
+   * when `forwardHeaders` is true. A shared session supplies nested concurrency
+   * limits and session-wide abort; cancelling only the parent is not recursive.
+   */
   makeNested(
     schemaOrName: ActionSchema | string,
     propagateIo = true,
@@ -569,6 +629,7 @@ export class Action {
     }
   }
 
+  /** Start the bound handler locally and return immediately. */
   run(): StatusOr<Action> {
     if (this.handler === null) {
       return failedPreconditionError('Action handler has not been set.');
@@ -584,6 +645,7 @@ export class Action {
     return this;
   }
 
+  /** Queue this action for remote dispatch; use `waitForDispatch` for acceptance. */
   async call(wireHeaders: ByteMapInput = new Map()): Promise<StatusOr<Action>> {
     try {
       return await this.callInternal(wireHeaders);
@@ -638,6 +700,7 @@ export class Action {
     return this;
   }
 
+  /** Await the remote dispatch acknowledgement, not handler completion. */
   async waitForDispatch(timeoutMs?: number): Promise<Status> {
     if (this.mode !== 'call') {
       return failedPreconditionError('Only a called Action has a dispatch status.');
@@ -645,12 +708,20 @@ export class Action {
     return this.waitForStatus(this.dispatched.promise, timeoutMs, 'Action dispatch timed out.');
   }
 
+  /** Await terminal local/remote completion after all lifecycle cleanup. */
   async wait(timeoutMs?: number): Promise<StatusOr<Action>> {
     if (this.mode === 'none') return failedPreconditionError('Action has not been run or called.');
     const status = await this.waitForStatus(this.done.promise, timeoutMs, 'Action wait timed out.');
     return isOk(status) ? this : status;
   }
 
+  /**
+   * Request cooperative cancellation once.
+   *
+   * Local handlers observe {@link signal}; remote calls also send the reserved
+   * cancellation action. `cancel()` initiates the transition—await `wait()` if
+   * teardown and output abort propagation must be complete.
+   */
   cancel(): Status {
     if (this.completionStatus !== null || this.finishing || this.cancelRequested) {
       return okStatus();
@@ -709,6 +780,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Materialize schema autofills into empty input nodes before a handler runs. */
   async applyInputAutofills(): Promise<Status> {
     try {
       return await this.applyInputAutofillsInternal();

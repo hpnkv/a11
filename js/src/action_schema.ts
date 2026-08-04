@@ -11,23 +11,46 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** MIME type used for structured action dispatch/completion status chunks. */
 export const ACTION_STATUS_MIMETYPE = 'application/x-a11-status';
+/** Reserved output node carrying the action's eventual completion status. */
 export const ACTION_STATUS_OUTPUT = '__status__';
+/** Reserved output node acknowledging whether a remote call was dispatched. */
 export const ACTION_DISPATCH_STATUS_OUTPUT = '__dispatch_status__';
+/** Reserved wire action name used to request remote cancellation. */
 export const CANCEL_ACTION_NAME = '__cancel__';
+/** Header naming the action id targeted by a cancellation message. */
 export const CANCEL_ACTION_HEADER = '__action';
+/** Prefix for framework headers normally forwarded to nested actions. */
 export const ACTION_HEADER_PREFIX = 'x-a11-';
+/** Output mapping sentinel meaning the output is the complete JSON value. */
 export const WHOLE_JSON_OUTPUT = '$';
 
+/** Declarative input/output port fields accepted by {@link ActionPortSchema}. */
 export interface ActionPortSchemaOptions {
+  /** Port name used by handlers and on the wire. */
   name: string;
+  /** Application type or MIME-facing type description. */
   type: string;
+  /** Developer/model-facing explanation of what the port carries. */
   description?: string;
+  /** Whether callers must provide the port. */
   required?: boolean;
+  /** Whether the port represents one whole value rather than a stream. */
   unary?: boolean;
+  /** Default input fragments; an autofilled input must otherwise be empty. */
   autofills?: readonly (NodeFragment | null)[];
 }
 
+/**
+ * Contract for one named action input or output node.
+ *
+ * Port descriptions and types form the interface shown to application code
+ * and, commonly, to an LLM tool schema. `unary` guides consumers toward one
+ * whole value while streaming ports may yield many fragments. Input autofills
+ * can supply defaults before the handler runs, but the runtime rejects an
+ * autofilled input that already contains data.
+ */
 export class ActionPortSchema {
   name: string;
   type: string;
@@ -88,12 +111,14 @@ export class ActionPortSchema {
   }
 }
 
+/** Declarative header fields accepted by {@link ActionHeaderSchema}. */
 export interface ActionHeaderSchemaOptions {
   name: string;
   description?: string;
   defaultValue?: ByteSource | null;
 }
 
+/** Describes one binary metadata value accepted by an action call. */
 export class ActionHeaderSchema {
   name: string;
   description: string;
@@ -159,6 +184,7 @@ type StringCollection =
   | ReadonlyMap<string, string>
   | Readonly<Record<string, string>>;
 
+/** Complete declarative interface accepted by {@link ActionSchema}. */
 export interface ActionSchemaOptions {
   name: string;
   description?: string;
@@ -174,7 +200,16 @@ function collectionEntries<T>(
   return value instanceof Map ? value.entries() : Object.entries(value ?? {});
 }
 
-/** Typed port and header contract for an Action. */
+/**
+ * Typed port and header contract for an {@link Action}.
+ *
+ * A schema is the stable boundary between callers and handlers: it names the
+ * operation, defines input/output AsyncNodes, declares metadata headers, and
+ * optionally maps outputs into an LLM/tool JSON result. Registries use the
+ * schema to instantiate local handlers. A remote call sends the action name
+ * and port mappings, not this schema; the peer resolves its own registration,
+ * so caller and receiver schemas must agree on the wire-facing contract.
+ */
 export class ActionSchema {
   name: string;
   description: string;
@@ -192,6 +227,7 @@ export class ActionSchema {
     this.outputToJsonField = new Map(collectionEntries(options.outputToJsonField));
   }
 
+  /** Construct and validate a schema before registering it. */
   static create(options: ActionSchemaOptions): StatusOr<ActionSchema> {
     try {
       const result = new ActionSchema(options);
@@ -273,6 +309,7 @@ export class ActionSchema {
     return okStatus();
   }
 
+  /** Map an output into a JSON field, or `$` as the whole result value. */
   mapOutputToJson(outputName: string, fieldName = ''): Status {
     try {
       const valid = validateName(outputName);
@@ -305,13 +342,19 @@ export class ActionSchema {
   }
 }
 
+/** Per-instance policy for binding and retaining an action's port nodes. */
 export interface ActionSettings {
+  /** Mirror input-node writes to the action's bound stream by default. */
   bindStreamsOnInputsByDefault?: boolean;
+  /** Mirror output-node writes to the action's bound stream by default. */
   bindStreamsOnOutputsByDefault?: boolean;
+  /** Discard input nodes from the map after local completion. */
   clearInputsAfterRun?: boolean;
+  /** Discard output nodes from the map after local completion. */
   clearOutputsAfterRun?: boolean;
 }
 
+/** Encode a structured action status as a reserved-MIME chunk. */
 export function statusToChunk(status: Status): StatusOr<Chunk> {
   const bytes = packStatus(status);
   if (!isOk(bytes)) return bytes;
@@ -321,6 +364,7 @@ export function statusToChunk(status: Status): StatusOr<Chunk> {
   });
 }
 
+/** Decode a status chunk while retaining outer parsing errors separately. */
 export function decodeStatusChunk(chunk: Chunk): StatusOr<DecodedStatus> {
   if (!(chunk instanceof Chunk)) return invalidArgumentError('chunk must be a Chunk.');
   const validation = chunk.validate();
@@ -337,6 +381,7 @@ export function statusFromChunk(chunk: Chunk): Status {
   return isOk(decoded) ? decoded.status : decoded;
 }
 
+/** Whether a chunk carries the reserved action status MIME type. */
 export function isStatusChunk(chunk: Chunk): boolean {
   return chunk instanceof Chunk && chunk.mimetype === ACTION_STATUS_MIMETYPE;
 }

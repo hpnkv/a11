@@ -24,6 +24,7 @@ interface Registration {
   handler: ActionHandler | null;
 }
 
+/** Per-instance collaborators supplied by {@link ActionRegistry.makeAction}. */
 export interface MakeActionOptions {
   id?: string;
   nodeMap?: NodeMap;
@@ -92,10 +93,19 @@ function cloneSchema(
   }
 }
 
-/** A catalogue of named Action schemas and their optional local handlers. */
+/**
+ * Catalogue of action contracts and the handlers this process can execute.
+ *
+ * A session consults its registry when an {@link ActionMessage} arrives: the
+ * schema validates and maps ports, and the optional handler performs local
+ * work. Client-only entries may omit handlers while still exposing schemas for
+ * constructing remote calls or model tool definitions. Registrations are
+ * copied so later caller mutation cannot change a live service contract.
+ */
 export class ActionRegistry {
   private readonly registrations = new Map<string, Registration>();
 
+  /** Register or replace one named schema/handler pair. */
   register(
     actionName: string,
     schema: ActionSchema,
@@ -129,6 +139,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Remove an action so future calls are no longer dispatchable. */
   unregister(actionName: string): Status {
     try {
       const validName = validateName(actionName);
@@ -150,6 +161,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Return an isolated copy of a registered callable contract. */
   getSchema(actionName: string): StatusOr<ActionSchema> {
     try {
       const validName = validateName(actionName);
@@ -164,6 +176,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Return the local implementation, or NotFound for remote-only entries. */
   getHandler(actionName: string): StatusOr<ActionHandler> {
     try {
       const validName = validateName(actionName);
@@ -180,6 +193,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Instantiate a configurable action bound to this registry. */
   makeAction(
     actionName: string,
     options: MakeActionOptions = {},
@@ -206,6 +220,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Build the initial wire description for a registered action call. */
   makeActionMessage(
     actionName: string,
     actionId = '',
@@ -216,6 +231,7 @@ export class ActionRegistry {
     return isOk(action) ? action.getActionMessage() : action;
   }
 
+  /** Snapshot registered names in insertion order. */
   listRegisteredActions(): string[] {
     try {
       return [...this.registrations.keys()];
@@ -224,6 +240,11 @@ export class ActionRegistry {
     }
   }
 
+  /**
+   * Clone registrations, normally removing all input and output autofills.
+   * Use the cleared copy before sharing a registry across an agent or trust
+   * boundary so context-specific defaults do not cross implicitly.
+   */
   copy(clearAutofills = true): StatusOr<ActionRegistry> {
     if (typeof clearAutofills !== 'boolean') {
       return invalidArgumentError('clearAutofills must be boolean.');

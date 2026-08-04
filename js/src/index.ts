@@ -1,3 +1,9 @@
+/**
+ * Public TypeScript surface for building A11 browser and Node agents.
+ *
+ * @packageDocumentation
+ */
+
 export * from './status.js';
 export * from './status_codec.js';
 export * from './bytes.js';

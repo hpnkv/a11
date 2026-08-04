@@ -430,6 +430,7 @@ export class Channel<ValueType> {
   }
 }
 
+/** Yield to the host event loop for at least `ms` milliseconds. */
 export async function sleep(ms: number): Promise<Status> {
   if (!Number.isFinite(ms) || ms < 0) {
     return invalidArgumentError('Sleep duration must be non-negative and finite.');
@@ -442,6 +443,7 @@ export async function sleep(ms: number): Promise<Status> {
   }
 }
 
+/** Sleep until an absolute JavaScript epoch-millisecond deadline. */
 export async function sleepUntil(time: number): Promise<Status> {
   if (!Number.isFinite(time)) {
     return invalidArgumentError('Sleep deadline must be a finite epoch millisecond value.');
@@ -473,6 +475,7 @@ export class Deferred<T> {
   }
 }
 
+/** One non-throwing unit of work for {@link CallbackScheduler}. */
 export type ScheduledCallback = () => Status | Promise<Status>;
 
 /**
@@ -540,6 +543,7 @@ export class CallbackScheduler {
   }
 }
 
+/** Shared fair pump used by high-cardinality chunk readers and writers. */
 export const storeCallbackScheduler = new CallbackScheduler();
 
 /** Await a promise with an optional millisecond timeout, returning a Status. */

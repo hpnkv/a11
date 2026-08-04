@@ -101,6 +101,11 @@ nav:
       - A toy agent with a tool: guides/agent-tool.md
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
+  - State machines:
+      - WireStream lifecycle: lifecycles/wire-stream.md
+      - AsyncNode lifecycle: lifecycles/async-node.md
+      - Session lifecycle: lifecycles/session.md
+      - Action lifecycle: lifecycles/action.md
   - Python API:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

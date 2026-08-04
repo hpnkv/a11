@@ -39,45 +39,81 @@ import {
   type WireStreamOptions,
 } from './wire_stream.js';
 
+/** Which side of a binary channel a {@link ChannelWireStream} may drive. */
 export enum ChannelEndpointRole {
+  /** Initiate the transport with {@link WireStream.start}. */
   CLIENT = 'client',
+  /** Receive the transport with {@link WireStream.accept}. */
   SERVER = 'server',
+  /** Allow either startup method; useful for custom channel adapters. */
   EITHER = 'either',
 }
 
+/** Packetization and reassembly bounds for a binary channel transport. */
 export interface ChannelFramingOptions {
+  /** Maximum bytes in one transport packet, including framing metadata. */
   splitSize?: number;
+  /** Incomplete interleaved messages retained during reassembly. */
   maxPendingMessages?: number;
+  /** Aggregate bytes retained for incomplete messages. */
   maxPendingBytes?: number;
 }
 
+/** Validated, default-filled form of {@link ChannelFramingOptions}. */
 export interface NormalizedChannelFramingOptions {
+  /** Maximum bytes in one framed packet. */
   splitSize: number;
+  /** Maximum number of incomplete messages. */
   maxPendingMessages: number;
+  /** Maximum aggregate bytes held by the reassembler. */
   maxPendingBytes: number;
 }
 
+/** Events a {@link BinaryChannel} reports to its framing state machine. */
 export interface BinaryChannelCallbacks {
+  /** Report that packets may now be sent. */
   onOpen: () => void;
+  /** Deliver one complete framing packet, not an application message. */
   onMessage: (packet: Uint8Array) => void;
+  /** End the stream because the underlying transport failed. */
   onError: (status: NonOkStatus) => void;
+  /** Report that the underlying transport closed. */
   onClosed: () => void;
+  /** Wake a sender waiting for transport backpressure to ease. */
   onBufferedAmountLow: () => void;
 }
 
-/** Internal binary-channel seam shared by browser and Node transports. */
+/**
+ * Transport-adapter seam shared by WebSocket, WebRTC, and in-process streams.
+ *
+ * Implement this interface when bringing another message-capable binary
+ * transport to A11. {@link ChannelWireStream} supplies byte packetization,
+ * bounded out-of-order reassembly, A11 half-close/abort messages, deadlines,
+ * and callback ordering. The adapter only owns opening, packet I/O,
+ * backpressure observation, and physical closure.
+ */
 export interface BinaryChannel {
+  /** Install the callbacks used for one stream lifecycle. */
   setCallbacks(callbacks: BinaryChannelCallbacks): Status;
+  /** Release callback references after full stream completion. */
   resetCallbacks(): Status;
+  /** Open the underlying channel and resolve when packet I/O is available. */
   open(): Promise<Status>;
+  /** Return whether packet sends are currently possible. */
   isOpen(): boolean;
+  /** Queue one framing packet without waiting for physical delivery. */
   send(packet: Uint8Array): Status;
+  /** Return bytes still buffered by the underlying transport. */
   bufferedAmount(): StatusOr<number>;
+  /** Await a low-water notification; callers recheck {@link bufferedAmount}. */
   waitForBufferedAmountLow(): Promise<Status>;
+  /** Close the physical channel and release transport resources. */
   close(): Status;
+  /** Expose the transport-specific object for advanced integration. */
   getImpl(): unknown | null;
 }
 
+/** Validate framing limits and choose defaults for a transport endpoint. */
 export function normalizeChannelFramingOptions(
   options: ChannelFramingOptions = {},
   maxMessageSize = 32 * 1024 * 1024,
@@ -162,9 +198,26 @@ function hasBinaryChannelShape(value: unknown): value is BinaryChannel {
   }
 }
 
-/** Shared WireStream framing and lifecycle implementation for binary channels. */
+/**
+ * Adds the A11 WireStream lifecycle to a packet-oriented binary channel.
+ *
+ * Each {@link WireMessage} is split into bounded packets and may be reassembled
+ * out of order or interleaved with other messages. Incoming queues and partial
+ * messages are bounded separately so an agent cannot accumulate unbounded
+ * state while an application callback is slow.
+ *
+ * Most applications construct {@link WebSocketWireStream},
+ * {@link WebRtcWireStream}, or {@link InProcessWireStream} instead. Use this
+ * class directly when adapting a new channel. After exactly one of
+ * {@link start} or {@link accept}, finish normally with {@link halfClose} then
+ * {@link drainOutgoingMessages}; peer input continues until its half-close.
+ * An abort, transport failure, or deadline skips that normal drain and ends
+ * both directions with a structured status.
+ */
 export class ChannelWireStream implements WireStream {
+  /** Normalized application-message and timing limits. */
   readonly options: Readonly<NormalizedWireStreamOptions>;
+  /** Normalized packet reassembly limits. */
   readonly framing: Readonly<NormalizedChannelFramingOptions>;
 
   private readonly reassembler: ByteReassembler;
@@ -206,6 +259,12 @@ export class ChannelWireStream implements WireStream {
     this.armTiming();
   }
 
+  /**
+   * Wrap a binary channel with A11 framing and lifecycle semantics.
+   *
+   * Construction validates the stream id and all limits without opening the
+   * channel. Opening happens later in {@link start} or {@link accept}.
+   */
   static create(
     channel: BinaryChannel,
     id: string,

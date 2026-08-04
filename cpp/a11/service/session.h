@@ -41,7 +41,9 @@
 
 namespace a11::service {
 
+/// Trailer/header used to communicate the session's structured terminal status.
 inline constexpr std::string_view kSessionStatusHeader = "x-a11-session-status";
+/// Hard upper bound for any one WireMessage admitted by a Session.
 inline constexpr size_t kMaxSingleMessageSize = 32 * 1024 * 1024;
 
 /**
@@ -167,8 +169,12 @@ class Session : public std::enable_shared_from_this<Session> {
 
   /**
    * @brief Replace the NodeMap backing this session's node state.
-   * @param node_map The new node map; set it before streaming fragments so
-   *   they land where expected.
+   *
+   * Active actions are rebound, but fragments already stored in the previous
+   * map are not migrated. Configure this before traffic to avoid splitting a
+   * live action's state between maps.
+   *
+   * @param node_map The new node map.
    * @return OK, or an error status on failure.
    */
   absl::Status SetNodeMap(std::shared_ptr<nodes::NodeMap> node_map);
@@ -182,7 +188,12 @@ class Session : public std::enable_shared_from_this<Session> {
 
   /**
    * @brief Replace the registry used to resolve incoming action messages.
-   * @param registry The new registry; configure it before actions arrive.
+   *
+   * Active actions are rebound for subsequent nested-name resolution. Prefer
+   * configuring this before dispatch so one operation does not observe
+   * registrations from different registry versions.
+   *
+   * @param registry The new registry.
    * @return OK, or an error status on failure.
    */
   absl::Status SetActionRegistry(
@@ -367,8 +378,8 @@ class Session : public std::enable_shared_from_this<Session> {
 
 /// An inbound wire message paired with the id of the stream it arrived on.
 struct ReceivedSessionMessage {
-  data::WireMessage message;
-  std::string stream_id;
+  data::WireMessage message;  ///< Received application message.
+  std::string stream_id;      ///< Id of the transport that delivered it.
 };
 
 /**

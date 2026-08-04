@@ -56,12 +56,15 @@ absl::Status ValidateName(std::string_view name);
  * (see a11::data::SerializationRegistry).
  */
 struct ChunkMetadata {
-  std::string mimetype;             ///< Media type of the chunk payload.
+  std::string mimetype;                   ///< Media type of the chunk payload.
   std::optional<absl::Time> timestamp{};  ///< Optional creation timestamp.
-  ByteMap attributes{};             ///< Free-form key/value attributes.
+  ByteMap attributes{};                   ///< Free-form key/value attributes.
 
+  /// Estimate memory/wire weight for bounded-buffer accounting.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate metadata before it crosses a store or transport boundary.
   absl::Status Validate() const;
   /** @brief Returns attribute @p key, or a NotFound error when absent. */
   absl::StatusOr<std::string> GetAttribute(std::string_view key) const;
@@ -91,10 +94,12 @@ struct ChunkMetadata {
  */
 struct Chunk {
   std::optional<ChunkMetadata> metadata{};  ///< Optional payload metadata.
-  std::string ref{};   ///< Node id this chunk references, if not inline.
-  Bytes data{};        ///< Inline byte payload.
+  std::string ref{};  ///< Node id this chunk references, if not inline.
+  Bytes data{};       ///< Inline byte payload.
 
+  /// Estimate memory/wire weight for bounded-buffer accounting.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
   /** @brief Returns the metadata mimetype, or empty when unset. */
   [[nodiscard]] std::string GetMimetype() const;
@@ -102,6 +107,7 @@ struct Chunk {
   [[nodiscard]] bool IsEmpty() const;
   /** @brief Whether the chunk represents an explicit null value. */
   [[nodiscard]] bool IsNull() const;
+  /// Validate that payload, reference, and metadata fields are consistent.
   absl::Status Validate() const;
 
   /** @brief Encodes this chunk as MessagePack bytes. */
@@ -130,8 +136,11 @@ struct NodeRef {
   // wider representation than offset and sequence numbers.
   std::optional<std::uint64_t> length;  ///< Optional length of the window.
 
+  /// Estimate memory/wire weight for bounded-buffer accounting.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate the referenced node id and requested slice.
   absl::Status Validate() const;
 
   /** @brief Encodes this reference as MessagePack bytes. */
@@ -158,11 +167,14 @@ struct NodeRef {
 struct NodeFragment {
   std::string id;  ///< Id of the node this fragment belongs to.
   std::variant<Chunk, NodeRef> data = Chunk{};  ///< Inline chunk or reference.
-  std::optional<std::uint32_t> seq;  ///< Ordering sequence number.
+  std::optional<std::uint32_t> seq;             ///< Ordering sequence number.
   bool continued = false;  ///< Whether further fragments follow this one.
 
+  /// Estimate memory/wire weight for session and transport limits.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate the node id, payload, sequence, and continuation marker.
   absl::Status Validate() const;
   /** @brief Returns the held Chunk, or an error when it holds a NodeRef. */
   absl::StatusOr<Chunk* absl_nonnull> GetChunk();
@@ -196,8 +208,11 @@ struct Port {
   std::string name;  ///< Schema-defined port name.
   std::string id;    ///< Id of the node backing this port.
 
+  /// Estimate memory/wire weight for session and transport limits.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate the port name and node id used to bind an action.
   absl::Status Validate() const;
 
   /** @brief Encodes this port as MessagePack bytes. */
@@ -222,14 +237,17 @@ struct Port {
  * what an a11::actions::Action produces to describe itself.
  */
 struct ActionMessage {
-  std::string id;             ///< Unique id of this action instance.
-  std::string name;           ///< Registered action name.
+  std::string id;               ///< Unique id of this action instance.
+  std::string name;             ///< Registered action name.
   std::vector<Port> inputs{};   ///< Input port -> node bindings.
   std::vector<Port> outputs{};  ///< Output port -> node bindings.
-  ByteMap headers{};          ///< Per-call headers.
+  ByteMap headers{};            ///< Per-call headers.
 
+  /// Estimate memory/wire weight for session and transport limits.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate the invocation id, action name, ports, and headers.
   absl::Status Validate() const;
 
   /** @brief Encodes this message as MessagePack bytes. */
@@ -261,8 +279,11 @@ struct WireMessage {
   std::vector<ActionMessage> actions{};        ///< Action invocations.
   ByteMap headers{};                           ///< Message-level headers.
 
+  /// Estimate memory/wire weight before admitting this message to a buffer.
   [[nodiscard]] size_t ApproxBytes() const;
+  /// Return a concise representation suitable for logs and diagnostics.
   [[nodiscard]] std::string DebugString() const;
+  /// Validate every contained fragment, action, and header.
   absl::Status Validate() const;
 
   /** @brief Encodes this message as MessagePack bytes. */

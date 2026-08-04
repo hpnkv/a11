@@ -32,8 +32,9 @@ This is deliberate. An agent rarely has its whole answer at once; it has the
 natural shape:
 
 - **Produce incrementally** with `put()` / `put_final()`. Each write returns a
-  future that completes when the chunk is durably stored (and sent, if a
-  transport is attached), so awaiting it applies backpressure.
+  future that completes when the backing store accepts the chunk. Attached
+  transport sends are attempted during the same flush, but this is not a
+  remote-delivery acknowledgement.
 - **Consume in whatever shape fits** — `await node.next()` for the next value,
   `async for value in node` to drain, or `await node.consume()` for a single
   whole result. Objects are serialized on the way in and deserialized on the way

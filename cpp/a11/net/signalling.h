@@ -46,14 +46,15 @@ enum class SignallingMessageType {
  * on `type`; ToJson()/FromJson() move it over a network transport.
  */
 struct SignallingMessage {
-  SignallingMessageType type = SignallingMessageType::kDescription;
-  std::string sender;
-  std::string recipient;
-  std::string description;
-  std::string description_type;
-  std::string candidate;
-  std::string mid;
-  absl::Status error;
+  SignallingMessageType type =
+      SignallingMessageType::kDescription;  ///< Payload discriminator.
+  std::string sender;            ///< Identity of the originating peer.
+  std::string recipient;         ///< Identity of the target peer.
+  std::string description;       ///< SDP offer or answer text.
+  std::string description_type;  ///< SDP type, such as offer or answer.
+  std::string candidate;         ///< ICE candidate text.
+  std::string mid;               ///< Media/data-section id for the candidate.
+  absl::Status error;            ///< Negotiation failure for kError messages.
 
   /** @return OK if the fields are consistent for this message's type. */
   absl::Status Validate() const;

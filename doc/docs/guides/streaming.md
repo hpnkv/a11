@@ -24,17 +24,25 @@ node = a11.AsyncNode.create("tokens")
 
 ## Write to it
 
-`put()` appends a value. Awaiting it once more resolves once the value is durably
-stored, so **awaiting applies backpressure** — a fast producer waits for a slow
-consumer instead of buffering without bound.
+`put()` admits a value into a bounded writer and returns its confirmation
+future. Await the coroutine once for admission, then await that future when the
+backing store must have accepted the value. Attached stream sends are attempted
+or queued during the flush, but the confirmation is not an acknowledgement from
+the remote reader. That second wait propagates storage and local-transport
+**backpressure**:
+
+```python
+confirmation = await node.put("A11")
+sequence = await confirmation
+```
 
 When you are the *authoritative* writer — the one who decides the stream is done
 — finish in two steps: mark the last value **final**, then **seal** the store:
 
 ```python
-await node.put("A11")
-await node.put("streams")
-await node.put_final("everything")  # mark where the data ends
+await (await node.put("A11"))
+await (await node.put("streams"))
+await (await node.put_final("everything"))  # mark where the data ends
 await node.drain_and_close()  # flush, forbid further writes, record OK
 ```
 
@@ -79,7 +87,7 @@ definite end:
 ```python
 async with a11.AsyncNode.create("tokens") as node:
     for word in ["A11", "streams", "everything"]:
-        await node.put(word)
+        await (await node.put(word))
     # leaving the block seals the store (clean exit) or aborts it (on error)
 ```
 
@@ -101,7 +109,7 @@ async def main() -> None:
 
     async with node:
         for word in ["A11", "streams", "everything"]:
-            await node.put(word)
+            await (await node.put(word))
 
     async for token in node:
         print(token)

@@ -123,29 +123,29 @@ class ChunkStore {
       std::uint64_t arrival_order, absl::Time deadline) = 0;
 
   /** @brief
-   *    Get the next available fragment, waiting indefinitely.
+   *    Get the next logical-sequence fragment, waiting indefinitely.
    *
    *  Convenience overload equivalent to Next() with an infinite deadline and a
    *  limit of one.
    *
    *  @return
-   *    An awaitable that resolves with a vector holding at most one fragment
-   *    slot (which may be empty when a fragment is missing).
+   *    An awaitable that resolves with at most one fragment, or a nullopt
+   *    sentinel once the store reaches a clean logical end.
    */
   a11::Future<std::vector<std::optional<data::NodeFragment>>> Next() {
     return Next(absl::InfiniteFuture(), 1);
   }
 
   /** @brief
-   *    Get the next available fragment before a deadline.
+   *    Get the next logical-sequence fragment before a deadline.
    *
    *  Convenience overload equivalent to Next() with a limit of one.
    *
    *  @param deadline
    *    The absolute time after which the wait gives up.
    *  @return
-   *    An awaitable that resolves with a vector holding at most one fragment
-   *    slot.
+   *    An awaitable that resolves with at most one fragment, or a nullopt
+   *    sentinel at a clean logical end.
    */
   a11::Future<std::vector<std::optional<data::NodeFragment>>> Next(
       absl::Time deadline) {
@@ -153,21 +153,21 @@ class ChunkStore {
   }
 
   /** @brief
-   *    Get up to `limit` of the next available fragments as they are
-   *    produced.
+   *    Get up to `limit` fragments from the shared logical-sequence cursor.
    *
-   *  The primary way to consume a growing store: the awaitable resolves with
-   *  whatever is ready before the deadline. Individual slots may be empty when
-   *  a fragment at that position is missing. Call repeatedly to follow the
-   *  store as it grows.
+   *  `Next()` advances through sequence numbers 0, 1, 2, and so on. It waits
+   *  at a gap rather than switching to ingestion order; use
+   *  `GetByArrivalOrder()` for that view. After the final sequence or a clean
+   *  write closure, the result includes a nullopt end sentinel. Call
+   *  repeatedly to follow the store as it grows.
    *
    *  @param deadline
    *    The absolute time after which the wait gives up.
    *  @param limit
    *    The maximum number of fragments to return in one call.
    *  @return
-   *    An awaitable that resolves with a vector of optional fragments, one
-   *    slot per position advanced.
+   *    An awaitable that resolves with up to `limit` data fragments; a clean
+   *    end may append a nullopt sentinel.
    */
   virtual a11::Future<std::vector<std::optional<data::NodeFragment>>> Next(
       absl::Time deadline, size_t limit) = 0;
@@ -224,11 +224,15 @@ class ChunkStore {
       std::uint64_t arrival_order) = 0;
 
   /** @brief
-   *    Get the sequence number of the final fragment, if the store is closed.
+   *    Get the sequence number explicitly marked as the final fragment.
    *
    *  @return
-   *    An awaitable that resolves with the final sequence number, or an empty
-   *    optional while the store is still open to writes.
+   *    An awaitable that resolves with the logical final sequence number, or
+   *    an empty optional when no fragment has declared finality.
+   *
+   *  Finality and write closure are separate state transitions. A producer may
+   *  mark a fragment final before closing the store, and
+   *  CloseWritesWithStatus() does not invent a final fragment.
    */
   virtual a11::Future<std::optional<std::uint32_t>> GetFinalSeq() = 0;
 

@@ -26,6 +26,9 @@ class Provider:
     name: str
     default_model: str
     api_key_env: tuple[str, ...]
+    # Base URL for providers reached over a local/self-hosted server rather
+    # than a hosted API (e.g. Ollama). Empty for the hosted backends.
+    base_url: str = ""
 
     def api_key(self) -> str:
         """First non-empty value among `api_key_env`, or ``""``."""
@@ -45,6 +48,12 @@ PROVIDERS: dict[str, Provider] = {
         name="gemini",
         default_model="gemini-3.5-flash",
         api_key_env=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    ),
+    "ollama": Provider(
+        name="ollama",
+        default_model="glm-4.7-flash",
+        api_key_env=(),
+        base_url="http://localhost:11434",
     ),
 }
 

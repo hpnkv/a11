@@ -63,7 +63,7 @@ def _make_client_action_registry() -> a11.ActionRegistry:
 DEFAULT_MODEL: dict[str, str] = {
     "claude": "claude-sonnet-4-6",
     "gemini": "gemini-3.5-flash",
-    "ollama": "deepseek-r1:8b",
+    "ollama": "glm-4.7-flash",
 }
 API_KEY_ENV: dict[str, tuple[str, ...]] = {
     "claude": ("ANTHROPIC_API_KEY",),

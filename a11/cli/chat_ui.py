@@ -42,10 +42,11 @@ from a11.status import Status, StatusCode, StatusException
 
 _HELP = (
     "Commands:\n"
-    "  /model <claude|gemini> [model]   switch backend (and optionally model)\n"
-    "  /clear                           forget the conversation so far\n"
-    "  /help, /?                        show this help\n"
-    "  /exit, /quit                     leave\n"
+    "  /model <claude|gemini|ollama> [model]   switch backend (and optionally"
+    " model)\n"
+    "  /clear                                  forget the conversation so far\n"
+    "  /help, /?                               show this help\n"
+    "  /exit, /quit                            leave\n"
 )
 
 
@@ -76,7 +77,7 @@ class ChatUI:
         self._traceparent = self._chat_span.traceparent()
         self._console.print(_HELP, style="dim", markup=False)
         self._print_status()
-        if not self._provider.api_key():
+        if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
 
         self._chat_span.set_input(
@@ -161,7 +162,7 @@ class ChatUI:
         self._provider = provider
         self._model = parts[2] if len(parts) > 2 else provider.default_model
         self._print_status()
-        if not provider.api_key():
+        if provider.api_key_env and not provider.api_key():
             self._warn_missing_key()
 
     # -- one conversational turn ------------------------------------------
@@ -173,6 +174,7 @@ class ChatUI:
             .set_header(LlmHeaders.PROVIDER.value, self._provider.name)
             .set_header(LlmHeaders.MODEL.value, self._model)
             .set_header(LlmHeaders.API_KEY.value, self._provider.api_key())
+            .set_header(LlmHeaders.BASE_URL.value, self._provider.base_url)
             .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, "")
         )
         observability.enable_tracing(

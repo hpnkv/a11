@@ -87,6 +87,13 @@ struct WebRtcConfiguration {
   std::optional<std::pair<std::uint16_t, std::uint16_t>> preferred_port_range;
   std::optional<std::string>
       bind_address;  ///< Optional local candidate address.
+  // A stream stripes A11 packets across several data channels on one peer
+  // connection so slow per-channel acknowledgement round-trips overlap. This
+  // is an internal detail: the WireStream still behaves as one ordered,
+  // reliable channel. A dialing client opens and maintains `desired_channels`;
+  // an accepting server admits at most `max_channels` per peer.
+  size_t desired_channels = 8;  ///< Data channels a client opens and replenishes.
+  size_t max_channels = 8;      ///< Data channels a server admits per peer.
 
   /** @return OK if the configuration is internally consistent. */
   absl::Status Validate() const;
@@ -158,6 +165,22 @@ class WebRtcWireStream final : public ChannelWireStream {
       std::shared_ptr<rtc::DataChannel> data_channel,
       std::shared_ptr<rtc::PeerConnection> connection,
       std::shared_ptr<SignallingTransport> signalling_endpoint,
+      ChannelEndpointRole role, WireStreamOptions options = {},
+      OpenOperation open_operation = {}, size_t split_size = 48 * 1024);
+
+  /**
+   * @brief Adopts an already-built binary channel (possibly multiplexed).
+   *
+   * Lower-level than Create: the caller owns the channel and its member data
+   * channels. `primary_channel` is retained only for the data_channel()
+   * accessor. Used by WebRtcWireServer and the client factory to wrap a
+   * multiplexed channel that stripes across several data channels.
+   */
+  static absl::StatusOr<std::shared_ptr<WebRtcWireStream>> BuildMultiplexedStream(
+      std::shared_ptr<internal::BinaryChannel> channel,
+      std::shared_ptr<rtc::DataChannel> primary_channel,
+      std::shared_ptr<rtc::PeerConnection> connection,
+      std::shared_ptr<SignallingTransport> signalling_endpoint, std::string id,
       ChannelEndpointRole role, WireStreamOptions options = {},
       OpenOperation open_operation = {}, size_t split_size = 48 * 1024);
 

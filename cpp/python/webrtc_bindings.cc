@@ -460,6 +460,18 @@ void BindWebRtc(py::module_& module) {
                      "Optional (min, max) local port range for ICE.")
       .def_readwrite("bind_address", &net::WebRtcConfiguration::bind_address,
                      "Optional local address to bind ICE sockets to.")
+      .def_readwrite(
+          "desired_channels", &net::WebRtcConfiguration::desired_channels,
+          "Number of WebRTC data channels a dialing client opens per "
+          "connection and keeps replenished. Streaming with several channels "
+          "lets slow per-channel acknowledgement round-trips overlap; the "
+          "stream still behaves as one ordered, reliable channel. Defaults to "
+          "8. Has no effect on the accepting side.")
+      .def_readwrite(
+          "max_channels", &net::WebRtcConfiguration::max_channels,
+          "Maximum number of WebRTC data channels an accepting server admits "
+          "per peer connection. Surplus channels a client opens beyond this "
+          "are refused. Defaults to 8. Has no effect on the dialing side.")
       .def("validate",
            [](const net::WebRtcConfiguration& configuration) {
              ThrowIfNotOk(configuration.Validate());

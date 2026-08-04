@@ -4987,12 +4987,34 @@ class WebRtcConfiguration:
     def channel_split_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
+    def desired_channels(self) -> int:
+        """
+        Number of WebRTC data channels a dialing client opens per connection
+        and keeps replenished. Streaming with several channels lets slow
+        per-channel acknowledgement round-trips overlap; the stream still
+        behaves as one ordered, reliable channel. Defaults to 8. Has no effect
+        on the accepting side.
+        """
+    @desired_channels.setter
+    def desired_channels(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
     def enable_ice_udp_mux(self) -> bool:
         """
         Whether to multiplex ICE traffic over a single UDP port.
         """
     @enable_ice_udp_mux.setter
     def enable_ice_udp_mux(self, arg0: bool) -> None: ...
+
+    @property
+    def max_channels(self) -> int:
+        """
+        Maximum number of WebRTC data channels an accepting server admits per
+        peer connection. Surplus channels a client opens beyond this are
+        refused. Defaults to 8. Has no effect on the dialing side.
+        """
+    @max_channels.setter
+    def max_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_message_size(self) -> int | None:

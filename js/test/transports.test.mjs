@@ -351,6 +351,7 @@ test('WebRTC signalling and bufferedAmount failures settle as statuses', async (
   let connection = new OpenPeerConnection();
   let stream = WebRtcWireStream.createClient('peer', signalling, {
     peerConnectionFactory: () => connection,
+    desiredChannels: 1,
   });
   assert.equal(isOk(stream), true);
   const malformedSignal = await onSignal({ unexpected: true });
@@ -363,6 +364,7 @@ test('WebRTC signalling and bufferedAmount failures settle as statuses', async (
   connection = new OpenPeerConnection();
   stream = WebRtcWireStream.createClient('peer', signalling, {
     peerConnectionFactory: () => connection,
+    desiredChannels: 1,
   });
   assert.equal(isOk(stream), true);
   assert.equal(isOk(await stream.start()), true);

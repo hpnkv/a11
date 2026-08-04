@@ -478,8 +478,10 @@ void MultiplexedBinaryChannel::DropMember(std::uint64_t id,
             << LiveCountLocked() << " of " << options_.target_channels
             << " remain";
     // The aggregate only fails once no live members remain and replenishment
-    // can no longer recover one (server side, or a client that gave up).
-    if (!closed_ && LiveCountLocked() == 0 && !factory_) {
+    // can no longer recover one (server side has no factory, or a client whose
+    // replenishment has given up).
+    if (!closed_ && LiveCountLocked() == 0 &&
+        (!factory_ || replenish_gave_up_)) {
       fatal = true;
       on_closed = callbacks_.on_closed;
     }
@@ -543,6 +545,8 @@ void MultiplexedBinaryChannel::MaybeReplenish() {
 
 void MultiplexedBinaryChannel::Replenish() {
   while (true) {
+    std::function<void()> give_up_on_closed;
+    bool give_up = false;
     {
       thread::MutexLock lock(&mu_);
       if (closed_ || members_.size() >= options_.target_channels) {
@@ -552,10 +556,19 @@ void MultiplexedBinaryChannel::Replenish() {
       if (replenish_failures_ >= options_.max_replenish_failures) {
         replenish_gave_up_ = true;
         replenishing_ = false;
+        give_up = true;
         VLOG(1) << "a11 webrtc: giving up channel replenishment after "
                 << replenish_failures_ << " consecutive failures";
-        return;
+        // If nothing is live and we have given up, fail the stream rather than
+        // buffer outgoing packets forever. Fire outside the lock.
+        if (!closed_ && LiveCountLocked() == 0)
+          give_up_on_closed = callbacks_.on_closed;
       }
+    }
+    if (give_up) {
+      if (give_up_on_closed)
+        give_up_on_closed();
+      return;
     }
     absl::StatusOr<std::shared_ptr<BinaryChannel>> created = factory_();
     if (!created.ok() || *created == nullptr) {

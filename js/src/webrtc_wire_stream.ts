@@ -599,6 +599,7 @@ class MultiplexedRtcChannel implements BinaryChannel {
   private replenishing = false;
   private replenishFailures = 0;
   private replenishGaveUp = false;
+  private lastSendFailure: NonOkStatus | null = null;
   private readonly opened = new Deferred<Status>();
   private failure: NonOkStatus | null = null;
   private readonly drainWaiters: Array<Deferred<Status>> = [];
@@ -815,7 +816,9 @@ class MultiplexedRtcChannel implements BinaryChannel {
         const framed = this.pendingOut[0];
         const sent = chosen.channel.send(framed);
         if (isOk(sent)) { this.pendingOut.shift(); continue; }
-        // Reroute the packet: drop the failed member, retry another.
+        // Reroute the packet: drop the failed member, retry another. Remember
+        // the failure so a stream that loses every channel fails with it.
+        this.lastSendFailure = sent;
         chosen.open = false;
         this.dropMember(chosen, 'send failed');
       }
@@ -832,6 +835,12 @@ class MultiplexedRtcChannel implements BinaryChannel {
     member.channel.closeChannel();
     const live = this.members.filter((m) => m.open).length;
     console.debug(`a11 webrtc: lost data channel (${reason}); ${live} of ${this.desiredChannels} remain`);
+    // If we have lost everything and replenishment cannot recover, fail rather
+    // than buffer forever.
+    if (live === 0 && this.replenishGaveUp) {
+      this.fail(this.lastSendFailure ?? unavailableError('All WebRTC data channels were lost.'));
+      return;
+    }
     void this.startReplenishment();
   }
 
@@ -840,13 +849,16 @@ class MultiplexedRtcChannel implements BinaryChannel {
     this.replenishing = true;
     try {
       while (!this.closed && !this.replenishGaveUp) {
-        const live = this.members.length;
-        if (live >= this.desiredChannels) break;
+        if (this.members.length >= this.desiredChannels) break;
         if (this.replenishFailures >= 4) {
           this.replenishGaveUp = true;
           console.debug('a11 webrtc: giving up channel replenishment after 4 consecutive failures');
           break;
         }
+        // Yield between attempts so send-failure drops settle and a run of
+        // failures can never starve the event loop.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (this.closed) break;
         const opened = await this.replenishOne();
         if (opened) {
           this.replenishFailures = 0;
@@ -858,6 +870,11 @@ class MultiplexedRtcChannel implements BinaryChannel {
       }
     } finally {
       this.replenishing = false;
+    }
+    // Gave up with nothing live: surface the failure so the stream terminates.
+    if (!this.closed && this.replenishGaveUp &&
+        this.members.filter((m) => m.open).length === 0) {
+      this.fail(this.lastSendFailure ?? unavailableError('WebRTC channel replenishment gave up with no live channels.'));
     }
   }
 
@@ -884,15 +901,28 @@ class MultiplexedRtcChannel implements BinaryChannel {
     });
     this.members.push(member);
     const timer = setTimeout(() => settle(false), 20000);
-    if (member.channel.isOpen()) { this.onMemberOpen(member); settle(true); }
+    if (member.channel.isOpen()) {
+      this.onMemberOpen(member);
+      settle(true);
+    } else {
+      // A channel that is already closing/closed will never fire 'open'; fail
+      // fast instead of waiting out the open timeout.
+      const state = member.channel.dataChannel.readyState;
+      if (state === 'closing' || state === 'closed') settle(false);
+    }
     const opened = await openedDeferred.promise;
     clearTimeout(timer);
-    if (!opened) {
+    // Yield once so an immediate send-failure drop (a channel that opens but
+    // cannot send) is observed: a channel that did not survive counts as a
+    // failed attempt, which bounds replenishment churn.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const survived = opened && this.members.indexOf(member) >= 0 && member.open;
+    if (!survived) {
       const index = this.members.indexOf(member);
       if (index >= 0) this.members.splice(index, 1);
       member.channel.closeChannel();
     }
-    return opened;
+    return survived;
   }
 
   private async negotiate(): Promise<void> {

@@ -359,8 +359,8 @@ class InstrumentedRoundRobin final : public boost::fibers::algo::algorithm {
   // scheduler here and could deadlock the scheduler itself.
   std::mutex mu_;
   std::condition_variable cv_;
-  std::uint64_t wake_seq_ ABSL_GUARDED_BY(mu_) = 0;
-  std::uint64_t consumed_wake_seq_ ABSL_GUARDED_BY(mu_) = 0;
+  std::uint64_t wake_seq_ = 0;
+  std::uint64_t consumed_wake_seq_ = 0;
 };
 
 bool& ThreadHasScheduler() {

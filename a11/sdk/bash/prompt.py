@@ -63,6 +63,11 @@ returned to you.
 - `shell_list` lists the shells you currently have open.
 - `shell_exit` closes a shell. Close shells you no longer need.
 
+You largely cannot run interactive commands, as you only have one shot at \
+running a command. If you need to supply any input, you must use pipes and \
+other shell features. If a given command may stall because of network calls \
+or other reasons, you must use system features to avoid it, such as `timeout`.
+
 Limits and care:
 - You may keep at most {max_shells} shells open at once (starting more fails); \
 reuse and exit shells rather than opening new ones needlessly.

@@ -382,9 +382,17 @@ class _StreamAccumulator:
     carrying a delta of `content` and/or `thinking`. Tool calls arrive whole
     (their arguments already parsed) rather than as a partial-JSON stream, so
     they are simply collected as they appear.
+
+    Ollama tool calls carry no id of their own, so one is synthesised. The
+    ``base_id`` offset makes those ids unique across the whole conversation:
+    each tool-calling round runs its own accumulator, and a fresh counter per
+    round would reuse ``call_0`` every round. Colliding ids let the second
+    round's nested tool action resolve to the first round's (already-closed)
+    one, so feeding its inputs fails with "ChunkStoreWriter is closed".
     """
 
-    def __init__(self):
+    def __init__(self, base_id: int = 0):
+        self._base_id = base_id
         self._content = ""
         self._thinking = ""
         self._tool_calls: list[_ToolCall] = []
@@ -399,7 +407,7 @@ class _StreamAccumulator:
             self._thinking += thinking
         for tool_call in getattr(message, "tool_calls", None) or []:
             function = tool_call.function
-            index = len(self._tool_calls)
+            index = self._base_id + len(self._tool_calls)
             self._tool_calls.append(
                 _ToolCall(
                     name=function.name,
@@ -776,6 +784,10 @@ async def interact_with_ollama(action: a11.Action):
     ollama_tools = _build_tools(tools)
     options = _build_options(config)
 
+    # Tool-call ids must be unique across the whole conversation, not just
+    # within one round (see `_StreamAccumulator`), so the counter lives out here
+    # and advances by the number of tool calls each round produces.
+    next_tool_call_id = 0
     try:
         while True:
             messages: list[dict[str, Any]] = []
@@ -801,7 +813,7 @@ async def interact_with_ollama(action: a11.Action):
                     code=StatusCode.INTERNAL, message=str(exc)
                 ).to_exception() from exc
 
-            accumulator = _StreamAccumulator()
+            accumulator = _StreamAccumulator(next_tool_call_id)
             snapshot = None
 
             async for chunk in stream:
@@ -819,6 +831,7 @@ async def interact_with_ollama(action: a11.Action):
                     snapshot = chunk
 
             tool_calls = accumulator.tool_calls
+            next_tool_call_id += len(tool_calls)
             message_dict = accumulator.message_dict()
 
             snapshot_model = (

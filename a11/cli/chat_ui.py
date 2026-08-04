@@ -54,11 +54,20 @@ class ChatUI:
     """A single interactive chat session over a swappable LLM backend."""
 
     def __init__(
-        self, provider: Provider, model: str, *, verbose: bool = False
+        self,
+        provider: Provider,
+        model: str,
+        *,
+        verbose: bool = False,
+        shell_tools: bool = True,
+        extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
         self._verbose = verbose
+        # Extra headers set on every interact_with_* call, applied last so they
+        # override the defaults for the same key (e.g. the base URL).
+        self._extra_headers = list(extra_headers or [])
         self._history: list[Interaction] = []
         self._console = Console()
         self._session: PromptSession[str] = PromptSession(
@@ -66,6 +75,32 @@ class ChatUI:
         )
         self._traceparent: str | None = None
         self._chat_span: observability.Span | None = None
+
+        # Shell tools: a registry of the four shell Actions, their tool
+        # definitions, the pattern that permits them, and the system prompt
+        # that teaches the model to use them. Built once and reused each turn.
+        self._registry: a11.ActionRegistry | None = None
+        self._tool_definitions: list[dict] = []
+        self._allowed_actions = ""
+        self._system_prompt = ""
+        if shell_tools:
+            self._enable_shell_tools()
+
+    def _enable_shell_tools(self) -> None:
+        from a11.sdk import bash
+        from a11.sdk.llm_tools.runner import get_tool_definitions
+
+        registry = a11.ActionRegistry()
+        bash.register(registry)
+        names = [schema.name for schema, _ in bash.SHELL_ACTIONS]
+        self._registry = registry
+        self._tool_definitions = get_tool_definitions(registry, names)
+        self._allowed_actions = "shell_.*"
+        # Chat runs outside an A11 Session, so shells are globally scoped and
+        # the global cap is the one the model should be told about.
+        self._system_prompt = bash.get_system_prompt(
+            max_shells=bash.MAX_GLOBAL_SHELLS
+        )
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -175,8 +210,16 @@ class ChatUI:
             .set_header(LlmHeaders.MODEL.value, self._model)
             .set_header(LlmHeaders.API_KEY.value, self._provider.api_key())
             .set_header(LlmHeaders.BASE_URL.value, self._provider.base_url)
-            .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, "")
+            .set_header(
+                LlmHeaders.ALLOWED_LLM_ACTIONS.value, self._allowed_actions
+            )
         )
+        # Tool calls the backend makes are dispatched against this registry.
+        if self._registry is not None:
+            interact.bind_registry(self._registry)
+        # Applied last so a user-supplied header overrides the default above.
+        for key, value in self._extra_headers:
+            interact.set_header(key, value)
         observability.enable_tracing(
             interact,
             traceparent=self._traceparent,
@@ -185,6 +228,12 @@ class ChatUI:
         interact.run()
 
         user_interaction = make_user_interaction(text)
+        # The tool system prompt rides on the first interaction of the
+        # conversation (every backend reads system instructions only there).
+        if self._system_prompt and not self._history:
+            user_interaction.system_instructions = [
+                a11.to_chunk(self._system_prompt)
+            ]
 
         text_buf: list[str] = []
         thoughts_buf: list[str] = []
@@ -236,6 +285,8 @@ class ChatUI:
                 for interaction in self._history:
                     await interactions.put(interaction)
                 await interactions.put_final(user_interaction)
+                for tool in self._tool_definitions:
+                    await tools.put(tool)
                 await tools.put_null_final()
 
             new_interactions: list[Interaction] = []
@@ -293,7 +344,12 @@ class ChatUI:
 
 
 async def run_chat(
-    provider_name: str, model: str | None, *, verbose: bool = False
+    provider_name: str,
+    model: str | None,
+    *,
+    verbose: bool = False,
+    shell_tools: bool = True,
+    extra_headers: list[tuple[str, str]] | None = None,
 ) -> int:
     """Run the interactive chat loop against ``provider_name``.
 
@@ -311,5 +367,9 @@ async def run_chat(
         return 2
 
     return await ChatUI(
-        provider, model or provider.default_model, verbose=verbose
+        provider,
+        model or provider.default_model,
+        verbose=verbose,
+        shell_tools=shell_tools,
+        extra_headers=extra_headers,
     ).run()

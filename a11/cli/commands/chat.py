@@ -19,7 +19,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "backend",
         nargs="?",
-        default=DEFAULT_PROVIDER,
+        default=None,
         choices=sorted(PROVIDERS),
         help=f"LLM provider to chat with (default: {DEFAULT_PROVIDER}).",
     )
@@ -30,10 +30,44 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         help="Model id (defaults to the backend's default model).",
     )
     parser.add_argument(
+        "--provider",
+        choices=sorted(PROVIDERS),
+        default=None,
+        help="LLM provider (overrides the positional backend).",
+    )
+    parser.add_argument(
+        "--model",
+        dest="model_flag",
+        metavar="MODEL",
+        default=None,
+        help="Model id (overrides the positional model).",
+    )
+    parser.add_argument(
+        "--header",
+        action="append",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        default=None,
+        dest="headers",
+        help=(
+            "Set a header on every interact_with_* call; repeatable. Overrides"
+            " the defaults for the same key (e.g. --header x-a11-llm-base-url"
+            " http://host:11434)."
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Log raw interaction events as they stream in.",
+    )
+    parser.add_argument(
+        "--no-shell-tools",
+        action="store_true",
+        help=(
+            "Disable the shell tools (and their system prompt) that let the"
+            " model run commands in your environment."
+        ),
     )
 
 
@@ -41,7 +75,17 @@ async def _run(args: argparse.Namespace) -> int:
     # Imported lazily so `a11 --help` never pulls in prompt_toolkit/rich work.
     from a11.cli.chat_ui import run_chat
 
-    return await run_chat(args.backend, args.model, verbose=args.verbose)
+    # Flags take precedence over the positionals; fall back to the default.
+    backend = args.provider or args.backend or DEFAULT_PROVIDER
+    model = args.model_flag or args.model
+
+    return await run_chat(
+        backend,
+        model,
+        verbose=args.verbose,
+        shell_tools=not args.no_shell_tools,
+        extra_headers=[(key, value) for key, value in (args.headers or [])],
+    )
 
 
 CHAT_COMMAND = Command(

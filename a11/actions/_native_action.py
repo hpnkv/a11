@@ -17,7 +17,10 @@ live-updating settings) via
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from a11 import _native
@@ -132,6 +135,36 @@ class _ActionProtocol:
         """An `asyncio.Event`-shaped view of completion (``await
         action.done.wait()``)."""
         return _done(self)
+
+    def add_done_callback(
+        self, callback: Callable[["Action"], Any | Awaitable[Any]]
+    ) -> asyncio.Task:
+        """Invoke ``callback(action)`` once this action completes.
+
+        The callback fires exactly once when the action finishes for any reason
+        -- normal completion, a handler error, or cancellation -- because it is
+        driven off the same completion view as ``done`` (whose wait swallows the
+        operation status). If the action is already done, the callback still
+        runs on the next event-loop iteration.
+
+        A synchronous callback runs to completion; one returning an awaitable is
+        awaited. Cleanup routines registered here should therefore never assume
+        success -- they run on the failure and cancellation paths too, which is
+        exactly what makes this the right hook for releasing resources (e.g.
+        tearing down a transient shell) tied to the action's lifetime.
+
+        Returns the scheduled ``asyncio.Task`` so the caller can cancel the
+        pending callback or await it. Must be called from within a running event
+        loop.
+        """
+
+        async def _run() -> None:
+            await self.done.wait()
+            result = callback(self)
+            if inspect.isawaitable(result):
+                await result
+
+        return asyncio.ensure_future(_run())
 
     def get_header(self, name: str, decode: bool = False) -> bytes | str | None:
         """Return header ``name`` (``None`` if absent); ``decode`` UTF-8 to

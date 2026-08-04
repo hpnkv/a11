@@ -201,12 +201,36 @@ class Action:
         stream: WireStream | None = None,
         session: Session | None = None,
         registry: ActionRegistry | None = None,
-        max_concurrent_nested_actions: (
-            typing.SupportsInt | typing.SupportsIndex
-        ) = 64,
+        max_concurrent_nested_actions: typing.SupportsInt = 64,
     ) -> None:
         """
         Create an action from a schema and optional bindings.
+        """
+
+    def add_done_callback(
+        self,
+        callback: typing.Callable[
+            ["Action"], typing.Any | Awaitable[typing.Any]
+        ],
+    ) -> asyncio.Task:
+        """
+        Invoke ``callback(action)`` once this action completes.
+
+        The callback fires exactly once when the action finishes for any reason
+        -- normal completion, a handler error, or cancellation -- because it is
+        driven off the same completion view as ``done`` (whose wait swallows the
+        operation status). If the action is already done, the callback still
+        runs on the next event-loop iteration.
+
+        A synchronous callback runs to completion; one returning an awaitable is
+        awaited. Cleanup routines registered here should therefore never assume
+        success -- they run on the failure and cancellation paths too, which is
+        exactly what makes this the right hook for releasing resources (e.g.
+        tearing down a transient shell) tied to the action's lifetime.
+
+        Returns the scheduled ``asyncio.Task`` so the caller can cancel the
+        pending callback or await it. Must be called from within a running event
+        loop.
         """
 
     def bind_handler(self, handler: typing.Any) -> Action:
@@ -513,7 +537,7 @@ class Action:
     def done(self) -> _DoneEvent:
         """
         An `asyncio.Event`-shaped view of completion (``await
-        action.done.wait()``).
+                action.done.wait()``).
         """
 
     @property
@@ -563,7 +587,6 @@ class ActionHeaderSchema:
     Schema describing a single header of an action.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -632,7 +655,6 @@ class ActionMessage:
     A message invoking a named action with input and output ports.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> ActionMessage:
@@ -649,8 +671,9 @@ class ActionMessage:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -766,7 +789,6 @@ class ActionPortSchema:
     Schema describing a single input or output port of an action.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -963,7 +985,6 @@ class ActionSchema:
     """
 
     WHOLE_JSON: typing.ClassVar[str] = "$"
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -1068,7 +1089,6 @@ class ActionSettings:
     Runtime settings controlling an action's stream binding and cleanup.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     bind_streams_on_inputs_by_default: typing.Any
     bind_streams_on_outputs_by_default: typing.Any
@@ -1139,17 +1159,18 @@ class AsyncNode:
         """
         Create a standalone node identified by ``node_id``.
 
-        ``chunk_store_factory`` builds the backing store from the id; it
-        defaults to an in-memory
-        [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
-        so overriding it is how you place a node's data in a different backend.
+                ``chunk_store_factory`` builds the backing store from the id; it
+                defaults to an in-memory
+                [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
+                so overriding it is how you place a node's data in a different backend.
 
-        Examples:
-            Create a stream used to deliver answer fragments:
+                Examples:
+                    Create a stream used to deliver answer fragments:
 
-            ```python
-            answer = AsyncNode.create("answer-tokens")
-            ```
+                    ```python
+                    answer = AsyncNode.create("answer-tokens")
+                    ```
+
         """
 
     async def __aenter__(self) -> AsyncNode: ...
@@ -1502,7 +1523,7 @@ class AsyncNode:
     def reader(self) -> ChunkStoreReader:
         """
         The node's
-        [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader].
+                [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader].
         """
 
     @property
@@ -1527,7 +1548,7 @@ class AsyncNode:
     def writer(self) -> ChunkStoreWriter:
         """
         The node's
-        [ChunkStoreWriter][a11.stores.chunk_store_writer.ChunkStoreWriter].
+                [ChunkStoreWriter][a11.stores.chunk_store_writer.ChunkStoreWriter].
         """
 
     @property
@@ -1555,9 +1576,7 @@ class ChannelFramingOptions:
         Maximum total bytes of in-flight frames.
         """
     @max_pending_bytes.setter
-    def max_pending_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_pending_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_pending_messages(self) -> int:
@@ -1565,9 +1584,7 @@ class ChannelFramingOptions:
         Maximum number of in-flight (unacknowledged) frames.
         """
     @max_pending_messages.setter
-    def max_pending_messages(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_pending_messages(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def split_size(self) -> int:
@@ -1575,16 +1592,13 @@ class ChannelFramingOptions:
         Maximum payload size before a message is split into multiple frames.
         """
     @split_size.setter
-    def split_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def split_size(self, arg0: typing.SupportsInt) -> None: ...
 
 class Chunk:
     """
     A unit of node data with optional metadata and ref.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> Chunk:
@@ -1601,8 +1615,9 @@ class Chunk:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -1715,7 +1730,6 @@ class ChunkMetadata:
     Metadata describing a chunk of node data.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> ChunkMetadata:
@@ -1732,8 +1746,9 @@ class ChunkMetadata:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -1842,9 +1857,7 @@ class ChunkStore:
         Construct the abstract base. Subclass this in Python to back an agent with a custom asynchronous chunk store; every data method returns an awaitable so callers never block the event loop.
         """
 
-    def clear_data(
-        self, seq: typing.SupportsInt | typing.SupportsIndex
-    ) -> typing.Any:
+    def clear_data(self, seq: typing.SupportsInt) -> typing.Any:
         """
         Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment. Use this to reclaim memory for chunks an agent has already consumed.
         """
@@ -1864,9 +1877,7 @@ class ChunkStore:
         """
 
     def get(
-        self,
-        seq: typing.SupportsInt | typing.SupportsIndex,
-        deadline: typing.Any | None = None,
+        self, seq: typing.SupportsInt, deadline: typing.Any | None = None
     ) -> typing.Any:
         """
         Await the fragment stored at a sequence number. The future resolves when the fragment is available or the optional deadline elapses.
@@ -1881,7 +1892,7 @@ class ChunkStore:
 
     def get_by_arrival_order(
         self,
-        arrival_order: typing.SupportsInt | typing.SupportsIndex,
+        arrival_order: typing.SupportsInt,
         deadline: typing.Any | None = None,
     ) -> typing.Any:
         """
@@ -1899,16 +1910,14 @@ class ChunkStore:
         """
 
     def get_seq_for_arrival_order(
-        self, arrival_order: typing.SupportsInt | typing.SupportsIndex
+        self, arrival_order: typing.SupportsInt
     ) -> typing.Any:
         """
         Await the sequence number that corresponds to a given arrival order. Use this to translate ingestion-order references into the sequence numbers the rest of the API expects.
         """
 
     def next(
-        self,
-        deadline: typing.Any | None = None,
-        limit: typing.SupportsInt | typing.SupportsIndex = 1,
+        self, deadline: typing.Any | None = None, limit: typing.SupportsInt = 1
     ) -> typing.Any:
         """
         Await up to `limit` of the next available fragments as a stream. This is the primary way an agent consumes chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
@@ -2015,7 +2024,6 @@ class ChunkStoreReader:
         """
 
 class ChunkStoreReaderOptions:
-    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -2062,9 +2070,7 @@ class ChunkStoreReaderOptions:
         Optional cap on the total number of chunks to read.
         """
     @max_chunks_to_read.setter
-    def max_chunks_to_read(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def max_chunks_to_read(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int:
@@ -2072,9 +2078,7 @@ class ChunkStoreReaderOptions:
         Maximum number of chunks to prefetch into the buffer.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def num_chunks_to_buffer(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -2082,9 +2086,7 @@ class ChunkStoreReaderOptions:
         Sequence number at which reading begins.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def ordered(self) -> bool:
@@ -2151,7 +2153,7 @@ class ChunkStoreWriter:
 
     def enqueue_chunk(
         self, chunk: Chunk, seq: typing.Any | None = None, final: bool = False
-    ) -> tuple[typing.Any, typing.Any]:
+    ) -> tuple:
         """
         Enqueue a chunk and get back a (confirmation, admission) pair of awaitables. Unlike `put_chunk`, this exposes backpressure explicitly: `admission` resolves when the chunk is accepted into the bounded queue (None if it fit immediately) and `confirmation` resolves with the sequence assigned by the backing store. An agent awaits admission to pace production and confirmation to know the store accepted the write.
         """
@@ -2235,7 +2237,6 @@ class ChunkStoreWriter:
         """
 
 class ChunkStoreWriterOptions:
-    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -2280,9 +2281,7 @@ class ChunkStoreWriterOptions:
         Maximum number of chunks flushed to the store per batch.
         """
     @max_chunks_to_write_at_once.setter
-    def max_chunks_to_write_at_once(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_chunks_to_write_at_once(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int | None:
@@ -2290,9 +2289,7 @@ class ChunkStoreWriterOptions:
         Optional bound on the in-flight write buffer size.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def num_chunks_to_buffer(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -2300,9 +2297,7 @@ class ChunkStoreWriterOptions:
         Sequence number at which writing begins.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def sticky_mimetype(self) -> bool:
@@ -2326,33 +2321,25 @@ class Duration:
         """
 
     @staticmethod
-    def microseconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def microseconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from microseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def milliseconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def milliseconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from milliseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def nanoseconds(
-        value: typing.SupportsInt | typing.SupportsIndex | None,
-    ) -> Duration:
+    def nanoseconds(value: typing.SupportsInt | None) -> Duration:
         """
         Creates a duration from nanoseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def seconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def seconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from seconds; None or negative means infinite.
         """
@@ -2374,9 +2361,7 @@ class Duration:
         Returns a hash of the duration.
         """
 
-    def __init__(
-        self, nanoseconds: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __init__(self, nanoseconds: typing.SupportsInt) -> None:
         """
         Creates a duration from a whole number of nanoseconds.
         """
@@ -2427,9 +2412,7 @@ class Duration:
 class Http2Client:
     @staticmethod
     def connect(
-        host: str,
-        port: typing.SupportsInt | typing.SupportsIndex,
-        options: Http2Options = ...,
+        host: str, port: typing.SupportsInt, options: Http2Options = ...
     ) -> typing.Any:
         """
         Asynchronously connect to an HTTP/2 server, returning a future that resolves to the connected client.
@@ -2576,9 +2559,7 @@ class Http2Options:
         Maximum buffered request bytes before backpressure.
         """
     @max_buffered_request_bytes.setter
-    def max_buffered_request_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_request_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_response_bytes(self) -> int:
@@ -2586,9 +2567,7 @@ class Http2Options:
         Maximum buffered response bytes before backpressure.
         """
     @max_buffered_response_bytes.setter
-    def max_buffered_response_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_response_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_request_body_size(self) -> int:
@@ -2596,9 +2575,7 @@ class Http2Options:
         Maximum accepted request body size in bytes.
         """
     @max_request_body_size.setter
-    def max_request_body_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_request_body_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_response_body_size(self) -> int:
@@ -2606,9 +2583,7 @@ class Http2Options:
         Maximum accepted response body size in bytes.
         """
     @max_response_body_size.setter
-    def max_response_body_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_response_body_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def tls(self) -> Http2TlsOptions:
@@ -2695,9 +2670,7 @@ class Http2ResponseWriter:
         """
 
     def send_headers(
-        self,
-        status: typing.SupportsInt | typing.SupportsIndex,
-        headers: typing.Any | None = None,
+        self, status: typing.SupportsInt, headers: typing.Any | None = None
     ) -> None:
         """
         Send the response status and headers.
@@ -2705,7 +2678,7 @@ class Http2ResponseWriter:
 
     def send_response(
         self,
-        status: typing.SupportsInt | typing.SupportsIndex,
+        status: typing.SupportsInt,
         headers: typing.Any | None = None,
         body: typing.Any = b"",
     ) -> None:
@@ -2751,7 +2724,7 @@ class Http2Server:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 0,
+        port: typing.SupportsInt = 0,
         handler: typing.Any | None = None,
         options: Http2Options = ...,
     ) -> Http2Server:
@@ -2948,9 +2921,7 @@ class HttpResponse:
 
 class HttpResponseHead:
     def __init__(
-        self,
-        status: typing.SupportsInt | typing.SupportsIndex = 0,
-        headers: typing.Any | None = None,
+        self, status: typing.SupportsInt = 0, headers: typing.Any | None = None
     ) -> None:
         """
         Construct an HTTP response head (status and headers).
@@ -2970,9 +2941,7 @@ class HttpResponseHead:
         The HTTP status code.
         """
     @status.setter
-    def status(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def status(self, arg0: typing.SupportsInt) -> None: ...
 
 class HttpSseClientWireStream(HttpSseWireStream):
     @staticmethod
@@ -3082,7 +3051,7 @@ class HttpSseServer:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 0,
+        port: typing.SupportsInt = 0,
         on_connect: typing.Any | None = None,
         options: HttpSseOptions = ...,
     ) -> HttpSseServer:
@@ -3185,7 +3154,6 @@ class NodeFragment:
     A fragment of a logical node carrying a Chunk or NodeRef.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> NodeFragment:
@@ -3202,8 +3170,9 @@ class NodeFragment:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -3313,9 +3282,7 @@ class NodeFragment:
         Optional sequence number of the fragment.
         """
     @seq.setter
-    def seq(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def seq(self, arg0: typing.SupportsInt | None) -> None: ...
 
 class NodeMap:
     @staticmethod
@@ -3373,7 +3340,6 @@ class NodeRef:
     Reference to a byte range of another logical node.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> NodeRef:
@@ -3390,8 +3356,9 @@ class NodeRef:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -3471,9 +3438,7 @@ class NodeRef:
         Optional byte length of the referenced range.
         """
     @length.setter
-    def length(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def length(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -3481,16 +3446,13 @@ class NodeRef:
         Byte offset into the referenced node.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
 class Port:
     """
     A named input or output port of an action.
     """
 
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> Port:
@@ -3507,8 +3469,9 @@ class Port:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -3833,10 +3796,6 @@ class RedisChunkStoreOptions:
     Key layout and inline-payload policy for RedisChunkStore.
     """
 
-    __annotations_cache__: typing.ClassVar[dict] = {
-        "key_prefix": str,
-        "inline_data_threshold": int,
-    }
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
@@ -3886,9 +3845,7 @@ class RedisChunkStoreOptions:
         Chunk data larger than this many bytes uses the blob hash.
         """
     @inline_data_threshold.setter
-    def inline_data_threshold(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def key_prefix(self) -> str:
@@ -3973,16 +3930,6 @@ class RedisClientOptions:
     Connection and timeout policy for Redis.
     """
 
-    __annotations_cache__: typing.ClassVar[dict] = {
-        "host": str,
-        "port": int,
-        "username": str,
-        "password": str,
-        "database": int,
-        "client_name": str,
-        "connect_timeout": Duration,
-        "command_timeout": Duration,
-    }
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
@@ -4013,10 +3960,10 @@ class RedisClientOptions:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 6379,
+        port: typing.SupportsInt = 6379,
         username: str = "",
         password: str = "",
-        database: typing.SupportsInt | typing.SupportsIndex = 0,
+        database: typing.SupportsInt = 0,
         client_name: str = "a11",
         connect_timeout: typing.Any | None = None,
         command_timeout: typing.Any | None = None,
@@ -4068,9 +4015,7 @@ class RedisClientOptions:
         Logical Redis database selected after connection.
         """
     @database.setter
-    def database(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def database(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def host(self) -> str:
@@ -4094,7 +4039,7 @@ class RedisClientOptions:
         Redis TCP port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def username(self) -> str:
@@ -4197,15 +4142,11 @@ class RedisReplyType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4290,6 +4231,30 @@ class Session:
     def actions(self) -> list[tuple[str, Action]]:
         """
         Return the (action_id, action) pairs currently running in the session. Actions execute asynchronously, so this is a point-in-time snapshot of in-flight work.
+        """
+
+    def add_done_callback(
+        self,
+        callback: typing.Callable[
+            ["Session"], typing.Any | Awaitable[typing.Any]
+        ],
+    ) -> asyncio.Task:
+        """
+        Invoke ``callback(session)`` once this session fully completes.
+
+        The callback fires exactly once when the session finishes -- whether it
+        drained and closed cleanly, its deadline elapsed, or it was aborted
+        ("dies") -- because every one of those paths resolves the completion
+        view exposed by ``done``. If the session is already done, the callback
+        still runs on the next event-loop iteration.
+
+        A synchronous callback runs to completion; one returning an awaitable is
+        awaited. This is the hook connection-scoped resources should register on
+        so they are released when the session ends regardless of outcome (e.g.
+        reaping the shells started within a session).
+
+        Returns the scheduled ``asyncio.Task``. Must be called from within a
+        running event loop.
         """
 
     def add_stream(
@@ -4458,9 +4423,10 @@ class Session:
         """
         An `asyncio.Event`-shaped view of full session completion.
 
-        `Session.is_closed` can become true as soon as shutdown starts. Await
-        this event (or ``wait_done``) when streams and actions must all have
-        released their runtime state.
+                `Session.is_closed` can become true as soon as shutdown starts. Await
+                this event (or ``wait_done``) when streams and actions must all have
+                released their runtime state.
+
         """
 
     @property
@@ -4478,7 +4444,6 @@ class Session:
     def node_map(self, arg1: NodeMap) -> None: ...
 
 class SessionOptions:
-    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -4538,7 +4503,7 @@ class SessionOptions:
         """
     @max_buffered_bytes_per_stream.setter
     def max_buffered_bytes_per_stream(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -4547,9 +4512,7 @@ class SessionOptions:
         Maximum total bytes buffered across all streams.
         """
     @max_buffered_bytes_total.setter
-    def max_buffered_bytes_total(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_bytes_total(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_messages_per_stream(self) -> int:
@@ -4558,7 +4521,7 @@ class SessionOptions:
         """
     @max_buffered_messages_per_stream.setter
     def max_buffered_messages_per_stream(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -4567,9 +4530,7 @@ class SessionOptions:
         Maximum number of messages buffered across all streams.
         """
     @max_buffered_messages_total.setter
-    def max_buffered_messages_total(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_messages_total(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_concurrent_nested_actions(self) -> int:
@@ -4578,7 +4539,7 @@ class SessionOptions:
         """
     @max_concurrent_nested_actions.setter
     def max_concurrent_nested_actions(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -4587,9 +4548,7 @@ class SessionOptions:
         Maximum number of concurrently running root actions.
         """
     @max_concurrent_root_actions.setter
-    def max_concurrent_root_actions(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_concurrent_root_actions(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_single_message_size(self) -> int:
@@ -4597,9 +4556,7 @@ class SessionOptions:
         Maximum size in bytes of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def no_stream_timeout(self) -> typing.Any:
@@ -4775,15 +4732,11 @@ class SignallingMessageType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4879,9 +4832,10 @@ class Status:
         """
         Convert an application exception to a transportable status.
 
-        Existing `StatusException` values retain their structured status;
-        registered casters handle framework-specific types, and unknown
-        exceptions become ``UNKNOWN``.
+                Existing `StatusException` values retain their structured status;
+                registered casters handle framework-specific types, and unknown
+                exceptions become ``UNKNOWN``.
+
         """
 
     @staticmethod
@@ -4941,7 +4895,7 @@ class Status:
 
     def __init__(
         self,
-        code: typing.SupportsInt | typing.SupportsIndex = 0,
+        code: typing.SupportsInt = 0,
         message: str = "OK",
         details: typing.Any = [],
     ) -> None:
@@ -5002,7 +4956,7 @@ class Status:
         The canonical status code.
         """
     @code.setter
-    def code(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def code(self, arg1: typing.SupportsInt) -> None: ...
 
     @property
     def details(self) -> typing.Any:
@@ -5036,15 +4990,11 @@ class StreamMode:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -5071,9 +5021,7 @@ class Time:
         """
 
     @staticmethod
-    def from_nanoseconds_since_epoch(
-        nanoseconds: typing.SupportsInt | typing.SupportsIndex,
-    ) -> Time:
+    def from_nanoseconds_since_epoch(nanoseconds: typing.SupportsInt) -> Time:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -5095,9 +5043,7 @@ class Time:
         Returns a hash of the time.
         """
 
-    def __init__(
-        self, nanoseconds_since_epoch: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __init__(self, nanoseconds_since_epoch: typing.SupportsInt) -> None:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -5147,15 +5093,11 @@ class TurnRelayType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -5202,7 +5144,7 @@ class TurnServer:
         TURN server port (default 3478).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def relay_type(self) -> TurnRelayType:
@@ -5245,9 +5187,7 @@ class WebRtcConfiguration:
         Size at which A11 fragments large logical messages.
         """
     @channel_split_size.setter
-    def channel_split_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def channel_split_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def desired_channels(self) -> int:
@@ -5255,9 +5195,7 @@ class WebRtcConfiguration:
         Number of WebRTC data channels a dialing client opens per connection and keeps replenished. Streaming with several channels lets slow per-channel acknowledgement round-trips overlap; the stream still behaves as one ordered, reliable channel. Defaults to 8. Has no effect on the accepting side.
         """
     @desired_channels.setter
-    def desired_channels(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def desired_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def enable_ice_udp_mux(self) -> bool:
@@ -5273,9 +5211,7 @@ class WebRtcConfiguration:
         Maximum number of WebRTC data channels an accepting server admits per peer connection. Surplus channels a client opens beyond this are refused. Defaults to 8. Has no effect on the dialing side.
         """
     @max_channels.setter
-    def max_channels(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_message_size(self) -> int | None:
@@ -5283,9 +5219,7 @@ class WebRtcConfiguration:
         Advertised local libdatachannel message size ceiling.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def preferred_port_range(self) -> tuple[int, int] | None:
@@ -5294,14 +5228,7 @@ class WebRtcConfiguration:
         """
     @preferred_port_range.setter
     def preferred_port_range(
-        self,
-        arg0: (
-            tuple[
-                typing.SupportsInt | typing.SupportsIndex,
-                typing.SupportsInt | typing.SupportsIndex,
-            ]
-            | None
-        ),
+        self, arg0: tuple[typing.SupportsInt, typing.SupportsInt] | None
     ) -> None: ...
 
     @property
@@ -5501,7 +5428,7 @@ class WebSocketServerOptions:
         TCP port to listen on; 0 selects an ephemeral port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def stream_options(self) -> WireStreamOptions:
@@ -5561,9 +5488,7 @@ class WebSocketSignallingClientOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
 class WebSocketSignallingServer:
     @staticmethod
@@ -5646,9 +5571,7 @@ class WebSocketSignallingServerOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def path_prefix(self) -> str:
@@ -5664,7 +5587,7 @@ class WebSocketSignallingServerOptions:
         TCP port to listen on (0 selects an ephemeral port).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
 class WebSocketWireServer:
     @staticmethod
@@ -5716,7 +5639,6 @@ class WireMessage:
     """
 
     VERSION: typing.ClassVar[int] = 1
-    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_json(value: str) -> WireMessage:
@@ -5739,8 +5661,9 @@ class WireMessage:
         """
         Construct a native value from trusted field values.
 
-        Native records retain C++ invariants. This validates input rather than
-        creating an invalid object.
+            Native records retain C++ invariants. This validates input rather than
+            creating an invalid object.
+
         """
 
     @classmethod
@@ -5948,7 +5871,6 @@ class WireStream:
         """
 
 class WireStreamOptions:
-    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -6002,9 +5924,7 @@ class WireStreamOptions:
         Maximum total bytes of buffered inbound messages before backpressure is applied.
         """
     @max_buffered_incoming_bytes.setter
-    def max_buffered_incoming_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_incoming_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_incoming_messages(self) -> int:
@@ -6013,7 +5933,7 @@ class WireStreamOptions:
         """
     @max_buffered_incoming_messages.setter
     def max_buffered_incoming_messages(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -6022,9 +5942,7 @@ class WireStreamOptions:
         Maximum size, in bytes, of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def message_timeout(self) -> typing.Any:
@@ -6172,9 +6090,7 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -6190,9 +6106,7 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> ActionMessage:
+    def __getitem__(self, index: typing.SupportsInt) -> ActionMessage:
         """
         Return the element at the given index.
         """
@@ -6219,9 +6133,7 @@ class _ActionMessageVectorView:
 
     @typing.overload
     def __setitem__(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: ActionMessage,
+        self, index: typing.SupportsInt, value: ActionMessage
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -6262,18 +6174,12 @@ class _ActionMessageVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: ActionMessage,
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: ActionMessage) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> ActionMessage:
+    def pop(self, index: typing.SupportsInt = -1) -> ActionMessage:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6472,9 +6378,7 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -6490,9 +6394,7 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> NodeFragment:
+    def __getitem__(self, index: typing.SupportsInt) -> NodeFragment:
         """
         Return the element at the given index.
         """
@@ -6519,9 +6421,7 @@ class _NodeFragmentVectorView:
 
     @typing.overload
     def __setitem__(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: NodeFragment,
+        self, index: typing.SupportsInt, value: NodeFragment
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -6562,18 +6462,12 @@ class _NodeFragmentVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: NodeFragment,
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: NodeFragment) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> NodeFragment:
+    def pop(self, index: typing.SupportsInt = -1) -> NodeFragment:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6605,9 +6499,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -6623,9 +6515,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> Port:
+    def __getitem__(self, index: typing.SupportsInt) -> Port:
         """
         Return the element at the given index.
         """
@@ -6651,9 +6541,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __setitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
-    ) -> None:
+    def __setitem__(self, index: typing.SupportsInt, value: Port) -> None:
         """
         Assign a value to the element at the given index.
         """
@@ -6693,16 +6581,12 @@ class _PortVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: Port) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> Port:
+    def pop(self, index: typing.SupportsInt = -1) -> Port:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6880,7 +6764,7 @@ def obs_configure(
     use_simple_processor: bool = False,
     otlp_endpoint: str = "",
     otlp_headers: collections.abc.Mapping[str, str] = {},
-    otlp_timeout_millis: typing.SupportsInt | typing.SupportsIndex = 10000,
+    otlp_timeout_millis: typing.SupportsInt = 10000,
     baggage_span_attributes: collections.abc.Sequence[str] = [],
 ) -> None:
     """
@@ -6919,18 +6803,10 @@ def set_default_redis_client(client: RedisClient) -> None:
     Replace the process-global Redis client.
     """
 
-def status_code_from_http(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_from_websocket(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_to_http(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_to_websocket(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
+def status_code_from_http(arg0: typing.SupportsInt) -> int: ...
+def status_code_from_websocket(arg0: typing.SupportsInt) -> int: ...
+def status_code_to_http(arg0: typing.SupportsInt) -> int: ...
+def status_code_to_websocket(arg0: typing.SupportsInt) -> int: ...
 def status_from_chunk(chunk: Chunk) -> typing.Any:
     """
     Decode an absl Status from a data chunk.

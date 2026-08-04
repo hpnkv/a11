@@ -16,6 +16,9 @@ attaches the asyncio-shaped completion and receive conveniences via
 from __future__ import annotations
 
 import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from a11 import _native
 from a11._native_protocol import attach_protocol
@@ -68,6 +71,34 @@ class _SessionProtocol:
         released their runtime state.
         """
         return _done(self)
+
+    def add_done_callback(
+        self, callback: Callable[["Session"], Any | Awaitable[Any]]
+    ) -> asyncio.Task:
+        """Invoke ``callback(session)`` once this session fully completes.
+
+        The callback fires exactly once when the session finishes -- whether it
+        drained and closed cleanly, its deadline elapsed, or it was aborted
+        ("dies") -- because every one of those paths resolves the completion
+        view exposed by ``done``. If the session is already done, the callback
+        still runs on the next event-loop iteration.
+
+        A synchronous callback runs to completion; one returning an awaitable is
+        awaited. This is the hook connection-scoped resources should register on
+        so they are released when the session ends regardless of outcome (e.g.
+        reaping the shells started within a session).
+
+        Returns the scheduled ``asyncio.Task``. Must be called from within a
+        running event loop.
+        """
+
+        async def _run() -> None:
+            await self.done.wait()
+            result = callback(self)
+            if inspect.isawaitable(result):
+                await result
+
+        return asyncio.ensure_future(_run())
 
 
 class _SessionWithRecvProtocol:

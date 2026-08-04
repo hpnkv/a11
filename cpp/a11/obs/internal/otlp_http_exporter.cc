@@ -12,11 +12,9 @@
 #include <utility>
 #include <vector>
 
+#include <absl/log/log.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
-
-#include <absl/log/log.h>
-
 #include <opentelemetry/nostd/span.h>
 #include <opentelemetry/nostd/variant.h>
 #include <opentelemetry/sdk/common/attribute_utils.h>
@@ -82,10 +80,9 @@ int OtlpStatus(otel::trace::StatusCode code) {
 }
 
 std::string UnixNanos(const otel::common::SystemTimestamp& timestamp) {
-  const auto nanos =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          timestamp.time_since_epoch())
-          .count();
+  const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         timestamp.time_since_epoch())
+                         .count();
   return std::to_string(nanos);
 }
 
@@ -177,8 +174,8 @@ std::string BuildPayload(
 
   json scope_obj = json::object();
   if (scope != nullptr) {
-    scope_obj = json{{"name", scope->GetName()},
-                     {"version", scope->GetVersion()}};
+    scope_obj =
+        json{{"name", scope->GetName()}, {"version", scope->GetVersion()}};
   }
   scope_spans.push_back(json{{"scope", scope_obj}, {"spans", span_array}});
 
@@ -209,8 +206,8 @@ class OtlpHttpJsonExporter final : public otel_sdk::SpanExporter {
   }
 
   otel::sdk::common::ExportResult Export(
-      const otel::nostd::span<std::unique_ptr<otel_sdk::Recordable>>& spans)
-      noexcept override {
+      const otel::nostd::span<std::unique_ptr<otel_sdk::Recordable>>&
+          spans) noexcept override {
     if (shutdown_.load(std::memory_order_acquire)) {
       return otel::sdk::common::ExportResult::kFailure;
     }
@@ -252,7 +249,7 @@ class OtlpHttpJsonExporter final : public otel_sdk::SpanExporter {
     curl_easy_cleanup(curl);
 
     if (rc != CURLE_OK) {
-      LOG(ERROR) << "OTLP export transport error: " << curl_easy_strerror(rc);
+      // LOG(ERROR) << "OTLP export transport error: " << curl_easy_strerror(rc);
       return otel::sdk::common::ExportResult::kFailure;
     }
     if (http_status < 200 || http_status >= 300) {

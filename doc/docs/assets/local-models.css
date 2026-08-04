@@ -14,3 +14,17 @@
 .gemma-compose { display: flex; gap: .5rem; padding: .75rem; background: var(--md-code-bg-color); border-top: 1px solid var(--md-default-fg-color--lightest); }
 .gemma-compose input { min-width: 0; flex: 1; padding: .5rem .65rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); }
 .gemma-compose button, .gemma-toolbar button { padding: .45rem .75rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; }
+/* Markdown rendered inside reply bubbles. */
+.gemma-bubble p { margin: 0 0 .5rem; white-space: normal; }
+.gemma-bubble > :last-child { margin-bottom: 0; }
+.gemma-bubble h1, .gemma-bubble h2, .gemma-bubble h3, .gemma-bubble h4, .gemma-bubble h5, .gemma-bubble h6 { margin: .4rem 0 .3rem; line-height: 1.25; }
+.gemma-bubble h1 { font-size: 1.3em; } .gemma-bubble h2 { font-size: 1.2em; } .gemma-bubble h3 { font-size: 1.1em; }
+.gemma-bubble h4, .gemma-bubble h5, .gemma-bubble h6 { font-size: 1em; }
+.gemma-bubble ul, .gemma-bubble ol { margin: .3rem 0; padding-left: 1.4rem; }
+.gemma-bubble li { margin: .15rem 0; white-space: normal; }
+.gemma-bubble a { color: var(--md-primary-fg-color); text-decoration: underline; }
+.gemma-bubble.request a { color: inherit; }
+.gemma-bubble code { padding: .1em .3em; border-radius: .25rem; background: color-mix(in srgb, var(--md-default-fg-color) 12%, transparent); font-family: var(--md-code-font-family); font-size: .9em; }
+.gemma-bubble pre { margin: .4rem 0; padding: .6rem .75rem; overflow: auto; border-radius: .35rem; background: var(--md-default-bg-color); border: 1px solid var(--md-default-fg-color--lightest); }
+.gemma-bubble pre code { padding: 0; background: none; white-space: pre; }
+.gemma-bubble blockquote { margin: .4rem 0; padding: .1rem .75rem; border-left: 3px solid var(--md-default-fg-color--lighter); color: var(--md-default-fg-color--light); }

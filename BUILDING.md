@@ -348,9 +348,7 @@ bash -n scripts/bootstrap_wheel_deps.sh scripts/smoke_cmake_install.sh
 The matrix is configured in `pyproject.toml` and orchestrated by
 `scripts/build_wheels.py`:
 
-- CPython 3.11, 3.12, 3.13, and 3.14 (3.15 is added automatically once
-  cibuildwheel ships stable images; `enable = ["cpython-prerelease"]` is already
-  set);
+- CPython 3.11, 3.12, 3.13, and 3.14;
 - macOS x86_64 and arm64 (deployment target 14.4, required by the Boost.Fiber
   futex spinlock — see [Prerequisites](#prerequisites));
 - manylinux x86_64 and aarch64.

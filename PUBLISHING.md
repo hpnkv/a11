@@ -15,7 +15,7 @@ TypeScript uses `js/package.json` as its independent source of truth;
 
 Use these annotated tags:
 
-- `a11-vX.Y.Z` builds CPython 3.11–3.15 wheels for macOS arm64/x86_64 and
+- `a11-vX.Y.Z` builds CPython 3.11–3.14 wheels for macOS arm64/x86_64 and
   manylinux aarch64/x86_64, builds an sdist plus separate Linux x86_64 and
   macOS arm64 C++ SDK archives, publishes the Python files to PyPI, and creates
   a GitHub release containing every artifact.

@@ -148,11 +148,9 @@
   status macros. Boost, OpenSSL, nghttp2, uvw/libuv, and libdatachannel targets
   must pass the static-target checks. Installed CMake targets must pass the
   out-of-tree smoke test.
-- `scripts/build_wheels.py` builds architecture-specific CPython 3.11-3.15
-  wheels for macOS x86_64/arm64 and Linux x86_64/aarch64. Python 3.15 remains
-  enabled through cibuildwheel's `cpython-prerelease` group until it is stable.
-  Do not emit `universal2` wheels: Boost.Context contains architecture-specific
-  assembly.
+- `scripts/build_wheels.py` builds architecture-specific CPython 3.11-3.14
+  wheels for macOS x86_64/arm64 and Linux x86_64/aarch64. Do not emit
+  `universal2` wheels: Boost.Context contains architecture-specific assembly.
 - On macOS, build both macOS and Linux matrices; on Linux, Linux-only is valid.
   The dependency bootstrap builds static archives per target architecture and
   deployment target. scikit-build outputs stay in ABI-specific build trees;

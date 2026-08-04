@@ -83,9 +83,8 @@ BUILD_TESTING = "OFF"
 A11_WITH_OTLP_HTTP = "ON"
 
 [tool.cibuildwheel]
-build = "cp311-* cp312-* cp313-* cp314-* cp315-*"
+build = "cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux* *-win32"
-enable = ["cpython-prerelease"]
 before-all = "bash {project}/scripts/bootstrap_wheel_deps.sh"
 test-command = "python {project}/scripts/audit_wheel.py {wheel}"
 environment = { MACOSX_DEPLOYMENT_TARGET = "14.4", CMAKE_BUILD_PARALLEL_LEVEL = "4", CMAKE_PREFIX_PATH = "$A11_DEPS_PREFIX", OPENSSL_ROOT_DIR = "$A11_DEPS_PREFIX", PKG_CONFIG_PATH = "$A11_DEPS_PREFIX/lib/pkgconfig", CMAKE_ARGS = "-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON -DCMAKE_PREFIX_PATH=$A11_DEPS_PREFIX -DOPENSSL_ROOT_DIR=$A11_DEPS_PREFIX" }

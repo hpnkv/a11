@@ -2,6 +2,10 @@
   "name": "@curiositystack/a11",
   "version": "0.1.6",
   "description": "TypeScript library for A11",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hpnkv/a11"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",

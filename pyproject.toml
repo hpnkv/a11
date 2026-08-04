@@ -27,7 +27,12 @@ a11 = "a11.cli.__main__:main"
 [project.optional-dependencies]
 claude = ["anthropic>=0.120.0"]
 gemini = ["google-genai>=1.55.0"]
-llm = ["anthropic>=0.120.0", "google-genai>=1.55.0"]
+ollama = ["ollama>=0.6.0"]
+llm = [
+    "anthropic>=0.120.0",
+    "google-genai>=1.55.0",
+    "ollama>=0.6.0",
+]
 
 [tool.scikit-build]
 cmake.source-dir = "cpp"
@@ -136,6 +141,7 @@ dev = [
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
     "google-genai>=1.55.0",
+    "ollama>=0.6.0",
     "pybind11-stubgen>=2.5.5",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -149,6 +155,9 @@ claude = [
 ]
 gemini = [
     "google-genai>=1.55.0",
+]
+ollama = [
+    "ollama>=0.6.0",
 ]
 docs = [
     "mkdocs-material>=9.5.0",

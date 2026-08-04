@@ -21,6 +21,7 @@ class LlmHeaders(enum.StrEnum):
     API_KEY = "x-a11-llm-api-key"
     MODEL = "x-a11-llm-model"
     PROVIDER = "x-a11-llm-provider"
+    BASE_URL = "x-a11-llm-base-url"
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
 
 
@@ -418,7 +419,6 @@ class Interaction(BaseModel):
 
     @field_serializer("content")
     def serialize_content(self, content: list[a11.Chunk]):
-        print(content)
         return [chunk.model_dump() for chunk in content]
 
     @model_validator(mode="after")
@@ -474,6 +474,7 @@ BACKEND_METADATA_KEY = "backend"
 class Backend(enum.StrEnum):
     CLAUDE = "claude"
     GEMINI = "gemini"
+    OLLAMA = "ollama"
 
 
 class NormalizedContentType(enum.StrEnum):

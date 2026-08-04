@@ -63,10 +63,16 @@ def _make_client_action_registry() -> a11.ActionRegistry:
 DEFAULT_MODEL: dict[str, str] = {
     "claude": "claude-sonnet-4-6",
     "gemini": "gemini-3.5-flash",
+    "ollama": "deepseek-r1:8b",
 }
 API_KEY_ENV: dict[str, tuple[str, ...]] = {
     "claude": ("ANTHROPIC_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+}
+# Providers reached over a base URL rather than a hosted API. Ollama runs
+# locally, so it needs no API key — just where to find the server.
+DEFAULT_BASE_URL: dict[str, str] = {
+    "ollama": "http://localhost:11434",
 }
 
 
@@ -112,6 +118,9 @@ async def send_text_message(
         .set_header(LlmHeaders.PROVIDER.value, provider)
         .set_header(LlmHeaders.API_KEY.value, _api_key_for(provider))
         .set_header(LlmHeaders.MODEL.value, model)
+        .set_header(
+            LlmHeaders.BASE_URL.value, DEFAULT_BASE_URL.get(provider, "")
+        )
         .set_header(
             LlmHeaders.ALLOWED_LLM_ACTIONS.value,
             ",".join(available_action_names),
@@ -164,8 +173,9 @@ async def send_text_message(
 
 _HELP = (
     "Commands:\n"
-    "  /model [claude|gemini] [model]  switch backend (and optionally model)\n"
-    "  /exit, /quit                     leave\n"
+    "  /model [claude|gemini|ollama] [model]  switch backend (and optionally"
+    " model)\n"
+    "  /exit, /quit                            leave\n"
 )
 
 
@@ -178,7 +188,9 @@ def _handle_model_command(
 
     new_provider = parts[1]
     new_model = parts[2] if len(parts) > 2 else DEFAULT_MODEL[new_provider]
-    if not _api_key_for(new_provider):
+    # Only the hosted backends need a key; a keyless provider (e.g. Ollama) is
+    # reached over its base URL instead.
+    if new_provider in API_KEY_ENV and not _api_key_for(new_provider):
         print(
             f"warning: no API key set for {new_provider} (expected one of"
             f" {', '.join(API_KEY_ENV[new_provider])})."

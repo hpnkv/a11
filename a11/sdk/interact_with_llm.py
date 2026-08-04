@@ -54,13 +54,25 @@ _PROVIDERS: dict[str, _Provider] = {
         handler="interact_with_gemini",
         extra="gemini",
     ),
+    "ollama": _Provider(
+        module="a11.sdk.ollama.interact_with_ollama",
+        handler="interact_with_ollama",
+        extra="ollama",
+    ),
 }
 
 # Fallbacks used when no explicit provider header is set: the model id's prefix
-# usually names its family.
+# usually names its family. Ollama serves many open-weight families, so a few of
+# the common ones route to it — set the provider header explicitly to override.
 _MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
     ("claude", "claude"),
     ("gemini", "gemini"),
+    ("llama", "ollama"),
+    ("qwen", "ollama"),
+    ("mistral", "ollama"),
+    ("gemma", "ollama"),
+    ("phi", "ollama"),
+    ("deepseek", "ollama"),
 )
 
 

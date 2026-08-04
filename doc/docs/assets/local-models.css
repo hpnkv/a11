@@ -1,0 +1,16 @@
+.gemma-demo { border: 1px solid var(--md-default-fg-color--lightest); border-radius: .5rem; overflow: hidden; margin: 1.5rem 0; }
+.gemma-toolbar { display: flex; gap: .5rem; padding: .75rem; background: var(--md-code-bg-color); }
+.gemma-toolbar input { min-width: 0; flex: 1; padding: .5rem .65rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); font-family: var(--md-code-font-family); font-size: .85em; }
+.gemma-status { padding: .35rem .75rem; color: var(--md-default-fg-color--light); background: var(--md-code-bg-color); border-top: 1px solid var(--md-default-fg-color--lightest); font-size: .82em; }
+.gemma-status:empty { display: none; }
+.gemma-errors { padding: .35rem .75rem; color: var(--md-typeset-color); background: color-mix(in srgb, #d32f2f 12%, transparent); }
+.gemma-errors:empty { display: none; }
+.gemma-chat { display: flex; min-height: 0; flex-direction: column; height: min(30rem, 65vh); }
+.gemma-messages { flex: 1; padding: 1rem; overflow: auto; }
+.gemma-bubble { max-width: 80%; width: fit-content; margin: .5rem 0; padding: .55rem .75rem; border-radius: .8rem; background: var(--md-code-bg-color); white-space: pre-wrap; overflow-wrap: anywhere; }
+.gemma-bubble.request { margin-left: auto; color: white; background: var(--md-primary-fg-color); }
+.gemma-bubble.gemma-pending::after { content: '▍'; animation: gemma-blink 1s steps(1) infinite; }
+@keyframes gemma-blink { 50% { opacity: 0; } }
+.gemma-compose { display: flex; gap: .5rem; padding: .75rem; background: var(--md-code-bg-color); border-top: 1px solid var(--md-default-fg-color--lightest); }
+.gemma-compose input { min-width: 0; flex: 1; padding: .5rem .65rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); }
+.gemma-compose button, .gemma-toolbar button { padding: .45rem .75rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; }

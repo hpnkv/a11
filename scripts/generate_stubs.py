@@ -150,6 +150,14 @@ def _normalise_annotations(stub: str) -> str:
         stub = re.sub(rf"(?<![.\w]){module}\.{name}\b", name, stub)
 
     stub = re.sub(r"\s+# value = .*?$", "", stub, flags=re.MULTILINE)
+    # Runtime version comes from the root VERSION file. Keep generated typing
+    # independent of the particular extension used to run stubgen.
+    stub = re.sub(
+        r'^__version__: str = ["\'][^"\']+["\']$',
+        "__version__: str",
+        stub,
+        flags=re.MULTILINE,
+    )
     stub = re.sub(
         r"def __eq__\(self, (\w+): [^)]+\) -> bool:",
         r"def __eq__(self, \1: object) -> bool:",

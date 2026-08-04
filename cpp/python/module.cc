@@ -46,7 +46,7 @@ PYBIND11_MODULE(_native, module) {
   py::google::ImportStatusModule();
 
   module.doc() = "Native C++ backend for A11";
-  module.attr("__version__") = "0.1.5";
+  module.attr("__version__") = A11_VERSION;
   module.attr("EMPTY_WIRE_MESSAGE_SIZE") = a11::data::EmptyWireMessageSize();
 
   module.def("status_code_from_http", [](int code) {

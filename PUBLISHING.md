@@ -1,86 +1,88 @@
 # Publishing A11
 
-Release the Python and npm packages from the same source revision and use the
-same version in `pyproject.toml`, `cpp/python/module.cc`, and
-`js/package.json`. Run every command below from the repository root unless a
-step changes directory explicitly.
+Releases are tag-only. A push to `main` can run checks and documentation, but
+cannot publish a package or create a GitHub release.
 
-## PyPI
+## Versions and tags
 
-A complete Python release contains one source distribution and 20
-architecture-specific wheels:
+Python and C++ share the version in [`VERSION`](VERSION). Python's build backend
+reads it as dynamic package metadata, while CMake uses it for `PROJECT_VERSION`,
+the native module's `__version__`, the tracing scope, and the installed
+`a11ConfigVersion.cmake`.
 
-- CPython 3.11, 3.12, 3.13, and 3.14;
-- macOS x86_64 and arm64; and
-- manylinux x86_64 and aarch64.
+TypeScript uses `js/package.json` as its independent source of truth;
+`js/package-lock.json` is generated from it.
 
-Do not publish `universal2` or musllinux wheels. Build the complete matrix on a
-macOS release host with Docker running and binfmt/QEMU configured for Linux
-aarch64. Linux hosts can build only the Linux half of the required matrix.
+Use these annotated tags:
 
-The macOS host must also have the official python.org CPython framework builds
-for every targeted version installed under
-`/Library/Frameworks/Python.framework/Versions/` — 3.11, 3.12, 3.13, 3.14, and
-3.15. cibuildwheel builds macOS wheels against those in place and will not
-install them outside CI, and the uv-managed interpreters cannot substitute for
-them. Install any that are missing from python.org before building; a partial
-set yields an incomplete matrix that must not be released.
+- `a11-vX.Y.Z` builds CPython 3.11–3.15 wheels for macOS arm64/x86_64 and
+  manylinux aarch64/x86_64, builds an sdist and Linux x86_64 C++ SDK archive,
+  publishes the Python files to PyPI, and creates a GitHub release containing
+  every artifact.
+- `npm-vX.Y.Z` tests and publishes both `@curiositystack/a11` and `aeleven` to
+  npm. It may have a different version from the Python/C++ release.
 
-Prepare and verify the release (export `A11_DEPS_PREFIX` first, as in
-[BUILDING.md](BUILDING.md#prerequisites), so the presets find the static deps):
+The workflows reject a tag whose version differs from its source file. Before
+tagging, update the relevant source and generated lock/stub files on a normal
+branch, merge it, then run (substituting the real version):
 
 ```sh
-uv sync --locked --group dev
-.venv/bin/python scripts/generate_stubs.py
-.venv/bin/python scripts/generate_stubs.py --check
-cmake --preset debug
-cmake --build --preset debug -j 8
-ctest --preset debug
-.venv/bin/python -m pytest -q
-scripts/smoke_cmake_install.sh
+git switch main
+git pull --ff-only
+git tag -a a11-v0.1.6 -m "A11 0.1.6"
+git push origin a11-v0.1.6
+
+git tag -a npm-v0.1.4 -m "A11 TypeScript 0.1.4"
+git push origin npm-v0.1.4
 ```
 
-Start with an empty `dist/`, then build the wheel matrix and source
-distribution:
+Tags are immutable release inputs. If publishing partially fails after a
+registry accepts a version, fix the issue and release a new version; do not
+move the old tag or rebuild an already published version.
 
-```sh
-.venv/bin/python scripts/build_wheels.py
-uv build --sdist --out-dir dist
-```
+## PyPI trusted publishing
 
-Confirm that `dist/` contains exactly 20 wheels and one `.tar.gz`, with all
-five CPython ABIs represented for each of the four platform/architecture
-pairs. `scripts/build_wheels.py` runs `scripts/audit_wheel.py` for every wheel;
-that audit checks the native module, dynamic dependencies, loader paths, and
-PEP 561 typing files.
+No PyPI API key is required. On pypi.org, open the `a11-kit` project and add a
+GitHub Actions trusted publisher with:
 
-Upload to TestPyPI first when validating release credentials or metadata, then
-install a wheel in a clean environment. For the production release, configure
-PyPI trusted publishing or set `UV_PUBLISH_TOKEN` to a scoped API token and
-run:
+- owner: this repository's GitHub owner;
+- repository: this repository's name;
+- workflow: `release.yml`;
+- environment: `release`.
 
-```sh
-uv publish --token "$UV_PUBLISH_TOKEN" dist/*
-```
+If `a11-kit` has not been published yet, create the same configuration as a
+pending publisher from the PyPI account's **Publishing** page.
 
-Do not rebuild artifacts after uploading any part of a version. If a release
-is wrong, increment the version and build the complete matrix again.
+In GitHub, create the `release` environment under **Settings → Environments**.
+Add required reviewers if releases should need an approval. The workflow's
+`id-token: write` permission lets PyPI verify the job through OIDC.
 
-## npm
+## npm trusted publishing
 
-The TypeScript package is in `js/` and is named `a11`. Confirm that the npm
-account or organization has publish rights to that unscoped package name.
-After the Python artifacts for the same version have been accepted by PyPI:
+For each npm package (`@curiositystack/a11` and `aeleven`), configure a trusted
+publisher on npmjs.com with this repository, workflow `npm.yml`, and environment
+`npm`. Then create the matching `npm` environment in GitHub. npm trusted
+publishing uses GitHub OIDC, so `NPM_TOKEN` is not needed. The workflow uses
+Node 24 and publishes with provenance.
 
-```sh
-cd js
-npm ci
-npm run build
-npm pack --dry-run
-npm publish --access public
-```
+npm requires a package to exist before its trusted publisher can be attached.
+For a brand-new package name, an owner must perform the one-time initial
+publish with a granular automation token, then configure trusted publishing and
+remove that token from GitHub.
 
-`prepublishOnly` rebuilds the package as a final guard. Use npm trusted
-publishing where configured; otherwise authenticate with `npm login` and
-supply an OTP when prompted. Verify the published package with
-`npm view a11 version` before creating the release tag.
+If the npm account requires two-factor authentication, choose the setting that
+allows automation/granular tokens or trusted publishers. The GitHub actor still
+needs permission to read the repository, and the npm account configuring the
+publisher must own both package names.
+
+## GitHub releases
+
+No key needs to be added. GitHub supplies a short-lived `GITHUB_TOKEN`; the
+workflow grants it `contents: write` only in the final release job. Repository
+Actions settings must allow workflows read/write access, or explicitly allow
+the workflow permission override. The GitHub release is created only after all
+builds and the PyPI upload succeed.
+
+For additional protection, add required reviewers to both GitHub environments
+and create tag rulesets restricting `a11-v*` and `npm-v*` creation/deletion to
+release maintainers.

@@ -1,0 +1,138 @@
+name: Release A11
+
+on:
+  push:
+    tags: ["a11-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - id: version
+        name: Validate A11 release tag
+        run: echo "version=$(python3 scripts/check_release_version.py a11 "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
+  wheels:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - runner: macos-15
+            platform: macos
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install wheel builder
+        run: python -m pip install "cibuildwheel==4.1.1"
+      - name: Build and audit wheels
+        run: python -m cibuildwheel --platform "${{ matrix.platform }}" --archs "${{ matrix.arch }}" --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  sdist:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --sdist --out-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  cpp-archive:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build perl cmake
+      - name: Build static dependency prefix
+        run: scripts/bootstrap_wheel_deps.sh
+        env:
+          A11_DEPS_PREFIX: ${{ runner.temp }}/a11-deps
+          A11_WHEEL_ARCH: x86_64
+      - name: Build and install C++ SDK
+        run: |
+          cmake -S cpp -B build-cpp -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/a11-sdk" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/a11-deps" \
+            -DOPENSSL_ROOT_DIR="$RUNNER_TEMP/a11-deps" \
+            -DA11_BUILD_PYTHON=OFF \
+            -DA11_REQUIRE_STATIC_DEPS=ON \
+            -DBUILD_TESTING=OFF
+          cmake --build build-cpp --parallel 4
+          cmake --install build-cpp
+          tar -C "$RUNNER_TEMP/a11-sdk" -czf \
+            "a11-cpp-${{ needs.validate.outputs.version }}-linux-x86_64.tar.gz" .
+        env:
+          PKG_CONFIG_PATH: ${{ runner.temp }}/a11-deps/lib/pkgconfig
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpp-sdk
+          path: a11-cpp-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, wheels, sdist, cpp-archive]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: cpp-sdk
+          path: release-assets
+      - name: Publish Python distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+      - name: Create GitHub release and attach all artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* release-assets/* --generate-notes --verify-tag

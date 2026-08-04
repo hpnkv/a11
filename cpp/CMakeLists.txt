@@ -4,9 +4,15 @@ if (POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif ()
 
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" A11_VERSION_STRING
+        LIMIT_COUNT 1)
+if (NOT A11_VERSION_STRING MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "VERSION must contain one semantic version")
+endif ()
+
 project(
         a11
-        VERSION 0.1.5
+        VERSION ${A11_VERSION_STRING}
         DESCRIPTION "A11 action and streaming runtime"
         LANGUAGES C CXX)
 
@@ -455,6 +461,7 @@ target_include_directories(
 add_library(a11_obs STATIC ${A11_OBS_SOURCES})
 add_library(a11::obs ALIAS a11_obs)
 set_target_properties(a11_obs PROPERTIES EXPORT_NAME obs)
+target_compile_definitions(a11_obs PRIVATE A11_VERSION="${PROJECT_VERSION}")
 target_include_directories(
         a11_obs PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -725,6 +732,8 @@ if (A11_BUILD_PYTHON)
 
     pybind11_add_module(a11_python MODULE ${A11_PYTHON_SOURCES})
     set_target_properties(a11_python PROPERTIES OUTPUT_NAME "_native")
+    target_compile_definitions(a11_python PRIVATE
+            A11_VERSION="${PROJECT_VERSION}")
     if (A11_BUILD_REDIS)
         target_compile_definitions(a11_python PRIVATE A11_BUILD_REDIS=1)
     endif ()

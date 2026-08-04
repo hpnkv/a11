@@ -1,9 +1,8 @@
 name: Publish TypeScript packages
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  push:
+    tags: ["npm-v*"]
 
 permissions:
   contents: read
@@ -12,21 +11,23 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: js/package-lock.json
+      - name: Validate npm release tag
+        run: python3 scripts/check_release_version.py npm "$GITHUB_REF_NAME"
       - run: npm ci --prefix js
       - run: npm --prefix js test
-      - name: Match release tag to package version
-        if: github.event_name == 'release'
+      - name: Inspect package contents
         working-directory: js
-        run: test "${GITHUB_REF_NAME#v}" = "$(npm pkg get version | tr -d '\"')"
+        run: npm pack --dry-run
       - name: Publish @curiositystack/a11 and aeleven
         run: npm --prefix js run publish:registries
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -6600,5 +6600,5 @@ WHOLE_JSON: str = "$"
 WIRE_MESSAGE_VERSION: int = 1
 WIRE_STREAM_ABORT_STATUS_HEADER: str = "x-a11-abort-status"
 WIRE_STREAM_MAX_SINGLE_MESSAGE_SIZE: int = 33554432
-__version__: str = "0.1.5"
+__version__: str
 HttpSseWireStreamServer = HttpSseServer

@@ -29,6 +29,7 @@ try {
             name,
             version: source.version,
             description: source.description,
+            repository: source.repository,
             type: source.type,
             sideEffects: source.sideEffects,
             main: source.main,

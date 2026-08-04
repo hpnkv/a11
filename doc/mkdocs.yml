@@ -1,5 +1,7 @@
 site_name: A11
 site_description: A concurrent action and streaming runtime for building AI agents
+repo_url: https://github.com/hpnkv/a11
+repo_name: A11 on GitHub
 docs_dir: docs
 site_dir: site
 
@@ -43,6 +45,8 @@ theme:
     - navigation.instant
     - navigation.tracking
     - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.top
     - toc.follow
     - content.code.copy
@@ -91,9 +95,21 @@ plugins:
             filters: [ "!^_" ]
 
 nav:
-  - Overview: index.md
-  - Principles: principles.md
-  - Guides:
+  - Documentation:
+      - Overview: index.md
+      - State machines:
+          - WireStream lifecycle: lifecycles/wire-stream.md
+          - AsyncNode lifecycle: lifecycles/async-node.md
+          - Session lifecycle: lifecycles/session.md
+          - Action lifecycle: lifecycles/action.md
+      - LLM SDK:
+          - Understanding interactions: llm-sdk/interactions.md
+          - Actions as LLM tools: llm-sdk/action-tools.md
+          - Running tool calls: llm-sdk/tool-runner.md
+          - Tools with interact_with_*: llm-sdk/interact-actions.md
+  - Why A11: principles.md
+  - Examples:
+      - All examples: examples.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
@@ -102,12 +118,7 @@ nav:
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
       - Local models on the web: guides/local-models-web.md
-  - State machines:
-      - WireStream lifecycle: lifecycles/wire-stream.md
-      - AsyncNode lifecycle: lifecycles/async-node.md
-      - Session lifecycle: lifecycles/session.md
-      - Action lifecycle: lifecycles/action.md
-  - Python API:
+  - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
       - Stores: api/stores.md
@@ -117,5 +128,5 @@ nav:
       - Data & serialization: api/data.md
       - Observability: api/observability.md
       - Status & timing: api/status-timing.md
-  - TypeScript API: typescript.md
-  - C++ internals: cpp.md
+  - TypeScript reference: typescript.md
+  - C++ reference: cpp.md

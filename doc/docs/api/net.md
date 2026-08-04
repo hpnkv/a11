@@ -7,6 +7,16 @@ implementation is how an agent goes from in-process to networked; see
 
 ## WireStream
 
+[`start`][a11.net.wire_stream.WireStream.start] and
+[`accept`][a11.net.wire_stream.WireStream.accept] install callbacks on the
+initiating and responding sides. [`send`][a11.net.wire_stream.WireStream.send]
+admits a message into the bounded outgoing path;
+[`half_close`][a11.net.wire_stream.WireStream.half_close] queues the local end
+marker; and
+[`drain_outgoing_messages`][a11.net.wire_stream.WireStream.drain_outgoing_messages]
+is the delivery barrier. [`abort`][a11.net.wire_stream.WireStream.abort]
+terminates a failed exchange with a structured status.
+
 ::: a11.net.wire_stream.WireStream
 
 ::: a11.net.wire_stream.WireStreamOptions
@@ -16,6 +26,10 @@ implementation is how an agent goes from in-process to networked; see
 ::: a11.net.in_process_wire_stream.InProcessWireStream
 
 ::: a11.net.in_process_wire_stream.create_in_process_wire_stream_pair
+
+Use
+[`create_in_process_wire_stream_pair`][a11.net.in_process_wire_stream.create_in_process_wire_stream_pair]
+to test both endpoints without opening a socket.
 
 ## WebSocket
 
@@ -39,6 +53,12 @@ implementation is how an agent goes from in-process to networked; see
 
 Signalling is the out-of-band handshake WebRTC peers use to find each other and
 exchange connection details.
+
+For a service,
+[`WebSocketSignallingServer.create`][a11.net.signalling.WebSocketSignallingServer.create]
+starts the endpoint and
+[`stop`][a11.net.signalling.WebSocketSignallingServer.stop] ends acceptance
+during shutdown.
 
 ::: a11.net.signalling.WebSocketSignallingServer
 

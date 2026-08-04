@@ -37,6 +37,7 @@ it.
 
 from __future__ import annotations
 
+import inspect
 from typing import TypeVar
 
 _NativeClass = TypeVar("_NativeClass", bound=type)
@@ -65,9 +66,10 @@ def attach_protocol(native: _NativeClass, protocol: type) -> _NativeClass:
     """Copy every member of ``protocol`` onto the bound native class ``native``.
 
     Each function, ``property``, ``staticmethod``, ``classmethod``, or plain
-    attribute defined in ``protocol`` is assigned onto ``native`` unchanged, so
-    the members keep their original types and signatures (type checkers and the
-    stub generator see them exactly as written). Class-body machinery such as
+    attribute defined in ``protocol`` is assigned onto ``native``. Function
+    docstrings are dedented first so stub generators do not mistake their
+    class-body indentation for a literal code block. Members otherwise retain
+    their original types and signatures. Class-body machinery such as
     ``__module__`` and ``__dict__`` is skipped.
 
     The members are copied by reference -- no wrapping -- so behaviour and
@@ -85,6 +87,8 @@ def attach_protocol(native: _NativeClass, protocol: type) -> _NativeClass:
     for name, member in vars(protocol).items():
         if name in _CLASS_MACHINERY:
             continue
+        if inspect.isfunction(member) and member.__doc__:
+            member.__doc__ = inspect.cleandoc(member.__doc__)
         setattr(native, name, member)
     return native
 

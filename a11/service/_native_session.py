@@ -80,6 +80,14 @@ class _SessionWithRecvProtocol:
         `receive_with_stream_id` when replies or diagnostics must retain their
         transport identity. The optional absolute deadline limits only this
         wait; it does not change the session deadline.
+
+        Examples:
+            Route messages from a session with one attached transport:
+
+            ```python
+            while message := await session.receive():
+                await route_message(message)
+            ```
         """
         return await _native_receive(self, deadline)
 
@@ -88,6 +96,15 @@ class _SessionWithRecvProtocol:
 
         This is the pull-style counterpart to ``OnSessionStreamMessage`` and
         is useful when an agent multiplexes several transports in one loop.
+
+        Examples:
+            Preserve the source while routing gateway traffic:
+
+            ```python
+            while item := await session.receive_with_stream_id():
+                message, stream_id = item
+                await route_message(message, source=stream_id)
+            ```
         """
         return await _native_receive_with_stream_id(self, deadline)
 

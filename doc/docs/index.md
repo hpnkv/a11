@@ -49,9 +49,9 @@ asyncio.run(main())
 
 ## Where to go next
 
-- [Principles](principles.md) — the async, streaming model, and the extension
+- [Why A11](principles.md) — the async, streaming model, and the extension
   points you will build on.
-- [Guides](guides/streaming.md) — a hands-on tour from a single node to a
+- [Examples](examples.md) — a hands-on tour from a single node to a
   networked, tool-using agent, one small step at a time.
 - [Python API](api/nodes.md) — reference for every public type.
 - [C++ internals](cpp.md) — the native runtime, for contributors.

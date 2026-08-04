@@ -100,6 +100,17 @@ class _ChunkStoreWriterProtocol:
         Set ``final=True`` on the last chunk when readers must know the logical
         end of the sequence. Calling `drain_and_close` later only flushes and
         closes the writer; it does not add that final marker for you.
+
+        Examples:
+            Checkpoint only after the store accepts the final event:
+
+            ```python
+            confirmation = await writer.put_chunk(
+                a11.to_chunk(event), final=True
+            )
+            stored_seq = await confirmation
+            await checkpoints.save(stored_seq)
+            ```
         """
         confirmation, admission = _native_enqueue_chunk(
             self, chunk, seq=seq, final=final

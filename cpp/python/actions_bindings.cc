@@ -1037,13 +1037,28 @@ void BindActions(py::module_& module) {
             return ValueOrThrow(
                 self.MakeNested(action_name, propagate_io, forward_headers));
           },
-          "Create a nested child action from a registered action name.",
+          R"doc(Create a nested child action from a registered action name.
+
+Examples:
+    Prepare a registered lookup while preserving the parent context:
+
+    ```python
+    lookup = action.make_nested("find_customer")
+    ```
+)doc",
           py::arg("action_name"), py::arg("propagate_io") = true,
           py::arg("forward_headers") = true)
       .def(
           "run", [](actions::Action& self) { return ValueOrThrow(self.Run()); },
-          "Run the action's handler synchronously and return the action. The "
-          "Python layer also exposes this as run_in_background.")
+          R"doc(Run the action's handler and return the running action. The Python layer also exposes the native entry point as `run_in_background`.
+
+Examples:
+    Start local work after binding its handler:
+
+    ```python
+    job = Action(SUMMARISE).bind_handler(summarise).run()
+    ```
+)doc")
       .def(
           "call",
           [](const std::shared_ptr<actions::Action>& self,
@@ -1057,7 +1072,19 @@ void BindActions(py::module_& module) {
             }
             return FutureToPython(self->Call(std::move(*converted)));
           },
-          "Dispatch the action remotely and return a future of the action.",
+          R"doc(Dispatch the action remotely and return a future of the action.
+
+Examples:
+    Call a child action and consume its result:
+
+    ```python
+    lookup = action.make_nested("find_customer")
+    await lookup["email"].put_final(request.email)
+    await lookup["email"].drain_and_close()
+    await lookup.call()
+    customer = await lookup["customer"].consume(obj_type=Customer)
+    ```
+)doc",
           py::arg("wire_headers") = py::none())
       .def(
           "wait_for_dispatch",
@@ -1182,7 +1209,15 @@ void BindActions(py::module_& module) {
                 self.Register(std::move(name), std::move(schema),
                               ValueOrThrow(MakeActionHandler(handler))));
           },
-          "Register an action with a schema and optional async handler.",
+          R"doc(Register an action with a schema and optional async handler.
+
+Examples:
+    Publish an application handler under its schema name:
+
+    ```python
+    registry.register("summarise", SUMMARISE, summarise)
+    ```
+)doc",
           py::arg("action_name"), py::arg("schema"),
           py::arg("handler") = py::none())
       .def(
@@ -1229,7 +1264,16 @@ void BindActions(py::module_& module) {
                 action_name, std::move(action_id), std::move(node_map),
                 std::move(stream), std::move(session)));
           },
-          "Create an action instance from a registered action name.",
+          R"doc(Create an action instance from a registered action name.
+
+Examples:
+    Construct and start work without repeating the schema:
+
+    ```python
+    job = registry.make_action("summarise")
+    job.run()
+    ```
+)doc",
           py::arg("action_name"), py::arg("action_id") = "",
           py::arg("node_map") = nullptr, py::arg("stream") = nullptr,
           py::arg("session") = nullptr, py::keep_alive<0, 5>(),

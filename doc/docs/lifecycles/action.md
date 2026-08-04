@@ -138,7 +138,7 @@ logical result:
 async def summarize(action: a11.Action) -> None:
     request = await action["request"].consume()
     result = await build_summary(request)
-    await (await action["summary"].put_final(result))
+    await action["summary"].put_final(result)
 ```
 
 Action cleanup drains writable outputs on success, but it does **not** invent

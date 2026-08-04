@@ -131,16 +131,15 @@ It does **not** append a final fragment. For a complete unary output, use this
 normal sequence:
 
 ```python
-confirmation = await output.put_final(result)
-await confirmation
+await output.put_final(result)
 await output.drain_and_close()
 ```
 
 For a visible value followed by an invisible terminator:
 
 ```python
-await (await output.put(result))
-await (await output.put_null_final())
+await output.put(result)
+await output.put_null_final()
 await output.drain_and_close()
 ```
 

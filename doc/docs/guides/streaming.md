@@ -40,9 +40,9 @@ When you are the *authoritative* writer — the one who decides the stream is do
 — finish in two steps: mark the last value **final**, then **seal** the store:
 
 ```python
-await (await node.put("A11"))
-await (await node.put("streams"))
-await (await node.put_final("everything"))  # mark where the data ends
+await node.put("A11")
+await node.put("streams")
+await node.put_final("everything")  # mark where the data ends
 await node.drain_and_close()  # flush, forbid further writes, record OK
 ```
 
@@ -87,7 +87,7 @@ definite end:
 ```python
 async with a11.AsyncNode.create("tokens") as node:
     for word in ["A11", "streams", "everything"]:
-        await (await node.put(word))
+        await node.put(word)
     # leaving the block seals the store (clean exit) or aborts it (on error)
 ```
 
@@ -109,7 +109,7 @@ async def main() -> None:
 
     async with node:
         for word in ["A11", "streams", "everything"]:
-            await (await node.put(word))
+            await node.put(word)
 
     async for token in node:
         print(token)

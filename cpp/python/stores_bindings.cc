@@ -307,10 +307,15 @@ void BindStores(py::module_& module) {
             }
             return StoreFuture(self->Get(seq, *converted));
           },
-          "Await the fragment stored at a sequence number. The returned "
-          "future resolves once the fragment is available or the optional "
-          "deadline elapses, so an agent can read a specific chunk without "
-          "polling. Pass None for the deadline to wait indefinitely.",
+          R"doc(Await the fragment stored at a sequence number. The future resolves when the fragment is available or the optional deadline elapses.
+
+Examples:
+    Read back a fragment after retaining its assigned position:
+
+    ```python
+    fragment = await store.get(seq)
+    ```
+)doc",
           py::arg("seq"), py::arg("deadline") = py::none())
       .def(
           "get_by_arrival_order",
@@ -353,9 +358,15 @@ void BindStores(py::module_& module) {
              data::NodeFragment fragment) {
             return StoreFuture(self->Put(std::move(fragment)));
           },
-          "Append a single fragment and await its assigned sequence number. "
-          "Use this to feed an agent's output into the store; the returned "
-          "future resolves once the backing store accepts the write.",
+          R"doc(Append a single fragment and await its assigned sequence number. The future resolves once the backing store accepts the write.
+
+Examples:
+    Store a fragment and retain its assigned position:
+
+    ```python
+    seq = await store.put(fragment)
+    ```
+)doc",
           py::arg("fragment"))
       .def(
           "put_many",
@@ -401,11 +412,15 @@ void BindStores(py::module_& module) {
             return StoreFuture(self->CloseWritesWithStatus(
                 StatusFromPython(status), return_existing));
           },
-          "Seal the store against further writes with a terminal status and "
-          "await completion. Call this when an agent has finished producing "
-          "output; readers awaiting `next` are then released. When "
-          "`return_status_if_already_closed` is set, a second close returns "
-          "the status recorded by the first instead of overwriting it.",
+          R"doc(Seal the store against further writes with a terminal status and await completion. Waiting readers are released. With `return_status_if_already_closed`, a repeated close returns the status recorded by the first.
+
+Examples:
+    Publish clean producer completion to all readers:
+
+    ```python
+    await store.close_writes_with_status(Status.ok())
+    ```
+)doc",
           py::arg("status"), py::arg("return_status_if_already_closed") = false)
       .def(
           "size",

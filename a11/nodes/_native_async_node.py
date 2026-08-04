@@ -301,6 +301,13 @@ class _AsyncNodeProtocol:
         defaults to an in-memory
         [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
         so overriding it is how you place a node's data in a different backend.
+
+        Examples:
+            Create a stream used to deliver answer fragments:
+
+            ```python
+            answer = AsyncNode.create("answer-tokens")
+            ```
         """
         return cls(
             chunk_store_factory(node_id),
@@ -481,6 +488,13 @@ class _AsyncNodeProtocol:
         `asyncio.Future` resolves to the stored sequence number after the
         backing store accepts the fragment. Attached WireStream sends are
         attempted or queued by the writer but are not separately acknowledged.
+
+        Examples:
+            Add an intermediate token while a model response is produced:
+
+            ```python
+            await answer.put("The shipment ")
+            ```
         """
         if isinstance(value, types.NodeFragment):
             if seq is not None or final or mimetype:
@@ -513,9 +527,16 @@ class _AsyncNodeProtocol:
     ) -> asyncio.Future[int]:
         """Write ``value`` as the logical final element.
 
-        This marks the final sequence but leaves the writer open. Await the
-        returned confirmation, then call `drain_and_close` to flush attached
-        streams and prevent further writes.
+        This marks the final sequence but leaves the writer open. The returned
+        confirmation can be awaited when immediate store acceptance matters;
+        otherwise a later `drain_and_close` flushes queued work.
+
+        Examples:
+            Mark the last visible fragment and close the producer:
+
+            ```python
+            await answer.put_final("arrives Friday.")
+            ```
         """
         return await self.put(value, seq=seq, final=True, mimetype=mimetype)
 
@@ -584,7 +605,17 @@ class _AsyncNodeProtocol:
         timeout: timing.Duration | None = None,
         mimetype_patterns: str | Sequence[str] = "",
     ) -> T | Any | None:
-        """Alias for `next_object`: the next deserialized value or ``None``."""
+        """Alias for `next_object`: the next deserialized value or ``None``.
+
+        Examples:
+            Process a live audit stream one event at a time:
+
+            ```python
+            events.set_expected_types("application/json", AuditEvent)
+            while (event := await events.next()) is not None:
+                await audit_index.store(event)
+            ```
+        """
         return await self.next_object(obj_type, timeout, mimetype_patterns)
 
     async def consume_fragment(
@@ -670,6 +701,13 @@ class _AsyncNodeProtocol:
         Use this for a node that carries a single result (the common case for a
         unary action output). Pass ``obj_type`` to deserialize to a specific
         type, or request ``NodeFragment``/``Chunk`` to get the raw form.
+
+        Examples:
+            Read the unary customer input of an action handler:
+
+            ```python
+            customer = await action["customer"].consume(obj_type=Customer)
+            ```
         """
         fragment = await self.consume_fragment(timeout, allow_none=allow_none)
         if fragment is None:

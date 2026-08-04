@@ -541,25 +541,46 @@ void BindService(py::module_& module) {
                 ValueOrThrow(self->AddStream(std::move(stream), converted));
             return FutureToPython(std::move(task));
           },
-          "Attach a wire stream to the session and begin pumping its messages "
-          "asynchronously, returning an awaitable for the stream's lifetime. "
-          "mode selects whether this side starts ('start') or accepts "
-          "('accept') the stream.",
+          R"doc(Attach a wire stream and begin pumping its messages, returning an awaitable for the stream's lifetime. `mode` selects whether this side starts (`"start"`) or accepts (`"accept"`) the stream.
+
+Examples:
+    Attach the client transport before exchanging messages:
+
+    ```python
+    stream_lifetime = session.add_stream(websocket_stream)
+    ```
+)doc",
           py::arg("stream"), py::arg("mode") = "start", py::keep_alive<1, 2>())
       .def(
           "half_close",
           [](service::Session& self) { ThrowIfNotOk(self.HalfClose()); },
-          "Signal that this side will send no more messages, allowing the "
-          "session to drain and finish once peers do the same. Remaining "
-          "inbound messages continue to be processed asynchronously.")
+          R"doc(Signal that this side will send no more messages, allowing the session to drain and finish once peers do the same. Remaining inbound messages continue to be processed asynchronously.
+
+Examples:
+    Finish an exchange after sending the last message:
+
+    ```python
+    session.half_close()
+    await session.done.wait()
+    ```
+)doc")
       .def(
           "abort",
           [](service::Session& self, const py::handle& status) {
             ThrowIfNotOk(self.Abort(StatusFromPython(status)));
           },
-          "Abort the session immediately with the given error status, "
-          "cancelling streams and actions. Use this to tear down the session "
-          "when an unrecoverable error occurs.",
+          R"doc(Abort the session immediately with the given error status, cancelling streams and actions. Use this when an unrecoverable error occurs.
+
+Examples:
+    Propagate an authentication failure to the peer:
+
+    ```python
+    session.abort(Status(
+        code=StatusCode.PERMISSION_DENIED,
+        message=str(error),
+    ))
+    ```
+)doc",
           py::arg("status"))
       .def(
           "send",
@@ -567,10 +588,15 @@ void BindService(py::module_& module) {
              const std::string& stream_id) {
             ThrowIfNotOk(self.Send(std::move(message), stream_id));
           },
-          "Enqueue a wire message for delivery on the named stream (or the "
-          "default stream), raising on failure. Delivery happens "
-          "asynchronously "
-          "as the stream drains.",
+          R"doc(Enqueue a wire message for delivery on the named stream (or the default stream), raising on failure. Delivery happens asynchronously as the stream drains.
+
+Examples:
+    Route a response through a particular attached transport:
+
+    ```python
+    session.send(response, stream_id=websocket_stream.get_id())
+    ```
+)doc",
           py::arg("message"), py::arg("stream_id") = "")
       .def_property_readonly(
           "deadline",

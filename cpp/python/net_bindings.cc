@@ -592,11 +592,15 @@ void BindNet(py::module_& module) {
           [](net::WireStream& self, data::WireMessage message) {
             CheckStatus(self.Send(std::move(message)));
           },
-          "Queue a message for asynchronous delivery to the peer. This call is "
-          "non-blocking: the message enters this endpoint's ordered outbound "
-          "queue and is drained by the transport task, which applies "
-          "backpressure. Use it to push agent output onto the wire without "
-          "awaiting the peer.",
+          R"doc(Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters the ordered outbound queue and the transport applies backpressure.
+
+Examples:
+    Admit a request before closing the local sending side:
+
+    ```python
+    stream.send(request_message)
+    ```
+)doc",
           py::arg("message"))
       .def(
           "start",
@@ -604,14 +608,15 @@ void BindNet(py::module_& module) {
              const py::object& on_message, const py::object& on_done) {
             return StartStream(self, false, on_message, on_done);
           },
-          "Begin driving the stream as the initiating (client) side, "
-          "delivering "
-          "each inbound message to the asynchronous on_message callback and "
-          "end-of-stream to on_done. The callbacks are awaited as data "
-          "arrives, "
-          "so this is the entry point for consuming a streaming agent "
-          "conversation. Returns an awaitable that resolves when the startup "
-          "handshake completes; use on_done as the terminal barrier.",
+          R"doc(Begin driving the stream as the initiating side, delivering inbound messages to `on_message` and completion to `on_done`. Callbacks are awaited as data arrives.
+
+Examples:
+    Start a client transport with application callbacks:
+
+    ```python
+    await stream.start(on_message, on_transport_done)
+    ```
+)doc",
           py::arg("on_message"), py::arg("on_done"))
       .def(
           "accept",
@@ -637,30 +642,49 @@ void BindNet(py::module_& module) {
               ThrowStatus(converted.status());
             CheckStatus(self->HalfClose(std::move(*converted)));
           },
-          "Signal that this endpoint has finished sending, optionally "
-          "attaching "
-          "trailers (final metadata) for the peer. The stream stays open for "
-          "inbound messages, so use this to end your half of a duplex agent "
-          "exchange while still receiving the peer's remaining output.",
+          R"doc(Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
+
+Examples:
+    End the local half and wait until queued messages reach the transport:
+
+    ```python
+    stream.half_close()
+    await stream.drain_outgoing_messages()
+    ```
+)doc",
           py::arg("trailers") = py::none())
       .def(
           "drain_outgoing_messages",
           [](const std::shared_ptr<net::WireStream>& self) {
             return FutureToPython(self->DrainOutgoingMessages());
           },
-          "Await until every queued outbound message has been handed to the "
-          "transport. Call half_close() first, then await this before shutting "
-          "down so buffered agent output is not dropped.")
+          R"doc(Await until every queued outbound message has been handed to the transport. Call `half_close` first so buffered output is not dropped.
+
+Examples:
+    Use the transport delivery barrier during orderly shutdown:
+
+    ```python
+    stream.half_close()
+    await stream.drain_outgoing_messages()
+    ```
+)doc")
       .def(
           "abort",
           [](net::WireStream& self, const py::handle& status) {
             CheckStatus(self.Abort(StatusFromPython(status)));
           },
-          "Terminate the stream immediately with an error status, discarding "
-          "buffered messages and propagating the failure to the peer and to "
-          "any "
-          "pending receivers. Use this to fail fast when an agent hits an "
-          "unrecoverable error.",
+          R"doc(Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
+
+Examples:
+    End an exchange when its upstream disappears:
+
+    ```python
+    stream.abort(Status(
+        code=StatusCode.UNAVAILABLE,
+        message="upstream connection was lost",
+    ))
+    ```
+)doc",
           py::arg("status"))
       .def(
           "set_deadline",

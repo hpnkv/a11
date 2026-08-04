@@ -153,10 +153,11 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
       - name: Create GitHub release and attach all artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh resolves the repository from GH_REPO, so no checkout is needed
+          # here -- a checkout would run `git clean` and wipe the downloaded
+          # dist/ and release-assets/ artifacts before they can be attached.
+          GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" dist/* release-assets/* --generate-notes --verify-tag

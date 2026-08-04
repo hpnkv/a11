@@ -170,7 +170,15 @@ class Action:
         """
         run(self: Action) -> Action
 
-        Run the action's handler synchronously and return the action. The Python layer also exposes this as run_in_background.
+        Run the action's handler and return the running action. The Python layer also exposes the native entry point as `run_in_background`.
+
+        Examples:
+            Start local work after binding its handler:
+
+            ```python
+            job = Action(SUMMARISE).bind_handler(summarise).run()
+            ```
+
         """
 
     def __contains__(self, name: str) -> bool:
@@ -193,7 +201,9 @@ class Action:
         stream: WireStream | None = None,
         session: Session | None = None,
         registry: ActionRegistry | None = None,
-        max_concurrent_nested_actions: typing.SupportsInt = 64,
+        max_concurrent_nested_actions: (
+            typing.SupportsInt | typing.SupportsIndex
+        ) = 64,
     ) -> None:
         """
         Create an action from a schema and optional bindings.
@@ -237,6 +247,17 @@ class Action:
     def call(self, wire_headers: typing.Any | None = None) -> typing.Any:
         """
         Dispatch the action remotely and return a future of the action.
+
+        Examples:
+            Call a child action and consume its result:
+
+            ```python
+            lookup = action.make_nested("find_customer")
+            await lookup["email"].put_final(request.email)
+            await lookup["email"].drain_and_close()
+            await lookup.call()
+            customer = await lookup["customer"].consume(obj_type=Customer)
+            ```
         """
 
     def cancel(self) -> None:
@@ -294,7 +315,7 @@ class Action:
     def get_header(self, name: str, decode: bool = False) -> bytes | str | None:
         """
         Return header ``name`` (``None`` if absent); ``decode`` UTF-8 to
-                ``str``.
+        ``str``.
         """
 
     def get_id(self) -> str:
@@ -400,6 +421,13 @@ class Action:
     ) -> Action:
         """
         Create a nested child action from a registered action name.
+
+        Examples:
+            Prepare a registered lookup while preserving the parent context:
+
+            ```python
+            lookup = action.make_nested("find_customer")
+            ```
         """
 
     def map_ports_from_message(self, message: ActionMessage) -> Action:
@@ -414,7 +442,14 @@ class Action:
 
     def run(self) -> Action:
         """
-        Run the action's handler synchronously and return the action. The Python layer also exposes this as run_in_background.
+        Run the action's handler and return the running action. The Python layer also exposes the native entry point as `run_in_background`.
+
+        Examples:
+            Start local work after binding its handler:
+
+            ```python
+            job = Action(SUMMARISE).bind_handler(summarise).run()
+            ```
         """
 
     def set_header(self, name: str, value: typing.Any) -> Action:
@@ -478,7 +513,7 @@ class Action:
     def done(self) -> _DoneEvent:
         """
         An `asyncio.Event`-shaped view of completion (``await
-                action.done.wait()``).
+        action.done.wait()``).
         """
 
     @property
@@ -528,6 +563,7 @@ class ActionHeaderSchema:
     Schema describing a single header of an action.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -596,6 +632,7 @@ class ActionMessage:
     A message invoking a named action with input and output ports.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> ActionMessage:
@@ -612,9 +649,8 @@ class ActionMessage:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -730,6 +766,7 @@ class ActionPortSchema:
     Schema describing a single input or output port of an action.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -874,6 +911,14 @@ class ActionRegistry:
     ) -> Action:
         """
         Create an action instance from a registered action name.
+
+        Examples:
+            Construct and start work without repeating the schema:
+
+            ```python
+            job = registry.make_action("summarise")
+            job.run()
+            ```
         """
 
     def make_action_message(
@@ -891,6 +936,13 @@ class ActionRegistry:
     ) -> None:
         """
         Register an action with a schema and optional async handler.
+
+        Examples:
+            Publish an application handler under its schema name:
+
+            ```python
+            registry.register("summarise", SUMMARISE, summarise)
+            ```
         """
 
     def register_sync(
@@ -911,6 +963,7 @@ class ActionSchema:
     """
 
     WHOLE_JSON: typing.ClassVar[str] = "$"
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
@@ -1015,6 +1068,7 @@ class ActionSettings:
     Runtime settings controlling an action's stream binding and cleanup.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     bind_streams_on_inputs_by_default: typing.Any
     bind_streams_on_outputs_by_default: typing.Any
@@ -1085,11 +1139,17 @@ class AsyncNode:
         """
         Create a standalone node identified by ``node_id``.
 
-                ``chunk_store_factory`` builds the backing store from the id; it
-                defaults to an in-memory
-                [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
-                so overriding it is how you place a node's data in a different backend.
+        ``chunk_store_factory`` builds the backing store from the id; it
+        defaults to an in-memory
+        [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore],
+        so overriding it is how you place a node's data in a different backend.
 
+        Examples:
+            Create a stream used to deliver answer fragments:
+
+            ```python
+            answer = AsyncNode.create("answer-tokens")
+            ```
         """
 
     async def __aenter__(self) -> AsyncNode: ...
@@ -1119,12 +1179,11 @@ class AsyncNode:
         """
         Build a node over ``chunk_store``.
 
-                Prefer `create`, which constructs the store for you from a node
-                id. Pass ``reader_options`` / ``writer_options`` (as
-                `ChunkStoreReaderOptions` / `ChunkStoreWriterOptions` or plain dicts) to
-                tune buffering and ordering, and a custom ``serialization_registry`` to
-                control how Python objects map to chunks.
-
+        Prefer `create`, which constructs the store for you from a node
+        id. Pass ``reader_options`` / ``writer_options`` (as
+        `ChunkStoreReaderOptions` / `ChunkStoreWriterOptions` or plain dicts) to
+        tune buffering and ordering, and a custom ``serialization_registry`` to
+        control how Python objects map to chunks.
         """
 
     def abort_with_status(self, status: typing.Any) -> typing.Any:
@@ -1162,10 +1221,16 @@ class AsyncNode:
         """
         Consume exactly one whole value and return it deserialized.
 
-                Use this for a node that carries a single result (the common case for a
-                unary action output). Pass ``obj_type`` to deserialize to a specific
-                type, or request ``NodeFragment``/``Chunk`` to get the raw form.
+        Use this for a node that carries a single result (the common case for a
+        unary action output). Pass ``obj_type`` to deserialize to a specific
+        type, or request ``NodeFragment``/``Chunk`` to get the raw form.
 
+        Examples:
+            Read the unary customer input of an action handler:
+
+            ```python
+            customer = await action["customer"].consume(obj_type=Customer)
+            ```
         """
 
     async def consume_chunk(
@@ -1181,11 +1246,10 @@ class AsyncNode:
         """
         Read exactly one whole value's fragment, enforcing the terminator.
 
-                Unlike `next_fragment`, this expects the node to hold a single
-                (possibly multi-part) value followed by a null final chunk, and raises
-                if that shape is violated. With ``allow_none`` an empty stream yields
-                ``None`` instead of raising. Requires an ordered reader.
-
+        Unlike `next_fragment`, this expects the node to hold a single
+        (possibly multi-part) value followed by a null final chunk, and raises
+        if that shape is violated. With ``allow_none`` an empty stream yields
+        ``None`` instead of raising. Requires an ordered reader.
         """
 
     def detach_stream(self, stream: WireStream) -> None:
@@ -1200,7 +1264,7 @@ class AsyncNode:
 
     def get_chunk_store(self) -> ChunkStore:
         """
-        Returns the underlying chunk store backing this node. The chunk store is the durable buffer that the node's reader and writer stream through; reach for it when you need lower-level access than the async put/next API provides.
+        Returns the underlying chunk store backing this node. The chunk store is the ordered storage boundary that the node's reader and writer stream through; reach for it when you need lower-level access than the async put/next API provides.
         """
 
     def get_id(self) -> str:
@@ -1255,7 +1319,7 @@ class AsyncNode:
     def iter_with_deadline(self, deadline: Time):
         """
         Async-iterate deserialized values until ``deadline`` or end of
-                stream.
+        stream.
         """
 
     async def next(
@@ -1266,6 +1330,15 @@ class AsyncNode:
     ) -> T | typing.Any | None:
         """
         Alias for `next_object`: the next deserialized value or ``None``.
+
+        Examples:
+            Process a live audit stream one event at a time:
+
+            ```python
+            events.set_expected_types("application/json", AuditEvent)
+            while (event := await events.next()) is not None:
+                await audit_index.store(event)
+            ```
         """
 
     async def next_chunk(self, timeout: Duration | None = None) -> Chunk | None:
@@ -1300,16 +1373,22 @@ class AsyncNode:
         """
         Write ``value`` and return its store-confirmation future.
 
-                ``value`` may be a [NodeFragment][a11.data.types.NodeFragment], a
-                [Chunk][a11.data.types.Chunk], or any Python object the node's
-                serialization registry can encode (``mimetype`` selects the encoding).
-                Set ``final=True`` on the last data fragment so readers know where the
-                logical value ends. Finality does not close the writer: call
-                `drain_and_close` after the confirmation future resolves. The returned
-                `asyncio.Future` resolves to the stored sequence number after the
-                backing store accepts the fragment. Attached WireStream sends are
-                attempted or queued by the writer but are not separately acknowledged.
+        ``value`` may be a [NodeFragment][a11.data.types.NodeFragment], a
+        [Chunk][a11.data.types.Chunk], or any Python object the node's
+        serialization registry can encode (``mimetype`` selects the encoding).
+        Set ``final=True`` on the last data fragment so readers know where the
+        logical value ends. Finality does not close the writer: call
+        `drain_and_close` after the confirmation future resolves. The returned
+        `asyncio.Future` resolves to the stored sequence number after the
+        backing store accepts the fragment. Attached WireStream sends are
+        attempted or queued by the writer but are not separately acknowledged.
 
+        Examples:
+            Add an intermediate token while a model response is produced:
+
+            ```python
+            await answer.put("The shipment ")
+            ```
         """
 
     async def put_chunk(
@@ -1318,12 +1397,11 @@ class AsyncNode:
         """
         Admit a native chunk and return its store-confirmation future.
 
-                Await this coroutine to respect the writer's bounded admission buffer,
-                then await the returned future when the backing store must have
-                accepted the fragment. Attached stream sends are attempted or queued
-                as the writer processes the batch, but do not add a second delivery
-                confirmation.
-
+        Await this coroutine to respect the writer's bounded admission buffer,
+        then await the returned future when the backing store must have
+        accepted the fragment. Attached stream sends are attempted or queued
+        as the writer processes the batch, but do not add a second delivery
+        confirmation.
         """
 
     async def put_final(
@@ -1332,16 +1410,22 @@ class AsyncNode:
         """
         Write ``value`` as the logical final element.
 
-                This marks the final sequence but leaves the writer open. Await the
-                returned confirmation, then call `drain_and_close` to flush attached
-                streams and prevent further writes.
+        This marks the final sequence but leaves the writer open. The returned
+        confirmation can be awaited when immediate store acceptance matters;
+        otherwise a later `drain_and_close` flushes queued work.
 
+        Examples:
+            Mark the last visible fragment and close the producer:
+
+            ```python
+            await answer.put_final("arrives Friday.")
+            ```
         """
 
     async def put_fragment(self, fragment: NodeFragment) -> asyncio.Future[int]:
         """
         Enqueue a [NodeFragment][a11.data.types.NodeFragment] (carrying its
-                seq/final).
+        seq/final).
         """
 
     async def put_null_final(
@@ -1350,10 +1434,9 @@ class AsyncNode:
         """
         Write an explicit null fragment as the logical terminator.
 
-                Use this after a non-final value when `consume` should treat that value
-                as one complete unary result. It does not close the writer; finish with
-                `drain_and_close` after the confirmation resolves.
-
+        Use this after a non-final value when `consume` should treat that value
+        as one complete unary result. It does not close the writer; finish with
+        `drain_and_close` after the confirmation resolves.
         """
 
     def reset_reader(
@@ -1372,10 +1455,9 @@ class AsyncNode:
         """
         Set the default MIME patterns and object type for reads.
 
-                Once set, ``next()``/``consume()`` and ``async for`` deserialize to
-                ``obj_type`` (matching ``mimetype_patterns``) without repeating those
-                arguments on every call. Returns ``self`` for chaining.
-
+        Once set, ``next()``/``consume()`` and ``async for`` deserialize to
+        ``obj_type`` (matching ``mimetype_patterns``) without repeating those
+        arguments on every call. Returns ``self`` for chaining.
         """
 
     def set_reader_options(
@@ -1420,7 +1502,7 @@ class AsyncNode:
     def reader(self) -> ChunkStoreReader:
         """
         The node's
-                [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader].
+        [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader].
         """
 
     @property
@@ -1445,7 +1527,7 @@ class AsyncNode:
     def writer(self) -> ChunkStoreWriter:
         """
         The node's
-                [ChunkStoreWriter][a11.stores.chunk_store_writer.ChunkStoreWriter].
+        [ChunkStoreWriter][a11.stores.chunk_store_writer.ChunkStoreWriter].
         """
 
     @property
@@ -1473,7 +1555,9 @@ class ChannelFramingOptions:
         Maximum total bytes of in-flight frames.
         """
     @max_pending_bytes.setter
-    def max_pending_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_pending_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_pending_messages(self) -> int:
@@ -1481,7 +1565,9 @@ class ChannelFramingOptions:
         Maximum number of in-flight (unacknowledged) frames.
         """
     @max_pending_messages.setter
-    def max_pending_messages(self, arg0: typing.SupportsInt) -> None: ...
+    def max_pending_messages(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def split_size(self) -> int:
@@ -1489,13 +1575,16 @@ class ChannelFramingOptions:
         Maximum payload size before a message is split into multiple frames.
         """
     @split_size.setter
-    def split_size(self, arg0: typing.SupportsInt) -> None: ...
+    def split_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class Chunk:
     """
     A unit of node data with optional metadata and ref.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> Chunk:
@@ -1512,9 +1601,8 @@ class Chunk:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -1627,6 +1715,7 @@ class ChunkMetadata:
     Metadata describing a chunk of node data.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> ChunkMetadata:
@@ -1643,9 +1732,8 @@ class ChunkMetadata:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -1754,7 +1842,9 @@ class ChunkStore:
         Construct the abstract base. Subclass this in Python to back an agent with a custom asynchronous chunk store; every data method returns an awaitable so callers never block the event loop.
         """
 
-    def clear_data(self, seq: typing.SupportsInt) -> typing.Any:
+    def clear_data(
+        self, seq: typing.SupportsInt | typing.SupportsIndex
+    ) -> typing.Any:
         """
         Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment. Use this to reclaim memory for chunks an agent has already consumed.
         """
@@ -1763,19 +1853,35 @@ class ChunkStore:
         self, status: typing.Any, return_status_if_already_closed: bool = False
     ) -> typing.Any:
         """
-        Seal the store against further writes with a terminal status and await completion. Call this when an agent has finished producing output; readers awaiting `next` are then released. When `return_status_if_already_closed` is set, a second close returns the status recorded by the first instead of overwriting it.
+        Seal the store against further writes with a terminal status and await completion. Waiting readers are released. With `return_status_if_already_closed`, a repeated close returns the status recorded by the first.
+
+        Examples:
+            Publish clean producer completion to all readers:
+
+            ```python
+            await store.close_writes_with_status(Status.ok())
+            ```
         """
 
     def get(
-        self, seq: typing.SupportsInt, deadline: typing.Any | None = None
+        self,
+        seq: typing.SupportsInt | typing.SupportsIndex,
+        deadline: typing.Any | None = None,
     ) -> typing.Any:
         """
-        Await the fragment stored at a sequence number. The returned future resolves once the fragment is available or the optional deadline elapses, so an agent can read a specific chunk without polling. Pass None for the deadline to wait indefinitely.
+        Await the fragment stored at a sequence number. The future resolves when the fragment is available or the optional deadline elapses.
+
+        Examples:
+            Read back a fragment after retaining its assigned position:
+
+            ```python
+            fragment = await store.get(seq)
+            ```
         """
 
     def get_by_arrival_order(
         self,
-        arrival_order: typing.SupportsInt,
+        arrival_order: typing.SupportsInt | typing.SupportsIndex,
         deadline: typing.Any | None = None,
     ) -> typing.Any:
         """
@@ -1793,14 +1899,16 @@ class ChunkStore:
         """
 
     def get_seq_for_arrival_order(
-        self, arrival_order: typing.SupportsInt
+        self, arrival_order: typing.SupportsInt | typing.SupportsIndex
     ) -> typing.Any:
         """
         Await the sequence number that corresponds to a given arrival order. Use this to translate ingestion-order references into the sequence numbers the rest of the API expects.
         """
 
     def next(
-        self, deadline: typing.Any | None = None, limit: typing.SupportsInt = 1
+        self,
+        deadline: typing.Any | None = None,
+        limit: typing.SupportsInt | typing.SupportsIndex = 1,
     ) -> typing.Any:
         """
         Await up to `limit` of the next available fragments as a stream. This is the primary way an agent consumes chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
@@ -1808,7 +1916,14 @@ class ChunkStore:
 
     def put(self, fragment: NodeFragment) -> typing.Any:
         """
-        Append a single fragment and await its assigned sequence number. Use this to feed an agent's output into the store; the returned future resolves once the write is durably accepted.
+        Append a single fragment and await its assigned sequence number. The future resolves once the backing store accepts the write.
+
+        Examples:
+            Store a fragment and retain its assigned position:
+
+            ```python
+            seq = await store.put(fragment)
+            ```
         """
 
     def put_many(
@@ -1834,10 +1949,9 @@ class ChunkStoreReader:
         """
         Open a reader over ``store``.
 
-                ``options`` (a `ChunkStoreReaderOptions` or plain dict) tunes
-                ordering, buffering, starting offset, sticky mimetypes, and whether
-                chunks are popped as they are read.
-
+        ``options`` (a `ChunkStoreReaderOptions` or plain dict) tunes
+        ordering, buffering, starting offset, sticky mimetypes, and whether
+        chunks are popped as they are read.
         """
 
     def cancel(self) -> None:
@@ -1859,14 +1973,22 @@ class ChunkStoreReader:
         """
         Return an awaitable for the next fragment in this reader's view.
 
-                It resolves to ``None`` after the configured range or final sequence is
-                exhausted. ``timeout`` bounds this wait only; a timed-out read does not
-                close the store or prevent a later call from continuing the stream.
+        It resolves to ``None`` after the configured range or final sequence is
+        exhausted. ``timeout`` bounds this wait only; a timed-out read does not
+        close the store or prevent a later call from continuing the stream.
 
-                Raises:
-                    StatusException: If the timeout expires, the store closes with an
-                        error, or the reader encounters invalid stream state.
+        Raises:
+            StatusException: If the timeout expires, the store closes with an
+                error, or the reader encounters invalid stream state.
 
+        Examples:
+            Resume a replay after an application checkpoint:
+
+            ```python
+            reader = ChunkStoreReader(store, {"offset": checkpoint + 1})
+            while fragment := await reader.next():
+                await replay(fragment)
+            ```
         """
 
     def wait(self) -> typing.Any:
@@ -1893,6 +2015,7 @@ class ChunkStoreReader:
         """
 
 class ChunkStoreReaderOptions:
+    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -1939,7 +2062,9 @@ class ChunkStoreReaderOptions:
         Optional cap on the total number of chunks to read.
         """
     @max_chunks_to_read.setter
-    def max_chunks_to_read(self, arg0: typing.SupportsInt | None) -> None: ...
+    def max_chunks_to_read(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
+    ) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int:
@@ -1947,7 +2072,9 @@ class ChunkStoreReaderOptions:
         Maximum number of chunks to prefetch into the buffer.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(self, arg0: typing.SupportsInt) -> None: ...
+    def num_chunks_to_buffer(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -1955,7 +2082,9 @@ class ChunkStoreReaderOptions:
         Sequence number at which reading begins.
         """
     @offset.setter
-    def offset(self, arg0: typing.SupportsInt) -> None: ...
+    def offset(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def ordered(self) -> bool:
@@ -1990,10 +2119,9 @@ class ChunkStoreWriter:
         """
         Open a writer over ``chunk_store``.
 
-                ``options`` (a `ChunkStoreWriterOptions` or plain dict) tunes the
-                starting offset, sticky mimetypes, and how much is buffered/flushed at
-                once.
-
+        ``options`` (a `ChunkStoreWriterOptions` or plain dict) tunes the
+        starting offset, sticky mimetypes, and how much is buffered/flushed at
+        once.
         """
 
     def abort_with_status(self, status: typing.Any) -> typing.Any:
@@ -2003,7 +2131,7 @@ class ChunkStoreWriter:
 
     def attach_stream(self, stream: WireStream) -> None:
         """
-        Mirror persisted fragments to an additional wire stream. Each confirmed chunk is copied to every attached stream, letting an agent fan its output out to remote peers. A transport failure stops later writes but never revokes confirmations already returned. The writer keeps the stream alive while attached.
+        Tee stored fragments to an additional wire stream. After the store accepts a batch, the writer calls send on attached streams; a successful send confirms local transport admission, not peer delivery. A transport failure stops later writes but cannot revoke the current batch's store confirmations. The writer keeps the stream alive while attached.
         """
 
     def cancel(self) -> typing.Any:
@@ -2023,9 +2151,9 @@ class ChunkStoreWriter:
 
     def enqueue_chunk(
         self, chunk: Chunk, seq: typing.Any | None = None, final: bool = False
-    ) -> tuple:
+    ) -> tuple[typing.Any, typing.Any]:
         """
-        Enqueue a chunk and get back a (confirmation, admission) pair of awaitables. Unlike `put_chunk`, this exposes backpressure explicitly: `admission` resolves when the chunk is accepted into the bounded queue (None if it fit immediately) and `confirmation` resolves with its durable sequence number. An agent awaits admission to pace production and confirmation to know the write landed.
+        Enqueue a chunk and get back a (confirmation, admission) pair of awaitables. Unlike `put_chunk`, this exposes backpressure explicitly: `admission` resolves when the chunk is accepted into the bounded queue (None if it fit immediately) and `confirmation` resolves with the sequence assigned by the backing store. An agent awaits admission to pace production and confirmation to know the store accepted the write.
         """
 
     def ensure_started(self) -> None:
@@ -2054,12 +2182,11 @@ class ChunkStoreWriter:
         """
         Write a chunk and return its store-confirmation future.
 
-                The writer operates at the chunk level; pass an already-serialized
-                [Chunk][a11.data.types.Chunk] (use
-                [AsyncNode][a11.nodes.async_node.AsyncNode]
-                to write arbitrary Python objects). Returns a `asyncio.Future`
-                resolving to the stored sequence number.
-
+        The writer operates at the chunk level; pass an already-serialized
+        [Chunk][a11.data.types.Chunk] (use
+        [AsyncNode][a11.nodes.async_node.AsyncNode]
+        to write arbitrary Python objects). Returns a `asyncio.Future`
+        resolving to the stored sequence number.
         """
 
     async def put_chunk(
@@ -2068,10 +2195,20 @@ class ChunkStoreWriter:
         """
         Enqueue a native chunk and return its store-confirmation future.
 
-                Set ``final=True`` on the last chunk when readers must know the logical
-                end of the sequence. Calling `drain_and_close` later only flushes and
-                closes the writer; it does not add that final marker for you.
+        Set ``final=True`` on the last chunk when readers must know the logical
+        end of the sequence. Calling `drain_and_close` later only flushes and
+        closes the writer; it does not add that final marker for you.
 
+        Examples:
+            Checkpoint only after the store accepts the final event:
+
+            ```python
+            confirmation = await writer.put_chunk(
+                a11.to_chunk(event), final=True
+            )
+            stored_seq = await confirmation
+            await checkpoints.save(stored_seq)
+            ```
         """
 
     def wait_for_buffer_to_drain(self) -> typing.Any:
@@ -2098,6 +2235,7 @@ class ChunkStoreWriter:
         """
 
 class ChunkStoreWriterOptions:
+    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -2142,7 +2280,9 @@ class ChunkStoreWriterOptions:
         Maximum number of chunks flushed to the store per batch.
         """
     @max_chunks_to_write_at_once.setter
-    def max_chunks_to_write_at_once(self, arg0: typing.SupportsInt) -> None: ...
+    def max_chunks_to_write_at_once(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int | None:
@@ -2150,7 +2290,9 @@ class ChunkStoreWriterOptions:
         Optional bound on the in-flight write buffer size.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(self, arg0: typing.SupportsInt | None) -> None: ...
+    def num_chunks_to_buffer(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
+    ) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -2158,7 +2300,9 @@ class ChunkStoreWriterOptions:
         Sequence number at which writing begins.
         """
     @offset.setter
-    def offset(self, arg0: typing.SupportsInt) -> None: ...
+    def offset(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def sticky_mimetype(self) -> bool:
@@ -2182,25 +2326,33 @@ class Duration:
         """
 
     @staticmethod
-    def microseconds(value: typing.SupportsFloat | None) -> Duration:
+    def microseconds(
+        value: typing.SupportsFloat | typing.SupportsIndex | None,
+    ) -> Duration:
         """
         Creates a duration from microseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def milliseconds(value: typing.SupportsFloat | None) -> Duration:
+    def milliseconds(
+        value: typing.SupportsFloat | typing.SupportsIndex | None,
+    ) -> Duration:
         """
         Creates a duration from milliseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def nanoseconds(value: typing.SupportsInt | None) -> Duration:
+    def nanoseconds(
+        value: typing.SupportsInt | typing.SupportsIndex | None,
+    ) -> Duration:
         """
         Creates a duration from nanoseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def seconds(value: typing.SupportsFloat | None) -> Duration:
+    def seconds(
+        value: typing.SupportsFloat | typing.SupportsIndex | None,
+    ) -> Duration:
         """
         Creates a duration from seconds; None or negative means infinite.
         """
@@ -2222,7 +2374,9 @@ class Duration:
         Returns a hash of the duration.
         """
 
-    def __init__(self, nanoseconds: typing.SupportsInt) -> None:
+    def __init__(
+        self, nanoseconds: typing.SupportsInt | typing.SupportsIndex
+    ) -> None:
         """
         Creates a duration from a whole number of nanoseconds.
         """
@@ -2273,7 +2427,9 @@ class Duration:
 class Http2Client:
     @staticmethod
     def connect(
-        host: str, port: typing.SupportsInt, options: Http2Options = ...
+        host: str,
+        port: typing.SupportsInt | typing.SupportsIndex,
+        options: Http2Options = ...,
     ) -> typing.Any:
         """
         Asynchronously connect to an HTTP/2 server, returning a future that resolves to the connected client.
@@ -2420,7 +2576,9 @@ class Http2Options:
         Maximum buffered request bytes before backpressure.
         """
     @max_buffered_request_bytes.setter
-    def max_buffered_request_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_buffered_request_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_buffered_response_bytes(self) -> int:
@@ -2428,7 +2586,9 @@ class Http2Options:
         Maximum buffered response bytes before backpressure.
         """
     @max_buffered_response_bytes.setter
-    def max_buffered_response_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_buffered_response_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_request_body_size(self) -> int:
@@ -2436,7 +2596,9 @@ class Http2Options:
         Maximum accepted request body size in bytes.
         """
     @max_request_body_size.setter
-    def max_request_body_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_request_body_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_response_body_size(self) -> int:
@@ -2444,7 +2606,9 @@ class Http2Options:
         Maximum accepted response body size in bytes.
         """
     @max_response_body_size.setter
-    def max_response_body_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_response_body_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def tls(self) -> Http2TlsOptions:
@@ -2531,7 +2695,9 @@ class Http2ResponseWriter:
         """
 
     def send_headers(
-        self, status: typing.SupportsInt, headers: typing.Any | None = None
+        self,
+        status: typing.SupportsInt | typing.SupportsIndex,
+        headers: typing.Any | None = None,
     ) -> None:
         """
         Send the response status and headers.
@@ -2539,7 +2705,7 @@ class Http2ResponseWriter:
 
     def send_response(
         self,
-        status: typing.SupportsInt,
+        status: typing.SupportsInt | typing.SupportsIndex,
         headers: typing.Any | None = None,
         body: typing.Any = b"",
     ) -> None:
@@ -2585,7 +2751,7 @@ class Http2Server:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt = 0,
+        port: typing.SupportsInt | typing.SupportsIndex = 0,
         handler: typing.Any | None = None,
         options: Http2Options = ...,
     ) -> Http2Server:
@@ -2782,7 +2948,9 @@ class HttpResponse:
 
 class HttpResponseHead:
     def __init__(
-        self, status: typing.SupportsInt = 0, headers: typing.Any | None = None
+        self,
+        status: typing.SupportsInt | typing.SupportsIndex = 0,
+        headers: typing.Any | None = None,
     ) -> None:
         """
         Construct an HTTP response head (status and headers).
@@ -2802,7 +2970,9 @@ class HttpResponseHead:
         The HTTP status code.
         """
     @status.setter
-    def status(self, arg0: typing.SupportsInt) -> None: ...
+    def status(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class HttpSseClientWireStream(HttpSseWireStream):
     @staticmethod
@@ -2912,7 +3082,7 @@ class HttpSseServer:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt = 0,
+        port: typing.SupportsInt | typing.SupportsIndex = 0,
         on_connect: typing.Any | None = None,
         options: HttpSseOptions = ...,
     ) -> HttpSseServer:
@@ -3015,6 +3185,7 @@ class NodeFragment:
     A fragment of a logical node carrying a Chunk or NodeRef.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> NodeFragment:
@@ -3031,9 +3202,8 @@ class NodeFragment:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -3143,7 +3313,9 @@ class NodeFragment:
         Optional sequence number of the fragment.
         """
     @seq.setter
-    def seq(self, arg0: typing.SupportsInt | None) -> None: ...
+    def seq(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
+    ) -> None: ...
 
 class NodeMap:
     @staticmethod
@@ -3201,6 +3373,7 @@ class NodeRef:
     Reference to a byte range of another logical node.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> NodeRef:
@@ -3217,9 +3390,8 @@ class NodeRef:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -3299,7 +3471,9 @@ class NodeRef:
         Optional byte length of the referenced range.
         """
     @length.setter
-    def length(self, arg0: typing.SupportsInt | None) -> None: ...
+    def length(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
+    ) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -3307,13 +3481,16 @@ class NodeRef:
         Byte offset into the referenced node.
         """
     @offset.setter
-    def offset(self, arg0: typing.SupportsInt) -> None: ...
+    def offset(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class Port:
     """
     A named input or output port of an action.
     """
 
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_msgpack(data: typing.Any) -> Port:
@@ -3330,9 +3507,8 @@ class Port:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -3436,10 +3612,9 @@ class RedisChunkStore(ChunkStore):
         """
         Open one node's persistent stream with an injected Redis client.
 
-                Stores for the same id address the same Redis state. Pass a shared
-                `RedisClient` in production so many nodes reuse one connection pool;
-                call `initialize` when metadata must exist before the first write.
-
+        Stores for the same id address the same Redis state. Pass a shared
+        `RedisClient` in production so many nodes reuse one connection pool;
+        call `initialize` when metadata must exist before the first write.
         """
 
     async def clear_data(self, seq: int) -> NodeFragment:
@@ -3453,18 +3628,16 @@ class RedisChunkStore(ChunkStore):
         """
         Atomically seal writes with a terminal status and wake readers.
 
-                This closes the producer side but does not mark data final. Write a
-                final fragment first when consumers use whole-value semantics such as
-                `AsyncNode.consume`.
-
+        This closes the producer side but does not mark data final. Write a
+        final fragment first when consumers use whole-value semantics such as
+        `AsyncNode.consume`.
         """
 
     async def get(self, seq: int, deadline: Time | None = None) -> NodeFragment:
         """
         Wait for and return a fragment by sequence number.
 
-                The deadline bounds both Redis work and the wait for a future fragment.
-
+        The deadline bounds both Redis work and the wait for a future fragment.
         """
 
     async def get_by_arrival_order(
@@ -3478,9 +3651,8 @@ class RedisChunkStore(ChunkStore):
         """
         Return the logical final sequence, if one has been written.
 
-                The final marker is independent of Redis write closure. Closing a store
-                does not synthesize it, and a final fragment does not close the store.
-
+        The final marker is independent of Redis write closure. Closing a store
+        does not synthesize it, and a final fragment does not close the store.
         """
 
     async def get_metadata(self) -> RedisChunkStoreMetadata:
@@ -3497,9 +3669,8 @@ class RedisChunkStore(ChunkStore):
         """
         Ensure node metadata exists without writing a fragment.
 
-                This is useful during provisioning or health checks; ordinary writes
-                initialize the store lazily.
-
+        This is useful during provisioning or health checks; ordinary writes
+        initialize the store lazily.
         """
 
     async def next(
@@ -3508,12 +3679,11 @@ class RedisChunkStore(ChunkStore):
         """
         Read from the persistent shared logical-sequence cursor.
 
-                The cursor advances through sequence numbers and waits at gaps;
-                ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
-                ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
-                it adds buffering, offsets, and final-sequence handling above this
-                primitive.
-
+        The cursor advances through sequence numbers and waits at gaps;
+        ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
+        ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
+        it adds buffering, offsets, and final-sequence handling above this
+        primitive.
         """
 
     async def put(self, fragment: NodeFragment) -> int:
@@ -3663,6 +3833,10 @@ class RedisChunkStoreOptions:
     Key layout and inline-payload policy for RedisChunkStore.
     """
 
+    __annotations_cache__: typing.ClassVar[dict] = {
+        "key_prefix": str,
+        "inline_data_threshold": int,
+    }
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
@@ -3712,7 +3886,9 @@ class RedisChunkStoreOptions:
         Chunk data larger than this many bytes uses the blob hash.
         """
     @inline_data_threshold.setter
-    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
+    def inline_data_threshold(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def key_prefix(self) -> str:
@@ -3743,9 +3919,8 @@ class RedisClient:
         """
         Begin connecting with validated native options.
 
-                A plain mapping is validated into the same bound options object used
-                by C++, rather than creating a second Python configuration model.
-
+        A plain mapping is validated into the same bound options object used
+        by C++, rather than creating a second Python configuration model.
         """
 
     def close(self) -> None:
@@ -3798,6 +3973,16 @@ class RedisClientOptions:
     Connection and timeout policy for Redis.
     """
 
+    __annotations_cache__: typing.ClassVar[dict] = {
+        "host": str,
+        "port": int,
+        "username": str,
+        "password": str,
+        "database": int,
+        "client_name": str,
+        "connect_timeout": Duration,
+        "command_timeout": Duration,
+    }
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
@@ -3828,10 +4013,10 @@ class RedisClientOptions:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: typing.SupportsInt = 6379,
+        port: typing.SupportsInt | typing.SupportsIndex = 6379,
         username: str = "",
         password: str = "",
-        database: typing.SupportsInt = 0,
+        database: typing.SupportsInt | typing.SupportsIndex = 0,
         client_name: str = "a11",
         connect_timeout: typing.Any | None = None,
         command_timeout: typing.Any | None = None,
@@ -3883,7 +4068,9 @@ class RedisClientOptions:
         Logical Redis database selected after connection.
         """
     @database.setter
-    def database(self, arg0: typing.SupportsInt) -> None: ...
+    def database(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def host(self) -> str:
@@ -3907,7 +4094,7 @@ class RedisClientOptions:
         Redis TCP port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt) -> None: ...
+    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
     @property
     def username(self) -> str:
@@ -4010,11 +4197,15 @@ class RedisReplyType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __init__(
+        self, value: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __setstate__(
+        self, state: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4083,7 +4274,17 @@ class Session:
 
     def abort(self, status: typing.Any) -> None:
         """
-        Abort the session immediately with the given error status, cancelling streams and actions. Use this to tear down the session when an unrecoverable error occurs.
+        Abort the session immediately with the given error status, cancelling streams and actions. Use this when an unrecoverable error occurs.
+
+        Examples:
+            Propagate an authentication failure to the peer:
+
+            ```python
+            session.abort(Status(
+                code=StatusCode.PERMISSION_DENIED,
+                message=str(error),
+            ))
+            ```
         """
 
     def actions(self) -> list[tuple[str, Action]]:
@@ -4095,7 +4296,14 @@ class Session:
         self, stream: WireStream, mode: typing.Any = "start"
     ) -> typing.Any:
         """
-        Attach a wire stream to the session and begin pumping its messages asynchronously, returning an awaitable for the stream's lifetime. mode selects whether this side starts ('start') or accepts ('accept') the stream.
+        Attach a wire stream and begin pumping its messages, returning an awaitable for the stream's lifetime. `mode` selects whether this side starts (`"start"`) or accepts (`"accept"`) the stream.
+
+        Examples:
+            Attach the client transport before exchanging messages:
+
+            ```python
+            stream_lifetime = session.add_stream(websocket_stream)
+            ```
         """
 
     def await_all_actions(
@@ -4174,6 +4382,14 @@ class Session:
     def half_close(self) -> None:
         """
         Signal that this side will send no more messages, allowing the session to drain and finish once peers do the same. Remaining inbound messages continue to be processed asynchronously.
+
+        Examples:
+            Finish an exchange after sending the last message:
+
+            ```python
+            session.half_close()
+            await session.done.wait()
+            ```
         """
 
     def is_closed(self) -> bool:
@@ -4189,11 +4405,18 @@ class Session:
     def send(self, message: WireMessage, stream_id: str = "") -> None:
         """
         Enqueue a wire message for delivery on the named stream (or the default stream), raising on failure. Delivery happens asynchronously as the stream drains.
+
+        Examples:
+            Route a response through a particular attached transport:
+
+            ```python
+            session.send(response, stream_id=websocket_stream.get_id())
+            ```
         """
 
     def set_action_registry(self, registry: ActionRegistry | None) -> None:
         """
-        Replace the ActionRegistry used to resolve incoming action messages, raising on failure. Configure this before actions arrive so the session knows how to construct them.
+        Replace the ActionRegistry used to resolve incoming action messages, raising on failure. Active actions are rebound for later nested-name resolution; configure it before dispatch to avoid mixing registry versions.
         """
 
     def set_deadline(self, deadline: typing.Any | None = None) -> None:
@@ -4203,7 +4426,7 @@ class Session:
 
     def set_node_map(self, node_map: NodeMap) -> None:
         """
-        Replace the NodeMap backing this session's node state, raising on failure. Set this before streaming node fragments so dispatched fragments land in the map you expect.
+        Replace the NodeMap backing this session's node state, raising on failure. Active actions are rebound, but existing fragments are not migrated; set it before traffic to avoid splitting state between maps.
         """
 
     def streams(self) -> list[tuple[str, WireStream]]:
@@ -4235,10 +4458,9 @@ class Session:
         """
         An `asyncio.Event`-shaped view of full session completion.
 
-                `Session.is_closed` can become true as soon as shutdown starts. Await
-                this event (or ``wait_done``) when streams and actions must all have
-                released their runtime state.
-
+        `Session.is_closed` can become true as soon as shutdown starts. Await
+        this event (or ``wait_done``) when streams and actions must all have
+        released their runtime state.
         """
 
     @property
@@ -4256,6 +4478,7 @@ class Session:
     def node_map(self, arg1: NodeMap) -> None: ...
 
 class SessionOptions:
+    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -4315,7 +4538,7 @@ class SessionOptions:
         """
     @max_buffered_bytes_per_stream.setter
     def max_buffered_bytes_per_stream(
-        self, arg0: typing.SupportsInt
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
     ) -> None: ...
 
     @property
@@ -4324,7 +4547,9 @@ class SessionOptions:
         Maximum total bytes buffered across all streams.
         """
     @max_buffered_bytes_total.setter
-    def max_buffered_bytes_total(self, arg0: typing.SupportsInt) -> None: ...
+    def max_buffered_bytes_total(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_buffered_messages_per_stream(self) -> int:
@@ -4333,7 +4558,7 @@ class SessionOptions:
         """
     @max_buffered_messages_per_stream.setter
     def max_buffered_messages_per_stream(
-        self, arg0: typing.SupportsInt
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
     ) -> None: ...
 
     @property
@@ -4342,7 +4567,9 @@ class SessionOptions:
         Maximum number of messages buffered across all streams.
         """
     @max_buffered_messages_total.setter
-    def max_buffered_messages_total(self, arg0: typing.SupportsInt) -> None: ...
+    def max_buffered_messages_total(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_concurrent_nested_actions(self) -> int:
@@ -4351,7 +4578,7 @@ class SessionOptions:
         """
     @max_concurrent_nested_actions.setter
     def max_concurrent_nested_actions(
-        self, arg0: typing.SupportsInt
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
     ) -> None: ...
 
     @property
@@ -4360,7 +4587,9 @@ class SessionOptions:
         Maximum number of concurrently running root actions.
         """
     @max_concurrent_root_actions.setter
-    def max_concurrent_root_actions(self, arg0: typing.SupportsInt) -> None: ...
+    def max_concurrent_root_actions(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_single_message_size(self) -> int:
@@ -4368,7 +4597,9 @@ class SessionOptions:
         Maximum size in bytes of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_single_message_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def no_stream_timeout(self) -> typing.Any:
@@ -4395,20 +4626,35 @@ class SessionWithRecv(Session):
         """
         Await the next inbound message, or ``None`` when the session ends.
 
-                Use this when one receive loop handles every attached stream. Choose
-                `receive_with_stream_id` when replies or diagnostics must retain their
-                transport identity. The optional absolute deadline limits only this
-                wait; it does not change the session deadline.
+        Use this when one receive loop handles every attached stream. Choose
+        `receive_with_stream_id` when replies or diagnostics must retain their
+        transport identity. The optional absolute deadline limits only this
+        wait; it does not change the session deadline.
 
+        Examples:
+            Route messages from a session with one attached transport:
+
+            ```python
+            while message := await session.receive():
+                await route_message(message)
+            ```
         """
 
     async def receive_with_stream_id(self, deadline=None):
         """
         Await ``(message, stream_id)``, or ``None`` after completion.
 
-                This is the pull-style counterpart to ``OnSessionStreamMessage`` and
-                is useful when an agent multiplexes several transports in one loop.
+        This is the pull-style counterpart to ``OnSessionStreamMessage`` and
+        is useful when an agent multiplexes several transports in one loop.
 
+        Examples:
+            Preserve the source while routing gateway traffic:
+
+            ```python
+            while item := await session.receive_with_stream_id():
+                message, stream_id = item
+                await route_message(message, source=stream_id)
+            ```
         """
 
 class SignallingEndpoint(SignallingTransport):
@@ -4529,11 +4775,15 @@ class SignallingMessageType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __init__(
+        self, value: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __setstate__(
+        self, state: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4629,10 +4879,9 @@ class Status:
         """
         Convert an application exception to a transportable status.
 
-                Existing `StatusException` values retain their structured status;
-                registered casters handle framework-specific types, and unknown
-                exceptions become ``UNKNOWN``.
-
+        Existing `StatusException` values retain their structured status;
+        registered casters handle framework-specific types, and unknown
+        exceptions become ``UNKNOWN``.
         """
 
     @staticmethod
@@ -4692,7 +4941,7 @@ class Status:
 
     def __init__(
         self,
-        code: typing.SupportsInt = 0,
+        code: typing.SupportsInt | typing.SupportsIndex = 0,
         message: str = "OK",
         details: typing.Any = [],
     ) -> None:
@@ -4753,7 +5002,7 @@ class Status:
         The canonical status code.
         """
     @code.setter
-    def code(self, arg1: typing.SupportsInt) -> None: ...
+    def code(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
     @property
     def details(self) -> typing.Any:
@@ -4787,11 +5036,15 @@ class StreamMode:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __init__(
+        self, value: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __setstate__(
+        self, state: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4818,7 +5071,9 @@ class Time:
         """
 
     @staticmethod
-    def from_nanoseconds_since_epoch(nanoseconds: typing.SupportsInt) -> Time:
+    def from_nanoseconds_since_epoch(
+        nanoseconds: typing.SupportsInt | typing.SupportsIndex,
+    ) -> Time:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -4840,7 +5095,9 @@ class Time:
         Returns a hash of the time.
         """
 
-    def __init__(self, nanoseconds_since_epoch: typing.SupportsInt) -> None:
+    def __init__(
+        self, nanoseconds_since_epoch: typing.SupportsInt | typing.SupportsIndex
+    ) -> None:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -4890,11 +5147,15 @@ class TurnRelayType:
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __init__(
+        self, value: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __int__(self) -> int: ...
     def __ne__(self, other: typing.Any) -> bool: ...
     def __repr__(self) -> str: ...
-    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __setstate__(
+        self, state: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4941,7 +5202,7 @@ class TurnServer:
         TURN server port (default 3478).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt) -> None: ...
+    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
     @property
     def relay_type(self) -> TurnRelayType:
@@ -4984,19 +5245,19 @@ class WebRtcConfiguration:
         Size at which A11 fragments large logical messages.
         """
     @channel_split_size.setter
-    def channel_split_size(self, arg0: typing.SupportsInt) -> None: ...
+    def channel_split_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def desired_channels(self) -> int:
         """
-        Number of WebRTC data channels a dialing client opens per connection
-        and keeps replenished. Streaming with several channels lets slow
-        per-channel acknowledgement round-trips overlap; the stream still
-        behaves as one ordered, reliable channel. Defaults to 8. Has no effect
-        on the accepting side.
+        Number of WebRTC data channels a dialing client opens per connection and keeps replenished. Streaming with several channels lets slow per-channel acknowledgement round-trips overlap; the stream still behaves as one ordered, reliable channel. Defaults to 8. Has no effect on the accepting side.
         """
     @desired_channels.setter
-    def desired_channels(self, arg0: typing.SupportsInt) -> None: ...
+    def desired_channels(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def enable_ice_udp_mux(self) -> bool:
@@ -5009,12 +5270,12 @@ class WebRtcConfiguration:
     @property
     def max_channels(self) -> int:
         """
-        Maximum number of WebRTC data channels an accepting server admits per
-        peer connection. Surplus channels a client opens beyond this are
-        refused. Defaults to 8. Has no effect on the dialing side.
+        Maximum number of WebRTC data channels an accepting server admits per peer connection. Surplus channels a client opens beyond this are refused. Defaults to 8. Has no effect on the dialing side.
         """
     @max_channels.setter
-    def max_channels(self, arg0: typing.SupportsInt) -> None: ...
+    def max_channels(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_message_size(self) -> int | None:
@@ -5022,7 +5283,9 @@ class WebRtcConfiguration:
         Advertised local libdatachannel message size ceiling.
         """
     @max_message_size.setter
-    def max_message_size(self, arg0: typing.SupportsInt | None) -> None: ...
+    def max_message_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
+    ) -> None: ...
 
     @property
     def preferred_port_range(self) -> tuple[int, int] | None:
@@ -5031,7 +5294,14 @@ class WebRtcConfiguration:
         """
     @preferred_port_range.setter
     def preferred_port_range(
-        self, arg0: tuple[typing.SupportsInt, typing.SupportsInt] | None
+        self,
+        arg0: (
+            tuple[
+                typing.SupportsInt | typing.SupportsIndex,
+                typing.SupportsInt | typing.SupportsIndex,
+            ]
+            | None
+        ),
     ) -> None: ...
 
     @property
@@ -5231,7 +5501,7 @@ class WebSocketServerOptions:
         TCP port to listen on; 0 selects an ephemeral port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt) -> None: ...
+    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
     @property
     def stream_options(self) -> WireStreamOptions:
@@ -5291,7 +5561,9 @@ class WebSocketSignallingClientOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_message_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class WebSocketSignallingServer:
     @staticmethod
@@ -5374,7 +5646,9 @@ class WebSocketSignallingServerOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_message_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def path_prefix(self) -> str:
@@ -5390,7 +5664,7 @@ class WebSocketSignallingServerOptions:
         TCP port to listen on (0 selects an ephemeral port).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt) -> None: ...
+    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
 class WebSocketWireServer:
     @staticmethod
@@ -5442,6 +5716,7 @@ class WireMessage:
     """
 
     VERSION: typing.ClassVar[int] = 1
+    __annotations_cache__: typing.ClassVar[dict]
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
     def from_json(value: str) -> WireMessage:
@@ -5464,9 +5739,8 @@ class WireMessage:
         """
         Construct a native value from trusted field values.
 
-            Native records retain C++ invariants. This validates input rather than
-            creating an invalid object.
-
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
         """
 
     @classmethod
@@ -5574,7 +5848,17 @@ class WireStream:
 
     def abort(self, status: typing.Any) -> None:
         """
-        Terminate the stream immediately with an error status, discarding buffered messages and propagating the failure to the peer and to any pending receivers. Use this to fail fast when an agent hits an unrecoverable error.
+        Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
+
+        Examples:
+            End an exchange when its upstream disappears:
+
+            ```python
+            stream.abort(Status(
+                code=StatusCode.UNAVAILABLE,
+                message="upstream connection was lost",
+            ))
+            ```
         """
 
     def accept(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
@@ -5584,7 +5868,15 @@ class WireStream:
 
     def drain_outgoing_messages(self) -> typing.Any:
         """
-        Await until every queued outbound message has been handed to the transport. Call half_close() first, then await this before shutting down so buffered agent output is not dropped.
+        Await until every queued outbound message has been handed to the transport. Call `half_close` first so buffered output is not dropped.
+
+        Examples:
+            Use the transport delivery barrier during orderly shutdown:
+
+            ```python
+            stream.half_close()
+            await stream.drain_outgoing_messages()
+            ```
         """
 
     def get_id(self) -> str:
@@ -5609,12 +5901,27 @@ class WireStream:
 
     def half_close(self, trailers: typing.Any | None = None) -> None:
         """
-        Signal that this endpoint has finished sending, optionally attaching trailers (final metadata) for the peer. The stream stays open for inbound messages, so use this to end your half of a duplex agent exchange while still receiving the peer's remaining output.
+        Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
+
+        Examples:
+            End the local half and wait until queued messages reach the transport:
+
+            ```python
+            stream.half_close()
+            await stream.drain_outgoing_messages()
+            ```
         """
 
     def send(self, message: WireMessage) -> None:
         """
-        Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters this endpoint's ordered outbound queue and is drained by the transport task, which applies backpressure. Use it to push agent output onto the wire without awaiting the peer.
+        Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters the ordered outbound queue and the transport applies backpressure.
+
+        Examples:
+            Admit a request before closing the local sending side:
+
+            ```python
+            stream.send(request_message)
+            ```
         """
 
     def set_deadline(self, deadline: typing.Any | None = None) -> None:
@@ -5624,7 +5931,14 @@ class WireStream:
 
     def start(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
         """
-        Begin driving the stream as the initiating (client) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. The callbacks are awaited as data arrives, so this is the entry point for consuming a streaming agent conversation. Returns an awaitable that resolves when the startup handshake completes; use on_done as the terminal barrier.
+        Begin driving the stream as the initiating side, delivering inbound messages to `on_message` and completion to `on_done`. Callbacks are awaited as data arrives.
+
+        Examples:
+            Start a client transport with application callbacks:
+
+            ```python
+            await stream.start(on_message, on_transport_done)
+            ```
         """
 
     @property
@@ -5634,6 +5948,7 @@ class WireStream:
         """
 
 class WireStreamOptions:
+    __annotations_cache__: typing.ClassVar[dict]
     _a11_options_installed: typing.ClassVar[bool] = True
     @staticmethod
     def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
@@ -5687,7 +6002,9 @@ class WireStreamOptions:
         Maximum total bytes of buffered inbound messages before backpressure is applied.
         """
     @max_buffered_incoming_bytes.setter
-    def max_buffered_incoming_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_buffered_incoming_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_buffered_incoming_messages(self) -> int:
@@ -5696,7 +6013,7 @@ class WireStreamOptions:
         """
     @max_buffered_incoming_messages.setter
     def max_buffered_incoming_messages(
-        self, arg0: typing.SupportsInt
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
     ) -> None: ...
 
     @property
@@ -5705,7 +6022,9 @@ class WireStreamOptions:
         Maximum size, in bytes, of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
+    def max_single_message_size(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def message_timeout(self) -> typing.Any:
@@ -5853,7 +6172,9 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __delitem__(self, index: typing.SupportsInt) -> None:
+    def __delitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> None:
         """
         Delete the element at the given index.
         """
@@ -5869,7 +6190,9 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __getitem__(self, index: typing.SupportsInt) -> ActionMessage:
+    def __getitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> ActionMessage:
         """
         Return the element at the given index.
         """
@@ -5896,7 +6219,9 @@ class _ActionMessageVectorView:
 
     @typing.overload
     def __setitem__(
-        self, index: typing.SupportsInt, value: ActionMessage
+        self,
+        index: typing.SupportsInt | typing.SupportsIndex,
+        value: ActionMessage,
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -5937,12 +6262,18 @@ class _ActionMessageVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(self, index: typing.SupportsInt, value: ActionMessage) -> None:
+    def insert(
+        self,
+        index: typing.SupportsInt | typing.SupportsIndex,
+        value: ActionMessage,
+    ) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(self, index: typing.SupportsInt = -1) -> ActionMessage:
+    def pop(
+        self, index: typing.SupportsInt | typing.SupportsIndex = -1
+    ) -> ActionMessage:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6141,7 +6472,9 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __delitem__(self, index: typing.SupportsInt) -> None:
+    def __delitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> None:
         """
         Delete the element at the given index.
         """
@@ -6157,7 +6490,9 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __getitem__(self, index: typing.SupportsInt) -> NodeFragment:
+    def __getitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> NodeFragment:
         """
         Return the element at the given index.
         """
@@ -6184,7 +6519,9 @@ class _NodeFragmentVectorView:
 
     @typing.overload
     def __setitem__(
-        self, index: typing.SupportsInt, value: NodeFragment
+        self,
+        index: typing.SupportsInt | typing.SupportsIndex,
+        value: NodeFragment,
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -6225,12 +6562,18 @@ class _NodeFragmentVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(self, index: typing.SupportsInt, value: NodeFragment) -> None:
+    def insert(
+        self,
+        index: typing.SupportsInt | typing.SupportsIndex,
+        value: NodeFragment,
+    ) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(self, index: typing.SupportsInt = -1) -> NodeFragment:
+    def pop(
+        self, index: typing.SupportsInt | typing.SupportsIndex = -1
+    ) -> NodeFragment:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6262,7 +6605,9 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __delitem__(self, index: typing.SupportsInt) -> None:
+    def __delitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> None:
         """
         Delete the element at the given index.
         """
@@ -6278,7 +6623,9 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __getitem__(self, index: typing.SupportsInt) -> Port:
+    def __getitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex
+    ) -> Port:
         """
         Return the element at the given index.
         """
@@ -6304,7 +6651,9 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __setitem__(self, index: typing.SupportsInt, value: Port) -> None:
+    def __setitem__(
+        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
+    ) -> None:
         """
         Assign a value to the element at the given index.
         """
@@ -6344,12 +6693,16 @@ class _PortVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(self, index: typing.SupportsInt, value: Port) -> None:
+    def insert(
+        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
+    ) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(self, index: typing.SupportsInt = -1) -> Port:
+    def pop(
+        self, index: typing.SupportsInt | typing.SupportsIndex = -1
+    ) -> Port:
         """
         Remove and return the element at the given index (default last).
         """
@@ -6527,7 +6880,7 @@ def obs_configure(
     use_simple_processor: bool = False,
     otlp_endpoint: str = "",
     otlp_headers: collections.abc.Mapping[str, str] = {},
-    otlp_timeout_millis: typing.SupportsInt = 10000,
+    otlp_timeout_millis: typing.SupportsInt | typing.SupportsIndex = 10000,
     baggage_span_attributes: collections.abc.Sequence[str] = [],
 ) -> None:
     """
@@ -6566,10 +6919,18 @@ def set_default_redis_client(client: RedisClient) -> None:
     Replace the process-global Redis client.
     """
 
-def status_code_from_http(arg0: typing.SupportsInt) -> int: ...
-def status_code_from_websocket(arg0: typing.SupportsInt) -> int: ...
-def status_code_to_http(arg0: typing.SupportsInt) -> int: ...
-def status_code_to_websocket(arg0: typing.SupportsInt) -> int: ...
+def status_code_from_http(
+    arg0: typing.SupportsInt | typing.SupportsIndex,
+) -> int: ...
+def status_code_from_websocket(
+    arg0: typing.SupportsInt | typing.SupportsIndex,
+) -> int: ...
+def status_code_to_http(
+    arg0: typing.SupportsInt | typing.SupportsIndex,
+) -> int: ...
+def status_code_to_websocket(
+    arg0: typing.SupportsInt | typing.SupportsIndex,
+) -> int: ...
 def status_from_chunk(chunk: Chunk) -> typing.Any:
     """
     Decode an absl Status from a data chunk.

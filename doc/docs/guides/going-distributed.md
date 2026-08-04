@@ -101,14 +101,13 @@ while True:
     if not message:
         continue
 
-    confirmation = await outgoing.put(message)
-    await confirmation
+    await outgoing.put(message)
 ```
 
-The first `await` admits the value to the node's bounded writer queue and
-returns its confirmation. The second waits until Redis has stored it, applying
+The `await` admits the value to the node's bounded writer queue, applying
 backpressure instead of accumulating an unbounded list of unsent chat
-messages.
+messages. The returned store confirmation does not need to be awaited here:
+the node is drained when this producer finishes.
 
 ## 5. Finalize, drain, and close
 
@@ -117,8 +116,7 @@ through an error—runs this cleanup in a `finally` block:
 
 ```python
 async def finish(outgoing: a11.AsyncNode) -> None:
-    confirmation = await outgoing.put_null_final()
-    await confirmation
+    await outgoing.put_null_final()
     await outgoing.drain_and_close()
 ```
 
@@ -168,13 +166,11 @@ async def send(outgoing: a11.AsyncNode, sender: str) -> None:
         if not message:
             continue
 
-        confirmation = await outgoing.put(message)
-        await confirmation
+        await outgoing.put(message)
 
 
 async def finish(outgoing: a11.AsyncNode) -> None:
-    confirmation = await outgoing.put_null_final()
-    await confirmation
+    await outgoing.put_null_final()
     await outgoing.drain_and_close()
 
 

@@ -75,6 +75,15 @@ class _ChunkStoreReaderProtocol:
         Raises:
             StatusException: If the timeout expires, the store closes with an
                 error, or the reader encounters invalid stream state.
+
+        Examples:
+            Resume a replay after an application checkpoint:
+
+            ```python
+            reader = ChunkStoreReader(store, {"offset": checkpoint + 1})
+            while fragment := await reader.next():
+                await replay(fragment)
+            ```
         """
         if not isinstance(timeout, timing.Duration):
             raise Status(

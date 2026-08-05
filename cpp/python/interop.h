@@ -229,6 +229,37 @@ a11::Future<T> CallPythonAsync(const std::shared_ptr<PythonLoop>& loop,
   }
 }
 
+/**
+ * Owns an asynchronous Python callback and the asyncio loop it was created on.
+ * Native fibers and transport threads may call it safely; invocation and
+ * awaiting are marshalled to the captured loop and surfaced as an A11 Task.
+ */
+class AsyncPythonCallback {
+ public:
+  static absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> Create(
+      const py::object& callable);
+
+  AsyncPythonCallback(const AsyncPythonCallback&) = delete;
+  AsyncPythonCallback& operator=(const AsyncPythonCallback&) = delete;
+  ~AsyncPythonCallback();
+
+  template <typename... Args>
+  a11::Task Call(Args&&... args) const {
+    py::gil_scoped_acquire acquire;
+    py::function function = py::reinterpret_borrow<py::function>(callable_);
+    return CallPythonAsync<a11::Unit>(loop_, function,
+                                      std::forward<Args>(args)...);
+  }
+
+ private:
+  AsyncPythonCallback(PyObject* absl_nonnull callable,
+                      std::shared_ptr<PythonLoop> loop)
+      : callable_(callable), loop_(std::move(loop)) {}
+
+  PyObject* absl_nullable callable_ = nullptr;
+  std::shared_ptr<PythonLoop> loop_;
+};
+
 template <typename T>
 absl::StatusOr<T> DataFromPython(const py::handle& value) {
   try {

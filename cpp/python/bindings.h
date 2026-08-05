@@ -12,6 +12,9 @@ void BindData(pybind11::module_& module);
 #ifdef A11_BUILD_REDIS
 void BindRedis(pybind11::module_& module);
 #endif
+#ifdef A11_BUILD_AUDIO
+void BindAudio(pybind11::module_& module);
+#endif
 void BindStores(pybind11::module_& module);
 void BindNet(pybind11::module_& module);
 void BindHttp(pybind11::module_& module);

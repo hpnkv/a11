@@ -124,6 +124,32 @@ void PythonLoop::Cancellation::Cancel() const {
   }
 }
 
+absl::StatusOr<std::shared_ptr<AsyncPythonCallback>>
+AsyncPythonCallback::Create(const py::object& callable) {
+  if (!PyCallable_Check(callable.ptr())) {
+    return absl::InvalidArgumentError("callback must be callable");
+  }
+  absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
+  if (!loop.ok()) {
+    return loop.status();
+  }
+
+  struct MakeSharedEnabler final : AsyncPythonCallback {
+    MakeSharedEnabler(PyObject* callable, std::shared_ptr<PythonLoop> loop)
+        : AsyncPythonCallback(callable, std::move(loop)) {}
+  };
+
+  return std::make_shared<MakeSharedEnabler>(callable.inc_ref().ptr(),
+                                             std::move(*loop));
+}
+
+AsyncPythonCallback::~AsyncPythonCallback() {
+  GilForDestructor gil;
+  if (gil.acquired()) {
+    Py_CLEAR(callable_);
+  }
+}
+
 absl::Status StatusFromPython(const py::handle& value) {
   try {
     if (py::isinstance<NativeStatus>(value))

@@ -46,6 +46,18 @@ def test_command_defines_the_no_shell_tools_flag():
     assert parser.parse_args(["--no-shell-tools"]).no_shell_tools is True
 
 
+def test_command_defines_voice_flags():
+    parser = argparse.ArgumentParser()
+    CHAT_COMMAND.configure(parser)
+
+    defaults = parser.parse_args([])
+    assert defaults.no_voice is False
+    assert defaults.voice_model == "tiny.en"
+    disabled = parser.parse_args(["--no-voice", "--voice-model", "base"])
+    assert disabled.no_voice is True
+    assert disabled.voice_model == "base"
+
+
 def test_repeated_header_flag_collects_key_value_pairs():
     parser = argparse.ArgumentParser()
     CHAT_COMMAND.configure(parser)
@@ -71,7 +83,14 @@ def test_provider_and_model_flags_override_positionals():
     CHAT_COMMAND.configure(parser)
 
     args = parser.parse_args(
-        ["claude", "old-model", "--provider", "ollama", "--model", "new-model"]
+        [
+            "claude",
+            "old-model",
+            "--provider",
+            "ollama",
+            "--model",
+            "new-model",
+        ]
     )
     assert (args.provider or args.backend) == "ollama"
     assert (args.model_flag or args.model) == "new-model"
@@ -85,3 +104,9 @@ def test_extra_headers_are_stored_on_the_ui():
         extra_headers=[("x-a11-llm-base-url", "http://host:11434")],
     )
     assert ui._extra_headers == [("x-a11-llm-base-url", "http://host:11434")]
+
+
+def test_voice_can_be_disabled_without_initialising_it():
+    ui = ChatUI(_provider(), "some-model", voice=False)
+    assert ui._voice_enabled is False
+    assert ui._recognizer is None

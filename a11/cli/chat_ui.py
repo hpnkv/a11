@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import a11
 from prompt_toolkit import PromptSession
@@ -39,6 +41,9 @@ from a11.sdk.interact_with_llm import (
 )
 from a11.sdk.llm import Interaction, LlmHeaders
 from a11.status import Status, StatusCode, StatusException
+
+if TYPE_CHECKING:
+    from a11.sdk.audio import SpeechRecognizer
 
 _HELP = (
     "Commands:\n"
@@ -60,6 +65,8 @@ class ChatUI:
         *,
         verbose: bool = False,
         shell_tools: bool = True,
+        voice: bool = True,
+        voice_model: str = "tiny.en",
         extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
         self._provider = provider
@@ -75,6 +82,10 @@ class ChatUI:
         )
         self._traceparent: str | None = None
         self._chat_span: observability.Span | None = None
+        self._voice_enabled = voice
+        self._voice_model = voice_model
+        self._voice_accepting = False
+        self._recognizer: SpeechRecognizer | None = None
 
         # Shell tools: a registry of the four shell Actions, their tool
         # definitions, the pattern that permits them, and the system prompt
@@ -114,6 +125,8 @@ class ChatUI:
         self._print_status()
         if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
+        if self._voice_enabled:
+            await self._prepare_voice()
 
         self._chat_span.set_input(
             f"Interactive chat started at {datetime.datetime.now().isoformat()}"
@@ -122,12 +135,31 @@ class ChatUI:
         try:
             while True:
                 try:
-                    with patch_stdout():
-                        text = await self._session.prompt_async(
-                            HTML(
-                                f"<ansicyan>{self._provider.name}</ansicyan> › "
-                            )
+                    voice_start: asyncio.Task[None] | None = None
+
+                    def start_voice() -> None:
+                        nonlocal voice_start
+                        voice_start = asyncio.create_task(
+                            self._start_voice_input()
                         )
+
+                    try:
+                        with patch_stdout():
+                            text = await self._session.prompt_async(
+                                HTML(
+                                    f"<ansicyan>{self._provider.name}"
+                                    "</ansicyan> › "
+                                ),
+                                # PromptSession resets its edit buffer at the
+                                # start of prompt_async(). Starting capture as
+                                # a pre-run hook guarantees ASR pieces land in
+                                # the active prompt rather than the old buffer.
+                                pre_run=start_voice,
+                            )
+                    finally:
+                        if voice_start is not None:
+                            await voice_start
+                        await self._stop_voice_input()
                 except (EOFError, KeyboardInterrupt):
                     break
 
@@ -315,6 +347,96 @@ class ChatUI:
 
     # -- small helpers -----------------------------------------------------
 
+    async def _prepare_voice(self) -> None:
+        """Download/load the selected model without blocking asyncio."""
+        try:
+            from a11.cli.voice import ensure_vad_model, ensure_voice_model
+            from a11.sdk.audio import (
+                SpeechRecognizer,
+                SpeechRecognizerOptions,
+            )
+
+            model_path: Path = await asyncio.to_thread(
+                ensure_voice_model, self._voice_model, self._console
+            )
+            # Silero VAD gates the decoder on genuine speech, so brief noise
+            # while the user gathers their thoughts does not spawn transcription.
+            vad_model_path: Path = await asyncio.to_thread(
+                ensure_vad_model, self._console
+            )
+            language = "en" if self._voice_model.endswith(".en") else "auto"
+            options = SpeechRecognizerOptions(
+                language=language, vad_model_path=str(vad_model_path)
+            )
+            self._recognizer = await asyncio.to_thread(
+                SpeechRecognizer, model_path, None, options
+            )
+            self._console.print(
+                f"voice input: [bold]{self._voice_model}[/] · microphone on "
+                "during your turns",
+                style="dim",
+            )
+        except StatusException as exc:
+            self._disable_voice(exc.status.message)
+        except Exception as exc:  # pragma: no cover - network/device specific
+            self._disable_voice(str(exc))
+
+    async def _start_voice_input(self) -> None:
+        """Start ASR for one prompt and splice pieces into its edit buffer."""
+        if self._recognizer is None:
+            return
+
+        self._voice_accepting = True
+
+        async def on_transcription(piece: str | None) -> None:
+            if piece is None or not self._voice_accepting:
+                return
+            piece = piece.strip()
+            if not piece:
+                return
+            buffer = self._session.default_buffer
+            document = buffer.document
+            before = document.text_before_cursor
+            after = document.text_after_cursor
+            leading = "" if not before or before[-1].isspace() else " "
+            trailing = "" if not after or after[0].isspace() else " "
+            buffer.insert_text(leading + piece + trailing)
+            self._session.app.invalidate()
+
+        async def on_done() -> None:
+            return None
+
+        try:
+            await self._recognizer.start(on_transcription, on_done)
+        except StatusException as exc:
+            self._voice_accepting = False
+            self._disable_voice(exc.status.message)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._voice_accepting = False
+            self._disable_voice(str(exc))
+
+    async def _stop_voice_input(self) -> None:
+        """Stop capture before the LLM turn; late callbacks are ignored."""
+        self._voice_accepting = False
+        if self._recognizer is None or not self._recognizer.running:
+            return
+        try:
+            await self._recognizer.stop()
+        except StatusException as exc:
+            self._disable_voice(exc.status.message)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._disable_voice(str(exc))
+
+    def _disable_voice(self, reason: str) -> None:
+        self._voice_enabled = False
+        self._voice_accepting = False
+        self._recognizer = None
+        self._console.print(
+            f"voice input unavailable: {reason} (typed input remains active)",
+            style="yellow",
+            markup=False,
+        )
+
     @staticmethod
     def _apply_span_error(span: observability.Span, status: Status) -> None:
         """Mirror an A11 Status onto a span: error status + error.type, plus
@@ -349,6 +471,8 @@ async def run_chat(
     *,
     verbose: bool = False,
     shell_tools: bool = True,
+    voice: bool = True,
+    voice_model: str = "tiny.en",
     extra_headers: list[tuple[str, str]] | None = None,
 ) -> int:
     """Run the interactive chat loop against ``provider_name``.
@@ -371,5 +495,7 @@ async def run_chat(
         model or provider.default_model,
         verbose=verbose,
         shell_tools=shell_tools,
+        voice=voice,
+        voice_model=voice_model,
         extra_headers=extra_headers,
     ).run()

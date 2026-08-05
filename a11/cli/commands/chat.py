@@ -13,6 +13,7 @@ import argparse
 
 from a11.cli.app import Command
 from a11.cli.backends import DEFAULT_PROVIDER, PROVIDERS
+from a11.cli.voice import DEFAULT_VOICE_MODEL, VOICE_MODELS
 
 
 def _configure(parser: argparse.ArgumentParser) -> None:
@@ -69,6 +70,20 @@ def _configure(parser: argparse.ArgumentParser) -> None:
             " model run commands in your environment."
         ),
     )
+    parser.add_argument(
+        "--no-voice",
+        action="store_true",
+        help="Disable local speech recognition and model downloads.",
+    )
+    parser.add_argument(
+        "--voice-model",
+        choices=tuple(VOICE_MODELS),
+        default=DEFAULT_VOICE_MODEL,
+        help=(
+            "Local whisper.cpp model used for voice input "
+            f"(default: {DEFAULT_VOICE_MODEL})."
+        ),
+    )
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -84,7 +99,9 @@ async def _run(args: argparse.Namespace) -> int:
         model,
         verbose=args.verbose,
         shell_tools=not args.no_shell_tools,
-        extra_headers=[(key, value) for key, value in (args.headers or [])],
+        voice=not args.no_voice,
+        voice_model=args.voice_model,
+        extra_headers=[(key, value) for key, value in args.headers or []],
     )
 
 

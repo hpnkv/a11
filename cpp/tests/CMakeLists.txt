@@ -36,3 +36,15 @@ if (A11_BUILD_REDIS)
                            GTest::gtest_main)
   add_test(NAME a11_redis_test COMMAND a11_redis_test)
 endif ()
+
+if (A11_BUILD_AUDIO)
+  add_executable(a11_audio_test
+    audio_buffer_test.cc
+    audio_input_test.cc
+    audio_processing_test.cc
+    sample_ring_test.cc
+    speech_recognizer_test.cc)
+  target_link_libraries(
+    a11_audio_test PRIVATE a11::audio a11::concurrency GTest::gtest_main)
+  add_test(NAME a11_audio_test COMMAND a11_audio_test)
+endif ()

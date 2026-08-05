@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import inspect
 import re
 import tempfile
@@ -17,6 +18,12 @@ from pybind11_stubgen import main as stubgen_main
 
 ROOT = Path(__file__).resolve().parents[1]
 STUB = ROOT / "a11" / "_native.pyi"
+
+
+def _load_optional_public_protocols() -> None:
+    """Attach facades that are not imported by the root ``a11`` package."""
+    if hasattr(native, "AudioInput"):
+        importlib.import_module("a11.sdk.audio.client")
 
 
 def _python_protocol_methods() -> dict[str, dict[str, bool]]:
@@ -189,6 +196,13 @@ def _normalise_annotations(stub: str) -> str:
         "    async def wait(self) -> bool:\n"
         "        ...\n"
     )
+    if "OnTranscription" in stub:
+        definitions += (
+            "OnTranscription = collections.abc.Callable["
+            "[str | None], collections.abc.Awaitable[None]]\n"
+            "OnRecognitionDone = collections.abc.Callable["
+            "[], collections.abc.Awaitable[None]]\n"
+        )
     marker = "import typing\n"
     if marker not in stub:
         raise RuntimeError("stubgen output did not import typing")
@@ -201,6 +215,8 @@ def _normalise_annotations(stub: str) -> str:
         stub = stub.replace(
             "import fastapi\n", "import fastapi\nimport httpx\n"
         )
+    if "os.PathLike" in stub:
+        stub = stub.replace("import typing\n", "import typing\nimport os\n", 1)
 
     unresolved_type = re.search(r"(?:: \.\.\.(?:\s*=)?|-> \.\.\.)", stub)
     if unresolved_type is not None:
@@ -241,6 +257,7 @@ def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
 
 
 def _generate(output_dir: Path) -> Path:
+    _load_optional_public_protocols()
     protocol_methods = _python_protocol_methods()
     _expose_bound_classes_in_native_module()
     stubgen_main(

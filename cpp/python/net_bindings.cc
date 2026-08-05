@@ -129,53 +129,6 @@ auto ValueWithoutGil(Operation&& operation) {
   return ValueOrThrow(std::move(result));
 }
 
-class AsyncPythonCallback {
- public:
-  static absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> Create(
-      const py::object& callable) {
-    if (!PyCallable_Check(callable.ptr())) {
-      return absl::InvalidArgumentError("callback must be callable");
-    }
-    absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
-    if (!loop.ok())
-      return loop.status();
-
-    struct MakeSharedEnabler final : AsyncPythonCallback {
-      MakeSharedEnabler(PyObject* callable, std::shared_ptr<PythonLoop> loop)
-          : AsyncPythonCallback(callable, std::move(loop)) {}
-    };
-
-    return std::make_shared<MakeSharedEnabler>(callable.inc_ref().ptr(),
-                                               std::move(*loop));
-  }
-
-  AsyncPythonCallback(const AsyncPythonCallback&) = delete;
-  AsyncPythonCallback& operator=(const AsyncPythonCallback&) = delete;
-
-  ~AsyncPythonCallback() {
-    if (Py_IsInitialized() == 0)
-      return;
-    PyGILState_STATE state = PyGILState_Ensure();
-    Py_CLEAR(callable_);
-    PyGILState_Release(state);
-  }
-
-  template <typename... Args>
-  a11::Task Call(Args&&... args) const {
-    py::gil_scoped_acquire acquire;
-    py::function function = py::reinterpret_borrow<py::function>(callable_);
-    return CallPythonAsync<a11::Unit>(loop_, function,
-                                      std::forward<Args>(args)...);
-  }
-
- private:
-  AsyncPythonCallback(PyObject* callable, std::shared_ptr<PythonLoop> loop)
-      : callable_(callable), loop_(std::move(loop)) {}
-
-  PyObject* callable_ = nullptr;
-  std::shared_ptr<PythonLoop> loop_;
-};
-
 net::OnMessage MakeOnMessage(
     const std::shared_ptr<AsyncPythonCallback>& callback) {
   return [callback](std::optional<data::WireMessage> message) {

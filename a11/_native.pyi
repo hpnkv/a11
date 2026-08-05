@@ -11,6 +11,7 @@ import httpx
 import collections.abc
 import msgpack._cmsgpack
 import typing
+import os
 
 T = typing.TypeVar("T")
 
@@ -18,6 +19,12 @@ class _DoneEvent(typing.Protocol):
     def is_set(self) -> bool: ...
     async def wait(self) -> bool: ...
 
+OnTranscription = collections.abc.Callable[
+    [str | None], collections.abc.Awaitable[None]
+]
+OnRecognitionDone = collections.abc.Callable[
+    [], collections.abc.Awaitable[None]
+]
 __all__: list[str] = [
     "ACCEPT",
     "ACTION_DISPATCH_STATUS_OUTPUT",
@@ -32,6 +39,11 @@ __all__: list[str] = [
     "ActionSchema",
     "ActionSettings",
     "AsyncNode",
+    "AudioBuffer",
+    "AudioDeviceInfo",
+    "AudioInput",
+    "AudioInputOptions",
+    "AudioSubscription",
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
     "CANDIDATE",
@@ -102,6 +114,8 @@ __all__: list[str] = [
     "SignallingMessageType",
     "SignallingService",
     "SignallingTransport",
+    "SpeechRecognizer",
+    "SpeechRecognizerOptions",
     "Status",
     "StreamMode",
     "TCP",
@@ -129,11 +143,14 @@ __all__: list[str] = [
     "WireStream",
     "WireStreamOptions",
     "WireStreamWithRecv",
+    "audio_device_info",
     "create_in_process_wire_stream_pair",
+    "default_audio_input_device",
     "default_redis_client",
     "get_http_header",
     "is_half_close_message",
     "is_status_chunk",
+    "list_audio_devices",
     "make_half_close_message",
     "normalize_session_headers",
     "obs_clear_recorded_spans",
@@ -1558,6 +1575,318 @@ class AsyncNode:
         """
     @writer_options.setter
     def writer_options(self, arg1: ChunkStoreWriterOptions) -> None: ...
+
+class AudioBuffer:
+    """
+    A captured block of samples stored channel-major (planar). Use `memoryview(buffer)` for a zero-copy (channels x frames) float view, or `channel(i)` for one channel.
+    """
+
+    def __buffer__(self, flags):
+        """
+        Return a buffer object that exposes the underlying memory of the object.
+        """
+
+    def __release_buffer__(self, buffer):
+        """
+        Release the buffer object that exposes the underlying memory of the object.
+        """
+
+    def channel(self, index: int) -> memoryview:
+        """
+        Return a zero-copy read-only view of one channel's samples.
+        """
+
+    @property
+    def end_time(self) -> typing.Any:
+        """
+        Best-effort instant the final sample in this buffer was taken.
+        """
+
+    @property
+    def num_channels(self) -> int:
+        """
+        Number of channels in this buffer.
+        """
+
+    @property
+    def num_frames(self) -> int:
+        """
+        Number of samples per channel in this buffer.
+        """
+
+    @property
+    def sample_rate(self) -> float:
+        """
+        Sample rate, in hertz, the samples were captured at.
+        """
+
+    @property
+    def samples(self) -> memoryview:
+        """
+        A zero-copy read-only ``(channels, frames)`` float view.
+        """
+
+class AudioDeviceInfo:
+    """
+    Static metadata describing one host audio device.
+    """
+
+    def __repr__(self) -> str: ...
+    @property
+    def default_high_input_latency(self) -> typing.Any:
+        """
+        Suggested latency for robust, buffered input use.
+        """
+
+    @property
+    def default_low_input_latency(self) -> typing.Any:
+        """
+        Suggested latency for interactive input use.
+        """
+
+    @property
+    def default_sample_rate(self) -> float:
+        """
+        Default sample rate in hertz.
+        """
+
+    @property
+    def host_api(self) -> str:
+        """
+        Host API backing the device (e.g. Core Audio, ALSA).
+        """
+
+    @property
+    def index(self) -> int:
+        """
+        PortAudio device index, stable within a process run.
+        """
+
+    @property
+    def is_default_input(self) -> bool:
+        """
+        Whether this is the host default input device.
+        """
+
+    @property
+    def is_default_output(self) -> bool:
+        """
+        Whether this is the host default output device.
+        """
+
+    @property
+    def max_input_channels(self) -> int:
+        """
+        Maximum capture channels the device offers.
+        """
+
+    @property
+    def max_output_channels(self) -> int:
+        """
+        Maximum playback channels the device offers.
+        """
+
+    @property
+    def name(self) -> str:
+        """
+        Human-readable name.
+        """
+
+class AudioInput:
+    """
+    A capturable input device that samples continuously while at least one subscription is alive.
+    """
+
+    @staticmethod
+    def open(
+        options: (
+            AudioInputOptions | collections.abc.Mapping[str, typing.Any] | None
+        ) = None,
+    ) -> AudioInput:
+        """
+        Resolve the device and validate options without starting capture.
+        """
+
+    def __init__(
+        self,
+        options: (
+            AudioInputOptions | collections.abc.Mapping[str, typing.Any] | None
+        ) = None,
+    ) -> None:
+        """
+        Resolve the device and validate options without starting capture.
+
+        A plain mapping is validated into the same bound options object used by
+        C++, rather than creating a second Python configuration model.
+        """
+
+    def subscribe(self, buffer_size: int) -> AudioSubscription:
+        """
+        Begin receiving buffers of ``buffer_size`` frames per channel.
+
+        Capture starts when the first subscription is created and stops when
+        the last one is closed.
+        """
+
+    @property
+    def capturing(self) -> bool:
+        """
+        Whether a capture stream is currently open.
+        """
+
+    @property
+    def channels(self) -> int:
+        """
+        Number of channels every subscription receives.
+        """
+
+    @property
+    def device(self) -> AudioDeviceInfo:
+        """
+        The captured device's metadata.
+        """
+
+    @property
+    def device_index(self) -> int:
+        """
+        The captured device's index.
+        """
+
+    @property
+    def name(self) -> str:
+        """
+        The captured device's name.
+        """
+
+    @property
+    def sample_rate(self) -> float:
+        """
+        Sample rate, in hertz, capture runs at.
+        """
+
+class AudioInputOptions:
+    """
+    How an AudioInput opens its capture stream.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        device_index: typing.SupportsInt = -1,
+        sample_rate: typing.SupportsFloat = 0.0,
+        channels: typing.SupportsInt = 0,
+        block_frames: typing.SupportsInt = 256,
+        ring_blocks: typing.SupportsInt = 32,
+    ) -> None:
+        """
+        Construct validated audio input options.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+
+    @property
+    def block_frames(self) -> int:
+        """
+        Frames per PortAudio callback block.
+        """
+    @block_frames.setter
+    def block_frames(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def channels(self) -> int:
+        """
+        Requested channel count, or 0 for the device's count.
+        """
+    @channels.setter
+    def channels(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def device_index(self) -> int:
+        """
+        Device index to capture from, or negative for default.
+        """
+    @device_index.setter
+    def device_index(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def ring_blocks(self) -> int:
+        """
+        Depth of the internal callback-to-fiber ring, in blocks.
+        """
+    @ring_blocks.setter
+    def ring_blocks(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def sample_rate(self) -> float:
+        """
+        Requested sample rate in hertz, or 0 for the default.
+        """
+    @sample_rate.setter
+    def sample_rate(self, arg0: typing.SupportsFloat) -> None: ...
+
+class AudioSubscription:
+    """
+    A live subscription delivering fixed-size buffers from an AudioInput.
+    """
+
+    async def __aenter__(self) -> typing.Self: ...
+    async def __aexit__(self, exc_type, exc, traceback) -> None: ...
+    def __aiter__(self) -> typing.Self: ...
+    async def __anext__(self) -> AudioBuffer: ...
+    def close(self) -> None:
+        """
+        Stop delivering; stops capture if this was the last subscription.
+        """
+
+    async def read(self) -> AudioBuffer:
+        """
+        Await the next captured buffer for this subscription.
+        """
+
+    @property
+    def buffer_size(self) -> int:
+        """
+        Frames per channel in every delivered buffer.
+        """
+
+    @property
+    def channels(self) -> int:
+        """
+        Number of channels in every delivered buffer.
+        """
+
+    @property
+    def dropped(self) -> int:
+        """
+        Buffers dropped because this subscription fell behind.
+        """
+
+    @property
+    def sample_rate(self) -> float:
+        """
+        Sample rate, in hertz, of every delivered buffer.
+        """
 
 class ChannelFramingOptions:
     def __init__(self) -> None:
@@ -4822,6 +5151,272 @@ class SignallingTransport:
         Register an async callback invoked for each inbound message.
         """
 
+class SpeechRecognizer:
+    """
+    Restartable local automatic speech recognizer backed by whisper.cpp. It invokes inference only for speech endpointed by its adaptive VAD.
+    """
+
+    @staticmethod
+    def create(
+        model_path: str | os.PathLike[str],
+        source: AudioInput | AudioSubscription | None = None,
+        options: (
+            SpeechRecognizerOptions
+            | collections.abc.Mapping[str, typing.Any]
+            | None
+        ) = None,
+    ) -> SpeechRecognizer:
+        """
+        Load a model and construct a recognizer.
+        """
+
+    def __init__(
+        self,
+        model_path: str | os.PathLike[str],
+        source: AudioInput | AudioSubscription | None = None,
+        options: (
+            SpeechRecognizerOptions
+            | collections.abc.Mapping[str, typing.Any]
+            | None
+        ) = None,
+    ) -> None:
+        """
+        Load a whisper.cpp GGML/GGUF model for local recognition.
+
+        Pass an :class:`AudioInput` to create a fresh subscription per run, an
+        :class:`AudioSubscription` to consume that subscription once, or
+        ``None`` to use the system default input. Loading happens once, so the
+        same recognizer can be paused while an agent responds and restarted for
+        the next user turn without reloading model weights.
+        """
+
+    def get_status(self) -> typing.Any:
+        """
+        Return the current or final recognition status.
+        """
+
+    async def start(
+        self, on_transcription: OnTranscription, on_done: OnRecognitionDone
+    ) -> None:
+        """
+        Start capture and deliver awaited transcription callbacks.
+
+        ``on_transcription`` receives non-empty pieces as speech endpoints are
+        decoded, then exactly one ``None``. ``on_done`` follows that terminal
+        marker. Silence does not invoke whisper or produce a piece.
+        """
+
+    async def stop(self) -> None:
+        """
+        Stop capture and await the terminal piece and done callbacks.
+        """
+
+    @property
+    def model_path(self) -> str:
+        """
+        Path of the loaded whisper model.
+        """
+
+    @property
+    def options(self) -> SpeechRecognizerOptions:
+        """
+        The validated native options used by this recognizer.
+        """
+
+    @property
+    def running(self) -> bool:
+        """
+        Whether a recognition run is active.
+        """
+
+class SpeechRecognizerOptions:
+    """
+    Configuration for whisper.cpp transcription and adaptive VAD.
+    """
+
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        language: str = "auto",
+        translate: bool = False,
+        inference_threads: typing.SupportsInt = 0,
+        use_gpu: bool = True,
+        flash_attention: bool = True,
+        use_context: bool = False,
+        initial_prompt: str = "",
+        subscription_buffer_millis: typing.SupportsInt = 100,
+        vad_threshold: typing.SupportsFloat = 0.009999999776482582,
+        vad_noise_ratio: typing.SupportsFloat = 2.5,
+        vad_window_millis: typing.SupportsInt = 20,
+        min_speech_millis: typing.SupportsInt = 250,
+        min_silence_millis: typing.SupportsInt = 600,
+        speech_pad_millis: typing.SupportsInt = 160,
+        max_speech_seconds: typing.SupportsInt = 30,
+        vad_model_path: str = "",
+        silero_threshold: typing.SupportsFloat = 0.5,
+    ) -> None:
+        """
+        Construct validated speech recognition options.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+
+    @property
+    def flash_attention(self) -> bool:
+        """
+        Use flash attention when supported.
+        """
+    @flash_attention.setter
+    def flash_attention(self, arg0: bool) -> None: ...
+
+    @property
+    def inference_threads(self) -> int:
+        """
+        Decoder threads, or zero for the bounded default.
+        """
+    @inference_threads.setter
+    def inference_threads(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def initial_prompt(self) -> str:
+        """
+        Optional initial decoder prompt.
+        """
+    @initial_prompt.setter
+    def initial_prompt(self, arg0: str) -> None: ...
+
+    @property
+    def language(self) -> str:
+        """
+        Whisper language code, or 'auto'.
+        """
+    @language.setter
+    def language(self, arg0: str) -> None: ...
+
+    @property
+    def max_speech_seconds(self) -> int:
+        """
+        Maximum utterance duration before splitting.
+        """
+    @max_speech_seconds.setter
+    def max_speech_seconds(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def min_silence_millis(self) -> int:
+        """
+        Silence needed to endpoint speech.
+        """
+    @min_silence_millis.setter
+    def min_silence_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def min_speech_millis(self) -> int:
+        """
+        Minimum voiced duration accepted.
+        """
+    @min_speech_millis.setter
+    def min_speech_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def silero_threshold(self) -> float:
+        """
+        Silero speech-probability threshold in (0, 1].
+        """
+    @silero_threshold.setter
+    def silero_threshold(self, arg0: typing.SupportsFloat) -> None: ...
+
+    @property
+    def speech_pad_millis(self) -> int:
+        """
+        Audio retained around an utterance.
+        """
+    @speech_pad_millis.setter
+    def speech_pad_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def subscription_buffer_millis(self) -> int:
+        """
+        Duration of internally-created capture buffers.
+        """
+    @subscription_buffer_millis.setter
+    def subscription_buffer_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def translate(self) -> bool:
+        """
+        Translate speech to English.
+        """
+    @translate.setter
+    def translate(self, arg0: bool) -> None: ...
+
+    @property
+    def use_context(self) -> bool:
+        """
+        Carry decoder context between utterances.
+        """
+    @use_context.setter
+    def use_context(self, arg0: bool) -> None: ...
+
+    @property
+    def use_gpu(self) -> bool:
+        """
+        Use a compiled GPU backend when available.
+        """
+    @use_gpu.setter
+    def use_gpu(self, arg0: bool) -> None: ...
+
+    @property
+    def vad_model_path(self) -> str:
+        """
+        Path to a Silero VAD model; empty disables Silero VAD.
+        """
+    @vad_model_path.setter
+    def vad_model_path(self, arg0: str) -> None: ...
+
+    @property
+    def vad_noise_ratio(self) -> float:
+        """
+        Speech threshold relative to learned noise.
+        """
+    @vad_noise_ratio.setter
+    def vad_noise_ratio(self, arg0: typing.SupportsFloat) -> None: ...
+
+    @property
+    def vad_threshold(self) -> float:
+        """
+        Absolute RMS speech threshold.
+        """
+    @vad_threshold.setter
+    def vad_threshold(self, arg0: typing.SupportsFloat) -> None: ...
+
+    @property
+    def vad_window_millis(self) -> int:
+        """
+        RMS analysis window duration.
+        """
+    @vad_window_millis.setter
+    def vad_window_millis(self, arg0: typing.SupportsInt) -> None: ...
+
 class Status:
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
     @staticmethod
@@ -6713,6 +7308,11 @@ class _StringSchemaMapView:
         Return a view of the map's values.
         """
 
+def audio_device_info(index: typing.SupportsInt) -> AudioDeviceInfo:
+    """
+    Return metadata for the audio device at `index`.
+    """
+
 def create_in_process_wire_stream_pair(
     options: WireStreamOptions | None = None,
     first_options: WireStreamOptions | None = None,
@@ -6720,6 +7320,11 @@ def create_in_process_wire_stream_pair(
 ) -> tuple[InProcessWireStream, InProcessWireStream]:
     """
     Create a connected pair of in-process wire streams (free-function form of InProcessWireStream.create_pair).
+    """
+
+def default_audio_input_device() -> AudioDeviceInfo:
+    """
+    Return metadata for the host's default input device.
     """
 
 def default_redis_client() -> RedisClient:
@@ -6740,6 +7345,11 @@ def is_half_close_message(message: WireMessage) -> bool:
 def is_status_chunk(chunk: Chunk) -> bool:
     """
     Return True when the chunk carries an action status.
+    """
+
+def list_audio_devices() -> list[AudioDeviceInfo]:
+    """
+    Return metadata for every audio device, in index order.
     """
 
 def make_half_close_message(trailers: typing.Any = {}) -> WireMessage:

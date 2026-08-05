@@ -15,4 +15,8 @@ if (A11_BUILD_REDIS)
     list(APPEND A11_PYTHON_SOURCES
          ${CMAKE_CURRENT_SOURCE_DIR}/redis_bindings.cc)
 endif ()
+if (A11_BUILD_AUDIO)
+    list(APPEND A11_PYTHON_SOURCES
+         ${CMAKE_CURRENT_SOURCE_DIR}/audio_bindings.cc)
+endif ()
 set(A11_PYTHON_SOURCES ${A11_PYTHON_SOURCES} PARENT_SCOPE)

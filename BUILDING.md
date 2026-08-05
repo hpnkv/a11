@@ -10,7 +10,8 @@ self-contained recipe for building and linking the C++ runtime on its own.
 A11 is a Python action and streaming runtime backed by a C++20 implementation.
 The Python package in `a11/` is the public, language-native API; `cpp/a11/`
 contains the native implementation, and `cpp/thread/` contains its cooperative
-fiber runtime.
+fiber runtime. The optional-at-build-time audio SDK lives in `cpp/sdk/audio/`;
+it is enabled by default with `A11_BUILD_AUDIO=ON`.
 
 Run all commands from the repository root.
 
@@ -48,7 +49,7 @@ Homebrew (or apt/dnf/…) you install only the *tools*:
 - pybind11 if `A11_BUILD_PYTHON=ON` in a direct CMake build.
 
 The C++ **libraries** — Boost.Context/Fiber/Thread, OpenSSL, libcurl, nghttp2,
-hiredis, nlohmann-json, and uvw — are built from source by
+hiredis, nlohmann-json, uvw, PortAudio, and whisper.cpp — are built from source by
 `scripts/bootstrap_wheel_deps.sh` into a per-architecture prefix, and every A11
 build (editable, presets, and wheels) links that prefix exclusively. This is
 required on Linux **and** macOS: the build pins Boost to the prefix
@@ -86,7 +87,9 @@ scripts/bootstrap_wheel_deps.sh
 ```
 
 That script builds Boost, OpenSSL, libcurl, nghttp2, hiredis, nlohmann-json,
-and uvw.
+uvw, PortAudio, and whisper.cpp. On Linux it also builds a static ALSA library
+for PortAudio; on macOS PortAudio uses the system Core Audio frameworks and
+whisper.cpp enables the system Metal and Accelerate backends.
 GoogleTest must still be installed separately for `BUILD_TESTING=ON`. Keep the
 exported paths in the shell used for CMake, `uv sync`, and editable rebuilds.
 
@@ -225,6 +228,10 @@ build directories; scikit-build keeps its own trees under `build/` (see
 [Editable Python build](#editable-python-build)), so reconfiguring or deleting a
 `cmake-build-*` tree never disturbs the editable extension.
 
+Audio capture and local speech recognition are built by default. Configure
+with `-DA11_BUILD_AUDIO=OFF` when a deployment does not need PortAudio or
+whisper.cpp; this also omits the native Python audio bindings.
+
 The native suite consists of `thread_test`, which exercises the cooperative
 runtime, and `a11_core_test`, which aggregates the A11 component tests. A
 focused test can be run directly with a GoogleTest filter, for example:
@@ -359,9 +366,9 @@ Boost.Context includes architecture-specific assembly.
 `build_wheels.py` needs no environment set up by hand. It exports the deps
 prefix per platform/arch; `scripts/bootstrap_wheel_deps.sh` (run automatically
 as cibuildwheel's `before-all`) builds the static dependencies (Boost, OpenSSL,
-curl, nghttp2, hiredis, nlohmann-json, uvw) into that prefix, and CMake discovers them
-from it. It also preflights prerequisites and prints a clear message instead of
-failing deep in a build.
+curl, nghttp2, hiredis, nlohmann-json, uvw, PortAudio, whisper.cpp, and ALSA on
+Linux) into that prefix, and CMake discovers them from it. It also preflights
+prerequisites and prints a clear message instead of failing deep in a build.
 
 ### Before you build
 
@@ -437,7 +444,7 @@ matrix on that architecture to audit those.
 | Symptom | Cause and fix |
 |---|---|
 | `Could NOT find Boost` (or another dep) at CMake configure | The deps prefix is missing or incomplete. Delete it (`rm -rf "$HOME/.cache/a11-deps/"*` for editable/macOS-wheel builds; Linux wheels rebuild `/opt/a11-deps-*` inside the container automatically) and rebuild; the bootstrap re-runs. Static builds are pinned to the prefix, so this fails loudly instead of silently using a system/Homebrew Boost. |
-| `symbol not found in flat namespace '_jump_fcontext'` at import/audit | A Boost.Context prefix built before the assembly-ABI fix. Delete the prefix and rebuild. The stamp file (`.a11-wheel-deps-v9-<arch>`, plus the deployment target and `A11_FIBER_SPINLOCK` on macOS) gates rebuilds; bumping the script's version forces one. |
+| `symbol not found in flat namespace '_jump_fcontext'` at import/audit | A Boost.Context prefix built before the assembly-ABI fix. Delete the prefix and rebuild. The stamp file (`.a11-wheel-deps-v11-<arch>`, plus the deployment target and `A11_FIBER_SPINLOCK` on macOS) gates rebuilds; bumping the script's version forces one. |
 | `"futex not supported on this platform"` at CMake/compile on macOS | The macOS deployment target is below 14.4. Keep `MACOSX_DEPLOYMENT_TARGET=14.4` in both the bootstrap shell and the CMake build. |
 | Fiber crashes/corruption only in a hand-rolled build | The Boost.Fiber spinlock macro differs between the deps prefix and the A11 compile. Use the same `A11_FIBER_SPINLOCK` (default `BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX`) for both, and rebuild the prefix if you change it. |
 | Linux build stops immediately citing Docker | Start Docker (or Colima) and retry, or build Linux wheels on a Linux host. |

@@ -5,4 +5,8 @@ find_package(a11 CONFIG REQUIRED)
 
 add_executable(a11_install_smoke smoke.cc)
 target_link_libraries(a11_install_smoke PRIVATE a11::service)
+if(TARGET a11::audio)
+  target_link_libraries(a11_install_smoke PRIVATE a11::audio)
+  target_compile_definitions(a11_install_smoke PRIVATE A11_INSTALL_SMOKE_AUDIO=1)
+endif()
 target_compile_features(a11_install_smoke PRIVATE cxx_std_20)

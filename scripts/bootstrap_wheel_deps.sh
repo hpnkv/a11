@@ -43,7 +43,7 @@ sanitize_tag=
 if [[ -n "${A11_DEPS_SANITIZE:-}" ]]; then
   sanitize_tag="-sanitize-${A11_DEPS_SANITIZE//[^a-zA-Z0-9]/}"
 fi
-stamp="${prefix}/.a11-wheel-deps-v10-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
+stamp="${prefix}/.a11-wheel-deps-v11-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -249,5 +249,64 @@ uv_bundled_include="${prefix}/include/uvw/uv/include"
 if [[ -f "${uv_bundled_include}/uv.h" ]]; then
   cp -R "${uv_bundled_include}/." "${prefix}/include/"
 fi
+
+# PortAudio's Linux backend uses ALSA. Build that system-facing library as a
+# static archive so the Python extension does not acquire a libasound.so loader
+# dependency (scripts/audit_wheel.py intentionally rejects it). macOS uses the
+# built-in Core Audio frameworks and needs no corresponding dependency.
+alsa_cmake_args=()
+if [[ "${host_os}" == Linux ]]; then
+  download_and_extract \
+    "https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.14.tar.bz2" \
+    alsa-lib.tar.bz2
+  (
+    cd "${work}/alsa-lib-1.2.14"
+    CFLAGS="-fPIC ${CFLAGS:-}" ./configure \
+      --prefix="${prefix}" --libdir="${prefix}/lib" \
+      --disable-shared --enable-static --disable-python
+    make -j "${jobs}"
+    make install
+  )
+  alsa_cmake_args=(
+    -DALSA_LIBRARY="${prefix}/lib/libasound.a"
+    -DALSA_INCLUDE_DIR="${prefix}/include")
+fi
+
+# Capture and ASR are default SDK components, so build their native libraries
+# once per wheel architecture in the shared prefix instead of recompiling them
+# independently for CPython 3.11 through 3.14.
+download_and_extract \
+  "https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz" \
+  portaudio.tar.gz
+cmake -S "${work}/portaudio-19.7.0" -B "${work}/portaudio-build" \
+  -G Ninja -DPA_BUILD_SHARED=OFF -DPA_BUILD_STATIC=ON \
+  -DPA_BUILD_TESTS=OFF -DPA_BUILD_EXAMPLES=OFF \
+  -DPA_ENABLE_DEBUG_OUTPUT=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
+  "${alsa_cmake_args[@]}" "${cmake_arch_args[@]}"
+cmake --build "${work}/portaudio-build" --target install -j "${jobs}"
+
+whisper_platform_args=(-DGGML_BLAS=OFF -DGGML_METAL=OFF)
+if [[ "${host_os}" == Darwin ]]; then
+  whisper_platform_args=(
+    -DGGML_ACCELERATE=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple
+    -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+    -DGGML_METAL_NDEBUG=ON)
+fi
+download_and_extract \
+  "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.2.tar.gz" \
+  whisper.tar.gz
+cmake -S "${work}/whisper.cpp-1.9.2" -B "${work}/whisper-build" \
+  -G Ninja -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF \
+  -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_SERVER=OFF \
+  -DWHISPER_CURL=OFF -DWHISPER_COREML=OFF -DWHISPER_OPENVINO=OFF \
+  -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF -DGGML_NATIVE=OFF \
+  -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF -DGGML_CCACHE=OFF \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
+  "${whisper_platform_args[@]}" "${cmake_arch_args[@]}"
+cmake --build "${work}/whisper-build" --target install -j "${jobs}"
 
 touch "${stamp}"

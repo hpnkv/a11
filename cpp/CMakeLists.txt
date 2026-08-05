@@ -25,6 +25,8 @@ option(A11_BUILD_PYTHON "Build the pybind11 extension" ON)
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
 option(A11_BUILD_WEBRTC "Build WebRTC wire streams and signalling" ON)
 option(A11_BUILD_REDIS "Build the Redis client and Redis ChunkStore" ON)
+option(A11_BUILD_AUDIO
+        "Build PortAudio capture and whisper.cpp speech recognition" ON)
 option(A11_FETCH_MISSING_DEPS "Fetch required dependencies not installed" ON)
 option(A11_REQUIRE_STATIC_DEPS
         "Fail configuration when a non-system dependency is only shared" ON)
@@ -308,6 +310,111 @@ if (A11_BUILD_REDIS)
     a11_require_static_target(hiredis::hiredis)
 endif ()
 
+if (A11_BUILD_AUDIO)
+    # PortAudio backs the cross-platform audio input SDK. Prefer a static
+    # package from the bootstrapped prefix; otherwise build it from source with
+    # only the static library (no shared lib, tests, or examples), like hiredis.
+    find_package(portaudio CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    if (NOT portaudio_FOUND AND A11_FETCH_MISSING_DEPS)
+        set(PA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(PA_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(PA_ENABLE_DEBUG_OUTPUT OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+                portaudio
+                GIT_REPOSITORY https://github.com/PortAudio/portaudio.git
+                GIT_TAG v19.7.0
+                GIT_SHALLOW TRUE
+                SYSTEM)
+        # PortAudio 19.7.0 still declares cmake_minimum_required(VERSION 2.8),
+        # which CMake 4 rejects. Grant the fetched subproject the 3.5 policy
+        # floor without lowering it for the rest of the tree.
+        set(A11_SAVED_POLICY_MIN "${CMAKE_POLICY_VERSION_MINIMUM}")
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+        FetchContent_MakeAvailable(portaudio)
+        set(CMAKE_POLICY_VERSION_MINIMUM "${A11_SAVED_POLICY_MIN}")
+        unset(A11_SAVED_POLICY_MIN)
+    elseif (NOT portaudio_FOUND)
+        message(FATAL_ERROR
+                "PortAudio is required; install it or enable "
+                "A11_FETCH_MISSING_DEPS")
+    endif ()
+    # PortAudio's target name varies across its packaging (imported package vs
+    # in-tree static build). Normalize whichever exists to one variable.
+    if (TARGET PortAudio::portaudio)
+        set(A11_PORTAUDIO_TARGET PortAudio::portaudio)
+        set(A11_PORTAUDIO_INSTALL_TARGET PortAudio::portaudio)
+    elseif (TARGET portaudio_static)
+        set(A11_PORTAUDIO_TARGET portaudio_static)
+        set(A11_PORTAUDIO_INSTALL_TARGET portaudio_static)
+    elseif (TARGET portaudio)
+        set(A11_PORTAUDIO_TARGET portaudio)
+        set(A11_PORTAUDIO_INSTALL_TARGET portaudio)
+    else ()
+        message(FATAL_ERROR
+                "PortAudio was resolved but no known target was defined")
+    endif ()
+    a11_require_static_target(${A11_PORTAUDIO_TARGET})
+
+    # whisper.cpp supplies local automatic speech recognition. It is built as
+    # static whisper + GGML archives. Generic per-architecture CPU kernels keep
+    # wheels portable; macOS additionally gets the system Metal, Accelerate,
+    # and Apple BLAS backends without introducing loader dependencies.
+    find_package(whisper CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    if (NOT whisper_FOUND AND A11_FETCH_MISSING_DEPS)
+        set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+        set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
+        set(WHISPER_COREML OFF CACHE BOOL "" FORCE)
+        set(WHISPER_OPENVINO OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+        set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+        set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+        if (APPLE)
+            set(GGML_ACCELERATE ON CACHE BOOL "" FORCE)
+            set(GGML_BLAS ON CACHE BOOL "" FORCE)
+            set(GGML_BLAS_VENDOR Apple CACHE STRING "" FORCE)
+            set(GGML_METAL ON CACHE BOOL "" FORCE)
+            set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+            set(GGML_METAL_NDEBUG ON CACHE BOOL "" FORCE)
+        else ()
+            set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+            set(GGML_METAL OFF CACHE BOOL "" FORCE)
+        endif ()
+        FetchContent_Declare(
+                whisper
+                GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+                GIT_TAG v1.9.2
+                GIT_SHALLOW TRUE
+                SYSTEM)
+        FetchContent_MakeAvailable(whisper)
+    elseif (NOT whisper_FOUND)
+        message(FATAL_ERROR
+                "whisper.cpp is required; install it or enable "
+                "A11_FETCH_MISSING_DEPS")
+    endif ()
+    if (NOT TARGET whisper)
+        message(FATAL_ERROR
+                "whisper.cpp was resolved but its whisper target is missing")
+    endif ()
+    a11_require_static_target(whisper)
+    foreach (A11_WHISPER_STATIC_TARGET IN ITEMS
+            ggml ggml-base ggml-cpu ggml-blas ggml-metal
+            ggml::ggml ggml::ggml-base ggml::ggml-cpu ggml::ggml-blas
+            ggml::ggml-metal)
+        if (TARGET ${A11_WHISPER_STATIC_TARGET})
+            a11_require_static_target(${A11_WHISPER_STATIC_TARGET})
+        endif ()
+    endforeach ()
+    unset(A11_WHISPER_STATIC_TARGET)
+endif ()
+
 if (A11_BUILD_HTTP)
     # Resolve OpenSSL before libdatachannel so its transitive crypto linkage uses
     # the same static archives as A11's HTTP implementation.
@@ -408,6 +515,9 @@ add_subdirectory(a11/service)
 add_subdirectory(a11/stores)
 if (A11_BUILD_REDIS)
     add_subdirectory(redis)
+endif ()
+if (A11_BUILD_AUDIO)
+    add_subdirectory(sdk/audio)
 endif ()
 add_subdirectory(python)
 
@@ -512,6 +622,54 @@ if (A11_BUILD_REDIS)
             $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
             $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
             a11::warnings)
+endif ()
+
+if (A11_BUILD_AUDIO)
+    add_library(a11_audio STATIC ${A11_AUDIO_SOURCES})
+    add_library(a11::audio ALIAS a11_audio)
+    set_target_properties(a11_audio PROPERTIES EXPORT_NAME audio)
+    target_include_directories(
+            a11_audio PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_audio
+            PUBLIC a11::concurrency
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            PRIVATE
+            $<BUILD_LOCAL_INTERFACE:${A11_PORTAUDIO_TARGET}>
+            $<INSTALL_INTERFACE:${A11_PORTAUDIO_INSTALL_TARGET}>
+            $<BUILD_LOCAL_INTERFACE:whisper>
+            $<INSTALL_INTERFACE:whisper::whisper>
+            $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            a11::warnings)
+    # PortAudio's target carries its host-API link requirements. Keep the macOS
+    # system frameworks explicit for older package exports; on Linux, do not
+    # rediscover ALSA independently because the bootstrapped PortAudio target
+    # deliberately records the pinned static libasound archive.
+    if (APPLE)
+        target_link_libraries(
+                a11_audio PRIVATE
+                "-framework CoreAudio" "-framework AudioToolbox"
+                "-framework AudioUnit" "-framework CoreFoundation"
+                "-framework CoreServices")
+    elseif (UNIX)
+        find_package(Threads REQUIRED)
+        # Static ALSA uses dlsym for its plugin loader. On pre-glibc-2.34
+        # manylinux hosts that symbol still lives in a separate libdl.
+        target_link_libraries(
+                a11_audio PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    endif ()
+    # whisper.cpp installs its unrelated parakeet library unconditionally.
+    # Building the focused A11 audio target must therefore also produce that
+    # archive so a subsequent `cmake --install` cannot reference a missing
+    # build artifact.
+    if (TARGET parakeet)
+        add_dependencies(a11_audio parakeet)
+    endif ()
 endif ()
 
 add_library(a11_stores STATIC ${A11_STORES_SOURCES})
@@ -737,6 +895,9 @@ if (A11_BUILD_PYTHON)
     if (A11_BUILD_REDIS)
         target_compile_definitions(a11_python PRIVATE A11_BUILD_REDIS=1)
     endif ()
+    if (A11_BUILD_AUDIO)
+        target_compile_definitions(a11_python PRIVATE A11_BUILD_AUDIO=1)
+    endif ()
     # Direct CMake builds place the module beside the Python sources for a fast
     # edit/build/test loop. scikit-build keeps every ABI in its isolated build
     # directory and installs it into the wheel, avoiding cross-ABI artifacts in
@@ -757,6 +918,9 @@ if (A11_BUILD_PYTHON)
             a11::nodes a11::obs a11::service a11::stores
             pybind11_abseil::status_casters a11::warnings
             absl::failure_signal_handler absl::symbolize)
+    if (A11_BUILD_AUDIO)
+        target_link_libraries(a11_python PRIVATE a11::audio)
+    endif ()
 
     # pybind11_abseil's status caster imports this extension by its canonical
     # package path. Keep direct-CMake outputs beside the source package and
@@ -805,6 +969,9 @@ set(A11_INSTALL_TARGETS
 if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)
 endif ()
+if (A11_BUILD_AUDIO)
+    list(APPEND A11_INSTALL_TARGETS a11_audio)
+endif ()
 install(
         TARGETS ${A11_INSTALL_TARGETS}
         EXPORT a11Targets
@@ -825,6 +992,15 @@ if (A11_BUILD_REDIS)
             DIRECTORY redis/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/redis
             FILES_MATCHING PATTERN "*.h")
+endif ()
+if (A11_BUILD_AUDIO)
+    install(
+            DIRECTORY sdk/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sdk
+            FILES_MATCHING PATTERN "*.h")
+    # whisper.cpp's package config validates its binary directory even when
+    # WHISPER_BUILD_EXAMPLES is disabled and no executable is installed.
+    install(DIRECTORY DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif ()
 configure_package_config_file(
         cmake/a11Config.cmake.in

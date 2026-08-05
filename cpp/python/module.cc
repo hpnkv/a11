@@ -30,8 +30,7 @@ void InstallFailureSignalHandler() {
   }
   std::string program;
   try {
-    program =
-        py::module_::import("sys").attr("executable").cast<std::string>();
+    program = py::module_::import("sys").attr("executable").cast<std::string>();
   } catch (...) {
     program.clear();
   }
@@ -72,6 +71,9 @@ PYBIND11_MODULE(_native, module) {
   a11::python::BindData(module);
 #ifdef A11_BUILD_REDIS
   a11::python::BindRedis(module);
+#endif
+#ifdef A11_BUILD_AUDIO
+  a11::python::BindAudio(module);
 #endif
 
   // Net is registered first because store writers and later runtime classes

@@ -32,6 +32,7 @@ def test_public_network_types_are_native_classes():
     names = (
         "Http2Client",
         "Http2Server",
+        "HttpProtocolPreference",
         "HttpSseClientWireStream",
         "HttpSseServer",
         "SignallingService",
@@ -91,6 +92,41 @@ async def test_nghttp2_websocket_wire_stream_exchanges_chunked_messages():
         )
         assert await asyncio.wait_for(client.receive(), timeout=5) is None
         assert await asyncio.wait_for(accepted.receive(), timeout=5) is None
+    finally:
+        server.stop()
+
+
+@pytest.mark.asyncio
+async def test_websocket_wire_stream_exchanges_over_http1():
+    """The native WebSocket transport interoperates over RFC 6455 / HTTP/1.1."""
+    accepted_future = asyncio.get_running_loop().create_future()
+
+    async def on_stream(stream):
+        accepted = WireStreamWithRecv(stream)
+        await accepted.accept()
+        accepted_future.set_result(accepted)
+
+    options = WebSocketServerOptions()
+    options.path = "/wire"
+    server = WebSocketWireServer.create(on_stream, options)
+    try:
+        client_options = _native.WebSocketClientOptions()
+        # Force the client onto HTTP/1.1; the cleartext server sniffs and
+        # accepts the RFC 6455 upgrade over an HTTP/1.1 connection.
+        client_options.http2_options.client_preference = (
+            a11.HttpProtocolPreference.HTTP11
+        )
+        raw_client = WebSocketWireStream.connect(
+            f"ws://127.0.0.1:{server.port}/wire",
+            websocket_options=client_options,
+        )
+        client = WireStreamWithRecv(raw_client)
+        await asyncio.wait_for(client.start(), timeout=5)
+        accepted = await asyncio.wait_for(accepted_future, timeout=5)
+
+        message = _message(b"http1-websocket")
+        client.send(message)
+        assert await asyncio.wait_for(accepted.receive(), timeout=10) == message
     finally:
         server.stop()
 

@@ -98,6 +98,71 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
   EXPECT_TRUE(server->Stop().ok());
 }
 
+TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
+  a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
+  auto accepted_future = accepted_promise.future();
+  a11::Promise<data::WireMessage> server_message_promise;
+  auto server_message = server_message_promise.future();
+
+  WebSocketServerOptions server_options;
+  server_options.port = 0;
+  server_options.bind_address = "127.0.0.1";
+  auto server = *WebSocketWireServer::Create(
+      [&accepted_promise,
+       &server_message_promise](std::shared_ptr<WebSocketWireStream> stream) {
+        const absl::Status published = accepted_promise.SetValue(stream);
+        if (!published.ok()) {
+          return a11::FailedTask(published);
+        }
+        return stream->Accept(
+            [&server_message_promise](std::optional<data::WireMessage> msg) {
+              if (msg.has_value()) {
+                (void)server_message_promise.SetValue(std::move(*msg));
+              }
+              return a11::ReadyTask();
+            },
+            []() { return a11::ReadyTask(); });
+      },
+      server_options);
+  auto port = server->port();
+  ASSERT_TRUE(port.ok()) << port.status();
+
+  // Force the client onto RFC 6455 over HTTP/1.1; the cleartext server sniffs
+  // the upgrade request and accepts it over an Http1Connection.
+  WebSocketClientOptions client_options;
+  client_options.http2_options.client_preference =
+      Http2Options::ProtocolPreference::kHttp11;
+  auto client = WebSocketWireStream::CreateClient(
+      "ws://127.0.0.1:" + std::to_string(*port) + "/a11", {}, client_options);
+  ASSERT_TRUE(client.ok()) << client.status();
+  ASSERT_TRUE(
+      (*client)
+          ->Start([](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+                  []() { return a11::ReadyTask(); })
+          .Await(absl::Now() + absl::Seconds(5))
+          .ok());
+  auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(accepted.ok()) << accepted.status();
+
+  data::WireMessage message{
+      .node_fragments = {{.id = "node",
+                          .data = data::Chunk{.data = "ws-over-http1"},
+                          .seq = 0,
+                          .continued = false}}};
+  ASSERT_TRUE((*client)->Send(message).ok());
+  auto received = server_message.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(received.ok()) << received.status();
+  EXPECT_EQ(*received, message);
+
+  ASSERT_TRUE((*client)->HalfClose().ok());
+  ASSERT_TRUE((*accepted)->HalfClose().ok());
+  ASSERT_TRUE((*client)
+                  ->DrainOutgoingMessages()
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
+  EXPECT_TRUE(server->Stop().ok());
+}
+
 TEST(WebSocketWireStreamTest, ReassemblesMultipleLargeChunkedMessagesInOrder) {
   a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
   a11::Future<std::shared_ptr<WebSocketWireStream>> accepted_future =

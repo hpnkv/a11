@@ -28,6 +28,7 @@ from .net.http2 import (
     Http2ResponseWriter,
     Http2Server,
     Http2TlsOptions,
+    HttpProtocolPreference,
     HttpRequest,
     HttpResponse,
     HttpResponseHead,

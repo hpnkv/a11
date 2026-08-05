@@ -24,6 +24,7 @@ HttpRequestHandler: TypeAlias = Callable[
 from a11._native import HttpRequest
 from a11._native import HttpResponseHead
 from a11._native import HttpResponse
+from a11._native import HttpProtocolPreference
 from a11._native import Http2TlsOptions
 from a11._native import Http2Options
 from a11._native import Http2RequestBodyStream
@@ -85,6 +86,7 @@ for _class in (
     HttpRequest,
     HttpResponseHead,
     HttpResponse,
+    HttpProtocolPreference,
     Http2TlsOptions,
     Http2Options,
     Http2RequestBodyStream,
@@ -107,6 +109,7 @@ __all__ = [
     "Http2Server",
     "Http2TlsOptions",
     "HttpHeaders",
+    "HttpProtocolPreference",
     "HttpRequest",
     "HttpRequestHandler",
     "HttpResponse",

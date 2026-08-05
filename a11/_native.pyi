@@ -72,6 +72,7 @@ __all__: list[str] = [
     "Http2ResponseWriter",
     "Http2Server",
     "Http2TlsOptions",
+    "HttpProtocolPreference",
     "HttpRequest",
     "HttpResponse",
     "HttpResponseHead",
@@ -2975,12 +2976,52 @@ class Http2Options:
         """
 
     @property
+    def client_allow_downgrade(self) -> bool:
+        """
+        Whether a cleartext client may retry with the other protocol when its first attempt fails.
+        """
+    @client_allow_downgrade.setter
+    def client_allow_downgrade(self, arg0: bool) -> None: ...
+
+    @property
+    def client_preference(self) -> HttpProtocolPreference:
+        """
+        Client protocol preference and cleartext attempt order.
+        """
+    @client_preference.setter
+    def client_preference(self, arg0: HttpProtocolPreference) -> None: ...
+
+    @property
     def deadline(self) -> typing.Any:
         """
         The operation deadline.
         """
     @deadline.setter
     def deadline(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def enable_h2(self) -> bool:
+        """
+        Serve/accept HTTP/2 over TLS (ALPN "h2").
+        """
+    @enable_h2.setter
+    def enable_h2(self, arg0: bool) -> None: ...
+
+    @property
+    def enable_h2c(self) -> bool:
+        """
+        Serve/accept cleartext prior-knowledge HTTP/2.
+        """
+    @enable_h2c.setter
+    def enable_h2c(self, arg0: bool) -> None: ...
+
+    @property
+    def enable_http1(self) -> bool:
+        """
+        Serve/accept HTTP/1.1 (ALPN and/or cleartext).
+        """
+    @enable_http1.setter
+    def enable_http1(self, arg0: bool) -> None: ...
 
     @property
     def max_buffered_request_bytes(self) -> int:
@@ -3247,6 +3288,36 @@ class Http2TlsOptions:
         """
     @verify_peer.setter
     def verify_peer(self, arg0: bool) -> None: ...
+
+class HttpProtocolPreference:
+    """
+    Members:
+
+      AUTO : Prefer HTTP/2, fall back to HTTP/1.1 (ALPN order / downgrade).
+
+      HTTP2 : Require HTTP/2 (h2 over TLS, prior-knowledge h2c cleartext).
+
+      HTTP11 : Require HTTP/1.1.
+    """
+
+    AUTO: typing.ClassVar[HttpProtocolPreference]
+    HTTP11: typing.ClassVar[HttpProtocolPreference]
+    HTTP2: typing.ClassVar[HttpProtocolPreference]
+    __members__: typing.ClassVar[dict[str, HttpProtocolPreference]]
+    def __eq__(self, other: object) -> bool: ...
+    def __getstate__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __int__(self) -> int: ...
+    def __ne__(self, other: typing.Any) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __str__(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def value(self) -> int: ...
 
 class HttpRequest:
     def __init__(

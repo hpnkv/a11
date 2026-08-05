@@ -67,7 +67,15 @@ export type WebSocketFactory = (
   headers: Readonly<Record<string, string>>,
 ) => WebSocketLike | Promise<WebSocketLike>;
 
-/** HTTP handshake, framing, and socket backpressure options. */
+/**
+ * HTTP handshake, framing, and socket backpressure options.
+ *
+ * This client speaks RFC 6455 WebSocket over HTTP/1.1 (via the browser
+ * `WebSocket` or the Node `ws` package). It connects directly to an A11 native
+ * server whose `enable_http1` protocol option is on (the default) -- no
+ * WebSocket-over-HTTP/2 bridge is required. The HTTP version is fixed by the
+ * underlying runtime and is not configurable here.
+ */
 export interface WebSocketClientOptions {
   /** Extra handshake headers; browsers cannot set arbitrary headers. */
   headers?: Readonly<Record<string, string>>;

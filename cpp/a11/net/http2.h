@@ -34,6 +34,15 @@
 
 namespace a11::net {
 
+/// Protocol-neutral connection backing the stream facades (see
+/// internal/http_connection.h). Either an HTTP/2 or an HTTP/1.1 connection.
+class HttpConnection;
+
+namespace internal {
+/// Shared TCP/TLS transport substrate for the HTTP connections.
+class HttpTransport;
+}  // namespace internal
+
 class Http2RequestBodyStream;
 
 /**
@@ -98,9 +107,16 @@ struct Http2TlsOptions {
   absl::Status Validate() const;
 };
 
-/** @brief Body-size limits, buffering thresholds, deadline, and TLS for an
- * HTTP/2 client or server. */
+/** @brief Body-size limits, buffering thresholds, deadline, TLS, and HTTP
+ * protocol negotiation for an HTTP client or server. */
 struct Http2Options {
+  /** @brief Client-side HTTP protocol preference / downgrade policy. */
+  enum class ProtocolPreference {
+    kAuto,    ///< Prefer HTTP/2, fall back to HTTP/1.1 (ALPN order / downgrade).
+    kHttp2,   ///< Require HTTP/2 (h2 over TLS, prior-knowledge h2c cleartext).
+    kHttp11,  ///< Require HTTP/1.1.
+  };
+
   size_t max_request_body_size = 32 * 1024 * 1024;   ///< Request hard limit.
   size_t max_response_body_size = 32 * 1024 * 1024;  ///< Response hard limit.
   size_t max_buffered_request_bytes =
@@ -110,7 +126,17 @@ struct Http2Options {
   absl::Time deadline = absl::InfiniteFuture();  ///< Connection-wide deadline.
   Http2TlsOptions tls;  ///< TLS and certificate policy.
 
-  /// Validate size relationships, deadline, and TLS settings.
+  // --- Protocol negotiation (server: which to accept; client: which to try). ---
+  bool enable_h2 = true;     ///< Serve/accept HTTP/2 over TLS (ALPN "h2").
+  bool enable_h2c = true;    ///< Serve/accept cleartext prior-knowledge HTTP/2.
+  bool enable_http1 = true;  ///< Serve/accept HTTP/1.1 (ALPN and/or cleartext).
+  /// Client protocol preference; also governs cleartext attempt order.
+  ProtocolPreference client_preference = ProtocolPreference::kAuto;
+  /// Whether a cleartext client may reconnect with the other protocol when its
+  /// first attempt fails (ALPN makes TLS negotiation unambiguous already).
+  bool client_allow_downgrade = true;
+
+  /// Validate size relationships, deadline, TLS, and protocol settings.
   absl::Status Validate() const;
 };
 
@@ -145,6 +171,7 @@ class Http2RequestBodyStream
   std::shared_ptr<State> state_;
 
   friend class Http2Connection;
+  friend class Http1Connection;
 };
 
 /**
@@ -179,6 +206,7 @@ class Http2ResponseStream
   std::shared_ptr<State> state_;
 
   friend class Http2Connection;
+  friend class Http1Connection;
   friend class Http2Client;
 };
 
@@ -210,14 +238,15 @@ class Http2DuplexStream
   [[nodiscard]] std::int32_t stream_id() const;
 
  private:
-  Http2DuplexStream(std::weak_ptr<Http2Connection> connection,
+  Http2DuplexStream(std::weak_ptr<HttpConnection> connection,
                     std::shared_ptr<Http2ResponseStream> response)
       : connection_(std::move(connection)), response_(std::move(response)) {}
 
-  std::weak_ptr<Http2Connection> connection_;
+  std::weak_ptr<HttpConnection> connection_;
   std::shared_ptr<Http2ResponseStream> response_;
 
   friend class Http2Connection;
+  friend class Http1Connection;
   friend class Http2Client;
 };
 
@@ -256,17 +285,18 @@ class Http2ResponseWriter
  private:
   struct State;
 
-  Http2ResponseWriter(std::weak_ptr<Http2Connection> connection,
+  Http2ResponseWriter(std::weak_ptr<HttpConnection> connection,
                       std::int32_t stream_id, std::shared_ptr<State> state)
       : connection_(std::move(connection)),
         stream_id_(stream_id),
         state_(std::move(state)) {}
 
-  std::weak_ptr<Http2Connection> connection_;
+  std::weak_ptr<HttpConnection> connection_;
   std::int32_t stream_id_;
   std::shared_ptr<State> state_;
 
   friend class Http2Connection;
+  friend class Http1Connection;
 };
 
 /** Callback dispatched for each inbound request, given a response writer. */
@@ -373,7 +403,7 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
   Http2Client(std::string host, std::uint16_t port, Http2Options options,
-              std::shared_ptr<Http2Connection> connection);
+              std::shared_ptr<internal::HttpTransport> connection);
 
   Impl* absl_nonnull state();
   const Impl* absl_nonnull state() const;

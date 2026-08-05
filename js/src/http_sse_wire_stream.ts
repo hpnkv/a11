@@ -180,7 +180,12 @@ function hasResponseShape(value: unknown): value is Response {
 }
 
 /**
- * Fetch-based client for A11's HTTP/2 Server-Sent Events transport.
+ * Fetch-based client for A11's Server-Sent Events transport.
+ *
+ * Because it uses `fetch`, the transport negotiates HTTP/1.1 or HTTP/2
+ * transparently (per the platform and ALPN): it works against an A11 native
+ * server serving SSE over either protocol, including HTTP/1.1 chunked
+ * transfer-encoding when the server's `enable_http1` option is on.
  *
  * The long-lived connect response carries messages from the service as SSE
  * events; separate POST requests carry client messages back to the assigned

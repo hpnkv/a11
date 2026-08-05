@@ -351,6 +351,15 @@ void BindHttp(py::module_& module) {
           },
           "Validate the TLS options, raising on error.");
 
+  py::enum_<net::Http2Options::ProtocolPreference>(module,
+                                                   "HttpProtocolPreference")
+      .value("AUTO", net::Http2Options::ProtocolPreference::kAuto,
+             "Prefer HTTP/2, fall back to HTTP/1.1 (ALPN order / downgrade).")
+      .value("HTTP2", net::Http2Options::ProtocolPreference::kHttp2,
+             "Require HTTP/2 (h2 over TLS, prior-knowledge h2c cleartext).")
+      .value("HTTP11", net::Http2Options::ProtocolPreference::kHttp11,
+             "Require HTTP/1.1.");
+
   py::class_<net::Http2Options>(module, "Http2Options")
       .def(py::init<>(), "Construct default HTTP/2 options.")
       .def_readwrite("max_request_body_size",
@@ -366,6 +375,19 @@ void BindHttp(py::module_& module) {
                      &net::Http2Options::max_buffered_response_bytes,
                      "Maximum buffered response bytes before backpressure.")
       .def_readwrite("tls", &net::Http2Options::tls, "The TLS options.")
+      .def_readwrite("enable_h2", &net::Http2Options::enable_h2,
+                     "Serve/accept HTTP/2 over TLS (ALPN \"h2\").")
+      .def_readwrite("enable_h2c", &net::Http2Options::enable_h2c,
+                     "Serve/accept cleartext prior-knowledge HTTP/2.")
+      .def_readwrite("enable_http1", &net::Http2Options::enable_http1,
+                     "Serve/accept HTTP/1.1 (ALPN and/or cleartext).")
+      .def_readwrite("client_preference",
+                     &net::Http2Options::client_preference,
+                     "Client protocol preference and cleartext attempt order.")
+      .def_readwrite("client_allow_downgrade",
+                     &net::Http2Options::client_allow_downgrade,
+                     "Whether a cleartext client may retry with the other "
+                     "protocol when its first attempt fails.")
       .def_property(
           "deadline",
           [](const net::Http2Options& options) {

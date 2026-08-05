@@ -9,6 +9,8 @@ set(A11_NET_SOURCES
 set(A11_NET_HTTP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/http2.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/http_sse_wire_stream.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/http1_codec.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/http1_connection.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/http2_websocket_channel.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/websocket_wire_stream.cc
     PARENT_SCOPE)

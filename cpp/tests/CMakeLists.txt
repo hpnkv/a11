@@ -3,6 +3,8 @@ add_executable(a11_core_test
   data_json_test.cc
   data_types_test.cc
   future_test.cc
+  http1_codec_test.cc
+  http1_connection_test.cc
   http2_test.cc
   http_sse_wire_stream_test.cc
   signalling_test.cc

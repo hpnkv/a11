@@ -40,6 +40,8 @@ __all__: list[str] = [
     "ActionSettings",
     "AsyncNode",
     "AudioBuffer",
+    "AudioCaptureEvent",
+    "AudioControlEvent",
     "AudioDeviceInfo",
     "AudioInput",
     "AudioInputOptions",
@@ -121,6 +123,7 @@ __all__: list[str] = [
     "TCP",
     "TLS",
     "Time",
+    "TranscriptionEvent",
     "TurnRelayType",
     "TurnServer",
     "UDP",
@@ -143,6 +146,8 @@ __all__: list[str] = [
     "WireStream",
     "WireStreamOptions",
     "WireStreamWithRecv",
+    "audio_buffer_from_msgpack",
+    "audio_buffer_to_msgpack",
     "audio_device_info",
     "create_in_process_wire_stream_pair",
     "default_audio_input_device",
@@ -159,6 +164,7 @@ __all__: list[str] = [
     "obs_recorded_spans",
     "obs_shutdown",
     "obs_start_span",
+    "register_audio_actions",
     "reset_default_redis_client",
     "set_default_redis_client",
     "status_code_from_http",
@@ -1586,6 +1592,16 @@ class AudioBuffer:
         Return a buffer object that exposes the underlying memory of the object.
         """
 
+    def __init__(
+        self,
+        data: collections.abc.Buffer,
+        sample_rate: typing.SupportsFloat,
+        num_channels: typing.SupportsInt = 1,
+    ) -> None:
+        """
+        Build an AudioBuffer from a buffer-protocol object (bytes, a NumPy array, a CPU PyTorch tensor, ...). Samples are read as channel-major float32 (raw bytes are reinterpreted as float32); a 2-D buffer's first dimension is the channel count.
+        """
+
     def __release_buffer__(self, buffer):
         """
         Release the buffer object that exposes the underlying memory of the object.
@@ -1625,6 +1641,72 @@ class AudioBuffer:
         """
         A zero-copy read-only ``(channels, frames)`` float view.
         """
+
+class AudioCaptureEvent:
+    """
+    A capture lifecycle or dropped-buffer notification from capture_audio.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @staticmethod
+    def buffers_dropped(count: typing.SupportsInt) -> AudioCaptureEvent: ...
+    @staticmethod
+    def started() -> AudioCaptureEvent: ...
+    @staticmethod
+    def stopped() -> AudioCaptureEvent: ...
+    def __eq__(self, arg0: object) -> bool: ...
+    def __init__(
+        self, kind: str = "started", dropped: typing.SupportsInt = 0
+    ) -> None:
+        """
+        Construct a capture event.
+        """
+
+    def __repr__(self) -> str: ...
+
+    @property
+    def dropped(self) -> int:
+        """
+        Buffers dropped since the previous event.
+        """
+    @dropped.setter
+    def dropped(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def kind(self) -> str:
+        """
+        The event kind: 'started', 'buffers_dropped' or 'stopped'.
+        """
+    @kind.setter
+    def kind(self, arg1: str) -> None: ...
+
+class AudioControlEvent:
+    """
+    A command on an Action's control_events input; 'stop' finishes capture gracefully.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @staticmethod
+    def stop() -> AudioControlEvent:
+        """
+        A stop command that finishes capture gracefully.
+        """
+
+    def __eq__(self, arg0: object) -> bool: ...
+    def __init__(self, command: str = "stop") -> None:
+        """
+        Construct a control event.
+        """
+
+    def __repr__(self) -> str: ...
+
+    @property
+    def command(self) -> str:
+        """
+        The command name, e.g. 'stop'.
+        """
+    @command.setter
+    def command(self, arg1: str) -> None: ...
 
 class AudioDeviceInfo:
     """
@@ -1787,10 +1869,12 @@ class AudioInputOptions:
     def __init__(
         self,
         device_index: typing.SupportsInt = -1,
+        device_name: str = "",
         sample_rate: typing.SupportsFloat = 0.0,
         channels: typing.SupportsInt = 0,
         block_frames: typing.SupportsInt = 256,
         ring_blocks: typing.SupportsInt = 32,
+        buffer_frames: typing.SupportsInt = 0,
     ) -> None:
         """
         Construct validated audio input options.
@@ -1814,6 +1898,14 @@ class AudioInputOptions:
     def block_frames(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
+    def buffer_frames(self) -> int:
+        """
+        Frames per delivered subscription buffer, or 0 for the block size.
+        """
+    @buffer_frames.setter
+    def buffer_frames(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
     def channels(self) -> int:
         """
         Requested channel count, or 0 for the device's count.
@@ -1828,6 +1920,14 @@ class AudioInputOptions:
         """
     @device_index.setter
     def device_index(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def device_name(self) -> str:
+        """
+        Input device name to capture from; empty selects by index or the default input.
+        """
+    @device_name.setter
+    def device_name(self, arg0: str) -> None: ...
 
     @property
     def ring_blocks(self) -> int:
@@ -5153,7 +5253,7 @@ class SignallingTransport:
 
 class SpeechRecognizer:
     """
-    Restartable local automatic speech recognizer backed by whisper.cpp. It invokes inference only for speech endpointed by its adaptive VAD.
+    Restartable local automatic speech recognizer backed by whisper.cpp. A cheap energy gate endpoints utterances so silence never reaches the decoder; a Silero VAD model, when configured, then filters each utterance to genuine speech before inference.
     """
 
     @staticmethod
@@ -5231,7 +5331,7 @@ class SpeechRecognizer:
 
 class SpeechRecognizerOptions:
     """
-    Configuration for whisper.cpp transcription and adaptive VAD.
+    Configuration for whisper.cpp transcription, a cheap energy VAD gate, and optional whisper.cpp Silero neural VAD.
     """
 
     _a11_options_installed: typing.ClassVar[bool] = True
@@ -5250,6 +5350,7 @@ class SpeechRecognizerOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
+        model_path: str = "",
         language: str = "auto",
         translate: bool = False,
         inference_threads: typing.SupportsInt = 0,
@@ -5336,6 +5437,14 @@ class SpeechRecognizerOptions:
         """
     @min_speech_millis.setter
     def min_speech_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def model_path(self) -> str:
+        """
+        Path to the whisper.cpp model; used by the transcription action (empty is rejected there).
+        """
+    @model_path.setter
+    def model_path(self, arg0: str) -> None: ...
 
     @property
     def silero_threshold(self) -> float:
@@ -5668,6 +5777,36 @@ class Time:
         """
         The time as nanoseconds since the Unix epoch.
         """
+
+class TranscriptionEvent:
+    """
+    A capture/inference lifecycle notification from capture_transcription.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @staticmethod
+    def capture_started() -> TranscriptionEvent: ...
+    @staticmethod
+    def capture_stopped() -> TranscriptionEvent: ...
+    @staticmethod
+    def inference_started() -> TranscriptionEvent: ...
+    @staticmethod
+    def inference_stopped() -> TranscriptionEvent: ...
+    def __eq__(self, arg0: object) -> bool: ...
+    def __init__(self, kind: str = "capture_started") -> None:
+        """
+        Construct a transcription event.
+        """
+
+    def __repr__(self) -> str: ...
+
+    @property
+    def kind(self) -> str:
+        """
+        The event kind, e.g. 'inference_started'.
+        """
+    @kind.setter
+    def kind(self, arg1: str) -> None: ...
 
 class TurnRelayType:
     """
@@ -7308,6 +7447,16 @@ class _StringSchemaMapView:
         Return a view of the map's values.
         """
 
+def audio_buffer_from_msgpack(data: bytes) -> AudioBuffer:
+    """
+    Decode an AudioBuffer from A11's MessagePack representation.
+    """
+
+def audio_buffer_to_msgpack(buffer: AudioBuffer) -> bytes:
+    """
+    Encode an AudioBuffer to A11's MessagePack representation.
+    """
+
 def audio_device_info(index: typing.SupportsInt) -> AudioDeviceInfo:
     """
     Return metadata for the audio device at `index`.
@@ -7401,6 +7550,11 @@ def obs_start_span(
 ) -> _Span:
     """
     Starts a new span with the given name and kind, optionally parented by a W3C traceparent.
+    """
+
+def register_audio_actions(registry: ActionRegistry | None) -> None:
+    """
+    Register the list_audio_inputs, capture_audio and capture_transcription Actions on `registry`, wiring each port's typeinfo to the matching audio type and ensuring their serializers are installed.
     """
 
 def reset_default_redis_client() -> None:

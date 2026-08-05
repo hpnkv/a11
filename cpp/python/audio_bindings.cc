@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -9,12 +10,22 @@
 #include <utility>
 #include <vector>
 
+#include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/match.h>
+#include <absl/strings/str_cat.h>
+#include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "a11/actions/action.h"
+#include "a11/actions/registry.h"
+#include "a11/actions/schema.h"
 #include "python/bindings.h"
 #include "python/interop.h"
+#include "sdk/audio/actions/audio_actions.h"
+#include "sdk/audio/actions/audio_events.h"
+#include "sdk/audio/actions/audio_serialization.h"
 #include "sdk/audio/audio_buffer.h"
 #include "sdk/audio/audio_input.h"
 #include "sdk/audio/device.h"
@@ -37,6 +48,70 @@ py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
                          {static_cast<py::ssize_t>(sizeof(float)) * frames,
                           static_cast<py::ssize_t>(sizeof(float))},
                          /*readonly=*/true);
+}
+
+// Builds an AudioBuffer from any Python buffer-protocol object (bytes, a NumPy
+// array, a CPU PyTorch tensor, ...). Samples are taken as 32-bit floats in
+// channel-major order; raw byte buffers are reinterpreted as float32. A 2-D
+// buffer's leading dimension is treated as the channel count.
+bool IsCContiguous(const py::buffer_info& info) {
+  py::ssize_t expected = info.itemsize;
+  for (py::ssize_t axis = info.ndim - 1; axis >= 0; --axis) {
+    if (info.shape[axis] == 0) {
+      return true;
+    }
+    if (info.strides[axis] != expected) {
+      return false;
+    }
+    expected *= info.shape[axis];
+  }
+  return true;
+}
+
+audio::AudioBuffer MakeAudioBufferFromBuffer(const py::buffer& data,
+                                             double sample_rate,
+                                             int num_channels) {
+  const py::buffer_info info = data.request();
+  if (!IsCContiguous(info)) {
+    ThrowStatus(absl::InvalidArgumentError(
+        "audio samples must be a C-contiguous buffer"));
+  }
+  std::vector<float> samples;
+  if (info.format == py::format_descriptor<float>::format()) {
+    const auto* first = static_cast<const float*>(info.ptr);
+    samples.assign(first, first + info.size);
+  } else if (info.itemsize == 1) {
+    const auto byte_count = static_cast<size_t>(info.size);
+    if (byte_count % sizeof(float) != 0) {
+      ThrowStatus(absl::InvalidArgumentError(
+          "raw audio bytes must be a whole number of float32 samples"));
+    }
+    samples.resize(byte_count / sizeof(float));
+    std::memcpy(samples.data(), info.ptr, byte_count);
+  } else {
+    ThrowStatus(absl::InvalidArgumentError(
+        "audio samples must be float32 or a raw byte buffer"));
+  }
+
+  size_t channels = num_channels > 0 ? static_cast<size_t>(num_channels) : 1;
+  if (info.ndim == 2) {
+    // A 2-D (channels, frames) buffer names its own channel count.
+    channels = static_cast<size_t>(info.shape[0]);
+  }
+  if (channels == 0 || samples.size() % channels != 0) {
+    ThrowStatus(absl::InvalidArgumentError(
+        "sample count is not a multiple of the channel count"));
+  }
+  if (!(sample_rate > 0.0)) {
+    ThrowStatus(
+        absl::InvalidArgumentError("sample_rate must be a positive number"));
+  }
+  audio::AudioBuffer buffer;
+  buffer.num_channels = channels;
+  buffer.num_frames = samples.size() / channels;
+  buffer.sample_rate = sample_rate;
+  buffer.samples = std::move(samples);
+  return buffer;
 }
 
 std::shared_ptr<audio::AudioInput> OpenAudioInput(
@@ -113,6 +188,211 @@ MakeRecognitionCallbacks(const py::object& on_transcription,
   return std::pair(std::move(native_transcription), std::move(native_done));
 }
 
+// GIL-reacquiring release for a Python type held as an ActionPortSchema
+// typeinfo handle. Mirrors the actions binding's own deleter so the referent
+// stays alive for exactly as long as any copy of the schema.
+void ReleaseAudioTypeInfo(void* object) {
+  if (object == nullptr || Py_IsInitialized() == 0) {
+    return;
+  }
+  const PyGILState_STATE gil = PyGILState_Ensure();
+  Py_DECREF(static_cast<PyObject*>(object));
+  PyGILState_Release(gil);
+}
+
+std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
+  Py_INCREF(cls.ptr());
+  return std::shared_ptr<void>(cls.ptr(), &ReleaseAudioTypeInfo);
+}
+
+// Resolves the Python class a port's typeinfo should point at from the type tag
+// embedded in the port's declared media type; str for text/plain; else empty.
+std::shared_ptr<void> TypeInfoForPort(const py::module_& native,
+                                      const std::string& port_type) {
+  const std::pair<std::string_view, const char*> kByTag[] = {
+      {audio::kAudioBufferTypeTag, "AudioBuffer"},
+      {audio::kAudioInputOptionsTypeTag, "AudioInputOptions"},
+      {audio::kSpeechRecognizerOptionsTypeTag, "SpeechRecognizerOptions"},
+      {audio::kAudioDeviceInfoTypeTag, "AudioDeviceInfo"},
+      {audio::kAudioControlEventTypeTag, "AudioControlEvent"},
+      {audio::kAudioCaptureEventTypeTag, "AudioCaptureEvent"},
+      {audio::kTranscriptionEventTypeTag, "TranscriptionEvent"},
+  };
+  for (const auto& [tag, attr] : kByTag) {
+    if (absl::StrContains(port_type, absl::StrCat("type=", tag))) {
+      return TypeInfoFromClass(native.attr(attr));
+    }
+  }
+  if (port_type == "text/plain") {
+    return TypeInfoFromClass(py::reinterpret_borrow<py::object>(
+        reinterpret_cast<PyObject*>(&PyUnicode_Type)));
+  }
+  return nullptr;
+}
+
+void AttachTypeInfo(a11::actions::ActionSchema& schema,
+                    const py::module_& native) {
+  for (auto& [name, port] : schema.inputs) {
+    port.typeinfo = TypeInfoForPort(native, port.type);
+  }
+  for (auto& [name, port] : schema.outputs) {
+    port.typeinfo = TypeInfoForPort(native, port.type);
+  }
+}
+
+// Registers the three C++ audio Actions on `registry`, attaching the bound
+// Python audio classes as each port's typeinfo (C++ cannot fabricate those).
+void RegisterAudioActionsPy(
+    const std::shared_ptr<a11::actions::ActionRegistry>& registry) {
+  if (registry == nullptr) {
+    ThrowStatus(absl::InvalidArgumentError("registry must not be None"));
+  }
+  if (const absl::Status status = audio::EnsureAudioTypesRegistered();
+      !status.ok()) {
+    ThrowStatus(status);
+  }
+  const py::module_ native = py::module_::import("a11._native");
+  const auto register_one = [&](std::string_view name,
+                                a11::actions::ActionSchema schema,
+                                a11::actions::ActionHandler handler) {
+    AttachTypeInfo(schema, native);
+    if (const absl::Status status = registry->Register(
+            std::string(name), std::move(schema), std::move(handler));
+        !status.ok()) {
+      ThrowStatus(status);
+    }
+  };
+  register_one(audio::kListAudioInputsAction, audio::ListAudioInputsSchema(),
+               audio::ListAudioInputsHandler());
+  register_one(audio::kCaptureAudioAction, audio::CaptureAudioSchema(),
+               audio::CaptureAudioHandler());
+  register_one(audio::kCaptureTranscriptionAction,
+               audio::CaptureTranscriptionSchema(),
+               audio::CaptureTranscriptionHandler());
+  register_one(audio::kTranscribeAudioAction, audio::TranscribeAudioSchema(),
+               audio::TranscribeAudioHandler());
+}
+
+void BindAudioEvents(py::module_& module) {
+  py::class_<audio::AudioControlEvent>(
+      module, "AudioControlEvent",
+      "A command on an Action's control_events input; 'stop' finishes capture "
+      "gracefully.")
+      .def(py::init([](const std::string& command) {
+             absl::StatusOr<audio::AudioControlEvent::Command> parsed =
+                 audio::ParseControlCommand(command);
+             if (!parsed.ok()) {
+               ThrowStatus(parsed.status());
+             }
+             return audio::AudioControlEvent{*parsed};
+           }),
+           "Construct a control event.", py::arg("command") = "stop")
+      .def_static("stop", &audio::AudioControlEvent::Stop,
+                  "A stop command that finishes capture gracefully.")
+      .def_property(
+          "command",
+          [](const audio::AudioControlEvent& self) {
+            return std::string(audio::ToString(self.command));
+          },
+          [](audio::AudioControlEvent& self, const std::string& value) {
+            absl::StatusOr<audio::AudioControlEvent::Command> parsed =
+                audio::ParseControlCommand(value);
+            if (!parsed.ok()) {
+              ThrowStatus(parsed.status());
+            }
+            self.command = *parsed;
+          },
+          "The command name, e.g. 'stop'.")
+      .def(py::self == py::self)
+      .def("__repr__", [](const audio::AudioControlEvent& self) {
+        return absl::StrCat("AudioControlEvent(command='",
+                            audio::ToString(self.command), "')");
+      });
+
+  py::class_<audio::AudioCaptureEvent>(
+      module, "AudioCaptureEvent",
+      "A capture lifecycle or dropped-buffer notification from capture_audio.")
+      .def(py::init([](const std::string& kind, std::uint64_t dropped) {
+             absl::StatusOr<audio::AudioCaptureEvent::Kind> parsed =
+                 audio::ParseCaptureKind(kind);
+             if (!parsed.ok()) {
+               ThrowStatus(parsed.status());
+             }
+             audio::AudioCaptureEvent event{*parsed, dropped};
+             if (const absl::Status valid = event.Validate(); !valid.ok()) {
+               ThrowStatus(valid);
+             }
+             return event;
+           }),
+           "Construct a capture event.", py::arg("kind") = "started",
+           py::arg("dropped") = 0)
+      .def_static("started", &audio::AudioCaptureEvent::Started)
+      .def_static("stopped", &audio::AudioCaptureEvent::Stopped)
+      .def_static("buffers_dropped", &audio::AudioCaptureEvent::BuffersDropped,
+                  py::arg("count"))
+      .def_property(
+          "kind",
+          [](const audio::AudioCaptureEvent& self) {
+            return std::string(audio::ToString(self.kind));
+          },
+          [](audio::AudioCaptureEvent& self, const std::string& value) {
+            absl::StatusOr<audio::AudioCaptureEvent::Kind> parsed =
+                audio::ParseCaptureKind(value);
+            if (!parsed.ok()) {
+              ThrowStatus(parsed.status());
+            }
+            self.kind = *parsed;
+          },
+          "The event kind: 'started', 'buffers_dropped' or 'stopped'.")
+      .def_readwrite("dropped", &audio::AudioCaptureEvent::dropped,
+                     "Buffers dropped since the previous event.")
+      .def(py::self == py::self)
+      .def("__repr__", [](const audio::AudioCaptureEvent& self) {
+        return absl::StrCat("AudioCaptureEvent(kind='",
+                            audio::ToString(self.kind),
+                            "', dropped=", self.dropped, ")");
+      });
+
+  py::class_<audio::TranscriptionEvent>(
+      module, "TranscriptionEvent",
+      "A capture/inference lifecycle notification from capture_transcription.")
+      .def(py::init([](const std::string& kind) {
+             absl::StatusOr<audio::TranscriptionEvent::Kind> parsed =
+                 audio::ParseTranscriptionKind(kind);
+             if (!parsed.ok()) {
+               ThrowStatus(parsed.status());
+             }
+             return audio::TranscriptionEvent{*parsed};
+           }),
+           "Construct a transcription event.",
+           py::arg("kind") = "capture_started")
+      .def_static("capture_started", &audio::TranscriptionEvent::CaptureStarted)
+      .def_static("inference_started",
+                  &audio::TranscriptionEvent::InferenceStarted)
+      .def_static("inference_stopped",
+                  &audio::TranscriptionEvent::InferenceStopped)
+      .def_static("capture_stopped", &audio::TranscriptionEvent::CaptureStopped)
+      .def_property(
+          "kind",
+          [](const audio::TranscriptionEvent& self) {
+            return std::string(audio::ToString(self.kind));
+          },
+          [](audio::TranscriptionEvent& self, const std::string& value) {
+            absl::StatusOr<audio::TranscriptionEvent::Kind> parsed =
+                audio::ParseTranscriptionKind(value);
+            if (!parsed.ok()) {
+              ThrowStatus(parsed.status());
+            }
+            self.kind = *parsed;
+          },
+          "The event kind, e.g. 'inference_started'.")
+      .def(py::self == py::self)
+      .def("__repr__", [](const audio::TranscriptionEvent& self) {
+        return absl::StrCat("TranscriptionEvent(kind='",
+                            audio::ToString(self.kind), "')");
+      });
+}
+
 }  // namespace
 
 void BindAudio(py::module_& module) {
@@ -161,6 +441,13 @@ void BindAudio(py::module_& module) {
       "`channel(i)` for one channel.",
       py::buffer_protocol())
       .def_buffer(&AudioBufferView)
+      .def(py::init(&MakeAudioBufferFromBuffer),
+           "Build an AudioBuffer from a buffer-protocol object (bytes, a NumPy "
+           "array, a CPU PyTorch tensor, ...). Samples are read as "
+           "channel-major "
+           "float32 (raw bytes are reinterpreted as float32); a 2-D buffer's "
+           "first dimension is the channel count.",
+           py::arg("data"), py::arg("sample_rate"), py::arg("num_channels") = 1)
       .def_property_readonly(
           "num_channels",
           [](const audio::AudioBuffer& self) { return self.num_channels; },
@@ -183,14 +470,17 @@ void BindAudio(py::module_& module) {
   py::class_<audio::AudioInputOptions>(
       module, "AudioInputOptions",
       "How an AudioInput opens its capture stream.")
-      .def(py::init([](int device_index, double sample_rate, int channels,
-                       size_t block_frames, size_t ring_blocks) {
+      .def(py::init([](int device_index, std::string device_name,
+                       double sample_rate, int channels, size_t block_frames,
+                       size_t ring_blocks, size_t buffer_frames) {
              audio::AudioInputOptions options{
                  .device_index = device_index,
+                 .device_name = std::move(device_name),
                  .sample_rate = sample_rate,
                  .channels = channels,
                  .block_frames = block_frames,
                  .ring_blocks = ring_blocks,
+                 .buffer_frames = buffer_frames,
              };
              if (const absl::Status valid = options.Validate(); !valid.ok()) {
                ThrowStatus(valid);
@@ -198,11 +488,15 @@ void BindAudio(py::module_& module) {
              return options;
            }),
            "Construct validated audio input options.",
-           py::arg("device_index") = -1, py::arg("sample_rate") = 0.0,
-           py::arg("channels") = 0, py::arg("block_frames") = 256,
-           py::arg("ring_blocks") = 32)
+           py::arg("device_index") = -1, py::arg("device_name") = "",
+           py::arg("sample_rate") = 0.0, py::arg("channels") = 0,
+           py::arg("block_frames") = 256, py::arg("ring_blocks") = 32,
+           py::arg("buffer_frames") = 0)
       .def_readwrite("device_index", &audio::AudioInputOptions::device_index,
                      "Device index to capture from, or negative for default.")
+      .def_readwrite("device_name", &audio::AudioInputOptions::device_name,
+                     "Input device name to capture from; empty selects by "
+                     "index or the default input.")
       .def_readwrite("sample_rate", &audio::AudioInputOptions::sample_rate,
                      "Requested sample rate in hertz, or 0 for the default.")
       .def_readwrite("channels", &audio::AudioInputOptions::channels,
@@ -211,15 +505,20 @@ void BindAudio(py::module_& module) {
                      "Frames per PortAudio callback block.")
       .def_readwrite("ring_blocks", &audio::AudioInputOptions::ring_blocks,
                      "Depth of the internal callback-to-fiber ring, in blocks.")
+      .def_readwrite("buffer_frames", &audio::AudioInputOptions::buffer_frames,
+                     "Frames per delivered subscription buffer, or 0 for the "
+                     "block size.")
       .def(
           "__eq__",
           [](const audio::AudioInputOptions& self,
              const audio::AudioInputOptions& other) {
             return self.device_index == other.device_index &&
+                   self.device_name == other.device_name &&
                    self.sample_rate == other.sample_rate &&
                    self.channels == other.channels &&
                    self.block_frames == other.block_frames &&
-                   self.ring_blocks == other.ring_blocks;
+                   self.ring_blocks == other.ring_blocks &&
+                   self.buffer_frames == other.buffer_frames;
           },
           py::is_operator());
 
@@ -227,52 +526,57 @@ void BindAudio(py::module_& module) {
       module, "SpeechRecognizerOptions",
       "Configuration for whisper.cpp transcription, a cheap energy VAD gate, "
       "and optional whisper.cpp Silero neural VAD.")
-      .def(
-          py::init([](std::string language, bool translate,
-                      int inference_threads, bool use_gpu, bool flash_attention,
-                      bool use_context, std::string initial_prompt,
-                      size_t subscription_buffer_millis, float vad_threshold,
-                      float vad_noise_ratio, size_t vad_window_millis,
-                      size_t min_speech_millis, size_t min_silence_millis,
-                      size_t speech_pad_millis, size_t max_speech_seconds,
-                      std::string vad_model_path, float silero_threshold) {
-            audio::SpeechRecognizerOptions options{
-                .language = std::move(language),
-                .translate = translate,
-                .inference_threads = inference_threads,
-                .use_gpu = use_gpu,
-                .flash_attention = flash_attention,
-                .use_context = use_context,
-                .initial_prompt = std::move(initial_prompt),
-                .subscription_buffer_millis = subscription_buffer_millis,
-                .vad_threshold = vad_threshold,
-                .vad_noise_ratio = vad_noise_ratio,
-                .vad_window_millis = vad_window_millis,
-                .min_speech_millis = min_speech_millis,
-                .min_silence_millis = min_silence_millis,
-                .speech_pad_millis = speech_pad_millis,
-                .max_speech_seconds = max_speech_seconds,
-                .vad_model_path = std::move(vad_model_path),
-                .silero_threshold = silero_threshold,
-            };
-            const absl::Status valid = options.Validate();
-            if (!valid.ok()) {
-              ThrowStatus(valid);
-            }
-            return options;
-          }),
-          "Construct validated speech recognition options.",
-          py::arg("language") = "auto", py::arg("translate") = false,
-          py::arg("inference_threads") = 0, py::arg("use_gpu") = true,
-          py::arg("flash_attention") = true, py::arg("use_context") = false,
-          py::arg("initial_prompt") = "",
-          py::arg("subscription_buffer_millis") = 100,
-          py::arg("vad_threshold") = 0.01f, py::arg("vad_noise_ratio") = 2.5f,
-          py::arg("vad_window_millis") = 20, py::arg("min_speech_millis") = 250,
-          py::arg("min_silence_millis") = 600,
-          py::arg("speech_pad_millis") = 160,
-          py::arg("max_speech_seconds") = 30, py::arg("vad_model_path") = "",
-          py::arg("silero_threshold") = 0.5f)
+      .def(py::init([](std::string model_path, std::string language,
+                       bool translate, int inference_threads, bool use_gpu,
+                       bool flash_attention, bool use_context,
+                       std::string initial_prompt,
+                       size_t subscription_buffer_millis, float vad_threshold,
+                       float vad_noise_ratio, size_t vad_window_millis,
+                       size_t min_speech_millis, size_t min_silence_millis,
+                       size_t speech_pad_millis, size_t max_speech_seconds,
+                       std::string vad_model_path, float silero_threshold) {
+             audio::SpeechRecognizerOptions options{
+                 .model_path = std::move(model_path),
+                 .language = std::move(language),
+                 .translate = translate,
+                 .inference_threads = inference_threads,
+                 .use_gpu = use_gpu,
+                 .flash_attention = flash_attention,
+                 .use_context = use_context,
+                 .initial_prompt = std::move(initial_prompt),
+                 .subscription_buffer_millis = subscription_buffer_millis,
+                 .vad_threshold = vad_threshold,
+                 .vad_noise_ratio = vad_noise_ratio,
+                 .vad_window_millis = vad_window_millis,
+                 .min_speech_millis = min_speech_millis,
+                 .min_silence_millis = min_silence_millis,
+                 .speech_pad_millis = speech_pad_millis,
+                 .max_speech_seconds = max_speech_seconds,
+                 .vad_model_path = std::move(vad_model_path),
+                 .silero_threshold = silero_threshold,
+             };
+             const absl::Status valid = options.Validate();
+             if (!valid.ok()) {
+               ThrowStatus(valid);
+             }
+             return options;
+           }),
+           "Construct validated speech recognition options.",
+           py::arg("model_path") = "", py::arg("language") = "auto",
+           py::arg("translate") = false, py::arg("inference_threads") = 0,
+           py::arg("use_gpu") = true, py::arg("flash_attention") = true,
+           py::arg("use_context") = false, py::arg("initial_prompt") = "",
+           py::arg("subscription_buffer_millis") = 100,
+           py::arg("vad_threshold") = 0.01f, py::arg("vad_noise_ratio") = 2.5f,
+           py::arg("vad_window_millis") = 20,
+           py::arg("min_speech_millis") = 250,
+           py::arg("min_silence_millis") = 600,
+           py::arg("speech_pad_millis") = 160,
+           py::arg("max_speech_seconds") = 30, py::arg("vad_model_path") = "",
+           py::arg("silero_threshold") = 0.5f)
+      .def_readwrite("model_path", &audio::SpeechRecognizerOptions::model_path,
+                     "Path to the whisper.cpp model; used by the transcription "
+                     "action (empty is rejected there).")
       .def_readwrite("language", &audio::SpeechRecognizerOptions::language,
                      "Whisper language code, or 'auto'.")
       .def_readwrite("translate", &audio::SpeechRecognizerOptions::translate,
@@ -493,6 +797,34 @@ void BindAudio(py::module_& module) {
         return ValueOrThrow(std::move(device));
       },
       "Return metadata for the audio device at `index`.", py::arg("index"));
+
+  module.def(
+      "audio_buffer_to_msgpack",
+      [](const audio::AudioBuffer& buffer) {
+        absl::StatusOr<std::string> bytes = audio::A11ToMsgpackBytes(buffer);
+        return py::bytes(ValueOrThrow(std::move(bytes)));
+      },
+      "Encode an AudioBuffer to A11's MessagePack representation.",
+      py::arg("buffer"));
+  module.def(
+      "audio_buffer_from_msgpack",
+      [](const py::bytes& data) {
+        absl::StatusOr<audio::AudioBuffer> buffer =
+            audio::A11FromMsgpackBytes(a11::data::TypeTag<audio::AudioBuffer>{},
+                                       static_cast<std::string>(data));
+        return ValueOrThrow(std::move(buffer));
+      },
+      "Decode an AudioBuffer from A11's MessagePack representation.",
+      py::arg("data"));
+
+  BindAudioEvents(module);
+  module.def("register_audio_actions", &RegisterAudioActionsPy,
+             py::arg("registry"),
+             "Register the list_audio_inputs, capture_audio and "
+             "capture_transcription Actions on `registry`, wiring each port's "
+             "typeinfo "
+             "to the matching audio type and ensuring their serializers are "
+             "installed.");
 }
 
 }  // namespace a11::python

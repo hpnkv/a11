@@ -47,4 +47,13 @@ if (A11_BUILD_AUDIO)
   target_link_libraries(
     a11_audio_test PRIVATE a11::audio a11::concurrency GTest::gtest_main)
   add_test(NAME a11_audio_test COMMAND a11_audio_test)
+
+  add_executable(a11_audio_actions_test
+    audio_serialization_test.cc
+    audio_actions_test.cc)
+  target_link_libraries(
+    a11_audio_actions_test PRIVATE a11::audio_actions a11::actions a11::audio
+                                   a11::concurrency a11::data a11::nodes
+                                   GTest::gtest_main)
+  add_test(NAME a11_audio_actions_test COMMAND a11_audio_actions_test)
 endif ()

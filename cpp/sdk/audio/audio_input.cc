@@ -200,6 +200,10 @@ absl::Status AudioInputOptions::Validate() const {
   if (channels < 0) {
     return absl::InvalidArgumentError("channels must not be negative");
   }
+  if (buffer_frames != 0 && buffer_frames < kMinBufferSize) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "buffer_frames must be 0 or at least ", kMinBufferSize));
+  }
   return absl::OkStatus();
 }
 
@@ -231,7 +235,25 @@ absl::StatusOr<std::shared_ptr<AudioInput>> AudioInput::Open(
   }
 
   int index = options.device_index;
-  if (index < 0) {
+  if (!options.device_name.empty()) {
+    // A requested name takes precedence and is resolved to an input device.
+    absl::StatusOr<std::vector<DeviceInfo>> devices = ListDevices();
+    if (!devices.ok()) {
+      return devices.status();
+    }
+    index = -1;
+    for (const DeviceInfo& candidate : *devices) {
+      if (candidate.name == options.device_name &&
+          candidate.max_input_channels > 0) {
+        index = candidate.index;
+        break;
+      }
+    }
+    if (index < 0) {
+      return absl::NotFoundError(absl::StrCat(
+          "No input device named '", options.device_name, "'"));
+    }
+  } else if (index < 0) {
     absl::StatusOr<DeviceInfo> default_input = DefaultInputDevice();
     if (!default_input.ok()) {
       return default_input.status();

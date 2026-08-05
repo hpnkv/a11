@@ -118,6 +118,12 @@ from .timing import (
 
 
 def get_deadline(action: Action) -> Time:
+    """Read the ``x-a11-deadline`` header as an absolute :class:`Time`.
+
+    The value is a base-10 count of **milliseconds** since the Unix epoch, or a
+    base-10 count of **nanoseconds** when suffixed with ``ns``. An absent header
+    means no deadline (:func:`infinite_future`).
+    """
     deadline_str = action.get_header("x-a11-deadline", decode=True)
     if deadline_str is None:
         return infinite_future()
@@ -130,29 +136,31 @@ def get_deadline(action: Action) -> Time:
     try:
         deadline = int(deadline_str)
     except ValueError:
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message=(
-                "Deadline header must be an integer optionally followed by 'ns'"
-            ),
-        ).to_exception()
-
+        deadline = -1
     if deadline < 0:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message=(
-                "Deadline header must be a non-negative integer optionally"
-                " followed by 'ns'"
+                "The x-a11-deadline header must be a non-negative base-10"
+                " integer of milliseconds since the epoch, or nanoseconds with"
+                " an 'ns' suffix."
             ),
         ).to_exception()
 
-    if nanos:
+    # Bare values are milliseconds; only the 'ns' form is already nanoseconds.
+    if not nanos:
         deadline *= 1000000
 
     return Time.from_nanoseconds_since_epoch(deadline)
 
 
 def set_deadline_header(action: Action, deadline: Time = infinite_future()):
+    """Write ``deadline`` to the ``x-a11-deadline`` header as milliseconds.
+
+    An infinite deadline clears the header. The value is emitted as a bare
+    base-10 millisecond count, the representation :func:`get_deadline` reads by
+    default.
+    """
     if deadline == infinite_future():
         try:
             action.remove_header("x-a11-deadline")

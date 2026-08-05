@@ -148,7 +148,9 @@ struct SpeechRecognizerState {
   absl::Status status ABSL_GUARDED_BY(mu);
   a11::Task worker ABSL_GUARDED_BY(mu);
   a11::Future<AudioBuffer> pending_read ABSL_GUARDED_BY(mu);
-  std::shared_ptr<AudioSubscription> active_subscription ABSL_GUARDED_BY(mu);
+  // Releases the current run's audio source (closes the subscription, or the
+  // caller's reader). Invoked by Stop() and after the run finishes.
+  std::function<void()> active_close ABSL_GUARDED_BY(mu);
   std::atomic<bool> stopping = false;
 };
 
@@ -299,12 +301,14 @@ absl::Status TranscribeUtterance(
   return absl::OkStatus();
 }
 
-absl::Status RecognitionLoop(
-    internal::SpeechRecognizerState* state,
-    const std::shared_ptr<AudioSubscription>& subscription,
-    OnTranscription* absl_nonnull on_transcription) {
-  StreamingMonoResampler resampler(subscription->sample_rate(),
-                                   subscription->channels());
+absl::Status RecognitionLoop(internal::SpeechRecognizerState* state,
+                             const AudioBufferReader& reader,
+                             absl::Duration pause_after,
+                             OnTranscription* absl_nonnull on_transcription) {
+  // The resampler is built from the first block, so a caller-supplied stream
+  // does not need to declare its rate and channel count up front (a device
+  // subscription's blocks simply carry its fixed values).
+  std::optional<StreamingMonoResampler> resampler;
   VoiceActivityDetector vad(VoiceActivityOptions{
       .energy_threshold = state->options.vad_threshold,
       .noise_ratio = state->options.vad_noise_ratio,
@@ -314,10 +318,21 @@ absl::Status RecognitionLoop(
       .speech_pad_millis = state->options.speech_pad_millis,
       .max_speech_seconds = state->options.max_speech_seconds,
   });
+  const bool finite_pause = pause_after < absl::InfiniteDuration();
+
+  // Endpoints and transcribes whatever speech the VAD currently holds; used
+  // both to drain a stalled stream (pause) and to finish the stream.
+  const auto flush_pending = [&]() -> absl::Status {
+    std::optional<std::vector<float>> utterance = vad.Flush();
+    if (utterance.has_value()) {
+      return TranscribeUtterance(state, std::move(*utterance), on_transcription);
+    }
+    return absl::OkStatus();
+  };
 
   bool natural_end = false;
+  a11::Future<AudioBuffer> read = reader();
   while (!state->stopping.load(std::memory_order_relaxed)) {
-    a11::Future<AudioBuffer> read = subscription->Read();
     {
       thread::MutexLock lock(&state->mu);
       state->pending_read = read;
@@ -325,47 +340,63 @@ absl::Status RecognitionLoop(
     if (state->stopping.load(std::memory_order_relaxed)) {
       (void)read.Cancel();
     }
-    absl::StatusOr<AudioBuffer> buffer = read.Await();
-    {
-      thread::MutexLock lock(&state->mu);
-      state->pending_read = a11::Future<AudioBuffer>();
-    }
+    absl::StatusOr<AudioBuffer> buffer =
+        finite_pause ? read.Await(absl::Now() + pause_after) : read.Await();
     if (!buffer.ok()) {
+      const absl::StatusCode code = buffer.status().code();
+      // A pause timeout does not end the run: endpoint what we have and keep
+      // awaiting the same (still-pending) read for more audio.
+      if (finite_pause && code == absl::StatusCode::kDeadlineExceeded &&
+          !state->stopping.load(std::memory_order_relaxed)) {
+        ABSL_RETURN_IF_ERROR(flush_pending());
+        continue;
+      }
+      {
+        thread::MutexLock lock(&state->mu);
+        state->pending_read = a11::Future<AudioBuffer>();
+      }
       if (state->stopping.load(std::memory_order_relaxed) ||
-          buffer.status().code() == absl::StatusCode::kCancelled) {
+          code == absl::StatusCode::kCancelled) {
         break;
       }
-      if (buffer.status().code() == absl::StatusCode::kOutOfRange) {
+      if (code == absl::StatusCode::kOutOfRange) {
         natural_end = true;
         break;
       }
       return buffer.status();
     }
+    {
+      thread::MutexLock lock(&state->mu);
+      state->pending_read = a11::Future<AudioBuffer>();
+    }
 
+    if (!resampler.has_value()) {
+      resampler.emplace(buffer->sample_rate,
+                        static_cast<size_t>(buffer->num_channels));
+    }
     std::vector<float> mono;
-    ABSL_RETURN_IF_ERROR(resampler.Process(*buffer, &mono));
+    ABSL_RETURN_IF_ERROR(resampler->Process(*buffer, &mono));
     std::vector<std::vector<float>> utterances;
     vad.Process(mono, &utterances);
     for (std::vector<float>& utterance : utterances) {
       ABSL_RETURN_IF_ERROR(
           TranscribeUtterance(state, std::move(utterance), on_transcription));
     }
+    read = reader();
   }
 
   if (natural_end && !state->stopping.load(std::memory_order_relaxed)) {
-    std::vector<float> tail;
-    resampler.Flush(&tail);
-    std::vector<std::vector<float>> utterances;
-    vad.Process(tail, &utterances);
-    for (std::vector<float>& utterance : utterances) {
-      ABSL_RETURN_IF_ERROR(
-          TranscribeUtterance(state, std::move(utterance), on_transcription));
+    if (resampler.has_value()) {
+      std::vector<float> tail;
+      resampler->Flush(&tail);
+      std::vector<std::vector<float>> utterances;
+      vad.Process(tail, &utterances);
+      for (std::vector<float>& utterance : utterances) {
+        ABSL_RETURN_IF_ERROR(
+            TranscribeUtterance(state, std::move(utterance), on_transcription));
+      }
     }
-    std::optional<std::vector<float>> final_utterance = vad.Flush();
-    if (final_utterance.has_value()) {
-      ABSL_RETURN_IF_ERROR(TranscribeUtterance(
-          state, std::move(*final_utterance), on_transcription));
-    }
+    ABSL_RETURN_IF_ERROR(flush_pending());
   }
   return absl::OkStatus();
 }
@@ -487,6 +518,18 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
       new SpeechRecognizer(std::move(*state)));
 }
 
+absl::StatusOr<std::shared_ptr<SpeechRecognizer>>
+SpeechRecognizer::CreateForStream(std::string model_path,
+                                  SpeechRecognizerOptions options) {
+  absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> state =
+      LoadState(std::move(model_path), std::move(options), nullptr, nullptr);
+  if (!state.ok()) {
+    return state.status();
+  }
+  return std::shared_ptr<SpeechRecognizer>(
+      new SpeechRecognizer(std::move(*state)));
+}
+
 a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
                                   OnRecognitionDone on_done) {
   if (on_transcription == nullptr || on_done == nullptr) {
@@ -508,6 +551,9 @@ a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
     }
     state_->supplied_subscription_used = true;
     subscription = state_->supplied_subscription;
+  } else if (state_->input == nullptr) {
+    return a11::FailedTask(absl::FailedPreconditionError(
+        "This recognizer has no audio device; use StartStream"));
   } else {
     const double requested_frames =
         state_->input->sample_rate() *
@@ -524,16 +570,55 @@ a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
     subscription = std::move(*created);
   }
 
+  // A subscription is itself an AudioBufferReader; a device stream never pauses.
+  AudioBufferReader reader = [subscription]() { return subscription->Read(); };
+  std::function<void()> close_source = [subscription]() {
+    subscription->Close();
+  };
+  return StartWithReaderLocked(std::move(reader), absl::InfiniteDuration(),
+                               std::move(close_source),
+                               std::move(on_transcription), std::move(on_done));
+}
+
+a11::Task SpeechRecognizer::StartStream(AudioBufferReader reader,
+                                        OnTranscription on_transcription,
+                                        OnRecognitionDone on_done,
+                                        absl::Duration pause_after,
+                                        std::function<void()> on_close) {
+  if (reader == nullptr) {
+    return a11::FailedTask(
+        absl::InvalidArgumentError("reader must be callable"));
+  }
+  if (on_transcription == nullptr || on_done == nullptr) {
+    return a11::FailedTask(absl::InvalidArgumentError(
+        "on_transcription and on_done must both be callable"));
+  }
+  thread::MutexLock lock(&state_->mu);
+  if (state_->running) {
+    return a11::FailedTask(
+        absl::FailedPreconditionError("SpeechRecognizer is already running"));
+  }
+  return StartWithReaderLocked(std::move(reader), pause_after,
+                               std::move(on_close), std::move(on_transcription),
+                               std::move(on_done));
+}
+
+a11::Task SpeechRecognizer::StartWithReaderLocked(
+    AudioBufferReader reader, absl::Duration pause_after,
+    std::function<void()> close_source, OnTranscription on_transcription,
+    OnRecognitionDone on_done) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   state_->stopping.store(false, std::memory_order_relaxed);
   state_->status = absl::OkStatus();
   state_->running = true;
-  state_->active_subscription = subscription;
+  state_->active_close = close_source;
   std::shared_ptr<SpeechRecognizer> self = shared_from_this();
   state_->worker = a11::SubmitTask(
-      [self = std::move(self), subscription = std::move(subscription),
+      [self = std::move(self), reader = std::move(reader), pause_after,
+       close_source = std::move(close_source),
        on_transcription = std::move(on_transcription),
        on_done = std::move(on_done)]() mutable {
-        return self->Run(std::move(subscription), std::move(on_transcription),
+        return self->Run(std::move(reader), pause_after,
+                         std::move(close_source), std::move(on_transcription),
                          std::move(on_done));
       },
       {.stack_size = 64 * 1024});
@@ -543,7 +628,7 @@ a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
 a11::Task SpeechRecognizer::Stop() {
   a11::Task worker;
   a11::Future<AudioBuffer> pending_read;
-  std::shared_ptr<AudioSubscription> subscription;
+  std::function<void()> close_source;
   {
     thread::MutexLock lock(&state_->mu);
     if (!state_->running) {
@@ -552,15 +637,20 @@ a11::Task SpeechRecognizer::Stop() {
     state_->stopping.store(true, std::memory_order_relaxed);
     worker = state_->worker;
     pending_read = state_->pending_read;
-    subscription = state_->active_subscription;
+    close_source = state_->active_close;
   }
-  if (subscription != nullptr) {
-    subscription->Close();
+  if (close_source) {
+    close_source();
   }
   if (pending_read.valid()) {
     (void)pending_read.Cancel();
   }
   return worker.valid() ? worker : a11::ReadyTask();
+}
+
+a11::Task SpeechRecognizer::Wait() {
+  thread::MutexLock lock(&state_->mu);
+  return state_->worker.valid() ? state_->worker : a11::ReadyTask();
 }
 
 bool SpeechRecognizer::running() const {
@@ -581,12 +671,15 @@ const SpeechRecognizerOptions& SpeechRecognizer::options() const {
   return state_->options;
 }
 
-absl::Status SpeechRecognizer::Run(
-    std::shared_ptr<AudioSubscription> subscription,
-    OnTranscription on_transcription, OnRecognitionDone on_done) {
+absl::Status SpeechRecognizer::Run(AudioBufferReader reader,
+                                   absl::Duration pause_after,
+                                   std::function<void()> close_source,
+                                   OnTranscription on_transcription,
+                                   OnRecognitionDone on_done) {
   absl::Status status;
   try {
-    status = RecognitionLoop(state_.get(), subscription, &on_transcription);
+    status =
+        RecognitionLoop(state_.get(), reader, pause_after, &on_transcription);
   } catch (const std::exception& error) {
     status = absl::UnknownError(error.what());
   } catch (...) {
@@ -594,7 +687,9 @@ absl::Status SpeechRecognizer::Run(
         "Speech recognition raised a non-standard exception");
   }
 
-  subscription->Close();
+  if (close_source) {
+    close_source();
+  }
   const absl::Status terminal = CallbackStatus(on_transcription, std::nullopt);
   if (status.ok() && !terminal.ok()) {
     status = terminal;
@@ -612,7 +707,7 @@ absl::Status SpeechRecognizer::Run(
     thread::MutexLock lock(&state_->mu);
     state_->status = status;
     state_->pending_read = a11::Future<AudioBuffer>();
-    state_->active_subscription.reset();
+    state_->active_close = nullptr;
     state_->running = false;
   }
   return status;

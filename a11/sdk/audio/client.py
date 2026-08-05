@@ -10,6 +10,7 @@ and ``buffer.channel(i)`` is one channel's row.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Self
@@ -17,6 +18,10 @@ from typing import Any, Self
 from a11 import _native
 from a11._native_options import install_native_options
 from a11._native_protocol import attach_protocol
+from a11.data.serialization import (
+    get_global_serialization_registry,
+    set_global_type_tag,
+)
 from a11.status import Status, StatusCode, StatusException
 
 from a11._native import AudioBuffer
@@ -34,16 +39,19 @@ install_native_options(
     AudioInputOptions,
     {
         "device_index": (int, -1),
+        "device_name": (str, ""),
         "sample_rate": (float, 0.0),
         "channels": (int, 0),
         "block_frames": (int, 256),
         "ring_blocks": (int, 32),
+        "buffer_frames": (int, 0),
     },
 )
 
 install_native_options(
     SpeechRecognizerOptions,
     {
+        "model_path": (str, ""),
         "language": (str, "auto"),
         "translate": (bool, False),
         "inference_threads": (int, 0),
@@ -63,6 +71,71 @@ install_native_options(
         "silero_threshold": (float, 0.5),
     },
 )
+
+def register_json_codec(cls: type, tag: str) -> None:
+    """Register a JSON codec for ``cls`` on the global Python registry.
+
+    Mirrors the native C++ codec so an audio value serialized by one language
+    (with the tag ``application/json;type=<tag>``) round-trips through the
+    other. ``cls`` must expose ``model_dump``/``model_validate`` (installed by
+    :func:`install_native_options`). Idempotent across repeated imports.
+    """
+    registry = get_global_serialization_registry()
+    set_global_type_tag(cls, tag)
+
+    def _serialize(obj: Any, _cls: type = cls) -> str:
+        return json.dumps(obj.model_dump())
+
+    def _deserialize(chunk: Any, _cls: type = cls) -> Any:
+        data = chunk.data
+        if isinstance(data, (bytes, bytearray)):
+            data = bytes(data).decode("utf-8")
+        return _cls.model_validate(json.loads(data))
+
+    try:
+        registry.register(
+            cls, "application/json", _serialize, _deserialize,
+            receives_chunk=True,
+        )
+    except StatusException:
+        pass  # already registered in this process
+
+
+register_json_codec(AudioInputOptions, "a11.sdk.audio.AudioInputOptions")
+register_json_codec(
+    SpeechRecognizerOptions, "a11.sdk.audio.SpeechRecognizerOptions"
+)
+
+
+def _register_audio_buffer_codec() -> None:
+    """Register the MessagePack codec for AudioBuffer on the global registry.
+
+    Both directions delegate to the native encoder/decoder so the bytes are
+    byte-for-byte identical to what C++ produces and consumes (samples as a
+    little-endian float32 blob).
+    """
+    registry = get_global_serialization_registry()
+    set_global_type_tag(AudioBuffer, "a11.sdk.audio.AudioBuffer")
+
+    def _serialize(buffer: AudioBuffer) -> bytes:
+        return _native.audio_buffer_to_msgpack(buffer)
+
+    def _deserialize(chunk: Any) -> AudioBuffer:
+        data = chunk.data
+        if isinstance(data, (bytes, bytearray)):
+            data = bytes(data)
+        return _native.audio_buffer_from_msgpack(data)
+
+    try:
+        registry.register(
+            AudioBuffer, "application/x-msgpack", _serialize, _deserialize,
+            receives_chunk=True,
+        )
+    except StatusException:
+        pass  # already registered in this process
+
+
+_register_audio_buffer_codec()
 
 _native_list_devices = _native.list_audio_devices
 _native_default_input_device = _native.default_audio_input_device

@@ -38,7 +38,12 @@ inline constexpr size_t kMinBufferSize = 32;
  */
 struct AudioInputOptions {
   /// Device index to capture from, or negative for the default input device.
+  /// Ignored when @c device_name is non-empty.
   int device_index = -1;
+  /// Human-readable input device name to capture from. When non-empty it takes
+  /// precedence over @c device_index and is resolved to an index in Open();
+  /// empty selects by @c device_index (or the default input device).
+  std::string device_name;
   /// Requested sample rate in hertz, or 0 to use the device default.
   double sample_rate = 0.0;
   /// Requested channel count, or 0 to use the device's input channel count.
@@ -47,9 +52,18 @@ struct AudioInputOptions {
   size_t block_frames = 256;
   /// Depth of the internal callback-to-fiber ring, in blocks.
   size_t ring_blocks = 32;
+  /// Frames per channel delivered in each subscription buffer, or 0 to fall
+  /// back to @c block_frames. Used by the action layer's Subscribe() call.
+  size_t buffer_frames = 0;
 
   /// Validate every field and return a descriptive status on failure.
   absl::Status Validate() const;
+
+  /// The delivered subscription buffer size implied by these options: the
+  /// requested @c buffer_frames, or @c block_frames when left at 0.
+  [[nodiscard]] size_t ResolvedBufferFrames() const {
+    return buffer_frames > 0 ? buffer_frames : block_frames;
+  }
 };
 
 class AudioInput;

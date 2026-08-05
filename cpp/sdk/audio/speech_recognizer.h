@@ -16,6 +16,7 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/time/time.h>
 
 #include "a11/concurrency/future.h"
 #include "sdk/audio/audio_input.h"
@@ -43,6 +44,11 @@ struct SpeechRecognizerState;
  * them. Silero is the accurate detector; the energy gate is the cheap trigger.
  */
 struct SpeechRecognizerOptions {
+  /// Path to the whisper.cpp GGML/GGUF model. The low-level SpeechRecognizer
+  /// takes its model path directly through Create() and ignores this field; it
+  /// exists so the action layer can carry the model choice inside a single
+  /// serializable options value (empty is rejected there, not here).
+  std::string model_path;
   /// Whisper language code, or "auto" to detect it per utterance.
   std::string language = "auto";
   /// Translate recognised speech to English instead of transcribing it.
@@ -96,6 +102,13 @@ using OnTranscription =
 /// Called exactly once after the terminal transcription marker has completed.
 using OnRecognitionDone = std::function<a11::Task()>;
 
+/// Pulls the next captured block for recognition. The returned future resolves
+/// with @c OutOfRange when the stream has ended (no more buffers will arrive)
+/// and with @c Cancelled when the future itself is cancelled. Each call should
+/// return a fresh future for the next block. This is the shape of
+/// @ref AudioSubscription::Read, so a subscription is trivially a reader.
+using AudioBufferReader = std::function<a11::Future<AudioBuffer>()>;
+
 /**
  * @brief Restartable, callback-driven local automatic speech recognizer.
  *
@@ -130,6 +143,11 @@ class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
       std::string model_path, std::shared_ptr<AudioSubscription> subscription,
       SpeechRecognizerOptions options = {});
 
+  /// Load @p model_path with no audio device; recognition is driven by a
+  /// caller-supplied @ref AudioBufferReader passed to StartStream.
+  static absl::StatusOr<std::shared_ptr<SpeechRecognizer>> CreateForStream(
+      std::string model_path, SpeechRecognizerOptions options = {});
+
   SpeechRecognizer(const SpeechRecognizer&) = delete;
   SpeechRecognizer& operator=(const SpeechRecognizer&) = delete;
   ~SpeechRecognizer();
@@ -141,8 +159,31 @@ class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
    */
   a11::Task Start(OnTranscription on_transcription, OnRecognitionDone on_done);
 
+  /**
+   * @brief Start recognition over a caller-supplied buffer stream.
+   *
+   * Recognition pulls blocks from @p reader (each carrying its own sample rate
+   * and channel count) instead of an audio device. The run ends when the reader
+   * reports @c OutOfRange (its stream closed) or when Stop()/cancellation
+   * intervenes. When @p pause_after is finite and no block arrives within that
+   * window, the current utterance is endpointed and transcribed and the run
+   * keeps waiting -- so a stalled producer still yields its speech promptly
+   * without ending the run. @p on_close, if set, is invoked once when the run
+   * stops so the caller can release the stream.
+   */
+  a11::Task StartStream(AudioBufferReader reader,
+                        OnTranscription on_transcription,
+                        OnRecognitionDone on_done,
+                        absl::Duration pause_after = absl::Seconds(1),
+                        std::function<void()> on_close = {});
+
   /// Request stop, close capture, and return the current run's completion Task.
   a11::Task Stop();
+
+  /// Return the current run's completion Task without requesting a stop, so a
+  /// caller can await a stream ending on its own. Resolves immediately when no
+  /// run is active.
+  a11::Task Wait();
 
   [[nodiscard]] bool running() const;
   /// Current/final run status (OK before the first run and after a clean stop).
@@ -153,7 +194,14 @@ class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
  private:
   explicit SpeechRecognizer(
       std::shared_ptr<internal::SpeechRecognizerState> state);
-  absl::Status Run(std::shared_ptr<AudioSubscription> subscription,
+  // Shared start path; the caller must hold the state mutex.
+  a11::Task StartWithReaderLocked(AudioBufferReader reader,
+                                  absl::Duration pause_after,
+                                  std::function<void()> close_source,
+                                  OnTranscription on_transcription,
+                                  OnRecognitionDone on_done);
+  absl::Status Run(AudioBufferReader reader, absl::Duration pause_after,
+                   std::function<void()> close_source,
                    OnTranscription on_transcription, OnRecognitionDone on_done);
 
   std::shared_ptr<internal::SpeechRecognizerState> state_;

@@ -759,6 +759,28 @@ target_link_libraries(
 # both public components through their transitive target metadata.
 target_link_libraries(a11_actions PUBLIC a11::service)
 
+if (A11_BUILD_AUDIO)
+    # The Action-based audio interface: schemas, streaming handlers and the
+    # serialization of the audio value types. Sits above both the raw audio SDK
+    # and the actions/nodes layer.
+    add_library(a11_audio_actions STATIC ${A11_AUDIO_ACTIONS_SOURCES})
+    add_library(a11::audio_actions ALIAS a11_audio_actions)
+    set_target_properties(a11_audio_actions PROPERTIES EXPORT_NAME audio_actions)
+    target_include_directories(
+            a11_audio_actions PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_audio_actions
+            PUBLIC a11::actions a11::audio a11::concurrency a11::data a11::nodes
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            PRIVATE
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            nlohmann_json::nlohmann_json a11::warnings)
+endif ()
+
 if (A11_BUILD_PYTHON)
     # PEP 517 frontends run CMake through a temporary build environment. Cache a
     # stable interpreter from its Python root so an editable rebuild remains
@@ -919,7 +941,7 @@ if (A11_BUILD_PYTHON)
             pybind11_abseil::status_casters a11::warnings
             absl::failure_signal_handler absl::symbolize)
     if (A11_BUILD_AUDIO)
-        target_link_libraries(a11_python PRIVATE a11::audio)
+        target_link_libraries(a11_python PRIVATE a11::audio a11::audio_actions)
     endif ()
 
     # pybind11_abseil's status caster imports this extension by its canonical
@@ -970,7 +992,7 @@ if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)
 endif ()
 if (A11_BUILD_AUDIO)
-    list(APPEND A11_INSTALL_TARGETS a11_audio)
+    list(APPEND A11_INSTALL_TARGETS a11_audio a11_audio_actions)
 endif ()
 install(
         TARGETS ${A11_INSTALL_TARGETS}

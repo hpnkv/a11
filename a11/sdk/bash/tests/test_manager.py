@@ -94,12 +94,9 @@ def _running_action(
 
     action = Action(ActionSchema(name="shell_execute"), handler=handler)
     if deadline is not None:
-        # ``get_deadline`` reads a bare integer header as nanoseconds; write it
-        # in that form so the deadline round-trips faithfully.
-        action.set_header(
-            "x-a11-deadline",
-            str(deadline.nanoseconds_since_epoch).encode(),
-        )
+        # Write the header through the canonical producer so it uses the
+        # standard representation (bare milliseconds since the epoch).
+        a11.set_deadline_header(action, deadline)
     action.run()
     return action, release
 

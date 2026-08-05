@@ -26,8 +26,9 @@ constexpr char kStreamTrace[] = "1234567890abcdef1234567890abcdef";
 const RecordedSpan* Find(const std::vector<RecordedSpan>& spans,
                          std::string_view name) {
   for (const RecordedSpan& span : spans) {
-    if (span.name == name)
+    if (span.name == name) {
       return &span;
+    }
   }
   return nullptr;
 }
@@ -35,16 +36,18 @@ const RecordedSpan* Find(const std::vector<RecordedSpan>& spans,
 const RecordedEvent* FindEvent(const RecordedSpan& span,
                                std::string_view name) {
   for (const RecordedEvent& event : span.events) {
-    if (event.name == name)
+    if (event.name == name) {
       return &event;
+    }
   }
   return nullptr;
 }
 
 std::string Attr(const RecordedEvent& event, std::string_view key) {
   for (const auto& [k, v] : event.attributes) {
-    if (k == key)
+    if (k == key) {
       return v;
+    }
   }
   return "";
 }
@@ -58,6 +61,7 @@ class SessionStreamSpanTest : public ::testing::Test {
     ASSERT_TRUE(Configure(options).ok());
     ClearRecordedSpans();
   }
+
   void TearDown() override { Shutdown(); }
 };
 
@@ -83,26 +87,26 @@ TEST_F(SessionStreamSpanTest, StreamSpansSharePreassignedTraceAndRecordSends) {
 
   std::atomic<bool> first_done = false;
   std::atomic<bool> second_done = false;
-  ASSERT_TRUE(first
-                  ->Start([](std::optional<data::WireMessage>) {
-                    return a11::ReadyTask();
-                  },
-                          [&first_done]() {
-                            first_done = true;
-                            return a11::ReadyTask();
-                          })
-                  .Await()
-                  .ok());
-  ASSERT_TRUE(second
-                  ->Accept([](std::optional<data::WireMessage>) {
-                    return a11::ReadyTask();
-                  },
-                           [&second_done]() {
-                             second_done = true;
-                             return a11::ReadyTask();
-                           })
-                  .Await()
-                  .ok());
+  ASSERT_TRUE(
+      first
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [&first_done]() {
+                first_done = true;
+                return a11::ReadyTask();
+              })
+          .Await()
+          .ok());
+  ASSERT_TRUE(
+      second
+          ->Accept(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [&second_done]() {
+                second_done = true;
+                return a11::ReadyTask();
+              })
+          .Await()
+          .ok());
 
   data::WireMessage message{.node_fragments = {{
                                 .id = "node",
@@ -125,8 +129,9 @@ TEST_F(SessionStreamSpanTest, StreamSpansSharePreassignedTraceAndRecordSends) {
   int stream_spans = 0;
   const RecordedEvent* send_event = nullptr;
   for (const RecordedSpan& span : spans) {
-    if (span.name != "a11.wire_stream")
+    if (span.name != "a11.wire_stream") {
       continue;
+    }
     ++stream_spans;
     EXPECT_EQ(span.trace_id, kStreamTrace);
     if (const RecordedEvent* event = FindEvent(span, "a11.wire.send")) {

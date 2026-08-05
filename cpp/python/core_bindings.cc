@@ -78,8 +78,9 @@ void SetStatusDetails(NativeStatus& status, const py::handle& details) {
 
 NativeDuration ScaledDuration(const std::optional<double>& value,
                               double nanoseconds_per_unit) {
-  if (!value.has_value() || *value <= -1e-8)
+  if (!value.has_value() || *value <= -1e-8) {
     return NativeDuration(absl::InfiniteDuration());
+  }
   const double nanoseconds = *value * nanoseconds_per_unit;
   if (!std::isfinite(nanoseconds) ||
       nanoseconds > static_cast<double>(INT64_MAX) ||
@@ -139,16 +140,19 @@ void BindCore(py::module_& module) {
             return JsonToPython(StatusDetails(status.value()));
           },
           &SetStatusDetails, "The structured status details, as a list.")
-      .def("is_ok",
-           [](const NativeStatus& status) { return status.value().ok(); },
-           "Returns whether the status is OK (no error).")
-      .def("_as_dict",
-           [](const NativeStatus& status) {
-             return JsonToPython(ValueOrThrow(StatusToJson(status.value())));
-           },
-           "Returns the status as a JSON-compatible dict.")
-      .def("_copy", [](const NativeStatus& status) { return status; },
-           "Returns a copy of this status.")
+      .def(
+          "is_ok",
+          [](const NativeStatus& status) { return status.value().ok(); },
+          "Returns whether the status is OK (no error).")
+      .def(
+          "_as_dict",
+          [](const NativeStatus& status) {
+            return JsonToPython(ValueOrThrow(StatusToJson(status.value())));
+          },
+          "Returns the status as a JSON-compatible dict.")
+      .def(
+          "_copy", [](const NativeStatus& status) { return status; },
+          "Returns a copy of this status.")
       .def(
           "__eq__",
           [](const NativeStatus& left, const NativeStatus& right) {
@@ -157,20 +161,24 @@ void BindCore(py::module_& module) {
           },
           "Returns whether two statuses have equal code, message, and details.",
           py::arg("right"), py::is_operator())
-      .def("__str__",
-           [](const NativeStatus& status) {
-             py::object code = py::module_::import("a11.status")
-                                   .attr("StatusCode")(
-                                       static_cast<int>(status.value().code()));
-             return py::str("{}: {}").attr("format")(
-                 code, std::string(status.value().message()));
-           },
-           "Returns a 'CODE: message' string form of the status.")
-      .def("__repr__", [](const NativeStatus& status) {
-        return "Status(code=" +
-               std::to_string(static_cast<int>(status.value().code())) +
-               ", message='" + std::string(status.value().message()) + "')";
-      }, "Returns a debug representation of the status.");
+      .def(
+          "__str__",
+          [](const NativeStatus& status) {
+            py::object code = py::module_::import("a11.status")
+                                  .attr("StatusCode")(
+                                      static_cast<int>(status.value().code()));
+            return py::str("{}: {}").attr("format")(
+                code, std::string(status.value().message()));
+          },
+          "Returns a 'CODE: message' string form of the status.")
+      .def(
+          "__repr__",
+          [](const NativeStatus& status) {
+            return "Status(code=" +
+                   std::to_string(static_cast<int>(status.value().code())) +
+                   ", message='" + std::string(status.value().message()) + "')";
+          },
+          "Returns a debug representation of the status.");
 
   py::class_<NativeDuration>(module, "Duration", py::dynamic_attr())
       .def(py::init([](std::int64_t nanoseconds) {
@@ -181,8 +189,9 @@ void BindCore(py::module_& module) {
       .def_static(
           "nanoseconds",
           [](const std::optional<std::int64_t>& value) {
-            if (!value.has_value() || *value < 0)
+            if (!value.has_value() || *value < 0) {
               return NativeDuration(absl::InfiniteDuration());
+            }
             return NativeDuration(absl::Nanoseconds(*value));
           },
           "Creates a duration from nanoseconds; None or negative means "
@@ -211,18 +220,21 @@ void BindCore(py::module_& module) {
           },
           "Creates a duration from seconds; None or negative means infinite.",
           py::arg("value"))
-      .def_static("_positive_infinity",
-                  [] { return NativeDuration(absl::InfiniteDuration()); },
-                  "Returns the positive-infinite duration.")
-      .def_static("_negative_infinity",
-                  [] { return NativeDuration(-absl::InfiniteDuration()); },
-                  "Returns the negative-infinite duration.")
-      .def("is_infinite",
-           [](const NativeDuration& duration) {
-             return duration.value() == absl::InfiniteDuration() ||
-                    duration.value() == -absl::InfiniteDuration();
-           },
-           "Returns whether the duration is positive or negative infinite.")
+      .def_static(
+          "_positive_infinity",
+          [] { return NativeDuration(absl::InfiniteDuration()); },
+          "Returns the positive-infinite duration.")
+      .def_static(
+          "_negative_infinity",
+          [] { return NativeDuration(-absl::InfiniteDuration()); },
+          "Returns the negative-infinite duration.")
+      .def(
+          "is_infinite",
+          [](const NativeDuration& duration) {
+            return duration.value() == absl::InfiniteDuration() ||
+                   duration.value() == -absl::InfiniteDuration();
+          },
+          "Returns whether the duration is positive or negative infinite.")
       .def_property_readonly(
           "nanoseconds_value",
           [](const NativeDuration& duration) {
@@ -233,10 +245,12 @@ void BindCore(py::module_& module) {
           "float_seconds",
           [](const NativeDuration& duration,
              const py::object& infinity_value) -> py::object {
-            if (duration.value() == absl::InfiniteDuration())
+            if (duration.value() == absl::InfiniteDuration()) {
               return infinity_value;
-            if (duration.value() == -absl::InfiniteDuration())
+            }
+            if (duration.value() == -absl::InfiniteDuration()) {
               return py::float_(0.0);
+            }
             if (duration.value() < absl::ZeroDuration()) {
               ThrowStatus(absl::InvalidArgumentError(
                   "float_seconds() is only available for non-negative "
@@ -249,11 +263,12 @@ void BindCore(py::module_& module) {
           "Returns the duration in seconds as a float; infinity_value is "
           "returned for a positive-infinite duration.",
           py::arg("infinity_value") = py::none())
-      .def("__neg__",
-           [](const NativeDuration& duration) {
-             return NativeDuration(-duration.value());
-           },
-           "Returns the negated duration.")
+      .def(
+          "__neg__",
+          [](const NativeDuration& duration) {
+            return NativeDuration(-duration.value());
+          },
+          "Returns the negated duration.")
       .def("__add__", &AddDurations, "Returns the sum of two durations.",
            py::arg("right"), py::is_operator())
       .def(
@@ -284,25 +299,34 @@ void BindCore(py::module_& module) {
           },
           "Returns whether this duration is less than or equal to another.",
           py::arg("right"), py::is_operator())
-      .def("__hash__",
-           [](const NativeDuration& duration) {
-             if (duration.value() == absl::InfiniteDuration())
-               return py::hash(py::str("a11.Duration(+inf)"));
-             if (duration.value() == -absl::InfiniteDuration())
-               return py::hash(py::str("a11.Duration(-inf)"));
-             return py::hash(
-                 py::int_(DurationNanosecondsOrThrow(duration.value())));
-           },
-           "Returns a hash of the duration.")
-      .def("__repr__", [](const NativeDuration& duration) {
-        if (duration.value() == absl::InfiniteDuration())
-          return std::string("Duration(+inf)");
-        if (duration.value() == -absl::InfiniteDuration())
-          return std::string("Duration(-inf)");
-        return "Duration(" +
-               std::to_string(DurationNanosecondsOrThrow(duration.value())) +
-               "ns)";
-      }, "Returns a debug representation of the duration.");
+      .def(
+          "__hash__",
+          [](const NativeDuration& duration) {
+            if (duration.value() == absl::InfiniteDuration()) {
+              return py::hash(py::str("a11.Duration(+inf)"));
+            }
+            if (duration.value() == -absl::InfiniteDuration()) {
+              return py::hash(py::str("a11.Duration(-inf)"));
+            }
+            return py::hash(
+                py::int_(DurationNanosecondsOrThrow(duration.value())));
+          },
+          "Returns a hash of the duration.")
+      .def(
+          "__repr__",
+          [](const NativeDuration& duration) {
+            if (duration.value() == absl::InfiniteDuration()) {
+              return std::string("Duration(+inf)");
+            }
+            if (duration.value() == -absl::InfiniteDuration()) {
+              return std::string("Duration(-inf)");
+            }
+            return "Duration(" +
+                   std::to_string(
+                       DurationNanosecondsOrThrow(duration.value())) +
+                   "ns)";
+          },
+          "Returns a debug representation of the duration.");
 
   py::class_<NativeTime>(module, "Time", py::dynamic_attr())
       .def(py::init([](std::int64_t nanoseconds) {
@@ -310,25 +334,28 @@ void BindCore(py::module_& module) {
            }),
            "Creates a time from nanoseconds since the Unix epoch.",
            py::arg("nanoseconds_since_epoch"))
-      .def_static("from_nanoseconds_since_epoch",
-                  [](std::int64_t nanoseconds) {
-                    return NativeTime(absl::FromUnixNanos(nanoseconds));
-                  },
-                  "Creates a time from nanoseconds since the Unix epoch.",
-                  py::arg("nanoseconds"))
-      .def_static("_infinite_future",
-                  [] { return NativeTime(absl::InfiniteFuture()); },
-                  "Returns the infinite-future time.")
-      .def_static("_infinite_past",
-                  [] { return NativeTime(absl::InfinitePast()); },
-                  "Returns the infinite-past time.")
-      .def_static("_now", [] { return NativeTime(a11::Now()); },
-                  "Returns the current time.")
-      .def_property_readonly("nanoseconds_since_epoch",
-                             [](const NativeTime& time) {
-                               return TimeNanosecondsOrThrow(time.value());
-                             },
-                             "The time as nanoseconds since the Unix epoch.")
+      .def_static(
+          "from_nanoseconds_since_epoch",
+          [](std::int64_t nanoseconds) {
+            return NativeTime(absl::FromUnixNanos(nanoseconds));
+          },
+          "Creates a time from nanoseconds since the Unix epoch.",
+          py::arg("nanoseconds"))
+      .def_static(
+          "_infinite_future", [] { return NativeTime(absl::InfiniteFuture()); },
+          "Returns the infinite-future time.")
+      .def_static(
+          "_infinite_past", [] { return NativeTime(absl::InfinitePast()); },
+          "Returns the infinite-past time.")
+      .def_static(
+          "_now", [] { return NativeTime(a11::Now()); },
+          "Returns the current time.")
+      .def_property_readonly(
+          "nanoseconds_since_epoch",
+          [](const NativeTime& time) {
+            return TimeNanosecondsOrThrow(time.value());
+          },
+          "The time as nanoseconds since the Unix epoch.")
       .def(
           "__add__",
           [](const NativeTime& time, const NativeDuration& duration) {
@@ -343,8 +370,9 @@ void BindCore(py::module_& module) {
               const auto& duration = other.cast<const NativeDuration&>();
               return py::cast(NativeTime(time.value() - duration.value()));
             }
-            if (!py::isinstance<NativeTime>(other))
+            if (!py::isinstance<NativeTime>(other)) {
               return py::reinterpret_borrow<py::object>(Py_NotImplemented);
+            }
             const auto& rhs = other.cast<const NativeTime&>();
             if ((time.value() == absl::InfiniteFuture() &&
                  rhs.value() == absl::InfiniteFuture()) ||
@@ -379,23 +407,31 @@ void BindCore(py::module_& module) {
           },
           "Returns whether this time is at or before another.",
           py::arg("right"), py::is_operator())
-      .def("__hash__",
-           [](const NativeTime& time) {
-             if (time.value() == absl::InfiniteFuture())
-               return py::hash(py::str("a11.Time(+inf)"));
-             if (time.value() == absl::InfinitePast())
-               return py::hash(py::str("a11.Time(-inf)"));
-             return py::hash(py::int_(TimeNanosecondsOrThrow(time.value())));
-           },
-           "Returns a hash of the time.")
-      .def("__repr__", [](const NativeTime& time) {
-        if (time.value() == absl::InfiniteFuture())
-          return std::string("Time(+inf)");
-        if (time.value() == absl::InfinitePast())
-          return std::string("Time(-inf)");
-        return "Time(" + std::to_string(TimeNanosecondsOrThrow(time.value())) +
-               "ns)";
-      }, "Returns a debug representation of the time.");
+      .def(
+          "__hash__",
+          [](const NativeTime& time) {
+            if (time.value() == absl::InfiniteFuture()) {
+              return py::hash(py::str("a11.Time(+inf)"));
+            }
+            if (time.value() == absl::InfinitePast()) {
+              return py::hash(py::str("a11.Time(-inf)"));
+            }
+            return py::hash(py::int_(TimeNanosecondsOrThrow(time.value())));
+          },
+          "Returns a hash of the time.")
+      .def(
+          "__repr__",
+          [](const NativeTime& time) {
+            if (time.value() == absl::InfiniteFuture()) {
+              return std::string("Time(+inf)");
+            }
+            if (time.value() == absl::InfinitePast()) {
+              return std::string("Time(-inf)");
+            }
+            return "Time(" +
+                   std::to_string(TimeNanosecondsOrThrow(time.value())) + "ns)";
+          },
+          "Returns a debug representation of the time.");
 }
 
 }  // namespace a11::python

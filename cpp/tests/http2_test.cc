@@ -38,14 +38,17 @@ TEST(Http2Test, MultiplexesBufferedAndStreamingResponses) {
               200, {{"content-type", "application/octet-stream"},
                     {"x-repeat", "first"},
                     {"x-repeat", "second"}});
-          if (!status.ok())
+          if (!status.ok()) {
             return a11::FailedTask(status);
+          }
           status = response->Write("first-");
-          if (!status.ok())
+          if (!status.ok()) {
             return a11::FailedTask(status);
+          }
           status = response->Write("second");
-          if (!status.ok())
+          if (!status.ok()) {
             return a11::FailedTask(status);
+          }
           status = response->Finish();
           return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
         }
@@ -113,25 +116,32 @@ TEST(Http2Test, ExtendedConnectCarriesDuplexData) {
             [body = std::move(request.body_stream),
              response = std::move(response)]() -> absl::StatusOr<a11::Unit> {
               absl::Status status = response->SendHeaders(200);
-              if (!status.ok())
+              if (!status.ok()) {
                 return status;
+              }
               auto incoming =
                   body->Read().Await(absl::Now() + absl::Seconds(5));
-              if (!incoming.ok())
+              if (!incoming.ok()) {
                 return incoming.status();
-              if (!incoming->has_value())
+              }
+              if (!incoming->has_value()) {
                 return absl::DataLossError("CONNECT body ended before data");
+              }
               status = response->Write(absl::StrCat("echo:", **incoming));
-              if (!status.ok())
+              if (!status.ok()) {
                 return status;
+              }
               auto end = body->Read().Await(absl::Now() + absl::Seconds(5));
-              if (!end.ok())
+              if (!end.ok()) {
                 return end.status();
-              if (end->has_value())
+              }
+              if (end->has_value()) {
                 return absl::DataLossError("unexpected second CONNECT chunk");
+              }
               status = response->Finish();
-              if (!status.ok())
+              if (!status.ok()) {
                 return status;
+              }
               return a11::Unit{};
             });
       });

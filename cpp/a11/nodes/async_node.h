@@ -300,13 +300,16 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
              mimetype_patterns)]() mutable -> absl::StatusOr<std::optional<T>> {
           absl::StatusOr<std::optional<data::NodeFragment>> fragment =
               self->NextFragment(timeout).Await();
-          if (!fragment.ok())
+          if (!fragment.ok()) {
             return fragment.status();
-          if (!fragment->has_value())
+          }
+          if (!fragment->has_value()) {
             return std::nullopt;
+          }
           absl::StatusOr<const data::Chunk*> chunk = (*fragment)->GetChunk();
-          if (!chunk.ok())
+          if (!chunk.ok()) {
             return chunk.status();
+          }
           if ((*chunk)->IsNull()) {
             if ((*fragment)->continued) {
               return absl::FailedPreconditionError(
@@ -321,8 +324,9 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
           }
           absl::StatusOr<T> value =
               registry->FromChunk<T>(**chunk, mimetype_patterns);
-          if (!value.ok())
+          if (!value.ok()) {
             return value.status();
+          }
           return std::optional<T>(std::move(*value));
         });
   }

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 
 #include "a11/data/types.h"
@@ -24,11 +25,10 @@ absl::StatusOr<std::shared_ptr<NodeMap>> NodeMap::Create(
   if (!factory) {
     factory = [](std::string node_id)
         -> absl::StatusOr<std::shared_ptr<stores::ChunkStore>> {
-      absl::StatusOr<std::shared_ptr<stores::LocalChunkStore>> store =
-          stores::LocalChunkStore::Create(std::move(node_id));
-      if (!store.ok())
-        return store.status();
-      return std::static_pointer_cast<stores::ChunkStore>(*store);
+      ABSL_ASSIGN_OR_RETURN(
+          std::shared_ptr<stores::LocalChunkStore> store,
+          stores::LocalChunkStore::Create(std::move(node_id)));
+      return std::static_pointer_cast<stores::ChunkStore>(store);
     };
   }
 
@@ -41,14 +41,13 @@ absl::StatusOr<std::shared_ptr<NodeMap>> NodeMap::Create(
 }
 
 absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
-  absl::Status status = data::ValidateName(node_id);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   {
     thread::MutexLock lock(&mu_);
     const auto found = nodes_.find(node_id);
-    if (found != nodes_.end())
+    if (found != nodes_.end()) {
       return found->second;
+    }
   }
 
   // A factory may cross a language boundary. Never invoke it while holding
@@ -61,17 +60,17 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
   } catch (...) {
     return absl::UnknownError("chunk-store factory raised an exception");
   }
-  if (!store.ok())
+  if (!store.ok()) {
     return store.status();
+  }
   if (*store == nullptr) {
     return absl::InternalError("chunk-store factory returned null");
   }
-  absl::StatusOr<std::shared_ptr<AsyncNode>> node = AsyncNode::Create(*store);
-  if (!node.ok())
-    return node.status();
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> node,
+                        AsyncNode::Create(*store));
   {
     thread::MutexLock lock(&mu_);
-    const auto iterator = nodes_.emplace(node_id, *node).first;
+    const auto iterator = nodes_.emplace(std::move(node_id), node).first;
     // Two callers may race through the factory. The first published node is
     // authoritative; the unused store remains privately owned and is safely
     // destroyed after this call.
@@ -81,21 +80,18 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
 
 absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::GetIfExists(
     std::string_view node_id) const {
-  absl::Status status = data::ValidateName(node_id);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   thread::MutexLock lock(&mu_);
   const auto found = nodes_.find(std::string(node_id));
-  if (found == nodes_.end())
+  if (found == nodes_.end()) {
     return std::shared_ptr<AsyncNode>();
+  }
   return found->second;
 }
 
 absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Discard(
     std::string_view node_id, const std::shared_ptr<AsyncNode>& expected) {
-  absl::Status status = data::ValidateName(node_id);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   thread::MutexLock lock(&mu_);
   const auto found = nodes_.find(std::string(node_id));
   if (found == nodes_.end() ||

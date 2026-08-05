@@ -43,13 +43,17 @@ ActionHandler ParentRunsChildHandler() {
   return [](std::shared_ptr<Action> action) {
     return a11::SubmitTask([action = std::move(action)]() -> absl::Status {
       auto child = action->MakeNested(Schema("child"));
-      if (!child.ok())
+      if (!child.ok()) {
         return child.status();
-      if (absl::Status bound = (*child)->BindHandler(OkHandler()); !bound.ok())
+      }
+      if (absl::Status bound = (*child)->BindHandler(OkHandler());
+          !bound.ok()) {
         return bound;
+      }
       auto ran = (*child)->Run();
-      if (!ran.ok())
+      if (!ran.ok()) {
         return ran.status();
+      }
       return (*child)->Wait(absl::Seconds(5)).Await().status();
     });
   };
@@ -58,8 +62,9 @@ ActionHandler ParentRunsChildHandler() {
 const obs::RecordedSpan* Find(const std::vector<obs::RecordedSpan>& spans,
                               std::string_view name) {
   for (const obs::RecordedSpan& span : spans) {
-    if (span.name == name)
+    if (span.name == name) {
       return &span;
+    }
   }
   return nullptr;
 }
@@ -73,6 +78,7 @@ class ActionSpanTest : public ::testing::Test {
     ASSERT_TRUE(obs::Configure(options).ok());
     obs::ClearRecordedSpans();
   }
+
   void TearDown() override { obs::Shutdown(); }
 };
 

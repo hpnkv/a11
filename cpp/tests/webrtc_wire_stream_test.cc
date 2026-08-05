@@ -155,8 +155,9 @@ TEST(WebRtcWireStreamTest, EstablishesThroughWebSocketSignallingBridge) {
                                WebRtcOnDone(server_recorder))
                       .Await(absl::Now() + absl::Seconds(10))
                       .status();
-              if (!status.ok())
+              if (!status.ok()) {
                 return status;
+              }
               (void)accepted->SetValue(stream);
               return absl::OkStatus();
             });

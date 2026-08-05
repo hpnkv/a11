@@ -45,9 +45,9 @@ std::string EncodeSequence(std::uint64_t sequence, std::string_view payload) {
 std::uint64_t DecodeSequence(std::string_view framed) {
   std::uint64_t sequence = 0;
   for (size_t index = 0; index < kSequencePrefix; ++index) {
-    sequence |= static_cast<std::uint64_t>(
-                    static_cast<unsigned char>(framed[index]))
-                << (index * 8U);
+    sequence |=
+        static_cast<std::uint64_t>(static_cast<unsigned char>(framed[index]))
+        << (index * 8U);
   }
   return sequence;
 }
@@ -71,14 +71,17 @@ MultiplexedBinaryChannel::MultiplexedBinaryChannel(
 std::shared_ptr<MultiplexedBinaryChannel> MultiplexedBinaryChannel::Create(
     std::vector<std::shared_ptr<BinaryChannel>> initial_members,
     MemberChannelFactory factory, MultiplexedChannelOptions options) {
-  if (options.target_channels == 0)
+  if (options.target_channels == 0) {
     options.target_channels = 1;
+  }
+
   struct Enabler final : MultiplexedBinaryChannel {
     Enabler(std::vector<std::shared_ptr<BinaryChannel>> members,
             MemberChannelFactory factory, MultiplexedChannelOptions options)
         : MultiplexedBinaryChannel(std::move(members), std::move(factory),
                                    options) {}
   };
+
   return std::make_shared<Enabler>(std::move(initial_members),
                                    std::move(factory), options);
 }
@@ -88,16 +91,17 @@ MultiplexedBinaryChannel::~MultiplexedBinaryChannel() {
 }
 
 void MultiplexedBinaryChannel::NotifyLocked() {
-  std::shared_ptr<thread::PermanentEvent> event = std::exchange(
-      changed_, std::make_shared<thread::PermanentEvent>());
+  std::shared_ptr<thread::PermanentEvent> event =
+      std::exchange(changed_, std::make_shared<thread::PermanentEvent>());
   event->Notify();
 }
 
 size_t MultiplexedBinaryChannel::LiveCountLocked() const {
   size_t live = 0;
   for (const std::shared_ptr<Member>& member : members_) {
-    if (member->open)
+    if (member->open) {
       ++live;
+    }
   }
   return live;
 }
@@ -123,39 +127,45 @@ void MultiplexedBinaryChannel::WireMember(
   BinaryChannelCallbacks callbacks{
       .on_open =
           [weak, id]() {
-            if (auto self = weak.lock(); self != nullptr)
+            if (auto self = weak.lock(); self != nullptr) {
               self->OnMemberOpen(id);
+            }
           },
       .on_message =
           [weak](std::string framed) {
-            if (auto self = weak.lock(); self != nullptr)
+            if (auto self = weak.lock(); self != nullptr) {
               self->OnMemberMessage(std::move(framed));
+            }
           },
       .on_error =
           [weak, id](absl::Status status) {
-            if (auto self = weak.lock(); self != nullptr)
+            if (auto self = weak.lock(); self != nullptr) {
               self->DropMember(id, status.message());
+            }
           },
       .on_closed =
           [weak, id]() {
-            if (auto self = weak.lock(); self != nullptr)
+            if (auto self = weak.lock(); self != nullptr) {
               self->DropMember(id, "channel closed");
+            }
           },
       // Forward drain notifications to the aggregate so the sender's drain
       // barrier wakes, and try to push buffered packets onto the freed channel.
       .on_buffered_amount_low =
           [weak]() {
             std::shared_ptr<MultiplexedBinaryChannel> self = weak.lock();
-            if (self == nullptr)
+            if (self == nullptr) {
               return;
+            }
             std::function<void()> low;
             {
               thread::MutexLock lock(&self->mu_);
               low = self->callbacks_.on_buffered_amount_low;
             }
             self->FlushPending();
-            if (low)
+            if (low) {
               low();
+            }
           }};
   absl::Status configured = member->channel->SetCallbacks(std::move(callbacks));
   if (!configured.ok()) {
@@ -164,8 +174,9 @@ void MultiplexedBinaryChannel::WireMember(
   }
   // The transport may already be open before its callbacks were installed.
   absl::StatusOr<bool> already_open = member->channel->IsOpen();
-  if (already_open.ok() && *already_open)
+  if (already_open.ok() && *already_open) {
     OnMemberOpen(id);
+  }
 }
 
 absl::Status MultiplexedBinaryChannel::SetCallbacks(
@@ -177,8 +188,9 @@ absl::Status MultiplexedBinaryChannel::SetCallbacks(
     callbacks_set_ = true;
     members = members_;
   }
-  for (const std::shared_ptr<Member>& member : members)
+  for (const std::shared_ptr<Member>& member : members) {
     WireMember(member);
+  }
   return absl::OkStatus();
 }
 
@@ -190,16 +202,18 @@ absl::Status MultiplexedBinaryChannel::ResetCallbacks() {
     callbacks_set_ = false;
     members = members_;
   }
-  for (const std::shared_ptr<Member>& member : members)
+  for (const std::shared_ptr<Member>& member : members) {
     (void)member->channel->ResetCallbacks();
+  }
   return absl::OkStatus();
 }
 
 absl::Status MultiplexedBinaryChannel::Open() {
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return absl::CancelledError("Multiplexed channel is closed");
+    }
   }
   // Only replenishes if the initial batch came up short; in steady state this
   // schedules nothing, so no fiber lingers to be torn down with the stream.
@@ -212,8 +226,9 @@ void MultiplexedBinaryChannel::OnMemberOpen(std::uint64_t id) {
   std::function<void()> on_open;
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return;
+    }
     bool found = false;
     for (const std::shared_ptr<Member>& member : members_) {
       if (member->id == id) {
@@ -222,8 +237,9 @@ void MultiplexedBinaryChannel::OnMemberOpen(std::uint64_t id) {
         break;
       }
     }
-    if (!found)
+    if (!found) {
       return;
+    }
     if (!any_open_) {
       any_open_ = true;
       announce = true;
@@ -232,8 +248,9 @@ void MultiplexedBinaryChannel::OnMemberOpen(std::uint64_t id) {
     NotifyLocked();
   }
   FlushPending();
-  if (announce && on_open)
+  if (announce && on_open) {
     on_open();
+  }
 }
 
 void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
@@ -245,9 +262,10 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
       thread::MutexLock lock(&mu_);
       on_error = callbacks_.on_error;
     }
-    if (on_error)
+    if (on_error) {
       on_error(absl::InvalidArgumentError(
           "Multiplexed member packet was malformed"));
+    }
     return;
   }
   const std::uint64_t sequence = DecodeSequence(framed);
@@ -256,8 +274,9 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
   std::vector<std::string> ready;
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return;
+    }
     if (sequence >= next_deliver_seq_ &&
         reorder_.find(sequence) == reorder_.end()) {
       if (reorder_.size() >= options_.max_reorder_packets) {
@@ -282,13 +301,15 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
         "Multiplexed channel reorder buffer overflowed"));
     return;
   }
-  if (on_message == nullptr)
+  if (on_message == nullptr) {
     return;
+  }
   // Drain contiguous packets in order; keep draining anything that arrived
   // while we were delivering without the lock.
   while (true) {
-    for (std::string& packet : ready)
+    for (std::string& packet : ready) {
       on_message(std::move(packet));
+    }
     ready.clear();
     thread::MutexLock lock(&mu_);
     auto it = reorder_.begin();
@@ -312,8 +333,9 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
 absl::Status MultiplexedBinaryChannel::Send(std::string bytes) {
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return absl::CancelledError("Multiplexed channel is closed");
+    }
     std::string framed = EncodeSequence(next_send_seq_++, bytes);
     pending_out_bytes_ += framed.size();
     pending_out_.push_back(std::move(framed));
@@ -325,8 +347,9 @@ absl::Status MultiplexedBinaryChannel::Send(std::string bytes) {
 void MultiplexedBinaryChannel::FlushPending() {
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return;
+    }
     if (flushing_) {
       // Another flusher owns the queue; make sure it revisits it before exit.
       flush_again_ = true;
@@ -398,8 +421,9 @@ absl::StatusOr<size_t> MultiplexedBinaryChannel::BufferedAmount() const {
   }
   for (const std::shared_ptr<Member>& member : members) {
     absl::StatusOr<size_t> amount = member->channel->BufferedAmount();
-    if (amount.ok())
+    if (amount.ok()) {
       total += *amount;
+    }
   }
   return total;
 }
@@ -413,8 +437,9 @@ absl::Status MultiplexedBinaryChannel::Close() {
   std::vector<std::shared_ptr<Member>> members;
   {
     thread::MutexLock lock(&mu_);
-    if (closed_)
+    if (closed_) {
       return absl::OkStatus();
+    }
     closed_ = true;
     members = members_;
     members_.clear();
@@ -433,28 +458,32 @@ absl::Status MultiplexedBinaryChannel::Close() {
 void* absl_nullable MultiplexedBinaryChannel::GetImpl() const {
   thread::MutexLock lock(&mu_);
   for (const std::shared_ptr<Member>& member : members_) {
-    if (member->open)
+    if (member->open) {
       return member->channel->GetImpl();
+    }
   }
   return members_.empty() ? nullptr : members_.front()->channel->GetImpl();
 }
 
 bool MultiplexedBinaryChannel::AddMember(
     std::shared_ptr<BinaryChannel> channel) {
-  if (channel == nullptr)
+  if (channel == nullptr) {
     return false;
+  }
   std::shared_ptr<Member> member;
   bool wire = false;
   {
     thread::MutexLock lock(&mu_);
-    if (closed_ || members_.size() >= options_.target_channels)
+    if (closed_ || members_.size() >= options_.target_channels) {
       return false;
+    }
     member = AppendMemberLocked(std::move(channel));
     wire = callbacks_set_;
     NotifyLocked();
   }
-  if (wire)
+  if (wire) {
     WireMember(member);
+  }
   return true;
 }
 
@@ -472,8 +501,9 @@ void MultiplexedBinaryChannel::DropMember(std::uint64_t id,
         break;
       }
     }
-    if (dropped == nullptr)
+    if (dropped == nullptr) {
       return;
+    }
     VLOG(1) << "a11 webrtc: lost data channel (" << reason << "); "
             << LiveCountLocked() << " of " << options_.target_channels
             << " remain";
@@ -491,10 +521,11 @@ void MultiplexedBinaryChannel::DropMember(std::uint64_t id,
     (void)dropped->channel->ResetCallbacks();
     (void)dropped->channel->Close();
   }
-  if (fatal && on_closed)
+  if (fatal && on_closed) {
     on_closed();
-  else if (!fatal)
+  } else if (!fatal) {
     MaybeReplenish();
+  }
 }
 
 bool MultiplexedBinaryChannel::WaitMemberOpen(std::uint64_t id) {
@@ -503,27 +534,32 @@ bool MultiplexedBinaryChannel::WaitMemberOpen(std::uint64_t id) {
     std::shared_ptr<thread::PermanentEvent> changed;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_)
+      if (closed_) {
         return false;
+      }
       bool present = false;
       for (const std::shared_ptr<Member>& member : members_) {
         if (member->id == id) {
           present = true;
-          if (member->open)
+          if (member->open) {
             return true;
+          }
           break;
         }
       }
-      if (!present)
+      if (!present) {
         return false;  // Dropped before opening.
+      }
       changed = changed_;
     }
     const int selected =
         thread::SelectUntil(deadline, {thread::OnCancel(), changed->OnEvent()});
-    if (selected == 0)
+    if (selected == 0) {
       return false;
-    if (selected < 0)
+    }
+    if (selected < 0) {
       return false;  // Timed out.
+    }
   }
 }
 
@@ -561,13 +597,15 @@ void MultiplexedBinaryChannel::Replenish() {
                 << replenish_failures_ << " consecutive failures";
         // If nothing is live and we have given up, fail the stream rather than
         // buffer outgoing packets forever. Fire outside the lock.
-        if (!closed_ && LiveCountLocked() == 0)
+        if (!closed_ && LiveCountLocked() == 0) {
           give_up_on_closed = callbacks_.on_closed;
+        }
       }
     }
     if (give_up) {
-      if (give_up_on_closed)
+      if (give_up_on_closed) {
         give_up_on_closed();
+      }
       return;
     }
     absl::StatusOr<std::shared_ptr<BinaryChannel>> created = factory_();

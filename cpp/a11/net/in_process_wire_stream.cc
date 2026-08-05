@@ -14,6 +14,7 @@
 
 #include <absl/random/random.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
@@ -133,12 +134,8 @@ absl::StatusOr<InProcessWireStream::Pair> InProcessWireStream::CreatePair(
   }
   first_options = first_options.value_or(WireStreamOptions{});
   second_options = second_options.value_or(WireStreamOptions{});
-  absl::Status status = first_options->Validate();
-  if (!status.ok())
-    return status;
-  status = second_options->Validate();
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(first_options->Validate());
+  ABSL_RETURN_IF_ERROR(second_options->Validate());
   const std::string id =
       preassigned_id.empty() ? NewStreamId() : std::move(preassigned_id);
   auto first_state = std::make_shared<State>(*first_options, id);
@@ -161,9 +158,7 @@ absl::StatusOr<InProcessWireStream::Pair> InProcessWireStream::CreatePair(
 }
 
 absl::Status InProcessWireStream::Send(data::WireMessage message) {
-  absl::Status validation = message.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(message.Validate());
   if (const std::shared_ptr<State> peer = state_->peer.lock()) {
     thread::MutexLock peer_lock(&peer->mu);
     if (peer->local_end == End::kAbort) {
@@ -174,11 +169,9 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
 
   End end = End::kNone;
   if (data::IsHalfCloseMessage(message)) {
-    absl::StatusOr<data::ByteMap> headers =
-        NormalizeWireHeaders(std::move(message.headers));
-    if (!headers.ok())
-      return headers.status();
-    message.headers = std::move(*headers);
+    ABSL_ASSIGN_OR_RETURN(data::ByteMap headers,
+                          NormalizeWireHeaders(std::move(message.headers)));
+    message.headers = std::move(headers);
     end = message.headers.find(kAbortStatusHeader) != message.headers.end()
               ? End::kAbort
               : End::kHalfClose;
@@ -200,8 +193,9 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
       // Abort outside the lock below.
     } else {
       state_->local_end = end;
-      if (end == End::kHalfClose)
+      if (end == End::kHalfClose) {
         state_->half_close_requested = true;
+      }
       if (end == End::kAbort) {
         state_->status =
             absl::AbortedError("The stream was aborted by this endpoint");
@@ -209,8 +203,7 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
       if (state_->span.IsRecording()) {
         state_->span.AddEvent(
             "a11.wire.send",
-            {{"a11.wire.action_messages",
-              absl::StrCat(message.actions.size())},
+            {{"a11.wire.action_messages", absl::StrCat(message.actions.size())},
              {"a11.wire.node_fragments",
               absl::StrCat(message.node_fragments.size())},
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
@@ -270,10 +263,8 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
 }
 
 absl::Status InProcessWireStream::HalfClose(data::ByteMap trailers) {
-  absl::StatusOr<data::ByteMap> normalized =
-      NormalizeWireHeaders(std::move(trailers));
-  if (!normalized.ok())
-    return normalized.status();
+  ABSL_ASSIGN_OR_RETURN(data::ByteMap normalized,
+                        NormalizeWireHeaders(std::move(trailers)));
   {
     thread::MutexLock lock(&state_->mu);
     if (state_->deadline <= absl::Now()) {
@@ -285,7 +276,7 @@ absl::Status InProcessWireStream::HalfClose(data::ByteMap trailers) {
       state_->local_end = End::kHalfClose;
       state_->half_close_requested = true;
       state_->outbound.push_back(State::Outbound{
-          .message = data::MakeHalfCloseMessage(std::move(*normalized)),
+          .message = data::MakeHalfCloseMessage(std::move(normalized)),
           .end = End::kHalfClose,
       });
       state_->cv.SignalAll();
@@ -303,8 +294,9 @@ a11::Task InProcessWireStream::DrainOutgoingMessages() {
     return a11::FailedTask(absl::FailedPreconditionError(
         "DrainOutgoingMessages requires HalfClose first"));
   }
-  if (state_->local_end_sent == End::kHalfClose)
+  if (state_->local_end_sent == End::kHalfClose) {
     return a11::ReadyTask();
+  }
   if (!state_->started) {
     return a11::FailedTask(absl::FailedPreconditionError(
         "The stream must be started before drain"));
@@ -316,9 +308,7 @@ absl::Status InProcessWireStream::Abort(absl::Status status) {
   if (status.ok()) {
     return absl::InvalidArgumentError("Abort status must be non-OK");
   }
-  absl::StatusOr<std::string> encoded = data::PackStatus(status);
-  if (!encoded.ok())
-    return encoded.status();
+  ABSL_ASSIGN_OR_RETURN(std::string encoded, data::PackStatus(status));
   {
     thread::MutexLock lock(&state_->mu);
     if (state_->deadline <= absl::Now()) {
@@ -331,7 +321,7 @@ absl::Status InProcessWireStream::Abort(absl::Status status) {
       state_->local_end = End::kAbort;
       data::WireMessage message;
       message.headers.emplace(std::string(kAbortStatusHeader),
-                              std::move(*encoded));
+                              std::move(encoded));
       state_->outbound.push_back(
           State::Outbound{.message = std::move(message), .end = End::kAbort});
       state_->cv.SignalAll();
@@ -403,8 +393,9 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
       while (state->outbound.empty() && !state->transport_finished) {
         state->cv.Wait(&state->mu);
       }
-      if (state->transport_finished)
+      if (state->transport_finished) {
         return;
+      }
       outbound = std::move(state->outbound.front());
       state->outbound.pop_front();
       if (state->implementation_aborted && outbound.end != End::kAbort) {
@@ -469,8 +460,9 @@ void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
       while (state->incoming.empty() && !state->transport_finished) {
         state->cv.Wait(&state->mu);
       }
-      if (state->transport_finished)
+      if (state->transport_finished) {
         return;
+      }
       payload = std::move(state->incoming.front());
       state->incoming.pop_front();
       state->incoming_bytes -= payload.size();
@@ -532,8 +524,9 @@ void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
         thread::MutexLock lock(&state->mu);
         state->remote_aborted = true;
         state->trailers.reset();
-        if (state->status.ok())
+        if (state->status.ok()) {
           state->status = recorded;
+        }
       }
       Finish(state);
       return;
@@ -563,8 +556,9 @@ void InProcessWireStream::WatchTiming(std::shared_ptr<State> state) {
     bool deadline_is_first = false;
     {
       thread::MutexLock lock(&state->mu);
-      if (state->transport_finished)
+      if (state->transport_finished) {
         return;
+      }
       const absl::Time inactivity =
           state->options.message_timeout == absl::InfiniteDuration()
               ? absl::InfiniteFuture()
@@ -603,14 +597,16 @@ void InProcessWireStream::MarkActivity(const std::shared_ptr<State>& first,
 
 bool InProcessWireStream::ForceAbort(const std::shared_ptr<State>& state,
                                      absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::InternalError("Invalid OK transport abort");
+  }
   absl::StatusOr<std::string> encoded = data::PackStatus(status);
   if (!encoded.ok()) {
     status = encoded.status();
     encoded = data::PackStatus(status);
-    if (!encoded.ok())
+    if (!encoded.ok()) {
       return false;
+    }
   }
   {
     thread::MutexLock lock(&state->mu);
@@ -643,8 +639,9 @@ void InProcessWireStream::MaybeFinish(const std::shared_ptr<State>& state) {
         state->remote_aborted || state->local_end_sent == End::kAbort ||
         (state->local_end_sent == End::kHalfClose && state->remote_half_closed);
   }
-  if (finish)
+  if (finish) {
     Finish(state);
+  }
 }
 
 void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
@@ -653,8 +650,9 @@ void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
   absl::Status span_status;
   {
     thread::MutexLock lock(&state->mu);
-    if (state->transport_finished)
+    if (state->transport_finished) {
       return;
+    }
     state->transport_finished = true;
     state->outbound.clear();
     state->cv.SignalAll();
@@ -673,8 +671,9 @@ void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
       callback ? InvokeDoneCallback(callback) : absl::OkStatus();
   if (!callback_status.ok()) {
     thread::MutexLock lock(&state->mu);
-    if (state->status.ok())
+    if (state->status.ok()) {
       state->status = callback_status;
+    }
   }
   const absl::Status completed =
       callback_status.ok() ? state->done_promise->SetValue(a11::Unit{})

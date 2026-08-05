@@ -14,6 +14,7 @@
 
 #include <absl/base/thread_annotations.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
@@ -137,24 +138,20 @@ ChannelWireStream::MakeState(std::shared_ptr<internal::BinaryChannel> channel,
                              OpenOperation open_operation,
                              WireStreamOptions options,
                              ChannelFramingOptions framing) {
-  if (channel == nullptr)
+  if (channel == nullptr) {
     return absl::InvalidArgumentError("channel must not be null");
-  if (id.empty())
+  }
+  if (id.empty()) {
     return absl::InvalidArgumentError("id must not be empty");
-  absl::Status status = options.Validate();
-  if (!status.ok())
-    return status;
-  status = framing.Validate();
-  if (!status.ok())
-    return status;
-  status =
-      ByteChunkingOptions{.packet_size = framing.split_size,
-                          .max_message_size = options.max_single_message_size,
-                          .max_pending_messages = framing.max_pending_messages,
-                          .max_pending_bytes = framing.max_pending_bytes}
-          .Validate();
-  if (!status.ok())
-    return status;
+  }
+  ABSL_RETURN_IF_ERROR(options.Validate());
+  ABSL_RETURN_IF_ERROR(framing.Validate());
+  ABSL_RETURN_IF_ERROR(
+      (ByteChunkingOptions{.packet_size = framing.split_size,
+                           .max_message_size = options.max_single_message_size,
+                           .max_pending_messages = framing.max_pending_messages,
+                           .max_pending_bytes = framing.max_pending_bytes}
+           .Validate()));
   return std::make_shared<State>(std::move(channel), std::move(id), role,
                                  std::move(open_operation), options, framing);
 }
@@ -175,23 +172,17 @@ void ChannelWireStream::Notify(const std::shared_ptr<State>& state) {
 }
 
 absl::Status ChannelWireStream::Send(data::WireMessage message) {
-  absl::Status validation = message.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(message.Validate());
   End end = End::kNone;
   if (data::IsHalfCloseMessage(message)) {
-    absl::StatusOr<data::ByteMap> headers =
-        NormalizeWireHeaders(std::move(message.headers));
-    if (!headers.ok())
-      return headers.status();
-    message.headers = std::move(*headers);
+    ABSL_ASSIGN_OR_RETURN(data::ByteMap headers,
+                          NormalizeWireHeaders(std::move(message.headers)));
+    message.headers = std::move(headers);
     end = message.headers.find(kAbortStatusHeader) != message.headers.end()
               ? End::kAbort
               : End::kHalfClose;
   }
-  absl::StatusOr<std::string> bytes = message.ToMsgpack();
-  if (!bytes.ok())
-    return bytes.status();
+  ABSL_ASSIGN_OR_RETURN(std::string bytes, message.ToMsgpack());
   bool queued = false;
   {
     thread::MutexLock lock(&state_->mu);
@@ -213,15 +204,14 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
       if (state_->span.IsRecording()) {
         state_->span.AddEvent(
             "a11.wire.send",
-            {{"a11.wire.action_messages",
-              absl::StrCat(message.actions.size())},
+            {{"a11.wire.action_messages", absl::StrCat(message.actions.size())},
              {"a11.wire.node_fragments",
               absl::StrCat(message.node_fragments.size())},
-             {"a11.wire.bytes", absl::StrCat(bytes->size())}});
+             {"a11.wire.bytes", absl::StrCat(bytes.size())}});
       }
       const std::uint64_t message_id = state_->next_outgoing_message_id++;
       state_->outgoing.push_back(State::Outbound{
-          .bytes = std::move(*bytes), .end = end, .message_id = message_id});
+          .bytes = std::move(bytes), .end = end, .message_id = message_id});
       queued = true;
     }
   }
@@ -291,14 +281,16 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
       .on_message =
           [weak](std::string packet) {
             std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr)
+            if (state == nullptr) {
               return;
+            }
             absl::Status error;
             bool enqueued = false;
             try {
               thread::MutexLock lock(&state->mu);
-              if (state->finished)
+              if (state->finished) {
                 return;
+              }
               absl::StatusOr<std::optional<std::string>> reassembled =
                   state->reassembler.Feed(std::move(packet));
               std::optional<std::string> complete;
@@ -346,8 +338,9 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
       .on_closed =
           [weak]() {
             std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr)
+            if (state == nullptr) {
               return;
+            }
             bool expected = false;
             {
               thread::MutexLock lock(&state->mu);
@@ -392,8 +385,9 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
     thread::MutexLock lock(&state_->mu);
     expired =
         state_->deadline <= absl::Now() || state_->local_end == End::kAbort;
-    if (*already_open)
+    if (*already_open) {
       state_->open = true;
+    }
   }
   if (*already_open) {
     (void)state_->startup_promise->SetValue(a11::Unit{});
@@ -437,11 +431,9 @@ absl::Status ChannelWireStream::HalfClose(data::ByteMap trailers) {
       return absl::OkStatus();
     }
   }
-  absl::StatusOr<data::ByteMap> normalized =
-      NormalizeWireHeaders(std::move(trailers));
-  if (!normalized.ok())
-    return normalized.status();
-  return Send(data::MakeHalfCloseMessage(std::move(*normalized)));
+  ABSL_ASSIGN_OR_RETURN(data::ByteMap normalized,
+                        NormalizeWireHeaders(std::move(trailers)));
+  return Send(data::MakeHalfCloseMessage(std::move(normalized)));
 }
 
 a11::Task ChannelWireStream::DrainOutgoingMessages() {
@@ -466,11 +458,9 @@ absl::Status ChannelWireStream::Abort(absl::Status status) {
       return absl::OkStatus();
     }
   }
-  absl::StatusOr<std::string> packed = data::PackStatus(status);
-  if (!packed.ok())
-    return packed.status();
+  ABSL_ASSIGN_OR_RETURN(std::string packed, data::PackStatus(status));
   data::WireMessage message;
-  message.headers.emplace(std::string(kAbortStatusHeader), std::move(*packed));
+  message.headers.emplace(std::string(kAbortStatusHeader), std::move(packed));
   return Send(std::move(message));
 }
 
@@ -531,8 +521,9 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
     bool has_outbound = false;
     {
       thread::MutexLock lock(&state->mu);
-      if (state->finished)
+      if (state->finished) {
         return;
+      }
       if (state->started && state->open && !state->outgoing.empty()) {
         outbound = std::move(state->outgoing.front());
         state->outgoing.pop_front();
@@ -542,8 +533,9 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
       }
     }
     if (!has_outbound) {
-      if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0)
+      if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0) {
         return;
+      }
       continue;
     }
     try {
@@ -575,8 +567,9 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
         std::shared_ptr<thread::PermanentEvent> drain_changed;
         {
           thread::MutexLock lock(&state->mu);
-          if (state->finished)
+          if (state->finished) {
             return;
+          }
           drain_changed = state->changed;
         }
         absl::StatusOr<size_t> buffered_amount =
@@ -585,8 +578,9 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
           Finish(state, buffered_amount.status());
           return;
         }
-        if (*buffered_amount == 0)
+        if (*buffered_amount == 0) {
           break;
+        }
         if (thread::Select({thread::OnCancel(), drain_changed->OnEvent()}) ==
             0) {
           return;
@@ -612,8 +606,9 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
     bool has_message = false;
     {
       thread::MutexLock lock(&state->mu);
-      if (state->finished)
+      if (state->finished) {
         return;
+      }
       if (!state->incoming.empty()) {
         bytes = std::move(state->incoming.front());
         state->incoming.pop_front();
@@ -624,8 +619,9 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
       }
     }
     if (!has_message) {
-      if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0)
+      if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0) {
         return;
+      }
       continue;
     }
     absl::StatusOr<data::WireMessage> message =
@@ -656,8 +652,9 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
       } catch (...) {
         callback_status = absl::UnknownError("on_message raised an exception");
       }
-      if (!callback_status.ok())
+      if (!callback_status.ok()) {
         ForceAbort(state, callback_status);
+      }
       continue;
     }
 
@@ -678,8 +675,9 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
         thread::MutexLock lock(&state->mu);
         state->remote_aborted = true;
         state->trailers.reset();
-        if (state->status.ok())
+        if (state->status.ok()) {
           state->status = status;
+        }
       }
       Finish(state);
       return;
@@ -715,8 +713,9 @@ void ChannelWireStream::WatchTiming(std::shared_ptr<State> state) {
     std::shared_ptr<thread::PermanentEvent> changed;
     {
       thread::MutexLock lock(&state->mu);
-      if (state->finished)
+      if (state->finished) {
         return;
+      }
       const absl::Time inactivity =
           state->options.message_timeout == absl::InfiniteDuration()
               ? absl::InfiniteFuture()
@@ -727,10 +726,12 @@ void ChannelWireStream::WatchTiming(std::shared_ptr<State> state) {
     }
     const int selected =
         thread::SelectUntil(wake, {thread::OnCancel(), changed->OnEvent()});
-    if (selected == 0)
+    if (selected == 0) {
       return;
-    if (selected > 0)
+    }
+    if (selected > 0) {
       continue;
+    }
     ForceAbort(state,
                deadline_first
                    ? absl::DeadlineExceededError("WireStream deadline exceeded")
@@ -751,8 +752,9 @@ void ChannelWireStream::MarkActivity(const std::shared_ptr<State>& state) {
 
 void ChannelWireStream::ForceAbort(const std::shared_ptr<State>& state,
                                    absl::Status status, bool can_communicate) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::InternalError("Invalid OK stream abort");
+  }
   absl::StatusOr<std::string> packed = data::PackStatus(status);
   bool finish_now = false;
   {
@@ -783,8 +785,9 @@ void ChannelWireStream::ForceAbort(const std::shared_ptr<State>& state,
     }
   }
   Notify(state);
-  if (finish_now)
+  if (finish_now) {
     Finish(state);
+  }
 }
 
 void ChannelWireStream::MaybeFinish(const std::shared_ptr<State>& state) {
@@ -795,8 +798,9 @@ void ChannelWireStream::MaybeFinish(const std::shared_ptr<State>& state) {
         state->remote_aborted || state->local_end_sent == End::kAbort ||
         (state->local_end_sent == End::kHalfClose && state->remote_half_closed);
   }
-  if (finish)
+  if (finish) {
     Finish(state);
+  }
 }
 
 void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
@@ -808,8 +812,9 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
   absl::Status span_status;
   {
     thread::MutexLock lock(&state->mu);
-    if (state->finished)
+    if (state->finished) {
       return;
+    }
     state->finished = true;
     if (terminal_error.has_value() && state->status.ok()) {
       state->status = *terminal_error;
@@ -855,8 +860,9 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
     }
     if (!callback_status.ok()) {
       thread::MutexLock lock(&state->mu);
-      if (state->status.ok())
+      if (state->status.ok()) {
         state->status = callback_status;
+      }
     }
   }
 }

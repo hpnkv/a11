@@ -627,8 +627,7 @@ void BindAudio(py::module_& module) {
                      &audio::SpeechRecognizerOptions::silero_threshold,
                      "Silero speech-probability threshold in (0, 1].");
 
-  py::class_<audio::AudioSubscription,
-             std::shared_ptr<audio::AudioSubscription>>(
+  py::classh<audio::AudioSubscription>(
       module, "AudioSubscription",
       "A live subscription delivering fixed-size buffers from an AudioInput.")
       .def_property_readonly("buffer_size",
@@ -656,7 +655,7 @@ void BindAudio(py::module_& module) {
           },
           "Stop delivering; stops capture if this was the last subscription.");
 
-  py::class_<audio::AudioInput, std::shared_ptr<audio::AudioInput>>(
+  py::classh<audio::AudioInput>(
       module, "AudioInput",
       "A capturable input device that samples continuously while at least one "
       "subscription is alive.")
@@ -704,7 +703,7 @@ void BindAudio(py::module_& module) {
           "Begin receiving buffers of `buffer_size` frames per channel.",
           py::arg("buffer_size"));
 
-  py::class_<audio::SpeechRecognizer, std::shared_ptr<audio::SpeechRecognizer>>(
+  py::classh<audio::SpeechRecognizer>(
       module, "SpeechRecognizer",
       "Restartable local automatic speech recognizer backed by whisper.cpp. A "
       "cheap energy gate endpoints utterances so silence never reaches the "

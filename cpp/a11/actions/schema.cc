@@ -37,19 +37,13 @@ absl::Status ActionHeaderSchema::Validate() const {
 }
 
 absl::Status ActionSchema::Validate() const {
-  absl::Status status = data::ValidateName(name);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   const absl::flat_hash_set<std::string_view> reserved = {
       kActionStatusOutput, kActionDispatchStatusOutput};
   for (const auto* ports : {&inputs, &outputs}) {
     for (const auto& [key, port] : *ports) {
-      status = data::ValidateName(key);
-      if (!status.ok())
-        return status;
-      status = port.Validate();
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(data::ValidateName(key));
+      ABSL_RETURN_IF_ERROR(port.Validate());
       if (key != port.name) {
         return absl::InvalidArgumentError(
             absl::StrCat("Action port key '", key,
@@ -62,12 +56,8 @@ absl::Status ActionSchema::Validate() const {
     }
   }
   for (const auto& [key, header] : headers) {
-    status = data::ValidateName(key);
-    if (!status.ok())
-      return status;
-    status = header.Validate();
-    if (!status.ok())
-      return status;
+    ABSL_RETURN_IF_ERROR(data::ValidateName(key));
+    ABSL_RETURN_IF_ERROR(header.Validate());
     if (key != header.name) {
       return absl::InvalidArgumentError(
           absl::StrCat("Action header key '", key,
@@ -80,16 +70,15 @@ absl::Status ActionSchema::Validate() const {
           absl::StrCat("Output '", output, "' is not in the action schema"));
     }
     if (field != kWholeJson) {
-      status = data::ValidateName(field);
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(data::ValidateName(field));
     }
   }
   size_t whole_values = 0;
   for (const auto& [unused, field] : output_to_json_field) {
     (void)unused;
-    if (field == kWholeJson)
+    if (field == kWholeJson) {
       ++whole_values;
+    }
   }
   if (whole_values > 1 ||
       (whole_values == 1 && output_to_json_field.size() != 1)) {
@@ -101,15 +90,14 @@ absl::Status ActionSchema::Validate() const {
 
 absl::Status ActionSchema::MapOutputToJson(std::string output_name,
                                            std::string field_name) {
-  absl::Status status = data::ValidateName(output_name);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(output_name));
   if (outputs.find(output_name) == outputs.end()) {
     return absl::NotFoundError(
         absl::StrCat("Output '", output_name, "' is not in the action schema"));
   }
-  if (field_name.empty())
+  if (field_name.empty()) {
     field_name = output_name;
+  }
   if (field_name == kWholeJson) {
     if (!output_to_json_field.empty() &&
         output_to_json_field != absl::flat_hash_map<std::string, std::string>{
@@ -118,9 +106,7 @@ absl::Status ActionSchema::MapOutputToJson(std::string output_name,
           "Only one output can map to the complete JSON value");
     }
   } else {
-    status = data::ValidateName(field_name);
-    if (!status.ok())
-      return status;
+    ABSL_RETURN_IF_ERROR(data::ValidateName(field_name));
   }
   output_to_json_field.insert_or_assign(std::move(output_name),
                                         std::move(field_name));
@@ -128,13 +114,11 @@ absl::Status ActionSchema::MapOutputToJson(std::string output_name,
 }
 
 absl::StatusOr<data::Chunk> StatusToChunk(const absl::Status& status) {
-  absl::StatusOr<std::string> bytes = data::PackStatus(status);
-  if (!bytes.ok())
-    return bytes.status();
+  ABSL_ASSIGN_OR_RETURN(std::string bytes, data::PackStatus(status));
   return data::Chunk{
       .metadata =
           data::ChunkMetadata{.mimetype = std::string(kActionStatusMimetype)},
-      .data = std::move(*bytes),
+      .data = std::move(bytes),
   };
 }
 

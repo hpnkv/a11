@@ -25,12 +25,14 @@ absl::StatusOr<std::shared_ptr<Client>> ConnectForTest() {
   options.command_timeout = absl::Seconds(2);
   absl::StatusOr<std::shared_ptr<Client>> client =
       Client::Create(std::move(options));
-  if (!client.ok())
+  if (!client.ok()) {
     return client.status();
+  }
   absl::Status ready =
       (*client)->Ready().Await(absl::Now() + absl::Seconds(2)).status();
-  if (!ready.ok())
+  if (!ready.ok()) {
     return ready;
+  }
   return *client;
 }
 
@@ -51,8 +53,9 @@ TEST(RedisClientOptionsTest, ParsesUrlsAndEnvironmentIndependentValidation) {
 
 TEST(RedisClientTest, CommandsAndPubSubAreBinarySafe) {
   absl::StatusOr<std::shared_ptr<Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<Client> client = *connected;
   const std::string suffix = std::to_string(absl::ToUnixNanos(absl::Now()));
   const std::string key = "a11:test:redis-client:" + suffix;
@@ -84,8 +87,9 @@ TEST(RedisClientTest, CommandsAndPubSubAreBinarySafe) {
 
 TEST(RedisClientTest, SubscriptionWaitSupportsCancellationAndReuse) {
   absl::StatusOr<std::shared_ptr<Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<Client> client = *connected;
   const std::string channel = "a11:test:redis-client:cancel:" +
                               std::to_string(absl::ToUnixNanos(absl::Now()));
@@ -110,8 +114,9 @@ TEST(RedisClientTest, SubscriptionWaitSupportsCancellationAndReuse) {
 
 TEST(RedisClientTest, ElapsedCommandDeadlineDoesNotPoisonConnection) {
   absl::StatusOr<std::shared_ptr<Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<Client> client = *connected;
 
   absl::StatusOr<Reply> elapsed =

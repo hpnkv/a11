@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/log/log.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
@@ -49,8 +50,9 @@ std::string Trim(std::string_view input) {
 }
 
 bool IsTokenChar(char value) {
-  if (std::isalnum(static_cast<unsigned char>(value)) != 0)
+  if (std::isalnum(static_cast<unsigned char>(value)) != 0) {
     return true;
+  }
   constexpr std::string_view extra = "!#$%&'*+-.^_`|~";
   return extra.find(value) != std::string_view::npos;
 }
@@ -58,8 +60,9 @@ bool IsTokenChar(char value) {
 absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
                                        bool allow_patterns) {
   std::vector<std::string_view> pieces = absl::StrSplit(input, ';');
-  if (pieces.empty())
+  if (pieces.empty()) {
     return absl::InvalidArgumentError("Mimetype is empty");
+  }
   std::string media_type = absl::AsciiStrToLower(Trim(pieces.front()));
   const size_t slash = media_type.find('/');
   if (slash == std::string::npos || slash == 0 ||
@@ -68,10 +71,12 @@ absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
     return absl::InvalidArgumentError("Mimetype must contain type/subtype");
   }
   for (char value : media_type) {
-    if (value == '/')
+    if (value == '/') {
       continue;
-    if (allow_patterns && value == '*')
+    }
+    if (allow_patterns && value == '*') {
       continue;
+    }
     if (!IsTokenChar(value)) {
       return absl::InvalidArgumentError("Mimetype contains an invalid token");
     }
@@ -108,8 +113,9 @@ absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
 
 bool WildcardMatches(std::string_view value, std::string_view pattern) {
   const size_t wildcard = pattern.find('*');
-  if (wildcard == std::string_view::npos)
+  if (wildcard == std::string_view::npos) {
     return value == pattern;
+  }
   const std::string_view prefix = pattern.substr(0, wildcard);
   const std::string_view suffix = pattern.substr(wildcard + 1);
   return value.size() >= prefix.size() + suffix.size() &&
@@ -121,8 +127,9 @@ bool Matches(const Mimetype& registration, const Mimetype& selection) {
     return false;
   }
   for (const auto& [key, pattern] : selection.parameters) {
-    if (key == "type")
+    if (key == "type") {
       continue;
+    }
     const auto found = registration.parameters.find(key);
     if (found == registration.parameters.end() ||
         !WildcardMatches(found->second, pattern)) {
@@ -195,10 +202,8 @@ absl::Status RegisterNative(SerializationRegistry* registry,
   return registry->Register<T>(
       std::move(type_name), std::string(kMsgpackMimetype),
       [](const T& value) -> absl::StatusOr<Chunk> {
-        absl::StatusOr<Bytes> encoded = value.ToMsgpack();
-        if (!encoded.ok())
-          return encoded.status();
-        return Chunk{.data = std::move(*encoded)};
+        ABSL_ASSIGN_OR_RETURN(Bytes encoded, value.ToMsgpack());
+        return Chunk{.data = std::move(encoded)};
       },
       [](const Chunk& chunk) -> absl::StatusOr<T> {
         return T::FromMsgpack(chunk.data);
@@ -262,22 +267,20 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
   }
-  absl::StatusOr<Mimetype> parsed = ParseMimetype(mimetype, false);
-  if (!parsed.ok())
-    return parsed.status();
-  const auto encoded_type = parsed->parameters.find("type");
-  if (encoded_type != parsed->parameters.end() &&
+  ABSL_ASSIGN_OR_RETURN(Mimetype parsed, ParseMimetype(mimetype, false));
+  const auto encoded_type = parsed.parameters.find("type");
+  if (encoded_type != parsed.parameters.end() &&
       encoded_type->second != type_name) {
     return absl::InvalidArgumentError(
         "A registered type parameter must equal type_name");
   }
-  *parsed = WithoutType(std::move(*parsed));
+  parsed = WithoutType(std::move(parsed));
   Impl* impl = GetImpl();
   thread::MutexLock lock(&impl->mu);
   for (const SerializerRegistration& registration : impl->serializers) {
     if (registration.type == type &&
-        registration.mimetype.media_type == parsed->media_type &&
-        registration.mimetype.parameters == parsed->parameters) {
+        registration.mimetype.media_type == parsed.media_type &&
+        registration.mimetype.parameters == parsed.parameters) {
       return absl::AlreadyExistsError(
           "A serializer is already registered for this type and mimetype");
     }
@@ -285,7 +288,7 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
   impl->serializers.push_back(SerializerRegistration{
       .type = type,
       .type_name = std::move(type_name),
-      .mimetype = std::move(*parsed),
+      .mimetype = std::move(parsed),
       .serializer = std::move(serializer),
       .order = impl->next_order++,
   });
@@ -298,22 +301,20 @@ absl::Status SerializationRegistry::RegisterDeserializerErased(
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
   }
-  absl::StatusOr<Mimetype> parsed = ParseMimetype(mimetype, false);
-  if (!parsed.ok())
-    return parsed.status();
-  const auto encoded_type = parsed->parameters.find("type");
-  if (encoded_type != parsed->parameters.end() &&
+  ABSL_ASSIGN_OR_RETURN(Mimetype parsed, ParseMimetype(mimetype, false));
+  const auto encoded_type = parsed.parameters.find("type");
+  if (encoded_type != parsed.parameters.end() &&
       encoded_type->second != type_name) {
     return absl::InvalidArgumentError(
         "A registered type parameter must equal type_name");
   }
-  *parsed = WithoutType(std::move(*parsed));
+  parsed = WithoutType(std::move(parsed));
   Impl* impl = GetImpl();
   thread::MutexLock lock(&impl->mu);
   for (const DeserializerRegistration& registration : impl->deserializers) {
     if (registration.type == type &&
-        registration.mimetype.media_type == parsed->media_type &&
-        registration.mimetype.parameters == parsed->parameters) {
+        registration.mimetype.media_type == parsed.media_type &&
+        registration.mimetype.parameters == parsed.parameters) {
       return absl::AlreadyExistsError(
           "A deserializer is already registered for this type and mimetype");
     }
@@ -321,7 +322,7 @@ absl::Status SerializationRegistry::RegisterDeserializerErased(
   impl->deserializers.push_back(DeserializerRegistration{
       .type = type,
       .type_name = std::move(type_name),
-      .mimetype = std::move(*parsed),
+      .mimetype = std::move(parsed),
       .deserializer = std::move(deserializer),
       .order = impl->next_order++,
   });
@@ -332,8 +333,9 @@ void SerializationRegistry::RemoveSerializer(std::type_index type,
                                              std::string_view type_name,
                                              std::string_view mimetype) {
   absl::StatusOr<Mimetype> parsed = ParseMimetype(mimetype, false);
-  if (!parsed.ok())
+  if (!parsed.ok()) {
     return;
+  }
   *parsed = WithoutType(std::move(*parsed));
   Impl* impl = GetImpl();
   thread::MutexLock lock(&impl->mu);
@@ -351,10 +353,8 @@ absl::StatusOr<Chunk> SerializationRegistry::ToChunkErased(
     std::string_view mimetype) const {
   std::optional<Mimetype> selection;
   if (!mimetype.empty()) {
-    absl::StatusOr<Mimetype> parsed = ParseMimetype(mimetype, true);
-    if (!parsed.ok())
-      return parsed.status();
-    selection = std::move(*parsed);
+    ABSL_ASSIGN_OR_RETURN(Mimetype parsed, ParseMimetype(mimetype, true));
+    selection = std::move(parsed);
   }
   ErasedSerializer serializer;
   std::string exact_mimetype;
@@ -396,14 +396,14 @@ absl::StatusOr<Chunk> SerializationRegistry::ToChunkErased(
   } catch (...) {
     return absl::UnknownError("serializer raised a non-standard exception");
   }
-  if (!chunk.ok())
+  if (!chunk.ok()) {
     return chunk.status();
-  if (!chunk->metadata.has_value())
+  }
+  if (!chunk->metadata.has_value()) {
     chunk->metadata.emplace();
+  }
   chunk->metadata->mimetype = exact_mimetype;
-  absl::Status status = chunk->Validate();
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(chunk->Validate());
   return chunk;
 }
 
@@ -417,10 +417,9 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
   std::vector<Mimetype> selectors;
   std::optional<Mimetype> actual;
   if (!chunk.GetMimetype().empty()) {
-    absl::StatusOr<Mimetype> parsed = ParseMimetype(chunk.GetMimetype(), false);
-    if (!parsed.ok())
-      return parsed.status();
-    actual = std::move(*parsed);
+    ABSL_ASSIGN_OR_RETURN(Mimetype parsed,
+                          ParseMimetype(chunk.GetMimetype(), false));
+    actual = std::move(parsed);
   }
   if (mimetype_patterns.empty()) {
     if (!actual.has_value()) {
@@ -430,20 +429,19 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
     selectors.push_back(*actual);
   } else {
     for (const std::string& pattern_text : mimetype_patterns) {
-      absl::StatusOr<Mimetype> pattern = ParseMimetype(pattern_text, true);
-      if (!pattern.ok())
-        return pattern.status();
-      if (actual.has_value() && Matches(*actual, *pattern)) {
+      ABSL_ASSIGN_OR_RETURN(Mimetype pattern,
+                            ParseMimetype(pattern_text, true));
+      if (actual.has_value() && Matches(*actual, pattern)) {
         selectors.push_back(*actual);
       } else {
         if (actual.has_value() &&
-            pattern->parameters.find("type") == pattern->parameters.end()) {
+            pattern.parameters.find("type") == pattern.parameters.end()) {
           const auto encoded = actual->parameters.find("type");
           if (encoded != actual->parameters.end()) {
-            pattern->parameters["type"] = encoded->second;
+            pattern.parameters["type"] = encoded->second;
           }
         }
-        selectors.push_back(std::move(*pattern));
+        selectors.push_back(std::move(pattern));
       }
     }
   }
@@ -487,33 +485,17 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
 }
 
 absl::Status SerializationRegistry::RegisterDefaults() {
-  absl::Status status = Register<nlohmann::json>(
-      "json", std::string(kJsonMimetype), SerializeJson, DeserializeJson);
-  if (!status.ok())
-    return status;
-  status =
+  ABSL_RETURN_IF_ERROR(Register<nlohmann::json>(
+      "json", std::string(kJsonMimetype), SerializeJson, DeserializeJson));
+  ABSL_RETURN_IF_ERROR(
       Register<nlohmann::json>("json", std::string(kMsgpackMimetype),
-                               SerializeJsonMsgpack, DeserializeJsonMsgpack);
-  if (!status.ok())
-    return status;
-  status = RegisterNative<ChunkMetadata>(this, "ChunkMetadata");
-  if (!status.ok())
-    return status;
-  status = RegisterNative<Chunk>(this, "Chunk");
-  if (!status.ok())
-    return status;
-  status = RegisterNative<NodeRef>(this, "NodeRef");
-  if (!status.ok())
-    return status;
-  status = RegisterNative<NodeFragment>(this, "NodeFragment");
-  if (!status.ok())
-    return status;
-  status = RegisterNative<Port>(this, "Port");
-  if (!status.ok())
-    return status;
-  status = RegisterNative<ActionMessage>(this, "ActionMessage");
-  if (!status.ok())
-    return status;
+                               SerializeJsonMsgpack, DeserializeJsonMsgpack));
+  ABSL_RETURN_IF_ERROR(RegisterNative<ChunkMetadata>(this, "ChunkMetadata"));
+  ABSL_RETURN_IF_ERROR(RegisterNative<Chunk>(this, "Chunk"));
+  ABSL_RETURN_IF_ERROR(RegisterNative<NodeRef>(this, "NodeRef"));
+  ABSL_RETURN_IF_ERROR(RegisterNative<NodeFragment>(this, "NodeFragment"));
+  ABSL_RETURN_IF_ERROR(RegisterNative<Port>(this, "Port"));
+  ABSL_RETURN_IF_ERROR(RegisterNative<ActionMessage>(this, "ActionMessage"));
   return RegisterNative<WireMessage>(this, "WireMessage");
 }
 

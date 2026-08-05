@@ -325,7 +325,8 @@ absl::Status RecognitionLoop(internal::SpeechRecognizerState* state,
   const auto flush_pending = [&]() -> absl::Status {
     std::optional<std::vector<float>> utterance = vad.Flush();
     if (utterance.has_value()) {
-      return TranscribeUtterance(state, std::move(*utterance), on_transcription);
+      return TranscribeUtterance(state, std::move(*utterance),
+                                 on_transcription);
     }
     return absl::OkStatus();
   };
@@ -478,12 +479,9 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
       .block_frames = 256,
       .ring_blocks = 32,
   };
-  absl::StatusOr<std::shared_ptr<AudioInput>> input =
-      AudioInput::Open(input_options);
-  if (!input.ok()) {
-    return input.status();
-  }
-  return Create(std::move(model_path), std::move(*input), std::move(options));
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AudioInput> input,
+                        AudioInput::Open(input_options));
+  return Create(std::move(model_path), std::move(input), std::move(options));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
@@ -492,14 +490,11 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
   if (input == nullptr) {
     return absl::InvalidArgumentError("input must not be null");
   }
-  absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> state =
-      LoadState(std::move(model_path), std::move(options), std::move(input),
-                nullptr);
-  if (!state.ok()) {
-    return state.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::SpeechRecognizerState> state,
+                        LoadState(std::move(model_path), std::move(options),
+                                  std::move(input), nullptr));
   return std::shared_ptr<SpeechRecognizer>(
-      new SpeechRecognizer(std::move(*state)));
+      new SpeechRecognizer(std::move(state)));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
@@ -508,26 +503,21 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
   if (subscription == nullptr) {
     return absl::InvalidArgumentError("subscription must not be null");
   }
-  absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> state =
-      LoadState(std::move(model_path), std::move(options), nullptr,
-                std::move(subscription));
-  if (!state.ok()) {
-    return state.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::SpeechRecognizerState> state,
+                        LoadState(std::move(model_path), std::move(options),
+                                  nullptr, std::move(subscription)));
   return std::shared_ptr<SpeechRecognizer>(
-      new SpeechRecognizer(std::move(*state)));
+      new SpeechRecognizer(std::move(state)));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>>
 SpeechRecognizer::CreateForStream(std::string model_path,
                                   SpeechRecognizerOptions options) {
-  absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> state =
-      LoadState(std::move(model_path), std::move(options), nullptr, nullptr);
-  if (!state.ok()) {
-    return state.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<internal::SpeechRecognizerState> state,
+      LoadState(std::move(model_path), std::move(options), nullptr, nullptr));
   return std::shared_ptr<SpeechRecognizer>(
-      new SpeechRecognizer(std::move(*state)));
+      new SpeechRecognizer(std::move(state)));
 }
 
 a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
@@ -571,7 +561,9 @@ a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
   }
 
   // A subscription is itself an AudioBufferReader; a device stream never pauses.
-  AudioBufferReader reader = [subscription]() { return subscription->Read(); };
+  AudioBufferReader reader = [subscription]() {
+    return subscription->Read();
+  };
   std::function<void()> close_source = [subscription]() {
     subscription->Close();
   };

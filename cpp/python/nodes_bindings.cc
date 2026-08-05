@@ -41,12 +41,14 @@ class PythonFactory {
   PythonFactory& operator=(const PythonFactory&) = delete;
 
   ~PythonFactory() {
-    if (Py_IsInitialized() == 0)
+    if (Py_IsInitialized() == 0) {
       return;
+    }
     PyGILState_STATE state = PyGILState_Ensure();
     Py_CLEAR(function_);
-    for (PyObject*& value : values_)
+    for (PyObject*& value : values_) {
       Py_CLEAR(value);
+    }
     PyGILState_Release(state);
   }
 
@@ -86,9 +88,7 @@ py::object StatusObject(const absl::Status& status) {
 }  // namespace
 
 void BindNodes(py::module_& module) {
-  py::class_<data::SerializationRegistry,
-             std::shared_ptr<data::SerializationRegistry>>(
-      module, "SerializationRegistry")
+  py::classh<data::SerializationRegistry>(module, "SerializationRegistry")
       .def(py::init<bool>(),
            "Creates a serialization registry, optionally pre-populated with "
            "the built-in serializers and deserializers.",
@@ -97,8 +97,9 @@ void BindNodes(py::module_& module) {
           "register_defaults",
           [](data::SerializationRegistry& self) {
             const absl::Status status = self.RegisterDefaults();
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Registers the built-in serializers and deserializers on this "
           "registry.")
@@ -109,8 +110,7 @@ void BindNodes(py::module_& module) {
                              &data::SerializationRegistry::deserializer_count,
                              "Number of registered deserializers.");
 
-  py::class_<nodes::NodeMap, std::shared_ptr<nodes::NodeMap>>(
-      module, "NodeMap", py::dynamic_attr())
+  py::classh<nodes::NodeMap>(module, "NodeMap", py::dynamic_attr())
       .def(py::init([](const py::object& factory) {
              if (factory.is_none()) {
                return ValueOrThrow(nodes::NodeMap::Create());
@@ -161,8 +161,7 @@ void BindNodes(py::module_& module) {
       .def("size", &nodes::NodeMap::Size, "Number of nodes in the map.")
       .def("__len__", &nodes::NodeMap::Size, "Number of nodes in the map.");
 
-  py::class_<nodes::AsyncNode, std::shared_ptr<nodes::AsyncNode>>(
-      module, "AsyncNode", py::dynamic_attr())
+  py::classh<nodes::AsyncNode>(module, "AsyncNode", py::dynamic_attr())
       .def(py::init([](std::shared_ptr<stores::ChunkStore> store,
                        std::shared_ptr<data::SerializationRegistry> registry,
                        stores::ChunkStoreReaderOptions reader_options,
@@ -210,8 +209,9 @@ void BindNodes(py::module_& module) {
              std::shared_ptr<data::SerializationRegistry> registry) {
             const absl::Status status =
                 self.SetSerializationRegistry(std::move(registry));
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "The serialization registry used to encode and decode "
           "typed values streamed through this node. Set it to change "
@@ -235,8 +235,9 @@ void BindNodes(py::module_& module) {
           "reader_options", &nodes::AsyncNode::GetReaderOptions,
           [](nodes::AsyncNode& self, stores::ChunkStoreReaderOptions options) {
             const absl::Status status = self.SetReaderOptions(options);
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Options controlling how this node reads from its chunk store, such "
           "as buffering and flow control.")
@@ -245,8 +246,9 @@ void BindNodes(py::module_& module) {
           [](nodes::AsyncNode& self,
              std::optional<stores::ChunkStoreReaderOptions> options) {
             const absl::Status status = self.ResetReader(options);
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Rewinds the node's reader back to the start of the stream, "
           "optionally applying new reader options. Use this to re-consume a "
@@ -256,8 +258,9 @@ void BindNodes(py::module_& module) {
           "writer_options", &nodes::AsyncNode::GetWriterOptions,
           [](nodes::AsyncNode& self, stores::ChunkStoreWriterOptions options) {
             const absl::Status status = self.SetWriterOptions(options);
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Options controlling how this node writes to its chunk store, such "
           "as buffering and flow control.")
@@ -401,8 +404,9 @@ void BindNodes(py::module_& module) {
           "attach_stream",
           [](nodes::AsyncNode& self, std::shared_ptr<net::WireStream> stream) {
             const absl::Status status = self.AttachStream(std::move(stream));
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Attaches a wire stream so this node's chunks are mirrored over the "
           "network transport. Use this to bridge a local streaming node to a "
@@ -413,8 +417,9 @@ void BindNodes(py::module_& module) {
           [](nodes::AsyncNode& self,
              const std::shared_ptr<net::WireStream>& stream) {
             const absl::Status status = self.DetachStream(stream);
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Detaches a previously attached wire stream so the node stops "
           "mirroring its chunks over that transport.",

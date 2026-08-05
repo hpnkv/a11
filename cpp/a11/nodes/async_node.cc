@@ -38,12 +38,14 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> AsyncNode::Create(
     std::shared_ptr<data::SerializationRegistry> serialization_registry,
     stores::ChunkStoreReaderOptions reader_options,
     stores::ChunkStoreWriterOptions writer_options) {
-  if (store == nullptr)
+  if (store == nullptr) {
     return absl::InvalidArgumentError("store must not be null");
+  }
   ABSL_RETURN_IF_ERROR(reader_options.Validate());
   ABSL_RETURN_IF_ERROR(writer_options.Validate());
-  if (serialization_registry == nullptr)
+  if (serialization_registry == nullptr) {
     serialization_registry = GlobalRegistryPointer();
+  }
 
   struct MakeSharedEnabler final : AsyncNode {
     MakeSharedEnabler(
@@ -89,8 +91,9 @@ absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> AsyncNode::reader() {
   if (reader_ == nullptr) {
     absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> created =
         stores::ChunkStoreReader::Create(store_, reader_options_);
-    if (!created.ok())
+    if (!created.ok()) {
       return created.status();
+    }
     reader_ = std::move(*created);
   }
   return reader_;
@@ -101,8 +104,9 @@ absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> AsyncNode::writer() {
   if (writer_ == nullptr) {
     absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> created =
         stores::ChunkStoreWriter::Create(store_, writer_options_);
-    if (!created.ok())
+    if (!created.ok()) {
       return created.status();
+    }
     writer_ = std::move(*created);
   }
   return writer_;
@@ -134,11 +138,13 @@ absl::Status AsyncNode::ResetReader(
   {
     thread::MutexLock lock(&mu_);
     reader = std::move(reader_);
-    if (options.has_value())
+    if (options.has_value()) {
       reader_options_ = *options;
+    }
   }
-  if (reader != nullptr)
+  if (reader != nullptr) {
     reader->Cancel();
+  }
   return absl::OkStatus();
 }
 
@@ -174,8 +180,9 @@ absl::Status AsyncNode::GetWriterStatus() const {
     thread::MutexLock lock(&mu_);
     writer = writer_;
   }
-  if (writer == nullptr)
+  if (writer == nullptr) {
     return absl::OkStatus();
+  }
   const std::optional<absl::Status> status = writer->GetStatus();
   return status.value_or(absl::OkStatus());
 }
@@ -194,10 +201,12 @@ a11::Future<bool> AsyncNode::IsWritable() {
   return a11::Submit<bool>([self = std::move(self)]() -> absl::StatusOr<bool> {
     absl::StatusOr<std::optional<std::uint32_t>> final =
         self->store_->GetFinalSeq().Await();
-    if (!final.ok())
+    if (!final.ok()) {
       return final.status();
-    if (final->has_value())
+    }
+    if (final->has_value()) {
       return false;
+    }
     std::shared_ptr<stores::ChunkStoreWriter> writer;
     {
       thread::MutexLock lock(&self->mu_);
@@ -251,13 +260,16 @@ a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
        timeout]() -> absl::StatusOr<std::optional<data::Chunk>> {
         absl::StatusOr<std::optional<data::NodeFragment>> fragment =
             self->NextFragment(timeout).Await();
-        if (!fragment.ok())
+        if (!fragment.ok()) {
           return fragment.status();
-        if (!fragment->has_value())
+        }
+        if (!fragment->has_value()) {
           return std::nullopt;
+        }
         absl::StatusOr<const data::Chunk*> chunk = (*fragment)->GetChunk();
-        if (!chunk.ok())
+        if (!chunk.ok()) {
           return chunk.status();
+        }
         return std::optional<data::Chunk>(**chunk);
       });
 }
@@ -285,16 +297,18 @@ a11::Task AsyncNode::AbortWithStatus(absl::Status status) {
 
 absl::Status AsyncNode::AttachStream(std::shared_ptr<net::WireStream> stream) {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> value = writer();
-  if (!value.ok())
+  if (!value.ok()) {
     return value.status();
+  }
   return (*value)->AttachStream(std::move(stream));
 }
 
 absl::Status AsyncNode::DetachStream(
     const std::shared_ptr<net::WireStream>& stream) {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> value = writer();
-  if (!value.ok())
+  if (!value.ok()) {
     return value.status();
+  }
   return (*value)->DetachStream(stream);
 }
 
@@ -304,8 +318,9 @@ void AsyncNode::CancelReader() {
     thread::MutexLock lock(&mu_);
     reader = reader_;
   }
-  if (reader != nullptr)
+  if (reader != nullptr) {
     reader->Cancel();
+  }
 }
 
 void AsyncNode::CancelWriter() {
@@ -314,8 +329,9 @@ void AsyncNode::CancelWriter() {
     thread::MutexLock lock(&mu_);
     writer = writer_;
   }
-  if (writer != nullptr)
+  if (writer != nullptr) {
     writer->Cancel();
+  }
 }
 
 void AsyncNode::Cancel() {

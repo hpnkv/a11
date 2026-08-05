@@ -58,8 +58,9 @@ TEST(ByteChunkingTest, ReassemblesOutOfOrderAndReleasesState) {
   for (std::string& packet : *packets) {
     auto fed = reassembler.Feed(std::move(packet));
     ASSERT_TRUE(fed.ok()) << fed.status();
-    if (fed->has_value())
+    if (fed->has_value()) {
       result = std::move(**fed);
+    }
   }
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(*result, message);
@@ -84,8 +85,9 @@ TEST(ByteChunkingTest, InterleavedMessagesRemainIndependent) {
     for (std::string* packet : {&(*first)[index], &(*second)[index]}) {
       auto fed = reassembler.Feed(std::move(*packet));
       ASSERT_TRUE(fed.ok()) << fed.status();
-      if (fed->has_value())
+      if (fed->has_value()) {
         completed.push_back(std::move(**fed));
+      }
     }
   }
   ASSERT_EQ(completed.size(), 2);

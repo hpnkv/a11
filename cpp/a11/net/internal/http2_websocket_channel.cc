@@ -42,8 +42,9 @@ void AppendBigEndian16(std::string* output, std::uint16_t value) {
 }
 
 void AppendBigEndian64(std::string* output, std::uint64_t value) {
-  for (int shift = 56; shift >= 0; shift -= 8)
+  for (int shift = 56; shift >= 0; shift -= 8) {
     output->push_back(static_cast<char>((value >> shift) & 0xffU));
+  }
 }
 
 std::uint16_t ReadBigEndian16(std::string_view input, size_t offset) {
@@ -84,11 +85,13 @@ class Http2WebSocketChannel final
     {
       thread::MutexLock lock(&mu_);
       callbacks_ = std::move(callbacks);
-      if (open_ && !closed_)
+      if (open_ && !closed_) {
         notify_open = callbacks_.on_open;
+      }
     }
-    if (notify_open)
+    if (notify_open) {
       notify_open();
+    }
     return absl::OkStatus();
   }
 
@@ -101,12 +104,14 @@ class Http2WebSocketChannel final
   absl::Status Open() override {
     {
       thread::MutexLock lock(&mu_);
-      if (open_)
+      if (open_) {
         return absl::OkStatus();
-      if (closed_)
+      }
+      if (closed_) {
         return status_.ok()
                    ? absl::FailedPreconditionError("HTTP/2 WebSocket is closed")
                    : status_;
+      }
       if (opening_) {
         return absl::FailedPreconditionError(
             "HTTP/2 WebSocket open is already in progress");
@@ -128,8 +133,9 @@ class Http2WebSocketChannel final
       callback = callbacks_.on_open;
     }
     StartReader();
-    if (callback)
+    if (callback) {
       callback();
+    }
     return absl::OkStatus();
   }
 
@@ -160,25 +166,29 @@ class Http2WebSocketChannel final
     bool send_close = false;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_)
+      if (closed_) {
         return absl::OkStatus();
+      }
       send_close = open_ && !close_sent_;
       close_sent_ = close_sent_ || send_close;
     }
     absl::Status first;
-    if (send_close)
+    if (send_close) {
       first = WriteFrame(kClose, std::string());
+    }
     absl::Status finished = FinishTransport();
-    if (first.ok() && !finished.ok())
+    if (first.ok() && !finished.ok()) {
       first = finished;
+    }
     CompleteClose();
     return first;
   }
 
   void* absl_nullable GetImpl() const override {
     thread::MutexLock lock(&mu_);
-    if (duplex_ != nullptr)
+    if (duplex_ != nullptr) {
       return duplex_.get();
+    }
     return request_.get();
   }
 
@@ -197,28 +207,25 @@ class Http2WebSocketChannel final
       thread::MutexLock lock(&mu_);
       config = *client_config_;
     }
-    absl::StatusOr<std::shared_ptr<Http2Client>> client =
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<Http2Client> client,
         Http2Client::Connect(config.host, config.port, config.http2_options)
-            .Await(config.http2_options.deadline);
-    if (!client.ok())
-      return client.status();
-    absl::StatusOr<std::shared_ptr<Http2DuplexStream>> duplex =
-        (*client)->ExtendedConnect("websocket", std::move(config.path),
-                                   std::move(config.headers));
-    if (!duplex.ok())
-      return duplex.status();
-    absl::StatusOr<HttpResponseHead> head =
-        (*duplex)->Headers().Await(config.http2_options.deadline);
-    if (!head.ok())
-      return head.status();
-    if (head->status < 200 || head->status >= 300) {
+            .Await(config.http2_options.deadline));
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<Http2DuplexStream> duplex,
+        client->ExtendedConnect("websocket", std::move(config.path),
+                                std::move(config.headers)));
+    ABSL_ASSIGN_OR_RETURN(
+        HttpResponseHead head,
+        duplex->Headers().Await(config.http2_options.deadline));
+    if (head.status < 200 || head.status >= 300) {
       return absl::Status(
-          StatusCodeFromHttp(head->status),
-          absl::StrCat("HTTP/2 WebSocket CONNECT returned ", head->status));
+          StatusCodeFromHttp(head.status),
+          absl::StrCat("HTTP/2 WebSocket CONNECT returned ", head.status));
     }
     thread::MutexLock lock(&mu_);
-    client_ = std::move(*client);
-    duplex_ = std::move(*duplex);
+    client_ = std::move(client);
+    duplex_ = std::move(duplex);
     client_config_.reset();
     return absl::OkStatus();
   }
@@ -229,8 +236,9 @@ class Http2WebSocketChannel final
       thread::MutexLock lock(&mu_);
       response = response_;
     }
-    if (response == nullptr)
+    if (response == nullptr) {
       return absl::FailedPreconditionError("WebSocket response is missing");
+    }
     return response->SendHeaders(200);
   }
 
@@ -239,14 +247,16 @@ class Http2WebSocketChannel final
     a11::Schedule([weak]() {
       while (true) {
         std::shared_ptr<Http2WebSocketChannel> self = weak.lock();
-        if (self == nullptr)
+        if (self == nullptr) {
           return;
+        }
         a11::Future<std::optional<std::string>> next = self->ReadTransport();
         self.reset();
         absl::StatusOr<std::optional<std::string>> chunk = next.Await();
         self = weak.lock();
-        if (self == nullptr)
+        if (self == nullptr) {
           return;
+        }
         if (!chunk.ok()) {
           self->Fail(chunk.status());
           return;
@@ -262,8 +272,9 @@ class Http2WebSocketChannel final
         }
         {
           thread::MutexLock lock(&self->mu_);
-          if (self->closed_)
+          if (self->closed_) {
             return;
+          }
         }
       }
     });
@@ -277,10 +288,12 @@ class Http2WebSocketChannel final
       duplex = duplex_;
       request = request_;
     }
-    if (duplex != nullptr)
+    if (duplex != nullptr) {
       return duplex->Read();
-    if (request != nullptr)
+    }
+    if (request != nullptr) {
       return request->Read();
+    }
     return a11::FailedFuture<std::optional<std::string>>(
         absl::FailedPreconditionError("WebSocket HTTP/2 stream is missing"));
   }
@@ -289,8 +302,9 @@ class Http2WebSocketChannel final
     ParsedActions actions;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_)
+      if (closed_) {
         return absl::OkStatus();
+      }
       if (input_.size() + data.size() > max_message_size_ + 14) {
         return absl::ResourceExhaustedError(
             "Buffered WebSocket frame exceeds max_message_size");
@@ -308,8 +322,9 @@ class Http2WebSocketChannel final
         thread::MutexLock lock(&mu_);
         callback = callbacks_.on_message;
       }
-      if (callback)
+      if (callback) {
         callback(std::move(message));
+      }
     }
     if (actions.close.has_value()) {
       bool reply = false;
@@ -318,8 +333,9 @@ class Http2WebSocketChannel final
         reply = !close_sent_;
         close_sent_ = true;
       }
-      if (reply)
+      if (reply) {
         ABSL_RETURN_IF_ERROR(WriteFrame(kClose, std::move(*actions.close)));
+      }
       ABSL_RETURN_IF_ERROR(FinishTransport());
       CompleteClose();
     }
@@ -335,8 +351,9 @@ class Http2WebSocketChannel final
           static_cast<unsigned char>(input_[consumed + 1]);
       const bool final = (first & 0x80U) != 0;
       const std::uint8_t opcode = first & 0x0fU;
-      if ((first & 0x70U) != 0)
+      if ((first & 0x70U) != 0) {
         return absl::InvalidArgumentError("WebSocket RSV bits are not zero");
+      }
       const bool masked = (second & 0x80U) != 0;
       if (masked != (role_ == Role::kServer)) {
         return absl::InvalidArgumentError(
@@ -348,16 +365,19 @@ class Http2WebSocketChannel final
       std::uint64_t payload_size = second & 0x7fU;
       size_t header_size = 2;
       if (payload_size == 126) {
-        if (input_.size() - consumed < 4)
+        if (input_.size() - consumed < 4) {
           break;
+        }
         payload_size = ReadBigEndian16(input_, consumed + 2);
         header_size = 4;
       } else if (payload_size == 127) {
-        if (input_.size() - consumed < 10)
+        if (input_.size() - consumed < 10) {
           break;
+        }
         payload_size = ReadBigEndian64(input_, consumed + 2);
-        if ((payload_size & (std::uint64_t{1} << 63U)) != 0)
+        if ((payload_size & (std::uint64_t{1} << 63U)) != 0) {
           return absl::InvalidArgumentError("WebSocket length is invalid");
+        }
         header_size = 10;
       }
       if (payload_size > max_message_size_ ||
@@ -373,16 +393,18 @@ class Http2WebSocketChannel final
       const size_t mask_size = masked ? 4 : 0;
       const size_t full_size =
           header_size + mask_size + static_cast<size_t>(payload_size);
-      if (input_.size() - consumed < full_size)
+      if (input_.size() - consumed < full_size) {
         break;
+      }
 
       const size_t mask_offset = consumed + header_size;
       const size_t payload_offset = mask_offset + mask_size;
       std::string payload =
           input_.substr(payload_offset, static_cast<size_t>(payload_size));
       if (masked) {
-        for (size_t index = 0; index < payload.size(); ++index)
+        for (size_t index = 0; index < payload.size(); ++index) {
           payload[index] ^= input_[mask_offset + (index % 4)];
+        }
       }
       consumed += full_size;
 
@@ -391,9 +413,10 @@ class Http2WebSocketChannel final
       } else if (opcode == kPong) {
         continue;
       } else if (opcode == kClose) {
-        if (payload.size() == 1)
+        if (payload.size() == 1) {
           return absl::InvalidArgumentError(
               "WebSocket close code is truncated");
+        }
         actions->close = std::move(payload);
         break;
       } else if (opcode == kText) {
@@ -429,8 +452,9 @@ class Http2WebSocketChannel final
         return absl::InvalidArgumentError("WebSocket opcode is unsupported");
       }
     }
-    if (consumed != 0)
+    if (consumed != 0) {
       input_.erase(0, consumed);
+    }
     return absl::OkStatus();
   }
 
@@ -459,8 +483,9 @@ class Http2WebSocketChannel final
           static_cast<char>(key & 0xffU),
       };
       frame.append(mask, sizeof(mask));
-      for (size_t index = 0; index < payload.size(); ++index)
+      for (size_t index = 0; index < payload.size(); ++index) {
         payload[index] ^= mask[index % 4];
+      }
     }
     frame.append(payload);
     return WriteTransport(std::move(frame));
@@ -475,10 +500,12 @@ class Http2WebSocketChannel final
       duplex = duplex_;
       response = response_;
     }
-    if (duplex != nullptr)
+    if (duplex != nullptr) {
       return duplex->Write(std::move(data));
-    if (response != nullptr)
+    }
+    if (response != nullptr) {
       return response->Write(std::move(data));
+    }
     return absl::FailedPreconditionError("WebSocket HTTP/2 writer is missing");
   }
 
@@ -491,24 +518,28 @@ class Http2WebSocketChannel final
       duplex = duplex_;
       response = response_;
     }
-    if (duplex != nullptr)
+    if (duplex != nullptr) {
       return duplex->Finish();
-    if (response != nullptr)
+    }
+    if (response != nullptr) {
       return response->Finish();
+    }
     return absl::OkStatus();
   }
 
   void Fail(absl::Status status) {
-    if (status.ok())
+    if (status.ok()) {
       status = absl::UnknownError("HTTP/2 WebSocket failed");
+    }
     std::function<void(absl::Status)> callback;
     std::shared_ptr<Http2DuplexStream> duplex;
     std::shared_ptr<Http2RequestBodyStream> request;
     std::shared_ptr<Http2ResponseWriter> response;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_)
+      if (closed_) {
         return;
+      }
       opening_ = false;
       closed_ = true;
       open_ = false;
@@ -518,29 +549,35 @@ class Http2WebSocketChannel final
       request = request_;
       response = response_;
     }
-    if (duplex != nullptr)
+    if (duplex != nullptr) {
       (void)duplex->Abort(status);
-    if (request != nullptr)
+    }
+    if (request != nullptr) {
       (void)request->Cancel(status);
-    if (response != nullptr)
+    }
+    if (response != nullptr) {
       (void)response->Abort(status);
-    if (callback)
+    }
+    if (callback) {
       callback(std::move(status));
+    }
   }
 
   void CompleteClose() {
     std::function<void()> callback;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_)
+      if (closed_) {
         return;
+      }
       opening_ = false;
       closed_ = true;
       open_ = false;
       callback = callbacks_.on_closed;
     }
-    if (callback)
+    if (callback) {
       callback();
+    }
   }
 
   const Role role_;
@@ -573,9 +610,10 @@ absl::StatusOr<std::shared_ptr<BinaryChannel>> MakeHttp2WebSocketClientChannel(
     return absl::InvalidArgumentError(
         "HTTP/2 WebSocket client requires host, port, and absolute path");
   }
-  if (config.max_message_size == 0)
+  if (config.max_message_size == 0) {
     return absl::InvalidArgumentError(
         "WebSocket message limit must be positive");
+  }
   ABSL_RETURN_IF_ERROR(config.http2_options.Validate());
   ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(config.headers));
   return std::make_shared<Http2WebSocketChannel>(std::move(config));
@@ -589,11 +627,13 @@ absl::StatusOr<std::shared_ptr<BinaryChannel>> MakeHttp2WebSocketServerChannel(
     return absl::InvalidArgumentError(
         "HTTP/2 request is not a WebSocket extended CONNECT");
   }
-  if (response == nullptr)
+  if (response == nullptr) {
     return absl::InvalidArgumentError("WebSocket response must not be null");
-  if (max_message_size == 0)
+  }
+  if (max_message_size == 0) {
     return absl::InvalidArgumentError(
         "WebSocket message limit must be positive");
+  }
   return std::make_shared<Http2WebSocketChannel>(
       std::move(request.body_stream), std::move(response), max_message_size);
 }

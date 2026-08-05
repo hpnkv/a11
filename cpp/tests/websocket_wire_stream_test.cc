@@ -34,8 +34,9 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
       [&accepted_promise, &server_message_promise,
        &server_done](std::shared_ptr<WebSocketWireStream> stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
-        if (!published.ok())
+        if (!published.ok()) {
           return a11::FailedTask(published);
+        }
         return stream->Accept(
             [&server_message_promise](
                 std::optional<data::WireMessage> message) {
@@ -114,8 +115,9 @@ TEST(WebSocketWireStreamTest, ReassemblesMultipleLargeChunkedMessagesInOrder) {
       [&accepted_promise, &messages_promise,
        &messages](std::shared_ptr<WebSocketWireStream> stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
-        if (!published.ok())
+        if (!published.ok()) {
           return a11::FailedTask(published);
+        }
         return stream->Accept(
             [&messages_promise,
              &messages](std::optional<data::WireMessage> message) {

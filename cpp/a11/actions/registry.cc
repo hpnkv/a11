@@ -65,8 +65,9 @@ absl::Status ActionRegistry::Unregister(std::string_view action_name) {
 }
 
 bool ActionRegistry::IsRegistered(std::string_view action_name) const {
-  if (!data::ValidateName(action_name).ok())
+  if (!data::ValidateName(action_name).ok()) {
     return false;
+  }
   thread::MutexLock lock(&mu_);
   return schemas_.find(std::string(action_name)) != schemas_.end();
 }
@@ -88,8 +89,9 @@ absl::StatusOr<ActionHandler> ActionRegistry::GetHandler(
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_name));
   thread::MutexLock lock(&mu_);
   const auto found = handlers_.find(action_name);
-  if (found != handlers_.end())
+  if (found != handlers_.end()) {
     return found->second;
+  }
   if (schemas_.find(action_name) != schemas_.end()) {
     return absl::NotFoundError(absl::StrCat(
         "Action '", action_name, "' is registered without a handler"));
@@ -108,8 +110,9 @@ absl::StatusOr<std::shared_ptr<Action>> ActionRegistry::MakeAction(
   {
     thread::MutexLock lock(&mu_);
     const auto found = handlers_.find(action_name);
-    if (found != handlers_.end())
+    if (found != handlers_.end()) {
       handler = found->second;
+    }
   }
   return Action::Create(std::move(schema), std::move(action_id),
                         std::move(handler), std::move(node_map),

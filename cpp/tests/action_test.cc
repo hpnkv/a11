@@ -42,19 +42,22 @@ ActionHandler EchoHandler() {
     return a11::SubmitTask([action = std::move(action)]() -> absl::Status {
       absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> input =
           action->GetInput("input");
-      if (!input.ok())
+      if (!input.ok()) {
         return input.status();
+      }
       absl::StatusOr<std::optional<data::Chunk>> chunk =
           (*input)->NextChunk().Await();
-      if (!chunk.ok())
+      if (!chunk.ok()) {
         return chunk.status();
+      }
       if (!chunk->has_value()) {
         return absl::FailedPreconditionError("echo input ended early");
       }
       absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> output =
           action->GetOutput("output");
-      if (!output.ok())
+      if (!output.ok()) {
         return output.status();
+      }
       return (*output)
           ->PutChunk(std::move(**chunk), std::nullopt, true)
           .Await()
@@ -94,8 +97,9 @@ TEST(ActionTest, HandlerFailureAbortsUnfinishedOutput) {
   ActionHandler failing = [](std::shared_ptr<Action> action) {
     return a11::SubmitTask([action = std::move(action)]() -> absl::Status {
       auto output = action->GetOutput("output", false);
-      if (!output.ok())
+      if (!output.ok()) {
         return output.status();
+      }
       return absl::DataLossError("handler failed");
     });
   };

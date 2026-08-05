@@ -144,8 +144,9 @@ class RtcBinaryChannel final : public BinaryChannel {
 
 absl::StatusOr<std::shared_ptr<BinaryChannel>> MakeRtcBinaryChannel(
     std::shared_ptr<rtc::Channel> channel) {
-  if (channel == nullptr)
+  if (channel == nullptr) {
     return absl::InvalidArgumentError("channel must not be null");
+  }
   return std::make_shared<RtcBinaryChannel>(std::move(channel));
 }
 

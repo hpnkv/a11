@@ -96,7 +96,8 @@ absl::StatusOr<absl::Time> DeadlineFromAction(
 // Spawns a fiber that requests a graceful stop once `deadline` is reached,
 // unless the run ends first (RequestStop notifies stop->event) or the fiber is
 // cancelled. `stop` is captured by value so its event outlives the watcher.
-a11::Task WatchDeadline(absl::Time deadline, std::shared_ptr<CaptureStop> stop) {
+a11::Task WatchDeadline(absl::Time deadline,
+                        std::shared_ptr<CaptureStop> stop) {
   if (deadline >= absl::InfiniteFuture()) {
     return a11::ReadyTask();
   }
@@ -200,12 +201,9 @@ ActionHandler MakeListAudioInputsHandler() {
       }
       ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<AsyncNode> out,
                             action->GetOutput("inputs"));
-      absl::StatusOr<std::vector<DeviceInfo>> devices = ListDevices();
-      if (!devices.ok()) {
-        return devices.status();
-      }
+      ABSL_ASSIGN_OR_RETURN(std::vector<DeviceInfo> devices, ListDevices());
       std::vector<DeviceInfo> inputs;
-      for (DeviceInfo& device : *devices) {
+      for (DeviceInfo& device : devices) {
         if (device.max_input_channels > 0) {
           inputs.push_back(std::move(device));
         }
@@ -444,8 +442,8 @@ ActionHandler MakeTranscribeAudioHandler() {
 
       ABSL_ASSIGN_OR_RETURN(
           SpeechRecognizerOptions asr_options,
-          ReadOptionalOptions<SpeechRecognizerOptions>(action, "asr_options",
-                                                       SpeechRecognizerOptions{}));
+          ReadOptionalOptions<SpeechRecognizerOptions>(
+              action, "asr_options", SpeechRecognizerOptions{}));
       if (asr_options.model_path.empty()) {
         return absl::InvalidArgumentError(
             "transcribe_audio requires asr_options.model_path");
@@ -455,10 +453,9 @@ ActionHandler MakeTranscribeAudioHandler() {
       // silence bound so genuine in-content pauses still endpoint via the VAD.
       const absl::Duration pause_after =
           absl::Milliseconds(asr_options.min_silence_millis + 500);
-      ABSL_ASSIGN_OR_RETURN(
-          std::shared_ptr<SpeechRecognizer> recognizer,
-          SpeechRecognizer::CreateForStream(std::move(model_path),
-                                            std::move(asr_options)));
+      ABSL_ASSIGN_OR_RETURN(std::shared_ptr<SpeechRecognizer> recognizer,
+                            SpeechRecognizer::CreateForStream(
+                                std::move(model_path), std::move(asr_options)));
 
       OnTranscription on_piece =
           [pieces_out](std::optional<std::string> piece) -> a11::Task {
@@ -520,15 +517,14 @@ ActionHandler MakeTranscribeAudioHandler() {
       auto deadline_done = std::make_shared<thread::PermanentEvent>();
       a11::Task deadline_task = a11::ReadyTask();
       if (deadline < absl::InfiniteFuture()) {
-        deadline_task = a11::SubmitTask(
-            [deadline, deadline_done, recognizer]() -> absl::Status {
-              if (thread::SelectUntil(deadline, {thread::OnCancel(),
-                                                 deadline_done->OnEvent()}) <
-                  0) {
-                (void)recognizer->Stop();  // non-blocking
-              }
-              return absl::OkStatus();
-            });
+        deadline_task = a11::SubmitTask([deadline, deadline_done,
+                                         recognizer]() -> absl::Status {
+          if (thread::SelectUntil(deadline, {thread::OnCancel(),
+                                             deadline_done->OnEvent()}) < 0) {
+            (void)recognizer->Stop();  // non-blocking
+          }
+          return absl::OkStatus();
+        });
       }
 
       // Await natural completion (input stream closed), the deadline, or
@@ -701,7 +697,8 @@ absl::StatusOr<absl::Time> ParseDeadlineHeader(std::string_view value) {
         "x-a11-deadline must be a non-negative base-10 integer of "
         "milliseconds since the epoch, or nanoseconds with an 'ns' suffix");
   }
-  return nanos ? absl::FromUnixNanos(magnitude) : absl::FromUnixMillis(magnitude);
+  return nanos ? absl::FromUnixNanos(magnitude)
+               : absl::FromUnixMillis(magnitude);
 }
 
 absl::Status EnsureAudioTypesRegistered() {

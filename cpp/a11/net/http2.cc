@@ -66,8 +66,9 @@ absl::Status ExceptionStatus(const std::exception& error,
 
 std::string OpenSslErrorMessage(std::string_view operation) {
   const unsigned long code = ERR_get_error();
-  if (code == 0)
+  if (code == 0) {
     return std::string(operation);
+  }
   char message[256];
   ERR_error_string_n(code, message, sizeof(message));
   return absl::StrCat(operation, ": ", message);
@@ -100,8 +101,9 @@ int SelectH2Alpn(SSL*, const unsigned char** output,
 
 absl::Status LoadCertificateAndKey(SSL_CTX* context,
                                    const Http2TlsOptions& options) {
-  if (options.certificate_pem_file.empty())
+  if (options.certificate_pem_file.empty()) {
     return absl::OkStatus();
+  }
   ERR_clear_error();
   if (SSL_CTX_use_certificate_chain_file(
           context, options.certificate_pem_file.c_str()) != 1) {
@@ -125,8 +127,9 @@ absl::Status LoadCertificateAndKey(SSL_CTX* context,
 absl::StatusOr<SslContext> CreateTlsContext(const Http2TlsOptions& options,
                                             bool server) {
   ABSL_RETURN_IF_ERROR(options.Validate());
-  if (!options.enabled)
+  if (!options.enabled) {
     return SslContext{};
+  }
   if (server && options.certificate_pem_file.empty()) {
     return absl::InvalidArgumentError(
         "A TLS HTTP/2 server requires a certificate and private key");
@@ -187,8 +190,9 @@ class UvExecutor {
   }
 
   absl::Status Post(std::function<void()> work) {
-    if (!work)
+    if (!work) {
       return absl::InvalidArgumentError("uv work must be callable");
+    }
     {
       thread::MutexLock lock(&mu_);
       if (!running_) {
@@ -204,8 +208,9 @@ class UvExecutor {
       }
     }
     const int result = async_->send();
-    if (result != 0)
+    if (result != 0) {
       return UvError(result, "uv_async_send");
+    }
     return absl::OkStatus();
   }
 
@@ -293,7 +298,7 @@ absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation) {
   }
   auto promise = std::make_shared<a11::Promise<T>>();
   a11::Future<T> future = promise->future();
-  absl::Status queued = UvExecutor::Instance().Post(
+  ABSL_RETURN_IF_ERROR(UvExecutor::Instance().Post(
       [promise, operation = std::move(operation)]() mutable {
         absl::StatusOr<T> result;
         try {
@@ -305,9 +310,7 @@ absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation) {
               "libuv operation raised a non-standard exception");
         }
         (void)promise->SetResult(std::move(result));
-      });
-  if (!queued.ok())
-    return queued;
+      }));
   return future.Await();
 }
 
@@ -315,9 +318,7 @@ absl::Status RunStatusOnUv(std::function<absl::Status()> operation) {
   absl::StatusOr<a11::Unit> result = RunOnUv<a11::Unit>(
       [operation =
            std::move(operation)]() mutable -> absl::StatusOr<a11::Unit> {
-        absl::Status status = operation();
-        if (!status.ok())
-          return status;
+        ABSL_RETURN_IF_ERROR(operation());
         return a11::Unit{};
       });
   return result.status();
@@ -346,13 +347,15 @@ std::vector<std::pair<std::string, std::string>> RequestHeaders(
   std::vector<std::pair<std::string, std::string>> values;
   values.reserve(headers.size() + 4 + (protocol.empty() ? 0 : 1));
   values.emplace_back(":method", method);
-  if (!protocol.empty())
+  if (!protocol.empty()) {
     values.emplace_back(":protocol", protocol);
+  }
   values.emplace_back(":scheme", scheme);
   values.emplace_back(":authority", authority);
   values.emplace_back(":path", path);
-  for (const auto& header : headers)
+  for (const auto& header : headers) {
     values.push_back(header);
+  }
   return values;
 }
 
@@ -361,15 +364,17 @@ std::vector<std::pair<std::string, std::string>> ResponseHeaders(
   std::vector<std::pair<std::string, std::string>> values;
   values.reserve(headers.size() + 1);
   values.emplace_back(":status", std::to_string(status));
-  for (auto& header : headers)
+  for (auto& header : headers) {
     values.push_back(std::move(header));
+  }
   return values;
 }
 
 absl::Status Http2StreamError(std::uint32_t error_code,
                               std::string_view context) {
-  if (error_code == NGHTTP2_NO_ERROR)
+  if (error_code == NGHTTP2_NO_ERROR) {
     return absl::OkStatus();
+  }
   if (error_code == NGHTTP2_CANCEL) {
     return absl::CancelledError(absl::StrCat(context, " was cancelled"));
   }
@@ -419,9 +424,10 @@ struct Http2RequestBodyStream::State {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
     {
       thread::MutexLock lock(&mu);
-      if (done)
+      if (done) {
         return status.ok() ? absl::CancelledError("Request body is done")
                            : status;
+      }
       if (pending_read != nullptr) {
         reader = std::move(pending_read);
       } else {
@@ -443,8 +449,9 @@ struct Http2RequestBodyStream::State {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
     {
       thread::MutexLock lock(&mu);
-      if (done)
+      if (done) {
         return;
+      }
       done = true;
       status = completion;
       reader = std::move(pending_read);
@@ -494,8 +501,9 @@ a11::Future<std::optional<std::string>> Http2RequestBodyStream::Read() {
     return a11::ReadyFuture(std::optional<std::string>(std::move(chunk)));
   }
   if (done) {
-    if (!status.ok())
+    if (!status.ok()) {
       return a11::FailedFuture<std::optional<std::string>>(status);
+    }
     return a11::ReadyFuture(std::optional<std::string>());
   }
   return promise->future();
@@ -506,13 +514,15 @@ a11::Task Http2RequestBodyStream::Done() const {
 }
 
 absl::Status Http2RequestBodyStream::Cancel(absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     return absl::InvalidArgumentError("Cancellation status must be non-OK");
+  }
   std::function<absl::Status(absl::Status)> cancel;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->done)
+    if (state_->done) {
       return absl::OkStatus();
+    }
     cancel = state_->cancel;
   }
   if (!cancel) {
@@ -560,16 +570,18 @@ struct Http2ResponseStream::State {
         publish = true;
       }
     }
-    if (publish)
+    if (publish) {
       (void)headers_promise->SetValue(std::move(head));
+    }
   }
 
   absl::Status Push(std::string data) {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
     {
       thread::MutexLock lock(&mu);
-      if (done)
+      if (done) {
         return status.ok() ? absl::CancelledError("Response is done") : status;
+      }
       if (pending_read != nullptr) {
         reader = std::move(pending_read);
       } else {
@@ -592,8 +604,9 @@ struct Http2ResponseStream::State {
     bool publish_headers_error = false;
     {
       thread::MutexLock lock(&mu);
-      if (done)
+      if (done) {
         return;
+      }
       done = true;
       status = completion;
       reader = std::move(pending_read);
@@ -637,8 +650,9 @@ struct Http2ResponseWriter::State {
   void Finish(const absl::Status& status) {
     {
       thread::MutexLock lock(&mu);
-      if (done)
+      if (done) {
         return;
+      }
       done = true;
     }
     if (status.ok()) {
@@ -702,8 +716,9 @@ absl::Status Http2ResponseStream::Cancel(absl::Status status) {
   std::function<absl::Status(absl::Status)> cancel;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->done)
+    if (state_->done) {
       return absl::OkStatus();
+    }
     cancel = state_->cancel;
   }
   if (!cancel) {
@@ -732,8 +747,9 @@ std::optional<std::string> GetHttpHeader(const HttpHeaders& headers,
   const auto iterator = std::find_if(
       headers.begin(), headers.end(),
       [&](const auto& header) { return header.first == normalized; });
-  if (iterator == headers.end())
+  if (iterator == headers.end()) {
     return std::nullopt;
+  }
   return iterator->second;
 }
 
@@ -804,8 +820,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       Http2RequestHandler handler, Http2Options options,
       SslContext tls_context = {}, std::string tls_server_name = {},
       std::function<void(Http2Connection*)> on_closed = {}) {
-    if (tcp == nullptr)
+    if (tcp == nullptr) {
       return absl::InvalidArgumentError("TCP handle must not be null");
+    }
 
     struct MakeSharedEnabler final : Http2Connection {
       MakeSharedEnabler(std::shared_ptr<uvw::tcp_handle> tcp, bool server,
@@ -826,10 +843,12 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   ~Http2Connection() {
-    if (session_ != nullptr)
+    if (session_ != nullptr) {
       nghttp2_session_del(session_);
-    if (ssl_ != nullptr)
+    }
+    if (ssl_ != nullptr) {
       SSL_free(ssl_);
+    }
   }
 
   [[nodiscard]] a11::Task Ready() const { return ready_future_; }
@@ -927,8 +946,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     return RunStatusOnUv([self = std::move(self), stream_id,
                           status = std::move(status)]() mutable {
       Stream* stream = self->FindStream(stream_id);
-      if (stream == nullptr)
+      if (stream == nullptr) {
         return absl::OkStatus();
+      }
       if (!stream->response_headers_sent) {
         HttpHeaders headers;
         headers.emplace_back("content-type", "text/plain; charset=utf-8");
@@ -954,10 +974,12 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     return RunStatusOnUv([self = std::move(self), stream_id,
                           status = std::move(status)]() mutable {
       Stream* stream = self->FindStream(stream_id);
-      if (stream == nullptr)
+      if (stream == nullptr) {
         return absl::OkStatus();
-      if (stream->response != nullptr)
+      }
+      if (stream->response != nullptr) {
         stream->response->Finish(status);
+      }
       const int submitted =
           nghttp2_submit_rst_stream(self->session_, NGHTTP2_FLAG_NONE,
                                     stream_id, StatusToHttp2Error(status));
@@ -973,8 +995,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     return RunOnUv<bool>(
         [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
           Stream* stream = self->FindStream(stream_id);
-          if (stream == nullptr)
+          if (stream == nullptr) {
             return false;
+          }
           return stream->response_headers_sent;
         });
   }
@@ -984,8 +1007,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     return RunOnUv<bool>(
         [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
           Stream* stream = self->FindStream(stream_id);
-          if (stream == nullptr)
+          if (stream == nullptr) {
             return true;
+          }
           return stream->outbound_finished;
         });
   }
@@ -1032,7 +1056,7 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       : tcp_(std::move(tcp)),
         server_(server),
         handler_(std::move(handler)),
-        options_(options),
+        options_(std::move(options)),
         ssl_context_(std::move(tls_context)),
         tls_server_name_(std::move(tls_server_name)),
         on_closed_(std::move(on_closed)),
@@ -1103,8 +1127,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     if (result != 0) {
       return Nghttp2Error(result, "nghttp2_submit_settings");
     }
-    if (ssl_context_ != nullptr)
+    if (ssl_context_ != nullptr) {
       return InitializeTls();
+    }
     return StartHttp2();
   }
 
@@ -1168,8 +1193,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   void PublishReady(const absl::Status& status) {
-    if (ready_published_)
+    if (ready_published_) {
       return;
+    }
     ready_published_ = true;
     if (status.ok()) {
       (void)ready_promise_->SetValue(a11::Unit{});
@@ -1179,8 +1205,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   absl::Status StartHttp2() {
-    if (http2_started_)
+    if (http2_started_) {
       return absl::OkStatus();
+    }
     absl::Status status = SendSession();
     if (!status.ok()) {
       PublishReady(status);
@@ -1203,8 +1230,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
         std::memcpy(output.get(), data + offset, chunk_size);
         const int written = tcp_->write(std::move(output),
                                         static_cast<unsigned int>(chunk_size));
-        if (written != 0)
+        if (written != 0) {
           return UvError(written, "Writing HTTP/2 TCP data");
+        }
         offset += chunk_size;
       }
       return absl::OkStatus();
@@ -1217,8 +1245,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   absl::Status FlushTlsOutput() {
-    if (ssl_ == nullptr)
+    if (ssl_ == nullptr) {
       return absl::OkStatus();
+    }
     BIO* output = SSL_get_wbio(ssl_);
     if (output == nullptr) {
       return absl::InternalError("The TLS connection has no output BIO");
@@ -1226,26 +1255,24 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     std::array<char, 16 * 1024> buffer{};
     while (BIO_ctrl_pending(output) > 0) {
       const int length = BIO_read(output, buffer.data(), buffer.size());
-      if (length <= 0)
+      if (length <= 0) {
         return TlsError("Reading encrypted TLS output");
-      absl::Status status =
-          WriteTcp(buffer.data(), static_cast<size_t>(length));
-      if (!status.ok())
-        return status;
+      }
+      ABSL_RETURN_IF_ERROR(
+          WriteTcp(buffer.data(), static_cast<size_t>(length)));
     }
     return absl::OkStatus();
   }
 
   absl::Status AdvanceTlsHandshake() {
-    if (tls_handshake_complete_)
+    if (tls_handshake_complete_) {
       return absl::OkStatus();
+    }
     ERR_clear_error();
     const int result = SSL_do_handshake(ssl_);
     const int error =
         result == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl_, result);
-    absl::Status flushed = FlushTlsOutput();
-    if (!flushed.ok())
-      return flushed;
+    ABSL_RETURN_IF_ERROR(FlushTlsOutput());
     if (result == 1) {
       const unsigned char* protocol = nullptr;
       unsigned int protocol_length = 0;
@@ -1303,14 +1330,16 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
           size - offset, static_cast<size_t>(std::numeric_limits<int>::max()));
       const int written =
           BIO_write(input, data + offset, static_cast<int>(chunk_size));
-      if (written <= 0)
+      if (written <= 0) {
         return TlsError("Buffering encrypted TLS input");
+      }
       offset += static_cast<size_t>(written);
     }
 
     absl::Status status = AdvanceTlsHandshake();
-    if (!status.ok() || !tls_handshake_complete_)
+    if (!status.ok() || !tls_handshake_complete_) {
       return status;
+    }
     std::array<char, 16 * 1024> plaintext{};
     while (true) {
       size_t length = 0;
@@ -1318,20 +1347,18 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       const int read =
           SSL_read_ex(ssl_, plaintext.data(), plaintext.size(), &length);
       if (read == 1) {
-        if (length == 0)
+        if (length == 0) {
           continue;
-        status = ProcessHttp2Data(plaintext.data(), length);
-        if (!status.ok())
-          return status;
+        }
+        ABSL_RETURN_IF_ERROR(ProcessHttp2Data(plaintext.data(), length));
         continue;
       }
       const int error = SSL_get_error(ssl_, read);
-      if (error == SSL_ERROR_WANT_READ)
+      if (error == SSL_ERROR_WANT_READ) {
         break;
+      }
       if (error == SSL_ERROR_WANT_WRITE) {
-        status = FlushTlsOutput();
-        if (!status.ok())
-          return status;
+        ABSL_RETURN_IF_ERROR(FlushTlsOutput());
         continue;
       }
       if (error == SSL_ERROR_ZERO_RETURN) {
@@ -1361,16 +1388,12 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
           return absl::InternalError("TLS accepted no HTTP/2 output data");
         }
         offset += written;
-        absl::Status status = FlushTlsOutput();
-        if (!status.ok())
-          return status;
+        ABSL_RETURN_IF_ERROR(FlushTlsOutput());
         continue;
       }
       const int error = SSL_get_error(ssl_, result);
       if (error == SSL_ERROR_WANT_WRITE) {
-        absl::Status status = FlushTlsOutput();
-        if (!status.ok())
-          return status;
+        ABSL_RETURN_IF_ERROR(FlushTlsOutput());
         continue;
       }
       return TlsError("Encrypting HTTP/2 TLS data");
@@ -1414,8 +1437,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     auto stream = std::make_unique<Stream>();
     stream->response = std::make_shared<Http2ResponseStream::State>(
         options_.max_buffered_response_bytes);
-    if (!body.empty())
+    if (!body.empty()) {
       stream->outbound.push_back(std::move(body));
+    }
     stream->outbound_finished = true;
     auto values = RequestHeaders(method, scheme, authority, path, {}, headers);
     auto fields = MakeNv(values);
@@ -1440,8 +1464,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       stream->response->cancel =
           [weak, stream_id](absl::Status status) -> absl::Status {
         const std::shared_ptr<Http2Connection> self = weak.lock();
-        if (self == nullptr)
+        if (self == nullptr) {
           return absl::OkStatus();
+        }
         return self->CancelRequest(stream_id, std::move(status));
       };
     }
@@ -1523,8 +1548,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     const std::int32_t stream_id =
         nghttp2_submit_request(session_, nullptr, fields.data(), fields.size(),
                                &provider, stream.get());
-    if (stream_id < 0)
+    if (stream_id < 0) {
       return Nghttp2Error(stream_id, "nghttp2_submit_request");
+    }
     stream->id = stream_id;
     std::weak_ptr<Http2Connection> weak = shared_from_this();
     {
@@ -1533,8 +1559,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       stream->response->cancel =
           [weak, stream_id](absl::Status status) -> absl::Status {
         std::shared_ptr<Http2Connection> self = weak.lock();
-        if (self == nullptr)
+        if (self == nullptr) {
           return absl::OkStatus();
+        }
         return self->CancelRequest(stream_id, std::move(status));
       };
     }
@@ -1614,8 +1641,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   absl::Status WriteOnLoop(std::int32_t stream_id, std::string data) {
-    if (data.empty())
+    if (data.empty()) {
       return absl::OkStatus();
+    }
     Stream* stream = FindStream(stream_id);
     if (stream == nullptr) {
       return absl::NotFoundError("HTTP/2 request stream is no longer active");
@@ -1637,15 +1665,17 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   absl::Status WriteRequestOnLoop(std::int32_t stream_id, std::string data) {
-    if (data.empty())
+    if (data.empty()) {
       return absl::OkStatus();
+    }
     if (server_) {
       return absl::FailedPreconditionError(
           "A server HTTP/2 connection cannot write request DATA");
     }
     Stream* stream = FindStream(stream_id);
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return absl::NotFoundError("HTTP/2 request stream is no longer active");
+    }
     if (!stream->duplex) {
       return absl::FailedPreconditionError(
           "HTTP/2 request is not an extended CONNECT stream");
@@ -1656,21 +1686,24 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     }
     stream->outbound.push_back(std::move(data));
     const int resumed = nghttp2_session_resume_data(session_, stream_id);
-    if (resumed != 0 && resumed != NGHTTP2_ERR_INVALID_ARGUMENT)
+    if (resumed != 0 && resumed != NGHTTP2_ERR_INVALID_ARGUMENT) {
       return Nghttp2Error(resumed, "nghttp2_session_resume_data");
+    }
     return SendSession();
   }
 
   absl::Status FinishOnLoop(std::int32_t stream_id) {
     Stream* stream = FindStream(stream_id);
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return absl::OkStatus();
+    }
     if (!stream->response_headers_sent) {
       return absl::FailedPreconditionError(
           "SendHeaders must be called before finishing an HTTP/2 response");
     }
-    if (stream->outbound_finished)
+    if (stream->outbound_finished) {
       return absl::OkStatus();
+    }
     stream->outbound_finished = true;
     const int resumed = nghttp2_session_resume_data(session_, stream_id);
     if (resumed != 0 && resumed != NGHTTP2_ERR_INVALID_ARGUMENT) {
@@ -1685,18 +1718,21 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
           "A server HTTP/2 connection cannot finish request DATA");
     }
     Stream* stream = FindStream(stream_id);
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return absl::OkStatus();
+    }
     if (!stream->duplex) {
       return absl::FailedPreconditionError(
           "HTTP/2 request is not an extended CONNECT stream");
     }
-    if (stream->outbound_finished)
+    if (stream->outbound_finished) {
       return absl::OkStatus();
+    }
     stream->outbound_finished = true;
     const int resumed = nghttp2_session_resume_data(session_, stream_id);
-    if (resumed != 0 && resumed != NGHTTP2_ERR_INVALID_ARGUMENT)
+    if (resumed != 0 && resumed != NGHTTP2_ERR_INVALID_ARGUMENT) {
       return Nghttp2Error(resumed, "nghttp2_session_resume_data");
+    }
     return SendSession();
   }
 
@@ -1711,8 +1747,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   bool IsExtendedConnect(const Stream* stream) const {
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return false;
+    }
     const std::optional<std::string> method =
         GetHttpHeader(stream->inbound_headers, ":method");
     const std::optional<std::string> protocol =
@@ -1721,10 +1758,12 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   absl::Status BeginDuplexRequest(Stream* stream) {
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return absl::InvalidArgumentError("HTTP/2 stream must not be null");
-    if (stream->request_body != nullptr)
+    }
+    if (stream->request_body != nullptr) {
       return absl::OkStatus();
+    }
     stream->duplex = true;
     stream->request_body = std::make_shared<Http2RequestBodyStream::State>(
         options_.max_buffered_request_bytes);
@@ -1736,8 +1775,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
       stream->request_body->cancel =
           [weak, stream_id](absl::Status status) -> absl::Status {
         std::shared_ptr<Http2Connection> self = weak.lock();
-        if (self == nullptr)
+        if (self == nullptr) {
           return absl::OkStatus();
+        }
         return self->CancelRequest(stream_id, std::move(status));
       };
     }
@@ -1745,12 +1785,14 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   void OnTcpData(const char* data, size_t size) {
-    if (closed_ || session_ == nullptr)
+    if (closed_ || session_ == nullptr) {
       return;
+    }
     absl::Status status = ssl_ == nullptr ? ProcessHttp2Data(data, size)
                                           : ReceiveTlsData(data, size);
-    if (!status.ok())
+    if (!status.ok()) {
       CloseOnLoop(status);
+    }
   }
 
   absl::Status SendSession() {
@@ -1762,8 +1804,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     if (pending_transport_error_.has_value()) {
       return *std::exchange(pending_transport_error_, std::nullopt);
     }
-    if (result != 0)
+    if (result != 0) {
       return Nghttp2Error(result, "nghttp2_session_send");
+    }
     return absl::OkStatus();
   }
 
@@ -1860,11 +1903,13 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
                               const std::uint8_t* value, size_t value_length,
                               std::uint8_t, void* user_data) noexcept {
     auto* self = static_cast<Http2Connection*>(user_data);
-    if (self == nullptr || frame == nullptr)
+    if (self == nullptr || frame == nullptr) {
       return 0;
+    }
     Stream* stream = self->FindStream(frame->hd.stream_id);
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return 0;
+    }
     try {
       std::string normalized_name(reinterpret_cast<const char*>(name),
                                   name_length);
@@ -1887,12 +1932,14 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   static int OnFrameRecvCallback(nghttp2_session*, const nghttp2_frame* frame,
                                  void* user_data) noexcept {
     auto* self = static_cast<Http2Connection*>(user_data);
-    if (self == nullptr || frame == nullptr)
+    if (self == nullptr || frame == nullptr) {
       return 0;
+    }
     try {
       Stream* stream = self->FindStream(frame->hd.stream_id);
-      if (stream == nullptr)
+      if (stream == nullptr) {
         return 0;
+      }
       if (frame->hd.type == NGHTTP2_HEADERS) {
         if (self->server_ && frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
           if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
@@ -1918,10 +1965,12 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
                  (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
         stream->remote_end = true;
         if (self->server_) {
-          if (stream->request_body != nullptr)
+          if (stream->request_body != nullptr) {
             stream->request_body->Finish(absl::OkStatus());
-          if (!stream->request_dispatched)
+          }
+          if (!stream->request_dispatched) {
             self->DispatchRequest(stream);
+          }
         } else if (stream->response != nullptr) {
           stream->response->Finish(absl::OkStatus());
         }
@@ -1943,11 +1992,13 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
                                  const std::uint8_t* data, size_t length,
                                  void* user_data) noexcept {
     auto* self = static_cast<Http2Connection*>(user_data);
-    if (self == nullptr)
+    if (self == nullptr) {
       return 0;
+    }
     Stream* stream = self->FindStream(stream_id);
-    if (stream == nullptr)
+    if (stream == nullptr) {
       return 0;
+    }
     try {
       if (self->server_) {
         if (stream->request_body != nullptr) {
@@ -1997,12 +2048,14 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
                                    std::uint32_t error_code,
                                    void* user_data) noexcept {
     auto* self = static_cast<Http2Connection*>(user_data);
-    if (self == nullptr)
+    if (self == nullptr) {
       return 0;
+    }
     try {
       auto iterator = self->streams_.find(stream_id);
-      if (iterator == self->streams_.end())
+      if (iterator == self->streams_.end()) {
         return 0;
+      }
       Stream& stream = *iterator->second;
       if (stream.response != nullptr) {
         absl::Status status = Http2StreamError(error_code, "HTTP/2 response");
@@ -2050,8 +2103,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
           absl::DataLossError("HTTP/2 response has an invalid :status"));
       return;
     }
-    if (status < 200)
+    if (status < 200) {
       return;
+    }
     HttpResponseHead head{.status = status};
     for (const auto& [name, value] : stream->inbound_headers) {
       if (name.empty() || name.front() != ':') {
@@ -2063,8 +2117,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   void DispatchRequest(Stream* stream) {
-    if (stream == nullptr || stream->request_dispatched)
+    if (stream == nullptr || stream->request_dispatched) {
       return;
+    }
 
     struct MakeWriterEnabler final : Http2ResponseWriter {
       MakeWriterEnabler(std::weak_ptr<Http2Connection> connection,
@@ -2081,8 +2136,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     };
 
     stream->request_dispatched = true;
-    if (stream->request_too_large)
+    if (stream->request_too_large) {
       return;
+    }
     const std::optional<std::string> method =
         GetHttpHeader(stream->inbound_headers, ":method");
     const std::optional<std::string> protocol =
@@ -2140,8 +2196,9 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
   }
 
   void CloseOnLoop(absl::Status status) {
-    if (closed_)
+    if (closed_) {
       return;
+    }
     closed_ = true;
     connected_.store(false);
     if (status.ok()) {
@@ -2150,20 +2207,24 @@ class Http2Connection : public std::enable_shared_from_this<Http2Connection> {
     PublishReady(status);
     for (auto& [stream_id, stream] : streams_) {
       (void)stream_id;
-      if (stream->response != nullptr)
+      if (stream->response != nullptr) {
         stream->response->Finish(status);
-      if (stream->request_body != nullptr)
+      }
+      if (stream->request_body != nullptr) {
         stream->request_body->Finish(status);
-      if (stream->writer != nullptr)
+      }
+      if (stream->writer != nullptr) {
         stream->writer->Finish(status);
+      }
     }
     streams_.clear();
     if (session_ != nullptr) {
       nghttp2_session_del(session_);
       session_ = nullptr;
     }
-    if (tcp_ != nullptr && !tcp_->closing())
+    if (tcp_ != nullptr && !tcp_->closing()) {
       tcp_->close();
+    }
     std::function<void(Http2Connection*)> on_closed = std::move(on_closed_);
     if (on_closed) {
       try {
@@ -2206,15 +2267,17 @@ a11::Future<std::optional<std::string>> Http2DuplexStream::Read() {
 
 absl::Status Http2DuplexStream::Write(std::string data) {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::UnavailableError("HTTP/2 connection is no longer available");
+  }
   return connection->WriteRequest(stream_id(), std::move(data));
 }
 
 absl::Status Http2DuplexStream::Finish() {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::UnavailableError("HTTP/2 connection is no longer available");
+  }
   return connection->FinishRequest(stream_id());
 }
 
@@ -2248,8 +2311,9 @@ absl::Status Http2ResponseWriter::Write(std::string data) {
 
 absl::Status Http2ResponseWriter::Finish() {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::OkStatus();
+  }
   return connection->Finish(stream_id_);
 }
 
@@ -2265,8 +2329,9 @@ absl::Status Http2ResponseWriter::SendResponse(int status, HttpHeaders headers,
 
 absl::Status Http2ResponseWriter::Abort(absl::Status status) {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::OkStatus();
+  }
   return connection->AbortResponse(stream_id_, std::move(status));
 }
 
@@ -2278,16 +2343,18 @@ a11::Task Http2ResponseWriter::Done() const {
 
 bool Http2ResponseWriter::headers_sent() const {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return false;
+  }
   absl::StatusOr<bool> result = connection->ResponseHeadersSent(stream_id_);
   return result.ok() && *result;
 }
 
 bool Http2ResponseWriter::finished() const {
   std::shared_ptr<Http2Connection> connection = connection_.lock();
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return true;
+  }
   absl::StatusOr<bool> result = connection->ResponseFinished(stream_id_);
   return !result.ok() || *result;
 }
@@ -2297,7 +2364,7 @@ struct Http2Server::State {
         Http2Options server_options, SslContext context)
       : bind_address(std::move(address)),
         handler(std::move(request_handler)),
-        options(server_options),
+        options(std::move(server_options)),
         tls_context(std::move(context)) {}
 
   mutable thread::Mutex mu;
@@ -2352,8 +2419,9 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
         listener->on<uvw::listen_event>([weak](const uvw::listen_event&,
                                                uvw::tcp_handle& listening) {
           std::shared_ptr<State> server = weak.lock();
-          if (server == nullptr)
+          if (server == nullptr) {
             return;
+          }
           std::shared_ptr<uvw::tcp_handle> client;
           try {
             client = listening.parent().resource<uvw::tcp_handle>();
@@ -2399,11 +2467,13 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
           }
         });
         int result = listener->bind(state->bind_address, port);
-        if (result != 0)
+        if (result != 0) {
           return UvError(result, "Binding HTTP/2 listener");
+        }
         result = listener->listen();
-        if (result != 0)
+        if (result != 0) {
           return UvError(result, "Listening for HTTP/2");
+        }
         const uvw::socket_address address = listener->sock();
         if (address.port > std::numeric_limits<std::uint16_t>::max()) {
           listener->close();
@@ -2436,14 +2506,16 @@ absl::Status Http2Server::Stop() {
     std::shared_ptr<uvw::tcp_handle> listener;
     {
       thread::MutexLock lock(&state->mu);
-      if (!state->running && state->listener == nullptr)
+      if (!state->running && state->listener == nullptr) {
         return absl::OkStatus();
+      }
       state->running = false;
       listener = std::move(state->listener);
       connections.swap(state->connections);
     }
-    if (listener != nullptr && !listener->closing())
+    if (listener != nullptr && !listener->closing()) {
       listener->close();
+    }
     for (const auto& connection : connections) {
       if (connection != nullptr) {
         (void)connection->Close(absl::CancelledError("HTTP/2 server stopped"));
@@ -2652,7 +2724,7 @@ struct Http2Client::Impl {
        std::shared_ptr<Http2Connection> client_connection)
       : host(std::move(client_host)),
         port(client_port),
-        options(client_options),
+        options(std::move(client_options)),
         connection(std::move(client_connection)) {}
 
   const std::string host;
@@ -2692,10 +2764,12 @@ absl::StatusOr<std::shared_ptr<Http2ResponseStream>> Http2Client::RequestStream(
     thread::MutexLock lock(&state()->mu);
     connection = state()->connection;
   }
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::UnavailableError("HTTP/2 client is closed");
-  if (scheme.empty())
+  }
+  if (scheme.empty()) {
     scheme = connection->secure() ? "https" : "http";
+  }
   std::string authority = state()->host;
   if (authority.find(':') != std::string::npos &&
       (authority.empty() || authority.front() != '[')) {
@@ -2715,10 +2789,12 @@ absl::StatusOr<std::shared_ptr<Http2DuplexStream>> Http2Client::ExtendedConnect(
     thread::MutexLock lock(&state()->mu);
     connection = state()->connection;
   }
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::UnavailableError("HTTP/2 client is closed");
-  if (scheme.empty())
+  }
+  if (scheme.empty()) {
     scheme = connection->secure() ? "https" : "http";
+  }
   std::string authority = state()->host;
   if (authority.find(':') != std::string::npos &&
       (authority.empty() || authority.front() != '[')) {
@@ -2746,30 +2822,25 @@ a11::Future<HttpResponse> Http2Client::Request(std::string method,
       [self = std::move(self),
        stream = std::move(*stream)]() mutable -> absl::StatusOr<HttpResponse> {
         const Http2Options& options = self->state()->options;
-        absl::StatusOr<HttpResponseHead> head =
-            stream->Headers().Await(options.deadline);
-        if (!head.ok())
-          return head.status();
-        HttpResponse response{.head = std::move(*head)};
+        ABSL_ASSIGN_OR_RETURN(HttpResponseHead head,
+                              stream->Headers().Await(options.deadline));
+        HttpResponse response{.head = std::move(head)};
         while (true) {
-          absl::StatusOr<std::optional<std::string>> chunk =
-              stream->Read().Await(options.deadline);
-          if (!chunk.ok())
-            return chunk.status();
-          if (!chunk->has_value())
+          ABSL_ASSIGN_OR_RETURN(std::optional<std::string> chunk,
+                                stream->Read().Await(options.deadline));
+          if (!chunk.has_value()) {
             break;
-          if (response.body.size() + (*chunk)->size() >
+          }
+          if (response.body.size() + chunk->size() >
               options.max_response_body_size) {
             const absl::Status status = absl::OutOfRangeError(
                 "HTTP/2 response exceeds max_response_body_size");
             (void)stream->Cancel(status);
             return status;
           }
-          response.body.append(**chunk);
+          response.body.append(*chunk);
         }
-        absl::Status complete = stream->Done().Await(options.deadline).status();
-        if (!complete.ok())
-          return complete;
+        ABSL_RETURN_IF_ERROR(stream->Done().Await(options.deadline).status());
         return response;
       });
 }
@@ -2780,8 +2851,9 @@ absl::Status Http2Client::Close() {
     thread::MutexLock lock(&state()->mu);
     connection = std::move(state()->connection);
   }
-  if (connection == nullptr)
+  if (connection == nullptr) {
     return absl::OkStatus();
+  }
   return connection->Close();
 }
 

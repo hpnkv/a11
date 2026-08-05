@@ -16,6 +16,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/random/random.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/match.h>
@@ -91,13 +92,16 @@ absl::StatusOr<ParsedHttpUrl> ParseHttpUrl(std::string_view url) {
       host = std::string(authority);
     }
   }
-  if (host.empty())
+  if (host.empty()) {
     return absl::InvalidArgumentError("SSE URL has no host");
+  }
   const size_t suffix = base_path.find_first_of("?#");
-  if (suffix != std::string::npos)
+  if (suffix != std::string::npos) {
     base_path.erase(suffix);
-  while (base_path.size() > 1 && base_path.back() == '/')
+  }
+  while (base_path.size() > 1 && base_path.back() == '/') {
     base_path.pop_back();
+  }
   return ParsedHttpUrl{.scheme = std::move(scheme),
                        .host = std::move(host),
                        .port = port,
@@ -109,8 +113,9 @@ absl::StatusOr<std::string> ResolveEndpoint(std::string_view base_path,
   if (endpoint.empty()) {
     return absl::InvalidArgumentError("HTTP SSE endpoint must not be empty");
   }
-  if (endpoint.front() == '/')
+  if (endpoint.front() == '/') {
     return std::string(endpoint);
+  }
   if (base_path.empty() || base_path == "/") {
     return absl::StrCat("/", endpoint);
   }
@@ -160,8 +165,9 @@ bool IsTerminal(const data::WireMessage& message) {
 }
 
 bool IsAbort(const data::WireMessage& message) {
-  if (!IsTerminal(message))
+  if (!IsTerminal(message)) {
     return false;
+  }
   return message.headers.find(kAbortStatusHeader) != message.headers.end();
 }
 
@@ -191,12 +197,8 @@ struct HttpSseWireStream::State {
 };
 
 absl::Status HttpSseOptions::Validate() const {
-  absl::Status status = stream_options.Validate();
-  if (!status.ok())
-    return status;
-  status = http2_options.Validate();
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(stream_options.Validate());
+  ABSL_RETURN_IF_ERROR(http2_options.Validate());
   if (connect_endpoint.empty() || connect_endpoint.front() != '/') {
     return absl::InvalidArgumentError(
         "connect_endpoint must be an absolute path");
@@ -280,8 +282,9 @@ a11::Task HttpSseWireStream::StartEndpoint(bool accept, OnMessage on_message,
                    : self->application_->Start(std::move(on_message),
                                                std::move(on_done));
         status = started.Await().status();
-        if (!status.ok())
+        if (!status.ok()) {
           self->FailTransport(status);
+        }
         return status;
       });
 }
@@ -323,8 +326,9 @@ a11::Task HttpSseWireStream::HandleBridgeMessage(
     thread::MutexLock lock(&state_->mu);
     state_->local_terminal_transmitted = true;
   }
-  if (!status.ok())
+  if (!status.ok()) {
     FailTransport(status);
+  }
   return StatusTask(std::move(status));
 }
 
@@ -333,8 +337,9 @@ a11::Task HttpSseWireStream::HandleBridgeDone() {
   bool send_abort = false;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->transport_finished)
+    if (state_->transport_finished) {
       return a11::ReadyTask();
+    }
     terminal_status = bridge_->GetStatus();
     send_abort = !state_->suppress_outbound_terminal &&
                  !state_->local_terminal_transmitted &&
@@ -372,21 +377,25 @@ a11::Task HttpSseWireStream::ReceiveTransportMessage(
       return a11::FailedTask(absl::FailedPreconditionError(
           "The SSE peer sent data after a terminal WireMessage"));
     }
-    if (terminal)
+    if (terminal) {
       state_->remote_terminal_received = true;
+    }
   }
   const bool abort = IsAbort(message);
   absl::Status sent = bridge_->Send(std::move(message));
-  if (!sent.ok())
+  if (!sent.ok()) {
     return a11::FailedTask(sent);
-  if (terminal && !abort)
+  }
+  if (terminal && !abort) {
     return bridge_->DrainOutgoingMessages();
+  }
   return a11::ReadyTask();
 }
 
 void HttpSseWireStream::FailTransport(absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::UnknownError("HTTP SSE transport failed");
+  }
   bool abort = false;
   {
     thread::MutexLock lock(&state_->mu);
@@ -396,8 +405,9 @@ void HttpSseWireStream::FailTransport(absl::Status status) {
       abort = true;
     }
   }
-  if (abort)
+  if (abort) {
     (void)bridge_->Abort(std::move(status));
+  }
 }
 
 absl::Status HttpSseWireStream::HalfClose(data::ByteMap trailers) {
@@ -418,9 +428,7 @@ absl::Status HttpSseWireStream::SetDeadline(absl::Time deadline) {
     state_->options.stream_options.deadline = deadline;
     state_->options.http2_options.deadline = deadline;
   }
-  absl::Status status = application_->SetDeadline(deadline);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(application_->SetDeadline(deadline));
   return bridge_->SetDeadline(deadline);
 }
 
@@ -464,9 +472,7 @@ std::optional<HttpHeaders> HttpSseWireStream::GetHttpResponseHeaders() const {
 
 absl::Status HttpSseWireStream::SetHttpRequestHeaders(HttpHeaders headers) {
   NormalizeHttpHeaders(&headers);
-  absl::Status status = ValidateHttpHeaders(headers);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
   thread::MutexLock lock(&state_->mu);
   if (role_ != Role::kClient) {
     return absl::FailedPreconditionError(
@@ -482,9 +488,7 @@ absl::Status HttpSseWireStream::SetHttpRequestHeaders(HttpHeaders headers) {
 
 absl::Status HttpSseWireStream::SetHttpResponseHeaders(HttpHeaders headers) {
   NormalizeHttpHeaders(&headers);
-  absl::Status status = ValidateHttpHeaders(headers);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
   thread::MutexLock lock(&state_->mu);
   if (role_ != Role::kServer) {
     return absl::FailedPreconditionError(
@@ -560,42 +564,33 @@ absl::StatusOr<std::shared_ptr<HttpSseClientWireStream>>
 HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
                                 std::shared_ptr<Http2Client> client,
                                 HttpHeaders request_headers) {
-  absl::StatusOr<ParsedHttpUrl> parsed = ParseHttpUrl(url);
-  if (!parsed.ok())
-    return parsed.status();
-  const bool secure = parsed->scheme == "https";
+  ABSL_ASSIGN_OR_RETURN(ParsedHttpUrl parsed, ParseHttpUrl(url));
+  const bool secure = parsed.scheme == "https";
   if (!secure && options.http2_options.tls.enabled) {
     return absl::InvalidArgumentError(
         "A TLS HTTP/2 client requires an https:// SSE URL");
   }
-  if (secure)
+  if (secure) {
     options.http2_options.tls.enabled = true;
+  }
   if (client != nullptr && client->secure() != secure) {
     return absl::InvalidArgumentError(
         "The supplied HTTP/2 client security does not match the SSE URL");
   }
-  absl::Status validation = options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   NormalizeHttpHeaders(&request_headers);
-  validation = ValidateHttpHeaders(request_headers);
-  if (!validation.ok())
-    return validation;
-  absl::StatusOr<std::string> connect_path =
-      ResolveEndpoint(parsed->base_path, options.connect_endpoint);
-  if (!connect_path.ok())
-    return connect_path.status();
-  absl::StatusOr<std::string> message_endpoint =
-      ResolveEndpoint(parsed->base_path, options.message_endpoint);
-  if (!message_endpoint.ok())
-    return message_endpoint.status();
-  validation = FormatMessageEndpoint(*message_endpoint, "validation").status();
-  if (!validation.ok())
-    return validation;
-  absl::StatusOr<InProcessWireStream::Pair> pair =
-      InProcessWireStream::CreatePair(options.stream_options);
-  if (!pair.ok())
-    return pair.status();
+  ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(request_headers));
+  ABSL_ASSIGN_OR_RETURN(
+      std::string connect_path,
+      ResolveEndpoint(parsed.base_path, options.connect_endpoint));
+  ABSL_ASSIGN_OR_RETURN(
+      std::string message_endpoint,
+      ResolveEndpoint(parsed.base_path, options.message_endpoint));
+  ABSL_RETURN_IF_ERROR(
+      FormatMessageEndpoint(message_endpoint, "validation").status());
+  ABSL_ASSIGN_OR_RETURN(
+      InProcessWireStream::Pair pair,
+      InProcessWireStream::CreatePair(options.stream_options));
   if (options.http2_options.deadline == absl::InfiniteFuture()) {
     options.http2_options.deadline = options.stream_options.deadline;
   }
@@ -605,10 +600,10 @@ HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
     state->request_headers = std::move(request_headers);
   }
   auto client_state = std::make_shared<ClientState>(
-      std::move(*parsed), std::move(*connect_path),
-      std::move(*message_endpoint), std::move(client));
+      std::move(parsed), std::move(connect_path), std::move(message_endpoint),
+      std::move(client));
   return std::make_shared<HttpSseClientWireStream>(
-      ConstructorToken{}, std::move(url), std::move(options), std::move(*pair),
+      ConstructorToken{}, std::move(url), std::move(options), std::move(pair),
       std::move(state), std::move(client_state));
 }
 
@@ -634,70 +629,63 @@ a11::Task HttpSseClientWireStream::OpenTransport() {
       scheme = self->client_state_->url.scheme;
     }
     if (client == nullptr) {
-      absl::StatusOr<std::shared_ptr<Http2Client>> connected =
+      ABSL_ASSIGN_OR_RETURN(
+          client,
           Http2Client::Connect(url.host, url.port, options.http2_options)
-              .Await(options.stream_options.deadline);
-      if (!connected.ok())
-        return connected.status();
-      client = std::move(*connected);
+              .Await(options.stream_options.deadline));
       thread::MutexLock lock(&self->client_state_->mu);
       self->client_state_->client = client;
     }
     HttpHeaders request_headers = self->GetHttpRequestHeaders();
     SetHttpHeader(&request_headers, "accept", "text/event-stream");
-    absl::StatusOr<std::shared_ptr<Http2ResponseStream>> response =
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<Http2ResponseStream> response,
         client->RequestStream("POST", connect_path, std::move(request_headers),
-                              {}, scheme);
-    if (!response.ok())
-      return response.status();
-    absl::StatusOr<HttpResponseHead> head =
-        (*response)->Headers().Await(options.stream_options.deadline);
-    if (!head.ok())
-      return head.status();
-    if (head->status < 200 || head->status >= 300) {
+                              {}, scheme));
+    ABSL_ASSIGN_OR_RETURN(
+        HttpResponseHead head,
+        response->Headers().Await(options.stream_options.deadline));
+    if (head.status < 200 || head.status >= 300) {
       std::string body;
       while (true) {
-        absl::StatusOr<std::optional<std::string>> chunk =
-            (*response)->Read().Await(options.stream_options.deadline);
-        if (!chunk.ok())
-          return chunk.status();
-        if (!chunk->has_value())
+        ABSL_ASSIGN_OR_RETURN(
+            std::optional<std::string> chunk,
+            response->Read().Await(options.stream_options.deadline));
+        if (!chunk.has_value()) {
           break;
-        body.append(**chunk);
+        }
+        body.append(*chunk);
       }
       return absl::Status(
-          StatusCodeFromHttp(head->status),
-          body.empty()
-              ? absl::StrCat("SSE connect returned HTTP ", head->status)
-              : body);
+          StatusCodeFromHttp(head.status),
+          body.empty() ? absl::StrCat("SSE connect returned HTTP ", head.status)
+                       : body);
     }
     const std::optional<std::string> stream_id =
-        GetHttpHeader(head->headers, kSseStreamIdHeader);
+        GetHttpHeader(head.headers, kSseStreamIdHeader);
     if (!stream_id.has_value() || stream_id->empty()) {
       return absl::DataLossError(
           "SSE response did not include x-a11-stream-id");
     }
     const std::optional<std::string> content_type =
-        GetHttpHeader(head->headers, "content-type");
+        GetHttpHeader(head.headers, "content-type");
     if (!content_type.has_value() ||
         !absl::StartsWithIgnoreCase(*content_type, "text/event-stream")) {
       return absl::DataLossError("SSE response did not use text/event-stream");
     }
     {
       thread::MutexLock lock(&self->client_state_->mu);
-      self->client_state_->response = *response;
+      self->client_state_->response = response;
     }
     self->SetId(*stream_id);
-    self->MarkHttpHeadersReady(head->headers);
+    self->MarkHttpHeadersReady(head.headers);
     a11::Schedule([self]() { ReceiveSseLoop(std::move(self)); });
     return absl::OkStatus();
   });
 }
 
 absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
-  absl::StatusOr<std::string> payload = data::WireMessageToJson(message);
-  if (!payload.ok())
-    return payload.status();
+  ABSL_ASSIGN_OR_RETURN(std::string payload, data::WireMessageToJson(message));
   std::shared_ptr<Http2Client> client;
   std::string endpoint;
   std::string scheme;
@@ -707,22 +695,20 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
     endpoint = client_state_->message_endpoint;
     scheme = client_state_->url.scheme;
   }
-  if (client == nullptr)
+  if (client == nullptr) {
     return absl::UnavailableError("SSE HTTP client is not connected");
-  absl::StatusOr<std::string> path =
-      FormatMessageEndpoint(std::move(endpoint), GetId());
-  if (!path.ok())
-    return path.status();
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string path,
+                        FormatMessageEndpoint(std::move(endpoint), GetId()));
   HttpHeaders headers = GetHttpRequestHeaders();
   SetHttpHeader(&headers, "content-type", "application/json");
-  absl::StatusOr<HttpResponse> response =
+  ABSL_ASSIGN_OR_RETURN(
+      HttpResponse response,
       client
-          ->Request("POST", std::move(*path), std::move(headers),
-                    std::move(*payload), std::move(scheme))
-          .Await(deadline());
-  if (!response.ok())
-    return response.status();
-  return HttpStatusError(*response, "SSE message request");
+          ->Request("POST", std::move(path), std::move(headers),
+                    std::move(payload), std::move(scheme))
+          .Await(deadline()));
+  return HttpStatusError(response, "SSE message request");
 }
 
 void HttpSseClientWireStream::ReceiveSseLoop(
@@ -741,25 +727,25 @@ void HttpSseClientWireStream::ReceiveSseLoop(
   std::vector<std::string> data_lines;
   bool saw_terminal = false;
   auto process_event = [&]() -> absl::Status {
-    if (data_lines.empty())
+    if (data_lines.empty()) {
       return absl::OkStatus();
+    }
     std::string payload;
     for (size_t index = 0; index < data_lines.size(); ++index) {
-      if (index != 0)
+      if (index != 0) {
         payload.push_back('\n');
+      }
       payload.append(data_lines[index]);
     }
     data_lines.clear();
-    absl::StatusOr<data::WireMessage> message =
-        data::WireMessageFromJson(payload);
-    if (!message.ok())
-      return message.status();
+    ABSL_ASSIGN_OR_RETURN(data::WireMessage message,
+                          data::WireMessageFromJson(payload));
     if (saw_terminal) {
       return absl::FailedPreconditionError(
           "SSE peer sent an event after a terminal WireMessage");
     }
-    saw_terminal = IsTerminal(*message);
-    return self->ReceiveTransportMessage(std::move(*message)).Await().status();
+    saw_terminal = IsTerminal(message);
+    return self->ReceiveTransportMessage(std::move(message)).Await().status();
   };
 
   while (true) {
@@ -769,17 +755,20 @@ void HttpSseClientWireStream::ReceiveSseLoop(
       self->FailTransport(chunk.status());
       return;
     }
-    if (!chunk->has_value())
+    if (!chunk->has_value()) {
       break;
+    }
     line_buffer.append(**chunk);
     while (true) {
       const size_t newline = line_buffer.find('\n');
-      if (newline == std::string::npos)
+      if (newline == std::string::npos) {
         break;
+      }
       std::string line = line_buffer.substr(0, newline);
       line_buffer.erase(0, newline + 1);
-      if (!line.empty() && line.back() == '\r')
+      if (!line.empty() && line.back() == '\r') {
         line.pop_back();
+      }
       if (line.empty()) {
         absl::Status status = process_event();
         if (!status.ok()) {
@@ -788,8 +777,9 @@ void HttpSseClientWireStream::ReceiveSseLoop(
         }
         continue;
       }
-      if (line.front() == ':')
+      if (line.front() == ':') {
         continue;
+      }
       const size_t colon = line.find(':');
       std::string_view field = colon == std::string::npos
                                    ? std::string_view(line)
@@ -797,10 +787,12 @@ void HttpSseClientWireStream::ReceiveSseLoop(
       std::string_view value = colon == std::string::npos
                                    ? std::string_view()
                                    : std::string_view(line).substr(colon + 1);
-      if (!value.empty() && value.front() == ' ')
+      if (!value.empty() && value.front() == ' ') {
         value.remove_prefix(1);
-      if (field == "data")
+      }
+      if (field == "data") {
         data_lines.emplace_back(value);
+      }
     }
   }
   if (!line_buffer.empty()) {
@@ -810,8 +802,9 @@ void HttpSseClientWireStream::ReceiveSseLoop(
     if (absl::StartsWith(line_buffer, "data:")) {
       std::string_view value(line_buffer);
       value.remove_prefix(5);
-      if (!value.empty() && value.front() == ' ')
+      if (!value.empty() && value.front() == ' ') {
         value.remove_prefix(1);
+      }
       data_lines.emplace_back(value);
     }
   }
@@ -830,8 +823,9 @@ void HttpSseClientWireStream::ReceiveSseLoop(
 
 void* absl_nullable HttpSseClientWireStream::TransportImpl() const {
   thread::MutexLock lock(&client_state_->mu);
-  if (client_state_->response != nullptr)
+  if (client_state_->response != nullptr) {
     return client_state_->response.get();
+  }
   return client_state_->client.get();
 }
 
@@ -872,15 +866,17 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
   SetHttpHeader(&headers, "content-type", "text/event-stream");
   SetHttpHeader(&headers, "cache-control", "no-cache");
   absl::Status status = response->SendHeaders(200, headers);
-  if (!status.ok())
+  if (!status.ok()) {
     return a11::FailedTask(status);
+  }
   std::weak_ptr<HttpSseServerWireStream> weak =
       std::static_pointer_cast<HttpSseServerWireStream>(shared_from_this());
   a11::Task response_done = response->Done();
   a11::Schedule([weak, response_done = std::move(response_done)]() mutable {
     absl::Status completion = response_done.Await().status();
-    if (completion.ok())
+    if (completion.ok()) {
       return;
+    }
     if (std::shared_ptr<HttpSseServerWireStream> self = weak.lock();
         self != nullptr) {
       self->FailTransport(completion);
@@ -893,21 +889,18 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
 }
 
 absl::Status HttpSseServerWireStream::Transmit(data::WireMessage message) {
-  absl::StatusOr<std::string> payload = data::WireMessageToJson(message);
-  if (!payload.ok())
-    return payload.status();
+  ABSL_ASSIGN_OR_RETURN(std::string payload, data::WireMessageToJson(message));
   const bool terminal = IsTerminal(message);
   const std::shared_ptr<Http2ResponseWriter>& response =
       server_state_->response;
   if (response == nullptr) {
     return absl::UnavailableError("SSE response writer is no longer available");
   }
-  absl::Status status =
-      response->Write(absl::StrCat("data: ", *payload, "\n\n"));
-  if (!status.ok())
-    return status;
-  if (terminal)
+  ABSL_RETURN_IF_ERROR(
+      response->Write(absl::StrCat("data: ", payload, "\n\n")));
+  if (terminal) {
     return response->Finish();
+  }
   return absl::OkStatus();
 }
 
@@ -919,10 +912,12 @@ void HttpSseServerWireStream::TransportDone() {
   const std::shared_ptr<Http2ResponseWriter>& response =
       server_state_->response;
   const std::function<void(std::string)>& remove = server_state_->remove;
-  if (response != nullptr && !response->finished())
+  if (response != nullptr && !response->finished()) {
     (void)response->Finish();
-  if (remove)
+  }
+  if (remove) {
     remove(GetId());
+  }
 }
 
 struct HttpSseServer::State {
@@ -968,8 +963,7 @@ HttpHeaders CorsHeaders(const HttpSseOptions& options) {
 }
 
 a11::Task SendHttpStatus(const std::shared_ptr<Http2ResponseWriter>& response,
-                         const absl::Status& status,
-                         HttpHeaders headers = {}) {
+                         const absl::Status& status, HttpHeaders headers = {}) {
   SetHttpHeader(&headers, "content-type", "text/plain; charset=utf-8");
   return StatusTask(response->SendResponse(StatusCodeToHttp(status.code()),
                                            std::move(headers),
@@ -978,8 +972,9 @@ a11::Task SendHttpStatus(const std::shared_ptr<Http2ResponseWriter>& response,
 
 std::string PathWithoutQuery(std::string path) {
   const size_t query = path.find_first_of("?#");
-  if (query != std::string::npos)
+  if (query != std::string::npos) {
     path.erase(query);
+  }
   return path;
 }
 
@@ -1008,29 +1003,28 @@ absl::StatusOr<std::string> MatchMessagePath(std::string_view path,
 absl::StatusOr<std::shared_ptr<HttpSseServer>> HttpSseServer::Create(
     std::string bind_address, std::uint16_t port, OnHttpSseConnect on_connect,
     HttpSseOptions options) {
-  absl::Status validation = options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   auto state =
       std::make_shared<State>(std::move(options), std::move(on_connect));
   std::weak_ptr<State> weak = state;
-  absl::StatusOr<std::shared_ptr<Http2Server>> server = Http2Server::Create(
-      std::move(bind_address), port,
-      [weak](HttpRequest request,
-             std::shared_ptr<Http2ResponseWriter> response) {
-        std::shared_ptr<State> state = weak.lock();
-        if (state == nullptr) {
-          return SendHttpStatus(response,
-                                absl::UnavailableError("SSE server stopped"));
-        }
-        return HandleRequest(state, std::move(request), std::move(response));
-      },
-      state->options.http2_options);
-  if (!server.ok())
-    return server.status();
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<Http2Server> server,
+      Http2Server::Create(
+          std::move(bind_address), port,
+          [weak](HttpRequest request,
+                 std::shared_ptr<Http2ResponseWriter> response) {
+            std::shared_ptr<State> state = weak.lock();
+            if (state == nullptr) {
+              return SendHttpStatus(
+                  response, absl::UnavailableError("SSE server stopped"));
+            }
+            return HandleRequest(state, std::move(request),
+                                 std::move(response));
+          },
+          state->options.http2_options));
   {
     thread::MutexLock lock(&state->mu);
-    state->http2_server = std::move(*server);
+    state->http2_server = std::move(server);
   }
 
   struct MakeSharedEnabler final : HttpSseServer {
@@ -1053,8 +1047,7 @@ a11::Task HttpSseServer::HandleRequest(
       request.method == "OPTIONS" &&
       (path == state->options.connect_endpoint ||
        MatchMessagePath(path, state->options.message_endpoint).ok())) {
-    return StatusTask(
-        response->SendResponse(204, CorsHeaders(state->options)));
+    return StatusTask(response->SendResponse(204, CorsHeaders(state->options)));
   }
   if (request.method == "POST" && path == state->options.connect_endpoint) {
     return HandleConnect(state, std::move(request), std::move(response));
@@ -1081,7 +1074,8 @@ a11::Task HttpSseServer::HandleConnect(
     absl::StatusOr<InProcessWireStream::Pair> pair =
         InProcessWireStream::CreatePair(state->options.stream_options);
     if (!pair.ok()) {
-      return SendHttpStatus(response, pair.status(), CorsHeaders(state->options))
+      return SendHttpStatus(response, pair.status(),
+                            CorsHeaders(state->options))
           .Await()
           .status();
     }
@@ -1178,8 +1172,9 @@ a11::Task HttpSseServer::HandleMessage(
     {
       thread::MutexLock lock(&state->mu);
       const auto iterator = state->streams.find(stream_id);
-      if (iterator != state->streams.end())
+      if (iterator != state->streams.end()) {
         stream = iterator->second;
+      }
     }
     if (stream == nullptr) {
       return SendHttpStatus(response,
@@ -1210,8 +1205,9 @@ a11::Task HttpSseServer::HandleMessage(
     absl::flat_hash_map<std::string, std::string> combined;
     for (const auto& [name, value] : request.headers) {
       auto [iterator, inserted] = combined.emplace(name, value);
-      if (!inserted)
+      if (!inserted) {
         iterator->second = absl::StrCat(iterator->second, ", ", value);
+      }
     }
     for (auto& [name, value] : combined) {
       // Framing headers describe the POST itself and are not application
@@ -1226,8 +1222,7 @@ a11::Task HttpSseServer::HandleMessage(
       absl::Status valid_name = data::ValidateName(wire_name);
       if (!valid_name.ok()) {
         stream->FailTransport(valid_name);
-        return SendHttpStatus(response, valid_name,
-                              CorsHeaders(state->options))
+        return SendHttpStatus(response, valid_name, CorsHeaders(state->options))
             .Await()
             .status();
       }
@@ -1274,8 +1269,9 @@ absl::Status HttpSseServer::Stop() {
   std::shared_ptr<Http2Server> server;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->stopped)
+    if (state_->stopped) {
       return absl::OkStatus();
+    }
     state_->stopped = true;
     for (auto& [id, stream] : state_->streams) {
       (void)id;
@@ -1287,10 +1283,12 @@ absl::Status HttpSseServer::Stop() {
     server = state_->http2_server;
   }
   const absl::Status stopped = absl::CancelledError("SSE server stopped");
-  for (const auto& stream : streams)
+  for (const auto& stream : streams) {
     stream->FailTransport(stopped);
-  for (const auto& waiter : waiters)
+  }
+  for (const auto& waiter : waiters) {
     (void)waiter->SetStatus(stopped);
+  }
   return server != nullptr ? server->Stop() : absl::OkStatus();
 }
 

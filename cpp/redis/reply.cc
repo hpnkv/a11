@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
@@ -93,33 +94,35 @@ Reply Reply::Set(std::vector<Reply> values) {
 }
 
 absl::StatusOr<std::string> Reply::AsString() const {
-  absl::StatusOr<std::string_view> value = AsStringView();
-  if (!value.ok())
-    return value.status();
-  return std::string(*value);
+  ABSL_ASSIGN_OR_RETURN(std::string_view value, AsStringView());
+  return std::string(value);
 }
 
 absl::StatusOr<std::string_view> Reply::AsStringView() const {
-  if (type_ != ReplyType::kString)
+  if (type_ != ReplyType::kString) {
     return WrongType(type_, "a string");
+  }
   return std::string_view(string_value_);
 }
 
 absl::StatusOr<std::int64_t> Reply::AsInteger() const {
-  if (type_ != ReplyType::kInteger)
+  if (type_ != ReplyType::kInteger) {
     return WrongType(type_, "an integer");
+  }
   return integer_value_;
 }
 
 absl::StatusOr<double> Reply::AsDouble() const {
-  if (type_ != ReplyType::kDouble)
+  if (type_ != ReplyType::kDouble) {
     return WrongType(type_, "a double");
+  }
   return double_value_;
 }
 
 absl::StatusOr<bool> Reply::AsBoolean() const {
-  if (type_ != ReplyType::kBoolean)
+  if (type_ != ReplyType::kBoolean) {
     return WrongType(type_, "a boolean");
+  }
   return boolean_value_;
 }
 

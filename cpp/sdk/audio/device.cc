@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
@@ -37,11 +38,9 @@ DeviceInfo BuildDeviceInfo(int index, const PaDeviceInfo& info) {
 }  // namespace
 
 absl::StatusOr<std::vector<DeviceInfo>> ListDevices() {
-  absl::StatusOr<std::shared_ptr<internal::PortAudioSession>> session =
-      internal::PortAudioSession::Acquire();
-  if (!session.ok()) {
-    return session.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      const std::shared_ptr<internal::PortAudioSession> session,
+      internal::PortAudioSession::Acquire());
 
   const PaDeviceIndex count = Pa_GetDeviceCount();
   if (count < 0) {
@@ -61,11 +60,9 @@ absl::StatusOr<std::vector<DeviceInfo>> ListDevices() {
 }
 
 absl::StatusOr<DeviceInfo> DefaultInputDevice() {
-  absl::StatusOr<std::shared_ptr<internal::PortAudioSession>> session =
-      internal::PortAudioSession::Acquire();
-  if (!session.ok()) {
-    return session.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      const std::shared_ptr<internal::PortAudioSession> session,
+      internal::PortAudioSession::Acquire());
 
   const PaDeviceIndex index = Pa_GetDefaultInputDevice();
   if (index == paNoDevice) {
@@ -79,11 +76,9 @@ absl::StatusOr<DeviceInfo> DefaultInputDevice() {
 }
 
 absl::StatusOr<DeviceInfo> DeviceInfoAt(int index) {
-  absl::StatusOr<std::shared_ptr<internal::PortAudioSession>> session =
-      internal::PortAudioSession::Acquire();
-  if (!session.ok()) {
-    return session.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      const std::shared_ptr<internal::PortAudioSession> session,
+      internal::PortAudioSession::Acquire());
 
   const PaDeviceIndex count = Pa_GetDeviceCount();
   if (count < 0) {

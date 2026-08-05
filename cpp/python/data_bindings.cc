@@ -74,11 +74,13 @@ class VectorView {
 
 size_t VectorIndex(py::ssize_t index, size_t size, bool allow_end = false) {
   const py::ssize_t signed_size = static_cast<py::ssize_t>(size);
-  if (index < 0)
+  if (index < 0) {
     index += signed_size;
+  }
   const py::ssize_t maximum = allow_end ? signed_size : signed_size - 1;
-  if (index < 0 || index > maximum)
+  if (index < 0 || index > maximum) {
     throw py::index_error("vector index out of range");
+  }
   return static_cast<size_t>(index);
 }
 
@@ -101,8 +103,9 @@ SliceIndices ComputeSlice(const py::slice& slice, size_t size) {
 
 std::string BytesFromPython(const py::handle& value, std::string_view field) {
   try {
-    if (py::isinstance<py::bytes>(value))
+    if (py::isinstance<py::bytes>(value)) {
       return value.cast<std::string>();
+    }
     if (py::isinstance<py::bytearray>(value) ||
         py::isinstance<py::memoryview>(value)) {
       return py::module_::import("builtins")
@@ -135,8 +138,9 @@ std::string BufferBytes(const py::handle& value) {
 }
 
 data::ByteMap ByteMapValue(const py::handle& value) {
-  if (py::isinstance<ByteMapView>(value))
+  if (py::isinstance<ByteMapView>(value)) {
     return value.cast<const ByteMapView&>().values();
+  }
   return ValueOrThrow(ByteMapFromPython(value));
 }
 
@@ -150,8 +154,9 @@ std::vector<T> VectorFromPython(const py::handle& value,
   }
   try {
     std::vector<T> result;
-    for (const py::handle item : py::reinterpret_borrow<py::iterable>(value))
+    for (const py::handle item : py::reinterpret_borrow<py::iterable>(value)) {
       result.push_back(py::cast<T>(item));
+    }
     return result;
   } catch (py::error_already_set& error) {
     ThrowStatus(StatusFromPythonException(error));
@@ -199,25 +204,29 @@ std::uint64_t UnsignedValue(const py::handle& value, std::uint64_t maximum,
 
 std::optional<std::uint32_t> OptionalUint32(const py::handle& value,
                                             std::string_view field) {
-  if (value.is_none())
+  if (value.is_none()) {
     return std::nullopt;
+  }
   return static_cast<std::uint32_t>(
       UnsignedValue(value, std::numeric_limits<std::uint32_t>::max(), field));
 }
 
 std::optional<std::uint64_t> OptionalLength(const py::handle& value) {
-  if (value.is_none())
+  if (value.is_none()) {
     return std::nullopt;
+  }
   constexpr std::uint64_t kMaximum =
       static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
   return UnsignedValue(value, kMaximum, "length");
 }
 
 std::optional<absl::Time> TimestampFromPython(const py::handle& value) {
-  if (value.is_none())
+  if (value.is_none()) {
     return std::nullopt;
-  if (py::isinstance<NativeTime>(value))
+  }
+  if (py::isinstance<NativeTime>(value)) {
     return value.cast<const NativeTime&>().value();
+  }
   try {
     py::object datetime = py::module_::import("datetime").attr("datetime");
     if (!py::isinstance(value, datetime)) {
@@ -242,8 +251,9 @@ std::optional<absl::Time> TimestampFromPython(const py::handle& value) {
 }
 
 py::object TimestampToPython(const std::optional<absl::Time>& value) {
-  if (!value.has_value())
+  if (!value.has_value()) {
     return py::none();
+  }
   py::module_ datetime = py::module_::import("datetime");
   py::object epoch = datetime.attr("datetime")(
       1970, 1, 1, 0, 0, 0,
@@ -255,8 +265,9 @@ py::object TimestampToPython(const std::optional<absl::Time>& value) {
 template <typename T>
 void ValidateOrThrow(const T& value) {
   const absl::Status status = value.Validate();
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 template <typename T, typename Parent>
@@ -268,12 +279,14 @@ VectorView<T> MakeVectorView(std::vector<T>* values, Parent* parent) {
 
 template <typename T>
 void BindVectorView(py::class_<VectorView<T>>& cls) {
-  cls.def("__len__",
-          [](const VectorView<T>& view) { return view.values().size(); },
-          "Return the number of elements in the vector.")
-      .def("__bool__",
-           [](const VectorView<T>& view) { return !view.values().empty(); },
-           "Return whether the vector contains any elements.")
+  cls.def(
+         "__len__",
+         [](const VectorView<T>& view) { return view.values().size(); },
+         "Return the number of elements in the vector.")
+      .def(
+          "__bool__",
+          [](const VectorView<T>& view) { return !view.values().empty(); },
+          "Return whether the vector contains any elements.")
       .def(
           "__iter__",
           [](VectorView<T>& view) {
@@ -292,135 +305,138 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
       .def(
           "__getitem__",
           [](VectorView<T>& view, const py::slice& slice) {
-             const SliceIndices indices =
-                 ComputeSlice(slice, view.values().size());
-             py::list result;
-             py::ssize_t index = indices.start;
-             for (py::ssize_t count = 0; count < indices.length; ++count) {
-               result.append(py::cast(
-                   &view.values()[static_cast<size_t>(index)],
-                   py::return_value_policy::reference_internal,
-                   py::cast(&view, py::return_value_policy::reference)));
-               index += indices.step;
-             }
-             return result;
+            const SliceIndices indices =
+                ComputeSlice(slice, view.values().size());
+            py::list result;
+            py::ssize_t index = indices.start;
+            for (py::ssize_t count = 0; count < indices.length; ++count) {
+              result.append(py::cast(
+                  &view.values()[static_cast<size_t>(index)],
+                  py::return_value_policy::reference_internal,
+                  py::cast(&view, py::return_value_policy::reference)));
+              index += indices.step;
+            }
+            return result;
           },
           "Return a list of the elements selected by the slice.",
           py::arg("slice"))
       .def(
           "__setitem__",
           [](VectorView<T>& view, py::ssize_t index, T value) {
-             const size_t converted = VectorIndex(index, view.values().size());
-             view.Mutate([&] { view.values()[converted] = std::move(value); });
+            const size_t converted = VectorIndex(index, view.values().size());
+            view.Mutate([&] { view.values()[converted] = std::move(value); });
           },
           "Assign a value to the element at the given index.", py::arg("index"),
           py::arg("value"))
       .def(
           "__setitem__",
           [](VectorView<T>& view, const py::slice& slice,
-              const py::handle& replacements) {
-             const SliceIndices indices =
-                 ComputeSlice(slice, view.values().size());
-             std::vector<T> converted =
-                 VectorFromPython<T>(replacements, "slice assignment");
-             if (indices.step != 1 &&
-                 converted.size() != static_cast<size_t>(indices.length)) {
-               throw py::value_error(
-                   "attempt to assign sequence of different size to extended "
-                   "slice");
-             }
-             view.Mutate([&] {
-               if (indices.step == 1) {
-                 auto first = view.values().begin() + indices.start;
-                 auto last = first + indices.length;
-                 first = view.values().erase(first, last);
-                 view.values().insert(
-                     first, std::make_move_iterator(converted.begin()),
-                     std::make_move_iterator(converted.end()));
-                 return;
-               }
-               py::ssize_t index = indices.start;
-               for (T& value : converted) {
-                 view.values()[static_cast<size_t>(index)] = std::move(value);
-                 index += indices.step;
-               }
-             });
+             const py::handle& replacements) {
+            const SliceIndices indices =
+                ComputeSlice(slice, view.values().size());
+            std::vector<T> converted =
+                VectorFromPython<T>(replacements, "slice assignment");
+            if (indices.step != 1 &&
+                converted.size() != static_cast<size_t>(indices.length)) {
+              throw py::value_error(
+                  "attempt to assign sequence of different size to extended "
+                  "slice");
+            }
+            view.Mutate([&] {
+              if (indices.step == 1) {
+                auto first = view.values().begin() + indices.start;
+                auto last = first + indices.length;
+                first = view.values().erase(first, last);
+                view.values().insert(first,
+                                     std::make_move_iterator(converted.begin()),
+                                     std::make_move_iterator(converted.end()));
+                return;
+              }
+              py::ssize_t index = indices.start;
+              for (T& value : converted) {
+                view.values()[static_cast<size_t>(index)] = std::move(value);
+                index += indices.step;
+              }
+            });
           },
           "Assign a sequence of values to the elements selected by the slice.",
           py::arg("slice"), py::arg("replacements"))
       .def(
           "__delitem__",
           [](VectorView<T>& view, py::ssize_t index) {
-             const size_t converted = VectorIndex(index, view.values().size());
-             view.Mutate([&] {
-               view.values().erase(view.values().begin() +
-                                   static_cast<std::ptrdiff_t>(converted));
-             });
+            const size_t converted = VectorIndex(index, view.values().size());
+            view.Mutate([&] {
+              view.values().erase(view.values().begin() +
+                                  static_cast<std::ptrdiff_t>(converted));
+            });
           },
           "Delete the element at the given index.", py::arg("index"))
       .def(
           "__delitem__",
           [](VectorView<T>& view, const py::slice& slice) {
-             const SliceIndices indices =
-                 ComputeSlice(slice, view.values().size());
-             view.Mutate([&] {
-               if (indices.step == 1) {
-                 auto first = view.values().begin() + indices.start;
-                 view.values().erase(first, first + indices.length);
-                 return;
-               }
-               std::vector<size_t> erased;
-               erased.reserve(static_cast<size_t>(indices.length));
-               py::ssize_t index = indices.start;
-               for (py::ssize_t count = 0; count < indices.length; ++count) {
-                 erased.push_back(static_cast<size_t>(index));
-                 index += indices.step;
-               }
-               std::sort(erased.rbegin(), erased.rend());
-               for (const size_t item : erased)
-                 view.values().erase(view.values().begin() +
-                                     static_cast<std::ptrdiff_t>(item));
-             });
+            const SliceIndices indices =
+                ComputeSlice(slice, view.values().size());
+            view.Mutate([&] {
+              if (indices.step == 1) {
+                auto first = view.values().begin() + indices.start;
+                view.values().erase(first, first + indices.length);
+                return;
+              }
+              std::vector<size_t> erased;
+              erased.reserve(static_cast<size_t>(indices.length));
+              py::ssize_t index = indices.start;
+              for (py::ssize_t count = 0; count < indices.length; ++count) {
+                erased.push_back(static_cast<size_t>(index));
+                index += indices.step;
+              }
+              std::sort(erased.rbegin(), erased.rend());
+              for (const size_t item : erased) {
+                view.values().erase(view.values().begin() +
+                                    static_cast<std::ptrdiff_t>(item));
+              }
+            });
           },
           "Delete the elements selected by the slice.", py::arg("slice"))
       .def(
           "insert",
           [](VectorView<T>& view, py::ssize_t index, T value) {
-             const py::ssize_t size =
-                 static_cast<py::ssize_t>(view.values().size());
-             if (index < 0)
-               index = std::max<py::ssize_t>(0, index + size);
-             if (index > size)
-               index = size;
-             view.Mutate([&] {
-               view.values().insert(view.values().begin() + index,
-                                    std::move(value));
-             });
+            const py::ssize_t size =
+                static_cast<py::ssize_t>(view.values().size());
+            if (index < 0) {
+              index = std::max<py::ssize_t>(0, index + size);
+            }
+            if (index > size) {
+              index = size;
+            }
+            view.Mutate([&] {
+              view.values().insert(view.values().begin() + index,
+                                   std::move(value));
+            });
           },
           "Insert a value before the given index.", py::arg("index"),
           py::arg("value"))
       .def(
           "append",
           [](VectorView<T>& view, T value) {
-             view.Mutate([&] { view.values().push_back(std::move(value)); });
+            view.Mutate([&] { view.values().push_back(std::move(value)); });
           },
           "Append a value to the end of the vector.", py::arg("value"))
       .def(
           "extend",
           [](VectorView<T>& view, const py::handle& values) {
-             std::vector<T> converted = VectorFromPython<T>(values, "values");
-             view.Mutate([&] {
-               view.values().insert(view.values().end(),
-                                    std::make_move_iterator(converted.begin()),
-                                    std::make_move_iterator(converted.end()));
-             });
+            std::vector<T> converted = VectorFromPython<T>(values, "values");
+            view.Mutate([&] {
+              view.values().insert(view.values().end(),
+                                   std::make_move_iterator(converted.begin()),
+                                   std::make_move_iterator(converted.end()));
+            });
           },
           "Append every value from the iterable to the vector.",
           py::arg("values"))
       .def(
           "clear",
           [](VectorView<T>& view) {
-             view.Mutate([&] { view.values().clear(); });
+            view.Mutate([&] { view.values().clear(); });
           },
           "Remove all elements from the vector.")
       .def(
@@ -439,71 +455,74 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
       .def(
           "remove",
           [](VectorView<T>& view, const T& value) {
-             const auto found =
-                 std::find(view.values().begin(), view.values().end(), value);
-             if (found == view.values().end())
-               throw py::value_error("value is not in vector");
-             const size_t index =
-                 static_cast<size_t>(found - view.values().begin());
-             view.Mutate([&] {
-               view.values().erase(view.values().begin() +
-                                   static_cast<std::ptrdiff_t>(index));
-             });
+            const auto found =
+                std::find(view.values().begin(), view.values().end(), value);
+            if (found == view.values().end()) {
+              throw py::value_error("value is not in vector");
+            }
+            const size_t index =
+                static_cast<size_t>(found - view.values().begin());
+            view.Mutate([&] {
+              view.values().erase(view.values().begin() +
+                                  static_cast<std::ptrdiff_t>(index));
+            });
           },
           "Remove the first element equal to the given value.",
           py::arg("value"))
       .def(
           "count",
           [](const VectorView<T>& view, const T& value) {
-             return std::count(view.values().begin(), view.values().end(),
-                               value);
+            return std::count(view.values().begin(), view.values().end(),
+                              value);
           },
           "Return the number of elements equal to the given value.",
           py::arg("value"))
       .def(
           "index",
           [](const VectorView<T>& view, const T& value) {
-             const auto found =
-                 std::find(view.values().begin(), view.values().end(), value);
-             if (found == view.values().end())
-               throw py::value_error("value is not in vector");
-             return static_cast<size_t>(found - view.values().begin());
+            const auto found =
+                std::find(view.values().begin(), view.values().end(), value);
+            if (found == view.values().end()) {
+              throw py::value_error("value is not in vector");
+            }
+            return static_cast<size_t>(found - view.values().begin());
           },
           "Return the index of the first element equal to the given value.",
           py::arg("value"))
       .def(
           "reverse",
           [](VectorView<T>& view) {
-             view.Mutate([&] {
-               std::reverse(view.values().begin(), view.values().end());
-             });
+            view.Mutate([&] {
+              std::reverse(view.values().begin(), view.values().end());
+            });
           },
           "Reverse the elements of the vector in place.")
       .def(
           "copy",
           [](VectorView<T>& view) {
-             return VectorToPython(
-                 view.values(),
-                 py::cast(&view, py::return_value_policy::reference));
+            return VectorToPython(
+                view.values(),
+                py::cast(&view, py::return_value_policy::reference));
           },
           "Return a shallow copy of the elements as a list.")
       .def(
           "__contains__",
           [](const VectorView<T>& view, const T& value) {
-             return std::find(view.values().begin(), view.values().end(),
-                              value) != view.values().end();
+            return std::find(view.values().begin(), view.values().end(),
+                             value) != view.values().end();
           },
           "Return whether the vector contains the given value.",
           py::arg("value"))
       .def(
           "__eq__",
           [](VectorView<T>& view, const py::object& other) {
-             return VectorToPython(
-                        view.values(),
-                        py::cast(&view, py::return_value_policy::reference))
-                 .equal(other);
+            return VectorToPython(
+                       view.values(),
+                       py::cast(&view, py::return_value_policy::reference))
+                .equal(other);
           },
-          "Return whether the vector equals the given object.", py::arg("other"))
+          "Return whether the vector equals the given object.",
+          py::arg("other"))
       .def(
           "__repr__",
           [](VectorView<T>& view) {
@@ -526,15 +545,17 @@ T FromMsgpack(const py::handle& value) {
 
 template <typename T>
 void BindValueProtocol(py::class_<T>& cls) {
-  cls.def("validate", [](const T& value) { ValidateOrThrow(value); },
-          "Raise if the value fails structural validation.")
+  cls.def(
+         "validate", [](const T& value) { ValidateOrThrow(value); },
+         "Raise if the value fails structural validation.")
       .def("to_msgpack", &ToMsgpack<T>,
            "Serialize the value to MessagePack bytes.")
       .def_static("from_msgpack", &FromMsgpack<T>,
                   "Deserialize a value from MessagePack bytes.",
                   py::arg("data"))
-      .def("__copy__", [](const T& value) { return value; },
-           "Return a shallow copy of the value.")
+      .def(
+          "__copy__", [](const T& value) { return value; },
+          "Return a shallow copy of the value.")
       .def(
           "__deepcopy__", [](const T& value, const py::dict&) { return value; },
           "Return a deep copy of the value.", py::arg("memo"))
@@ -554,8 +575,9 @@ void BindData(py::module_& module) {
       "validate_name_string",
       [](const std::string& name) {
         const absl::Status status = data::ValidateName(name);
-        if (!status.ok())
+        if (!status.ok()) {
           ThrowStatus(status);
+        }
         return name;
       },
       "Validate a name string and return it, raising if it is invalid.",
@@ -570,57 +592,60 @@ void BindData(py::module_& module) {
       .def(
           "__iter__",
           [](const ByteMapView& value) {
-             return ByteMapToPython(value.values()).attr("__iter__")();
+            return ByteMapToPython(value.values()).attr("__iter__")();
           },
           "Return an iterator over the keys.")
       .def(
           "__contains__",
           [](const ByteMapView& value, const std::string& key) {
-             return value.values().find(key) != value.values().end();
+            return value.values().find(key) != value.values().end();
           },
           "Return whether the mapping contains the given key.", py::arg("key"))
       .def(
           "__getitem__",
           [](const ByteMapView& value, const std::string& key) {
-             const auto found = value.values().find(key);
-             if (found == value.values().end())
-               throw py::key_error(key);
-             return py::bytes(found->second);
+            const auto found = value.values().find(key);
+            if (found == value.values().end()) {
+              throw py::key_error(key);
+            }
+            return py::bytes(found->second);
           },
           "Return the bytes stored under the given key.", py::arg("key"))
       .def(
           "__setitem__",
           [](ByteMapView& value, std::string key, const py::handle& item) {
-             const absl::Status validation = data::ValidateName(key);
-             if (!validation.ok())
-               ThrowStatus(validation);
-             value.values().insert_or_assign(
-                 std::move(key), BytesFromPython(item, "mapping value"));
+            const absl::Status validation = data::ValidateName(key);
+            if (!validation.ok()) {
+              ThrowStatus(validation);
+            }
+            value.values().insert_or_assign(
+                std::move(key), BytesFromPython(item, "mapping value"));
           },
           "Store bytes under the given key.", py::arg("key"), py::arg("item"))
       .def(
           "__delitem__",
           [](ByteMapView& value, const std::string& key) {
-             if (value.values().erase(key) == 0)
-               throw py::key_error(key);
+            if (value.values().erase(key) == 0) {
+              throw py::key_error(key);
+            }
           },
           "Delete the entry with the given key.", py::arg("key"))
       .def(
           "keys",
           [](const ByteMapView& value) {
-             return ByteMapToPython(value.values()).attr("keys")();
+            return ByteMapToPython(value.values()).attr("keys")();
           },
           "Return a view of the mapping's keys.")
       .def(
           "values",
           [](const ByteMapView& value) {
-             return ByteMapToPython(value.values()).attr("values")();
+            return ByteMapToPython(value.values()).attr("values")();
           },
           "Return a view of the mapping's values.")
       .def(
           "items",
           [](const ByteMapView& value) {
-             return ByteMapToPython(value.values()).attr("items")();
+            return ByteMapToPython(value.values()).attr("items")();
           },
           "Return a view of the mapping's key/value pairs.")
       .def(
@@ -637,9 +662,10 @@ void BindData(py::module_& module) {
       .def(
           "update",
           [](ByteMapView& value, const py::handle& updates) {
-             data::ByteMap converted = ByteMapValue(updates);
-             for (auto& [key, item] : converted)
-               value.values().insert_or_assign(std::move(key), std::move(item));
+            data::ByteMap converted = ByteMapValue(updates);
+            for (auto& [key, item] : converted) {
+              value.values().insert_or_assign(std::move(key), std::move(item));
+            }
           },
           "Merge entries from another mapping into this one.",
           py::arg("updates"))
@@ -649,13 +675,13 @@ void BindData(py::module_& module) {
       .def(
           "copy",
           [](const ByteMapView& value) {
-             return ByteMapToPython(value.values());
+            return ByteMapToPython(value.values());
           },
           "Return a plain dict copy of the mapping.")
       .def(
           "__eq__",
           [](const ByteMapView& value, const py::object& other) {
-             return ByteMapToPython(value.values()).equal(other);
+            return ByteMapToPython(value.values()).equal(other);
           },
           "Return whether the mapping equals the given object.",
           py::arg("other"))
@@ -720,18 +746,19 @@ void BindData(py::module_& module) {
       .def(
           "get_attribute",
           [](const data::ChunkMetadata& value, const std::string& key) {
-             return py::bytes(ValueOrThrow(value.GetAttribute(key)));
+            return py::bytes(ValueOrThrow(value.GetAttribute(key)));
           },
           "Return the attribute bytes for a key, raising if it is absent.",
           py::arg("key"))
       .def(
           "set_attribute",
           [](data::ChunkMetadata& value, std::string key,
-              const py::handle& bytes) {
-             const absl::Status status = value.SetAttribute(
-                 std::move(key), BytesFromPython(bytes, "value"));
-             if (!status.ok())
-               ThrowStatus(status);
+             const py::handle& bytes) {
+            const absl::Status status = value.SetAttribute(
+                std::move(key), BytesFromPython(bytes, "value"));
+            if (!status.ok()) {
+              ThrowStatus(status);
+            }
           },
           "Set the attribute bytes for a key.", py::arg("key"),
           py::arg("bytes"))
@@ -748,8 +775,9 @@ void BindData(py::module_& module) {
       .def(py::init([](const py::object& metadata, std::string ref,
                        const py::handle& raw_data) {
              std::optional<data::ChunkMetadata> converted_metadata;
-             if (!metadata.is_none())
+             if (!metadata.is_none()) {
                converted_metadata = metadata.cast<data::ChunkMetadata>();
+             }
              const std::string mimetype = converted_metadata.has_value()
                                               ? converted_metadata->mimetype
                                               : std::string();
@@ -766,8 +794,9 @@ void BindData(py::module_& module) {
       .def_property(
           "metadata",
           [](data::Chunk& value) -> py::object {
-            if (!value.metadata.has_value())
+            if (!value.metadata.has_value()) {
               return py::none();
+            }
             return py::cast(
                 &*value.metadata, py::return_value_policy::reference_internal,
                 py::cast(&value, py::return_value_policy::reference));
@@ -791,8 +820,9 @@ void BindData(py::module_& module) {
             ValidateOrThrow(value);
           },
           "Raw payload bytes of the chunk.")
-      .def_property_readonly("approx_bytes", &data::Chunk::ApproxBytes,
-                             "Approximate in-memory size of the chunk in bytes.")
+      .def_property_readonly(
+          "approx_bytes", &data::Chunk::ApproxBytes,
+          "Approximate in-memory size of the chunk in bytes.")
       .def("get_mimetype", &data::Chunk::GetMimetype,
            "Return the chunk's MIME type, or empty if it has no metadata.")
       .def("is_empty", &data::Chunk::IsEmpty,
@@ -806,8 +836,8 @@ void BindData(py::module_& module) {
   BindValueProtocol(chunk);
 
   py::class_<data::NodeRef> node_ref(
-      module, "NodeRef",
-      "Reference to a byte range of another logical node.", py::dynamic_attr());
+      module, "NodeRef", "Reference to a byte range of another logical node.",
+      py::dynamic_attr());
   node_ref
       .def(py::init([](std::string id, const py::handle& offset,
                        const py::handle& length) {
@@ -916,9 +946,9 @@ void BindData(py::module_& module) {
            "Return a human-readable debug string.");
   BindValueProtocol(fragment);
 
-  py::class_<data::Port> port(
-      module, "Port", "A named input or output port of an action.",
-      py::dynamic_attr());
+  py::class_<data::Port> port(module, "Port",
+                              "A named input or output port of an action.",
+                              py::dynamic_attr());
   port.def(py::init([](std::string name, std::string id) {
              data::Port result{.name = std::move(name), .id = std::move(id)};
              ValidateOrThrow(result);
@@ -1063,13 +1093,13 @@ void BindData(py::module_& module) {
       .def(
           "to_json",
           [](const data::WireMessage& value) {
-             return ValueOrThrow(data::WireMessageToJson(value));
+            return ValueOrThrow(data::WireMessageToJson(value));
           },
           "Serialize the message to its JSON wire encoding.")
       .def_static(
           "from_json",
           [](const std::string& value) {
-             return ValueOrThrow(data::WireMessageFromJson(value));
+            return ValueOrThrow(data::WireMessageFromJson(value));
           },
           "Deserialize a message from its JSON wire encoding.",
           py::arg("value"))

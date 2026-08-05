@@ -51,6 +51,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
@@ -76,23 +77,20 @@ namespace serializable_internal {
 
 template <typename T>
 concept HasSerialTag = requires {
-  { A11SerialTag(TypeTag<T>{}) } -> std::convertible_to<std::string_view>;
+  {A11SerialTag(TypeTag<T>{})}->std::convertible_to<std::string_view>;
 };
 
 template <typename T>
 concept HasJson = requires(const T& value, const nlohmann::json& json) {
-  { A11ToJson(value) } -> std::same_as<absl::StatusOr<nlohmann::json>>;
-  { A11FromJson(TypeTag<T>{}, json) } -> std::same_as<absl::StatusOr<T>>;
+  {A11ToJson(value)}->std::same_as<absl::StatusOr<nlohmann::json>>;
+  {A11FromJson(TypeTag<T>{}, json)}->std::same_as<absl::StatusOr<T>>;
 };
 
 template <typename T>
-concept HasMsgpackBytes =
-    requires(const T& value, std::string_view bytes) {
-      { A11ToMsgpackBytes(value) } -> std::same_as<absl::StatusOr<std::string>>;
-      {
-        A11FromMsgpackBytes(TypeTag<T>{}, bytes)
-      } -> std::same_as<absl::StatusOr<T>>;
-    };
+concept HasMsgpackBytes = requires(const T& value, std::string_view bytes) {
+  {A11ToMsgpackBytes(value)}->std::same_as<absl::StatusOr<std::string>>;
+  {A11FromMsgpackBytes(TypeTag<T>{}, bytes)}->std::same_as<absl::StatusOr<T>>;
+};
 
 template <typename T>
 std::string SerialTag() {
@@ -103,18 +101,17 @@ std::string SerialTag() {
 
 /** @brief Whether @c T provides an ADL JSON representation. */
 template <typename T>
-concept JsonSerializable = serializable_internal::HasSerialTag<T> &&
-                           serializable_internal::HasJson<T>;
+concept JsonSerializable =
+    serializable_internal::HasSerialTag<T> && serializable_internal::HasJson<T>;
 
 /**
  * @brief Whether @c T can be serialized to MessagePack, either directly via
  *   A11ToMsgpackBytes / A11FromMsgpackBytes or derived from its JSON form.
  */
 template <typename T>
-concept MsgpackSerializable =
-    serializable_internal::HasSerialTag<T> &&
-    (serializable_internal::HasMsgpackBytes<T> ||
-     serializable_internal::HasJson<T>);
+concept MsgpackSerializable = serializable_internal::HasSerialTag<T> &&
+                              (serializable_internal::HasMsgpackBytes<T> ||
+                               serializable_internal::HasJson<T>);
 
 /** @brief Whether @c T supports at least one representation. */
 template <typename T>
@@ -122,8 +119,7 @@ concept Serializable = JsonSerializable<T> || MsgpackSerializable<T>;
 
 /** @brief Returns the language-agnostic type tag registered for @c T. */
 template <typename T>
-  requires serializable_internal::HasSerialTag<T>
-std::string SerialTypeTag() {
+requires serializable_internal::HasSerialTag<T> std::string SerialTypeTag() {
   return serializable_internal::SerialTag<T>();
 }
 
@@ -132,16 +128,14 @@ std::string SerialTypeTag() {
  * @return OK, or AlreadyExists when a JSON codec is already registered.
  */
 template <typename T>
-  requires JsonSerializable<T>
-absl::Status RegisterJsonSerializable(SerializationRegistry& registry) {
+requires JsonSerializable<T> absl::Status RegisterJsonSerializable(
+    SerializationRegistry& registry) {
   return registry.Register<T>(
       serializable_internal::SerialTag<T>(), std::string(kJsonMimetype),
       [](const T& value) -> absl::StatusOr<Chunk> {
-        absl::StatusOr<nlohmann::json> json = A11ToJson(value);
-        if (!json.ok())
-          return json.status();
+        ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
         try {
-          return Chunk{.data = json->dump()};
+          return Chunk{.data = json.dump()};
         } catch (const std::exception& error) {
           return absl::InvalidArgumentError(
               absl::StrCat("Failed to serialize JSON: ", error.what()));
@@ -165,16 +159,14 @@ absl::Status RegisterJsonSerializable(SerializationRegistry& registry) {
  * @return OK, or AlreadyExists when a MessagePack codec is already registered.
  */
 template <typename T>
-  requires MsgpackSerializable<T>
-absl::Status RegisterMsgpackSerializable(SerializationRegistry& registry) {
+requires MsgpackSerializable<T> absl::Status RegisterMsgpackSerializable(
+    SerializationRegistry& registry) {
   if constexpr (serializable_internal::HasMsgpackBytes<T>) {
     return registry.Register<T>(
         serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
         [](const T& value) -> absl::StatusOr<Chunk> {
-          absl::StatusOr<std::string> bytes = A11ToMsgpackBytes(value);
-          if (!bytes.ok())
-            return bytes.status();
-          return Chunk{.data = std::move(*bytes)};
+          ABSL_ASSIGN_OR_RETURN(std::string bytes, A11ToMsgpackBytes(value));
+          return Chunk{.data = std::move(bytes)};
         },
         [](const Chunk& chunk) -> absl::StatusOr<T> {
           return A11FromMsgpackBytes(TypeTag<T>{}, chunk.data);
@@ -184,18 +176,16 @@ absl::Status RegisterMsgpackSerializable(SerializationRegistry& registry) {
     return registry.Register<T>(
         serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
         [](const T& value) -> absl::StatusOr<Chunk> {
-          absl::StatusOr<nlohmann::json> json = A11ToJson(value);
-          if (!json.ok())
-            return json.status();
+          ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
           try {
             const std::vector<std::uint8_t> encoded =
-                nlohmann::json::to_msgpack(*json);
+                nlohmann::json::to_msgpack(json);
             return Chunk{.data = std::string(
                              reinterpret_cast<const char*>(encoded.data()),
                              encoded.size())};
           } catch (const std::exception& error) {
-            return absl::InvalidArgumentError(
-                absl::StrCat("Failed to serialize MessagePack: ", error.what()));
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Failed to serialize MessagePack: ", error.what()));
           }
         },
         [](const Chunk& chunk) -> absl::StatusOr<T> {
@@ -203,8 +193,8 @@ absl::Status RegisterMsgpackSerializable(SerializationRegistry& registry) {
           try {
             const auto* first =
                 reinterpret_cast<const std::uint8_t*>(chunk.data.data());
-            json = nlohmann::json::from_msgpack(first, first + chunk.data.size(),
-                                                true, true);
+            json = nlohmann::json::from_msgpack(
+                first, first + chunk.data.size(), true, true);
           } catch (const std::exception& error) {
             return absl::InvalidArgumentError(
                 absl::StrCat("Invalid MessagePack data: ", error.what()));
@@ -224,21 +214,16 @@ absl::Status RegisterMsgpackSerializable(SerializationRegistry& registry) {
  * @return OK on success, or the first registration error.
  */
 template <typename T>
-  requires Serializable<T>
-absl::Status RegisterSerializable(SerializationRegistry& registry,
-                                  bool json = true, bool msgpack = true) {
+requires Serializable<T> absl::Status RegisterSerializable(
+    SerializationRegistry& registry, bool json = true, bool msgpack = true) {
   if (json && JsonSerializable<T>) {
     if constexpr (JsonSerializable<T>) {
-      absl::Status status = RegisterJsonSerializable<T>(registry);
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(RegisterJsonSerializable<T>(registry));
     }
   }
   if (msgpack && MsgpackSerializable<T>) {
     if constexpr (MsgpackSerializable<T>) {
-      absl::Status status = RegisterMsgpackSerializable<T>(registry);
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(RegisterMsgpackSerializable<T>(registry));
     }
   }
   return absl::OkStatus();

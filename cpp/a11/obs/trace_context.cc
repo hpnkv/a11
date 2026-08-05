@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
@@ -92,8 +93,8 @@ std::string PercentEncode(std::string_view value) {
   out.reserve(value.size());
   for (const char ch : value) {
     const auto c = static_cast<unsigned char>(ch);
-    const bool unreserved = absl::ascii_isalnum(c) || c == '-' || c == '.' ||
-                            c == '_' || c == '~';
+    const bool unreserved =
+        absl::ascii_isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~';
     if (unreserved) {
       out.push_back(ch);
     } else {
@@ -142,8 +143,8 @@ absl::StatusOr<TraceContext> ParseTraceparent(std::string_view value) {
   TraceContext context;
   context.trace_id = std::string(trace_id);
   context.span_id = std::string(span_id);
-  context.trace_flags = static_cast<std::uint8_t>(
-      (HexValue(flags[0]) << 4) | HexValue(flags[1]));
+  context.trace_flags =
+      static_cast<std::uint8_t>((HexValue(flags[0]) << 4) | HexValue(flags[1]));
   return context;
 }
 
@@ -187,8 +188,7 @@ absl::StatusOr<std::optional<TraceContext>> ExtractTraceContext(
       Find(headers, kTraceparentHeader);
   const std::optional<std::string_view> tracestate =
       Find(headers, kTracestateHeader);
-  const std::optional<std::string_view> baggage =
-      Find(headers, kBaggageHeader);
+  const std::optional<std::string_view> baggage = Find(headers, kBaggageHeader);
 
   if (!traceparent.has_value()) {
     // tracestate and baggage are only meaningful alongside a traceparent.
@@ -201,21 +201,14 @@ absl::StatusOr<std::optional<TraceContext>> ExtractTraceContext(
     return std::nullopt;
   }
 
-  absl::StatusOr<TraceContext> context = ParseTraceparent(*traceparent);
-  if (!context.ok()) {
-    return context.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(TraceContext context, ParseTraceparent(*traceparent));
   if (tracestate.has_value()) {
-    context->tracestate = std::string(*tracestate);
+    context.tracestate = std::string(*tracestate);
   }
   if (baggage.has_value()) {
-    absl::StatusOr<std::vector<BaggageEntry>> parsed = ParseBaggage(*baggage);
-    if (!parsed.ok()) {
-      return parsed.status();
-    }
-    context->baggage = *std::move(parsed);
+    ABSL_ASSIGN_OR_RETURN(context.baggage, ParseBaggage(*baggage));
   }
-  return std::optional<TraceContext>(*std::move(context));
+  return std::optional<TraceContext>(std::move(context));
 }
 
 absl::Status InjectTraceContext(const TraceContext& context,

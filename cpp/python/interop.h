@@ -81,8 +81,9 @@ py::object StatusException(const absl::Status& status);
 
 template <typename T>
 T ValueOrThrow(absl::StatusOr<T> value) {
-  if (!value.ok())
+  if (!value.ok()) {
     ThrowStatus(value.status());
+  }
   T result = std::move(value).value();
   return result;
 }
@@ -280,8 +281,9 @@ template <typename T>
 py::handle DataToPython(const T& value, const char* absl_nonnull class_name) {
   py::gil_scoped_acquire acquire;
   absl::StatusOr<std::string> packed = value.ToMsgpack();
-  if (!packed.ok())
+  if (!packed.ok()) {
     ThrowStatus(packed.status());
+  }
   py::object cls = py::module_::import("a11.data.types").attr(class_name);
   return cls.attr("from_msgpack")(py::bytes(*packed)).release();
 }

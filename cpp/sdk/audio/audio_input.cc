@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
@@ -201,8 +202,8 @@ absl::Status AudioInputOptions::Validate() const {
     return absl::InvalidArgumentError("channels must not be negative");
   }
   if (buffer_frames != 0 && buffer_frames < kMinBufferSize) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "buffer_frames must be 0 or at least ", kMinBufferSize));
+    return absl::InvalidArgumentError(
+        absl::StrCat("buffer_frames must be 0 or at least ", kMinBufferSize));
   }
   return absl::OkStatus();
 }
@@ -224,25 +225,17 @@ AudioInput::~AudioInput() {
 
 absl::StatusOr<std::shared_ptr<AudioInput>> AudioInput::Open(
     AudioInputOptions options) {
-  if (absl::Status valid = options.Validate(); !valid.ok()) {
-    return valid;
-  }
+  ABSL_RETURN_IF_ERROR(options.Validate());
 
-  absl::StatusOr<std::shared_ptr<internal::PortAudioSession>> session =
-      internal::PortAudioSession::Acquire();
-  if (!session.ok()) {
-    return session.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::PortAudioSession> session,
+                        internal::PortAudioSession::Acquire());
 
   int index = options.device_index;
   if (!options.device_name.empty()) {
     // A requested name takes precedence and is resolved to an input device.
-    absl::StatusOr<std::vector<DeviceInfo>> devices = ListDevices();
-    if (!devices.ok()) {
-      return devices.status();
-    }
+    ABSL_ASSIGN_OR_RETURN(std::vector<DeviceInfo> devices, ListDevices());
     index = -1;
-    for (const DeviceInfo& candidate : *devices) {
+    for (const DeviceInfo& candidate : devices) {
       if (candidate.name == options.device_name &&
           candidate.max_input_channels > 0) {
         index = candidate.index;
@@ -250,40 +243,34 @@ absl::StatusOr<std::shared_ptr<AudioInput>> AudioInput::Open(
       }
     }
     if (index < 0) {
-      return absl::NotFoundError(absl::StrCat(
-          "No input device named '", options.device_name, "'"));
+      return absl::NotFoundError(
+          absl::StrCat("No input device named '", options.device_name, "'"));
     }
   } else if (index < 0) {
-    absl::StatusOr<DeviceInfo> default_input = DefaultInputDevice();
-    if (!default_input.ok()) {
-      return default_input.status();
-    }
-    index = default_input->index;
+    ABSL_ASSIGN_OR_RETURN(DeviceInfo default_input, DefaultInputDevice());
+    index = default_input.index;
   }
 
-  absl::StatusOr<DeviceInfo> device = DeviceInfoAt(index);
-  if (!device.ok()) {
-    return device.status();
-  }
-  if (device->max_input_channels <= 0) {
+  ABSL_ASSIGN_OR_RETURN(DeviceInfo device, DeviceInfoAt(index));
+  if (device.max_input_channels <= 0) {
     return absl::FailedPreconditionError(
-        absl::StrCat("Device '", device->name, "' has no input channels"));
+        absl::StrCat("Device '", device.name, "' has no input channels"));
   }
 
   const double sample_rate = options.sample_rate > 0.0
                                  ? options.sample_rate
-                                 : device->default_sample_rate;
+                                 : device.default_sample_rate;
   if (sample_rate <= 0.0) {
     return absl::InvalidArgumentError(
         "Could not determine a sample rate for the device");
   }
 
   const int channels =
-      options.channels > 0 ? options.channels : device->max_input_channels;
-  if (channels > device->max_input_channels) {
+      options.channels > 0 ? options.channels : device.max_input_channels;
+  if (channels > device.max_input_channels) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Requested ", channels, " channels but device '", device->name,
-        "' offers at most ", device->max_input_channels));
+        "Requested ", channels, " channels but device '", device.name,
+        "' offers at most ", device.max_input_channels));
   }
 
   auto context = std::make_shared<internal::CaptureContext>();
@@ -299,8 +286,8 @@ absl::StatusOr<std::shared_ptr<AudioInput>> AudioInput::Open(
   context->poll_interval = cadence;
 
   return std::shared_ptr<AudioInput>(
-      new AudioInput(std::move(*device), sample_rate, channels, options,
-                     std::move(*session), std::move(context)));
+      new AudioInput(std::move(device), sample_rate, channels, options,
+                     std::move(session), std::move(context)));
 }
 
 bool AudioInput::capturing() const {

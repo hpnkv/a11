@@ -154,8 +154,9 @@ std::array<std::atomic<void*>, Capacity>& StackPool() {
 template <size_t Capacity>
 void* TryClaim(std::array<std::atomic<void*>, Capacity>& slots) {
   for (std::atomic<void*>& slot : slots) {
-    if (void* sp = slot.exchange(nullptr, std::memory_order_acquire))
+    if (void* sp = slot.exchange(nullptr, std::memory_order_acquire)) {
       return sp;
+    }
   }
   return nullptr;
 }
@@ -260,8 +261,9 @@ class PooledFixedSizeStack {
   }
 
   void deallocate(boost::context::stack_context& context) {
-    if (TryReleaseToPool(context.size, context.sp))
+    if (TryReleaseToPool(context.size, context.sp)) {
       return;
+    }
     backing_.deallocate(context);
   }
 

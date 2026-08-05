@@ -102,8 +102,9 @@ TEST(InProcessWireStreamTest, CommunicatesAbortStatus) {
           .ok());
   ASSERT_TRUE(first->Abort(absl::DataLossError("corrupt")).ok());
   const absl::Time limit = absl::Now() + absl::Seconds(5);
-  while (!done && absl::Now() < limit)
+  while (!done && absl::Now() < limit) {
     thread::SleepFor(absl::Milliseconds(1));
+  }
   ASSERT_TRUE(done);
   EXPECT_EQ(second->GetStatus().code(), absl::StatusCode::kDataLoss);
   EXPECT_EQ(first->GetStatus().code(), absl::StatusCode::kAborted);

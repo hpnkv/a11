@@ -27,6 +27,7 @@
 
 #include <absl/base/nullability.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 
 #include "a11/data/types.h"
@@ -117,10 +118,8 @@ class SerializationRegistry {
         [deserializer = std::move(deserializer)](
             const Chunk& chunk) -> absl::StatusOr<std::any> {
           try {
-            absl::StatusOr<T> result = deserializer(chunk);
-            if (!result.ok())
-              return result.status();
-            return std::any(std::move(*result));
+            ABSL_ASSIGN_OR_RETURN(T result, deserializer(chunk));
+            return std::any(std::move(result));
           } catch (const std::exception& error) {
             return absl::UnknownError(error.what());
           } catch (...) {
@@ -146,12 +145,10 @@ class SerializationRegistry {
   absl::Status Register(std::string type_name, std::string mimetype,
                         Serializer<T> serializer,
                         Deserializer<T> deserializer) {
-    absl::Status status =
-        RegisterSerializer<T>(type_name, mimetype, serializer);
-    if (!status.ok())
-      return status;
-    status = RegisterDeserializer<T>(std::move(type_name), std::move(mimetype),
-                                     std::move(deserializer));
+    ABSL_RETURN_IF_ERROR(
+        RegisterSerializer<T>(type_name, mimetype, serializer));
+    absl::Status status = RegisterDeserializer<T>(
+        std::move(type_name), std::move(mimetype), std::move(deserializer));
     if (!status.ok()) {
       RemoveSerializer(typeid(T), type_name, mimetype);
       return status;
@@ -186,12 +183,10 @@ class SerializationRegistry {
   absl::StatusOr<T> FromChunk(
       const Chunk& chunk,
       const std::vector<std::string>& mimetype_patterns = {}) const {
-    absl::StatusOr<std::any> result =
-        FromChunkErased(chunk, typeid(T), mimetype_patterns);
-    if (!result.ok())
-      return result.status();
+    ABSL_ASSIGN_OR_RETURN(std::any result,
+                          FromChunkErased(chunk, typeid(T), mimetype_patterns));
     try {
-      return std::any_cast<T>(std::move(*result));
+      return std::any_cast<T>(std::move(result));
     } catch (const std::bad_any_cast& error) {
       return absl::InternalError(error.what());
     }

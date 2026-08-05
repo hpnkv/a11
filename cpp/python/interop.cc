@@ -28,13 +28,15 @@ namespace {
 class GilForDestructor {
  public:
   GilForDestructor() {
-    if (Py_IsInitialized() != 0)
+    if (Py_IsInitialized() != 0) {
       state_ = PyGILState_Ensure();
+    }
   }
 
   ~GilForDestructor() {
-    if (state_.has_value())
+    if (state_.has_value()) {
       PyGILState_Release(*state_);
+    }
   }
 
   [[nodiscard]] bool acquired() const { return state_.has_value(); }
@@ -83,8 +85,9 @@ absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Capture() {
 
 PythonLoop::~PythonLoop() {
   GilForDestructor gil;
-  if (gil.acquired())
+  if (gil.acquired()) {
     Py_XDECREF(loop_);
+  }
   loop_ = nullptr;
 }
 
@@ -111,8 +114,9 @@ PythonLoop::Cancellation::Cancellation(py::handle callback)
 
 PythonLoop::Cancellation::~Cancellation() {
   GilForDestructor gil;
-  if (gil.acquired())
+  if (gil.acquired()) {
     Py_CLEAR(callback_);
+  }
 }
 
 void PythonLoop::Cancellation::Cancel() const {
@@ -152,8 +156,9 @@ AsyncPythonCallback::~AsyncPythonCallback() {
 
 absl::Status StatusFromPython(const py::handle& value) {
   try {
-    if (py::isinstance<NativeStatus>(value))
+    if (py::isinstance<NativeStatus>(value)) {
       return value.cast<const NativeStatus&>().value();
+    }
     py::object ground_status = py::module_::import("a11.status").attr("Status");
     if (py::isinstance(value, ground_status)) {
       const int code = value.attr("code").cast<int>();
@@ -217,13 +222,15 @@ absl::Status StatusFromPythonException(py::error_already_set& error) {
 absl::StatusOr<absl::Time> TimeFromPython(const py::handle& value,
                                           bool none_is_infinite) {
   if (value.is_none()) {
-    if (none_is_infinite)
+    if (none_is_infinite) {
       return absl::InfiniteFuture();
+    }
     return absl::InvalidArgumentError("time must not be None");
   }
   try {
-    if (py::isinstance<NativeTime>(value))
+    if (py::isinstance<NativeTime>(value)) {
       return value.cast<const NativeTime&>().value();
+    }
     py::module_ timing = py::module_::import("a11.timing");
     if (py::isinstance(value, timing.attr("Time"))) {
       if (value.equal(timing.attr("infinite_future")())) {
@@ -253,19 +260,23 @@ py::object TimeToPython(absl::Time value) {
 absl::StatusOr<absl::Duration> DurationFromPython(const py::handle& value,
                                                   bool none_is_infinite) {
   if (value.is_none()) {
-    if (none_is_infinite)
+    if (none_is_infinite) {
       return absl::InfiniteDuration();
+    }
     return absl::InvalidArgumentError("duration must not be None");
   }
   try {
-    if (py::isinstance<NativeDuration>(value))
+    if (py::isinstance<NativeDuration>(value)) {
       return value.cast<const NativeDuration&>().value();
+    }
     py::module_ timing = py::module_::import("a11.timing");
     if (py::isinstance(value, timing.attr("Duration"))) {
-      if (value.equal(timing.attr("infinite_duration")()))
+      if (value.equal(timing.attr("infinite_duration")())) {
         return absl::InfiniteDuration();
-      if (value.equal(-timing.attr("infinite_duration")()))
+      }
+      if (value.equal(-timing.attr("infinite_duration")())) {
         return -absl::InfiniteDuration();
+      }
       return absl::Nanoseconds(
           value.attr("nanoseconds_value").cast<std::int64_t>());
     }
@@ -287,8 +298,9 @@ py::object DurationToPython(absl::Duration value) {
 absl::StatusOr<data::ByteMap> ByteMapFromPython(const py::handle& value,
                                                 bool none_is_empty) {
   if (value.is_none()) {
-    if (none_is_empty)
+    if (none_is_empty) {
       return data::ByteMap{};
+    }
     return absl::InvalidArgumentError("mapping must not be None");
   }
   try {
@@ -321,8 +333,9 @@ absl::StatusOr<data::ByteMap> ByteMapFromPython(const py::handle& value,
 py::dict ByteMapToPython(const data::ByteMap& value) {
   py::gil_scoped_acquire acquire;
   py::dict result;
-  for (const auto& [key, bytes] : value)
+  for (const auto& [key, bytes] : value) {
     result[py::str(key)] = py::bytes(bytes);
+  }
   return result;
 }
 
@@ -347,8 +360,9 @@ PythonReferences::PythonReferences(py::handle loop, py::handle future,
 
 PythonReferences::~PythonReferences() {
   GilForDestructor gil;
-  if (gil.acquired())
+  if (gil.acquired()) {
     ClearWithGilHeld();
+  }
 }
 
 py::object PythonReferences::loop() const {

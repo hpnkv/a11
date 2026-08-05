@@ -53,8 +53,9 @@ absl::StatusOr<std::string> IdentityUrl(std::string url,
     url.replace(marker, 4, identity);
     return url;
   }
-  if (url.empty() || url.back() != '/')
+  if (url.empty() || url.back() != '/') {
     url.push_back('/');
+  }
   url.append(identity);
   return url;
 }
@@ -76,18 +77,21 @@ absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
   const std::string_view authority = url.substr(0, slash);
   result.path =
       slash == std::string_view::npos ? "/" : std::string(url.substr(slash));
-  if (authority.empty())
+  if (authority.empty()) {
     return absl::InvalidArgumentError("Signalling URL host must not be empty");
+  }
 
   std::string_view port_text;
   if (authority.front() == '[') {
     const size_t bracket = authority.find(']');
-    if (bracket == std::string_view::npos)
+    if (bracket == std::string_view::npos) {
       return absl::InvalidArgumentError("Signalling IPv6 host is malformed");
+    }
     result.host = std::string(authority.substr(1, bracket - 1));
     if (bracket + 1 < authority.size()) {
-      if (authority[bracket + 1] != ':')
+      if (authority[bracket + 1] != ':') {
         return absl::InvalidArgumentError("Signalling authority is malformed");
+      }
       port_text = authority.substr(bracket + 2);
     }
   } else {
@@ -99,12 +103,14 @@ absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
       result.host = std::string(authority);
     }
   }
-  if (result.host.empty())
+  if (result.host.empty()) {
     return absl::InvalidArgumentError("Signalling URL host must not be empty");
+  }
   if (!port_text.empty()) {
     unsigned int port = 0;
-    if (!absl::SimpleAtoi(port_text, &port) || port == 0 || port > 65535)
+    if (!absl::SimpleAtoi(port_text, &port) || port == 0 || port > 65535) {
       return absl::InvalidArgumentError("Signalling URL port is invalid");
+    }
     result.port = static_cast<std::uint16_t>(port);
   }
   return result;
@@ -118,11 +124,13 @@ absl::Status CallbackFailure(const std::exception& error) {
 }  // namespace
 
 absl::Status WebSocketSignallingClientOptions::Validate() const {
-  if (deadline <= absl::InfinitePast())
+  if (deadline <= absl::InfinitePast()) {
     return absl::InvalidArgumentError("signalling deadline is invalid");
-  if (max_message_size == 0)
+  }
+  if (max_message_size == 0) {
     return absl::InvalidArgumentError(
         "signalling max_message_size must be positive");
+  }
   return http2_options.Validate();
 }
 
@@ -222,24 +230,28 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
       .on_open =
           [weak]() {
             std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr)
+            if (state == nullptr) {
               return;
+            }
             std::shared_ptr<WebSocketSignallingClient> client;
             {
               thread::MutexLock lock(&state->mu);
-              if (state->closed)
+              if (state->closed) {
                 return;
+              }
               state->connected = true;
               client = std::move(state->pending_client);
             }
-            if (client != nullptr)
+            if (client != nullptr) {
               (void)state->startup_promise->SetValue(std::move(client));
+            }
           },
       .on_message =
           [weak](std::string raw) {
             std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr)
+            if (state == nullptr) {
               return;
+            }
             absl::StatusOr<SignallingMessage> message =
                 SignallingMessage::FromJson(raw);
             if (!message.ok()) {
@@ -250,8 +262,9 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
             bool wrong_recipient = false;
             {
               thread::MutexLock lock(&state->mu);
-              if (state->closed)
+              if (state->closed) {
                 return;
+              }
               if (!message->recipient.empty() &&
                   message->recipient != state->identity) {
                 wrong_recipient = true;
@@ -268,13 +281,15 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
                               "Signalling message has the wrong recipient"));
               return;
             }
-            if (start)
+            if (start) {
               a11::Schedule([state]() { Pump(state); });
+            }
           },
       .on_error =
           [weak](absl::Status status) {
-            if (std::shared_ptr<State> state = weak.lock(); state != nullptr)
+            if (std::shared_ptr<State> state = weak.lock(); state != nullptr) {
               Fail(state, std::move(status));
+            }
           },
       .on_closed =
           [weak]() {
@@ -292,8 +307,9 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
   }
   a11::Schedule([state, active_channel = std::move(active_channel)]() {
     absl::Status opened = active_channel->Open();
-    if (!opened.ok())
+    if (!opened.ok()) {
       Fail(state, std::move(opened));
+    }
   });
   return state->startup;
 }
@@ -330,13 +346,15 @@ void WebSocketSignallingClient::Pump(const std::shared_ptr<State>& state) {
 
 void WebSocketSignallingClient::Fail(const std::shared_ptr<State>& state,
                                      absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::UnknownError("Signalling WebSocket failed");
+  }
   std::shared_ptr<internal::BinaryChannel> channel;
   {
     thread::MutexLock lock(&state->mu);
-    if (state->closed)
+    if (state->closed) {
       return;
+    }
     state->closed = true;
     state->connected = false;
     state->status = status;
@@ -382,8 +400,9 @@ absl::Status WebSocketSignallingClient::SetOnMessage(
         "Signalling on_message callback must be callable");
   }
   thread::MutexLock lock(&state_->mu);
-  if (state_->closed)
+  if (state_->closed) {
     return state_->status;
+  }
   state_->on_message = std::move(on_message);
   return absl::OkStatus();
 }
@@ -392,8 +411,9 @@ absl::Status WebSocketSignallingClient::Close() {
   std::shared_ptr<internal::BinaryChannel> channel;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->closed)
+    if (state_->closed) {
       return absl::OkStatus();
+    }
     state_->closed = true;
     state_->connected = false;
     state_->status = absl::CancelledError("Signalling WebSocket closed");
@@ -401,8 +421,9 @@ absl::Status WebSocketSignallingClient::Close() {
   }
   (void)state_->startup_promise->SetStatus(
       absl::CancelledError("Signalling WebSocket closed"));
-  if (channel == nullptr)
+  if (channel == nullptr) {
     return absl::OkStatus();
+  }
   (void)channel->ResetCallbacks();
   return channel->Close();
 }
@@ -432,11 +453,13 @@ absl::Status WebSocketSignallingServerOptions::Validate() const {
     return absl::InvalidArgumentError(
         "WebSocket signalling path_prefix must start and end with '/'");
   }
-  if (bind_address.empty())
+  if (bind_address.empty()) {
     return absl::InvalidArgumentError("signalling bind_address is empty");
-  if (max_message_size == 0)
+  }
+  if (max_message_size == 0) {
     return absl::InvalidArgumentError(
         "signalling max_message_size must be positive");
+  }
   return http2_options.Validate();
 }
 
@@ -608,8 +631,9 @@ void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
   {
     thread::MutexLock lock(&state->mu);
     const auto found = state->connections.find(identity);
-    if (found == state->connections.end())
+    if (found == state->connections.end()) {
       return;
+    }
     connection = std::move(found->second);
     state->connections.erase(found);
   }
@@ -617,8 +641,9 @@ void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
     (void)connection.channel->ResetCallbacks();
     (void)connection.channel->Close();
   }
-  if (connection.endpoint != nullptr)
+  if (connection.endpoint != nullptr) {
     (void)connection.endpoint->Close();
+  }
 }
 
 WebSocketSignallingServer::~WebSocketSignallingServer() {
@@ -630,8 +655,9 @@ absl::Status WebSocketSignallingServer::Stop() {
   std::shared_ptr<Http2Server> server;
   {
     thread::MutexLock lock(&state_->mu);
-    if (!state_->running)
+    if (!state_->running) {
       return absl::OkStatus();
+    }
     state_->running = false;
     connections.swap(state_->connections);
     server = std::move(state_->server);
@@ -642,8 +668,9 @@ absl::Status WebSocketSignallingServer::Stop() {
       (void)connection.channel->ResetCallbacks();
       (void)connection.channel->Close();
     }
-    if (connection.endpoint != nullptr)
+    if (connection.endpoint != nullptr) {
       (void)connection.endpoint->Close();
+    }
   }
   return server == nullptr ? absl::OkStatus() : server->Stop();
 }

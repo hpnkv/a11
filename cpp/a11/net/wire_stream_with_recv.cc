@@ -50,8 +50,9 @@ struct WireStreamWithRecv::State {
 
 absl::StatusOr<std::shared_ptr<WireStreamWithRecv>> WireStreamWithRecv::Create(
     std::shared_ptr<WireStream> stream) {
-  if (stream == nullptr)
+  if (stream == nullptr) {
     return absl::InvalidArgumentError("stream must not be null");
+  }
   std::string id;
   try {
     id = stream->GetId();
@@ -237,8 +238,9 @@ a11::Future<std::optional<data::WireMessage>> WireStreamWithRecv::Receive(
               result = std::move(self->state_->queue.front());
               self->state_->queue.pop_front();
               has_result = true;
-              if (!result.has_value())
+              if (!result.has_value()) {
                 self->state_->eof_delivered = true;
+              }
               notify =
                   std::exchange(self->state_->changed,
                                 std::make_shared<thread::PermanentEvent>());
@@ -249,10 +251,12 @@ a11::Future<std::optional<data::WireMessage>> WireStreamWithRecv::Receive(
               changed = self->state_->changed;
             }
           }
-          if (notify)
+          if (notify) {
             notify->Notify();
-          if (has_result)
+          }
+          if (has_result) {
             return result;
+          }
 
           const int selected = thread::SelectUntil(
               deadline, {thread::OnCancel(), changed->OnEvent()});
@@ -318,8 +322,9 @@ a11::Task WireStreamWithRecv::HandleMessage(
           }
         }
 
-        if (!observer)
+        if (!observer) {
           return absl::OkStatus();
+        }
         try {
           return observer(message).Await().status();
         } catch (const std::exception& error) {
@@ -350,8 +355,9 @@ a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
         }
         notify->Notify();
 
-        if (!observer)
+        if (!observer) {
           return absl::OkStatus();
+        }
         try {
           return observer().Await().status();
         } catch (const std::exception& error) {
@@ -370,13 +376,15 @@ void WireStreamWithRecv::RecordCurrentStatus() const {
 }
 
 void WireStreamWithRecv::SignalError(absl::Status status) const {
-  if (status.ok())
+  if (status.ok()) {
     return;
+  }
   std::shared_ptr<thread::PermanentEvent> notify;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->error.has_value())
+    if (state_->error.has_value()) {
       return;
+    }
     state_->error = std::move(status);
     state_->queue.clear();
     notify = std::exchange(state_->changed,

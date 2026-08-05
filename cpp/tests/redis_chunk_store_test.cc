@@ -31,12 +31,14 @@ absl::StatusOr<std::shared_ptr<redis::Client>> ConnectForTest() {
   options.command_timeout = absl::Seconds(3);
   absl::StatusOr<std::shared_ptr<redis::Client>> client =
       redis::Client::Create(std::move(options));
-  if (!client.ok())
+  if (!client.ok()) {
     return client.status();
+  }
   absl::Status ready =
       (*client)->Ready().Await(absl::Now() + absl::Seconds(2)).status();
-  if (!ready.ok())
+  if (!ready.ok()) {
     return ready;
+  }
   return *client;
 }
 
@@ -52,15 +54,17 @@ data::NodeFragment Fragment(std::optional<std::uint32_t> seq,
 absl::Status DeleteStore(const std::shared_ptr<redis::Client>& client,
                          const RedisChunkStoreKeys& keys) {
   std::vector<std::string> command{"DEL"};
-  for (std::string key : keys.ScriptKeys())
+  for (std::string key : keys.ScriptKeys()) {
     command.push_back(std::move(key));
+  }
   return client->Command(std::move(command)).Await().status();
 }
 
 TEST(RedisChunkStoreTest, ImplementsOrderingAtomicityAndMetadata) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -122,8 +126,9 @@ TEST(RedisChunkStoreTest, ImplementsOrderingAtomicityAndMetadata) {
 
 TEST(RedisChunkStoreTest, WaitsForWritesAndPropagatesCloseStatus) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -159,8 +164,9 @@ TEST(RedisChunkStoreTest, WaitsForWritesAndPropagatesCloseStatus) {
 
 TEST(RedisChunkStoreTest, ClearDataPreservesMetadataAndRemovesLargePayload) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -200,8 +206,9 @@ TEST(RedisChunkStoreTest, ClearDataPreservesMetadataAndRemovesLargePayload) {
 
 TEST(RedisChunkStoreTest, UsesRawDataSizeForInlineThreshold) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -221,8 +228,9 @@ TEST(RedisChunkStoreTest, UsesRawDataSizeForInlineThreshold) {
 
 TEST(RedisChunkStoreTest, MetadataRemainsReadableWhenChunkDataIsMissing) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -244,8 +252,9 @@ TEST(RedisChunkStoreTest, MetadataRemainsReadableWhenChunkDataIsMissing) {
 
 TEST(RedisChunkStoreTest, ReservesS3ReferencesWithoutPretendingToReadThem) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -290,8 +299,9 @@ TEST(RedisChunkStoreTest, ReservesS3ReferencesWithoutPretendingToReadThem) {
 
 TEST(RedisChunkStoreTest, RejectsCorruptMetadataBeforeWritingAnything) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -318,8 +328,9 @@ TEST(RedisChunkStoreTest, RejectsCorruptMetadataBeforeWritingAnything) {
 
 TEST(RedisChunkStoreTest, PreflightsRevisionAndStreamIdExhaustion) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -368,8 +379,9 @@ TEST(RedisChunkStoreTest, PreflightsRevisionAndStreamIdExhaustion) {
 
 TEST(RedisChunkStoreTest, ConcurrentBatchesAndCloseCommitWholeBatches) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
@@ -403,8 +415,9 @@ TEST(RedisChunkStoreTest, ConcurrentBatchesAndCloseCommitWholeBatches) {
     }
     ASSERT_EQ(result->size(), kBatchSize);
     successful_chunks += result->size();
-    for (std::uint32_t seq : *result)
+    for (std::uint32_t seq : *result) {
       EXPECT_TRUE(assigned.insert(seq).second);
+    }
   }
   absl::StatusOr<absl::Status> closed_status = closing.Await();
   ASSERT_TRUE(closed_status.ok());
@@ -436,8 +449,9 @@ TEST(RedisChunkStoreTest, ConcurrentBatchesAndCloseCommitWholeBatches) {
 
 TEST(RedisChunkStoreTest, CancellingAWaitDoesNotConsumeFutureData) {
   absl::StatusOr<std::shared_ptr<redis::Client>> connected = ConnectForTest();
-  if (!connected.ok())
+  if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
+  }
   std::shared_ptr<redis::Client> client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =

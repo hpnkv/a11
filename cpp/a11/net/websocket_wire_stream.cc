@@ -68,18 +68,21 @@ absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
   result.path = slash == std::string_view::npos
                     ? "/"
                     : std::string(remainder.substr(slash));
-  if (authority.empty())
+  if (authority.empty()) {
     return absl::InvalidArgumentError("WebSocket URL host must not be empty");
+  }
 
   std::string_view port_text;
   if (authority.front() == '[') {
     const size_t bracket = authority.find(']');
-    if (bracket == std::string_view::npos)
+    if (bracket == std::string_view::npos) {
       return absl::InvalidArgumentError("WebSocket IPv6 host is malformed");
+    }
     result.host = std::string(authority.substr(1, bracket - 1));
     if (bracket + 1 < authority.size()) {
-      if (authority[bracket + 1] != ':')
+      if (authority[bracket + 1] != ':') {
         return absl::InvalidArgumentError("WebSocket authority is malformed");
+      }
       port_text = authority.substr(bracket + 2);
     }
   } else {
@@ -91,8 +94,9 @@ absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
       result.host = std::string(authority);
     }
   }
-  if (result.host.empty())
+  if (result.host.empty()) {
     return absl::InvalidArgumentError("WebSocket URL host must not be empty");
+  }
   if (!port_text.empty()) {
     unsigned int port = 0;
     if (!absl::SimpleAtoi(port_text, &port) || port == 0 || port > 65535) {
@@ -183,8 +187,9 @@ struct WebSocketWireServer::State {
 absl::StatusOr<std::shared_ptr<WebSocketWireServer>>
 WebSocketWireServer::Create(OnWebSocketStream on_stream,
                             WebSocketServerOptions options) {
-  if (!on_stream)
+  if (!on_stream) {
     return absl::InvalidArgumentError("on_stream must be callable");
+  }
   ABSL_RETURN_IF_ERROR(options.Validate());
   auto state =
       std::make_shared<State>(std::move(on_stream), std::move(options));
@@ -251,8 +256,9 @@ absl::Status WebSocketWireServer::Stop() {
 
 absl::StatusOr<std::uint16_t> WebSocketWireServer::port() const {
   thread::MutexLock lock(&state_->mu);
-  if (state_->server == nullptr)
+  if (state_->server == nullptr) {
     return absl::FailedPreconditionError("WebSocket server is stopped");
+  }
   return state_->server->port();
 }
 

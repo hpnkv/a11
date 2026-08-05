@@ -56,13 +56,15 @@ size_t SizeOption(const py::handle& value, size_t maximum, const char* name) {
 }
 
 absl::Duration MessageTimeoutOption(const py::handle& value) {
-  if (value.is_none())
+  if (value.is_none()) {
     return absl::InfiniteDuration();
+  }
   try {
     if (py::isinstance<py::int_>(value)) {
       const py::int_ integer = py::reinterpret_borrow<py::int_>(value);
-      if (py::cast<bool>(integer.attr("__lt__")(0)))
+      if (py::cast<bool>(integer.attr("__lt__")(0))) {
         return absl::InfiniteDuration();
+      }
       return absl::Milliseconds(integer.cast<std::int64_t>());
     }
     if (py::isinstance<py::float_>(value)) {
@@ -75,8 +77,9 @@ absl::Duration MessageTimeoutOption(const py::handle& value) {
         ThrowStatus(absl::InvalidArgumentError(
             "message_timeout_millis must be finite"));
       }
-      if (std::abs(number) < 1e-8)
+      if (std::abs(number) < 1e-8) {
         return absl::ZeroDuration();
+      }
       const double micros = number * 1000.0;
       if (micros >
           static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
@@ -95,13 +98,15 @@ absl::Duration MessageTimeoutOption(const py::handle& value) {
 
 void ValidateWireStreamOptions(const net::WireStreamOptions& options) {
   const absl::Status status = options.Validate();
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 void CheckStatus(const absl::Status& status) {
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 template <typename Operation>
@@ -146,16 +151,19 @@ absl::StatusOr<std::pair<net::OnMessage, net::OnDone>> MakeStreamCallbacks(
     const py::object& on_message, const py::object& on_done) {
   absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> message =
       AsyncPythonCallback::Create(on_message);
-  if (!message.ok())
+  if (!message.ok()) {
     return message.status();
+  }
   absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> done =
       AsyncPythonCallback::Create(on_done);
-  if (!done.ok())
+  if (!done.ok()) {
     return done.status();
+  }
   return std::pair(MakeOnMessage(*message), MakeOnDone(*done));
 }
 
-class PyWireStream : public net::WireStream {
+class PyWireStream : public net::WireStream,
+                     public py::trampoline_self_life_support {
  public:
   PyWireStream() {
     absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
@@ -227,8 +235,9 @@ class PyWireStream : public net::WireStream {
   absl::Status GetStatus() const override {
     {
       thread::MutexLock lock(&mu_);
-      if (!override_status_.ok())
+      if (!override_status_.ok()) {
         return override_status_;
+      }
     }
     py::gil_scoped_acquire acquire;
     try {
@@ -260,8 +269,9 @@ class PyWireStream : public net::WireStream {
         return std::nullopt;
       }
       py::object result = override();
-      if (result.is_none())
+      if (result.is_none()) {
         return std::nullopt;
+      }
       absl::StatusOr<data::ByteMap> converted =
           ByteMapFromPython(result, false);
       if (!converted.ok()) {
@@ -399,11 +409,13 @@ class PyWireStream : public net::WireStream {
   }
 
   void SetOverrideStatus(absl::Status status) const {
-    if (status.ok())
+    if (status.ok()) {
       return;
+    }
     thread::MutexLock lock(&mu_);
-    if (override_status_.ok())
+    if (override_status_.ok()) {
       override_status_ = std::move(status);
+    }
   }
 
   std::shared_ptr<PythonLoop> loop_;
@@ -431,8 +443,9 @@ py::object StartStream(const std::shared_ptr<net::WireStream>& stream,
 }
 
 py::object VoidPointer(void* pointer, const char* name) {
-  if (pointer == nullptr)
+  if (pointer == nullptr) {
     return py::none();
+  }
   return py::capsule(pointer, name);
 }
 
@@ -532,8 +545,7 @@ void BindNet(py::module_& module) {
           },
           "Validate the framing options, raising on invalid configuration.");
 
-  py::class_<net::WireStream, PyWireStream, std::shared_ptr<net::WireStream>>
-      wire_stream(module, "WireStream");
+  py::classh<net::WireStream, PyWireStream> wire_stream(module, "WireStream");
   wire_stream
       .def(py::init<>(),
            "Construct the abstract WireStream base. Subclass this in Python to "
@@ -591,8 +603,9 @@ Examples:
              const py::object& trailers) {
             absl::StatusOr<data::ByteMap> converted =
                 ByteMapFromPython(trailers);
-            if (!converted.ok())
+            if (!converted.ok()) {
               ThrowStatus(converted.status());
+            }
             CheckStatus(self->HalfClose(std::move(*converted)));
           },
           R"doc(Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
@@ -644,8 +657,9 @@ Examples:
           [](const std::shared_ptr<net::WireStream>& self,
              const py::object& deadline) {
             absl::StatusOr<absl::Time> converted = TimeFromPython(deadline);
-            if (!converted.ok())
+            if (!converted.ok()) {
               ThrowStatus(converted.status());
+            }
             CheckStatus(self->SetDeadline(*converted));
           },
           "Set an absolute wall-clock deadline after which the stream is "
@@ -672,8 +686,9 @@ Examples:
           "get_trailers",
           [](const net::WireStream& self) -> py::object {
             std::optional<data::ByteMap> trailers = self.GetTrailers();
-            if (!trailers.has_value())
+            if (!trailers.has_value()) {
               return py::none();
+            }
             return ByteMapToPython(*trailers);
           },
           "Return the trailers (final metadata) the peer sent at half-close, "
@@ -692,8 +707,7 @@ Examples:
           "Return an opaque native handle to the underlying implementation, or "
           "None. Intended for advanced interop, not normal agent code.");
 
-  py::class_<net::InProcessWireStream, net::WireStream,
-             std::shared_ptr<net::InProcessWireStream>>(
+  py::classh<net::InProcessWireStream, net::WireStream>(
       module, "InProcessWireStream", py::dynamic_attr())
       .def_static(
           "create_pair",
@@ -740,8 +754,7 @@ Examples:
       py::arg("first_options") = std::nullopt,
       py::arg("second_options") = std::nullopt);
 
-  py::class_<net::WireStreamWithRecv, net::WireStream,
-             std::shared_ptr<net::WireStreamWithRecv>>(
+  py::classh<net::WireStreamWithRecv, net::WireStream>(
       module, "WireStreamWithRecv", py::dynamic_attr())
       .def(py::init([](const py::object& value) {
              if (!py::isinstance<net::WireStream>(value)) {
@@ -840,8 +853,7 @@ Examples:
           },
           "Validate the client options, raising on invalid configuration.");
 
-  py::class_<net::WebSocketWireStream, net::WireStream,
-             std::shared_ptr<net::WebSocketWireStream>>(module,
+  py::classh<net::WebSocketWireStream, net::WireStream>(module,
                                                         "WebSocketWireStream")
       .def_static(
           "connect",
@@ -893,16 +905,15 @@ Examples:
           },
           "Validate the server options, raising on invalid configuration.");
 
-  py::class_<net::WebSocketWireServer,
-             std::shared_ptr<net::WebSocketWireServer>>(module,
-                                                        "WebSocketWireServer")
+  py::classh<net::WebSocketWireServer>(module, "WebSocketWireServer")
       .def_static(
           "create",
           [](const py::object& on_stream, net::WebSocketServerOptions options) {
             absl::StatusOr<std::shared_ptr<AsyncPythonCallback>> callback =
                 AsyncPythonCallback::Create(on_stream);
-            if (!callback.ok())
+            if (!callback.ok()) {
               ThrowStatus(callback.status());
+            }
             // Create() blocks on the libuv loop (Http2Server::Create ->
             // RunOnUv), so release the GIL while it runs.
             return ValueWithoutGil([&] {

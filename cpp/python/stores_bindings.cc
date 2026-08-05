@@ -42,7 +42,8 @@ a11::Future<T> InvalidFuture(const absl::Status& status) {
   return a11::FailedFuture<T>(status);
 }
 
-class PyChunkStore : public ChunkStore {
+class PyChunkStore : public ChunkStore,
+                     public py::trampoline_self_life_support {
  public:
   PyChunkStore() {
     absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
@@ -127,8 +128,9 @@ class PyChunkStore : public ChunkStore {
  private:
   template <typename T, typename... Args>
   a11::Future<T> Call(const char* name, Args&&... args) const {
-    if (loop_ == nullptr)
+    if (loop_ == nullptr) {
       return InvalidFuture<T>(loop_status_);
+    }
     py::gil_scoped_acquire acquire;
     try {
       py::function override =
@@ -186,21 +188,24 @@ std::uint64_t UnsignedOption(const py::handle& value, std::uint64_t maximum,
 std::optional<std::uint64_t> OptionalUnsignedOption(const py::handle& value,
                                                     std::uint64_t maximum,
                                                     const char* name) {
-  if (value.is_none())
+  if (value.is_none()) {
     return std::nullopt;
+  }
   return UnsignedOption(value, maximum, name);
 }
 
 void ValidateReaderOptions(const stores::ChunkStoreReaderOptions& options) {
   const absl::Status status = options.Validate();
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 void ValidateWriterOptions(const stores::ChunkStoreWriterOptions& options) {
   const absl::Status status = options.Validate();
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 }  // namespace
@@ -289,8 +294,7 @@ void BindStores(py::module_& module) {
       .def("validate", &ValidateWriterOptions,
            "Raise if the options are not internally consistent.");
 
-  py::class_<ChunkStore, PyChunkStore, std::shared_ptr<ChunkStore>> chunk_store(
-      module, "ChunkStore");
+  py::classh<ChunkStore, PyChunkStore> chunk_store(module, "ChunkStore");
   chunk_store
       .def(py::init<>(),
            "Construct the abstract base. Subclass this in Python to back an "
@@ -435,9 +439,7 @@ Examples:
           "Return the store's node identifier. Raises if a Python subclass "
           "does not override `get_id`.");
 
-  py::class_<stores::LocalChunkStore, ChunkStore,
-             std::shared_ptr<stores::LocalChunkStore>>(module,
-                                                       "LocalChunkStore")
+  py::classh<stores::LocalChunkStore, ChunkStore>(module, "LocalChunkStore")
       .def(
           py::init([](std::string id) {
             return ValueOrThrow(stores::LocalChunkStore::Create(std::move(id)));
@@ -471,8 +473,9 @@ Examples:
                      "inline_data_threshold")),
              };
              const absl::Status status = options.Validate();
-             if (!status.ok())
+             if (!status.ok()) {
                ThrowStatus(status);
+             }
              return options;
            }),
            "Construct validated Redis chunk-store options.",
@@ -488,8 +491,9 @@ Examples:
           "validate",
           [](const stores::RedisChunkStoreOptions& self) {
             const absl::Status status = self.Validate();
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Raise if the key layout policy is invalid.")
       .def_static(
@@ -563,17 +567,17 @@ Examples:
       .def_readonly("revision", &stores::RedisChunkStoreMetadata::revision,
                     "Monotonic mutation generation published to waiters.");
 
-  py::class_<stores::RedisChunkStore, ChunkStore,
-             std::shared_ptr<stores::RedisChunkStore>>(
+  py::classh<stores::RedisChunkStore, ChunkStore>(
       module, "RedisChunkStore",
       "A persistent, multi-process ChunkStore backed by Redis Streams.")
       .def(py::init([](std::string id, const py::object& client_value,
                        const py::object& options_value) {
              std::shared_ptr<redis::Client> client;
-             if (client_value.is_none())
+             if (client_value.is_none()) {
                client = ValueOrThrow(redis::DefaultClient());
-             else
+             } else {
                client = client_value.cast<std::shared_ptr<redis::Client>>();
+             }
              stores::RedisChunkStoreOptions options =
                  options_value.is_none()
                      ? ValueOrThrow(
@@ -591,10 +595,11 @@ Examples:
           [](std::string id, const py::object& client_value,
              const py::object& options_value) {
             std::shared_ptr<redis::Client> client;
-            if (client_value.is_none())
+            if (client_value.is_none()) {
               client = ValueOrThrow(redis::DefaultClient());
-            else
+            } else {
               client = client_value.cast<std::shared_ptr<redis::Client>>();
+            }
             stores::RedisChunkStoreOptions options =
                 options_value.is_none()
                     ? ValueOrThrow(
@@ -630,9 +635,8 @@ Examples:
           "A copy of the sharding-safe Redis key layout.");
 #endif
 
-  py::class_<stores::ChunkStoreReader,
-             std::shared_ptr<stores::ChunkStoreReader>>(
-      module, "ChunkStoreReader", py::dynamic_attr())
+  py::classh<stores::ChunkStoreReader>(module, "ChunkStoreReader",
+                                       py::dynamic_attr())
       .def(py::init([](std::shared_ptr<ChunkStore> store,
                        stores::ChunkStoreReaderOptions options) {
              return ValueOrThrow(
@@ -696,9 +700,8 @@ Examples:
                              "Number of prefetched fragments currently held in "
                              "the reader's buffer.");
 
-  py::class_<stores::ChunkStoreWriter,
-             std::shared_ptr<stores::ChunkStoreWriter>>(
-      module, "ChunkStoreWriter", py::dynamic_attr())
+  py::classh<stores::ChunkStoreWriter>(module, "ChunkStoreWriter",
+                                       py::dynamic_attr())
       .def(py::init([](std::shared_ptr<ChunkStore> store,
                        stores::ChunkStoreWriterOptions options) {
              return ValueOrThrow(
@@ -837,8 +840,9 @@ Examples:
           [](stores::ChunkStoreWriter& self,
              std::shared_ptr<net::WireStream> stream) {
             const absl::Status status = self.AttachStream(std::move(stream));
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Tee stored fragments to an additional wire stream. After the store "
           "accepts a batch, the writer calls send on attached streams; a "
@@ -852,8 +856,9 @@ Examples:
           [](stores::ChunkStoreWriter& self,
              const std::shared_ptr<net::WireStream>& stream) {
             const absl::Status status = self.DetachStream(stream);
-            if (!status.ok())
+            if (!status.ok()) {
               ThrowStatus(status);
+            }
           },
           "Stop mirroring fragments to a previously attached wire stream. "
           "Raises if the stream was not attached.",

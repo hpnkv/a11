@@ -19,6 +19,7 @@
 
 #include <absl/container/flat_hash_set.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
@@ -49,47 +50,49 @@ absl::Status ProtocolError(std::string_view message) {
 
 absl::Status ScriptFailure(std::string_view code, std::string_view message) {
   absl::StatusCode status_code = absl::StatusCode::kUnknown;
-  if (code == "CANCELLED")
+  if (code == "CANCELLED") {
     status_code = absl::StatusCode::kCancelled;
-  else if (code == "UNKNOWN")
+  } else if (code == "UNKNOWN") {
     status_code = absl::StatusCode::kUnknown;
-  else if (code == "INVALID_ARGUMENT")
+  } else if (code == "INVALID_ARGUMENT") {
     status_code = absl::StatusCode::kInvalidArgument;
-  else if (code == "DEADLINE_EXCEEDED")
+  } else if (code == "DEADLINE_EXCEEDED") {
     status_code = absl::StatusCode::kDeadlineExceeded;
-  else if (code == "NOT_FOUND")
+  } else if (code == "NOT_FOUND") {
     status_code = absl::StatusCode::kNotFound;
-  else if (code == "ALREADY_EXISTS")
+  } else if (code == "ALREADY_EXISTS") {
     status_code = absl::StatusCode::kAlreadyExists;
-  else if (code == "PERMISSION_DENIED")
+  } else if (code == "PERMISSION_DENIED") {
     status_code = absl::StatusCode::kPermissionDenied;
-  else if (code == "RESOURCE_EXHAUSTED")
+  } else if (code == "RESOURCE_EXHAUSTED") {
     status_code = absl::StatusCode::kResourceExhausted;
-  else if (code == "FAILED_PRECONDITION")
+  } else if (code == "FAILED_PRECONDITION") {
     status_code = absl::StatusCode::kFailedPrecondition;
-  else if (code == "ABORTED")
+  } else if (code == "ABORTED") {
     status_code = absl::StatusCode::kAborted;
-  else if (code == "OUT_OF_RANGE")
+  } else if (code == "OUT_OF_RANGE") {
     status_code = absl::StatusCode::kOutOfRange;
-  else if (code == "UNIMPLEMENTED")
+  } else if (code == "UNIMPLEMENTED") {
     status_code = absl::StatusCode::kUnimplemented;
-  else if (code == "INTERNAL")
+  } else if (code == "INTERNAL") {
     status_code = absl::StatusCode::kInternal;
-  else if (code == "UNAVAILABLE")
+  } else if (code == "UNAVAILABLE") {
     status_code = absl::StatusCode::kUnavailable;
-  else if (code == "DATA_LOSS")
+  } else if (code == "DATA_LOSS") {
     status_code = absl::StatusCode::kDataLoss;
-  else if (code == "UNAUTHENTICATED")
+  } else if (code == "UNAUTHENTICATED") {
     status_code = absl::StatusCode::kUnauthenticated;
-  else
+  } else {
     return ProtocolError(absl::StrCat("unknown script status code ", code));
+  }
   return absl::Status(status_code, std::string(message));
 }
 
 absl::StatusOr<std::string_view> StringAt(
     const std::vector<redis::Reply>& values, size_t index) {
-  if (index >= values.size())
+  if (index >= values.size()) {
     return ProtocolError("a required array element is missing");
+  }
   absl::StatusOr<std::string_view> value = values[index].AsStringView();
   if (!value.ok()) {
     return ProtocolError(
@@ -102,32 +105,31 @@ absl::StatusOr<const std::vector<redis::Reply>*> ResultElements(
     const redis::Reply& reply) {
   absl::StatusOr<const std::vector<redis::Reply>*> elements =
       reply.AsElements();
-  if (!elements.ok())
+  if (!elements.ok()) {
     return ProtocolError("top-level value is not an array");
-  if ((*elements)->empty())
+  }
+  if ((*elements)->empty()) {
     return ProtocolError("top-level array is empty");
-  absl::StatusOr<std::string_view> tag = StringAt(**elements, 0);
-  if (!tag.ok())
-    return tag.status();
-  if (*tag != "error")
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(**elements, 0));
+  if (tag != "error") {
     return *elements;
-  if ((*elements)->size() != 3)
+  }
+  if ((*elements)->size() != 3) {
     return ProtocolError("script error does not have three fields");
-  absl::StatusOr<std::string_view> code = StringAt(**elements, 1);
-  if (!code.ok())
-    return code.status();
-  absl::StatusOr<std::string_view> message = StringAt(**elements, 2);
-  if (!message.ok())
-    return message.status();
-  return ScriptFailure(*code, *message);
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view code, StringAt(**elements, 1));
+  ABSL_ASSIGN_OR_RETURN(std::string_view message, StringAt(**elements, 2));
+  return ScriptFailure(code, message);
 }
 
 template <typename T>
 absl::StatusOr<T> ParseUnsigned(std::string_view value,
                                 std::string_view field) {
   static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
-  if (value.empty())
+  if (value.empty()) {
     return ProtocolError(absl::StrCat(field, " is empty"));
+  }
   T parsed = 0;
   const char* first = value.data();
   const char* last = first + value.size();
@@ -140,19 +142,19 @@ absl::StatusOr<T> ParseUnsigned(std::string_view value,
 
 absl::StatusOr<std::optional<std::uint32_t>> ParseOptionalSequence(
     std::string_view value, std::string_view field) {
-  if (value.empty())
+  if (value.empty()) {
     return std::optional<std::uint32_t>{};
-  absl::StatusOr<std::uint32_t> parsed =
-      ParseUnsigned<std::uint32_t>(value, field);
-  if (!parsed.ok())
-    return parsed.status();
-  return std::optional<std::uint32_t>(*parsed);
+  }
+  ABSL_ASSIGN_OR_RETURN(std::uint32_t parsed,
+                        ParseUnsigned<std::uint32_t>(value, field));
+  return std::optional<std::uint32_t>(parsed);
 }
 
 absl::StatusOr<absl::Status> DecodeStoredStatus(std::string_view encoded) {
   absl::StatusOr<absl::Status> decoded = data::UnpackStatus(encoded);
-  if (decoded.ok())
+  if (decoded.ok()) {
     return absl::StatusOr<absl::Status>(std::in_place, std::move(*decoded));
+  }
   absl::StatusOr<absl::Status> result;
   result.AssignStatus(absl::DataLossError(
       absl::StrCat("RedisChunkStore contains an invalid terminal status: ",
@@ -163,68 +165,58 @@ absl::StatusOr<absl::Status> DecodeStoredStatus(std::string_view encoded) {
 absl::StatusOr<data::NodeFragment> DecodeItemFields(
     const std::vector<redis::Reply>& values, size_t offset,
     const std::string& node_id) {
-  if (offset > values.size() || values.size() - offset < 4)
+  if (offset > values.size() || values.size() - offset < 4) {
     return ProtocolError("chunk item is truncated");
-  absl::StatusOr<std::string_view> seq_text = StringAt(values, offset);
-  if (!seq_text.ok())
-    return seq_text.status();
-  absl::StatusOr<std::uint32_t> seq =
-      ParseUnsigned<std::uint32_t>(*seq_text, "chunk sequence");
-  if (!seq.ok())
-    return seq.status();
-  absl::StatusOr<std::string_view> storage = StringAt(values, offset + 1);
-  if (!storage.ok())
-    return storage.status();
-  absl::StatusOr<std::string_view> payload = StringAt(values, offset + 2);
-  if (!payload.ok())
-    return payload.status();
-  absl::StatusOr<std::string_view> final_text = StringAt(values, offset + 3);
-  if (!final_text.ok())
-    return final_text.status();
-  absl::StatusOr<std::optional<std::uint32_t>> final_seq =
-      ParseOptionalSequence(*final_text, "final sequence");
-  if (!final_seq.ok())
-    return final_seq.status();
-  if (final_seq->has_value() && *seq > **final_seq) {
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view seq_text, StringAt(values, offset));
+  ABSL_ASSIGN_OR_RETURN(std::uint32_t seq, ParseUnsigned<std::uint32_t>(
+                                               seq_text, "chunk sequence"));
+  ABSL_ASSIGN_OR_RETURN(std::string_view storage, StringAt(values, offset + 1));
+  ABSL_ASSIGN_OR_RETURN(std::string_view payload, StringAt(values, offset + 2));
+  ABSL_ASSIGN_OR_RETURN(std::string_view final_text,
+                        StringAt(values, offset + 3));
+  ABSL_ASSIGN_OR_RETURN(std::optional<std::uint32_t> final_seq,
+                        ParseOptionalSequence(final_text, "final sequence"));
+  if (final_seq.has_value() && seq > *final_seq) {
     return ProtocolError("a stored chunk exceeds the final sequence");
   }
 
-  if (*storage == "s3") {
+  if (storage == "s3") {
     return absl::UnimplementedError(absl::StrCat(
-        "S3-backed chunk access is not implemented (reference: ", *payload,
+        "S3-backed chunk access is not implemented (reference: ", payload,
         ")"));
   }
-  if (*storage != "inline" && *storage != "redis" && *storage != "tombstone") {
-    return ProtocolError(absl::StrCat("unknown chunk storage kind ", *storage));
+  if (storage != "inline" && storage != "redis" && storage != "tombstone") {
+    return ProtocolError(absl::StrCat("unknown chunk storage kind ", storage));
   }
 
-  absl::StatusOr<data::Chunk> chunk = data::Chunk::FromMsgpack(*payload);
+  absl::StatusOr<data::Chunk> chunk = data::Chunk::FromMsgpack(payload);
   if (!chunk.ok()) {
     return absl::DataLossError(
         absl::StrCat("RedisChunkStore contains an invalid encoded Chunk: ",
                      chunk.status().message()));
   }
-  if (*storage == "tombstone" &&
+  if (storage == "tombstone" &&
       (chunk->ref != kTombstoneReference || !chunk->data.empty())) {
     return ProtocolError("tombstone payload is not data-free");
   }
   return data::NodeFragment{
       .id = node_id,
       .data = std::move(*chunk),
-      .seq = *seq,
-      .continued = !final_seq->has_value() || *seq < **final_seq,
+      .seq = seq,
+      .continued = !final_seq.has_value() || seq < *final_seq,
   };
 }
 
 absl::StatusOr<data::NodeFragment> ParseItemReply(
     const std::vector<redis::Reply>& values, const std::string& node_id) {
-  if (values.size() != 5)
+  if (values.size() != 5) {
     return ProtocolError("item reply does not have five fields");
-  absl::StatusOr<std::string_view> tag = StringAt(values, 0);
-  if (!tag.ok())
-    return tag.status();
-  if (*tag != "item")
-    return ProtocolError(absl::StrCat("expected item reply, got ", *tag));
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(values, 0));
+  if (tag != "item") {
+    return ProtocolError(absl::StrCat("expected item reply, got ", tag));
+  }
   return DecodeItemFields(values, 1, node_id);
 }
 
@@ -238,64 +230,52 @@ struct NextPage {
 
 absl::StatusOr<NextPage> ParseNextReply(const std::vector<redis::Reply>& values,
                                         const std::string& node_id) {
-  if (values.size() < 4)
+  if (values.size() < 4) {
     return ProtocolError("next reply is truncated");
-  absl::StatusOr<std::string_view> tag = StringAt(values, 0);
-  if (!tag.ok())
-    return tag.status();
-  if (*tag != "next")
-    return ProtocolError(absl::StrCat("expected next reply, got ", *tag));
-  absl::StatusOr<std::string_view> disposition = StringAt(values, 1);
-  if (!disposition.ok())
-    return disposition.status();
-  absl::StatusOr<std::string_view> detail = StringAt(values, 2);
-  if (!detail.ok())
-    return detail.status();
-  absl::StatusOr<std::string_view> count_text = StringAt(values, 3);
-  if (!count_text.ok())
-    return count_text.status();
-  absl::StatusOr<size_t> count =
-      ParseUnsigned<size_t>(*count_text, "next item count");
-  if (!count.ok())
-    return count.status();
-  if (*count > (values.size() - 4) / 4 || values.size() != 4 + *count * 4) {
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(values, 0));
+  if (tag != "next") {
+    return ProtocolError(absl::StrCat("expected next reply, got ", tag));
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string_view disposition, StringAt(values, 1));
+  ABSL_ASSIGN_OR_RETURN(std::string_view detail, StringAt(values, 2));
+  ABSL_ASSIGN_OR_RETURN(std::string_view count_text, StringAt(values, 3));
+  ABSL_ASSIGN_OR_RETURN(size_t count,
+                        ParseUnsigned<size_t>(count_text, "next item count"));
+  if (count > (values.size() - 4) / 4 || values.size() != 4 + count * 4) {
     return ProtocolError("next item count does not match the reply size");
   }
 
   NextPage page;
-  page.fragments.reserve(*count);
-  for (size_t index = 0; index < *count; ++index) {
-    absl::StatusOr<data::NodeFragment> fragment =
-        DecodeItemFields(values, 4 + index * 4, node_id);
-    if (!fragment.ok())
-      return fragment.status();
-    page.fragments.emplace_back(std::move(*fragment));
+  page.fragments.reserve(count);
+  for (size_t index = 0; index < count; ++index) {
+    ABSL_ASSIGN_OR_RETURN(data::NodeFragment fragment,
+                          DecodeItemFields(values, 4 + index * 4, node_id));
+    page.fragments.emplace_back(std::move(fragment));
   }
 
-  if (*disposition == "ready") {
+  if (disposition == "ready") {
     page.disposition = NextDisposition::kReady;
-  } else if (*disposition == "wait") {
+  } else if (disposition == "wait") {
     page.disposition = NextDisposition::kWait;
-  } else if (*disposition == "end") {
+  } else if (disposition == "end") {
     page.disposition = NextDisposition::kEnd;
-  } else if (*disposition == "closed") {
+  } else if (disposition == "closed") {
     page.disposition = NextDisposition::kClosed;
-    absl::StatusOr<absl::Status> status = DecodeStoredStatus(*detail);
-    if (!status.ok())
-      return status.status();
-    page.terminal_status = std::move(*status);
-  } else if (*disposition == "data_loss") {
-    return absl::DataLossError(std::string(*detail));
-  } else if (*disposition == "s3") {
+    ABSL_ASSIGN_OR_RETURN(absl::Status status, DecodeStoredStatus(detail));
+    page.terminal_status = std::move(status);
+  } else if (disposition == "data_loss") {
+    return absl::DataLossError(std::string(detail));
+  } else if (disposition == "s3") {
     return absl::UnimplementedError(absl::StrCat(
-        "S3-backed chunk access is not implemented (reference: ", *detail,
-        ")"));
+        "S3-backed chunk access is not implemented (reference: ", detail, ")"));
   } else {
     return ProtocolError(
-        absl::StrCat("unknown next disposition ", *disposition));
+        absl::StrCat("unknown next disposition ", disposition));
   }
-  if (page.disposition != NextDisposition::kClosed && !detail->empty())
+  if (page.disposition != NextDisposition::kClosed && !detail.empty()) {
     return ProtocolError("non-terminal next reply has unexpected detail");
+  }
   return page;
 }
 
@@ -304,27 +284,27 @@ absl::Status ExpectTag(const std::vector<redis::Reply>& values,
   if (values.size() != expected_size) {
     return ProtocolError(absl::StrCat(expected, " reply has the wrong size"));
   }
-  absl::StatusOr<std::string_view> tag = StringAt(values, 0);
-  if (!tag.ok())
-    return tag.status();
-  if (*tag != expected) {
+  ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(values, 0));
+  if (tag != expected) {
     return ProtocolError(
-        absl::StrCat("expected ", expected, " reply, got ", *tag));
+        absl::StrCat("expected ", expected, " reply, got ", tag));
   }
   return absl::OkStatus();
 }
 
 std::optional<std::string> EnvironmentValue(const char* name) {
   const char* value = std::getenv(name);
-  if (value == nullptr)
+  if (value == nullptr) {
     return std::nullopt;
+  }
   return std::string(value);
 }
 
 absl::StatusOr<size_t> ParseEnvironmentSize(std::string_view value,
                                             std::string_view name) {
-  if (value.empty())
+  if (value.empty()) {
     return absl::InvalidArgumentError(absl::StrCat(name, " is empty"));
+  }
   size_t parsed = 0;
   const char* first = value.data();
   const char* last = first + value.size();
@@ -357,15 +337,13 @@ RedisChunkStoreOptions::FromEnvironment() {
   }
   if (std::optional<std::string> value = EnvironmentValue(
           "A11_REDIS_CHUNK_STORE_INLINE_DATA_THRESHOLD_BYTES")) {
-    absl::StatusOr<size_t> parsed = ParseEnvironmentSize(
-        *value, "A11_REDIS_CHUNK_STORE_INLINE_DATA_THRESHOLD_BYTES");
-    if (!parsed.ok())
-      return parsed.status();
-    options.inline_data_threshold = *parsed;
+    ABSL_ASSIGN_OR_RETURN(
+        size_t parsed,
+        ParseEnvironmentSize(
+            *value, "A11_REDIS_CHUNK_STORE_INLINE_DATA_THRESHOLD_BYTES"));
+    options.inline_data_threshold = parsed;
   }
-  absl::Status status = options.Validate();
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   return options;
 }
 
@@ -376,14 +354,11 @@ std::vector<std::string> RedisChunkStoreKeys::ScriptKeys() const {
 absl::StatusOr<std::shared_ptr<RedisChunkStore>> RedisChunkStore::Create(
     std::string node_id, std::shared_ptr<redis::Client> client,
     RedisChunkStoreOptions options) {
-  absl::Status node_status = data::ValidateName(node_id);
-  if (!node_status.ok())
-    return node_status;
-  if (client == nullptr)
+  ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
+  if (client == nullptr) {
     return absl::InvalidArgumentError("Redis client must not be null");
-  absl::Status options_status = options.Validate();
-  if (!options_status.ok())
-    return options_status;
+  }
+  ABSL_RETURN_IF_ERROR(options.Validate());
 
   const std::string base =
       absl::StrCat(options.key_prefix, "{chunk-store:", node_id, "}");
@@ -402,20 +377,16 @@ absl::StatusOr<std::shared_ptr<RedisChunkStore>> RedisChunkStore::Create(
 
 absl::StatusOr<std::shared_ptr<RedisChunkStore>> RedisChunkStore::Create(
     std::string node_id, std::shared_ptr<redis::Client> client) {
-  absl::StatusOr<RedisChunkStoreOptions> options =
-      RedisChunkStoreOptions::FromEnvironment();
-  if (!options.ok())
-    return options.status();
-  return Create(std::move(node_id), std::move(client), std::move(*options));
+  ABSL_ASSIGN_OR_RETURN(RedisChunkStoreOptions options,
+                        RedisChunkStoreOptions::FromEnvironment());
+  return Create(std::move(node_id), std::move(client), std::move(options));
 }
 
 absl::StatusOr<std::shared_ptr<RedisChunkStore>> RedisChunkStore::Create(
     std::string node_id) {
-  absl::StatusOr<std::shared_ptr<redis::Client>> client =
-      redis::DefaultClient();
-  if (!client.ok())
-    return client.status();
-  return Create(std::move(node_id), std::move(*client));
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<redis::Client> client,
+                        redis::DefaultClient());
+  return Create(std::move(node_id), std::move(client));
 }
 
 a11::Future<data::NodeFragment> RedisChunkStore::Read(ReadKind kind,
@@ -435,67 +406,56 @@ a11::Future<data::NodeFragment> RedisChunkStore::Read(ReadKind kind,
         while (true) {
           const std::uint64_t generation =
               subscription == nullptr ? 0 : subscription->generation();
-          absl::StatusOr<redis::Reply> reply =
+          ABSL_ASSIGN_OR_RETURN(
+              redis::Reply reply,
               client
                   ->Eval(ScriptText(), keys.ScriptKeys(),
                          {"lookup", node_id, kind_text, value_text}, deadline)
-                  .Await();
-          if (!reply.ok())
-            return reply.status();
-          absl::StatusOr<const std::vector<redis::Reply>*> elements =
-              ResultElements(*reply);
-          if (!elements.ok())
-            return elements.status();
-          absl::StatusOr<std::string_view> tag = StringAt(**elements, 0);
-          if (!tag.ok())
-            return tag.status();
-          if (*tag == "item")
-            return ParseItemReply(**elements, node_id);
-          if (*tag == "closed") {
-            absl::Status expected = ExpectTag(**elements, "closed", 2);
-            if (!expected.ok())
-              return expected;
-            absl::StatusOr<std::string_view> encoded = StringAt(**elements, 1);
-            if (!encoded.ok())
-              return encoded.status();
-            absl::StatusOr<absl::Status> terminal =
-                DecodeStoredStatus(*encoded);
-            if (!terminal.ok())
-              return terminal.status();
-            if (!terminal->ok())
-              return *terminal;
+                  .Await());
+          ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                                ResultElements(reply));
+          ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(*elements, 0));
+          if (tag == "item") {
+            return ParseItemReply(*elements, node_id);
+          }
+          if (tag == "closed") {
+            ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "closed", 2));
+            ABSL_ASSIGN_OR_RETURN(std::string_view encoded,
+                                  StringAt(*elements, 1));
+            ABSL_ASSIGN_OR_RETURN(absl::Status terminal,
+                                  DecodeStoredStatus(encoded));
+            if (!terminal.ok()) {
+              return terminal;
+            }
             return absl::NotFoundError(
                 kind == ReadKind::kSequence
                     ? absl::StrCat("Chunk store closed without seq ", value)
                     : absl::StrCat("Chunk store closed without arrival order ",
                                    value));
           }
-          if (*tag != "wait" || (*elements)->size() != 4)
+          if (tag != "wait" || elements->size() != 4) {
             return ProtocolError("lookup returned an unexpected disposition");
-          absl::StatusOr<std::string_view> revision = StringAt(**elements, 1);
-          if (!revision.ok())
-            return revision.status();
+          }
+          ABSL_ASSIGN_OR_RETURN(std::string_view revision,
+                                StringAt(*elements, 1));
           absl::StatusOr<std::uint64_t> parsed_revision =
-              ParseUnsigned<std::uint64_t>(*revision, "metadata revision");
-          if (!parsed_revision.ok())
+              ParseUnsigned<std::uint64_t>(revision, "metadata revision");
+          if (!parsed_revision.ok()) {
             return parsed_revision.status();
-          absl::StatusOr<std::string_view> echoed_kind =
-              StringAt(**elements, 2);
-          absl::StatusOr<std::string_view> echoed_value =
-              StringAt(**elements, 3);
-          if (!echoed_kind.ok())
-            return echoed_kind.status();
-          if (!echoed_value.ok())
-            return echoed_value.status();
-          if (*echoed_kind != kind_text || *echoed_value != value_text)
+          }
+          ABSL_ASSIGN_OR_RETURN(std::string_view echoed_kind,
+                                StringAt(*elements, 2));
+          ABSL_ASSIGN_OR_RETURN(std::string_view echoed_value,
+                                StringAt(*elements, 3));
+          if (echoed_kind != kind_text || echoed_value != value_text) {
             return ProtocolError(
                 "lookup wait reply does not match its request");
+          }
           if (subscription == nullptr) {
-            absl::StatusOr<std::shared_ptr<redis::Subscription>> subscribed =
-                client->Subscribe(keys.events, deadline).Await();
-            if (!subscribed.ok())
-              return subscribed.status();
-            subscription = std::move(*subscribed);
+            ABSL_ASSIGN_OR_RETURN(
+                std::shared_ptr<redis::Subscription> subscribed,
+                client->Subscribe(keys.events, deadline).Await());
+            subscription = std::move(subscribed);
             // Re-read after the subscription acknowledgement. A mutation that
             // happened before this listener existed is then visible without
             // depending on a notification it could not have observed.
@@ -503,8 +463,9 @@ a11::Future<data::NodeFragment> RedisChunkStore::Read(ReadKind kind,
           }
           absl::StatusOr<std::uint64_t> changed =
               subscription->Wait(generation, deadline).Await();
-          if (!changed.ok())
+          if (!changed.ok()) {
             return changed.status();
+          }
         }
       });
 }
@@ -547,44 +508,47 @@ RedisChunkStore::Next(absl::Time deadline, size_t limit) {
                          deadline)
                   .Await();
           if (!reply.ok()) {
-            if (!fragments.empty())
+            if (!fragments.empty()) {
               return fragments;
+            }
             return reply.status();
           }
-          absl::StatusOr<const std::vector<redis::Reply>*> elements =
-              ResultElements(*reply);
-          if (!elements.ok())
-            return elements.status();
-          absl::StatusOr<NextPage> page = ParseNextReply(**elements, node_id);
-          if (!page.ok())
-            return page.status();
-          for (std::optional<data::NodeFragment>& fragment : page->fragments)
+          ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                                ResultElements(*reply));
+          ABSL_ASSIGN_OR_RETURN(NextPage page,
+                                ParseNextReply(*elements, node_id));
+          for (std::optional<data::NodeFragment>& fragment : page.fragments) {
             fragments.push_back(std::move(fragment));
+          }
 
-          if (page->disposition == NextDisposition::kReady)
+          if (page.disposition == NextDisposition::kReady) {
             return fragments;
-          if (page->disposition == NextDisposition::kEnd) {
+          }
+          if (page.disposition == NextDisposition::kEnd) {
             fragments.emplace_back(std::nullopt);
             return fragments;
           }
-          if (page->disposition == NextDisposition::kClosed) {
-            if (!page->terminal_status.has_value())
+          if (page.disposition == NextDisposition::kClosed) {
+            if (!page.terminal_status.has_value()) {
               return ProtocolError("closed next reply has no status");
-            if (page->terminal_status->ok()) {
+            }
+            if (page.terminal_status->ok()) {
               fragments.emplace_back(std::nullopt);
               return fragments;
             }
-            if (!fragments.empty())
+            if (!fragments.empty()) {
               return fragments;
-            return *page->terminal_status;
+            }
+            return *page.terminal_status;
           }
 
           if (subscription == nullptr) {
             absl::StatusOr<std::shared_ptr<redis::Subscription>> subscribed =
                 client->Subscribe(keys.events, deadline).Await();
             if (!subscribed.ok()) {
-              if (!fragments.empty())
+              if (!fragments.empty()) {
                 return fragments;
+              }
               return subscribed.status();
             }
             subscription = std::move(*subscribed);
@@ -595,8 +559,9 @@ RedisChunkStore::Next(absl::Time deadline, size_t limit) {
           absl::StatusOr<std::uint64_t> changed =
               subscription->Wait(generation, deadline).Await();
           if (!changed.ok()) {
-            if (!fragments.empty())
+            if (!fragments.empty()) {
               return fragments;
+            }
             return changed.status();
           }
         }
@@ -656,9 +621,7 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
         arguments.push_back(std::to_string(fragments.size()));
 
         for (const data::NodeFragment& fragment : fragments) {
-          absl::Status validation = fragment.Validate();
-          if (!validation.ok())
-            return validation;
+          ABSL_RETURN_IF_ERROR(fragment.Validate());
           any_explicit = any_explicit || fragment.seq.has_value();
           all_explicit = all_explicit && fragment.seq.has_value();
           if (fragment.seq.has_value() &&
@@ -678,17 +641,14 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
 
         for (const data::NodeFragment& fragment : fragments) {
           const data::Chunk& chunk = std::get<data::Chunk>(fragment.data);
-          absl::StatusOr<data::Bytes> encoded = chunk.ToMsgpack();
-          if (!encoded.ok())
-            return encoded.status();
+          ABSL_ASSIGN_OR_RETURN(data::Bytes encoded, chunk.ToMsgpack());
           data::Chunk tombstone{
               .metadata = chunk.metadata,
               .ref = std::string(kTombstoneReference),
               .data = {},
           };
-          absl::StatusOr<data::Bytes> encoded_tombstone = tombstone.ToMsgpack();
-          if (!encoded_tombstone.ok())
-            return encoded_tombstone.status();
+          ABSL_ASSIGN_OR_RETURN(data::Bytes encoded_tombstone,
+                                tombstone.ToMsgpack());
 
           arguments.push_back(fragment.seq.has_value()
                                   ? std::to_string(*fragment.seq)
@@ -697,37 +657,32 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
           arguments.push_back(chunk.data.size() > options.inline_data_threshold
                                   ? "redis"
                                   : "inline");
-          arguments.push_back(std::move(*encoded));
-          arguments.push_back(std::move(*encoded_tombstone));
+          arguments.push_back(std::move(encoded));
+          arguments.push_back(std::move(encoded_tombstone));
         }
 
-        absl::StatusOr<redis::Reply> reply =
+        ABSL_ASSIGN_OR_RETURN(
+            redis::Reply reply,
             client->Eval(ScriptText(), keys.ScriptKeys(), std::move(arguments))
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        if ((*elements)->size() != fragments.size() + 1)
+                .Await());
+        ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                              ResultElements(reply));
+        if (elements->size() != fragments.size() + 1) {
           return ProtocolError("put reply has the wrong sequence count");
-        absl::StatusOr<std::string_view> tag = StringAt(**elements, 0);
-        if (!tag.ok())
-          return tag.status();
-        if (*tag != "ok")
-          return ProtocolError(absl::StrCat("expected put reply, got ", *tag));
+        }
+        ABSL_ASSIGN_OR_RETURN(std::string_view tag, StringAt(*elements, 0));
+        if (tag != "ok") {
+          return ProtocolError(absl::StrCat("expected put reply, got ", tag));
+        }
         std::vector<std::uint32_t> assigned;
         assigned.reserve(fragments.size());
-        for (size_t index = 1; index < (*elements)->size(); ++index) {
-          absl::StatusOr<std::string_view> value = StringAt(**elements, index);
-          if (!value.ok())
-            return value.status();
-          absl::StatusOr<std::uint32_t> seq =
-              ParseUnsigned<std::uint32_t>(*value, "assigned sequence");
-          if (!seq.ok())
-            return seq.status();
-          assigned.push_back(*seq);
+        for (size_t index = 1; index < elements->size(); ++index) {
+          ABSL_ASSIGN_OR_RETURN(std::string_view value,
+                                StringAt(*elements, index));
+          ABSL_ASSIGN_OR_RETURN(
+              std::uint32_t seq,
+              ParseUnsigned<std::uint32_t>(value, "assigned sequence"));
+          assigned.push_back(seq);
         }
         return assigned;
       });
@@ -739,18 +694,15 @@ a11::Future<data::NodeFragment> RedisChunkStore::ClearData(std::uint32_t seq) {
   const std::string node_id = node_id_;
   return a11::Submit<data::NodeFragment>(
       [client, keys, node_id, seq]() -> absl::StatusOr<data::NodeFragment> {
-        absl::StatusOr<redis::Reply> reply =
+        ABSL_ASSIGN_OR_RETURN(
+            redis::Reply reply,
             client
                 ->Eval(ScriptText(), keys.ScriptKeys(),
                        {"clear", node_id, std::to_string(seq)})
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        return ParseItemReply(**elements, node_id);
+                .Await());
+        ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                              ResultElements(reply));
+        return ParseItemReply(*elements, node_id);
       });
 }
 
@@ -762,24 +714,17 @@ a11::Future<std::uint32_t> RedisChunkStore::GetSeqForArrivalOrder(
   return a11::Submit<std::uint32_t>(
       [client, keys, node_id,
        arrival_order]() -> absl::StatusOr<std::uint32_t> {
-        absl::StatusOr<redis::Reply> reply =
+        ABSL_ASSIGN_OR_RETURN(
+            redis::Reply reply,
             client
                 ->Eval(ScriptText(), keys.ScriptKeys(),
                        {"arrival_seq", node_id, std::to_string(arrival_order)})
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        absl::Status expected = ExpectTag(**elements, "value", 2);
-        if (!expected.ok())
-          return expected;
-        absl::StatusOr<std::string_view> value = StringAt(**elements, 1);
-        if (!value.ok())
-          return value.status();
-        return ParseUnsigned<std::uint32_t>(*value, "arrival sequence");
+                .Await());
+        ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                              ResultElements(reply));
+        ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "value", 2));
+        ABSL_ASSIGN_OR_RETURN(std::string_view value, StringAt(*elements, 1));
+        return ParseUnsigned<std::uint32_t>(value, "arrival sequence");
       });
 }
 
@@ -790,22 +735,15 @@ a11::Future<std::optional<std::uint32_t>> RedisChunkStore::GetFinalSeq() {
   return a11::Submit<std::optional<std::uint32_t>>(
       [client, keys,
        node_id]() -> absl::StatusOr<std::optional<std::uint32_t>> {
-        absl::StatusOr<redis::Reply> reply =
+        ABSL_ASSIGN_OR_RETURN(
+            redis::Reply reply,
             client->Eval(ScriptText(), keys.ScriptKeys(), {"final", node_id})
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        absl::Status expected = ExpectTag(**elements, "optional", 2);
-        if (!expected.ok())
-          return expected;
-        absl::StatusOr<std::string_view> value = StringAt(**elements, 1);
-        if (!value.ok())
-          return value.status();
-        return ParseOptionalSequence(*value, "final sequence");
+                .Await());
+        ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                              ResultElements(reply));
+        ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "optional", 2));
+        ABSL_ASSIGN_OR_RETURN(std::string_view value, StringAt(*elements, 1));
+        return ParseOptionalSequence(value, "final sequence");
       });
 }
 
@@ -864,22 +802,15 @@ a11::Future<size_t> RedisChunkStore::Size() {
   const std::string node_id = node_id_;
   return a11::Submit<size_t>(
       [client, keys, node_id]() -> absl::StatusOr<size_t> {
-        absl::StatusOr<redis::Reply> reply =
+        ABSL_ASSIGN_OR_RETURN(
+            redis::Reply reply,
             client->Eval(ScriptText(), keys.ScriptKeys(), {"size", node_id})
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        absl::Status expected = ExpectTag(**elements, "value", 2);
-        if (!expected.ok())
-          return expected;
-        absl::StatusOr<std::string_view> value = StringAt(**elements, 1);
-        if (!value.ok())
-          return value.status();
-        return ParseUnsigned<size_t>(*value, "chunk store size");
+                .Await());
+        ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                              ResultElements(reply));
+        ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "value", 2));
+        ABSL_ASSIGN_OR_RETURN(std::string_view value, StringAt(*elements, 1));
+        return ParseUnsigned<size_t>(value, "chunk store size");
       });
 }
 
@@ -893,18 +824,13 @@ a11::Task RedisChunkStore::Initialize() {
   const std::string node_id = node_id_;
   return a11::Submit<a11::Unit>([client, keys,
                                  node_id]() -> absl::StatusOr<a11::Unit> {
-    absl::StatusOr<redis::Reply> reply =
+    ABSL_ASSIGN_OR_RETURN(
+        redis::Reply reply,
         client->Eval(ScriptText(), keys.ScriptKeys(), {"initialize", node_id})
-            .Await();
-    if (!reply.ok())
-      return reply.status();
-    absl::StatusOr<const std::vector<redis::Reply>*> elements =
-        ResultElements(*reply);
-    if (!elements.ok())
-      return elements.status();
-    absl::Status expected = ExpectTag(**elements, "ok", 1);
-    if (!expected.ok())
-      return expected;
+            .Await());
+    ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                          ResultElements(reply));
+    ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "ok", 1));
     return a11::Unit{};
   });
 }
@@ -913,103 +839,71 @@ a11::Future<RedisChunkStoreMetadata> RedisChunkStore::GetMetadata() {
   const std::shared_ptr<redis::Client> client = client_;
   const RedisChunkStoreKeys keys = keys_;
   const std::string node_id = node_id_;
-  return a11::Submit<RedisChunkStoreMetadata>(
-      [client, keys, node_id]() -> absl::StatusOr<RedisChunkStoreMetadata> {
-        absl::StatusOr<redis::Reply> reply =
-            client->Eval(ScriptText(), keys.ScriptKeys(), {"metadata", node_id})
-                .Await();
-        if (!reply.ok())
-          return reply.status();
-        absl::StatusOr<const std::vector<redis::Reply>*> elements =
-            ResultElements(*reply);
-        if (!elements.ok())
-          return elements.status();
-        absl::Status expected = ExpectTag(**elements, "metadata", 10);
-        if (!expected.ok())
-          return expected;
+  return a11::Submit<
+      RedisChunkStoreMetadata>([client, keys, node_id]()
+                                   -> absl::StatusOr<RedisChunkStoreMetadata> {
+    ABSL_ASSIGN_OR_RETURN(
+        redis::Reply reply,
+        client->Eval(ScriptText(), keys.ScriptKeys(), {"metadata", node_id})
+            .Await());
+    ABSL_ASSIGN_OR_RETURN(const std::vector<redis::Reply>* elements,
+                          ResultElements(reply));
+    ABSL_RETURN_IF_ERROR(ExpectTag(*elements, "metadata", 10));
 
-        absl::StatusOr<std::string_view> id = StringAt(**elements, 1);
-        absl::StatusOr<std::string_view> closed_text = StringAt(**elements, 2);
-        absl::StatusOr<std::string_view> status_text = StringAt(**elements, 3);
-        absl::StatusOr<std::string_view> final_text = StringAt(**elements, 4);
-        absl::StatusOr<std::string_view> size_text = StringAt(**elements, 5);
-        absl::StatusOr<std::string_view> put_text = StringAt(**elements, 6);
-        absl::StatusOr<std::string_view> cursor_text = StringAt(**elements, 7);
-        absl::StatusOr<std::string_view> max_text = StringAt(**elements, 8);
-        absl::StatusOr<std::string_view> revision_text =
-            StringAt(**elements, 9);
-        if (!id.ok())
-          return id.status();
-        if (!closed_text.ok())
-          return closed_text.status();
-        if (!status_text.ok())
-          return status_text.status();
-        if (!final_text.ok())
-          return final_text.status();
-        if (!size_text.ok())
-          return size_text.status();
-        if (!put_text.ok())
-          return put_text.status();
-        if (!cursor_text.ok())
-          return cursor_text.status();
-        if (!max_text.ok())
-          return max_text.status();
-        if (!revision_text.ok())
-          return revision_text.status();
-        if (*id != node_id)
-          return ProtocolError("metadata belongs to a different node");
-        if (*closed_text != "0" && *closed_text != "1")
-          return ProtocolError("metadata closed flag is not boolean");
+    ABSL_ASSIGN_OR_RETURN(std::string_view id, StringAt(*elements, 1));
+    ABSL_ASSIGN_OR_RETURN(std::string_view closed_text, StringAt(*elements, 2));
+    ABSL_ASSIGN_OR_RETURN(std::string_view status_text, StringAt(*elements, 3));
+    ABSL_ASSIGN_OR_RETURN(std::string_view final_text, StringAt(*elements, 4));
+    ABSL_ASSIGN_OR_RETURN(std::string_view size_text, StringAt(*elements, 5));
+    ABSL_ASSIGN_OR_RETURN(std::string_view put_text, StringAt(*elements, 6));
+    ABSL_ASSIGN_OR_RETURN(std::string_view cursor_text, StringAt(*elements, 7));
+    ABSL_ASSIGN_OR_RETURN(std::string_view max_text, StringAt(*elements, 8));
+    ABSL_ASSIGN_OR_RETURN(std::string_view revision_text,
+                          StringAt(*elements, 9));
+    if (id != node_id) {
+      return ProtocolError("metadata belongs to a different node");
+    }
+    if (closed_text != "0" && closed_text != "1") {
+      return ProtocolError("metadata closed flag is not boolean");
+    }
 
-        absl::StatusOr<std::optional<std::uint32_t>> final_seq =
-            ParseOptionalSequence(*final_text, "final sequence");
-        if (!final_seq.ok())
-          return final_seq.status();
-        absl::StatusOr<size_t> size =
-            ParseUnsigned<size_t>(*size_text, "chunk store size");
-        if (!size.ok())
-          return size.status();
-        absl::StatusOr<std::uint64_t> put_count =
-            ParseUnsigned<std::uint64_t>(*put_text, "put count");
-        if (!put_count.ok())
-          return put_count.status();
-        absl::StatusOr<std::uint64_t> next_cursor =
-            ParseUnsigned<std::uint64_t>(*cursor_text, "next cursor");
-        if (!next_cursor.ok())
-          return next_cursor.status();
-        absl::StatusOr<std::optional<std::uint32_t>> max_seq =
-            ParseOptionalSequence(*max_text, "maximum sequence");
-        if (!max_seq.ok())
-          return max_seq.status();
-        absl::StatusOr<std::uint64_t> revision =
-            ParseUnsigned<std::uint64_t>(*revision_text, "metadata revision");
-        if (!revision.ok())
-          return revision.status();
+    ABSL_ASSIGN_OR_RETURN(std::optional<std::uint32_t> final_seq,
+                          ParseOptionalSequence(final_text, "final sequence"));
+    ABSL_ASSIGN_OR_RETURN(size_t size,
+                          ParseUnsigned<size_t>(size_text, "chunk store size"));
+    ABSL_ASSIGN_OR_RETURN(std::uint64_t put_count,
+                          ParseUnsigned<std::uint64_t>(put_text, "put count"));
+    ABSL_ASSIGN_OR_RETURN(
+        std::uint64_t next_cursor,
+        ParseUnsigned<std::uint64_t>(cursor_text, "next cursor"));
+    ABSL_ASSIGN_OR_RETURN(std::optional<std::uint32_t> max_seq,
+                          ParseOptionalSequence(max_text, "maximum sequence"));
+    ABSL_ASSIGN_OR_RETURN(
+        std::uint64_t revision,
+        ParseUnsigned<std::uint64_t>(revision_text, "metadata revision"));
 
-        std::optional<absl::Status> terminal;
-        const bool closed = *closed_text == "1";
-        if (closed) {
-          absl::StatusOr<absl::Status> decoded =
-              DecodeStoredStatus(*status_text);
-          if (!decoded.ok())
-            return decoded.status();
-          terminal = std::move(*decoded);
-        } else if (!status_text->empty()) {
-          return ProtocolError("open metadata unexpectedly contains a status");
-        }
+    std::optional<absl::Status> terminal;
+    const bool closed = closed_text == "1";
+    if (closed) {
+      ABSL_ASSIGN_OR_RETURN(absl::Status decoded,
+                            DecodeStoredStatus(status_text));
+      terminal = std::move(decoded);
+    } else if (!status_text.empty()) {
+      return ProtocolError("open metadata unexpectedly contains a status");
+    }
 
-        return RedisChunkStoreMetadata{
-            .id = std::string(*id),
-            .closed = closed,
-            .status = std::move(terminal),
-            .final_seq = *final_seq,
-            .size = *size,
-            .total_chunks_put = *put_count,
-            .next_cursor = *next_cursor,
-            .max_seq = *max_seq,
-            .revision = *revision,
-        };
-      });
+    return RedisChunkStoreMetadata{
+        .id = std::string(id),
+        .closed = closed,
+        .status = std::move(terminal),
+        .final_seq = final_seq,
+        .size = size,
+        .total_chunks_put = put_count,
+        .next_cursor = next_cursor,
+        .max_seq = max_seq,
+        .revision = revision,
+    };
+  });
 }
 
 }  // namespace a11::stores

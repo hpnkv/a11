@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
@@ -288,8 +289,9 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
                   state->total_chunks_read > *state->final_seq;
               if (final_was_read) {
                 if (state->status.has_value() && !state->status->ok()) {
-                  if (!fragments.empty())
+                  if (!fragments.empty()) {
                     return fragments;
+                  }
                   return *state->status;
                 }
                 fragments.emplace_back(std::nullopt);
@@ -302,12 +304,14 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
                   fragments.emplace_back(std::nullopt);
                   return fragments;
                 }
-                if (!fragments.empty())
+                if (!fragments.empty()) {
                   return fragments;
+                }
                 return *state->status;
               }
-              if (fragments.size() == limit)
+              if (fragments.size() == limit) {
                 return fragments;
+              }
               if (found == state->chunks.end()) {
                 changed = state->changed;
                 break;
@@ -371,9 +375,7 @@ a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(
         bool all_explicit = true;
         absl::flat_hash_set<std::uint32_t> explicit_sequences;
         for (const data::NodeFragment& fragment : fragments) {
-          absl::Status status = fragment.Validate();
-          if (!status.ok())
-            return status;
+          ABSL_RETURN_IF_ERROR(fragment.Validate());
           any_explicit = any_explicit || fragment.seq.has_value();
           all_explicit = all_explicit && fragment.seq.has_value();
           if (fragment.seq.has_value() &&
@@ -400,8 +402,9 @@ a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(
             return absl::FailedPreconditionError(absl::StrCat(
                 "Chunk store ", state->node_id, " is closed for writes"));
           }
-          if (fragments.empty())
+          if (fragments.empty()) {
             return std::vector<std::uint32_t>{};
+          }
 
           assigned.reserve(fragments.size());
           if (all_explicit) {

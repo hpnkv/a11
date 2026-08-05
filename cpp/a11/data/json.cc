@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
@@ -58,8 +59,9 @@ absl::StatusOr<const Json*> GetRequired(const Json& object,
 }
 
 const Json* GetOptional(const Json& object, std::string_view key) {
-  if (!object.is_object())
+  if (!object.is_object()) {
     return nullptr;
+  }
   const auto iterator = object.find(key);
   return iterator == object.end() ? nullptr : &*iterator;
 }
@@ -68,8 +70,9 @@ absl::StatusOr<std::string> GetString(const Json& object, std::string_view key,
                                       std::string_view default_value,
                                       std::string_view context) {
   const Json* value = GetOptional(object, key);
-  if (value == nullptr)
+  if (value == nullptr) {
     return std::string(default_value);
+  }
   if (!value->is_string()) {
     return absl::InvalidArgumentError(
         absl::StrCat(context, ".", key, " must be a string"));
@@ -83,8 +86,9 @@ absl::StatusOr<std::uint64_t> GetUnsigned(const Json& object,
                                           std::uint64_t maximum,
                                           std::string_view context) {
   const Json* value = GetOptional(object, key);
-  if (value == nullptr)
+  if (value == nullptr) {
     return default_value;
+  }
   if (!value->is_number_unsigned() && !value->is_number_integer()) {
     return absl::InvalidArgumentError(
         absl::StrCat(context, ".", key, " must be an unsigned integer"));
@@ -112,21 +116,20 @@ Json EncodeByteMap(const ByteMap& values) {
 absl::StatusOr<ByteMap> DecodeByteMap(const Json* value,
                                       std::string_view context) {
   ByteMap result;
-  if (value == nullptr)
+  if (value == nullptr) {
     return result;
+  }
   if (!value->is_object()) {
     return absl::InvalidArgumentError(
         absl::StrCat(context, " must be an object"));
   }
   for (auto iterator = value->begin(); iterator != value->end(); ++iterator) {
-    absl::Status validation = ValidateName(iterator.key());
-    if (!validation.ok())
-      return validation;
-    absl::StatusOr<std::string> decoded = DecodeBytes(
-        iterator.value(), absl::StrCat(context, ".", iterator.key()));
-    if (!decoded.ok())
-      return decoded.status();
-    result.emplace(iterator.key(), std::move(*decoded));
+    ABSL_RETURN_IF_ERROR(ValidateName(iterator.key()));
+    ABSL_ASSIGN_OR_RETURN(
+        std::string decoded,
+        DecodeBytes(iterator.value(),
+                    absl::StrCat(context, ".", iterator.key())));
+    result.emplace(iterator.key(), std::move(decoded));
   }
   return result;
 }
@@ -145,10 +148,8 @@ Json EncodeMetadata(const ChunkMetadata& metadata) {
 }
 
 absl::StatusOr<ChunkMetadata> DecodeMetadata(const Json& value) {
-  absl::StatusOr<std::string> mimetype =
-      GetString(value, "mimetype", "", "ChunkMetadata");
-  if (!mimetype.ok())
-    return mimetype.status();
+  ABSL_ASSIGN_OR_RETURN(std::string mimetype,
+                        GetString(value, "mimetype", "", "ChunkMetadata"));
   std::optional<absl::Time> timestamp;
   if (const Json* timestamp_value = GetOptional(value, "timestamp");
       timestamp_value != nullptr && !timestamp_value->is_null()) {
@@ -166,16 +167,13 @@ absl::StatusOr<ChunkMetadata> DecodeMetadata(const Json& value) {
     }
     timestamp = parsed;
   }
-  absl::StatusOr<ByteMap> attributes = DecodeByteMap(
-      GetOptional(value, "attributes"), "ChunkMetadata.attributes");
-  if (!attributes.ok())
-    return attributes.status();
-  ChunkMetadata result{.mimetype = std::move(*mimetype),
+  ABSL_ASSIGN_OR_RETURN(ByteMap attributes,
+                        DecodeByteMap(GetOptional(value, "attributes"),
+                                      "ChunkMetadata.attributes"));
+  ChunkMetadata result{.mimetype = std::move(mimetype),
                        .timestamp = timestamp,
-                       .attributes = std::move(*attributes)};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+                       .attributes = std::move(attributes)};
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
@@ -184,8 +182,9 @@ Json EncodeChunk(const Chunk& chunk) {
   if (chunk.metadata.has_value()) {
     value["metadata"] = EncodeMetadata(*chunk.metadata);
   }
-  if (!chunk.ref.empty())
+  if (!chunk.ref.empty()) {
     value["ref"] = chunk.ref;
+  }
   // Emitting data even when empty makes the Chunk/NodeRef union unambiguous.
   value["data"] = EncodeBytes(chunk.data);
   return value;
@@ -198,122 +197,108 @@ absl::StatusOr<Chunk> DecodeChunk(const Json& value) {
   std::optional<ChunkMetadata> metadata;
   if (const Json* metadata_value = GetOptional(value, "metadata");
       metadata_value != nullptr && !metadata_value->is_null()) {
-    absl::StatusOr<ChunkMetadata> decoded = DecodeMetadata(*metadata_value);
-    if (!decoded.ok())
-      return decoded.status();
-    metadata = std::move(*decoded);
+    ABSL_ASSIGN_OR_RETURN(ChunkMetadata decoded,
+                          DecodeMetadata(*metadata_value));
+    metadata = std::move(decoded);
   }
-  absl::StatusOr<std::string> ref = GetString(value, "ref", "", "Chunk");
-  if (!ref.ok())
-    return ref.status();
+  ABSL_ASSIGN_OR_RETURN(std::string ref, GetString(value, "ref", "", "Chunk"));
   std::string data;
   if (const Json* data_value = GetOptional(value, "data");
       data_value != nullptr) {
-    absl::StatusOr<std::string> decoded =
-        DecodeBytes(*data_value, "Chunk.data");
-    if (!decoded.ok())
-      return decoded.status();
-    data = std::move(*decoded);
+    ABSL_ASSIGN_OR_RETURN(std::string decoded,
+                          DecodeBytes(*data_value, "Chunk.data"));
+    data = std::move(decoded);
   }
   Chunk result{.metadata = std::move(metadata),
-               .ref = std::move(*ref),
+               .ref = std::move(ref),
                .data = std::move(data)};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
 Json EncodeNodeRef(const NodeRef& node_ref) {
   Json value = Json::object({{"id", node_ref.id}});
-  if (node_ref.offset != 0)
+  if (node_ref.offset != 0) {
     value["offset"] = node_ref.offset;
-  if (node_ref.length.has_value())
+  }
+  if (node_ref.length.has_value()) {
     value["length"] = *node_ref.length;
+  }
   return value;
 }
 
 absl::StatusOr<NodeRef> DecodeNodeRef(const Json& value) {
-  absl::StatusOr<std::string> id = GetString(value, "id", "", "NodeRef");
-  if (!id.ok())
-    return id.status();
-  absl::StatusOr<std::uint64_t> offset = GetUnsigned(
-      value, "offset", 0, std::numeric_limits<std::uint32_t>::max(), "NodeRef");
-  if (!offset.ok())
-    return offset.status();
+  ABSL_ASSIGN_OR_RETURN(std::string id, GetString(value, "id", "", "NodeRef"));
+  ABSL_ASSIGN_OR_RETURN(
+      std::uint64_t offset,
+      GetUnsigned(value, "offset", 0, std::numeric_limits<std::uint32_t>::max(),
+                  "NodeRef"));
   std::optional<std::uint64_t> length;
   if (const Json* length_value = GetOptional(value, "length");
       length_value != nullptr && !length_value->is_null()) {
-    absl::StatusOr<std::uint64_t> decoded = GetUnsigned(
-        value, "length", 0,
-        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) +
-            1,
-        "NodeRef");
-    if (!decoded.ok())
-      return decoded.status();
-    length = *decoded;
+    ABSL_ASSIGN_OR_RETURN(
+        std::uint64_t decoded,
+        GetUnsigned(value, "length", 0,
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::uint32_t>::max()) +
+                        1,
+                    "NodeRef"));
+    length = decoded;
   }
-  NodeRef result{.id = std::move(*id),
-                 .offset = static_cast<std::uint32_t>(*offset),
+  NodeRef result{.id = std::move(id),
+                 .offset = static_cast<std::uint32_t>(offset),
                  .length = length};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
 Json EncodeFragment(const NodeFragment& fragment) {
   Json value = Json::object();
-  if (!fragment.id.empty())
+  if (!fragment.id.empty()) {
     value["id"] = fragment.id;
+  }
   if (const Chunk* chunk = std::get_if<Chunk>(&fragment.data)) {
     value["data"] = EncodeChunk(*chunk);
   } else {
     value["data"] = EncodeNodeRef(std::get<NodeRef>(fragment.data));
   }
-  if (fragment.seq.has_value())
+  if (fragment.seq.has_value()) {
     value["seq"] = *fragment.seq;
-  if (fragment.continued)
+  }
+  if (fragment.continued) {
     value["continued"] = true;
+  }
   return value;
 }
 
 absl::StatusOr<NodeFragment> DecodeFragment(const Json& value) {
-  absl::StatusOr<std::string> id = GetString(value, "id", "", "NodeFragment");
-  if (!id.ok())
-    return id.status();
-  absl::StatusOr<const Json*> data_value =
-      GetRequired(value, "data", "NodeFragment");
-  if (!data_value.ok())
-    return data_value.status();
-  if (!(*data_value)->is_object()) {
+  ABSL_ASSIGN_OR_RETURN(std::string id,
+                        GetString(value, "id", "", "NodeFragment"));
+  ABSL_ASSIGN_OR_RETURN(const Json* data_value,
+                        GetRequired(value, "data", "NodeFragment"));
+  if (!data_value->is_object()) {
     return absl::InvalidArgumentError(
         "NodeFragment.data must be a JSON object");
   }
   std::variant<Chunk, NodeRef> data;
-  if (GetOptional(**data_value, "id") != nullptr &&
-      GetOptional(**data_value, "data") == nullptr &&
-      GetOptional(**data_value, "ref") == nullptr &&
-      GetOptional(**data_value, "metadata") == nullptr) {
-    absl::StatusOr<NodeRef> decoded = DecodeNodeRef(**data_value);
-    if (!decoded.ok())
-      return decoded.status();
-    data = std::move(*decoded);
+  if (GetOptional(*data_value, "id") != nullptr &&
+      GetOptional(*data_value, "data") == nullptr &&
+      GetOptional(*data_value, "ref") == nullptr &&
+      GetOptional(*data_value, "metadata") == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(NodeRef decoded, DecodeNodeRef(*data_value));
+    data = std::move(decoded);
   } else {
-    absl::StatusOr<Chunk> decoded = DecodeChunk(**data_value);
-    if (!decoded.ok())
-      return decoded.status();
-    data = std::move(*decoded);
+    ABSL_ASSIGN_OR_RETURN(Chunk decoded, DecodeChunk(*data_value));
+    data = std::move(decoded);
   }
   std::optional<std::uint32_t> seq;
   if (const Json* seq_value = GetOptional(value, "seq");
       seq_value != nullptr && !seq_value->is_null()) {
-    absl::StatusOr<std::uint64_t> decoded =
+    ABSL_ASSIGN_OR_RETURN(
+        std::uint64_t decoded,
         GetUnsigned(value, "seq", 0, std::numeric_limits<std::uint32_t>::max(),
-                    "NodeFragment");
-    if (!decoded.ok())
-      return decoded.status();
-    seq = static_cast<std::uint32_t>(*decoded);
+                    "NodeFragment"));
+    seq = static_cast<std::uint32_t>(decoded);
   }
   bool continued = false;
   if (const Json* continued_value = GetOptional(value, "continued");
@@ -324,36 +309,30 @@ absl::StatusOr<NodeFragment> DecodeFragment(const Json& value) {
     }
     continued = continued_value->get<bool>();
   }
-  NodeFragment result{.id = std::move(*id),
+  NodeFragment result{.id = std::move(id),
                       .data = std::move(data),
                       .seq = seq,
                       .continued = continued};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
 Json EncodePort(const Port& port) {
   Json value = Json::object();
-  if (!port.name.empty())
+  if (!port.name.empty()) {
     value["name"] = port.name;
-  if (!port.id.empty())
+  }
+  if (!port.id.empty()) {
     value["id"] = port.id;
+  }
   return value;
 }
 
 absl::StatusOr<Port> DecodePort(const Json& value) {
-  absl::StatusOr<std::string> name = GetString(value, "name", "", "Port");
-  if (!name.ok())
-    return name.status();
-  absl::StatusOr<std::string> id = GetString(value, "id", "", "Port");
-  if (!id.ok())
-    return id.status();
-  Port result{.name = std::move(*name), .id = std::move(*id)};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_ASSIGN_OR_RETURN(std::string name, GetString(value, "name", "", "Port"));
+  ABSL_ASSIGN_OR_RETURN(std::string id, GetString(value, "id", "", "Port"));
+  Port result{.name = std::move(name), .id = std::move(id)};
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
@@ -371,67 +350,57 @@ Json EncodeAction(const ActionMessage& action) {
       value["outputs"].push_back(EncodePort(port));
     }
   }
-  if (!action.headers.empty())
+  if (!action.headers.empty()) {
     value["headers"] = EncodeByteMap(action.headers);
+  }
   return value;
 }
 
 absl::StatusOr<std::vector<Port>> DecodePorts(const Json* value,
                                               std::string_view context) {
   std::vector<Port> result;
-  if (value == nullptr)
+  if (value == nullptr) {
     return result;
+  }
   if (!value->is_array()) {
     return absl::InvalidArgumentError(
         absl::StrCat(context, " must be an array"));
   }
   result.reserve(value->size());
   for (const Json& item : *value) {
-    absl::StatusOr<Port> port = DecodePort(item);
-    if (!port.ok())
-      return port.status();
-    result.push_back(std::move(*port));
+    ABSL_ASSIGN_OR_RETURN(Port port, DecodePort(item));
+    result.push_back(std::move(port));
   }
   return result;
 }
 
 absl::StatusOr<ActionMessage> DecodeAction(const Json& value) {
-  absl::StatusOr<std::string> id = GetString(value, "id", "", "ActionMessage");
-  if (!id.ok())
-    return id.status();
-  absl::StatusOr<std::string> name =
-      GetString(value, "name", "", "ActionMessage");
-  if (!name.ok())
-    return name.status();
-  absl::StatusOr<std::vector<Port>> inputs =
-      DecodePorts(GetOptional(value, "inputs"), "ActionMessage.inputs");
-  if (!inputs.ok())
-    return inputs.status();
-  absl::StatusOr<std::vector<Port>> outputs =
-      DecodePorts(GetOptional(value, "outputs"), "ActionMessage.outputs");
-  if (!outputs.ok())
-    return outputs.status();
-  absl::StatusOr<ByteMap> headers =
-      DecodeByteMap(GetOptional(value, "headers"), "ActionMessage.headers");
-  if (!headers.ok())
-    return headers.status();
-  ActionMessage result{.id = std::move(*id),
-                       .name = std::move(*name),
-                       .inputs = std::move(*inputs),
-                       .outputs = std::move(*outputs),
-                       .headers = std::move(*headers)};
-  absl::Status validation = result.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_ASSIGN_OR_RETURN(std::string id,
+                        GetString(value, "id", "", "ActionMessage"));
+  ABSL_ASSIGN_OR_RETURN(std::string name,
+                        GetString(value, "name", "", "ActionMessage"));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<Port> inputs,
+      DecodePorts(GetOptional(value, "inputs"), "ActionMessage.inputs"));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<Port> outputs,
+      DecodePorts(GetOptional(value, "outputs"), "ActionMessage.outputs"));
+  ABSL_ASSIGN_OR_RETURN(
+      ByteMap headers,
+      DecodeByteMap(GetOptional(value, "headers"), "ActionMessage.headers"));
+  ActionMessage result{.id = std::move(id),
+                       .name = std::move(name),
+                       .inputs = std::move(inputs),
+                       .outputs = std::move(outputs),
+                       .headers = std::move(headers)};
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 
 }  // namespace
 
 absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
-  absl::Status validation = message.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(message.Validate());
   try {
     Json value = Json::object();
     if (!message.node_fragments.empty()) {
@@ -446,8 +415,9 @@ absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
         value["actions"].push_back(EncodeAction(action));
       }
     }
-    if (!message.headers.empty())
+    if (!message.headers.empty()) {
       value["headers"] = EncodeByteMap(message.headers);
+    }
     return value;
   } catch (const std::exception& error) {
     return absl::InternalError(
@@ -459,11 +429,9 @@ absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
 }
 
 absl::StatusOr<std::string> WireMessageToJson(const WireMessage& message) {
-  absl::StatusOr<Json> value = WireMessageToJsonValue(message);
-  if (!value.ok())
-    return value.status();
+  ABSL_ASSIGN_OR_RETURN(Json value, WireMessageToJsonValue(message));
   try {
-    return value->dump(-1, ' ', false, Json::error_handler_t::strict);
+    return value.dump(-1, ' ', false, Json::error_handler_t::strict);
   } catch (const std::exception& error) {
     return absl::InternalError(
         absl::StrCat("Failed to serialize WireMessage JSON: ", error.what()));
@@ -488,10 +456,8 @@ absl::StatusOr<WireMessage> WireMessageFromJsonValue(const Json& value) {
       }
       result.node_fragments.reserve(fragments->size());
       for (const Json& item : *fragments) {
-        absl::StatusOr<NodeFragment> fragment = DecodeFragment(item);
-        if (!fragment.ok())
-          return fragment.status();
-        result.node_fragments.push_back(std::move(*fragment));
+        ABSL_ASSIGN_OR_RETURN(NodeFragment fragment, DecodeFragment(item));
+        result.node_fragments.push_back(std::move(fragment));
       }
     }
     if (const Json* actions = GetOptional(value, "actions");
@@ -502,20 +468,15 @@ absl::StatusOr<WireMessage> WireMessageFromJsonValue(const Json& value) {
       }
       result.actions.reserve(actions->size());
       for (const Json& item : *actions) {
-        absl::StatusOr<ActionMessage> action = DecodeAction(item);
-        if (!action.ok())
-          return action.status();
-        result.actions.push_back(std::move(*action));
+        ABSL_ASSIGN_OR_RETURN(ActionMessage action, DecodeAction(item));
+        result.actions.push_back(std::move(action));
       }
     }
-    absl::StatusOr<ByteMap> headers =
-        DecodeByteMap(GetOptional(value, "headers"), "WireMessage.headers");
-    if (!headers.ok())
-      return headers.status();
-    result.headers = std::move(*headers);
-    absl::Status validation = result.Validate();
-    if (!validation.ok())
-      return validation;
+    ABSL_ASSIGN_OR_RETURN(
+        ByteMap headers,
+        DecodeByteMap(GetOptional(value, "headers"), "WireMessage.headers"));
+    result.headers = std::move(headers);
+    ABSL_RETURN_IF_ERROR(result.Validate());
     return result;
   } catch (const std::exception& error) {
     return absl::InvalidArgumentError(

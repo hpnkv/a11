@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/random/random.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/match.h>
 #include <absl/strings/numbers.h>
@@ -98,26 +99,30 @@ struct ClientPeerContext {
 
 void FailClient(const std::shared_ptr<ClientPeerContext>& context,
                 absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::UnknownError("WebRTC establishment failed");
+  }
   std::shared_ptr<rtc::DataChannel> channel;
   std::shared_ptr<rtc::PeerConnection> connection;
   {
     thread::MutexLock lock(&context->mu);
-    if (context->failed)
+    if (context->failed) {
       return;
+    }
     context->failed = true;
     context->status = status;
     channel = context->data_channel;
     connection = context->connection;
   }
   try {
-    if (channel != nullptr)
+    if (channel != nullptr) {
       channel->close();
+    }
   } catch (...) {}
   try {
-    if (connection != nullptr)
+    if (connection != nullptr) {
       connection->close();
+    }
   } catch (...) {}
 }
 
@@ -132,8 +137,9 @@ a11::Task HandleClientSignal(const std::shared_ptr<ClientPeerContext>& context,
   std::shared_ptr<rtc::PeerConnection> connection;
   {
     thread::MutexLock lock(&context->mu);
-    if (context->failed)
+    if (context->failed) {
       return a11::FailedTask(context->status);
+    }
     connection = context->connection;
   }
   if (connection == nullptr) {
@@ -263,8 +269,7 @@ absl::Status WebRtcConfiguration::Validate() const {
         "WebRTC desired_channels must be at least 1");
   }
   if (max_channels == 0) {
-    return absl::InvalidArgumentError(
-        "WebRTC max_channels must be at least 1");
+    return absl::InvalidArgumentError("WebRTC max_channels must be at least 1");
   }
   for (const TurnServer& server : turn_servers) {
     if (server.hostname.empty()) {
@@ -277,12 +282,8 @@ absl::Status WebRtcConfiguration::Validate() const {
 
 absl::StatusOr<rtc::Configuration> BuildLibDataChannelConfiguration(
     const WebRtcConfiguration& configuration) {
-  absl::Status status = configuration.Validate();
-  if (!status.ok())
-    return status;
-  status = InitializeSctp();
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(configuration.Validate());
+  ABSL_RETURN_IF_ERROR(InitializeSctp());
   try {
     rtc::Configuration result;
     result.maxMessageSize = configuration.max_message_size;
@@ -331,15 +332,16 @@ WebRtcWireStream::BuildMultiplexedStream(
     return absl::InvalidArgumentError(
         "WebRTC peer connection must not be null");
   }
-  if (id.empty())
+  if (id.empty()) {
     id = NewDataChannelId();
-  absl::StatusOr<std::shared_ptr<State>> state = MakeState(
-      std::move(channel), std::move(id), role, std::move(open_operation),
-      options, ChannelFramingOptions{.split_size = split_size});
-  if (!state.ok())
-    return state.status();
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<State> state,
+      MakeState(std::move(channel), std::move(id), role,
+                std::move(open_operation), options,
+                ChannelFramingOptions{.split_size = split_size}));
   return std::make_shared<WebRtcWireStream>(
-      ConstructorToken{}, std::move(*state), std::move(primary_channel),
+      ConstructorToken{}, std::move(state), std::move(primary_channel),
       std::move(connection), std::move(signalling_endpoint));
 }
 
@@ -365,21 +367,18 @@ absl::StatusOr<std::shared_ptr<WebRtcWireStream>> WebRtcWireStream::Create(
     return absl::UnknownError(
         "Reading WebRTC data channel label raised an exception");
   }
-  absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
-      internal::MakeRtcBinaryChannel(data_channel);
-  if (!channel.ok())
-    return channel.status();
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::BinaryChannel> channel,
+                        internal::MakeRtcBinaryChannel(data_channel));
   // Adopt a single data channel as a one-member multiplex with no
   // replenishment; the multi-channel factories build wider ones directly.
   std::shared_ptr<internal::MultiplexedBinaryChannel> multiplex =
       internal::MultiplexedBinaryChannel::Create(
-          {std::move(*channel)}, /*factory=*/{},
+          {std::move(channel)}, /*factory=*/{},
           internal::MultiplexedChannelOptions{.target_channels = 1});
-  return BuildMultiplexedStream(std::move(multiplex), std::move(data_channel),
-                                std::move(connection),
-                                std::move(signalling_endpoint), std::move(id),
-                                role, options, std::move(open_operation),
-                                split_size);
+  return BuildMultiplexedStream(
+      std::move(multiplex), std::move(data_channel), std::move(connection),
+      std::move(signalling_endpoint), std::move(id), role, options,
+      std::move(open_operation), split_size);
 }
 
 absl::StatusOr<std::shared_ptr<WebRtcWireStream>>
@@ -387,19 +386,16 @@ WebRtcWireStream::CreateClient(std::string identity, std::string peer_identity,
                                std::shared_ptr<SignallingService> signalling,
                                WebRtcConfiguration configuration,
                                WireStreamOptions options) {
-  absl::Status validation = data::ValidateName(identity);
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
   if (signalling == nullptr) {
     return absl::InvalidArgumentError(
         "WebRTC signalling service must not be null");
   }
-  absl::StatusOr<std::shared_ptr<SignallingEndpoint>> endpoint =
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<SignallingEndpoint> endpoint,
       signalling->Connect(std::move(identity),
-                          [](SignallingMessage) { return a11::ReadyTask(); });
-  if (!endpoint.ok())
-    return endpoint.status();
-  return CreateClient(std::move(peer_identity), std::move(*endpoint),
+                          [](SignallingMessage) { return a11::ReadyTask(); }));
+  return CreateClient(std::move(peer_identity), std::move(endpoint),
                       std::move(configuration), options);
 }
 
@@ -413,28 +409,20 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
         "WebRTC signalling transport must not be null");
   }
   const std::string identity = signalling->identity();
-  absl::Status validation = data::ValidateName(identity);
-  if (!validation.ok())
-    return validation;
-  validation = data::ValidateName(peer_identity);
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
+  ABSL_RETURN_IF_ERROR(data::ValidateName(peer_identity));
   if (identity == peer_identity) {
     return absl::InvalidArgumentError(
         "WebRTC identity and peer_identity must differ");
   }
-  validation = options.Validate();
-  if (!validation.ok())
-    return validation;
-  absl::StatusOr<rtc::Configuration> rtc_configuration =
-      BuildLibDataChannelConfiguration(configuration);
-  if (!rtc_configuration.ok())
-    return rtc_configuration.status();
+  ABSL_RETURN_IF_ERROR(options.Validate());
+  ABSL_ASSIGN_OR_RETURN(rtc::Configuration rtc_configuration,
+                        BuildLibDataChannelConfiguration(configuration));
 
   std::shared_ptr<rtc::PeerConnection> connection;
   try {
     connection =
-        std::make_shared<rtc::PeerConnection>(std::move(*rtc_configuration));
+        std::make_shared<rtc::PeerConnection>(std::move(rtc_configuration));
   } catch (const std::exception& error) {
     (void)signalling->Close();
     return ExternalException(error, "Creating WebRTC peer connection");
@@ -446,12 +434,14 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
   auto context = std::make_shared<ClientPeerContext>(
       identity, std::move(peer_identity), signalling, connection);
   std::weak_ptr<ClientPeerContext> weak = context;
-  validation = signalling->SetOnMessage([weak](SignallingMessage message) {
-    std::shared_ptr<ClientPeerContext> context = weak.lock();
-    if (context == nullptr)
-      return a11::ReadyTask();
-    return HandleClientSignal(context, std::move(message));
-  });
+  absl::Status validation =
+      signalling->SetOnMessage([weak](SignallingMessage message) {
+        std::shared_ptr<ClientPeerContext> context = weak.lock();
+        if (context == nullptr) {
+          return a11::ReadyTask();
+        }
+        return HandleClientSignal(context, std::move(message));
+      });
   if (!validation.ok()) {
     (void)signalling->Close();
     return validation;
@@ -460,29 +450,33 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
   try {
     connection->onLocalDescription([weak](rtc::Description description) {
       std::shared_ptr<ClientPeerContext> context = weak.lock();
-      if (context == nullptr)
+      if (context == nullptr) {
         return;
+      }
       SignallingMessage message{.type = SignallingMessageType::kDescription,
                                 .sender = context->identity,
                                 .recipient = context->peer_identity,
                                 .description = description.generateSdp("\r\n"),
                                 .description_type = description.typeString()};
       absl::Status sent = context->endpoint->Send(std::move(message));
-      if (!sent.ok())
+      if (!sent.ok()) {
         FailClient(context, sent);
+      }
     });
     connection->onLocalCandidate([weak](rtc::Candidate candidate) {
       std::shared_ptr<ClientPeerContext> context = weak.lock();
-      if (context == nullptr)
+      if (context == nullptr) {
         return;
+      }
       SignallingMessage message{.type = SignallingMessageType::kCandidate,
                                 .sender = context->identity,
                                 .recipient = context->peer_identity,
                                 .candidate = std::string(candidate),
                                 .mid = candidate.mid()};
       absl::Status sent = context->endpoint->Send(std::move(message));
-      if (!sent.ok())
+      if (!sent.ok()) {
         FailClient(context, sent);
+      }
     });
     connection->onStateChange([weak](rtc::PeerConnection::State state) {
       if (state != rtc::PeerConnection::State::Failed &&
@@ -499,15 +493,17 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
     });
     // Open the desired number of data channels up front so packets can stripe
     // across them from the first send; the multiplex replenishes losses later.
-    const size_t desired =
-        configuration.desired_channels == 0 ? 1 : configuration.desired_channels;
+    const size_t desired = configuration.desired_channels == 0
+                               ? 1
+                               : configuration.desired_channels;
     std::vector<std::shared_ptr<internal::BinaryChannel>> members;
     members.reserve(desired);
     for (size_t index = 0; index < desired; ++index) {
       std::shared_ptr<rtc::DataChannel> channel =
           connection->createDataChannel(NewDataChannelId());
-      if (index == 0)
+      if (index == 0) {
         data_channel = channel;
+      }
       absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> wrapped =
           internal::MakeRtcBinaryChannel(std::move(channel));
       if (!wrapped.ok()) {
@@ -522,8 +518,7 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
     }
     // Replenishment reopens a data channel on the same peer connection.
     std::weak_ptr<rtc::PeerConnection> weak_connection = connection;
-    internal::MemberChannelFactory factory =
-        [weak_connection]()
+    internal::MemberChannelFactory factory = [weak_connection]()
         -> absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> {
       std::shared_ptr<rtc::PeerConnection> connection = weak_connection.lock();
       if (connection == nullptr) {
@@ -545,13 +540,14 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
         internal::MultiplexedBinaryChannel::Create(
             std::move(members), std::move(factory),
             internal::MultiplexedChannelOptions{.target_channels = desired});
-    OpenOperation open = [context]() { return ClientStatus(context); };
+    OpenOperation open = [context]() {
+      return ClientStatus(context);
+    };
     absl::StatusOr<std::shared_ptr<WebRtcWireStream>> stream =
-        BuildMultiplexedStream(std::move(multiplex), data_channel, connection,
-                               context->endpoint, std::move(id),
-                               ChannelEndpointRole::kClient, options,
-                               std::move(open),
-                               configuration.channel_split_size);
+        BuildMultiplexedStream(
+            std::move(multiplex), data_channel, connection, context->endpoint,
+            std::move(id), ChannelEndpointRole::kClient, options,
+            std::move(open), configuration.channel_split_size);
     if (!stream.ok()) {
       FailClient(context, stream.status());
       return stream.status();
@@ -646,9 +642,7 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
     std::string identity, std::shared_ptr<SignallingService> signalling,
     OnWebRtcStream on_stream, WebRtcConfiguration configuration,
     WireStreamOptions stream_options) {
-  absl::Status validation = data::ValidateName(identity);
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
   if (signalling == nullptr) {
     return absl::InvalidArgumentError(
         "WebRTC signalling service must not be null");
@@ -656,12 +650,8 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
   if (!on_stream) {
     return absl::InvalidArgumentError("WebRTC on_stream must be callable");
   }
-  validation = configuration.Validate();
-  if (!validation.ok())
-    return validation;
-  validation = stream_options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(configuration.Validate());
+  ABSL_RETURN_IF_ERROR(stream_options.Validate());
   auto state = std::make_shared<State>(
       std::move(identity), std::move(signalling), std::move(on_stream),
       std::move(configuration), stream_options);
@@ -671,17 +661,17 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
     // lock held until endpoint publication so an immediate offer cannot
     // observe a partially initialized server.
     thread::MutexLock lock(&state->mu);
-    absl::StatusOr<std::shared_ptr<SignallingEndpoint>> endpoint =
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<SignallingEndpoint> endpoint,
         state->signalling->Connect(state->identity,
                                    [weak](SignallingMessage message) {
                                      std::shared_ptr<State> state = weak.lock();
-                                     if (state == nullptr)
+                                     if (state == nullptr) {
                                        return a11::ReadyTask();
+                                     }
                                      return OnSignal(state, std::move(message));
-                                   });
-    if (!endpoint.ok())
-      return endpoint.status();
-    state->endpoint = std::move(*endpoint);
+                                   }));
+    state->endpoint = std::move(endpoint);
   }
 
   struct MakeSharedEnabler final : WebRtcWireServer {
@@ -732,14 +722,12 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
           absl::StrCat("WebRTC peer already exists: ", message.sender));
     }
   }
-  absl::StatusOr<rtc::Configuration> configuration =
-      BuildLibDataChannelConfiguration(state->configuration);
-  if (!configuration.ok())
-    return configuration.status();
+  ABSL_ASSIGN_OR_RETURN(rtc::Configuration configuration,
+                        BuildLibDataChannelConfiguration(state->configuration));
   std::shared_ptr<rtc::PeerConnection> connection;
   try {
     connection =
-        std::make_shared<rtc::PeerConnection>(std::move(*configuration));
+        std::make_shared<rtc::PeerConnection>(std::move(configuration));
   } catch (const std::exception& error) {
     return ExternalException(error, "Creating WebRTC server peer");
   } catch (...) {
@@ -769,14 +757,16 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
     connection->onLocalDescription([weak_state, peer = message.sender](
                                        rtc::Description description) {
       std::shared_ptr<State> state = weak_state.lock();
-      if (state == nullptr)
+      if (state == nullptr) {
         return;
+      }
       std::shared_ptr<SignallingEndpoint> endpoint;
       std::string identity;
       {
         thread::MutexLock lock(&state->mu);
-        if (!state->running)
+        if (!state->running) {
           return;
+        }
         endpoint = state->endpoint;
         identity = state->identity;
       }
@@ -786,20 +776,23 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
                               .description = description.generateSdp("\r\n"),
                               .description_type = description.typeString()};
       absl::Status sent = endpoint->Send(std::move(reply));
-      if (!sent.ok())
+      if (!sent.ok()) {
         ReportPeerError(state, peer, sent);
+      }
     });
     connection->onLocalCandidate(
         [weak_state, peer = message.sender](rtc::Candidate candidate) {
           std::shared_ptr<State> state = weak_state.lock();
-          if (state == nullptr)
+          if (state == nullptr) {
             return;
+          }
           std::shared_ptr<SignallingEndpoint> endpoint;
           std::string identity;
           {
             thread::MutexLock lock(&state->mu);
-            if (!state->running)
+            if (!state->running) {
               return;
+            }
             endpoint = state->endpoint;
             identity = state->identity;
           }
@@ -809,8 +802,9 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
                                   .candidate = std::string(candidate),
                                   .mid = candidate.mid()};
           absl::Status sent = endpoint->Send(std::move(reply));
-          if (!sent.ok())
+          if (!sent.ok()) {
             ReportPeerError(state, peer, sent);
+          }
         });
     connection->onStateChange(
         [weak_state, peer = message.sender](rtc::PeerConnection::State status) {
@@ -829,92 +823,91 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
             }
           }
         });
-    connection->onDataChannel(
-        [weak_state, weak_context](std::shared_ptr<rtc::DataChannel> channel) {
-          std::shared_ptr<State> state = weak_state.lock();
-          std::shared_ptr<ServerPeerContext> context = weak_context.lock();
-          if (state == nullptr || context == nullptr || channel == nullptr)
-            return;
-          std::shared_ptr<SignallingEndpoint> endpoint;
-          OnWebRtcStream callback;
-          WebRtcConfiguration configuration;
-          WireStreamOptions options;
-          {
-            thread::MutexLock lock(&state->mu);
-            if (!state->running) {
-              try {
-                channel->close();
-              } catch (...) {}
-              return;
-            }
-            endpoint = state->endpoint;
-            callback = state->on_stream;
-            configuration = state->configuration;
-            options = state->stream_options;
-          }
-          absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> wrapped =
-              internal::MakeRtcBinaryChannel(channel);
-          if (!wrapped.ok()) {
-            ReportPeerError(state, context->identity, wrapped.status());
-            return;
-          }
-          std::string id;
+    connection->onDataChannel([weak_state, weak_context](
+                                  std::shared_ptr<rtc::DataChannel> channel) {
+      std::shared_ptr<State> state = weak_state.lock();
+      std::shared_ptr<ServerPeerContext> context = weak_context.lock();
+      if (state == nullptr || context == nullptr || channel == nullptr) {
+        return;
+      }
+      std::shared_ptr<SignallingEndpoint> endpoint;
+      OnWebRtcStream callback;
+      WebRtcConfiguration configuration;
+      WireStreamOptions options;
+      {
+        thread::MutexLock lock(&state->mu);
+        if (!state->running) {
           try {
-            id = channel->label();
-          } catch (...) {
-            id.clear();
-          }
-          // The first data channel builds the multiplex and the stream; later
-          // channels join the same multiplex (rejected past max_channels).
-          std::shared_ptr<internal::MultiplexedBinaryChannel> multiplex;
-          bool first = false;
-          {
-            thread::MutexLock lock(&context->mu);
-            if (context->failed) {
-              try {
-                channel->close();
-              } catch (...) {}
-              return;
-            }
-            if (context->multiplex == nullptr) {
-              const size_t max_channels = configuration.max_channels == 0
-                                              ? 1
-                                              : configuration.max_channels;
-              context->multiplex = internal::MultiplexedBinaryChannel::Create(
-                  {*wrapped}, /*factory=*/{},
-                  internal::MultiplexedChannelOptions{.target_channels =
-                                                          max_channels});
-              context->data_channel = channel;
-              multiplex = context->multiplex;
-              first = true;
-            } else {
-              multiplex = context->multiplex;
-            }
-          }
-          if (!first) {
-            if (!multiplex->AddMember(*wrapped)) {
-              // Past the server's per-peer channel cap; refuse the surplus.
-              try {
-                channel->close();
-              } catch (...) {}
-            }
-            return;
-          }
-          ChannelWireStream::OpenOperation open = [context]() {
-            return ServerPeerStatus(context);
-          };
-          absl::StatusOr<std::shared_ptr<WebRtcWireStream>> stream =
-              WebRtcWireStream::BuildMultiplexedStream(
-                  std::move(multiplex), channel, context->connection,
-                  std::move(endpoint), std::move(id),
-                  ChannelEndpointRole::kServer, options, std::move(open),
-                  configuration.channel_split_size);
-          if (!stream.ok()) {
-            ReportPeerError(state, context->identity, stream.status());
-            return;
-          }
-          a11::Schedule([callback = std::move(callback),
-                         stream = std::move(*stream)]() {
+            channel->close();
+          } catch (...) {}
+          return;
+        }
+        endpoint = state->endpoint;
+        callback = state->on_stream;
+        configuration = state->configuration;
+        options = state->stream_options;
+      }
+      absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> wrapped =
+          internal::MakeRtcBinaryChannel(channel);
+      if (!wrapped.ok()) {
+        ReportPeerError(state, context->identity, wrapped.status());
+        return;
+      }
+      std::string id;
+      try {
+        id = channel->label();
+      } catch (...) {
+        id.clear();
+      }
+      // The first data channel builds the multiplex and the stream; later
+      // channels join the same multiplex (rejected past max_channels).
+      std::shared_ptr<internal::MultiplexedBinaryChannel> multiplex;
+      bool first = false;
+      {
+        thread::MutexLock lock(&context->mu);
+        if (context->failed) {
+          try {
+            channel->close();
+          } catch (...) {}
+          return;
+        }
+        if (context->multiplex == nullptr) {
+          const size_t max_channels =
+              configuration.max_channels == 0 ? 1 : configuration.max_channels;
+          context->multiplex = internal::MultiplexedBinaryChannel::Create(
+              {*wrapped}, /*factory=*/{},
+              internal::MultiplexedChannelOptions{.target_channels =
+                                                      max_channels});
+          context->data_channel = channel;
+          multiplex = context->multiplex;
+          first = true;
+        } else {
+          multiplex = context->multiplex;
+        }
+      }
+      if (!first) {
+        if (!multiplex->AddMember(*wrapped)) {
+          // Past the server's per-peer channel cap; refuse the surplus.
+          try {
+            channel->close();
+          } catch (...) {}
+        }
+        return;
+      }
+      ChannelWireStream::OpenOperation open = [context]() {
+        return ServerPeerStatus(context);
+      };
+      absl::StatusOr<std::shared_ptr<WebRtcWireStream>> stream =
+          WebRtcWireStream::BuildMultiplexedStream(
+              std::move(multiplex), channel, context->connection,
+              std::move(endpoint), std::move(id), ChannelEndpointRole::kServer,
+              options, std::move(open), configuration.channel_split_size);
+      if (!stream.ok()) {
+        ReportPeerError(state, context->identity, stream.status());
+        return;
+      }
+      a11::Schedule(
+          [callback = std::move(callback), stream = std::move(*stream)]() {
             absl::Status status;
             try {
               status = callback(stream).Await().status();
@@ -924,10 +917,11 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
               status = absl::UnknownError(
                   "WebRTC on_stream callback raised an exception");
             }
-            if (!status.ok())
+            if (!status.ok()) {
               (void)stream->Abort(status);
+            }
           });
-        });
+    });
     connection->setRemoteDescription(
         rtc::Description(message.description, message.description_type));
   } catch (const std::exception& error) {
@@ -966,8 +960,9 @@ absl::Status WebRtcWireServer::HandleCandidate(
 void WebRtcWireServer::ReportPeerError(const std::shared_ptr<State>& state,
                                        std::string peer_identity,
                                        absl::Status status) {
-  if (status.ok())
+  if (status.ok()) {
     status = absl::UnknownError("WebRTC peer failed");
+  }
   std::shared_ptr<ServerPeerContext> context;
   std::shared_ptr<SignallingEndpoint> endpoint;
   std::string identity;
@@ -996,12 +991,14 @@ void WebRtcWireServer::ReportPeerError(const std::shared_ptr<State>& state,
       connection = context->connection;
     }
     try {
-      if (channel != nullptr)
+      if (channel != nullptr) {
         channel->close();
+      }
     } catch (...) {}
     try {
-      if (connection != nullptr)
+      if (connection != nullptr) {
         connection->close();
+      }
     } catch (...) {}
   }
   if (endpoint != nullptr && !peer_identity.empty()) {
@@ -1018,14 +1015,16 @@ absl::Status WebRtcWireServer::Stop() {
   std::shared_ptr<SignallingEndpoint> endpoint;
   {
     thread::MutexLock lock(&state_->mu);
-    if (!state_->running)
+    if (!state_->running) {
       return absl::OkStatus();
+    }
     state_->running = false;
     peers.swap(state_->peers);
     endpoint = std::move(state_->endpoint);
   }
-  if (endpoint != nullptr)
+  if (endpoint != nullptr) {
     (void)endpoint->Close();
+  }
   for (auto& [identity, context] : peers) {
     (void)identity;
     std::shared_ptr<rtc::DataChannel> data_channel;
@@ -1034,8 +1033,9 @@ absl::Status WebRtcWireServer::Stop() {
       data_channel = std::exchange(context->data_channel, nullptr);
     }
     try {
-      if (data_channel != nullptr)
+      if (data_channel != nullptr) {
         data_channel->close();
+      }
     } catch (...) {}
     try {
       if (context->connection != nullptr) {

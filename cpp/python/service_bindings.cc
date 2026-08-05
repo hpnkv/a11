@@ -41,8 +41,9 @@ class PythonSessionCallback {
                                         " must be callable");
     }
     absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
-    if (!loop.ok())
+    if (!loop.ok()) {
       return loop.status();
+    }
 
     struct MakeSharedEnabler final : PythonSessionCallback {
       MakeSharedEnabler(PyObject* callable, std::shared_ptr<PythonLoop> loop)
@@ -57,8 +58,9 @@ class PythonSessionCallback {
   PythonSessionCallback& operator=(const PythonSessionCallback&) = delete;
 
   ~PythonSessionCallback() {
-    if (Py_IsInitialized() == 0)
+    if (Py_IsInitialized() == 0) {
       return;
+    }
     const PyGILState_STATE state = PyGILState_Ensure();
     Py_CLEAR(callable_);
     PyGILState_Release(state);
@@ -111,8 +113,9 @@ absl::StatusOr<SessionCallbacks> MakeSessionCallbacks(
   if (!on_message.is_none()) {
     absl::StatusOr<std::shared_ptr<PythonSessionCallback>> callback =
         PythonSessionCallback::Create(on_message, "on_stream_message");
-    if (!callback.ok())
+    if (!callback.ok()) {
       return callback.status();
+    }
     result.on_message = [callback = std::move(*callback)](
                             std::optional<data::WireMessage> message,
                             std::shared_ptr<net::WireStream> stream,
@@ -124,8 +127,9 @@ absl::StatusOr<SessionCallbacks> MakeSessionCallbacks(
   if (!on_done.is_none()) {
     absl::StatusOr<std::shared_ptr<PythonSessionCallback>> callback =
         PythonSessionCallback::Create(on_done, "on_stream_done");
-    if (!callback.ok())
+    if (!callback.ok()) {
       return callback.status();
+    }
     result.on_done = [callback = std::move(*callback)](
                          std::shared_ptr<net::WireStream> stream,
                          std::shared_ptr<service::Session> session) {
@@ -139,10 +143,12 @@ absl::StatusOr<service::StreamMode> StreamModeFromPython(
     const py::object& value) {
   if (py::isinstance<py::str>(value)) {
     const std::string mode = value.cast<std::string>();
-    if (mode == "start")
+    if (mode == "start") {
       return service::StreamMode::kStart;
-    if (mode == "accept")
+    }
+    if (mode == "accept") {
       return service::StreamMode::kAccept;
+    }
     return absl::InvalidArgumentError(
         "mode must be either 'start' or 'accept'");
   }
@@ -191,15 +197,17 @@ service::SessionOptions MakeSessionOptions(
     options.deadline = ValueOrThrow(TimeFromPython(deadline, false));
   }
   const absl::Status validation = options.Validate();
-  if (!validation.ok())
+  if (!validation.ok()) {
     ThrowStatus(validation);
+  }
   return options;
 }
 
 void ValidateSessionOptions(const service::SessionOptions& options) {
   const absl::Status status = options.Validate();
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 absl::StatusOr<std::shared_ptr<service::Session>> CreateSession(
@@ -215,11 +223,13 @@ absl::StatusOr<std::shared_ptr<service::Session>> CreateSession(
   }
   absl::StatusOr<SessionCallbacks> callbacks =
       MakeSessionCallbacks(resolved_message, on_done);
-  if (!callbacks.ok())
+  if (!callbacks.ok()) {
     return callbacks.status();
+  }
   absl::StatusOr<data::ByteMap> converted_headers = ByteMapFromPython(headers);
-  if (!converted_headers.ok())
+  if (!converted_headers.ok()) {
     return converted_headers.status();
+  }
   return service::Session::Create(
       std::move(session_id), std::move(callbacks->on_message),
       std::move(callbacks->on_done), std::move(*converted_headers),
@@ -233,8 +243,9 @@ absl::StatusOr<std::shared_ptr<service::SessionWithRecv>> CreateSessionWithRecv(
     std::shared_ptr<nodes::NodeMap> node_map,
     std::shared_ptr<actions::ActionRegistry> registry) {
   absl::StatusOr<data::ByteMap> converted_headers = ByteMapFromPython(headers);
-  if (!converted_headers.ok())
+  if (!converted_headers.ok()) {
     return converted_headers.status();
+  }
   return service::SessionWithRecv::Create(
       std::move(session_id), std::move(*converted_headers),
       options.value_or(service::SessionOptions{}), std::move(node_map),
@@ -242,8 +253,9 @@ absl::StatusOr<std::shared_ptr<service::SessionWithRecv>> CreateSessionWithRecv(
 }
 
 void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 }  // namespace
@@ -310,8 +322,7 @@ void BindService(py::module_& module) {
       .value("ACCEPT", service::StreamMode::kAccept)
       .export_values();
 
-  py::class_<service::Session, std::shared_ptr<service::Session>> session(
-      module, "Session", py::dynamic_attr());
+  py::classh<service::Session> session(module, "Session", py::dynamic_attr());
   session
       .def(py::init(
                [](std::string session_id, const py::object& on_stream_message,
@@ -616,9 +627,8 @@ Examples:
           "asynchronously as time passes.",
           py::arg("deadline") = py::none());
 
-  py::class_<service::SessionWithRecv, service::Session,
-             std::shared_ptr<service::SessionWithRecv>>(module,
-                                                        "SessionWithRecv")
+  py::classh<service::SessionWithRecv, service::Session>(module,
+                                                         "SessionWithRecv")
       .def(py::init(
                [](std::string session_id, const py::object& headers,
                   std::optional<service::SessionOptions> options,
@@ -652,8 +662,9 @@ Examples:
                 self->ReceiveWithStreamId(*converted),
                 [](const std::optional<service::ReceivedSessionMessage>& value)
                     -> py::object {
-                  if (!value.has_value())
+                  if (!value.has_value()) {
                     return py::none();
+                  }
                   return py::make_tuple(value->message, value->stream_id);
                 });
           },

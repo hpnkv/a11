@@ -13,6 +13,7 @@
 #include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
@@ -42,10 +43,12 @@ absl::StatusOr<SignallingMessageType> ParseMessageType(std::string_view value) {
   if (value == "description" || value == "offer" || value == "answer") {
     return SignallingMessageType::kDescription;
   }
-  if (value == "candidate")
+  if (value == "candidate") {
     return SignallingMessageType::kCandidate;
-  if (value == "error")
+  }
+  if (value == "error") {
     return SignallingMessageType::kError;
+  }
   return absl::InvalidArgumentError(
       absl::StrCat("Unknown signalling message type: ", value));
 }
@@ -58,12 +61,8 @@ absl::Status CallbackException(const std::exception& error) {
 }  // namespace
 
 absl::Status SignallingMessage::Validate() const {
-  absl::Status status = data::ValidateName(sender);
-  if (!status.ok())
-    return status;
-  status = data::ValidateName(recipient);
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(sender));
+  ABSL_RETURN_IF_ERROR(data::ValidateName(recipient));
   switch (type) {
     case SignallingMessageType::kDescription:
       if (description.empty()) {
@@ -93,9 +92,7 @@ absl::Status SignallingMessage::Validate() const {
 }
 
 absl::StatusOr<std::string> SignallingMessage::ToJson() const {
-  absl::Status validation = Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(Validate());
   try {
     nlohmann::json value = {
         {"type", MessageTypeName(type)},
@@ -116,10 +113,8 @@ absl::StatusOr<std::string> SignallingMessage::ToJson() const {
         value["id"] = recipient;
         break;
       case SignallingMessageType::kError: {
-        absl::StatusOr<nlohmann::json> encoded = StatusToJson(error);
-        if (!encoded.ok())
-          return encoded.status();
-        value["status"] = std::move(*encoded);
+        ABSL_ASSIGN_OR_RETURN(nlohmann::json encoded, StatusToJson(error));
+        value["status"] = std::move(encoded);
         break;
       }
     }
@@ -147,11 +142,10 @@ absl::StatusOr<SignallingMessage> SignallingMessage::FromJson(
           "A signalling message requires a string type");
     }
     const std::string type_name = type_iterator->get<std::string>();
-    absl::StatusOr<SignallingMessageType> type = ParseMessageType(type_name);
-    if (!type.ok())
-      return type.status();
+    ABSL_ASSIGN_OR_RETURN(SignallingMessageType type,
+                          ParseMessageType(type_name));
     SignallingMessage result;
-    result.type = *type;
+    result.type = type;
     const auto sender = value.find("from");
     const auto recipient = value.find("to");
     if (sender != value.end() && sender->is_string()) {
@@ -189,13 +183,12 @@ absl::StatusOr<SignallingMessage> SignallingMessage::FromJson(
             "A signalling error message requires status");
       }
       absl::StatusOr<absl::Status> decoded = StatusFromJson(*status);
-      if (!decoded.ok())
+      if (!decoded.ok()) {
         return decoded.status();
+      }
       result.error = std::move(*decoded);
     }
-    absl::Status validation = result.Validate();
-    if (!validation.ok())
-      return validation;
+    ABSL_RETURN_IF_ERROR(result.Validate());
     return result;
   } catch (const std::exception& error) {
     return absl::InvalidArgumentError(
@@ -245,9 +238,7 @@ SignallingService::~SignallingService() {
 
 absl::StatusOr<std::shared_ptr<SignallingEndpoint>> SignallingService::Connect(
     std::string identity, OnSignallingMessage on_message) {
-  absl::Status validation = data::ValidateName(identity);
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
   if (!on_message) {
     return absl::InvalidArgumentError(
         "Signalling on_message callback must be callable");
@@ -285,17 +276,16 @@ absl::Status SignallingService::Route(
   }
   {
     thread::MutexLock lock(&sender->mu);
-    if (!sender->connected)
+    if (!sender->connected) {
       return sender->status;
+    }
     if (!message.sender.empty() && message.sender != sender->identity) {
       return absl::PermissionDeniedError(
           "A signalling endpoint cannot impersonate another identity");
     }
     message.sender = sender->identity;
   }
-  absl::Status validation = message.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(message.Validate());
   std::shared_ptr<SignallingEndpoint::State> recipient;
   {
     thread::MutexLock lock(&state_->mu);
@@ -312,8 +302,9 @@ absl::Status SignallingService::Route(
   bool start_pump = false;
   {
     thread::MutexLock lock(&recipient->mu);
-    if (!recipient->connected)
+    if (!recipient->connected) {
       return recipient->status;
+    }
     recipient->incoming.push_back(std::move(message));
     if (!recipient->pumping) {
       recipient->pumping = true;
@@ -352,8 +343,9 @@ void SignallingService::Pump(
     }
     if (!status.ok()) {
       std::shared_ptr<SignallingService> service = endpoint->service.lock();
-      if (service != nullptr)
+      if (service != nullptr) {
         service->Disconnect(endpoint, status);
+      }
       return;
     }
   }
@@ -362,13 +354,15 @@ void SignallingService::Pump(
 void SignallingService::Disconnect(
     const std::shared_ptr<SignallingEndpoint::State>& endpoint,
     absl::Status status) {
-  if (endpoint == nullptr)
+  if (endpoint == nullptr) {
     return;
+  }
   std::string identity;
   {
     thread::MutexLock lock(&endpoint->mu);
-    if (!endpoint->connected)
+    if (!endpoint->connected) {
       return;
+    }
     endpoint->connected = false;
     endpoint->status = status.ok()
                            ? absl::CancelledError("Signalling endpoint closed")
@@ -382,8 +376,9 @@ void SignallingService::Disconnect(
   if (iterator != state_->endpoints.end()) {
     std::shared_ptr<SignallingEndpoint::State> current =
         iterator->second.lock();
-    if (current == nullptr || current == endpoint)
+    if (current == nullptr || current == endpoint) {
       state_->endpoints.erase(iterator);
+    }
   }
 }
 
@@ -398,8 +393,9 @@ std::vector<std::string> SignallingService::Identities() const {
   thread::MutexLock lock(&state_->mu);
   result.reserve(state_->endpoints.size());
   for (const auto& [identity, endpoint] : state_->endpoints) {
-    if (!endpoint.expired())
+    if (!endpoint.expired()) {
       result.push_back(identity);
+    }
   }
   return result;
 }
@@ -408,8 +404,9 @@ absl::Status SignallingService::Stop() {
   std::vector<std::shared_ptr<SignallingEndpoint::State>> endpoints;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->stopped)
+    if (state_->stopped) {
       return absl::OkStatus();
+    }
     state_->stopped = true;
     for (const auto& [identity, endpoint] : state_->endpoints) {
       (void)identity;
@@ -447,16 +444,18 @@ absl::Status SignallingEndpoint::SetOnMessage(OnSignallingMessage on_message) {
         "Signalling on_message callback must be callable");
   }
   thread::MutexLock lock(&state_->mu);
-  if (!state_->connected)
+  if (!state_->connected) {
     return state_->status;
+  }
   state_->on_message = std::move(on_message);
   return absl::OkStatus();
 }
 
 absl::Status SignallingEndpoint::Close() {
   std::shared_ptr<SignallingService> service = state_->service.lock();
-  if (service == nullptr)
+  if (service == nullptr) {
     return absl::OkStatus();
+  }
   service->Disconnect(state_,
                       absl::CancelledError("Signalling endpoint closed"));
   return absl::OkStatus();

@@ -25,6 +25,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/log/log.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/cord.h>
@@ -76,10 +77,12 @@ absl::Status RedisErrorStatus(std::string message) {
 }
 
 absl::StatusOr<Reply> ParseReply(const redisReply* reply, size_t depth) {
-  if (reply == nullptr)
+  if (reply == nullptr) {
     return absl::UnavailableError("Redis returned a null reply");
-  if (depth > kMaximumReplyDepth)
+  }
+  if (depth > kMaximumReplyDepth) {
     return absl::ResourceExhaustedError("Redis reply nesting is too deep");
+  }
   if (reply->elements > kMaximumReplyElements) {
     return absl::ResourceExhaustedError("Redis reply has too many elements");
   }
@@ -96,19 +99,19 @@ absl::StatusOr<Reply> ParseReply(const redisReply* reply, size_t depth) {
     std::vector<Reply> values;
     values.reserve(reply->elements);
     for (size_t index = 0; index < reply->elements; ++index) {
-      absl::StatusOr<Reply> child =
-          ParseReply(reply->element[index], depth + 1);
-      if (!child.ok())
-        return child.status();
-      values.push_back(std::move(*child));
+      ABSL_ASSIGN_OR_RETURN(Reply child,
+                            ParseReply(reply->element[index], depth + 1));
+      values.push_back(std::move(child));
     }
     if (type == ReplyType::kMap) {
-      if (values.size() % 2 != 0)
+      if (values.size() % 2 != 0) {
         return absl::DataLossError("Redis map reply has an odd element count");
+      }
       return Reply::Map(std::move(values));
     }
-    if (type == ReplyType::kSet)
+    if (type == ReplyType::kSet) {
       return Reply::Set(std::move(values));
+    }
     return Reply::Array(std::move(values));
   };
 
@@ -117,16 +120,12 @@ absl::StatusOr<Reply> ParseReply(const redisReply* reply, size_t depth) {
       return Reply::Null();
     case REDIS_REPLY_STRING:
     case REDIS_REPLY_STATUS: {
-      absl::StatusOr<std::string> value = bytes();
-      if (!value.ok())
-        return value.status();
-      return Reply::String(std::move(*value));
+      ABSL_ASSIGN_OR_RETURN(std::string value, bytes());
+      return Reply::String(std::move(value));
     }
     case REDIS_REPLY_ERROR: {
-      absl::StatusOr<std::string> value = bytes();
-      if (!value.ok())
-        return value.status();
-      return RedisErrorStatus(std::move(*value));
+      ABSL_ASSIGN_OR_RETURN(std::string value, bytes());
+      return RedisErrorStatus(std::move(value));
     }
     case REDIS_REPLY_INTEGER:
       return Reply::Integer(static_cast<std::int64_t>(reply->integer));
@@ -158,18 +157,14 @@ absl::StatusOr<Reply> ParseReply(const redisReply* reply, size_t depth) {
 #endif
 #ifdef REDIS_REPLY_BIGNUM
     case REDIS_REPLY_BIGNUM: {
-      absl::StatusOr<std::string> value = bytes();
-      if (!value.ok())
-        return value.status();
-      return Reply::String(std::move(*value));
+      ABSL_ASSIGN_OR_RETURN(std::string value, bytes());
+      return Reply::String(std::move(value));
     }
 #endif
 #ifdef REDIS_REPLY_VERB
     case REDIS_REPLY_VERB: {
-      absl::StatusOr<std::string> value = bytes();
-      if (!value.ok())
-        return value.status();
-      return Reply::String(std::move(*value));
+      ABSL_ASSIGN_OR_RETURN(std::string value, bytes());
+      return Reply::String(std::move(value));
     }
 #endif
     default:
@@ -184,8 +179,9 @@ absl::StatusOr<Reply> ParseReply(const redisReply* reply) {
 
 absl::StatusOr<int> ParseInteger(std::string_view value, std::string_view name,
                                  int minimum, int maximum) {
-  if (value.empty())
+  if (value.empty()) {
     return absl::InvalidArgumentError(absl::StrCat(name, " is empty"));
+  }
   int result = 0;
   const char* first = value.data();
   const char* last = first + value.size();
@@ -207,9 +203,10 @@ absl::StatusOr<std::string> PercentDecode(std::string_view value) {
       decoded.push_back(value[index]);
       continue;
     }
-    if (index + 2 >= value.size())
+    if (index + 2 >= value.size()) {
       return absl::InvalidArgumentError(
           "Truncated percent escape in Redis URL");
+    }
     const char high =
         absl::ascii_tolower(static_cast<unsigned char>(value[index + 1]));
     const char low =
@@ -229,8 +226,9 @@ absl::StatusOr<std::string> PercentDecode(std::string_view value) {
 
 std::optional<std::string> EnvironmentValue(const char* name) {
   const char* value = std::getenv(name);
-  if (value == nullptr)
+  if (value == nullptr) {
     return std::nullopt;
+  }
   return std::string(value);
 }
 
@@ -242,12 +240,14 @@ class RedisIoLoop {
   }
 
   absl::Status Post(std::function<void()> work) {
-    if (!work)
+    if (!work) {
       return absl::InvalidArgumentError("Redis I/O work must be callable");
+    }
     {
       thread::MutexLock lock(&mu_);
-      if (!running_)
+      if (!running_) {
         return absl::FailedPreconditionError("The Redis I/O loop is stopped");
+      }
       try {
         work_.push_back(std::move(work));
       } catch (const std::exception& error) {
@@ -298,8 +298,9 @@ class RedisIoLoop {
       LOG(FATAL) << "Could not create the Redis libuv executor";
     }
     thread::MutexLock lock(&mu_);
-    while (!started_)
+    while (!started_) {
       cv_.Wait(&mu_);
+    }
   }
 
   void Drain() {
@@ -339,13 +340,15 @@ struct PendingResult {
   }
 
   void Complete(absl::StatusOr<T> result) {
-    if (TryComplete())
+    if (TryComplete()) {
       promise.SetResult(std::move(result)).IgnoreError();
+    }
   }
 
   void Fail(absl::Status status) {
-    if (!status.ok() && TryComplete())
+    if (!status.ok() && TryComplete()) {
       promise.SetStatus(std::move(status)).IgnoreError();
+    }
   }
 };
 
@@ -389,12 +392,15 @@ std::shared_ptr<Client>& DefaultClientStorage() {
 }  // namespace
 
 absl::Status ClientOptions::Validate() const {
-  if (host.empty())
+  if (host.empty()) {
     return absl::InvalidArgumentError("Redis host must not be empty");
-  if (port <= 0 || port > 65535)
+  }
+  if (port <= 0 || port > 65535) {
     return absl::InvalidArgumentError("Redis port must be between 1 and 65535");
-  if (database < 0)
+  }
+  if (database < 0) {
     return absl::InvalidArgumentError("Redis database must be non-negative");
+  }
   if (connect_timeout <= absl::ZeroDuration() ||
       connect_timeout == absl::InfiniteDuration()) {
     return absl::InvalidArgumentError(
@@ -436,17 +442,11 @@ absl::StatusOr<ClientOptions> ClientOptions::FromUrl(std::string_view url) {
     const std::string_view user_info = authority.substr(0, at);
     host_port = authority.substr(at + 1);
     const size_t colon = user_info.find(':');
-    absl::StatusOr<std::string> username =
-        PercentDecode(user_info.substr(0, colon));
-    if (!username.ok())
-      return username.status();
-    options.username = std::move(*username);
+    ABSL_ASSIGN_OR_RETURN(options.username,
+                          PercentDecode(user_info.substr(0, colon)));
     if (colon != std::string_view::npos) {
-      absl::StatusOr<std::string> password =
-          PercentDecode(user_info.substr(colon + 1));
-      if (!password.ok())
-        return password.status();
-      options.password = std::move(*password);
+      ABSL_ASSIGN_OR_RETURN(options.password,
+                            PercentDecode(user_info.substr(colon + 1)));
     }
   }
 
@@ -454,13 +454,15 @@ absl::StatusOr<ClientOptions> ClientOptions::FromUrl(std::string_view url) {
   std::string_view port;
   if (absl::StartsWith(host_port, "[")) {
     const size_t close = host_port.find(']');
-    if (close == std::string_view::npos)
+    if (close == std::string_view::npos) {
       return absl::InvalidArgumentError(
           "Redis URL has an unterminated IPv6 host");
+    }
     host = host_port.substr(1, close - 1);
     if (close + 1 < host_port.size()) {
-      if (host_port[close + 1] != ':')
+      if (host_port[close + 1] != ':') {
         return absl::InvalidArgumentError("Invalid text after Redis IPv6 host");
+      }
       port = host_port.substr(close + 2);
     }
   } else if (const size_t colon = host_port.rfind(':');
@@ -470,42 +472,32 @@ absl::StatusOr<ClientOptions> ClientOptions::FromUrl(std::string_view url) {
   } else {
     host = host_port;
   }
-  absl::StatusOr<std::string> decoded_host = PercentDecode(host);
-  if (!decoded_host.ok())
-    return decoded_host.status();
-  options.host = std::move(*decoded_host);
+  ABSL_ASSIGN_OR_RETURN(options.host, PercentDecode(host));
   if (!port.empty()) {
-    absl::StatusOr<int> parsed = ParseInteger(port, "Redis URL port", 1, 65535);
-    if (!parsed.ok())
-      return parsed.status();
-    options.port = *parsed;
+    ABSL_ASSIGN_OR_RETURN(options.port,
+                          ParseInteger(port, "Redis URL port", 1, 65535));
   }
   if (!path.empty()) {
-    absl::StatusOr<int> database = ParseInteger(
-        path, "Redis URL database", 0, std::numeric_limits<int>::max());
-    if (!database.ok())
-      return database.status();
-    options.database = *database;
+    ABSL_ASSIGN_OR_RETURN(options.database,
+                          ParseInteger(path, "Redis URL database", 0,
+                                       std::numeric_limits<int>::max()));
   }
-  absl::Status validation = options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   return options;
 }
 
 absl::StatusOr<ClientOptions> ClientOptions::FromEnvironment() {
-  if (std::optional<std::string> url = EnvironmentValue("A11_REDIS_URL"))
+  if (std::optional<std::string> url = EnvironmentValue("A11_REDIS_URL")) {
     return FromUrl(*url);
+  }
 
   ClientOptions options;
-  if (std::optional<std::string> value = EnvironmentValue("A11_REDIS_HOST"))
+  if (std::optional<std::string> value = EnvironmentValue("A11_REDIS_HOST")) {
     options.host = std::move(*value);
+  }
   if (std::optional<std::string> value = EnvironmentValue("A11_REDIS_PORT")) {
-    absl::StatusOr<int> parsed =
-        ParseInteger(*value, "A11_REDIS_PORT", 1, 65535);
-    if (!parsed.ok())
-      return parsed.status();
-    options.port = *parsed;
+    ABSL_ASSIGN_OR_RETURN(options.port,
+                          ParseInteger(*value, "A11_REDIS_PORT", 1, 65535));
   }
   if (std::optional<std::string> value =
           EnvironmentValue("A11_REDIS_USERNAME")) {
@@ -516,11 +508,9 @@ absl::StatusOr<ClientOptions> ClientOptions::FromEnvironment() {
     options.password = std::move(*value);
   }
   if (std::optional<std::string> value = EnvironmentValue("A11_REDIS_DB")) {
-    absl::StatusOr<int> parsed = ParseInteger(*value, "A11_REDIS_DB", 0,
-                                              std::numeric_limits<int>::max());
-    if (!parsed.ok())
-      return parsed.status();
-    options.database = *parsed;
+    ABSL_ASSIGN_OR_RETURN(options.database,
+                          ParseInteger(*value, "A11_REDIS_DB", 0,
+                                       std::numeric_limits<int>::max()));
   }
   if (std::optional<std::string> value =
           EnvironmentValue("A11_REDIS_CLIENT_NAME")) {
@@ -528,25 +518,19 @@ absl::StatusOr<ClientOptions> ClientOptions::FromEnvironment() {
   }
   if (std::optional<std::string> value =
           EnvironmentValue("A11_REDIS_CONNECT_TIMEOUT_MS")) {
-    absl::StatusOr<int> parsed =
-        ParseInteger(*value, "A11_REDIS_CONNECT_TIMEOUT_MS", 1,
-                     std::numeric_limits<int>::max());
-    if (!parsed.ok())
-      return parsed.status();
-    options.connect_timeout = absl::Milliseconds(*parsed);
+    ABSL_ASSIGN_OR_RETURN(const int parsed,
+                          ParseInteger(*value, "A11_REDIS_CONNECT_TIMEOUT_MS",
+                                       1, std::numeric_limits<int>::max()));
+    options.connect_timeout = absl::Milliseconds(parsed);
   }
   if (std::optional<std::string> value =
           EnvironmentValue("A11_REDIS_COMMAND_TIMEOUT_MS")) {
-    absl::StatusOr<int> parsed =
-        ParseInteger(*value, "A11_REDIS_COMMAND_TIMEOUT_MS", 1,
-                     std::numeric_limits<int>::max());
-    if (!parsed.ok())
-      return parsed.status();
-    options.command_timeout = absl::Milliseconds(*parsed);
+    ABSL_ASSIGN_OR_RETURN(const int parsed,
+                          ParseInteger(*value, "A11_REDIS_COMMAND_TIMEOUT_MS",
+                                       1, std::numeric_limits<int>::max()));
+    options.command_timeout = absl::Milliseconds(parsed);
   }
-  absl::Status validation = options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   return options;
 }
 
@@ -571,8 +555,9 @@ struct Subscription::State
         complete = true;
       }
     }
-    if (complete)
+    if (complete) {
       ready_promise.SetValue(a11::Unit{}).IgnoreError();
+    }
   }
 
   void Notify() {
@@ -581,8 +566,9 @@ struct Subscription::State
     absl::Status overflow;
     {
       thread::MutexLock lock(&mu);
-      if (terminal_status.has_value())
+      if (terminal_status.has_value()) {
         return;
+      }
       if (generation == std::numeric_limits<std::uint64_t>::max()) {
         overflow = absl::ResourceExhaustedError(
             "Redis subscription generation overflowed");
@@ -602,28 +588,33 @@ struct Subscription::State
       Fail(std::move(overflow));
       return;
     }
-    for (const auto& waiter : completions)
+    for (const auto& waiter : completions) {
       waiter->promise.SetValue(published).IgnoreError();
+    }
   }
 
   void Fail(absl::Status status) {
-    if (status.ok())
+    if (status.ok()) {
       status = absl::UnknownError("Redis subscription failed without an error");
+    }
     std::vector<std::shared_ptr<Waiter>> pending;
     bool fail_ready = false;
     {
       thread::MutexLock lock(&mu);
-      if (terminal_status.has_value())
+      if (terminal_status.has_value()) {
         return;
+      }
       terminal_status = status;
       fail_ready = !ready_completed;
       ready_completed = true;
       pending.swap(waiters);
     }
-    if (fail_ready)
+    if (fail_ready) {
       ready_promise.SetStatus(status).IgnoreError();
-    for (const auto& waiter : pending)
+    }
+    for (const auto& waiter : pending) {
       waiter->Fail(status);
+    }
   }
 
   void RemoveWaiter(const Waiter* waiter) {
@@ -641,14 +632,16 @@ struct Subscription::State
     waiter->promise
         .SetCancellationCallback([weak_state, weak_waiter] {
           const std::shared_ptr<Waiter> pending = weak_waiter.lock();
-          if (pending == nullptr || !pending->TryComplete())
+          if (pending == nullptr || !pending->TryComplete()) {
             return;
+          }
           pending->promise
               .SetStatus(
                   absl::CancelledError("Redis subscription wait was cancelled"))
               .IgnoreError();
-          if (const std::shared_ptr<State> state = weak_state.lock())
+          if (const std::shared_ptr<State> state = weak_state.lock()) {
             state->RemoveWaiter(pending.get());
+          }
         })
         .IgnoreError();
 
@@ -664,23 +657,26 @@ struct Subscription::State
         waiters.push_back(waiter);
       }
     }
-    if (immediate.has_value())
+    if (immediate.has_value()) {
       waiter->Complete(*immediate);
-    else if (failure.has_value())
+    } else if (failure.has_value()) {
       waiter->Fail(*failure);
+    }
 
     if (!waiter->completed.load(std::memory_order_acquire) &&
         deadline != absl::InfiniteFuture()) {
       thread::PostAt(deadline, [weak_state, weak_waiter] {
         const std::shared_ptr<Waiter> pending = weak_waiter.lock();
-        if (pending == nullptr || !pending->TryComplete())
+        if (pending == nullptr || !pending->TryComplete()) {
           return;
+        }
         pending->promise
             .SetStatus(absl::DeadlineExceededError(
                 "Redis subscription did not change before the deadline"))
             .IgnoreError();
-        if (const std::shared_ptr<State> state = weak_state.lock())
+        if (const std::shared_ptr<State> state = weak_state.lock()) {
           state->RemoveWaiter(pending.get());
+        }
       });
     }
     return future;
@@ -730,22 +726,25 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
 
   static void ConnectCallback(const redisAsyncContext* context, int status) {
     auto* impl = static_cast<Impl*>(context->data);
-    if (impl != nullptr)
+    if (impl != nullptr) {
       impl->OnConnect(const_cast<redisAsyncContext*>(context), status);
+    }
   }
 
   static void DisconnectCallback(const redisAsyncContext* context, int status) {
     auto* impl = static_cast<Impl*>(context->data);
-    if (impl != nullptr)
+    if (impl != nullptr) {
       impl->OnDisconnect(const_cast<redisAsyncContext*>(context), status);
+    }
   }
 
   static void InitializationCallback(redisAsyncContext* context,
                                      void* hiredis_reply, void* private_data) {
     std::unique_ptr<InitializationToken> token(
         static_cast<InitializationToken*>(private_data));
-    if (token == nullptr || token->impl == nullptr)
+    if (token == nullptr || token->impl == nullptr) {
       return;
+    }
     if (hiredis_reply == nullptr) {
       const std::string detail =
           context == nullptr || context->errstr == nullptr ? "connection closed"
@@ -767,8 +766,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
   static void PubSubCallback(redisAsyncContext* context, void* hiredis_reply,
                              void* private_data) {
     auto* impl = static_cast<Impl*>(private_data);
-    if (impl == nullptr)
+    if (impl == nullptr) {
       return;
+    }
     if (hiredis_reply == nullptr) {
       const std::string detail =
           context == nullptr || context->errstr == nullptr ? "connection closed"
@@ -781,8 +781,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
   }
 
   void StartOnLoop() {
-    if (closing || terminal_status.has_value())
+    if (closing || terminal_status.has_value()) {
       return;
+    }
     absl::StatusOr<redisAsyncContext*> command = CreateContext();
     if (!command.ok()) {
       Fail(command.status());
@@ -803,8 +804,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     hiredis_options.connect_timeout = &timeout;
     REDIS_OPTIONS_SET_TCP(&hiredis_options, options.host.c_str(), options.port);
     redisAsyncContext* context = redisAsyncConnectWithOptions(&hiredis_options);
-    if (context == nullptr)
+    if (context == nullptr) {
       return absl::ResourceExhaustedError("Could not allocate Redis context");
+    }
     if (context->err != REDIS_OK) {
       const std::string error = context->errstr == nullptr
                                     ? "unknown hiredis connection error"
@@ -832,13 +834,15 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
       bool subscriber) const {
     std::vector<std::vector<std::string>> commands;
     if (!options.password.empty() || !options.username.empty()) {
-      if (options.username.empty())
+      if (options.username.empty()) {
         commands.push_back({"AUTH", options.password});
-      else
+      } else {
         commands.push_back({"AUTH", options.username, options.password});
+      }
     }
-    if (options.database != 0)
+    if (options.database != 0) {
       commands.push_back({"SELECT", std::to_string(options.database)});
+    }
     if (!options.client_name.empty()) {
       commands.push_back(
           {"CLIENT", "SETNAME",
@@ -849,15 +853,17 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
 
   void SendInitialization(redisAsyncContext* context, bool subscriber,
                           size_t command_index) {
-    if (terminal_status.has_value() || closing)
+    if (terminal_status.has_value() || closing) {
       return;
+    }
     const std::vector<std::vector<std::string>> commands =
         InitializationCommands(subscriber);
     if (command_index == commands.size()) {
-      if (subscriber)
+      if (subscriber) {
         subscriber_initialized = true;
-      else
+      } else {
         command_initialized = true;
+      }
       MaybeReady();
       return;
     }
@@ -903,10 +909,12 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
   }
 
   void OnDisconnect(redisAsyncContext* context, int status) {
-    if (context == command_context)
+    if (context == command_context) {
       command_context = nullptr;
-    if (context == subscriber_context)
+    }
+    if (context == subscriber_context) {
       subscriber_context = nullptr;
+    }
     if (!closing && !terminal_status.has_value()) {
       const std::string detail =
           status == REDIS_OK || context->errstr == nullptr ? "connection closed"
@@ -927,15 +935,18 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
 
     std::vector<QueuedCommand> commands;
     commands.swap(queued_commands);
-    for (QueuedCommand& command : commands)
+    for (QueuedCommand& command : commands) {
       SendCommand(std::move(command.request));
-    for (auto& [channel, state] : channels)
+    }
+    for (auto& [channel, state] : channels) {
       EnsureSubscribed(channel, &state);
+    }
   }
 
   void QueueOrSend(std::shared_ptr<CommandRequest> request) {
-    if (request->completed.load(std::memory_order_acquire))
+    if (request->completed.load(std::memory_order_acquire)) {
       return;
+    }
     if (terminal_status.has_value()) {
       request->Fail(*terminal_status);
       return;
@@ -952,8 +963,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
   }
 
   void SendCommand(std::shared_ptr<CommandRequest> request) {
-    if (request->completed.load(std::memory_order_acquire))
+    if (request->completed.load(std::memory_order_acquire)) {
       return;
+    }
     if (command_context == nullptr || terminal_status.has_value()) {
       request->Fail(terminal_status.value_or(
           absl::UnavailableError("Redis command connection is unavailable")));
@@ -993,8 +1005,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
       listener->MarkReady();
       return;
     }
-    if (ready_completed)
+    if (ready_completed) {
       EnsureSubscribed(listener->channel, &channel);
+    }
   }
 
   void EnsureSubscribed(const std::string& name, Channel* channel) {
@@ -1023,8 +1036,9 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
   void RemoveSubscription(std::string channel_name,
                           const Subscription::State* listener) {
     const auto found = channels.find(channel_name);
-    if (found == channels.end())
+    if (found == channels.end()) {
       return;
+    }
     Channel& channel = found->second;
     std::erase_if(channel.listeners,
                   [listener](const std::weak_ptr<Subscription::State>& weak) {
@@ -1032,19 +1046,22 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
                         weak.lock();
                     return candidate == nullptr || candidate.get() == listener;
                   });
-    if (!channel.listeners.empty())
+    if (!channel.listeners.empty()) {
       return;
-    if (channel.subscribed)
+    }
+    if (channel.subscribed) {
       SendUnsubscribe(channel_name, &channel);
-    else if (channel.command_sent)
+    } else if (channel.command_sent) {
       channel.unsubscribe_after_ack = true;
-    else
+    } else {
       channels.erase(found);
+    }
   }
 
   void SendUnsubscribe(const std::string& name, Channel* channel) {
-    if (subscriber_context == nullptr)
+    if (subscriber_context == nullptr) {
       return;
+    }
     std::vector<std::string> parts{"UNSUBSCRIBE", name};
     std::vector<const char*> values;
     std::vector<size_t> lengths;
@@ -1087,28 +1104,32 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
       return;
     }
     const auto found = channels.find(*channel_name);
-    if (found == channels.end())
+    if (found == channels.end()) {
       return;
+    }
     Channel& channel = found->second;
     RemoveExpiredListeners(&channel);
     if (*type == "subscribe") {
       channel.command_sent = false;
       channel.subscribed = true;
       for (const auto& weak : channel.listeners) {
-        if (const std::shared_ptr<Subscription::State> listener = weak.lock())
+        if (const std::shared_ptr<Subscription::State> listener = weak.lock()) {
           listener->MarkReady();
+        }
       }
-      if (channel.listeners.empty() || channel.unsubscribe_after_ack)
+      if (channel.listeners.empty() || channel.unsubscribe_after_ack) {
         SendUnsubscribe(*channel_name, &channel);
+      }
       return;
     }
     if (*type == "unsubscribe") {
       channel.command_sent = false;
       channel.subscribed = false;
-      if (channel.listeners.empty())
+      if (channel.listeners.empty()) {
         channels.erase(found);
-      else
+      } else {
         EnsureSubscribed(*channel_name, &channel);
+      }
       return;
     }
     if (*type != "message") {
@@ -1117,16 +1138,19 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
       return;
     }
     for (const auto& weak : channel.listeners) {
-      if (const std::shared_ptr<Subscription::State> listener = weak.lock())
+      if (const std::shared_ptr<Subscription::State> listener = weak.lock()) {
         listener->Notify();
+      }
     }
   }
 
   void Fail(absl::Status status) {
-    if (status.ok())
+    if (status.ok()) {
       status = absl::UnknownError("Redis client failed without an error");
-    if (terminal_status.has_value())
+    }
+    if (terminal_status.has_value()) {
       return;
+    }
     terminal_status = status;
     if (!ready_completed) {
       ready_completed = true;
@@ -1134,36 +1158,40 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     }
     std::vector<QueuedCommand> commands;
     commands.swap(queued_commands);
-    for (QueuedCommand& command : commands)
+    for (QueuedCommand& command : commands) {
       command.request->Fail(status);
+    }
     for (auto& [name, channel] : channels) {
       (void)name;
       for (const auto& weak : channel.listeners) {
-        if (const std::shared_ptr<Subscription::State> listener = weak.lock())
+        if (const std::shared_ptr<Subscription::State> listener = weak.lock()) {
           listener->Fail(status);
+        }
       }
     }
     channels.clear();
-    if (command_context != nullptr)
+    if (command_context != nullptr) {
       redisAsyncDisconnect(command_context);
-    if (subscriber_context != nullptr)
+    }
+    if (subscriber_context != nullptr) {
       redisAsyncDisconnect(subscriber_context);
+    }
     MaybeRelease();
   }
 
   absl::Status RequestClose() {
-    if (close_requested.exchange(true, std::memory_order_acq_rel))
+    if (close_requested.exchange(true, std::memory_order_acq_rel)) {
       return absl::OkStatus();
-    absl::Status queued = RedisIoLoop::Instance().Post(
-        [self = shared_from_this()] { self->CloseOnLoop(); });
-    if (!queued.ok())
-      return queued;
+    }
+    ABSL_RETURN_IF_ERROR(RedisIoLoop::Instance().Post(
+        [self = shared_from_this()] { self->CloseOnLoop(); }));
     return absl::OkStatus();
   }
 
   void CloseOnLoop() {
-    if (closing)
+    if (closing) {
       return;
+    }
     closing = true;
     Fail(absl::CancelledError("Redis client was closed"));
   }
@@ -1195,13 +1223,15 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
 };
 
 Subscription::~Subscription() {
-  if (state_ == nullptr)
+  if (state_ == nullptr) {
     return;
+  }
   State* identity = state_.get();
   std::function<void(const State*)> release = state_->on_release;
   state_->Fail(absl::CancelledError("Redis subscription was released"));
-  if (release)
+  if (release) {
     release(identity);
+  }
 }
 
 std::string Subscription::channel() const {
@@ -1222,17 +1252,16 @@ Client::Client(ClientOptions options)
     : impl_(std::make_shared<Impl>(std::move(options))) {}
 
 absl::StatusOr<std::shared_ptr<Client>> Client::Create(ClientOptions options) {
-  absl::Status validation = options.Validate();
-  if (!validation.ok())
-    return validation;
+  ABSL_RETURN_IF_ERROR(options.Validate());
   std::shared_ptr<Client> client(new Client(std::move(options)));
   client->impl_->Start();
   return client;
 }
 
 Client::~Client() {
-  if (impl_ != nullptr)
+  if (impl_ != nullptr) {
     impl_->RequestClose().IgnoreError();
+  }
 }
 
 const ClientOptions& Client::options() const {
@@ -1259,8 +1288,10 @@ a11::Future<Reply> Client::Command(std::vector<std::string> parts,
   const std::weak_ptr<CommandRequest> weak_request = request;
   request->promise
       .SetCancellationCallback([weak_request] {
-        if (const std::shared_ptr<CommandRequest> pending = weak_request.lock())
+        if (const std::shared_ptr<CommandRequest> pending =
+                weak_request.lock()) {
           pending->Fail(absl::CancelledError("Redis command was cancelled"));
+        }
       })
       .IgnoreError();
 
@@ -1268,8 +1299,9 @@ a11::Future<Reply> Client::Command(std::vector<std::string> parts,
       impl_->options.command_timeout == absl::InfiniteDuration()
           ? absl::InfiniteFuture()
           : absl::Now() + impl_->options.command_timeout;
-  if (deadline == absl::InfiniteFuture() || timeout_deadline < deadline)
+  if (deadline == absl::InfiniteFuture() || timeout_deadline < deadline) {
     deadline = timeout_deadline;
+  }
   if (deadline != absl::InfiniteFuture()) {
     thread::PostAt(deadline, [weak_request] {
       if (const std::shared_ptr<CommandRequest> pending = weak_request.lock()) {
@@ -1281,8 +1313,9 @@ a11::Future<Reply> Client::Command(std::vector<std::string> parts,
 
   absl::Status queued = RedisIoLoop::Instance().Post(
       [impl = impl_, request] { impl->QueueOrSend(request); });
-  if (!queued.ok())
+  if (!queued.ok()) {
     request->Fail(std::move(queued));
+  }
   return future;
 }
 
@@ -1299,10 +1332,12 @@ a11::Future<Reply> Client::Eval(std::string script,
   command.push_back("EVAL");
   command.push_back(std::move(script));
   command.push_back(std::to_string(keys.size()));
-  for (std::string& key : keys)
+  for (std::string& key : keys) {
     command.push_back(std::move(key));
-  for (std::string& argument : arguments)
+  }
+  for (std::string& argument : arguments) {
     command.push_back(std::move(argument));
+  }
   return Command(std::move(command), deadline);
 }
 
@@ -1334,27 +1369,30 @@ a11::Future<std::shared_ptr<Subscription>> Client::Subscribe(
   result->promise
       .SetCancellationCallback([weak_state, result] {
         if (const std::shared_ptr<Subscription::State> active =
-                weak_state.lock())
+                weak_state.lock()) {
           active->Fail(
               absl::CancelledError("Redis subscribe operation was cancelled"));
+        }
         result->Fail(
             absl::CancelledError("Redis subscribe operation was cancelled"));
       })
       .IgnoreError();
   state->ready.OnReady(
       [result, subscription](const absl::StatusOr<a11::Unit>& ready) {
-        if (!ready.ok())
+        if (!ready.ok()) {
           result->Fail(ready.status());
-        else
+        } else {
           result->Complete(subscription);
+        }
       });
 
   const absl::Time timeout_deadline =
       impl_->options.command_timeout == absl::InfiniteDuration()
           ? absl::InfiniteFuture()
           : absl::Now() + impl_->options.command_timeout;
-  if (deadline == absl::InfiniteFuture() || timeout_deadline < deadline)
+  if (deadline == absl::InfiniteFuture() || timeout_deadline < deadline) {
     deadline = timeout_deadline;
+  }
   if (deadline != absl::InfiniteFuture()) {
     thread::PostAt(deadline, [weak_state] {
       if (const std::shared_ptr<Subscription::State> active =
@@ -1367,8 +1405,9 @@ a11::Future<std::shared_ptr<Subscription>> Client::Subscribe(
 
   absl::Status queued = RedisIoLoop::Instance().Post(
       [impl = impl_, state] { impl->RegisterSubscription(state); });
-  if (!queued.ok())
+  if (!queued.ok()) {
     state->Fail(std::move(queued));
+  }
   return future;
 }
 
@@ -1379,22 +1418,19 @@ absl::Status Client::Close() {
 absl::StatusOr<std::shared_ptr<Client>> DefaultClient() {
   thread::MutexLock lock(&DefaultClientMutex());
   std::shared_ptr<Client>& stored = DefaultClientStorage();
-  if (stored != nullptr)
+  if (stored != nullptr) {
     return stored;
-  absl::StatusOr<ClientOptions> options = ClientOptions::FromEnvironment();
-  if (!options.ok())
-    return options.status();
-  absl::StatusOr<std::shared_ptr<Client>> client =
-      Client::Create(std::move(*options));
-  if (!client.ok())
-    return client.status();
-  stored = *client;
+  }
+  ABSL_ASSIGN_OR_RETURN(ClientOptions options,
+                        ClientOptions::FromEnvironment());
+  ABSL_ASSIGN_OR_RETURN(stored, Client::Create(std::move(options)));
   return stored;
 }
 
 absl::Status SetDefaultClient(std::shared_ptr<Client> client) {
-  if (client == nullptr)
+  if (client == nullptr) {
     return absl::InvalidArgumentError("Default Redis client must not be null");
+  }
   thread::MutexLock lock(&DefaultClientMutex());
   DefaultClientStorage() = std::move(client);
   return absl::OkStatus();

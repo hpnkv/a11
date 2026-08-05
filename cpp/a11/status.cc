@@ -21,8 +21,9 @@ bool IsCanonicalCode(std::int64_t code) {
 }  // namespace
 
 absl::StatusCode StatusCodeFromHttp(int http_code) {
-  if (http_code >= 200 && http_code < 300)
+  if (http_code >= 200 && http_code < 300) {
     return absl::StatusCode::kOk;
+  }
   switch (http_code) {
     case 400:
       return absl::StatusCode::kInvalidArgument;
@@ -144,13 +145,16 @@ absl::StatusCode StatusCodeFromWebSocket(std::uint16_t close_code) {
 }
 
 std::uint16_t StatusCodeToWebSocket(absl::StatusCode code) {
-  if (code == absl::StatusCode::kOk)
+  if (code == absl::StatusCode::kOk) {
     return 1000;
+  }
   const int raw = static_cast<int>(code);
-  if (raw >= 1 && raw <= 15)
+  if (raw >= 1 && raw <= 15) {
     return static_cast<std::uint16_t>(3999 + raw);
-  if (code == absl::StatusCode::kUnauthenticated)
+  }
+  if (code == absl::StatusCode::kUnauthenticated) {
     return 4007;
+  }
   return 4001;
 }
 
@@ -171,8 +175,9 @@ absl::Status MakeStatus(absl::StatusCode code, std::string message,
 nlohmann::json StatusDetails(const absl::Status& status) {
   const std::optional<absl::Cord> payload =
       status.GetPayload(kStatusDetailsPayloadUrl);
-  if (!payload.has_value())
+  if (!payload.has_value()) {
     return nlohmann::json::array();
+  }
   try {
     absl::Cord mutable_payload = *payload;
     nlohmann::json details =

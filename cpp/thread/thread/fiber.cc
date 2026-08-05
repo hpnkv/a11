@@ -194,8 +194,9 @@ void Fiber::MarkJoined() {
   {
     thread::MutexLock lock(&mu_);
     DCHECK(first_child_ == nullptr);
-    if (state_ == JOINED)
+    if (state_ == JOINED) {
       return;  // Already joined.
+    }
     DCHECK_EQ(state_, FINISHED);
     DVLOG(2) << "F " << this << " joined";
     state_ = JOINED;

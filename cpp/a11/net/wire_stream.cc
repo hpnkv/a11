@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/strings/ascii.h>
 
 #include "a11/data/types.h"
@@ -41,9 +42,7 @@ absl::StatusOr<data::ByteMap> NormalizeWireHeaders(data::ByteMap headers) {
   data::ByteMap normalized;
   for (auto& [key, value] : headers) {
     std::string folded = absl::AsciiStrToLower(key);
-    absl::Status status = data::ValidateName(folded);
-    if (!status.ok())
-      return status;
+    ABSL_RETURN_IF_ERROR(data::ValidateName(folded));
     normalized.insert_or_assign(std::move(folded), std::move(value));
   }
   return normalized;

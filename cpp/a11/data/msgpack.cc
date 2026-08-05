@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
@@ -32,9 +33,7 @@ absl::Status Need(size_t position, size_t count, size_t total) {
 
 absl::StatusOr<std::uint64_t> ReadUnsigned(std::string_view bytes,
                                            size_t* position, size_t width) {
-  absl::Status status = Need(*position, width, bytes.size());
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(Need(*position, width, bytes.size()));
   std::uint64_t result = 0;
   for (size_t index = 0; index < width; ++index) {
     result =
@@ -48,9 +47,7 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
   if (depth > kMaxNesting) {
     return absl::ResourceExhaustedError("MessagePack nesting is too deep");
   }
-  absl::Status status = Need(*position, 1, bytes.size());
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(Need(*position, 1, bytes.size()));
   const std::uint8_t marker = static_cast<std::uint8_t>(bytes[(*position)++]);
 
   if (marker <= 0x7f || marker >= 0xe0 || marker == 0xc0 || marker == 0xc2 ||
@@ -59,20 +56,20 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
   }
   if ((marker & 0xe0U) == 0xa0U) {
     const size_t length = marker & 0x1fU;
-    status = Need(*position, length, bytes.size());
-    if (status.ok())
+    const absl::Status status = Need(*position, length, bytes.size());
+    if (status.ok()) {
       *position += length;
+    }
     return status;
   }
   if ((marker & 0xf0U) == 0x90U || (marker & 0xf0U) == 0x80U) {
     const bool is_map = (marker & 0xf0U) == 0x80U;
     std::uint64_t count = marker & 0x0fU;
-    if (is_map)
+    if (is_map) {
       count *= 2;
+    }
     for (std::uint64_t index = 0; index < count; ++index) {
-      status = SkipValue(bytes, position, depth + 1);
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(SkipValue(bytes, position, depth + 1));
     }
     return absl::OkStatus();
   }
@@ -132,43 +129,42 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
       break;
   }
   if (fixed_width != 0) {
-    status = Need(*position, fixed_width, bytes.size());
-    if (status.ok())
+    const absl::Status status = Need(*position, fixed_width, bytes.size());
+    if (status.ok()) {
       *position += fixed_width;
+    }
     return status;
   }
 
   if (marker == 0xdc || marker == 0xdd || marker == 0xde || marker == 0xdf) {
     const size_t width = (marker == 0xdc || marker == 0xde) ? 2 : 4;
-    absl::StatusOr<std::uint64_t> count = ReadUnsigned(bytes, position, width);
-    if (!count.ok())
-      return count.status();
+    ABSL_ASSIGN_OR_RETURN(std::uint64_t count,
+                          ReadUnsigned(bytes, position, width));
     const bool is_map = marker == 0xde || marker == 0xdf;
     if (is_map) {
-      if (*count > std::numeric_limits<std::uint64_t>::max() / 2) {
+      if (count > std::numeric_limits<std::uint64_t>::max() / 2) {
         return absl::ResourceExhaustedError("MessagePack map is too large");
       }
-      *count *= 2;
+      count *= 2;
     }
-    for (std::uint64_t index = 0; index < *count; ++index) {
-      status = SkipValue(bytes, position, depth + 1);
-      if (!status.ok())
-        return status;
+    for (std::uint64_t index = 0; index < count; ++index) {
+      ABSL_RETURN_IF_ERROR(SkipValue(bytes, position, depth + 1));
     }
     return absl::OkStatus();
   }
 
   if (marker == 0xc7 || marker == 0xc8 || marker == 0xc9) {
     const size_t width = marker == 0xc7 ? 1 : marker == 0xc8 ? 2 : 4;
-    absl::StatusOr<std::uint64_t> length = ReadUnsigned(bytes, position, width);
-    if (!length.ok())
-      return length.status();
-    if (*length > std::numeric_limits<size_t>::max() - 1) {
+    ABSL_ASSIGN_OR_RETURN(std::uint64_t length,
+                          ReadUnsigned(bytes, position, width));
+    if (length > std::numeric_limits<size_t>::max() - 1) {
       return absl::ResourceExhaustedError("MessagePack extension is too large");
     }
-    status = Need(*position, static_cast<size_t>(*length) + 1, bytes.size());
-    if (status.ok())
-      *position += static_cast<size_t>(*length) + 1;
+    const absl::Status status =
+        Need(*position, static_cast<size_t>(length) + 1, bytes.size());
+    if (status.ok()) {
+      *position += static_cast<size_t>(length) + 1;
+    }
     return status;
   }
 
@@ -185,9 +181,7 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
 // Length-prefixed binary and string markers need payload-aware handling. This
 // wrapper handles them before delegating the remaining marker classes.
 absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
-  absl::Status status = Need(*position, 1, bytes.size());
-  if (!status.ok())
-    return status;
+  ABSL_RETURN_IF_ERROR(Need(*position, 1, bytes.size()));
   const std::uint8_t marker = static_cast<std::uint8_t>(bytes[*position]);
   if (marker == 0xc4 || marker == 0xc5 || marker == 0xc6 || marker == 0xd9 ||
       marker == 0xda || marker == 0xdb) {
@@ -195,15 +189,16 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
     const size_t width = (marker == 0xc4 || marker == 0xd9)   ? 1
                          : (marker == 0xc5 || marker == 0xda) ? 2
                                                               : 4;
-    absl::StatusOr<std::uint64_t> length = ReadUnsigned(bytes, position, width);
-    if (!length.ok())
-      return length.status();
-    if (*length > std::numeric_limits<size_t>::max()) {
+    ABSL_ASSIGN_OR_RETURN(std::uint64_t length,
+                          ReadUnsigned(bytes, position, width));
+    if (length > std::numeric_limits<size_t>::max()) {
       return absl::ResourceExhaustedError("MessagePack value is too large");
     }
-    status = Need(*position, static_cast<size_t>(*length), bytes.size());
-    if (status.ok())
-      *position += static_cast<size_t>(*length);
+    const absl::Status status =
+        Need(*position, static_cast<size_t>(length), bytes.size());
+    if (status.ok()) {
+      *position += static_cast<size_t>(length);
+    }
     return status;
   }
 
@@ -223,11 +218,9 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
       is_map = (marker & 0xf0U) == 0x80U;
     } else {
       const size_t width = (marker == 0xdc || marker == 0xde) ? 2 : 4;
-      absl::StatusOr<std::uint64_t> parsed =
-          ReadUnsigned(bytes, position, width);
-      if (!parsed.ok())
-        return parsed.status();
-      count = *parsed;
+      ABSL_ASSIGN_OR_RETURN(std::uint64_t parsed,
+                            ReadUnsigned(bytes, position, width));
+      count = parsed;
       is_map = marker == 0xde || marker == 0xdf;
     }
     if (is_map) {
@@ -237,9 +230,7 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
       count *= 2;
     }
     for (std::uint64_t index = 0; index < count; ++index) {
-      status = ScanValue(bytes, position, depth + 1);
-      if (!status.ok())
-        return status;
+      ABSL_RETURN_IF_ERROR(ScanValue(bytes, position, depth + 1));
     }
     return absl::OkStatus();
   }
@@ -304,15 +295,9 @@ absl::StatusOr<std::string> GetBinary(const nlohmann::json& value,
 
 absl::StatusOr<std::string> PackStatus(const absl::Status& status) {
   MsgpackWriter writer;
-  absl::Status result = writer.Pack(static_cast<int>(status.code()));
-  if (!result.ok())
-    return result;
-  result = writer.Pack(std::string(status.message()));
-  if (!result.ok())
-    return result;
-  result = writer.Pack(StatusDetails(status));
-  if (!result.ok())
-    return result;
+  ABSL_RETURN_IF_ERROR(writer.Pack(static_cast<int>(status.code())));
+  ABSL_RETURN_IF_ERROR(writer.Pack(std::string(status.message())));
+  ABSL_RETURN_IF_ERROR(writer.Pack(StatusDetails(status)));
   return writer.TakeBytes();
 }
 

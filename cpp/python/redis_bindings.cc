@@ -27,8 +27,9 @@ namespace {
 
 std::string RedisBytes(const py::handle& value, const char* name) {
   try {
-    if (py::isinstance<py::str>(value))
+    if (py::isinstance<py::str>(value)) {
       return value.cast<std::string>();
+    }
     if (py::isinstance<py::bytes>(value) ||
         PyByteArray_Check(value.ptr()) != 0 ||
         PyMemoryView_Check(value.ptr()) != 0) {
@@ -57,8 +58,9 @@ std::vector<std::string> RedisParts(const py::handle& values,
   }
   try {
     std::vector<std::string> result;
-    for (const py::handle value : values)
+    for (const py::handle value : values) {
       result.push_back(RedisBytes(value, name));
+    }
     return result;
   } catch (py::error_already_set& error) {
     ThrowStatus(StatusFromPythonException(error));
@@ -75,8 +77,9 @@ absl::Time RedisDeadline(const py::handle& value) {
 }
 
 void CheckStatus(absl::Status status) {
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 void ValidateClientOptions(const redis::ClientOptions& options) {
@@ -227,7 +230,7 @@ void BindRedis(py::module_& module) {
              const redis::ClientOptions& other) { return self == other; },
           py::is_operator());
 
-  py::class_<redis::Subscription, std::shared_ptr<redis::Subscription>>(
+  py::classh<redis::Subscription>(
       module, "RedisSubscription",
       "A non-buffering broadcast subscription for invalidation events.")
       .def_property_readonly("channel", &redis::Subscription::channel,
@@ -243,7 +246,7 @@ void BindRedis(py::module_& module) {
           "Await a message newer than generation `after`.", py::arg("after"),
           py::arg("deadline") = py::none());
 
-  py::class_<redis::Client, std::shared_ptr<redis::Client>>(
+  py::classh<redis::Client>(
       module, "RedisClient",
       "An asynchronous, binary-safe hiredis/libuv client using A11 futures.")
       .def(py::init([](redis::ClientOptions options) {

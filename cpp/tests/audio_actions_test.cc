@@ -65,8 +65,8 @@ TEST(AudioActionsTest, DeadlineAlreadyPassedIsRejected) {
   ASSERT_TRUE(EnsureAudioTypesRegistered().ok());
   // The deadline is checked before any device is touched, so this is
   // deterministic without audio hardware. "1" ms since epoch is long past.
-  auto action = *Action::Create(CaptureAudioSchema(), "past",
-                                CaptureAudioHandler());
+  auto action =
+      *Action::Create(CaptureAudioSchema(), "past", CaptureAudioHandler());
   ASSERT_TRUE(action->SetHeader(std::string(kDeadlineHeader), "1").ok());
   ASSERT_TRUE(action->Run().ok());
   EXPECT_EQ(action->Wait(absl::Seconds(10)).Await().status().code(),
@@ -84,11 +84,10 @@ TEST(AudioActionsTest, SchemasDeclareDeadlineHeader) {
 
 TEST(AudioActionsTest, TranscribeAudioRequiresModelPath) {
   ASSERT_TRUE(EnsureAudioTypesRegistered().ok());
-  auto action = *Action::Create(TranscribeAudioSchema(), "tr",
-                                TranscribeAudioHandler());
+  auto action =
+      *Action::Create(TranscribeAudioSchema(), "tr", TranscribeAudioHandler());
   // Close the audio input empty and omit asr_options (empty model_path).
-  ASSERT_TRUE(
-      (*action->GetInput("audio", false))->PutNullFinal().Await().ok());
+  ASSERT_TRUE((*action->GetInput("audio", false))->PutNullFinal().Await().ok());
   ASSERT_TRUE(
       (*action->GetInput("asr_options", false))->PutNullFinal().Await().ok());
   ASSERT_TRUE(action->Run().ok());
@@ -130,9 +129,12 @@ TEST(AudioActionsTest, ListAudioInputsStreamsDevices) {
   auto out = *action->GetOutput("inputs", false);
   std::vector<DeviceInfo> devices;
   while (true) {
-    auto next = out->NextObject<DeviceInfo>().Await(absl::Now() + absl::Seconds(5));
+    auto next =
+        out->NextObject<DeviceInfo>().Await(absl::Now() + absl::Seconds(5));
     ASSERT_TRUE(next.ok()) << next.status();
-    if (!next->has_value()) break;
+    if (!next->has_value()) {
+      break;
+    }
     devices.push_back(**next);
   }
   for (const DeviceInfo& device : devices) {
@@ -175,10 +177,11 @@ TEST(AudioActionsTest, CaptureAudioStopsGracefully) {
 
   AudioInputOptions options;
   options.buffer_frames = 512;
-  ASSERT_TRUE((*action->GetInput("options", false))
-                  ->Put<AudioInputOptions>(options, std::nullopt, /*final=*/true)
-                  .Await()
-                  .ok());
+  ASSERT_TRUE(
+      (*action->GetInput("options", false))
+          ->Put<AudioInputOptions>(options, std::nullopt, /*final=*/true)
+          .Await()
+          .ok());
   // A stop command already queued makes the run finish promptly.
   ASSERT_TRUE((*action->GetInput("control_events", false))
                   ->Put<AudioControlEvent>(AudioControlEvent::Stop(),
@@ -194,10 +197,12 @@ TEST(AudioActionsTest, CaptureAudioStopsGracefully) {
   auto events = *action->GetOutput("events", false);
   std::vector<AudioCaptureEvent> seen;
   while (true) {
-    auto next =
-        events->NextObject<AudioCaptureEvent>().Await(absl::Now() + absl::Seconds(5));
+    auto next = events->NextObject<AudioCaptureEvent>().Await(absl::Now() +
+                                                              absl::Seconds(5));
     ASSERT_TRUE(next.ok()) << next.status();
-    if (!next->has_value()) break;
+    if (!next->has_value()) {
+      break;
+    }
     seen.push_back(**next);
   }
   ASSERT_FALSE(seen.empty());
@@ -209,7 +214,9 @@ TEST(AudioActionsTest, CaptureAudioStopsGracefully) {
   while (true) {
     auto next = audio->NextChunk().Await(absl::Now() + absl::Seconds(5));
     ASSERT_TRUE(next.ok()) << next.status();
-    if (!next->has_value()) break;
+    if (!next->has_value()) {
+      break;
+    }
   }
 }
 

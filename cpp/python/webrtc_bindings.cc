@@ -40,8 +40,9 @@ class PythonSignallingCallback {
                                         " must be callable");
     }
     absl::StatusOr<std::shared_ptr<PythonLoop>> loop = PythonLoop::Capture();
-    if (!loop.ok())
+    if (!loop.ok()) {
       return loop.status();
+    }
 
     struct MakeSharedEnabler final : PythonSignallingCallback {
       MakeSharedEnabler(PyObject* callable, std::shared_ptr<PythonLoop> loop)
@@ -56,8 +57,9 @@ class PythonSignallingCallback {
   PythonSignallingCallback& operator=(const PythonSignallingCallback&) = delete;
 
   ~PythonSignallingCallback() {
-    if (Py_IsInitialized() == 0)
+    if (Py_IsInitialized() == 0) {
       return;
+    }
     const PyGILState_STATE state = PyGILState_Ensure();
     Py_CLEAR(callable_);
     PyGILState_Release(state);
@@ -86,7 +88,8 @@ net::OnSignallingMessage MakeSignallingCallback(
   };
 }
 
-class PySignallingTransport : public net::SignallingTransport {
+class PySignallingTransport : public net::SignallingTransport,
+                              public py::trampoline_self_life_support {
  public:
   absl::Status Send(net::SignallingMessage message) override {
     return CallNone("send", std::move(message));
@@ -175,8 +178,9 @@ class PySignallingTransport : public net::SignallingTransport {
   absl::Status GetStatus() const override {
     {
       thread::MutexLock lock(&mu_);
-      if (!read_status_.ok())
+      if (!read_status_.ok()) {
         return read_status_;
+      }
     }
     py::gil_scoped_acquire acquire;
     try {
@@ -227,11 +231,13 @@ class PySignallingTransport : public net::SignallingTransport {
   }
 
   void SetReadStatus(absl::Status status) const {
-    if (status.ok())
+    if (status.ok()) {
       return;
+    }
     thread::MutexLock lock(&mu_);
-    if (read_status_.ok())
+    if (read_status_.ok()) {
       read_status_ = std::move(status);
+    }
   }
 
   mutable thread::Mutex mu_;
@@ -239,14 +245,16 @@ class PySignallingTransport : public net::SignallingTransport {
 };
 
 py::object PointerCapsule(void* pointer, const char* name) {
-  if (pointer == nullptr)
+  if (pointer == nullptr) {
     return py::none();
+  }
   return py::capsule(pointer, name);
 }
 
 void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok())
+  if (!status.ok()) {
     ThrowStatus(status);
+  }
 }
 
 template <typename Operation>
@@ -296,8 +304,9 @@ void BindWebRtc(py::module_& module) {
                  .description_type = std::move(description_type),
                  .candidate = std::move(candidate),
                  .mid = std::move(mid)};
-             if (!error.is_none())
+             if (!error.is_none()) {
                result.error = StatusFromPython(error);
+             }
              return result;
            }),
            "Construct a signalling message describing an SDP offer/answer, an "
@@ -331,76 +340,81 @@ void BindWebRtc(py::module_& module) {
             message.error = StatusFromPython(status);
           },
           "Error status carried by ERROR messages, or OK otherwise.")
-      .def("validate",
-           [](const net::SignallingMessage& message) {
-             ThrowIfNotOk(message.Validate());
-           },
-           "Raise if the message fields are inconsistent for its type.")
-      .def("to_json",
-           [](const net::SignallingMessage& message) {
-             return ValueOrThrow(message.ToJson());
-           },
-           "Serialize this message to its JSON wire representation.")
-      .def_static("from_json",
-                  [](const std::string& json) {
-                    return ValueOrThrow(net::SignallingMessage::FromJson(json));
-                  },
-                  "Parse a signalling message from its JSON wire "
-                  "representation.",
-                  py::arg("json"));
+      .def(
+          "validate",
+          [](const net::SignallingMessage& message) {
+            ThrowIfNotOk(message.Validate());
+          },
+          "Raise if the message fields are inconsistent for its type.")
+      .def(
+          "to_json",
+          [](const net::SignallingMessage& message) {
+            return ValueOrThrow(message.ToJson());
+          },
+          "Serialize this message to its JSON wire representation.")
+      .def_static(
+          "from_json",
+          [](const std::string& json) {
+            return ValueOrThrow(net::SignallingMessage::FromJson(json));
+          },
+          "Parse a signalling message from its JSON wire "
+          "representation.",
+          py::arg("json"));
 
-  py::class_<net::SignallingTransport, PySignallingTransport,
-             std::shared_ptr<net::SignallingTransport>>
-      transport(module, "SignallingTransport");
+  py::classh<net::SignallingTransport, PySignallingTransport> transport(
+      module, "SignallingTransport");
   transport.def(py::init<>(), "Construct a base signalling transport.")
-      .def("send",
-           [](net::SignallingTransport& self, net::SignallingMessage message) {
-             ThrowIfNotOk(self.Send(std::move(message)));
-           },
-           "Send a signalling message to the peer (non-blocking).",
-           py::arg("message"))
-      .def("set_on_message",
-           [](net::SignallingTransport& self, const py::object& callback) {
-             std::shared_ptr<PythonSignallingCallback> owner = ValueOrThrow(
-                 PythonSignallingCallback::Create(callback, "on_message"));
-             ThrowIfNotOk(self.SetOnMessage(MakeSignallingCallback(owner)));
-           },
-           "Register an async callback invoked for each inbound message.",
-           py::arg("callback"))
-      .def("close",
-           [](net::SignallingTransport& self) { ThrowIfNotOk(self.Close()); },
-           "Close the transport and release its resources.")
+      .def(
+          "send",
+          [](net::SignallingTransport& self, net::SignallingMessage message) {
+            ThrowIfNotOk(self.Send(std::move(message)));
+          },
+          "Send a signalling message to the peer (non-blocking).",
+          py::arg("message"))
+      .def(
+          "set_on_message",
+          [](net::SignallingTransport& self, const py::object& callback) {
+            std::shared_ptr<PythonSignallingCallback> owner = ValueOrThrow(
+                PythonSignallingCallback::Create(callback, "on_message"));
+            ThrowIfNotOk(self.SetOnMessage(MakeSignallingCallback(owner)));
+          },
+          "Register an async callback invoked for each inbound message.",
+          py::arg("callback"))
+      .def(
+          "close",
+          [](net::SignallingTransport& self) { ThrowIfNotOk(self.Close()); },
+          "Close the transport and release its resources.")
       .def("identity", &net::SignallingTransport::identity,
            "Return the local identity bound to this transport.")
       .def("connected", &net::SignallingTransport::connected,
            "Return whether the transport is currently connected.")
-      .def("get_status",
-           [](const net::SignallingTransport& self) {
-             return StatusToPython(self.GetStatus());
-           },
-           "Return the current transport status.");
+      .def(
+          "get_status",
+          [](const net::SignallingTransport& self) {
+            return StatusToPython(self.GetStatus());
+          },
+          "Return the current transport status.");
 
-  py::class_<net::SignallingEndpoint, net::SignallingTransport,
-             std::shared_ptr<net::SignallingEndpoint>>(module,
-                                                       "SignallingEndpoint");
+  py::classh<net::SignallingEndpoint, net::SignallingTransport>(
+      module, "SignallingEndpoint");
 
-  py::class_<net::SignallingService, std::shared_ptr<net::SignallingService>>(
-      module, "SignallingService")
+  py::classh<net::SignallingService>(module, "SignallingService")
       .def_static("create", &net::SignallingService::Create,
                   "Create a new in-process signalling service.")
       .def(py::init([]() { return net::SignallingService::Create(); }),
            "Create a new in-process signalling service.")
-      .def("connect",
-           [](net::SignallingService& self, std::string identity,
-              const py::object& on_message) {
-             std::shared_ptr<PythonSignallingCallback> callback = ValueOrThrow(
-                 PythonSignallingCallback::Create(on_message, "on_message"));
-             return ValueOrThrow(self.Connect(
-                 std::move(identity), MakeSignallingCallback(callback)));
-           },
-           "Register an identity and its async inbound-message callback, "
-           "returning a signalling endpoint.",
-           py::arg("identity"), py::arg("on_message"))
+      .def(
+          "connect",
+          [](net::SignallingService& self, std::string identity,
+             const py::object& on_message) {
+            std::shared_ptr<PythonSignallingCallback> callback = ValueOrThrow(
+                PythonSignallingCallback::Create(on_message, "on_message"));
+            return ValueOrThrow(self.Connect(std::move(identity),
+                                             MakeSignallingCallback(callback)));
+          },
+          "Register an identity and its async inbound-message callback, "
+          "returning a signalling endpoint.",
+          py::arg("identity"), py::arg("on_message"))
       .def("contains", &net::SignallingService::Contains,
            "Return whether the given identity is currently connected.",
            py::arg("identity"))
@@ -409,9 +423,10 @@ void BindWebRtc(py::module_& module) {
            py::arg("identity"))
       .def("identities", &net::SignallingService::Identities,
            "Return the list of currently connected identities.")
-      .def("stop",
-           [](net::SignallingService& self) { ThrowIfNotOk(self.Stop()); },
-           "Stop the service and disconnect all endpoints.");
+      .def(
+          "stop",
+          [](net::SignallingService& self) { ThrowIfNotOk(self.Stop()); },
+          "Stop the service and disconnect all endpoints.");
 
   py::enum_<net::TurnRelayType>(module, "TurnRelayType")
       .value("UDP", net::TurnRelayType::kUdp)
@@ -421,12 +436,12 @@ void BindWebRtc(py::module_& module) {
 
   py::class_<net::TurnServer>(module, "TurnServer")
       .def(py::init<>(), "Construct an empty TURN server configuration.")
-      .def_static("from_string",
-                  [](const std::string& value) {
-                    return ValueOrThrow(net::TurnServer::FromString(value));
-                  },
-                  "Parse a TURN server from a URL-like string.",
-                  py::arg("value"))
+      .def_static(
+          "from_string",
+          [](const std::string& value) {
+            return ValueOrThrow(net::TurnServer::FromString(value));
+          },
+          "Parse a TURN server from a URL-like string.", py::arg("value"))
       .def_readwrite("hostname", &net::TurnServer::hostname,
                      "TURN server hostname.")
       .def_readwrite("port", &net::TurnServer::port,
@@ -472,14 +487,14 @@ void BindWebRtc(py::module_& module) {
           "Maximum number of WebRTC data channels an accepting server admits "
           "per peer connection. Surplus channels a client opens beyond this "
           "are refused. Defaults to 8. Has no effect on the dialing side.")
-      .def("validate",
-           [](const net::WebRtcConfiguration& configuration) {
-             ThrowIfNotOk(configuration.Validate());
-           },
-           "Raise if the configuration is invalid.");
+      .def(
+          "validate",
+          [](const net::WebRtcConfiguration& configuration) {
+            ThrowIfNotOk(configuration.Validate());
+          },
+          "Raise if the configuration is invalid.");
 
-  py::class_<net::WebRtcWireStream, net::WireStream,
-             std::shared_ptr<net::WebRtcWireStream>>(module, "WebRtcWireStream")
+  py::classh<net::WebRtcWireStream, net::WireStream>(module, "WebRtcWireStream")
       .def_static(
           "create_client",
           [](std::string identity, std::string peer_identity,
@@ -518,35 +533,34 @@ void BindWebRtc(py::module_& module) {
           py::arg("peer_identity"), py::arg("signalling"),
           py::arg("configuration") = net::WebRtcConfiguration{},
           py::arg("options") = net::WireStreamOptions{})
-      .def_property_readonly("data_channel",
-                             [](const net::WebRtcWireStream& self) {
-                               return PointerCapsule(
-                                   self.data_channel().get(),
-                                   "a11.WebRtcWireStream.data_channel");
-                             },
-                             "Opaque capsule around the underlying "
-                             "libdatachannel DataChannel. Exposed for advanced "
-                             "interop and diagnostics; agent code normally "
-                             "reads and writes through the WireStream API "
-                             "rather than touching this directly.")
-      .def_property_readonly("peer_connection",
-                             [](const net::WebRtcWireStream& self) {
-                               return PointerCapsule(
-                                   self.peer_connection().get(),
-                                   "a11.WebRtcWireStream.peer_connection");
-                             },
-                             "Opaque capsule around the underlying "
-                             "libdatachannel PeerConnection. Useful for "
-                             "inspecting ICE/connection state during "
-                             "debugging; not required for normal streaming.")
-      .def_property_readonly("signalling_endpoint",
-                             &net::WebRtcWireStream::signalling_endpoint,
-                             "Signalling transport this stream negotiated over. "
-                             "Lets an agent observe or reuse the channel that "
-                             "carried the asynchronous SDP/ICE handshake.");
+      .def_property_readonly(
+          "data_channel",
+          [](const net::WebRtcWireStream& self) {
+            return PointerCapsule(self.data_channel().get(),
+                                  "a11.WebRtcWireStream.data_channel");
+          },
+          "Opaque capsule around the underlying "
+          "libdatachannel DataChannel. Exposed for advanced "
+          "interop and diagnostics; agent code normally "
+          "reads and writes through the WireStream API "
+          "rather than touching this directly.")
+      .def_property_readonly(
+          "peer_connection",
+          [](const net::WebRtcWireStream& self) {
+            return PointerCapsule(self.peer_connection().get(),
+                                  "a11.WebRtcWireStream.peer_connection");
+          },
+          "Opaque capsule around the underlying "
+          "libdatachannel PeerConnection. Useful for "
+          "inspecting ICE/connection state during "
+          "debugging; not required for normal streaming.")
+      .def_property_readonly(
+          "signalling_endpoint", &net::WebRtcWireStream::signalling_endpoint,
+          "Signalling transport this stream negotiated over. "
+          "Lets an agent observe or reuse the channel that "
+          "carried the asynchronous SDP/ICE handshake.");
 
-  py::class_<net::WebRtcWireServer, std::shared_ptr<net::WebRtcWireServer>>(
-      module, "WebRtcWireServer")
+  py::classh<net::WebRtcWireServer>(module, "WebRtcWireServer")
       .def_static(
           "create",
           [](std::string identity,
@@ -569,11 +583,12 @@ void BindWebRtc(py::module_& module) {
           py::arg("identity"), py::arg("signalling"), py::arg("on_stream"),
           py::arg("configuration") = net::WebRtcConfiguration{},
           py::arg("stream_options") = net::WireStreamOptions{})
-      .def("stop",
-           [](net::WebRtcWireServer& self) {
-             CallWithoutGil([&self] { return self.Stop(); });
-           },
-           "Stop the server and stop accepting new peer connections.")
+      .def(
+          "stop",
+          [](net::WebRtcWireServer& self) {
+            CallWithoutGil([&self] { return self.Stop(); });
+          },
+          "Stop the server and stop accepting new peer connections.")
       .def_property_readonly("identity", &net::WebRtcWireServer::identity,
                              "Local identity this server listens as.")
       .def_property_readonly("running", &net::WebRtcWireServer::running,
@@ -605,14 +620,14 @@ void BindWebRtc(py::module_& module) {
             options.deadline = ValueOrThrow(TimeFromPython(deadline));
           },
           "Deadline by which the connection must be established.")
-      .def("validate",
-           [](const net::WebSocketSignallingClientOptions& options) {
-             ThrowIfNotOk(options.Validate());
-           },
-           "Raise if the options are invalid.");
+      .def(
+          "validate",
+          [](const net::WebSocketSignallingClientOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Raise if the options are invalid.");
 
-  py::class_<net::WebSocketSignallingClient, net::SignallingTransport,
-             std::shared_ptr<net::WebSocketSignallingClient>>(
+  py::classh<net::WebSocketSignallingClient, net::SignallingTransport>(
       module, "WebSocketSignallingClient")
       .def_static(
           "connect",
@@ -634,12 +649,13 @@ void BindWebRtc(py::module_& module) {
           py::arg("url"), py::arg("identity"),
           py::arg("on_message") = py::none(),
           py::arg("options") = net::WebSocketSignallingClientOptions{})
-      .def("get_impl",
-           [](const net::WebSocketSignallingClient& self) {
-             return PointerCapsule(self.GetImpl(),
-                                   "a11.WebSocketSignallingClient.impl");
-           },
-           "Opaque capsule around the native implementation, for interop.");
+      .def(
+          "get_impl",
+          [](const net::WebSocketSignallingClient& self) {
+            return PointerCapsule(self.GetImpl(),
+                                  "a11.WebSocketSignallingClient.impl");
+          },
+          "Opaque capsule around the native implementation, for interop.");
 
   py::class_<net::WebSocketSignallingServerOptions>(
       module, "WebSocketSignallingServerOptions")
@@ -668,15 +684,15 @@ void BindWebRtc(py::module_& module) {
       .def_readwrite("max_message_size",
                      &net::WebSocketSignallingServerOptions::max_message_size,
                      "Maximum inbound signalling message size in bytes.")
-      .def("validate",
-           [](const net::WebSocketSignallingServerOptions& options) {
-             ThrowIfNotOk(options.Validate());
-           },
-           "Raise if the options are invalid.");
+      .def(
+          "validate",
+          [](const net::WebSocketSignallingServerOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Raise if the options are invalid.");
 
-  py::class_<net::WebSocketSignallingServer,
-             std::shared_ptr<net::WebSocketSignallingServer>>(
-      module, "WebSocketSignallingServer")
+  py::classh<net::WebSocketSignallingServer>(module,
+                                             "WebSocketSignallingServer")
       .def_static(
           "create",
           [](std::shared_ptr<net::SignallingService> service,
@@ -684,19 +700,20 @@ void BindWebRtc(py::module_& module) {
             // Create() blocks on the libuv loop (Http2Server::Create ->
             // RunOnUv), so release the GIL while it runs.
             return ValueWithoutGil([&] {
-              return net::WebSocketSignallingServer::Create(
-                  std::move(service), std::move(options));
+              return net::WebSocketSignallingServer::Create(std::move(service),
+                                                            std::move(options));
             });
           },
           "Create a WebSocket signalling server that fronts the given "
           "in-process signalling service.",
           py::arg("service"),
           py::arg("options") = net::WebSocketSignallingServerOptions{})
-      .def("stop",
-           [](net::WebSocketSignallingServer& self) {
-             CallWithoutGil([&self] { return self.Stop(); });
-           },
-           "Stop the server and close all client connections.")
+      .def(
+          "stop",
+          [](net::WebSocketSignallingServer& self) {
+            CallWithoutGil([&self] { return self.Stop(); });
+          },
+          "Stop the server and close all client connections.")
       .def_property_readonly("port", &net::WebSocketSignallingServer::port,
                              "Port the server is listening on.")
       .def_property_readonly("running",
@@ -705,12 +722,13 @@ void BindWebRtc(py::module_& module) {
       .def_property_readonly("service",
                              &net::WebSocketSignallingServer::service,
                              "Signalling service this server fronts.")
-      .def("get_impl",
-           [](const net::WebSocketSignallingServer& self) {
-             return PointerCapsule(self.GetImpl(),
-                                   "a11.WebSocketSignallingServer.impl");
-           },
-           "Opaque capsule around the native implementation, for interop.");
+      .def(
+          "get_impl",
+          [](const net::WebSocketSignallingServer& self) {
+            return PointerCapsule(self.GetImpl(),
+                                  "a11.WebSocketSignallingServer.impl");
+          },
+          "Opaque capsule around the native implementation, for interop.");
 }
 
 }  // namespace a11::python

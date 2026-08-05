@@ -37,7 +37,7 @@ Future<T> SubmitWithCancellationHook(
         absl::StatusOr<T> result;
         if (thread::Cancelled()) {
           result = absl::CancelledError("Task cancelled before it started");
-        } else
+        } else {
           try {
             result = std::move(work)();
           } catch (const std::exception& error) {
@@ -45,6 +45,7 @@ Future<T> SubmitWithCancellationHook(
           } catch (...) {
             result = absl::UnknownError("task raised a non-standard exception");
           }
+        }
         const absl::Status completion = promise.SetResult(std::move(result));
         (void)completion;
       },
@@ -54,8 +55,9 @@ Future<T> SubmitWithCancellationHook(
   future.SetCancellationCallbackForExecutor(
       [cancel = std::move(cancel),
        cancellation_hook = std::move(cancellation_hook)]() {
-        if (cancellation_hook != nullptr)
+        if (cancellation_hook != nullptr) {
           cancellation_hook();
+        }
         cancel();
       });
   return future;

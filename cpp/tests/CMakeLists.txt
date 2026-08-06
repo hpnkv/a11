@@ -39,6 +39,16 @@ if (A11_BUILD_REDIS)
   add_test(NAME a11_redis_test COMMAND a11_redis_test)
 endif ()
 
+if (A11_BUILD_SQLITE)
+  add_executable(a11_sqlite_test
+    sqlite_chunk_store_test.cc)
+  target_include_directories(a11_sqlite_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(
+    a11_sqlite_test PRIVATE a11::concurrency a11::data a11::stores
+                            GTest::gtest_main)
+  add_test(NAME a11_sqlite_test COMMAND a11_sqlite_test)
+endif ()
+
 if (A11_BUILD_AUDIO)
   add_executable(a11_audio_test
     audio_buffer_test.cc

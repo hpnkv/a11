@@ -104,7 +104,6 @@ def _normalise_annotations(stub: str) -> str:
         "_native.WireStream": "WireStream",
         "_ActionDoneEvent": "_DoneEvent",
         "_SessionDoneEvent": "_DoneEvent",
-        "ChunkStoreFactory": "typing.Callable[[str], ChunkStore]",
         "StatusExceptionCasters": "a11.status.StatusExceptionCasters",
         # Raw C++ return/parameter types the bindings expose by name. The
         # ``registry: ...`` rule is broad on purpose: it resolves the named
@@ -144,6 +143,15 @@ def _normalise_annotations(stub: str) -> str:
     }
     for old, new in replacements.items():
         stub = stub.replace(old, new)
+
+    # The bare alias resolves to its callable form, but only as a whole word:
+    # a plain substring replace would also rewrite the tail of concrete class
+    # names such as ``SQLiteChunkStoreFactory``.
+    stub = re.sub(
+        r"(?<![\w.])ChunkStoreFactory\b",
+        "typing.Callable[[str], ChunkStore]",
+        stub,
+    )
 
     # Shorten the module-qualified facade types in *annotations* to their bare
     # names, but only when not already part of a longer dotted path (a

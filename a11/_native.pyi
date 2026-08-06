@@ -105,6 +105,11 @@ __all__: list[str] = [
     "RedisSubscription",
     "SESSION_MAX_SINGLE_MESSAGE_SIZE",
     "SESSION_STATUS_HEADER",
+    "SQLiteChunkStore",
+    "SQLiteChunkStoreFactory",
+    "SQLiteChunkStoreMetadata",
+    "SQLiteChunkStoreOptions",
+    "SQLiteSynchronous",
     "SSE_HTTP_HEADER_PREFIX",
     "SSE_STREAM_ID_HEADER",
     "START",
@@ -4676,6 +4681,409 @@ class RedisSubscription:
         """
         The current broadcast generation.
         """
+
+class SQLiteChunkStore(ChunkStore):
+    """
+    A durable, embedded ChunkStore backed by SQLite and blob files.
+    """
+
+    @staticmethod
+    def create(
+        id: str,
+        root: str | typing.Any | None = None,
+        options: SQLiteChunkStoreOptions | dict[str, typing.Any] | None = None,
+    ) -> SQLiteChunkStore:
+        """
+        Create a SQLite-backed fragment log for one node id.
+        """
+
+    def __init__(
+        self,
+        id: str,
+        root: str | typing.Any | None = None,
+        options: SQLiteChunkStoreOptions | dict[str, typing.Any] | None = None,
+    ) -> None:
+        """
+        Open one node's durable stream under a storage root.
+
+        Stores for the same id and root address the same rows, so reopening
+        after a restart resumes the same fragment log. Omit `root` to use
+        `SQLiteChunkStoreFactory.default_root()`. Opening many nodes under one
+        root is cheap; they share a single database.
+        """
+
+    async def clear_data(self, seq: int) -> NodeFragment:
+        """
+        Tombstone one payload while retaining ordering metadata.
+
+        Returns the fragment as it was. Any blob file backing it is unlinked
+        once the transaction commits. Node-reference fragments cannot be
+        cleared, because a tombstone is chunk-shaped.
+        """
+
+    async def close_writes_with_status(
+        self, status: Status, return_status_if_already_closed: bool = False
+    ) -> Status:
+        """
+        Atomically seal writes with a terminal status and wake readers.
+
+        This closes the producer side but does not mark data final. Write a
+        final fragment first when consumers use whole-value semantics such as
+        `AsyncNode.consume`.
+        """
+
+    async def find_referrers(self, limit: int = 100) -> list[NodeFragment]:
+        """
+        Find fragments elsewhere whose `NodeRef` points at this node.
+
+        This is the traversal the relational layout exists for: the answer
+        comes from an index on the reference target, so the cost tracks the
+        number of referrers rather than the size of the database.
+        """
+
+    async def get(self, seq: int, deadline: Time | None = None) -> NodeFragment:
+        """
+        Wait for and return a fragment by sequence number.
+
+        The wait parks on a per-node event rather than polling the database,
+        and resolves early with an error once the fragment can no longer
+        arrive.
+        """
+
+    async def get_by_arrival_order(
+        self, arrival_order: int, deadline: Time | None = None
+    ) -> NodeFragment:
+        """
+        Wait for a fragment by its zero-based ingestion order.
+        """
+
+    async def get_final_seq(self) -> int | None:
+        """
+        Return the logical final sequence, if one has been written.
+
+        The final marker is independent of write closure. Closing a store does
+        not synthesize it, and a final fragment does not close the store.
+        """
+
+    async def get_metadata(self) -> SQLiteChunkStoreMetadata:
+        """
+        Read cursors, finality, and closure state in one row read.
+        """
+
+    async def get_seq_for_arrival_order(self, arrival_order: int) -> int:
+        """
+        Translate a zero-based ingestion position to its sequence number.
+        """
+
+    async def next(
+        self, deadline: Time | None = None, limit: int = 1
+    ) -> list[NodeFragment | None]:
+        """
+        Read from the persistent shared logical-sequence cursor.
+
+        The cursor lives in the database, so it survives a restart and is
+        shared by every store open on this node. It advances through sequence
+        numbers and waits at gaps; ``None`` marks clean end-of-stream. Prefer
+        `ChunkStoreReader` for ordinary consumption.
+        """
+
+    async def put(self, fragment: NodeFragment) -> int:
+        """
+        Atomically append one fragment and return its sequence number.
+        """
+
+    async def put_many(
+        self, fragments: typing.Sequence[NodeFragment]
+    ) -> list[int]:
+        """
+        Atomically append a batch and return its assigned sequences.
+
+        The batch commits in one transaction: either every fragment is stored,
+        or none is and no blob file is left behind.
+        """
+
+    async def size(self) -> int:
+        """
+        Return the number of fragment slots, tombstones included.
+        """
+
+    async def sweep_orphan_blobs(self) -> int:
+        """
+        Delete unreferenced blob files older than the grace period.
+
+        A crash between writing a blob and committing its row leaves a file
+        nothing points at. This reclaims those; the grace period keeps it from
+        deleting a blob whose transaction is still in flight elsewhere.
+        """
+
+    @property
+    def options(self) -> SQLiteChunkStoreOptions:
+        """
+        A copy of this store's storage policy.
+        """
+
+    @property
+    def root(self) -> str:
+        """
+        The storage root this store reads and writes.
+        """
+
+class SQLiteChunkStoreFactory:
+    """
+    Creates SQLiteChunkStores that share one database per storage root.
+    """
+
+    @staticmethod
+    def default_root() -> str:
+        """
+        The process-wide default storage root: $A11_SQLITE_CHUNK_STORE_ROOT, else $XDG_CACHE_HOME/a11/chunks, else ~/.cache/a11/chunks.
+        """
+
+    def __call__(self, node_id: str) -> SQLiteChunkStore:
+        """
+        Open a store, so the factory can be passed directly wherever a chunk_store_factory callable is expected.
+        """
+
+    def __init__(
+        self,
+        root: str | typing.Any | None = None,
+        options: SQLiteChunkStoreOptions | dict[str, typing.Any] | None = None,
+    ) -> None:
+        """
+        Create a factory rooted at a directory, created when absent.
+
+        Pass the factory itself wherever a ``chunk_store_factory`` callable is
+        expected to make SQLite the backing store for a `NodeMap`, `AsyncNode`,
+        or `Session`.
+        """
+
+    def open(self, node_id: str) -> SQLiteChunkStore:
+        """
+        Open a store for `node_id` under this factory's root.
+        """
+
+    async def sweep_orphan_blobs(self) -> int:
+        """
+        Delete unreferenced blob files older than the grace period.
+        """
+
+    @property
+    def options(self) -> SQLiteChunkStoreOptions:
+        """
+        A copy of the storage policy applied to every store created here.
+        """
+
+    @property
+    def root(self) -> str:
+        """
+        The root this factory creates stores under.
+        """
+
+class SQLiteChunkStoreMetadata:
+    """
+    Node-level SQLite state read without listing fragments.
+    """
+
+    @property
+    def closed(self) -> bool:
+        """
+        Whether the store rejects new writes.
+        """
+
+    @property
+    def created_at(self) -> typing.Any:
+        """
+        When the node row was created by its first accepted write.
+        """
+
+    @property
+    def data_bytes(self) -> int:
+        """
+        Cached total of stored payload bytes.
+        """
+
+    @property
+    def final_seq(self) -> int | None:
+        """
+        The declared final sequence, if one has arrived.
+        """
+
+    @property
+    def id(self) -> str:
+        """
+        The owning AsyncNode identifier.
+        """
+
+    @property
+    def max_seq(self) -> int | None:
+        """
+        Largest sequence currently present.
+        """
+
+    @property
+    def next_cursor(self) -> int:
+        """
+        The next sequence the shared next() cursor will want.
+        """
+
+    @property
+    def owner_id(self) -> str:
+        """
+        Owner recorded on the node row, possibly empty.
+        """
+
+    @property
+    def revision(self) -> int:
+        """
+        Monotonic mutation generation.
+        """
+
+    @property
+    def size(self) -> int:
+        """
+        Number of fragment slots, tombstones included.
+        """
+
+    @property
+    def status(self) -> Status | None:
+        """
+        Return the terminal status when closed, otherwise ``None``.
+        """
+
+    @property
+    def total_chunks_put(self) -> int:
+        """
+        Fragments accepted over the store lifetime.
+        """
+
+    @property
+    def updated_at(self) -> typing.Any:
+        """
+        When the node row was last mutated.
+        """
+
+class SQLiteChunkStoreOptions:
+    """
+    Payload, ownership and durability policy for SQLiteChunkStore.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def from_environment() -> SQLiteChunkStoreOptions:
+        """
+        Read the A11_SQLITE_CHUNK_STORE_* environment variables.
+        """
+
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        inline_data_threshold: typing.Any = 131072,
+        owner_id: str = "",
+        synchronous: SQLiteSynchronous = ...,
+        cross_process_poll_interval: typing.Any | None = None,
+        blob_grace_period: typing.Any | None = None,
+    ) -> None:
+        """
+        Construct validated SQLite chunk-store options.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+    def validate(self) -> None:
+        """
+        Raise if the storage policy is invalid.
+        """
+
+    @property
+    def blob_grace_period(self) -> typing.Any:
+        """
+        How long an unreferenced blob survives before a sweep removes it.
+        """
+    @blob_grace_period.setter
+    def blob_grace_period(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def cross_process_poll_interval(self) -> typing.Any:
+        """
+        How often to notice other processes' commits; zero disables it.
+        """
+    @cross_process_poll_interval.setter
+    def cross_process_poll_interval(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def inline_data_threshold(self) -> int:
+        """
+        Payloads larger than this many bytes move into a blob file.
+        """
+    @inline_data_threshold.setter
+    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def owner_id(self) -> str:
+        """
+        Owner recorded on the node row; carries no enforcement.
+        """
+    @owner_id.setter
+    def owner_id(self, arg0: str) -> None: ...
+
+    @property
+    def synchronous(self) -> SQLiteSynchronous:
+        """
+        Durability level applied with PRAGMA synchronous.
+        """
+    @synchronous.setter
+    def synchronous(self, arg0: SQLiteSynchronous) -> None: ...
+
+class SQLiteSynchronous:
+    """
+    How much durability a SQLite chunk store trades for write throughput.
+
+    Members:
+
+      OFF : Fastest; a machine crash can corrupt recent commits.
+
+      NORMAL : Default; survives an application crash, may lose the newest commits on power loss.
+
+      FULL : Every commit is fsynced.
+    """
+
+    FULL: typing.ClassVar[SQLiteSynchronous]
+    NORMAL: typing.ClassVar[SQLiteSynchronous]
+    OFF: typing.ClassVar[SQLiteSynchronous]
+    __members__: typing.ClassVar[dict[str, SQLiteSynchronous]]
+    def __eq__(self, other: object) -> bool: ...
+    def __getstate__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __int__(self) -> int: ...
+    def __ne__(self, other: typing.Any) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __str__(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def value(self) -> int: ...
 
 class SerializationRegistry:
     def __init__(self, register_defaults: bool = False) -> None:

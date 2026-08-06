@@ -107,6 +107,13 @@ from .stores.redis_chunk_store import (
     RedisChunkStoreMetadata,
     RedisChunkStoreOptions,
 )
+from .stores.sqlite_chunk_store import (
+    SQLiteChunkStore,
+    SQLiteChunkStoreFactory,
+    SQLiteChunkStoreMetadata,
+    SQLiteChunkStoreOptions,
+    SQLiteSynchronous,
+)
 from .timing import (
     Duration,
     Time,

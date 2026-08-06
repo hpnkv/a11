@@ -51,6 +51,38 @@ def _audit_linux(binary: Path) -> None:
                 raise RuntimeError(f"non-relocatable ELF loader path: {path}")
 
 
+def _audit_vendored_symbols(binary: Path) -> None:
+    """Fail if a statically vendored C library leaks into the dynamic table.
+
+    SQLite is linked into the extension from the amalgamation, while CPython's
+    own ``_sqlite3`` module loads the system ``libsqlite3`` into the same
+    process. On ELF, an exported duplicate would interpose on that library's
+    internal calls and corrupt its ``sqlite3_stmt`` state, so the vendored copy
+    must stay hidden. The build enforces this with hidden visibility; this
+    check is what notices if that ever stops working.
+    """
+    if sys.platform == "darwin":
+        exported = _output("nm", "-gU", str(binary))
+    else:
+        exported = _output("nm", "-D", "--defined-only", str(binary))
+
+    leaked = sorted(
+        {
+            symbol
+            for symbol in re.findall(r"\b_?(sqlite3_[A-Za-z0-9_]+)\b", exported)
+            # Mangled C++ names merely mention the type; only the plain C
+            # symbol at the end of a line is an actual exported entry point.
+            if re.search(rf"(?m)^\S+\s+\S+\s+_?{re.escape(symbol)}$", exported)
+        }
+    )
+    if leaked:
+        raise RuntimeError(
+            "vendored SQLite symbols are exported from the extension: "
+            + ", ".join(leaked[:5])
+            + (" ..." if len(leaked) > 5 else "")
+        )
+
+
 def _audit_typing_files(root: Path) -> None:
     marker = root / "a11" / "py.typed"
     stub = root / "a11" / "_native.pyi"
@@ -102,6 +134,7 @@ def main() -> None:
                 _audit_macos(binary)
             elif sys.platform.startswith("linux"):
                 _audit_linux(binary)
+        _audit_vendored_symbols(native_binaries[0])
 
     importlib.import_module("a11._native")
     importlib.import_module("pybind11_abseil.status")

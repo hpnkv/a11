@@ -25,6 +25,7 @@ option(A11_BUILD_PYTHON "Build the pybind11 extension" ON)
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
 option(A11_BUILD_WEBRTC "Build WebRTC wire streams and signalling" ON)
 option(A11_BUILD_REDIS "Build the Redis client and Redis ChunkStore" ON)
+option(A11_BUILD_SQLITE "Build the SQLite ChunkStore" ON)
 option(A11_BUILD_AUDIO
         "Build PortAudio capture and whisper.cpp speech recognition" ON)
 option(A11_FETCH_MISSING_DEPS "Fetch required dependencies not installed" ON)
@@ -310,6 +311,73 @@ if (A11_BUILD_REDIS)
     a11_require_static_target(hiredis::hiredis)
 endif ()
 
+if (A11_BUILD_SQLITE)
+    # SQLite is always vendored from the upstream amalgamation, never found on
+    # the system. A system SQLite is a shared library, which A11_REQUIRE_STATIC_DEPS
+    # forbids, and the version would be unpinned. A11_SQLITE_SOURCE_DIR points an
+    # offline build at an already-extracted amalgamation directory.
+    if (A11_SQLITE_SOURCE_DIR)
+        FetchContent_Declare(sqlite3 SOURCE_DIR "${A11_SQLITE_SOURCE_DIR}")
+    elseif (A11_FETCH_MISSING_DEPS)
+        FetchContent_Declare(
+                sqlite3
+                URL https://sqlite.org/2025/sqlite-amalgamation-3500400.zip
+                URL_HASH
+                SHA3_256=f131b68e6ba5fb891cc13ebb5ff9555054c77294cb92d8d1268bad5dba4fa2a1
+                DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+                SYSTEM)
+    else ()
+        message(FATAL_ERROR
+                "A11_BUILD_SQLITE requires the SQLite amalgamation; enable "
+                "A11_FETCH_MISSING_DEPS or set A11_SQLITE_SOURCE_DIR")
+    endif ()
+    FetchContent_MakeAvailable(sqlite3)
+
+    add_library(a11_sqlite3 STATIC "${sqlite3_SOURCE_DIR}/sqlite3.c")
+    add_library(a11::sqlite3 ALIAS a11_sqlite3)
+    set_target_properties(
+            a11_sqlite3 PROPERTIES
+            EXPORT_NAME sqlite3
+            C_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON
+            POSITION_INDEPENDENT_CODE ON)
+    # The amalgamation ships as one C file and cannot satisfy a11::warnings
+    # (-Wconversion -Wshadow -Wpedantic, optionally -Werror), so it is compiled
+    # warning-free like the other vendored C dependencies. SYSTEM on the include
+    # directory keeps its headers out of our warning surface too.
+    target_include_directories(
+            a11_sqlite3 SYSTEM PUBLIC
+            $<BUILD_INTERFACE:${sqlite3_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_compile_options(a11_sqlite3 PRIVATE -w)
+    # SQLITE_API carries the visibility attribute so the statically linked copy
+    # inside _native.so can never be exported. CPython's own _sqlite3 module
+    # loads the system libsqlite3 into the same process; on ELF, an exported
+    # duplicate would interpose on that library's internal calls and corrupt its
+    # sqlite3_stmt state. C_VISIBILITY_PRESET alone would suffice, but the two
+    # together cost nothing and are checked by scripts/audit_wheel.py.
+    target_compile_definitions(
+            a11_sqlite3 PRIVATE
+            "SQLITE_API=__attribute__((visibility(\"hidden\")))"
+            SQLITE_THREADSAFE=1
+            SQLITE_DQS=0
+            SQLITE_DEFAULT_MEMSTATUS=0
+            SQLITE_DEFAULT_WAL_SYNCHRONOUS=1
+            SQLITE_LIKE_DOESNT_MATCH_BLOBS
+            SQLITE_OMIT_DEPRECATED
+            SQLITE_OMIT_LOAD_EXTENSION
+            SQLITE_OMIT_SHARED_CACHE
+            SQLITE_OMIT_AUTOINIT
+            SQLITE_USE_ALLOCA
+            # Bounds the recursive-descent expression parser's C-stack use. The
+            # store issues only fixed, shallow, hand-written statements.
+            SQLITE_MAX_EXPR_DEPTH=50)
+    if (UNIX)
+        find_package(Threads REQUIRED)
+        target_link_libraries(a11_sqlite3 PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    endif ()
+endif ()
+
 if (A11_BUILD_AUDIO)
     # PortAudio backs the cross-platform audio input SDK. Prefer a static
     # package from the bootstrapped prefix; otherwise build it from source with
@@ -549,7 +617,9 @@ target_link_libraries(
         a11_core
         PUBLIC $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::status_macros> $<INSTALL_INTERFACE:absl::status_macros> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
         $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
-        PRIVATE $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log> a11::warnings nlohmann_json::nlohmann_json)
+        PRIVATE $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log> a11::warnings nlohmann_json::nlohmann_json
+        $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random>
+        $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>)
 
 add_library(a11_data STATIC ${A11_DATA_SOURCES})
 add_library(a11::data ALIAS a11_data)
@@ -684,6 +754,11 @@ target_link_libraries(
         PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings)
 if (A11_BUILD_REDIS)
     target_link_libraries(a11_stores PUBLIC a11::redis)
+endif ()
+if (A11_BUILD_SQLITE)
+    # PRIVATE: sqlite3.h never appears in a public A11 header, so consumers of
+    # a11::stores do not inherit it.
+    target_link_libraries(a11_stores PRIVATE a11::sqlite3)
 endif ()
 
 add_library(a11_net STATIC ${A11_NET_SOURCES})
@@ -917,6 +992,9 @@ if (A11_BUILD_PYTHON)
     if (A11_BUILD_REDIS)
         target_compile_definitions(a11_python PRIVATE A11_BUILD_REDIS=1)
     endif ()
+    if (A11_BUILD_SQLITE)
+        target_compile_definitions(a11_python PRIVATE A11_BUILD_SQLITE=1)
+    endif ()
     if (A11_BUILD_AUDIO)
         target_compile_definitions(a11_python PRIVATE A11_BUILD_AUDIO=1)
     endif ()
@@ -990,6 +1068,11 @@ set(A11_INSTALL_TARGETS
         a11_nodes a11_actions a11_service Thread)
 if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)
+endif ()
+if (A11_BUILD_SQLITE)
+    # a11_stores links this, so the exported a11Targets set must contain it or
+    # the installed config references a missing target.
+    list(APPEND A11_INSTALL_TARGETS a11_sqlite3)
 endif ()
 if (A11_BUILD_AUDIO)
     list(APPEND A11_INSTALL_TARGETS a11_audio a11_audio_actions)

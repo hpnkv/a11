@@ -28,6 +28,9 @@
 #include "a11/stores/redis_chunk_store.h"
 #include "redis/client.h"
 #endif
+#ifdef A11_BUILD_SQLITE
+#include "a11/stores/sqlite_chunk_store.h"
+#endif
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
@@ -633,6 +636,277 @@ Examples:
           "keys",
           [](const stores::RedisChunkStore& self) { return self.keys(); },
           "A copy of the sharding-safe Redis key layout.");
+#endif
+
+#ifdef A11_BUILD_SQLITE
+  py::enum_<stores::internal::SqliteSynchronous>(
+      module, "SQLiteSynchronous",
+      "How much durability a SQLite chunk store trades for write throughput.")
+      .value("OFF", stores::internal::SqliteSynchronous::kOff,
+             "Fastest; a machine crash can corrupt recent commits.")
+      .value("NORMAL", stores::internal::SqliteSynchronous::kNormal,
+             "Default; survives an application crash, may lose the newest "
+             "commits on power loss.")
+      .value("FULL", stores::internal::SqliteSynchronous::kFull,
+             "Every commit is fsynced.");
+
+  py::class_<stores::SQLiteChunkStoreOptions>(
+      module, "SQLiteChunkStoreOptions",
+      "Payload, ownership and durability policy for SQLiteChunkStore.")
+      .def(
+          py::init([](const py::handle& inline_data_threshold,
+                      std::string owner_id,
+                      stores::internal::SqliteSynchronous synchronous,
+                      const py::object& cross_process_poll_interval,
+                      const py::object& blob_grace_period) {
+            stores::SQLiteChunkStoreOptions options;
+            options.inline_data_threshold = static_cast<size_t>(UnsignedOption(
+                inline_data_threshold, std::numeric_limits<size_t>::max(),
+                "inline_data_threshold"));
+            options.owner_id = std::move(owner_id);
+            options.synchronous = synchronous;
+            if (!cross_process_poll_interval.is_none()) {
+              options.cross_process_poll_interval = ValueOrThrow(
+                  DurationFromPython(cross_process_poll_interval,
+                                     "cross_process_poll_interval"));
+            }
+            if (!blob_grace_period.is_none()) {
+              options.blob_grace_period = ValueOrThrow(
+                  DurationFromPython(blob_grace_period, "blob_grace_period"));
+            }
+            const absl::Status status = options.Validate();
+            if (!status.ok()) {
+              ThrowStatus(status);
+            }
+            return options;
+          }),
+          "Construct validated SQLite chunk-store options.",
+          py::arg("inline_data_threshold") = 128 * 1024,
+          py::arg("owner_id") = "",
+          py::arg("synchronous") = stores::internal::SqliteSynchronous::kNormal,
+          py::arg("cross_process_poll_interval") = py::none(),
+          py::arg("blob_grace_period") = py::none())
+      .def_readwrite(
+          "inline_data_threshold",
+          &stores::SQLiteChunkStoreOptions::inline_data_threshold,
+          "Payloads larger than this many bytes move into a blob file.")
+      .def_readwrite("owner_id", &stores::SQLiteChunkStoreOptions::owner_id,
+                     "Owner recorded on the node row; carries no enforcement.")
+      .def_readwrite("synchronous",
+                     &stores::SQLiteChunkStoreOptions::synchronous,
+                     "Durability level applied with PRAGMA synchronous.")
+      .def_property(
+          "cross_process_poll_interval",
+          [](const stores::SQLiteChunkStoreOptions& self) {
+            return DurationToPython(self.cross_process_poll_interval);
+          },
+          [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
+            self.cross_process_poll_interval = ValueOrThrow(
+                DurationFromPython(value, "cross_process_poll_interval"));
+          },
+          "How often to notice other processes' commits; zero disables it.")
+      .def_property(
+          "blob_grace_period",
+          [](const stores::SQLiteChunkStoreOptions& self) {
+            return DurationToPython(self.blob_grace_period);
+          },
+          [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
+            self.blob_grace_period =
+                ValueOrThrow(DurationFromPython(value, "blob_grace_period"));
+          },
+          "How long an unreferenced blob survives before a sweep removes it.")
+      .def(
+          "validate",
+          [](const stores::SQLiteChunkStoreOptions& self) {
+            const absl::Status status = self.Validate();
+            if (!status.ok()) {
+              ThrowStatus(status);
+            }
+          },
+          "Raise if the storage policy is invalid.")
+      .def_static(
+          "from_environment",
+          [] {
+            return ValueOrThrow(
+                stores::SQLiteChunkStoreOptions::FromEnvironment());
+          },
+          "Read the A11_SQLITE_CHUNK_STORE_* environment variables.")
+      .def(
+          "__eq__",
+          [](const stores::SQLiteChunkStoreOptions& self,
+             const stores::SQLiteChunkStoreOptions& other) {
+            return self == other;
+          },
+          py::is_operator());
+
+  py::class_<stores::SQLiteChunkStoreMetadata>(
+      module, "SQLiteChunkStoreMetadata",
+      "Node-level SQLite state read without listing fragments.")
+      .def_readonly("id", &stores::SQLiteChunkStoreMetadata::id,
+                    "The owning AsyncNode identifier.")
+      .def_readonly("owner_id", &stores::SQLiteChunkStoreMetadata::owner_id,
+                    "Owner recorded on the node row, possibly empty.")
+      .def_readonly("closed", &stores::SQLiteChunkStoreMetadata::closed,
+                    "Whether the store rejects new writes.")
+      .def_property_readonly(
+          "status",
+          [](const stores::SQLiteChunkStoreMetadata& self) -> py::object {
+            return self.status.has_value() ? StatusToPython(*self.status)
+                                           : py::none();
+          },
+          "The terminal Status when closed, otherwise None.")
+      .def_readonly("final_seq", &stores::SQLiteChunkStoreMetadata::final_seq,
+                    "The declared final sequence, if one has arrived.")
+      .def_readonly("size", &stores::SQLiteChunkStoreMetadata::size,
+                    "Number of fragment slots, tombstones included.")
+      .def_readonly("total_chunks_put",
+                    &stores::SQLiteChunkStoreMetadata::total_chunks_put,
+                    "Fragments accepted over the store lifetime.")
+      .def_readonly("next_cursor",
+                    &stores::SQLiteChunkStoreMetadata::next_cursor,
+                    "The next sequence the shared next() cursor will want.")
+      .def_readonly("data_bytes", &stores::SQLiteChunkStoreMetadata::data_bytes,
+                    "Cached total of stored payload bytes.")
+      .def_readonly("max_seq", &stores::SQLiteChunkStoreMetadata::max_seq,
+                    "Largest sequence currently present.")
+      .def_readonly("revision", &stores::SQLiteChunkStoreMetadata::revision,
+                    "Monotonic mutation generation.")
+      .def_property_readonly(
+          "created_at",
+          [](const stores::SQLiteChunkStoreMetadata& self) {
+            return TimeToPython(self.created_at);
+          },
+          "When the node row was created by its first accepted write.")
+      .def_property_readonly(
+          "updated_at",
+          [](const stores::SQLiteChunkStoreMetadata& self) {
+            return TimeToPython(self.updated_at);
+          },
+          "When the node row was last mutated.");
+
+  py::classh<stores::SQLiteChunkStore, ChunkStore>(
+      module, "SQLiteChunkStore",
+      "A durable, embedded ChunkStore backed by SQLite and blob files.")
+      .def(py::init([](std::string id, const py::object& root,
+                       const py::object& options_value) {
+             stores::SQLiteChunkStoreOptions options =
+                 options_value.is_none()
+                     ? ValueOrThrow(
+                           stores::SQLiteChunkStoreOptions::FromEnvironment())
+                     : options_value.cast<stores::SQLiteChunkStoreOptions>();
+             std::string directory =
+                 root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
+                                : root.cast<std::string>();
+             return ValueOrThrow(stores::SQLiteChunkStore::Create(
+                 std::move(id), std::move(directory), std::move(options)));
+           }),
+           "Create a SQLite store. Without a root it uses the default cache "
+           "directory; stores sharing a root share one database.",
+           py::arg("id"), py::arg("root") = py::none(),
+           py::arg("options") = py::none())
+      .def_static(
+          "create",
+          [](std::string id, const py::object& root,
+             const py::object& options_value) {
+            stores::SQLiteChunkStoreOptions options =
+                options_value.is_none()
+                    ? ValueOrThrow(
+                          stores::SQLiteChunkStoreOptions::FromEnvironment())
+                    : options_value.cast<stores::SQLiteChunkStoreOptions>();
+            std::string directory =
+                root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
+                               : root.cast<std::string>();
+            return ValueOrThrow(stores::SQLiteChunkStore::Create(
+                std::move(id), std::move(directory), std::move(options)));
+          },
+          "Create a SQLite store with an optional root and options.",
+          py::arg("id"), py::arg("root") = py::none(),
+          py::arg("options") = py::none())
+      .def(
+          "get_metadata",
+          [](const std::shared_ptr<stores::SQLiteChunkStore>& self) {
+            return StoreFuture(self->GetMetadata());
+          },
+          "Read node-level state without listing fragments.")
+      .def(
+          "find_referrers",
+          [](const std::shared_ptr<stores::SQLiteChunkStore>& self,
+             const py::handle& limit) {
+            return StoreFuture(
+                self->FindReferrers(static_cast<size_t>(UnsignedOption(
+                    limit, std::numeric_limits<size_t>::max(), "limit"))));
+          },
+          "Find fragments elsewhere in the database whose NodeRef points at "
+          "this node, using the node-reference index rather than a scan.",
+          py::arg("limit") = 100)
+      .def(
+          "sweep_orphan_blobs",
+          [](const std::shared_ptr<stores::SQLiteChunkStore>& self) {
+            return StoreFuture(self->SweepOrphanBlobs());
+          },
+          "Delete unreferenced blob files older than the grace period.")
+      .def_property_readonly(
+          "options",
+          [](const stores::SQLiteChunkStore& self) { return self.options(); },
+          "A copy of this store's storage policy.")
+      .def_property_readonly("root", &stores::SQLiteChunkStore::root,
+                             "The storage root this store reads and writes.");
+
+  py::classh<stores::SQLiteChunkStoreFactory>(
+      module, "SQLiteChunkStoreFactory",
+      "Creates SQLiteChunkStores that share one database per storage root.")
+      .def(
+          py::init([](const py::object& root, const py::object& options_value) {
+            stores::SQLiteChunkStoreOptions options =
+                options_value.is_none()
+                    ? ValueOrThrow(
+                          stores::SQLiteChunkStoreOptions::FromEnvironment())
+                    : options_value.cast<stores::SQLiteChunkStoreOptions>();
+            std::string directory =
+                root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
+                               : root.cast<std::string>();
+            return ValueOrThrow(stores::SQLiteChunkStoreFactory::Create(
+                std::move(directory), std::move(options)));
+          }),
+          "Create a factory rooted at a directory, defaulting to the A11 "
+          "cache directory.",
+          py::arg("root") = py::none(), py::arg("options") = py::none())
+      .def_static(
+          "default_root", &stores::SQLiteChunkStoreFactory::DefaultRoot,
+          "The process-wide default storage root: "
+          "$A11_SQLITE_CHUNK_STORE_ROOT, else $XDG_CACHE_HOME/a11/chunks, "
+          "else ~/.cache/a11/chunks.")
+      .def(
+          "open",
+          [](const std::shared_ptr<stores::SQLiteChunkStoreFactory>& self,
+             std::string node_id) {
+            return ValueOrThrow(self->Open(std::move(node_id)));
+          },
+          "Open a store for a node id under this factory's root.",
+          py::arg("node_id"))
+      .def(
+          "__call__",
+          [](const std::shared_ptr<stores::SQLiteChunkStoreFactory>& self,
+             std::string node_id) {
+            return ValueOrThrow(self->Open(std::move(node_id)));
+          },
+          "Open a store, so the factory can be passed directly wherever a "
+          "chunk_store_factory callable is expected.",
+          py::arg("node_id"))
+      .def(
+          "sweep_orphan_blobs",
+          [](const std::shared_ptr<stores::SQLiteChunkStoreFactory>& self) {
+            return StoreFuture(self->SweepOrphanBlobs());
+          },
+          "Delete unreferenced blob files older than the grace period.")
+      .def_property_readonly("root", &stores::SQLiteChunkStoreFactory::root,
+                             "The root this factory creates stores under.")
+      .def_property_readonly(
+          "options",
+          [](const stores::SQLiteChunkStoreFactory& self) {
+            return self.options();
+          },
+          "A copy of the storage policy applied to every store created here.");
 #endif
 
   py::classh<stores::ChunkStoreReader>(module, "ChunkStoreReader",

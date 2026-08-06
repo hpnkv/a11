@@ -7,6 +7,22 @@ from a11 import timing
 from a11.data import types
 from a11.status import Status, StatusCode, StatusException
 from a11.stores.local_chunk_store import LocalChunkStore
+from a11.stores.sqlite_chunk_store import SQLiteChunkStoreFactory
+
+
+@pytest.fixture(params=["local", "sqlite"])
+def make_store(request, tmp_path):
+    """Build a store from each backend so the contract is tested on both.
+
+    Everything below exercises the ChunkStore contract itself, not a backend
+    detail, so both implementations must satisfy it identically. The SQLite
+    stores share one root per test, which also covers many nodes living in a
+    single database.
+    """
+    if request.param == "local":
+        return LocalChunkStore
+    factory = SQLiteChunkStoreFactory(str(tmp_path))
+    return factory.open
 
 
 def _deadline() -> timing.Time:
@@ -32,8 +48,8 @@ def _implicit_fragment(
 
 
 @pytest.mark.asyncio
-async def test_basic_ops_work():
-    store = LocalChunkStore("test")
+async def test_basic_ops_work(make_store):
+    store = make_store("test")
     seqs = await store.put_many(
         [_fragment(2, final=True), _fragment(0), _fragment(1)]
     )
@@ -51,8 +67,8 @@ async def test_basic_ops_work():
 
 
 @pytest.mark.asyncio
-async def test_get_waits_for_an_out_of_order_fragment():
-    store = LocalChunkStore("test")
+async def test_get_waits_for_an_out_of_order_fragment(make_store):
+    store = make_store("test")
     waiting = asyncio.create_task(store.get(1, deadline=_deadline()))
     await asyncio.sleep(0)
 
@@ -66,8 +82,8 @@ async def test_get_waits_for_an_out_of_order_fragment():
 
 
 @pytest.mark.asyncio
-async def test_multiple_independent_consumers():
-    store = LocalChunkStore("test")
+async def test_multiple_independent_consumers(make_store):
+    store = make_store("test")
 
     async def consume() -> list[bytes]:
         return [
@@ -85,8 +101,8 @@ async def test_multiple_independent_consumers():
 
 
 @pytest.mark.asyncio
-async def test_spmc():
-    store = LocalChunkStore("test")
+async def test_spmc(make_store):
+    store = make_store("test")
 
     async def consume() -> list[int]:
         sequences = []
@@ -109,8 +125,8 @@ async def test_spmc():
 
 
 @pytest.mark.asyncio
-async def test_mpmc():
-    store = LocalChunkStore("test")
+async def test_mpmc(make_store):
+    store = make_store("test")
 
     async def produce(sequences: tuple[int, ...]) -> None:
         for seq in sequences:
@@ -138,11 +154,13 @@ async def test_mpmc():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("seed", range(10))
-async def test_randomised_get_consumers_with_multiple_producers(seed: int):
+async def test_randomised_get_consumers_with_multiple_producers(
+    seed: int, make_store
+):
     rng = random.Random(seed)
     count = rng.randint(12, 30)
     producer_count = rng.randint(2, 5)
-    store = LocalChunkStore("randomised")
+    store = make_store("randomised")
     sequences = list(range(count))
     rng.shuffle(sequences)
     batches = [
@@ -179,10 +197,12 @@ async def test_randomised_get_consumers_with_multiple_producers(seed: int):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("seed", range(10))
-async def test_randomised_next_consumers_receive_every_fragment_once(seed: int):
+async def test_randomised_next_consumers_receive_every_fragment_once(
+    seed: int, make_store
+):
     rng = random.Random(seed)
     count = rng.randint(12, 30)
-    store = LocalChunkStore("randomised")
+    store = make_store("randomised")
 
     async def produce() -> None:
         pending = list(range(count))
@@ -210,8 +230,8 @@ async def test_randomised_next_consumers_receive_every_fragment_once(seed: int):
 
 
 @pytest.mark.asyncio
-async def test_arrival_order_is_independent_of_sequence_order():
-    store = LocalChunkStore("test")
+async def test_arrival_order_is_independent_of_sequence_order(make_store):
+    store = make_store("test")
     await store.put_many([_fragment(4, final=True), _fragment(1), _fragment(3)])
 
     fragments = [
@@ -230,8 +250,8 @@ async def test_arrival_order_is_independent_of_sequence_order():
 
 
 @pytest.mark.asyncio
-async def test_waiting_gets_time_out_with_deadline_exceeded():
-    store = LocalChunkStore("test")
+async def test_waiting_gets_time_out_with_deadline_exceeded(make_store):
+    store = make_store("test")
 
     for make_waiting_call in (
         lambda: store.get(0, deadline=_short_deadline()),
@@ -244,8 +264,8 @@ async def test_waiting_gets_time_out_with_deadline_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_elapsed_deadlines_are_reported_as_deadline_exceeded():
-    store = LocalChunkStore("test")
+async def test_elapsed_deadlines_are_reported_as_deadline_exceeded(make_store):
+    store = make_store("test")
     elapsed = timing.now() - timing.Duration.milliseconds(1)
 
     for make_waiting_call in (
@@ -259,8 +279,8 @@ async def test_elapsed_deadlines_are_reported_as_deadline_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_next_returns_immediately_when_limit_is_reached():
-    store = LocalChunkStore("test")
+async def test_next_returns_immediately_when_limit_is_reached(make_store):
+    store = make_store("test")
     await store.put_many([_fragment(0), _fragment(1)])
 
     batch = await store.next(deadline=_deadline(), limit=2)
@@ -269,8 +289,8 @@ async def test_next_returns_immediately_when_limit_is_reached():
 
 
 @pytest.mark.asyncio
-async def test_next_returns_a_partial_batch_at_the_deadline():
-    store = LocalChunkStore("test")
+async def test_next_returns_a_partial_batch_at_the_deadline(make_store):
+    store = make_store("test")
     await store.put(_fragment(0))
 
     batch = await store.next(deadline=_short_deadline(), limit=2)
@@ -279,8 +299,8 @@ async def test_next_returns_a_partial_batch_at_the_deadline():
 
 
 @pytest.mark.asyncio
-async def test_successful_close_appends_none_to_a_partial_batch():
-    store = LocalChunkStore("test")
+async def test_successful_close_appends_none_to_a_partial_batch(make_store):
+    store = make_store("test")
     waiting = asyncio.create_task(store.next(deadline=_deadline(), limit=2))
     await asyncio.sleep(0)
     await store.put(_fragment(0))
@@ -295,8 +315,8 @@ async def test_successful_close_appends_none_to_a_partial_batch():
 
 
 @pytest.mark.asyncio
-async def test_error_close_returns_partial_batch_before_raising():
-    store = LocalChunkStore("test")
+async def test_error_close_returns_partial_batch_before_raising(make_store):
+    store = make_store("test")
     waiting = asyncio.create_task(store.next(deadline=_deadline(), limit=2))
     await asyncio.sleep(0)
     await store.put(_fragment(0))
@@ -313,8 +333,8 @@ async def test_error_close_returns_partial_batch_before_raising():
 
 
 @pytest.mark.asyncio
-async def test_error_close_wakes_all_kinds_of_waiter():
-    store = LocalChunkStore("test")
+async def test_error_close_wakes_all_kinds_of_waiter(make_store):
+    store = make_store("test")
     waiters = [
         asyncio.create_task(store.get(3, deadline=_deadline())),
         asyncio.create_task(
@@ -335,8 +355,8 @@ async def test_error_close_wakes_all_kinds_of_waiter():
 
 
 @pytest.mark.asyncio
-async def test_clear_data_returns_original_and_leaves_a_tombstone():
-    store = LocalChunkStore("test")
+async def test_clear_data_returns_original_and_leaves_a_tombstone(make_store):
+    store = make_store("test")
     await store.put(_fragment(0, final=True))
 
     cleared = await store.clear_data(0)
@@ -349,8 +369,8 @@ async def test_clear_data_returns_original_and_leaves_a_tombstone():
 
 
 @pytest.mark.asyncio
-async def test_put_many_validation_is_atomic():
-    store = LocalChunkStore("test")
+async def test_put_many_validation_is_atomic(make_store):
+    store = make_store("test")
 
     with pytest.raises(StatusException) as raised:
         await store.put_many([_fragment(0), _fragment(0, final=True)])
@@ -361,16 +381,16 @@ async def test_put_many_validation_is_atomic():
 
 
 @pytest.mark.asyncio
-async def test_put_returns_explicit_and_implicit_sequences():
-    store = LocalChunkStore("test")
+async def test_put_returns_explicit_and_implicit_sequences(make_store):
+    store = make_store("test")
 
     assert await store.put(_fragment(4)) == 4
     assert await store.put(_implicit_fragment(1)) == 1
 
 
 @pytest.mark.asyncio
-async def test_put_many_assigns_and_returns_implicit_sequences():
-    store = LocalChunkStore("test")
+async def test_put_many_assigns_and_returns_implicit_sequences(make_store):
+    store = make_store("test")
 
     seqs = await store.put_many(
         [
@@ -388,8 +408,10 @@ async def test_put_many_assigns_and_returns_implicit_sequences():
 
 
 @pytest.mark.asyncio
-async def test_put_many_rejects_mixed_explicit_and_implicit_sequences():
-    store = LocalChunkStore("test")
+async def test_put_many_rejects_mixed_explicit_and_implicit_sequences(
+    make_store,
+):
+    store = make_store("test")
 
     with pytest.raises(StatusException) as raised:
         await store.put_many([_implicit_fragment(0), _fragment(1)])
@@ -399,8 +421,10 @@ async def test_put_many_rejects_mixed_explicit_and_implicit_sequences():
 
 
 @pytest.mark.asyncio
-async def test_put_many_collision_does_not_change_implicit_assignment():
-    store = LocalChunkStore("test")
+async def test_put_many_collision_does_not_change_implicit_assignment(
+    make_store,
+):
+    store = make_store("test")
     await store.put(_fragment(0))
 
     with pytest.raises(StatusException) as raised:
@@ -412,7 +436,32 @@ async def test_put_many_collision_does_not_change_implicit_assignment():
 
 
 @pytest.mark.asyncio
-async def test_put_many_late_validation_failure_is_atomic():
+async def test_put_many_late_validation_failure_is_atomic(make_store):
+    """A rule checked after sequences are assigned still writes nothing.
+
+    Two final fragments are only detectable once the batch has been laid out,
+    so this exercises the rollback path rather than the cheap pre-checks.
+    """
+    store = make_store("test")
+
+    with pytest.raises(StatusException) as raised:
+        await store.put_many(
+            [_fragment(0), _fragment(1, final=True), _fragment(2, final=True)]
+        )
+
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert await store.size() == 0
+    assert await store.put(_implicit_fragment(0)) == 0
+
+
+@pytest.mark.asyncio
+async def test_local_store_rejects_node_ref_payloads():
+    """NodeRef support is a backend property, not part of the contract.
+
+    The in-memory store has nowhere to resolve a reference, so it refuses one.
+    `SQLiteChunkStore` accepts them and stores the target as indexed columns;
+    see `test_sqlite_chunk_store.py`.
+    """
     store = LocalChunkStore("test")
     unsupported = types.NodeFragment(
         seq=1,
@@ -427,12 +476,11 @@ async def test_put_many_late_validation_failure_is_atomic():
 
     assert raised.value.status.code == StatusCode.UNIMPLEMENTED
     assert await store.size() == 0
-    assert await store.put(_implicit_fragment(0)) == 0
 
 
 @pytest.mark.asyncio
-async def test_concurrent_implicit_puts_receive_unique_sequences():
-    store = LocalChunkStore("test")
+async def test_concurrent_implicit_puts_receive_unique_sequences(make_store):
+    store = make_store("test")
 
     seqs = await asyncio.gather(
         *(store.put(_implicit_fragment(value)) for value in range(10))
@@ -443,8 +491,8 @@ async def test_concurrent_implicit_puts_receive_unique_sequences():
 
 
 @pytest.mark.asyncio
-async def test_explicit_final_sequence_is_reported():
-    store = LocalChunkStore("test")
+async def test_explicit_final_sequence_is_reported(make_store):
+    store = make_store("test")
     await store.put_many([_fragment(1, final=True), _fragment(0)])
 
     assert await store.get_final_seq() == 1
@@ -455,8 +503,8 @@ async def test_explicit_final_sequence_is_reported():
 
 
 @pytest.mark.asyncio
-async def test_implicit_sequences_support_a_final_fragment():
-    store = LocalChunkStore("test")
+async def test_implicit_sequences_support_a_final_fragment(make_store):
+    store = make_store("test")
     await store.put_many(
         [
             types.NodeFragment(data=types.Chunk(data="0"), continued=True),
@@ -478,8 +526,8 @@ async def test_implicit_sequences_support_a_final_fragment():
 
 
 @pytest.mark.asyncio
-async def test_put_is_rejected_after_writes_are_closed():
-    store = LocalChunkStore("test")
+async def test_put_is_rejected_after_writes_are_closed(make_store):
+    store = make_store("test")
     await store.close_writes_with_status(Status())
 
     with pytest.raises(StatusException) as raised:
@@ -488,8 +536,8 @@ async def test_put_is_rejected_after_writes_are_closed():
 
 
 @pytest.mark.asyncio
-async def test_ok_close_wakes_next_waiter_and_ends_iteration():
-    store = LocalChunkStore("test")
+async def test_ok_close_wakes_next_waiter_and_ends_iteration(make_store):
+    store = make_store("test")
     waiting = asyncio.create_task(store.next(deadline=_deadline()))
     await asyncio.sleep(0)
 

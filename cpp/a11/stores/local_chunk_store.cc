@@ -28,6 +28,7 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
 #include "a11/stores/chunk_store.h"
+#include "a11/stores/internal/chunk_store_common.h"
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
 #include "thread/fiber.h"
@@ -37,31 +38,8 @@
 namespace a11::stores {
 namespace {
 
-template <typename T, typename F>
-a11::Future<T> CompleteInline(F&& operation) {
-  try {
-    return a11::CompletedFuture<T>(std::forward<F>(operation)());
-  } catch (const std::exception& error) {
-    return a11::FailedFuture<T>(absl::UnknownError(error.what()));
-  } catch (...) {
-    return a11::FailedFuture<T>(
-        absl::UnknownError("Chunk store operation raised an exception"));
-  }
-}
-
-absl::Status WaitForChange(
-    const std::shared_ptr<thread::PermanentEvent>& changed, absl::Time deadline,
-    std::string message) {
-  const int selected =
-      thread::SelectUntil(deadline, {thread::OnCancel(), changed->OnEvent()});
-  if (selected == 0) {
-    return absl::CancelledError("Chunk store operation was cancelled");
-  }
-  if (selected < 0) {
-    return absl::DeadlineExceededError(std::move(message));
-  }
-  return absl::OkStatus();
-}
+using internal::CompleteInline;
+using internal::WaitForChange;
 
 }  // namespace
 
@@ -110,7 +88,7 @@ struct LocalChunkStore::State
             state->RemoveRead(pending.get());
           }
         });
-    (void)callback_status;
+    callback_status.IgnoreError();
 
     std::vector<ReadCompletion> completions;
     {
@@ -341,28 +319,11 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
 }
 
 a11::Future<std::uint32_t> LocalChunkStore::Put(data::NodeFragment fragment) {
-  std::vector<data::NodeFragment> fragments;
-  fragments.push_back(std::move(fragment));
-  a11::Future<std::vector<std::uint32_t>> batch = PutMany(std::move(fragments));
-  a11::Promise<std::uint32_t> promise;
-  a11::Future<std::uint32_t> result = promise.future();
-  batch.OnReady(
-      [promise = std::move(promise)](
-          const absl::StatusOr<std::vector<std::uint32_t>>& seqs) mutable {
-        if (!seqs.ok()) {
-          promise.SetStatus(seqs.status()).IgnoreError();
-          return;
-        }
-        if (seqs->size() != 1) {
-          promise
-              .SetStatus(absl::DataLossError(
-                  "PutMany did not return exactly one sequence"))
-              .IgnoreError();
-          return;
-        }
-        promise.SetValue(seqs->front()).IgnoreError();
-      });
-  return result;
+  return internal::PutOneViaPutMany(
+      [this](std::vector<data::NodeFragment> batch) {
+        return PutMany(std::move(batch));
+      },
+      std::move(fragment), "LocalChunkStore");
 }
 
 a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(

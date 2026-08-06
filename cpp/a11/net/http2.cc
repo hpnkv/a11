@@ -2143,7 +2143,12 @@ struct Http2Client::Impl {
 Http2Client::Http2Client(std::string host, std::uint16_t port,
                          Http2Options options,
                          std::shared_ptr<HttpTransport> connection) {
-  static_assert(sizeof(Impl) <= kImplSize);
+  static_assert(sizeof(Impl) <= kImplSize,
+                "Http2Client::Impl outgrew its inline storage. kImplSize in "
+                "http2.h is derived from Impl's member types, so this means a "
+                "member was added or changed without updating that expression "
+                "-- do that rather than padding the literal slack, which would "
+                "hide the same overflow on the other standard library.");
   static_assert(alignof(Impl) <= kImplAlignment);
   std::construct_at(reinterpret_cast<Impl*>(impl_), std::move(host), port,
                     options, std::move(connection));

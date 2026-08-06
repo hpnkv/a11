@@ -55,8 +55,12 @@ build (editable, presets, and wheels) links that prefix exclusively. This is
 required on Linux **and** macOS: the build pins Boost to the prefix
 (`find_package(... NO_DEFAULT_PATH)`) and, on macOS, depends on the
 futex/memory-ordering patch the bootstrap applies to Boost.Fiber — a Homebrew
-Boost lacks it and is rejected. CMake additionally fetches the pinned Abseil and,
-for WebRTC, libdatachannel.
+Boost lacks it and is rejected. CMake additionally fetches the pinned Abseil,
+the pinned SQLite amalgamation (for `A11_BUILD_SQLITE`), and, for WebRTC,
+libdatachannel. SQLite is never taken from the system: it is compiled into the
+extension with hidden visibility so it cannot collide with the `libsqlite3`
+that CPython's own `_sqlite3` module loads into the same process. Point
+`A11_SQLITE_SOURCE_DIR` at an extracted amalgamation for an offline build.
 
 On macOS, install the tools with Homebrew:
 

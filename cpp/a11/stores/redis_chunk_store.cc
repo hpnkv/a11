@@ -29,6 +29,7 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/msgpack.h"
 #include "a11/data/types.h"
+#include "a11/stores/internal/chunk_store_common.h"
 #include "a11/stores/redis_chunk_store_script.h"
 #include "redis/client.h"
 #include "redis/reply.h"
@@ -292,29 +293,8 @@ absl::Status ExpectTag(const std::vector<redis::Reply>& values,
   return absl::OkStatus();
 }
 
-std::optional<std::string> EnvironmentValue(const char* name) {
-  const char* value = std::getenv(name);
-  if (value == nullptr) {
-    return std::nullopt;
-  }
-  return std::string(value);
-}
-
-absl::StatusOr<size_t> ParseEnvironmentSize(std::string_view value,
-                                            std::string_view name) {
-  if (value.empty()) {
-    return absl::InvalidArgumentError(absl::StrCat(name, " is empty"));
-  }
-  size_t parsed = 0;
-  const char* first = value.data();
-  const char* last = first + value.size();
-  const auto result = std::from_chars(first, last, parsed);
-  if (result.ec != std::errc{} || result.ptr != last) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(name, " is not a non-negative integer"));
-  }
-  return parsed;
-}
+using internal::EnvironmentValue;
+using internal::ParseEnvironmentSize;
 
 }  // namespace
 
@@ -569,26 +549,11 @@ RedisChunkStore::Next(absl::Time deadline, size_t limit) {
 }
 
 a11::Future<std::uint32_t> RedisChunkStore::Put(data::NodeFragment fragment) {
-  std::vector<data::NodeFragment> fragments;
-  fragments.push_back(std::move(fragment));
-  a11::Future<std::vector<std::uint32_t>> batch = PutMany(std::move(fragments));
-  a11::Promise<std::uint32_t> promise;
-  a11::Future<std::uint32_t> result = promise.future();
-  batch.OnReady(
-      [promise = std::move(promise)](
-          const absl::StatusOr<std::vector<std::uint32_t>>& seqs) mutable {
-        if (!seqs.ok()) {
-          promise.SetStatus(seqs.status()).IgnoreError();
-        } else if (seqs->size() != 1) {
-          promise
-              .SetStatus(absl::DataLossError(
-                  "Redis PutMany did not return exactly one sequence"))
-              .IgnoreError();
-        } else {
-          promise.SetValue(seqs->front()).IgnoreError();
-        }
-      });
-  return result;
+  return internal::PutOneViaPutMany(
+      [this](std::vector<data::NodeFragment> batch) {
+        return PutMany(std::move(batch));
+      },
+      std::move(fragment), "Redis");
 }
 
 a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(

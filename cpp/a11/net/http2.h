@@ -31,6 +31,8 @@
 #include <absl/time/time.h>
 
 #include "a11/concurrency/future.h"
+// For sizeof(thread::Mutex) in Http2Client's inline-storage budget below.
+#include "thread/boost_primitives.h"
 
 namespace a11::net {
 
@@ -399,7 +401,22 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
 
  private:
   struct Impl;
-  static constexpr size_t kImplSize = 272;
+
+  // Inline storage for Impl, whose definition lives in the .cc. The budget is
+  // derived from the member types rather than written as a literal because
+  // std::string is 24 bytes on libc++ and 32 on libstdc++: Impl holds four of
+  // them (its own host plus the three in Http2Options::tls), so a constant
+  // tuned on macOS silently overflows by 24 bytes on Linux and the
+  // static_assert in the constructor becomes a hard build failure. Keep this
+  // in sync with Impl's members; the trailing slack covers padding and the odd
+  // small field.
+  static constexpr size_t kImplSize =
+      sizeof(std::string) +                               // host
+      sizeof(std::uint16_t) +                             // port
+      sizeof(Http2Options) +                              // options
+      sizeof(thread::Mutex) +                             // mu
+      sizeof(std::shared_ptr<internal::HttpTransport>) +  // connection
+      32;                                                 // padding and slack
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
   Http2Client(std::string host, std::uint16_t port, Http2Options options,

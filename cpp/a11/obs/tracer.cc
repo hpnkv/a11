@@ -36,7 +36,6 @@
 namespace otel = opentelemetry;
 
 namespace a11::obs {
-
 // Holds the live OpenTelemetry span plus the baggage inherited from the parent
 // so it can be re-propagated to children. Kept small enough to live inside
 // Span's inline storage.
@@ -46,9 +45,6 @@ struct Span::Impl {
 };
 
 namespace {
-
-constexpr std::string_view kLowerHex = "0123456789abcdef";
-
 int HexNibble(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -143,7 +139,6 @@ void PromoteBaggageAttributes(Span& span,
     }
   }
 }
-
 }  // namespace
 
 // --- Span -----------------------------------------------------------------
@@ -403,5 +398,4 @@ Span Tracer::StartRootSpan(std::string_view name, SpanKind kind,
   impl->span = internal::GlobalTracer()->StartSpan(name, options);
   return span;
 }
-
 }  // namespace a11::obs

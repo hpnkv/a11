@@ -38,6 +38,7 @@
 #include "a11/obs/tracer.h"
 #include "a11/service/session.h"
 #include "a11/status.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
 #include "thread/select.h"
@@ -47,14 +48,7 @@ namespace a11::actions {
 namespace {
 
 std::string NewActionId() {
-  absl::BitGen generator;
-  const std::uint64_t high = absl::Uniform<std::uint64_t>(generator);
-  const std::uint64_t low = absl::Uniform<std::uint64_t>(generator);
-  return absl::StrFormat(
-      "%08x-%04x-%04x-%04x-%012x", static_cast<std::uint32_t>(high >> 32U),
-      static_cast<std::uint16_t>(high >> 16U), static_cast<std::uint16_t>(high),
-      static_cast<std::uint16_t>(low >> 48U),
-      low & UINT64_C(0x0000ffffffffffff));
+  return a11::NewUuid();
 }
 
 absl::Status CancelledStatus() {

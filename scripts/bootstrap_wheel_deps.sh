@@ -60,6 +60,9 @@ download_and_extract() {
   tar -xf "${work}/${archive}" -C "${work}"
 }
 
+# These arrays stay empty on some hosts (no arch flags on Linux, no ALSA on
+# macOS). Expand them as ${arr[@]+"${arr[@]}"} rather than "${arr[@]}": the
+# bash 3.2 that macOS ships treats an empty array as unbound under `set -u`.
 cmake_arch_args=()
 boost_arch_args=()
 openssl_target=
@@ -179,7 +182,7 @@ cmake -S "${work}/curl-8.11.0" -B "${work}/curl-build" \
   -DENABLE_CURL_MANUAL=OFF -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${cmake_arch_args[@]}"
+  ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/curl-build" --target install -j "${jobs}"
 
 download_and_extract \
@@ -203,7 +206,7 @@ download_and_extract \
   nlohmann-json.tar.gz
 cmake -S "${work}/json-3.12.0" -B "${work}/json-build" \
   -G Ninja -DJSON_BuildTests=OFF -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="${prefix}" "${cmake_arch_args[@]}"
+  -DCMAKE_INSTALL_PREFIX="${prefix}" ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/json-build" --target install -j "${jobs}"
 
 download_and_extract \
@@ -214,7 +217,7 @@ cmake -S "${work}/nghttp2-1.69.0" -B "${work}/nghttp2-build" \
   -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${cmake_arch_args[@]}"
+  ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/nghttp2-build" --target install -j "${jobs}"
 
 download_and_extract \
@@ -226,7 +229,7 @@ cmake -S "${work}/hiredis-1.3.0" -B "${work}/hiredis-build" \
   -DENABLE_EXAMPLES=OFF -DENABLE_NUGET=OFF \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${cmake_arch_args[@]}"
+  ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/hiredis-build" --target install -j "${jobs}"
 
 download_and_extract \
@@ -237,7 +240,7 @@ cmake -S "${work}/uvw-3.4.0_libuv_v1.48" -B "${work}/uvw-build" \
   -DFETCH_LIBUV=ON -DUSE_LIBCPP=OFF -DBUILD_TESTING=OFF \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${cmake_arch_args[@]}"
+  ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/uvw-build" --target install -j "${jobs}"
 
 # uvw's FETCH_LIBUV install copies libuv's public headers to
@@ -284,7 +287,7 @@ cmake -S "${work}/portaudio-19.7.0" -B "${work}/portaudio-build" \
   -DPA_ENABLE_DEBUG_OUTPUT=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${alsa_cmake_args[@]}" "${cmake_arch_args[@]}"
+  ${alsa_cmake_args[@]+"${alsa_cmake_args[@]}"} ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/portaudio-build" --target install -j "${jobs}"
 
 whisper_platform_args=(-DGGML_BLAS=OFF -DGGML_METAL=OFF)
@@ -306,7 +309,7 @@ cmake -S "${work}/whisper.cpp-1.9.2" -B "${work}/whisper-build" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
-  "${whisper_platform_args[@]}" "${cmake_arch_args[@]}"
+  "${whisper_platform_args[@]}" ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
 cmake --build "${work}/whisper-build" --target install -j "${jobs}"
 
 touch "${stamp}"

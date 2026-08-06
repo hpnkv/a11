@@ -28,7 +28,7 @@ import msgpack
 import pydantic
 
 from a11 import _native, timing
-from a11.data import types
+from a11.data import serial_tags, types
 from a11.status import Status, StatusCode, StatusException
 
 SerializedData = str | bytes | bytearray | memoryview | types.Chunk
@@ -215,6 +215,19 @@ def _qualified_name(obj_type: type) -> str:
     if "<locals>" in qualname or module in ("", "builtins", "__main__"):
         return obj_type.__name__
     return f"{module}.{qualname}"
+
+
+def _declared_serial_tag(obj_type: type) -> str | None:
+    """The cross-language tag a class declares for itself, if any.
+
+    A class opts in with an ``A11_SERIAL_TAG`` ClassVar naming its entry in
+    `a11.data.serial_tags` — the Python counterpart of the C++ ``A11SerialTag``
+    ADL customization point. Read from the class's own ``__dict__`` rather than
+    with ``getattr``: a subclass must not inherit its base's identity and
+    silently serialize as the wrong type.
+    """
+    tag = obj_type.__dict__.get(serial_tags.SERIAL_TAG_ATTRIBUTE)
+    return tag if isinstance(tag, str) and tag else None
 
 
 def _import_qualified(name: str) -> type | None:
@@ -468,10 +481,18 @@ class SerializationRegistry:
 
     @_status_boundary
     def _type_tag(self, obj_type: type) -> str:
-        """The wire tag for ``obj_type``: explicit if set, else qualified."""
+        """The wire tag for ``obj_type``.
+
+        A tag pinned on this registry wins, then one the class declares for
+        itself with an ``A11_SERIAL_TAG`` ClassVar, and failing both the
+        qualified name.
+        """
         explicit = self._type_tags.get(obj_type)
         if explicit is not None:
             return explicit
+        declared = _declared_serial_tag(obj_type)
+        if declared is not None:
+            return declared
         return _qualified_name(obj_type)
 
     @_status_boundary
@@ -847,6 +868,9 @@ class SerializationRegistry:
         if obj_type not in known:
             known.append(obj_type)
         self._known_by_tag.setdefault(_qualified_name(obj_type), obj_type)
+        declared = _declared_serial_tag(obj_type)
+        if declared is not None:
+            self._known_by_tag.setdefault(declared, obj_type)
 
     @_status_boundary
     def _resolve_type(self, name: str) -> type | None:
@@ -878,7 +902,11 @@ class SerializationRegistry:
             if candidate in visited:
                 continue
             visited.add(candidate)
-            if _qualified_name(candidate) == name or candidate.__name__ == name:
+            if (
+                _declared_serial_tag(candidate) == name
+                or _qualified_name(candidate) == name
+                or candidate.__name__ == name
+            ):
                 self._remember_type(candidate)
                 return candidate
             try:
@@ -1611,6 +1639,25 @@ _NATIVE_DATA_TYPES: tuple[type, ...] = (
 )
 
 
+#: Canonical cross-language tags for the runtime's own types. They are native
+#: (pybind11) classes and so cannot declare an ``A11_SERIAL_TAG`` ClassVar the
+#: way an SDK model does; a registry pins their tags from here instead. Readers
+#: still accept the historical bare names ("Chunk", "Status") through
+#: ``SerializationRegistry._resolve_type``'s class-name fallback.
+CORE_TYPE_TAGS: dict[type, str] = {
+    types.ChunkMetadata: serial_tags.CHUNK_METADATA,
+    types.Chunk: serial_tags.CHUNK,
+    types.NodeRef: serial_tags.NODE_REF,
+    types.NodeFragment: serial_tags.NODE_FRAGMENT,
+    types.Port: serial_tags.PORT,
+    types.ActionMessage: serial_tags.ACTION_MESSAGE,
+    types.WireMessage: serial_tags.WIRE_MESSAGE,
+    Status: serial_tags.STATUS,
+    timing.Time: serial_tags.TIME,
+    timing.Duration: serial_tags.DURATION,
+}
+
+
 DEFAULT_SERIALIZABLE_TYPES: tuple[type, ...] = (
     dict,
     list,
@@ -1676,14 +1723,15 @@ def _register_default_serializers(registry: SerializationRegistry) -> None:
         type(None): "null",
     }
 
-    # The framework's other well-known types retain their historical bare-name
-    # tags; user-defined types use qualified, collision-free tags by default.
+    # Anything else well-known keeps its bare-name tag; user-defined types use
+    # qualified, collision-free tags by default.
     for obj_type in DEFAULT_SERIALIZABLE_TYPES:
         if obj_type is pydantic.BaseModel:
             continue
+        default = CORE_TYPE_TAGS.get(obj_type, obj_type.__name__)
         registry._set_type_tag(
             obj_type,
-            canonical_json_tags.get(obj_type, obj_type.__name__),
+            canonical_json_tags.get(obj_type, default),
             allow_shared=obj_type in (list, tuple),
         )
 

@@ -2,6 +2,16 @@ import { decode, encode } from '@msgpack/msgpack';
 
 import { toBytesAsync, utf8Decode, utf8Encode, type AsyncByteSource } from './bytes.js';
 import { Chunk, ChunkMetadata } from './data.js';
+import { canonicalSerialTag } from './serial_tags.js';
+import {
+  WIRE_CLASS_NAME,
+  unwrapWireValue,
+  wireValueCodecCount,
+  wireValueCodecFor,
+  wireValueCodecs,
+  wrapWireValue,
+  type Fields,
+} from './wire_values.js';
 import {
   alreadyExistsError,
   invalidArgumentError,
@@ -154,7 +164,10 @@ function canonicalJsonTag(value: unknown): string | null {
 }
 
 function canonicalTypeTag(tag: string): string {
-  return LEGACY_TYPE_TAGS[tag] ?? tag;
+  // Two generations of alias: the Python type names JSON-native values used to
+  // carry, and the bare/module-qualified names A11's own types carried before
+  // the tags were unified across languages.
+  return LEGACY_TYPE_TAGS[tag] ?? canonicalSerialTag(tag);
 }
 
 function wireTag(name: string, value: unknown): Record<string, unknown> {
@@ -212,6 +225,19 @@ function toWire(value: unknown, binary: boolean, topLevel = false, seen = new Se
         pairs.push([encodedKey, encodedValue]);
       }
       return wireTag('map', pairs);
+    }
+    // A registered class -- a Chunk in an interaction's content, a Status, an
+    // SDK model -- is written as a tagged object naming its type, so the peer
+    // can rebuild it rather than receive an anonymous bag of fields. At the top
+    // level the chunk's own `;type=` parameter already says what this is, so the
+    // fields go out bare.
+    const wireValue = wireValueCodecFor(value);
+    if (wireValue !== null) {
+      const dumped = wireValue.dump(value);
+      if (!isOk(dumped)) return dumped;
+      const encoded = toWire(dumped, binary, true, seen);
+      if (!isOk(encoded)) return encoded;
+      return topLevel ? encoded : wrapWireValue(wireValue, encoded);
     }
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
       return invalidArgumentError(`Objects of type ${value.constructor?.name ?? 'unknown'} cannot be serialized by the default codecs.`);
@@ -293,6 +319,11 @@ function fromWire(value: unknown): StatusOr<unknown> {
   if (tag === 'tuple') {
     // JavaScript has no tuple runtime type; arrays are its native equivalent.
     return fromWire(encoded);
+  }
+  if (tag === 'a11.value' || tag === 'pydantic') {
+    const decoded = fromWire(encoded);
+    if (!isOk(decoded)) return decoded;
+    return unwrapWireValue(object[WIRE_CLASS_NAME], decoded);
   }
   return invalidArgumentError(`Unsupported A11 serialization tag: ${tag}.`);
 }
@@ -406,6 +437,8 @@ function deserializeBytes(
 export class SerializationRegistry {
   private readonly codecs: RegisteredCodec[] = [];
   private nextOrder = 0;
+  private wireValueCache: RegisteredCodec[] | null = null;
+  private wireValueGeneration = -1;
 
   constructor(options: { registerDefaults?: boolean } = {}) {
     if (options.registerDefaults ?? false) this.installDefaults();
@@ -508,12 +541,54 @@ export class SerializationRegistry {
     return { code: 0, message: 'OK' };
   }
 
+  /**
+   * Codecs for the class-tagged types, derived from the wire-value registry.
+   *
+   * They are derived rather than registered because that registry grows on
+   * import: an SDK module adds `a11.sdk.Interaction` whenever the application
+   * first pulls it in, which is routinely after this registry was built. They
+   * sort ahead of everything else, since a value that knows its own class must
+   * not be claimed by the generic `object` codec that also matches it.
+   */
+  private wireValueCodecs(): RegisteredCodec[] {
+    if (this.wireValueCache !== null && this.wireValueGeneration === wireValueCodecCount()) {
+      return this.wireValueCache;
+    }
+    const derived: RegisteredCodec[] = [];
+    for (const wireValue of wireValueCodecs()) {
+      for (const mimetype of [JSON_MIMETYPE, MSGPACK_MIMETYPE]) {
+        const parsed = parseMimetype(mimetype);
+        if (!isOk(parsed)) continue;
+        const json = mimetype === JSON_MIMETYPE;
+        derived.push({
+          tag: wireValue.tag,
+          mimetype,
+          parsed,
+          order: -1,
+          test: (value): value is unknown => wireValue.test(value),
+          serialize: (value) => (json ? jsonSerialize(value) : msgpackSerialize(value)),
+          deserialize: (data) => {
+            const decoded = json ? jsonDeserialize(data) : msgpackDeserialize(data);
+            if (!isOk(decoded)) return decoded;
+            if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+              return invalidArgumentError(`A ${wireValue.tag} payload must be an object.`);
+            }
+            return wireValue.load(decoded as Fields);
+          },
+        } as RegisteredCodec);
+      }
+    }
+    this.wireValueCache = derived;
+    this.wireValueGeneration = wireValueCodecCount();
+    return derived;
+  }
+
   /** Select a matching serializer and produce a tagged, owned Chunk. */
   async toChunk(value: unknown, mimetype = ''): Promise<StatusOr<Chunk>> {
     try {
       const selection = mimetype === '' ? null : parseMimetype(mimetype, true);
       if (selection !== null && !isOk(selection)) return selection;
-      const candidates = this.codecs
+      const candidates = [...this.wireValueCodecs(), ...this.codecs]
         .filter((codec) =>
           codec.test(value) &&
           (selection === null || registrationMatches(codec.parsed, selection, codec.tag)),
@@ -598,7 +673,7 @@ export class SerializationRegistry {
           `The chunk mimetype ${chunk.mimetype} does not match the requested patterns.`,
         );
       }
-      const candidates = this.codecs.filter((codec) =>
+      const candidates = [...this.wireValueCodecs(), ...this.codecs].filter((codec) =>
         (canonicalEncodedTag === undefined || codec.tag === canonicalEncodedTag) &&
         (
           // A Blob carries its concrete browser media type (for example,

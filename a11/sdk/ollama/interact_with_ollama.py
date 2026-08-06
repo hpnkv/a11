@@ -587,9 +587,15 @@ def _decode_action_output_fragments(
 
     values: dict[str, Any] = {}
     for field_name, field_fragments in grouped.items():
+        # A null chunk is an end-of-stream marker, not a value: an action that
+        # ends an output with `put_null_final` (or reports "nothing here" on an
+        # optional port) must not make the whole tool result undecodable.
+        chunks = [fragment.get_chunk() for fragment in field_fragments]
         decoded = [
-            a11.from_chunk(fragment.get_chunk()) for fragment in field_fragments
+            a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
         ]
+        if not decoded:
+            continue
         values[field_name] = decoded[0] if len(decoded) == 1 else decoded
 
     if list(values.keys()) == ["$"]:
@@ -598,17 +604,25 @@ def _decode_action_output_fragments(
 
 
 async def _build_tool_results_from_outputs(
-    outputs: dict[str, list[a11.NodeFragment]],
+    executed: runner.ExecutedActions,
     call_names: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Turn nested-action outputs into Ollama `role: "tool"` messages."""
+    """Turn nested-action outputs into Ollama `role: "tool"` messages.
+
+    A call that failed reports its failure as that call's message: the model can
+    react to it, and the calls that succeeded keep their own answers.
+    """
     tool_results = []
-    for call_id, fragments in outputs.items():
-        content = _decode_action_output_fragments(fragments)
-        if not isinstance(content, str):
-            content = (
-                await asyncio.to_thread(pydantic_core.to_json, content)
-            ).decode()
+    for call_id, fragments in executed.outputs.items():
+        failure = executed.error_message(call_id)
+        if failure is not None:
+            content = f"Error: {failure}"
+        else:
+            content = _decode_action_output_fragments(fragments)
+            if not isinstance(content, str):
+                content = (
+                    await asyncio.to_thread(pydantic_core.to_json, content)
+                ).decode()
 
         message: dict[str, Any] = {
             "role": "tool",
@@ -868,7 +882,7 @@ async def interact_with_ollama(action: a11.Action):
                         )
                 break
 
-            outputs = await runner.execute_actions_from_interaction(
+            executed = await runner.execute_actions_from_interaction(
                 interaction, action, action.get_registry()
             )
 
@@ -877,7 +891,7 @@ async def interact_with_ollama(action: a11.Action):
                 previous_interaction_id=previous_interaction_id,
                 role=llm.Role.USER,
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
-                action_outputs=outputs,
+                action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.OLLAMA).encode()
                 },
@@ -886,7 +900,7 @@ async def interact_with_ollama(action: a11.Action):
                         {
                             "messages": (
                                 await _build_tool_results_from_outputs(
-                                    outputs, call_names
+                                    executed, call_names
                                 )
                             )
                         }

@@ -7,8 +7,9 @@
  * Declares the a11::data customization points (A11SerialTag / A11ToJson /
  * A11FromJson / A11ToMsgpackBytes / A11FromMsgpackBytes) for every type that
  * appears on an audio Action's ports, and @ref RegisterAudioTypes to install
- * their codecs into a SerializationRegistry. Type tags are language-agnostic,
- * e.g. @c "application/x-msgpack;type=a11.sdk.audio.AudioBuffer".
+ * their codecs into a SerializationRegistry. Type tags are language-agnostic
+ * and come from a11/data/serial_tags.h, e.g.
+ * @c "application/x-msgpack;type=a11.sdk.AudioBuffer".
  *
  * Representations:
  *   - AudioBuffer            -- MessagePack only (samples packed as binary).
@@ -37,6 +38,7 @@
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
@@ -48,21 +50,25 @@
 
 namespace a11::sdk::audio {
 
-// --- Type tags (also the Python-visible, language-agnostic names) -----------
+// --- Type tags --------------------------------------------------------------
+//
+// Aliases of the canonical cross-language table in a11/data/serial_tags.h;
+// every language must agree on these strings, so they are defined once there.
 
-inline constexpr std::string_view kAudioBufferTypeTag = "a11.sdk.audio.AudioBuffer";
+inline constexpr std::string_view kAudioBufferTypeTag =
+    a11::data::kAudioBufferTag;
 inline constexpr std::string_view kAudioInputOptionsTypeTag =
-    "a11.sdk.audio.AudioInputOptions";
+    a11::data::kAudioInputOptionsTag;
 inline constexpr std::string_view kSpeechRecognizerOptionsTypeTag =
-    "a11.sdk.audio.SpeechRecognizerOptions";
+    a11::data::kSpeechRecognizerOptionsTag;
 inline constexpr std::string_view kAudioDeviceInfoTypeTag =
-    "a11.sdk.audio.AudioDeviceInfo";
+    a11::data::kAudioDeviceInfoTag;
 inline constexpr std::string_view kAudioControlEventTypeTag =
-    "a11.sdk.audio.AudioControlEvent";
+    a11::data::kAudioControlEventTag;
 inline constexpr std::string_view kAudioCaptureEventTypeTag =
-    "a11.sdk.audio.AudioCaptureEvent";
+    a11::data::kAudioCaptureEventTag;
 inline constexpr std::string_view kTranscriptionEventTypeTag =
-    "a11.sdk.audio.TranscriptionEvent";
+    a11::data::kTranscriptionEventTag;
 
 // --- AudioBuffer: MessagePack only ------------------------------------------
 

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from a11 import _native
 from a11._native_options import install_native_options
+from a11.data import serial_tags
 from a11.sdk.audio.client import register_json_codec
 
 from a11._native import AudioCaptureEvent
@@ -50,9 +51,9 @@ install_native_options(TranscriptionEvent, {"kind": (str, "capture_started")})
 
 # JSON codecs so the event types round-trip through the Python serialization
 # registry the AsyncNode uses, matching the native C++ tags.
-register_json_codec(AudioControlEvent, "a11.sdk.audio.AudioControlEvent")
-register_json_codec(AudioCaptureEvent, "a11.sdk.audio.AudioCaptureEvent")
-register_json_codec(TranscriptionEvent, "a11.sdk.audio.TranscriptionEvent")
+register_json_codec(AudioControlEvent, serial_tags.AUDIO_CONTROL_EVENT)
+register_json_codec(AudioCaptureEvent, serial_tags.AUDIO_CAPTURE_EVENT)
+register_json_codec(TranscriptionEvent, serial_tags.TRANSCRIPTION_EVENT)
 
 _native_register_audio_actions = _native.register_audio_actions
 

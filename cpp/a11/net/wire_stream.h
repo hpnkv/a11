@@ -43,7 +43,7 @@ inline constexpr size_t kMaxSingleMessageSize = 32 * 1024 * 1024;
  */
 struct WireStreamOptions {
   /// Maximum inbound messages buffered before backpressure is applied.
-  size_t max_buffered_incoming_messages = 100;
+  size_t max_buffered_incoming_messages = 1000;
   /// Reject any single reassembled message larger than this.
   size_t max_single_message_size = kMaxSingleMessageSize;
   /// Maximum total bytes of buffered inbound messages.

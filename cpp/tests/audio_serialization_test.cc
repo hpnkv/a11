@@ -44,7 +44,7 @@ TEST(AudioSerializationTest, AudioBufferRoundTripsMsgpack) {
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   ASSERT_TRUE(chunk->metadata.has_value());
   EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.audio.AudioBuffer"));
+                                "type=a11.sdk.AudioBuffer"));
   EXPECT_TRUE(absl::StartsWith(chunk->metadata->mimetype, kMsgpackMimetype));
 
   absl::StatusOr<AudioBuffer> decoded = registry.FromChunk<AudioBuffer>(*chunk);
@@ -65,7 +65,7 @@ TEST(AudioSerializationTest, AudioBufferChunkEncodeDecode) {
   absl::StatusOr<Chunk> chunk = EncodeAudioBufferChunk(buffer);
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.audio.AudioBuffer"));
+                                "type=a11.sdk.AudioBuffer"));
   absl::StatusOr<AudioBuffer> decoded = DecodeAudioBufferChunk(*chunk);
   ASSERT_TRUE(decoded.ok()) << decoded.status();
   EXPECT_EQ(decoded->num_channels, 1u);
@@ -92,7 +92,7 @@ TEST(AudioSerializationTest, AudioInputOptionsJsonOmitsDefaults) {
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   EXPECT_EQ(chunk->data, "{}");  // every field is at its default
   EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.audio.AudioInputOptions"));
+                                "type=a11.sdk.AudioInputOptions"));
 }
 
 TEST(AudioSerializationTest, AudioInputOptionsJsonRoundTripAndDefaults) {
@@ -171,7 +171,7 @@ TEST(AudioSerializationTest, DeviceInfoRoundTrip) {
       registry.ToChunk<DeviceInfo>(device, kJsonMimetype);
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.audio.AudioDeviceInfo"));
+                                "type=a11.sdk.AudioDeviceInfo"));
   absl::StatusOr<DeviceInfo> decoded = registry.FromChunk<DeviceInfo>(*chunk);
   ASSERT_TRUE(decoded.ok()) << decoded.status();
   EXPECT_EQ(decoded->index, 2);
@@ -190,7 +190,7 @@ TEST(AudioSerializationTest, ControlEventRoundTrip) {
       registry.ToChunk<AudioControlEvent>(AudioControlEvent::Stop());
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.audio.AudioControlEvent"));
+                                "type=a11.sdk.AudioControlEvent"));
   absl::StatusOr<AudioControlEvent> decoded =
       registry.FromChunk<AudioControlEvent>(*chunk);
   ASSERT_TRUE(decoded.ok()) << decoded.status();
@@ -216,7 +216,7 @@ TEST(AudioSerializationTest, CaptureEventRejectsDropOnNonDropKind) {
   Chunk chunk;
   chunk.metadata = data::ChunkMetadata{
       .mimetype = std::string(kJsonMimetype) +
-                  ";type=a11.sdk.audio.AudioCaptureEvent"};
+                  ";type=a11.sdk.AudioCaptureEvent"};
   chunk.data = R"({"kind":"started","dropped":5})";
   EXPECT_FALSE(registry.FromChunk<AudioCaptureEvent>(chunk).ok());
 }
@@ -227,7 +227,7 @@ TEST(AudioSerializationTest, PythonStyleJsonDecodesOnGlobalRegistry) {
   Chunk chunk;
   chunk.metadata = data::ChunkMetadata{
       .mimetype =
-          "application/json;type=a11.sdk.audio.AudioInputOptions"};
+          "application/json;type=a11.sdk.AudioInputOptions"};
   chunk.data =
       R"({"device_index": -1, "device_name": "", "sample_rate": 0.0, )"
       R"("channels": 0, "block_frames": 256, "ring_blocks": 32, )"

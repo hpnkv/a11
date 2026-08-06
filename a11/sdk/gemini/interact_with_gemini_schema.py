@@ -1,10 +1,11 @@
 # Copyright 2026 The A11 Authors.
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import a11
 from pydantic import BaseModel, Field
 
+from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.status import Status, StatusCode
 
@@ -30,6 +31,8 @@ class CreateInteractionConfig(BaseModel):
     plus toggles for the model's built-in, server-side tools. Registry-backed
     A11 actions are surfaced separately through the `tools` input port.
     """
+
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACT_WITH_GEMINI_CONFIG
 
     max_output_tokens: int = Field(
         default=10240,

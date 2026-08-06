@@ -151,7 +151,7 @@ TEST(AudioActionsTest, CaptureAudioDecodesRawJsonOptionsNodePath) {
                                               CaptureAudioHandler());
   data::Chunk options;
   options.metadata = data::ChunkMetadata{
-      .mimetype = "application/json;type=a11.sdk.audio.AudioInputOptions"};
+      .mimetype = "application/json;type=a11.sdk.AudioInputOptions"};
   options.data = R"({"buffer_frames": 512})";
   ASSERT_TRUE((*action->GetInput("options", false))
                   ->PutChunk(options, std::nullopt, /*final=*/true)

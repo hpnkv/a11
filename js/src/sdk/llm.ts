@@ -14,6 +14,19 @@ import { z } from 'zod';
 import type { Action } from '../action.js';
 import { utf8Decode } from '../bytes.js';
 import {
+  ACTION_CONFIG_TAG,
+  INTERACTION_TAG,
+  PEER_TAG,
+  USAGE_METADATA_TAG,
+} from '../serial_tags.js';
+import {
+  registerWireValueCodec,
+  tagValue,
+  testTagged,
+  valueTag,
+  type Fields,
+} from '../wire_values.js';
+import {
   failedPreconditionError,
   invalidArgumentError,
   isOk,
@@ -78,6 +91,23 @@ export const usageMetadataSchema = z
 export type UsageMetadata = z.infer<typeof usageMetadataSchema>;
 
 // --- Peers -------------------------------------------------------------------
+
+/**
+ * A field holding a registered model, without losing what it already is.
+ *
+ * When a serialized value arrives, the decoder has already rebuilt each nested
+ * model and branded it with its tag. Validating that field again would produce
+ * a *fresh* object and drop the brand, and the model would go back out to the
+ * peer as an anonymous map instead of as its own type. So an already-branded
+ * value passes through untouched, and only a value supplied by hand — by a
+ * TypeScript caller writing an object literal — is parsed and branded.
+ */
+function taggedOr<S extends z.ZodType>(tag: string, schema: S) {
+  return z.union([
+    z.custom<z.infer<S>>((value) => valueTag(value) === tag),
+    schema.transform((value) => tagValue({ ...(value as object) }, tag) as z.infer<S>),
+  ]);
+}
 
 /** Global WebRTC signalling endpoint used when an `rtc` peer omits one. */
 export const GLOBAL_WEBRTC_SIGNALLING_ENDPOINT = 'wss://a11.services/ice';
@@ -191,8 +221,12 @@ export function a11PeerFromString(peer: string): StatusOr<A11Peer> {
 // --- Action config -----------------------------------------------------------
 
 export const a11ActionConfigSchema = z.object({
-  peer: z.union([z.string(), a11PeerSchema]).default('a11://$sender'),
-  header_autofills: z.record(z.string(), z.string()).default({}),
+  peer: z.union([z.string(), taggedOr(PEER_TAG, a11PeerSchema)]).default('a11://$sender'),
+  // `dict[str, bytes]` on the Python side; see the note on an interaction's
+  // `backend_specific_metadata`.
+  header_autofills: z
+    .record(z.string(), z.union([z.instanceof(Uint8Array), z.string()]))
+    .default({}),
 });
 export type A11ActionConfig = z.infer<typeof a11ActionConfigSchema>;
 
@@ -212,17 +246,32 @@ const interactionSchema = z
     action_calls: z.array(z.unknown()).default([]),
     action_inputs: z.record(z.string(), z.array(z.unknown())).default({}),
     action_outputs: z.record(z.string(), z.array(z.unknown())).default({}),
-    backend_specific_metadata: z.record(z.string(), z.string()).default({}),
-    usage_metadata: usageMetadataSchema.nullish(),
+    // `dict[str, bytes]` on the Python side; a peer sends raw bytes, which the
+    // decoder has already turned into a Uint8Array by the time this runs. A
+    // string is accepted so a TypeScript caller can set one by hand.
+    backend_specific_metadata: z
+      .record(z.string(), z.union([z.instanceof(Uint8Array), z.string()]))
+      .default({}),
+    usage_metadata: taggedOr(USAGE_METADATA_TAG, usageMetadataSchema).nullish(),
   })
   .loose();
 
 /** Portable, backend-independent record of one turn in a conversation. */
 export type Interaction = z.infer<typeof interactionSchema>;
 
-/** Validate and default-fill an unknown value into an {@link Interaction}. */
+/**
+ * Validate and default-fill an unknown value into an {@link Interaction}.
+ *
+ * The result is branded with its serialization tag, which is what lets it go
+ * back out to a peer as an `Interaction` rather than an anonymous object — see
+ * {@link tagValue}. Build interactions through here (or
+ * {@link makeTextMessageInteraction}) rather than as object literals, or the
+ * backend will reject them.
+ */
 export function parseInteraction(value: unknown): StatusOr<Interaction> {
-  return zodParse(interactionSchema, value, 'Interaction');
+  const parsed = zodParse(interactionSchema, value, 'Interaction');
+  if (!isOk(parsed)) return parsed;
+  return tagValue(parsed, INTERACTION_TAG);
 }
 
 /** Build a fully defaulted {@link Interaction} from a partial one. */
@@ -263,6 +312,57 @@ function randomUuid(): string {
   return `${Date.now().toString(16)}-${Math.floor(
     Math.random() * 0xffff_ffff,
   ).toString(16)}`;
+}
+
+// --- Serialization -----------------------------------------------------------
+//
+// The SDK's models are `zod` types, so at runtime they are plain objects with
+// nothing to tell them apart from any other object a caller might send. Each is
+// branded with its canonical tag when built or decoded, and registered here so
+// it survives a round trip through a peer in another language: an interaction
+// handed back to the backend has to arrive as `a11.sdk.Interaction`, not as an
+// anonymous JSON blob the strict `interactions` port will refuse.
+//
+// `dump` is a shallow copy: the brand lives under a symbol, so a model's own
+// enumerable fields are already exactly what goes on the wire — but handing the
+// encoder the very object it is walking would read as a cycle and be refused.
+
+function registerModelCodec<S extends z.ZodType>(
+  tag: string,
+  schema: S,
+  context: string,
+): void {
+  registerWireValueCodec<z.infer<S>>({
+    tag,
+    kind: 'pydantic',
+    test: testTagged(tag),
+    dump: (value) => ({ ...(value as Fields) }),
+    load: (fields) => {
+      const parsed = zodParse(schema, fields, context);
+      if (!isOk(parsed)) return parsed;
+      return tagValue(parsed as object, tag) as z.infer<S>;
+    },
+  });
+}
+
+registerModelCodec(INTERACTION_TAG, interactionSchema, 'Interaction');
+registerModelCodec(PEER_TAG, a11PeerSchema, 'A11Peer');
+registerModelCodec(ACTION_CONFIG_TAG, a11ActionConfigSchema, 'A11ActionConfig');
+registerModelCodec(USAGE_METADATA_TAG, usageMetadataSchema, 'UsageMetadata');
+
+/** Brand a peer so it serializes as `a11.sdk.Peer`. */
+export function asPeerValue(peer: A11Peer): A11Peer {
+  return tagValue({ ...peer }, PEER_TAG);
+}
+
+/** Brand an action config so it serializes as `a11.sdk.ActionConfig`. */
+export function asActionConfigValue(config: A11ActionConfig): A11ActionConfig {
+  return tagValue({ ...config }, ACTION_CONFIG_TAG);
+}
+
+/** Brand usage metadata so it serializes as `a11.sdk.UsageMetadata`. */
+export function asUsageMetadataValue(usage: UsageMetadata): UsageMetadata {
+  return tagValue({ ...usage }, USAGE_METADATA_TAG);
 }
 
 // --- Tool allow-list ---------------------------------------------------------

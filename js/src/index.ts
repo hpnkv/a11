@@ -10,6 +10,9 @@ export * from './bytes.js';
 export * from './data.js';
 export * from './serialization.js';
 
+export * from './serial_tags.js';
+export * from './wire_values.js';
+
 export * from './chunk_store.js';
 export * from './chunk_store_reader.js';
 export * from './chunk_store_writer.js';

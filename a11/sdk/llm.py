@@ -5,9 +5,10 @@ import base64
 import enum
 import re
 import uuid
-from typing import Any, Callable, Literal
+from typing import Any, Callable, ClassVar, Literal
 
 import a11
+from a11.data import serial_tags
 from a11.status import Status, StatusCode
 from pydantic import (
     BaseModel,
@@ -88,6 +89,8 @@ class UsageMetadata(BaseModel):
     `backend_specific_metadata`.
     """
 
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.USAGE_METADATA
+
     input_tokens: int | None = Field(
         default=None,
         description=(
@@ -150,6 +153,8 @@ GLOBAL_WEBRTC_SIGNALLING_ENDPOINT = "wss://a11.services/ice"
 
 
 class A11Peer(BaseModel):
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.PEER
+
     protocol: Literal["a11", "mcp"] = Field(
         default="a11",
         description="The protocol to use for the A11 peer.",
@@ -308,6 +313,8 @@ class A11Peer(BaseModel):
 
 
 class A11ActionConfig(BaseModel):
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.ACTION_CONFIG
+
     peer: str | A11Peer = Field(
         default="a11://$sender",
         description="Who should run the action.",
@@ -337,6 +344,8 @@ class A11ActionConfig(BaseModel):
 
 
 class Interaction(BaseModel):
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACTION
+
     id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
         description="The completion ID of this interaction",

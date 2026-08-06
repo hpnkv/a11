@@ -18,6 +18,7 @@ from typing import Any, Self
 from a11 import _native
 from a11._native_options import install_native_options
 from a11._native_protocol import attach_protocol
+from a11.data import serial_tags
 from a11.data.serialization import (
     get_global_serialization_registry,
     set_global_type_tag,
@@ -101,9 +102,9 @@ def register_json_codec(cls: type, tag: str) -> None:
         pass  # already registered in this process
 
 
-register_json_codec(AudioInputOptions, "a11.sdk.audio.AudioInputOptions")
+register_json_codec(AudioInputOptions, serial_tags.AUDIO_INPUT_OPTIONS)
 register_json_codec(
-    SpeechRecognizerOptions, "a11.sdk.audio.SpeechRecognizerOptions"
+    SpeechRecognizerOptions, serial_tags.SPEECH_RECOGNIZER_OPTIONS
 )
 
 
@@ -115,7 +116,7 @@ def _register_audio_buffer_codec() -> None:
     little-endian float32 blob).
     """
     registry = get_global_serialization_registry()
-    set_global_type_tag(AudioBuffer, "a11.sdk.audio.AudioBuffer")
+    set_global_type_tag(AudioBuffer, serial_tags.AUDIO_BUFFER)
 
     def _serialize(buffer: AudioBuffer) -> bytes:
         return _native.audio_buffer_to_msgpack(buffer)

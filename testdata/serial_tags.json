@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "The canonical A11 serialization tags, once, for every language.",
+    "A tag is what identifies a type on the wire: the `type` parameter of a",
+    "chunk's MIME type, and the `class_name` of a nested a11.value/pydantic",
+    "wire object. Each language keeps its own constants (a11/data/serial_tags.py,",
+    "cpp/a11/data/serial_tags.h, js/src/serial_tags.ts,",
+    "kotlin/src/main/kotlin/a11/SerialTags.kt) and asserts them against this",
+    "file in its test suite, so a tag renamed in one language and forgotten in",
+    "another fails a test instead of a conversation.",
+    "Keys are language-neutral names for the concept; values are the wire tags."
+  ],
+  "core": {
+    "chunk_metadata": "a11.ChunkMetadata",
+    "chunk": "a11.Chunk",
+    "node_ref": "a11.NodeRef",
+    "node_fragment": "a11.NodeFragment",
+    "port": "a11.Port",
+    "action_message": "a11.ActionMessage",
+    "wire_message": "a11.WireMessage",
+    "status": "a11.Status",
+    "time": "a11.Time",
+    "duration": "a11.Duration"
+  },
+  "sdk": {
+    "interaction": "a11.sdk.Interaction",
+    "peer": "a11.sdk.Peer",
+    "action_config": "a11.sdk.ActionConfig",
+    "usage_metadata": "a11.sdk.UsageMetadata",
+    "interact_with_claude_config": "a11.sdk.InteractWithClaudeConfig",
+    "interact_with_gemini_config": "a11.sdk.InteractWithGeminiConfig",
+    "interact_with_ollama_config": "a11.sdk.InteractWithOllamaConfig",
+    "interact_with_gemma_config": "a11.sdk.InteractWithGemmaConfig"
+  },
+  "audio": {
+    "audio_buffer": "a11.sdk.AudioBuffer",
+    "audio_input_options": "a11.sdk.AudioInputOptions",
+    "speech_recognizer_options": "a11.sdk.SpeechRecognizerOptions",
+    "audio_device_info": "a11.sdk.AudioDeviceInfo",
+    "audio_control_event": "a11.sdk.AudioControlEvent",
+    "audio_capture_event": "a11.sdk.AudioCaptureEvent",
+    "transcription_event": "a11.sdk.TranscriptionEvent"
+  }
+}

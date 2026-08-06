@@ -8,6 +8,7 @@ import pytest
 from a11 import timing
 from a11.data import types
 from a11.data.serialization import (
+    CORE_TYPE_TAGS,
     JSON_MIMETYPE,
     MSGPACK_MIMETYPE,
     SerializationRegistry,
@@ -59,7 +60,9 @@ def test_default_codecs_round_trip_required_types(mimetype, value):
         bool: "boolean",
         type(None): "null",
     }
-    expected_tag = canonical_tags.get(type(value), type(value).__name__)
+    expected_tag = canonical_tags.get(
+        type(value), CORE_TYPE_TAGS.get(type(value), type(value).__name__)
+    )
     assert chunk.get_mimetype() == f"{mimetype};type={expected_tag}"
     result = registry.from_chunk(chunk)
     if type(value) is tuple:

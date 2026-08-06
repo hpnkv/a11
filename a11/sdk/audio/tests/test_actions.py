@@ -105,7 +105,7 @@ def test_audio_buffer_msgpack_round_trip() -> None:
         array.array("f", [0.1, 0.2, 0.3, 0.4]), sample_rate=16000.0
     )
     chunk = registry.to_chunk(buffer)
-    assert "type=a11.sdk.audio.AudioBuffer" in chunk.metadata.mimetype
+    assert "type=a11.sdk.AudioBuffer" in chunk.metadata.mimetype
     decoded = registry.from_chunk(chunk, obj_type=AudioBuffer)
     assert decoded.num_frames == 4
     assert decoded.sample_rate == 16000.0

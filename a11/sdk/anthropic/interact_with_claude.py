@@ -477,9 +477,15 @@ def _decode_action_output_fragments(
 
     values: dict[str, Any] = {}
     for field_name, field_fragments in grouped.items():
+        # A null chunk is an end-of-stream marker, not a value: an action that
+        # ends an output with `put_null_final` (or reports "nothing here" on an
+        # optional port) must not make the whole tool result undecodable.
+        chunks = [fragment.get_chunk() for fragment in field_fragments]
         decoded = [
-            a11.from_chunk(fragment.get_chunk()) for fragment in field_fragments
+            a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
         ]
+        if not decoded:
+            continue
         values[field_name] = decoded[0] if len(decoded) == 1 else decoded
 
     if list(values.keys()) == ["$"]:
@@ -488,10 +494,27 @@ def _decode_action_output_fragments(
 
 
 async def _build_tool_results_from_outputs(
-    outputs: dict[str, list[a11.NodeFragment]],
+    executed: runner.ExecutedActions,
 ) -> list[dict[str, Any]]:
+    """One `tool_result` per call: its outputs, or why it failed."""
     tool_results = []
-    for tool_use_id, fragments in outputs.items():
+    for tool_use_id, fragments in executed.outputs.items():
+        failure = executed.error_message(tool_use_id)
+        if failure is not None:
+            # Told to the model rather than raised past it: a failed tool
+            # is something it can react to — retry differently, or say
+            # what went wrong — and the calls that worked still deserve
+            # their answers.
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": failure,
+                    "is_error": True,
+                }
+            )
+            continue
+
         content = _decode_action_output_fragments(fragments)
         if not isinstance(content, str):
             content = (
@@ -809,7 +832,7 @@ async def interact_with_claude(action: a11.Action):
                         )
                 break
 
-            outputs = await runner.execute_actions_from_interaction(
+            executed = await runner.execute_actions_from_interaction(
                 interaction, action, action.get_registry()
             )
 
@@ -817,7 +840,7 @@ async def interact_with_claude(action: a11.Action):
                 previous_interaction_id=previous_interaction_id,
                 role=llm.Role.USER,
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
-                action_outputs=outputs,
+                action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.CLAUDE).encode()
                 },
@@ -826,7 +849,7 @@ async def interact_with_claude(action: a11.Action):
                         {
                             "role": "user",
                             "content": await _build_tool_results_from_outputs(
-                                outputs
+                                executed
                             ),
                         }
                     )

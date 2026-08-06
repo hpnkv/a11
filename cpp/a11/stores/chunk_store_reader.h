@@ -40,7 +40,7 @@ struct ChunkStoreReaderOptions {
   /// Whether fragments are removed from the store as they are read.
   bool pop_chunks = false;
   /// Maximum number of fragments to prefetch into the buffer.
-  std::uint64_t num_chunks_to_buffer = 32;
+  std::uint64_t num_chunks_to_buffer = 1024;
   /// Sequence number at which reading begins.
   std::uint32_t offset = 0;
   /// Optional cap on the total number of fragments to read.

@@ -1,10 +1,11 @@
 # Copyright 2026 The A11 Authors.
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import a11
 from pydantic import BaseModel, Field
 
+from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.status import Status, StatusCode
 
@@ -18,6 +19,8 @@ class CreateChatConfig(BaseModel):
     no built-in server-side tools, so registry-backed A11 actions surfaced
     through the `tools` input port are the only tools available.
     """
+
+    A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACT_WITH_OLLAMA_CONFIG
 
     num_predict: int = Field(
         default=-1,

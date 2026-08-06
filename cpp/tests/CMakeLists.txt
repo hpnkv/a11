@@ -52,7 +52,8 @@ if (A11_BUILD_AUDIO)
 
   add_executable(a11_audio_actions_test
     audio_serialization_test.cc
-    audio_actions_test.cc)
+    audio_actions_test.cc
+    serial_tags_test.cc)
   target_link_libraries(
     a11_audio_actions_test PRIVATE a11::audio_actions a11::actions a11::audio
                                    a11::concurrency a11::data a11::nodes

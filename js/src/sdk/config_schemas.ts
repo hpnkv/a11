@@ -6,10 +6,26 @@
  * provided so a TypeScript caller can validate, document, and type the
  * `config` port when routing an interaction to those providers through a
  * remote A11 session; the browser-only {@link GemmaConfig} lives in the gemma
- * module. Use {@link zodParse} to validate a value into one of these types.
+ * module.
+ *
+ * Validate a value into one of these types with the matching `make*` function
+ * below rather than with {@link zodParse} directly: the result is branded with
+ * the provider's canonical serialization tag, and the strict, unary `config`
+ * port on the Python side accepts nothing else — an untagged object is a plain
+ * `object` on the wire, and the backend rejects it rather than guessing which
+ * provider's config it was meant to be.
  */
 
 import { z } from 'zod';
+
+import {
+  INTERACT_WITH_CLAUDE_CONFIG_TAG,
+  INTERACT_WITH_GEMINI_CONFIG_TAG,
+  INTERACT_WITH_OLLAMA_CONFIG_TAG,
+} from '../serial_tags.js';
+import { isOk, type StatusOr } from '../status.js';
+import { registerWireValueCodec, tagValue, testTagged, type Fields } from '../wire_values.js';
+import { zodParse } from './llm.js';
 
 /** How the Gemini handler carries conversation state across turns. */
 export const geminiStateModeSchema = z.enum(['full-history', 'last-id', 'auto']);
@@ -146,6 +162,52 @@ export const claudeCreateMessageConfigSchema = z.object({
 export type ClaudeCreateMessageConfig = z.infer<
   typeof claudeCreateMessageConfigSchema
 >;
+
+// --- Serialization -----------------------------------------------------------
+
+function registerConfigCodec<S extends z.ZodType>(
+  tag: string,
+  schema: S,
+  context: string,
+): (value?: unknown) => StatusOr<z.infer<S>> {
+  registerWireValueCodec<z.infer<S>>({
+    tag,
+    kind: 'pydantic',
+    test: testTagged(tag),
+    // A shallow copy: handing the encoder the object it is already walking
+    // would read as a cycle. See the note in `llm.ts`.
+    dump: (value) => ({ ...(value as Fields) }),
+    load: (fields) => make(fields),
+  });
+
+  function make(value: unknown = {}): StatusOr<z.infer<S>> {
+    const parsed = zodParse(schema, value, context);
+    if (!isOk(parsed)) return parsed;
+    return tagValue(parsed as object, tag) as z.infer<S>;
+  }
+  return make;
+}
+
+/** Validate and tag a Gemini request config for the `config` port. */
+export const makeGeminiCreateInteractionConfig = registerConfigCodec(
+  INTERACT_WITH_GEMINI_CONFIG_TAG,
+  geminiCreateInteractionConfigSchema,
+  'GeminiCreateInteractionConfig',
+);
+
+/** Validate and tag an Ollama request config for the `config` port. */
+export const makeOllamaCreateChatConfig = registerConfigCodec(
+  INTERACT_WITH_OLLAMA_CONFIG_TAG,
+  ollamaCreateChatConfigSchema,
+  'OllamaCreateChatConfig',
+);
+
+/** Validate and tag a Claude request config for the `config` port. */
+export const makeClaudeCreateMessageConfig = registerConfigCodec(
+  INTERACT_WITH_CLAUDE_CONFIG_TAG,
+  claudeCreateMessageConfigSchema,
+  'ClaudeCreateMessageConfig',
+);
 
 /** Default model ids matching the Python SDK. */
 export const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';

@@ -20,6 +20,15 @@
   binary and schema values; they must not introduce a second public data model.
   Python serializers and deserializers continue to operate on those native
   values.
+- A serializable type carries the *same* wire tag in every language:
+  `a11.<Class>` for the runtime's own types, `a11.sdk.<Class>` for the SDKs,
+  subpackages omitted and the name chosen for what the type is. The table lives
+  once per language — `a11/data/serial_tags.py` (an `A11_SERIAL_TAG` ClassVar
+  per class), `cpp/a11/data/serial_tags.h` (returned by the `A11SerialTag` ADL
+  point), `js/src/serial_tags.ts`, `kotlin/.../SerialTags.kt` — and
+  `testdata/serial_tags.json` pins all four, with each suite asserting its own
+  constants against it. Renaming a tag is a wire change: add the old spelling to
+  the legacy alias map so readers keep accepting it, and never emit it again.
 
 ## Concurrency architecture
 

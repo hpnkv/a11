@@ -37,16 +37,16 @@ publishes the terminal state to every reader.
 Durable storage without a server: fragments live in one SQLite database per
 storage root, with payloads above 128 KiB moved into adjacent blob files. It is
 also the only backend that accepts `NodeRef` payloads, storing the reference
-target as indexed columns so traversal between nodes is a query. See the
-[SQLite page](sqlite.md) for the on-disk layout, durability, and configuration.
+target as indexed columns so traversal between nodes is a query.
 
-::: a11.stores.sqlite_chunk_store.SQLiteChunkStore
-
-::: a11.stores.sqlite_chunk_store.SQLiteChunkStoreFactory
-
-::: a11.stores.sqlite_chunk_store.SQLiteChunkStoreOptions
-
-::: a11.stores.sqlite_chunk_store.SQLiteChunkStoreMetadata
+The [SQLite page](sqlite.md) covers the on-disk layout, durability, and
+configuration, and is where
+[`SQLiteChunkStore`][a11.stores.sqlite_chunk_store.SQLiteChunkStore],
+[`SQLiteChunkStoreFactory`][a11.stores.sqlite_chunk_store.SQLiteChunkStoreFactory],
+[`SQLiteChunkStoreOptions`][a11.stores.sqlite_chunk_store.SQLiteChunkStoreOptions],
+and
+[`SQLiteChunkStoreMetadata`][a11.stores.sqlite_chunk_store.SQLiteChunkStoreMetadata]
+are documented.
 
 ## ChunkStoreReader
 

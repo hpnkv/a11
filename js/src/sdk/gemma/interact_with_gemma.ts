@@ -23,6 +23,8 @@ import {
 } from '../../action_schema.js';
 import type { AsyncNode } from '../../async_node.js';
 import { utf8Decode } from '../../bytes.js';
+import { Chunk } from '../../data.js';
+import { JSON_MIMETYPE } from '../../serialization.js';
 import {
   invalidArgumentError,
   isOk,
@@ -414,10 +416,35 @@ class GemmaStopFilter {
 
 // --- Content helpers ---------------------------------------------------------
 
+/**
+ * The application value inside one `content` / `system_instructions` entry.
+ *
+ * An interaction carries these as {@link Chunk}s. Decoded here rather than
+ * through the serialization registry because the callers below are synchronous
+ * — one of them implements the sync {@link InteractionNormalizer} contract —
+ * and the only thing they want is the text a message envelope holds, which is
+ * always written as JSON or plain text. Anything else reads as absent, and a
+ * bare value (as older callers wrote) passes through as it stands.
+ */
+function entryValue(item: unknown): unknown {
+  if (!(item instanceof Chunk)) return item;
+  const text = utf8Decode(item.data);
+  if (!isOk(text)) return null;
+  const mediaType = item.mimetype.split(';')[0]?.trim() ?? '';
+  if (mediaType.startsWith('text/')) return text;
+  if (mediaType !== '' && mediaType !== JSON_MIMETYPE) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
 /** Extract the plain text of one interaction's `{role, content:[…]}` envelope. */
 function extractInteractionText(interaction: Interaction): string {
   const pieces: string[] = [];
-  for (const item of interaction.content ?? []) {
+  for (const entry of interaction.content ?? []) {
+    const item = entryValue(entry);
     if (typeof item === 'string') {
       pieces.push(item);
       continue;
@@ -448,7 +475,8 @@ function extractInteractionText(interaction: Interaction): string {
 function systemInstructionsText(interactions: readonly Interaction[]): string {
   const lines: string[] = [];
   for (const interaction of interactions) {
-    for (const instruction of interaction.system_instructions ?? []) {
+    for (const entry of interaction.system_instructions ?? []) {
+      const instruction = entryValue(entry);
       if (typeof instruction === 'string') lines.push(instruction);
       else if (
         typeof instruction === 'object' &&

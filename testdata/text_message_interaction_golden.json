@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "The interaction every language's `makeTextMessageInteraction` must",
+    "build, for text 'hey' and system prompt 'Be brief.'. It is the shape a",
+    "chat client sends on the `interactions` port, and the backend validates",
+    "it against its own Interaction model -- so `content` and",
+    "`system_instructions` have to be Chunks, not bare JSON. Compare with",
+    "`id` ignored, since that one is generated per interaction."
+  ],
+  "text": "hey",
+  "system_prompt": "Be brief.",
+  "mimetype": "application/json;type=a11.sdk.Interaction",
+  "base64": "eyJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInJvbGUiOiJ1c2VyIiwiY3JlYXRlZF9hdF9taWxsaXMiOm51bGwsInByZXZpb3VzX2ludGVyYWN0aW9uX2lkIjoiIiwibW9kZWwiOiIiLCJzdGF0dXMiOnsiX19hMTFfc2VyaWFsaXplZF90eXBlX18iOiJhMTEudmFsdWUiLCJ2YWx1ZSI6eyJjb2RlIjowLCJtZXNzYWdlIjoiIn0sImNsYXNzX25hbWUiOiJhMTEuU3RhdHVzIn0sInN5c3RlbV9pbnN0cnVjdGlvbnMiOlt7Il9fYTExX3NlcmlhbGl6ZWRfdHlwZV9fIjoiYTExLnZhbHVlIiwidmFsdWUiOnsiZGF0YSI6eyJfX2ExMV9zZXJpYWxpemVkX3R5cGVfXyI6ImJ5dGVzIiwidmFsdWUiOiJJa0psSUdKeWFXVm1MaUk9In0sIm1ldGFkYXRhIjp7Im1pbWV0eXBlIjoiYXBwbGljYXRpb24vanNvbjt0eXBlPXN0cmluZyJ9fSwiY2xhc3NfbmFtZSI6ImExMS5DaHVuayJ9XSwiYWN0aW9uX2NvbmZpZ3MiOnt9LCJjb250ZW50IjpbeyJfX2ExMV9zZXJpYWxpemVkX3R5cGVfXyI6ImExMS52YWx1ZSIsInZhbHVlIjp7ImRhdGEiOnsiX19hMTFfc2VyaWFsaXplZF90eXBlX18iOiJieXRlcyIsInZhbHVlIjoiZXlKeWIyeGxJam9pZFhObGNpSXNJbU52Ym5SbGJuUWlPbHQ3SW5SNWNHVWlPaUowWlhoMElpd2lkR1Y0ZENJNkltaGxlU0o5WFgwPSJ9LCJtZXRhZGF0YSI6eyJtaW1ldHlwZSI6ImFwcGxpY2F0aW9uL2pzb247dHlwZT1vYmplY3QifX0sImNsYXNzX25hbWUiOiJhMTEuQ2h1bmsifV0sImFjdGlvbl9jYWxscyI6W10sImFjdGlvbl9pbnB1dHMiOnt9LCJhY3Rpb25fb3V0cHV0cyI6e30sImJhY2tlbmRfc3BlY2lmaWNfbWV0YWRhdGEiOnt9LCJ1c2FnZV9tZXRhZGF0YSI6bnVsbH0="
+}

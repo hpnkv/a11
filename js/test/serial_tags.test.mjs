@@ -128,11 +128,38 @@ test("an interaction handed back is byte-for-byte the one that arrived", async (
 });
 
 test('an interaction built here is tagged for the strict interactions port', async () => {
-  const interaction = need(makeTextMessageInteraction('hello', 'be brief'));
+  const interaction = need(await makeTextMessageInteraction('hello', 'be brief'));
 
   const chunk = need(await toChunk(interaction));
 
   assert.equal(chunk.mimetype, `application/json;type=${tags.INTERACTION_TAG}`);
+});
+
+test('an interaction built here is the one the Python SDK builds', async () => {
+  // This is what a chat client sends on the `interactions` port, and the
+  // backend validates it against its own Interaction model -- so `content` and
+  // `system_instructions` have to be Chunks, not the bare JSON they hold.
+  const golden = testdata('text_message_interaction_golden.json');
+  const expected = JSON.parse(Buffer.from(golden.base64, 'base64').toString());
+
+  const interaction = need(
+    await makeTextMessageInteraction(golden.text, golden.system_prompt),
+  );
+  const chunk = need(await toChunk(interaction));
+  const actual = JSON.parse(Buffer.from(chunk.data).toString());
+
+  assert.equal(chunk.mimetype, golden.mimetype);
+  assert.deepEqual(actual.content, expected.content);
+  assert.deepEqual(actual.system_instructions, expected.system_instructions);
+  // Every other field this side writes must agree too. It writes fewer of them
+  // — Python spells out `status`, `created_at_millis` and `usage_metadata`
+  // where this side leaves them to the model's defaults, which is why the two
+  // payloads are equivalent rather than identical.
+  assert.equal(typeof actual.id, 'string');
+  for (const [key, value] of Object.entries(actual)) {
+    if (key === 'id') continue;
+    assert.deepEqual(value, expected[key], `field ${key}`);
+  }
 });
 
 test('a provider config is tagged so the unary config port accepts it', async () => {
@@ -216,7 +243,7 @@ test('an unknown class_name is reported rather than silently passed through', as
 test('a registry built before an SDK import still sees its codecs', async () => {
   // The SDK registers on import, routinely after a registry was constructed.
   const registry = new SerializationRegistry({ registerDefaults: true });
-  const interaction = need(makeTextMessageInteraction('hi'));
+  const interaction = need(await makeTextMessageInteraction('hi'));
 
   const chunk = need(await registry.toChunk(interaction));
 

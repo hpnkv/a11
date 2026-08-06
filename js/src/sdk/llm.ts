@@ -13,6 +13,8 @@ import { z } from 'zod';
 
 import type { Action } from '../action.js';
 import { utf8Decode } from '../bytes.js';
+import { Chunk } from '../data.js';
+import { toChunk } from '../serialization.js';
 import {
   ACTION_CONFIG_TAG,
   INTERACTION_TAG,
@@ -286,22 +288,36 @@ export function makeInteraction(
  *
  * The content is the backend-neutral `{role, content: [text part]}` envelope,
  * so a plain text turn stays portable across a mid-conversation model switch.
+ *
+ * An interaction's `content` and `system_instructions` are lists of
+ * {@link Chunk}s, not of bare JSON — that is what every backend reads, and a
+ * peer validating this one against its own model rejects anything else. Which
+ * is why this is async: making a chunk means going through the serialization
+ * registry, the same way `a11.to_chunk` does on the Python side.
  */
-export function makeTextMessageInteraction(
+export async function makeTextMessageInteraction(
   text: string,
   systemPrompt = '',
   role: Role = Role.USER,
-): StatusOr<Interaction> {
+): Promise<StatusOr<Interaction>> {
   if (role === Role.SYSTEM) {
     return invalidArgumentError(
       'A text message interaction cannot use the system role as content.',
     );
   }
   const roleStr = role === Role.ASSISTANT ? 'model' : 'user';
+  const content = await toChunk({ role: roleStr, content: [{ type: 'text', text }] });
+  if (!isOk(content)) return content;
+  const instructions: Chunk[] = [];
+  if (systemPrompt) {
+    const instruction = await toChunk(systemPrompt);
+    if (!isOk(instruction)) return instruction;
+    instructions.push(instruction);
+  }
   return makeInteraction({
     role,
-    content: [{ role: roleStr, content: [{ type: 'text', text }] }],
-    system_instructions: systemPrompt ? [systemPrompt] : [],
+    content: [content],
+    system_instructions: instructions,
   });
 }
 

@@ -286,6 +286,31 @@ export class AsyncNode {
     return fragment.getChunk();
   }
 
+  /**
+   * The next fragment carrying a value, or `null` once the node ends.
+   *
+   * A null chunk is a marker, not a value: a final one says the node is
+   * finished, and a non-final one says nothing at all. Neither is something a
+   * reader asked for, so both are skipped here rather than surfaced as a value
+   * or rejected — which is what lets a node be closed with nothing in it.
+   */
+  private async nextValueFragment(
+    timeoutMs?: number,
+  ): Promise<StatusOr<NodeFragment | null>> {
+    const started = Date.now();
+    for (;;) {
+      const remaining = timeoutMs === undefined
+        ? undefined
+        : Math.max(0, timeoutMs - (Date.now() - started));
+      const fragment = await this.nextFragment(remaining);
+      if (!isOk(fragment) || fragment === null) return fragment;
+      const chunk = fragment.getChunk();
+      if (!isOk(chunk)) return chunk;
+      if (!chunk.isNull) return fragment;
+      if (!fragment.continued) return null;
+    }
+  }
+
   /** Read one value, or `null` at finality, clean closure, or the reader limit. */
   async next<T = unknown>(
     optionsOrTimeout: {
@@ -301,15 +326,10 @@ export class AsyncNode {
       if (typeof options !== 'object' || options === null) {
         return invalidArgumentError('AsyncNode next options must be an object or timeout in milliseconds.');
       }
-      const fragment = await this.nextFragment(options.timeoutMs);
+      const fragment = await this.nextValueFragment(options.timeoutMs);
       if (!isOk(fragment) || fragment === null) return fragment;
       const chunk = fragment.getChunk();
       if (!isOk(chunk)) return chunk;
-      if (chunk.isNull) {
-        return fragment.continued
-          ? failedPreconditionError('A null stream marker must be final.')
-          : null;
-      }
       return this.registry.fromChunk<T>(
         chunk,
         options.mimetypePatterns ?? this.expectedMimetypePatterns,
@@ -345,14 +365,11 @@ export class AsyncNode {
     }
     if ((this.readerOptions.ordered ?? true) !== true) return failedPreconditionError('consume() requires an ordered reader.');
     const started = Date.now();
-    const first = await this.nextFragment(options.timeoutMs);
+    const first = await this.nextValueFragment(options.timeoutMs);
     if (!isOk(first)) return first;
     if (first === null) return options.allowNone
       ? null
       : failedPreconditionError('AsyncNode is empty at the current reader offset.');
-    const chunk = first.getChunk();
-    if (!isOk(chunk)) return chunk;
-    if (chunk.isNull) return failedPreconditionError('AsyncNode cannot consume a null chunk as its value.');
     if (!first.continued) return first;
     const remaining = options.timeoutMs === undefined
       ? undefined

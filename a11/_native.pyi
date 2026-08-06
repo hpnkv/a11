@@ -1291,10 +1291,12 @@ class AsyncNode:
         """
         Read exactly one whole value's fragment, enforcing the terminator.
 
-        Unlike `next_fragment`, this expects the node to hold a single
-        (possibly multi-part) value followed by a null final chunk, and raises
-        if that shape is violated. With ``allow_none`` an empty stream yields
-        ``None`` instead of raising. Requires an ordered reader.
+        Unlike `next_fragment`, this expects the node to hold exactly one
+        value, and raises if that shape is violated. Two spellings are
+        accepted: the value written as final, or the value followed by a null
+        final chunk. With ``allow_none`` a node that holds no value — closed
+        empty, or holding nothing but a null final — yields ``None`` instead of
+        raising. Requires an ordered reader.
         """
 
     def detach_stream(self, stream: WireStream) -> None:

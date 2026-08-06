@@ -94,6 +94,30 @@ def _read_timeout(timeout: timing.Duration | None) -> timing.Duration:
     return timeout
 
 
+async def _next_value_fragment(
+    node: AsyncNode,
+    converted_timeout: timing.Duration,
+    started_at: timing.Time,
+) -> types.NodeFragment | None:
+    """The next fragment carrying a value, or ``None`` once the node ends.
+
+    A null chunk is a marker, not a value: a final one says the node is
+    finished, and a non-final one says nothing at all. Neither is something a
+    reader asked for, so both are skipped here rather than surfaced as a value
+    or rejected — which is what lets a node be closed with nothing in it.
+    """
+    while True:
+        fragment = await node.next_fragment(
+            _remaining_timeout(converted_timeout, started_at)
+        )
+        if fragment is None:
+            return None
+        if not fragment.get_chunk().is_null():
+            return fragment
+        if not fragment.continued:
+            return None
+
+
 def _ensure_python_state(node: AsyncNode) -> None:
     state = node.__dict__
     state.setdefault(
@@ -179,8 +203,7 @@ def _remaining_timeout(
         raise Status(
             code=StatusCode.DEADLINE_EXCEEDED,
             message=(
-                "AsyncNode.consume() timed out before reaching the stream "
-                "terminator."
+                "AsyncNode timed out before reaching the stream terminator."
             ),
         ).to_exception()
     return remaining
@@ -581,16 +604,10 @@ class _AsyncNodeProtocol:
         mimetype_patterns: str | Sequence[str] = "",
     ) -> T | Any | None:
         """Read and deserialize the next value, or ``None`` at end of stream."""
-        fragment = await self.next_fragment(timeout)
+        fragment = await _next_value_fragment(
+            self, _read_timeout(timeout), timing.now()
+        )
         if fragment is None:
-            return None
-        chunk = fragment.get_chunk()
-        if chunk.is_null():
-            if fragment.continued:
-                raise Status(
-                    code=StatusCode.FAILED_PRECONDITION,
-                    message="A null stream marker must be final.",
-                ).to_exception()
             return None
         mimetype_patterns, obj_type = _resolve_expected_types(
             self, mimetype_patterns, obj_type
@@ -625,10 +642,12 @@ class _AsyncNodeProtocol:
     ) -> types.NodeFragment | None:
         """Read exactly one whole value's fragment, enforcing the terminator.
 
-        Unlike `next_fragment`, this expects the node to hold a single
-        (possibly multi-part) value followed by a null final chunk, and raises
-        if that shape is violated. With ``allow_none`` an empty stream yields
-        ``None`` instead of raising. Requires an ordered reader.
+        Unlike `next_fragment`, this expects the node to hold exactly one
+        value, and raises if that shape is violated. Two spellings are
+        accepted: the value written as final, or the value followed by a null
+        final chunk. With ``allow_none`` a node that holds no value — closed
+        empty, or holding nothing but a null final — yields ``None`` instead of
+        raising. Requires an ordered reader.
         """
         if not self.get_reader_options().ordered:
             raise Status(
@@ -638,7 +657,9 @@ class _AsyncNodeProtocol:
 
         converted_timeout = _read_timeout(timeout)
         started_at = timing.now()
-        fragment = await self.next_fragment(converted_timeout)
+        fragment = await _next_value_fragment(
+            self, converted_timeout, started_at
+        )
         if fragment is None:
             if not allow_none:
                 raise Status(
@@ -647,12 +668,6 @@ class _AsyncNodeProtocol:
                 ).to_exception()
             return None
 
-        chunk = fragment.get_chunk()
-        if chunk.is_null():
-            raise Status(
-                code=StatusCode.FAILED_PRECONDITION,
-                message="AsyncNode cannot consume a null chunk as its value.",
-            ).to_exception()
         if not fragment.continued:
             return fragment
 
@@ -770,16 +785,10 @@ class _AsyncNodeProtocol:
         return self
 
     async def __anext__(self, timeout: timing.Duration | None = None) -> Any:
-        fragment = await self.next_fragment(timeout)
+        fragment = await _next_value_fragment(
+            self, _read_timeout(timeout), timing.now()
+        )
         if fragment is None:
-            raise StopAsyncIteration
-        chunk = fragment.get_chunk()
-        if chunk.is_null():
-            if fragment.continued:
-                raise Status(
-                    code=StatusCode.FAILED_PRECONDITION,
-                    message="A null stream marker must be final.",
-                ).to_exception()
             raise StopAsyncIteration
         _ensure_python_state(self)
         return await _deserialize_fragment(

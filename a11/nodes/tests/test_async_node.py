@@ -309,6 +309,37 @@ async def test_consume_can_return_raw_chunk_or_fragment():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("closed_with_null", [False, True])
+async def test_consume_treats_a_node_holding_no_value_as_none(closed_with_null):
+    """A null chunk marks the end of a node; it is not a value in it.
+
+    A caller closing an optional port it has nothing to put on writes either
+    nothing at all or a bare null final, and both must read back the same. This
+    is the shape a unary `config` port arrives in when the caller wants the
+    backend's own defaults.
+    """
+    node = AsyncNode(LocalChunkStore(f"consume-empty-{closed_with_null}"))
+    if closed_with_null:
+        assert await (await node.put_null_final()) == 0
+    else:
+        await node.drain_and_close()
+
+    assert await node.consume(allow_none=True) is None
+
+
+@pytest.mark.asyncio
+async def test_iteration_skips_a_null_marker_rather_than_failing():
+    node = AsyncNode(LocalChunkStore("iterate-null"))
+    await _confirm(
+        await node.put("first"),
+        await node.put("second"),
+        await node.put_null_final(),
+    )
+
+    assert [value async for value in node] == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_consume_rejects_invalid_terminal_shapes():
     null_node = AsyncNode(LocalChunkStore("consume-null"))
     assert await (await null_node.put_null_final()) == 0

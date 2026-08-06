@@ -117,7 +117,7 @@ test('interact_with_gemma streams tokens and produces an assistant turn', async 
     need(action.run());
 
     const interactions = need(await action.getInput('interactions'));
-    const user = need(makeTextMessageInteraction('Hi there'));
+    const user = need(await makeTextMessageInteraction('Hi there'));
     need(await interactions.put(user, { final: true }));
     const config = need(await action.getInput('config'));
     need(await config.putFinal({}));

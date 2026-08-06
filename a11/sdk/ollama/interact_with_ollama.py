@@ -925,7 +925,7 @@ async def interact_with_ollama(action: a11.Action):
         await _close_stream(action["event_stream"])
         await _close_stream(action["text_output"])
         await _close_stream(action["thoughts"])
-        await action["new_interactions"].drain_and_close()
+        await _close_stream(action["new_interactions"])
 
     finally:
         pass

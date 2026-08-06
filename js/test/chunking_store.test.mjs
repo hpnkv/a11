@@ -152,6 +152,52 @@ test('AsyncNode streams typed values through shared reader/writer pumps', async 
   assert.equal(await node.next(), null);
 });
 
+test('AsyncNode consume accepts both spellings of a single value', async () => {
+  const asFinal = await AsyncNode.create('consume-final');
+  assert.equal(isOk(await asFinal.putFinal({ value: 1 })), true);
+  assert.deepEqual(await asFinal.consume(), { value: 1 });
+
+  const thenNull = await AsyncNode.create('consume-then-null');
+  assert.equal(isOk(await thenNull.put({ value: 2 })), true);
+  assert.equal(isOk(await thenNull.putNullFinal()), true);
+  assert.deepEqual(await thenNull.consume(), { value: 2 });
+});
+
+test('AsyncNode consume reads a node holding no value as none', async () => {
+  // A null chunk marks the end of a node; it is not a value in it. A caller
+  // closing an optional port it has nothing to put on writes either nothing at
+  // all or a bare null final, and both must read back the same -- this is how a
+  // unary `config` port arrives when the caller wants the backend's defaults.
+  const closedEmpty = await AsyncNode.create('consume-closed-empty');
+  assert.equal(isOk(await closedEmpty.drainAndClose()), true);
+  assert.equal(await closedEmpty.consume({ allowNone: true }), null);
+
+  const nullOnly = await AsyncNode.create('consume-null-only');
+  assert.equal(isOk(await nullOnly.putNullFinal()), true);
+  assert.equal(await nullOnly.consume({ allowNone: true }), null);
+
+  const strict = await AsyncNode.create('consume-null-only-strict');
+  assert.equal(isOk(await strict.putNullFinal()), true);
+  const refused = await strict.consume();
+  assert.equal(isOk(refused), false);
+  assert.equal(refused.code, StatusCode.FAILED_PRECONDITION);
+});
+
+test('AsyncNode iteration skips a null marker rather than failing', async () => {
+  const node = await AsyncNode.create('iterate-null');
+  assert.equal(isOk(await node.put('first')), true);
+  assert.equal(isOk(await node.put('second')), true);
+  assert.equal(isOk(await node.putNullFinal()), true);
+
+  const values = [];
+  for (;;) {
+    const value = await node.next();
+    if (value === null) break;
+    values.push(value);
+  }
+  assert.deepEqual(values, ['first', 'second']);
+});
+
 test('ChunkStoreReader and Writer convert foreign promise failures to statuses', async () => {
   const rejectingStore = {
     get: async () => { throw new TypeError('get rejected'); },

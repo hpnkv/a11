@@ -15,6 +15,7 @@ import pathlib
 import a11
 import pytest
 from a11.data import serial_tags
+from a11.cli.backends import make_user_interaction
 from a11.data.serialization import CORE_TYPE_TAGS, _declared_serial_tag
 from a11.sdk.llm import (
     A11ActionConfig,
@@ -28,6 +29,7 @@ from a11.status import Status
 _TESTDATA = pathlib.Path(__file__).resolve().parents[3] / "testdata"
 _FIXTURE = _TESTDATA / "serial_tags.json"
 _GOLDEN = _TESTDATA / "interaction_golden.json"
+_TEXT_MESSAGE_GOLDEN = _TESTDATA / "text_message_interaction_golden.json"
 
 
 def golden_interaction() -> Interaction:
@@ -152,6 +154,49 @@ def test_the_golden_interaction_round_trips():
     reencoded = a11.to_chunk(decoded)
 
     assert bytes(reencoded.data) == base64.b64decode(golden["base64"])
+
+
+def test_python_still_writes_the_golden_text_message_interaction():
+    """The shape every language's `makeTextMessageInteraction` is held to."""
+    golden = json.loads(_TEXT_MESSAGE_GOLDEN.read_text())
+    interaction = make_user_interaction(golden["text"])
+    interaction.system_instructions = [a11.to_chunk(golden["system_prompt"])]
+    interaction.id = json.loads(base64.b64decode(golden["base64"]))["id"]
+
+    chunk = a11.to_chunk(interaction)
+
+    assert chunk.get_mimetype() == golden["mimetype"]
+    assert base64.b64encode(bytes(chunk.data)).decode() == golden["base64"]
+
+
+def test_an_interaction_from_another_language_validates():
+    """What TypeScript and Kotlin send on the `interactions` port.
+
+    They leave `status`, `created_at_millis` and `usage_metadata` to this
+    model's defaults rather than spelling them out, so the payload is
+    equivalent to Python's rather than identical — it still has to validate.
+    Above all `content` and `system_instructions` arrive as chunks: a bare
+    string there is what produced "Chunk must be validated from a mapping."
+    """
+    golden = json.loads(_TEXT_MESSAGE_GOLDEN.read_text())
+    payload = json.loads(base64.b64decode(golden["base64"]))
+    for omitted in ("status", "created_at_millis", "usage_metadata"):
+        payload.pop(omitted)
+    chunk = a11.Chunk(
+        data=json.dumps(payload).encode(),
+        metadata=a11.ChunkMetadata(mimetype=golden["mimetype"]),
+    )
+
+    decoded = a11.from_chunk(chunk, "", Interaction)
+
+    assert isinstance(decoded, Interaction)
+    assert a11.from_chunk(decoded.content[0]) == {
+        "role": "user",
+        "content": [{"type": "text", "text": golden["text"]}],
+    }
+    assert a11.from_chunk(decoded.system_instructions[0]) == (
+        golden["system_prompt"]
+    )
 
 
 def test_a_payload_written_before_the_rename_still_reads():

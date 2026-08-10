@@ -7,15 +7,11 @@ A11's public, stateful runtime types --
 and friends -- *are* the classes exported by the native ``a11._native``
 extension, not Python subclasses of them (see ``AGENTS.md``, "Python boundary").
 The idiomatic asynchronous, streaming, and Pydantic-flavoured behaviour that
-makes them pleasant to use from Python is *attached* onto those bound classes
-rather than implemented in a parallel hierarchy.
+makes them pleasant to use from Python is *attached* onto those bound classes.
 
-Historically that attachment was written as a flat sequence of module-level
-functions (``def _put(node, ...)``) followed by a block of
-``NativeClass.put = _put`` assignments, which obscured the shape of the class it
-was building. `attach_protocol` lets the same behaviour be written as an
-ordinary ``class`` body -- with ``self``, type annotations, and docstrings --
-and then copied, member for member, onto the native class:
+`attach_protocol` lets that behaviour be written as an ordinary ``class`` body
+-- with ``self``, type annotations, and docstrings -- and then copied, member
+for member, onto the native class:
 
 .. code-block:: python
 
@@ -27,12 +23,10 @@ and then copied, member for member, onto the native class:
 
     attach_protocol(Widget, _WidgetProtocol)
 
-The copy is a plain `setattr` of each member object, so the result is
-byte-for-byte equivalent to the explicit assignments it replaces: methods still
-receive the native instance as their first argument, attribute lookup is
-unchanged, and there is no wrapper on the hot path. The protocol class is only a
-readable, statically analysable *description*; instances are never created from
-it.
+The copy is a plain `setattr` of each member object: methods receive the native
+instance as their first argument, attribute lookup is unchanged, and there is
+no wrapper on the hot path. The protocol class is only a readable, statically
+analysable *description*; instances are never created from it.
 """
 
 from __future__ import annotations
@@ -72,10 +66,8 @@ def attach_protocol(native: _NativeClass, protocol: type) -> _NativeClass:
     their original types and signatures. Class-body machinery such as
     ``__module__`` and ``__dict__`` is skipped.
 
-    The members are copied by reference -- no wrapping -- so behaviour and
-    performance are identical to assigning them onto ``native`` directly. The
-    functions run bound to native instances; ``protocol`` itself is never
-    instantiated.
+    Members are copied by reference, with no wrapping. The functions run bound
+    to native instances; ``protocol`` itself is never instantiated.
 
     Args:
         native: The bound ``a11._native`` class to extend in place.

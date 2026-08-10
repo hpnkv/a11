@@ -713,9 +713,9 @@ class _AsyncNodeProtocol:
     ) -> T | Any | None:
         """Consume exactly one whole value and return it deserialized.
 
-        Use this for a node that carries a single result (the common case for a
-        unary action output). Pass ``obj_type`` to deserialize to a specific
-        type, or request ``NodeFragment``/``Chunk`` to get the raw form.
+        For a node that carries a single result, such as a unary action
+        output. Pass ``obj_type`` to deserialize to a specific type, or request
+        ``NodeFragment``/``Chunk`` to get the raw form.
 
         Examples:
             Read the unary customer input of an action handler:

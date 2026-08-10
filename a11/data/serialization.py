@@ -4,9 +4,7 @@ A chunk's metadata is the only thing that says how to read its bytes. The media
 type gives the representation (``application/json``, ``application/x-msgpack``)
 and, when the value is not one JSON already describes, a ``type`` parameter
 names it: ``application/json;type=a11.sdk.Interaction``. Nothing inside the
-payload repeats that -- a serialized value is ordinary JSON or MessagePack, and
-a peer holding bytes without their metadata is not expected to recover anything
-more than the format itself can express.
+payload repeats that: a serialized value is ordinary JSON or MessagePack.
 
 So a bare ``application/json`` is a complete description: it decodes to a
 `dict`, `list` or scalar. Ask for a particular ``obj_type`` and the registry
@@ -48,9 +46,9 @@ MSGPACK_MIMETYPE = _native.MSGPACK_MIMETYPE
 _TYPE_PARAMETER = "type"
 
 #: Tags a JSON or MessagePack payload already spells out for itself. A chunk
-#: holding one of these carries no ``type`` parameter at all: writing
-#: ``;type=object`` on an object says nothing a parser did not already know,
-#: and it stops a peer that only has ``application/json`` from being understood.
+#: holding one of these carries no ``type`` parameter at all: ``;type=object``
+#: on an object says nothing a parser did not already know, and a peer matching
+#: on bare ``application/json`` would fail to recognise it.
 _GENERIC_TAGS = frozenset(
     {"object", "array", "string", "integer", "number", "boolean", "null"}
 )
@@ -465,9 +463,8 @@ class SerializationRegistry:
     def set_type_tag(self, obj_type: type, tag: str) -> None:
         """Pin the wire tag used to identify ``obj_type`` in serialized data.
 
-        Overrides the default fully-qualified name. Use this to keep a short,
-        stable tag for a type (for example to preserve an existing wire format)
-        or to give two like-named types deterministic, distinct identifiers.
+        Overrides the default fully-qualified name, giving a type a short,
+        stable identifier or disambiguating two like-named types.
         """
         if not isinstance(obj_type, type):
             raise Status(

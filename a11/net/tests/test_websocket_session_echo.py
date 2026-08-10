@@ -1,18 +1,15 @@
-"""Regression tests for running a `Session` over a WebSocket wire stream.
+"""Running a `Session` over a WebSocket wire stream on a single event loop.
 
-These guard the deadlock fixed in ``Session::AddStream``: attaching a stream
-used to drive the transport's (potentially blocking) ``Start()``/``Accept()``
-on the *calling* thread. For a WebSocket client that blocks until the HTTP/2
-CONNECT handshake completes, which stalls the asyncio event loop -- so an
-in-process peer whose accept callback needs that same loop can never respond,
-and ``add_stream`` hangs forever (the symptom reported for the
-``000-websocket-echo`` example).
+``Session::AddStream`` must keep the transport's (potentially blocking)
+``Start()``/``Accept()`` off the *calling* thread. A WebSocket client blocks
+until the HTTP/2 CONNECT handshake completes, so stalling the asyncio event
+loop there would leave an in-process peer whose accept callback needs that same
+loop unable to respond, and ``add_stream`` waiting forever.
 
 The scenarios below run client and server on a single event loop in a child
-process with a hard wall-clock timeout. That is deliberate: when the bug is
-present the loop thread is blocked in native code, so an in-loop
-``asyncio.wait_for`` can never fire -- only an out-of-process timeout turns a
-regression into a fast failure instead of a hang.
+process with a hard wall-clock timeout. A blocked loop thread sits in native
+code, where an in-loop ``asyncio.wait_for`` can never fire, so only an
+out-of-process timeout turns such a failure into a fast one.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _EXAMPLE_DIR = _REPO_ROOT / "examples" / "000-websocket-echo"
 
 # Generous relative to the sub-second happy path, but short enough that a
-# reintroduced deadlock fails the suite promptly rather than hanging CI.
+# deadlock fails the suite promptly rather than hanging CI.
 _TIMEOUT_SECONDS = 60
 
 
@@ -104,8 +101,8 @@ async def main():
             f"ws://127.0.0.1:{server.port}/ws",
             websocket_options=WebSocketClientOptions(),
         )
-        # Would hang here before the fix: this call blocked the loop, so the
-        # server's accept callback could never complete the handshake.
+        # Must not block the loop here: the server's accept callback needs it
+        # to complete the handshake.
         await asyncio.wait_for(session.add_stream(stream, mode="start"), 10)
         session.send(_msg("ping"))
         echo = await asyncio.wait_for(session.receive(), 10)
@@ -144,6 +141,6 @@ def test_example_echoes_then_exits():
     reason="websocket-echo example not present",
 )
 def test_example_exits_on_eof():
-    """Closed stdin (Ctrl-D) drains the session and exits instead of hanging."""
+    """Closed stdin (Ctrl-D) drains the session and exits cleanly."""
     result = _run(["main.py"], cwd=_EXAMPLE_DIR, stdin="")
     assert result.returncode == 0, result.stderr

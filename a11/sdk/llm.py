@@ -482,10 +482,9 @@ BACKEND_METADATA_KEY = "backend"
 #: Output port carrying a tool's narration of its own run, written for the
 #: person watching rather than for the model.
 #:
-#: An action that declares it is saying "this port is not part of the tool
-#: contract": the LLM tool runner drains it, keeps it out of the tool result the
-#: model is shown, and files it under the call id instead (see
-#: [ExecutedActions][a11.sdk.llm_tools.runner.ExecutedActions]).
+#: The port sits outside the tool contract: the LLM tool runner drains it,
+#: keeps it out of the tool result the model is shown, and files it under the
+#: call id (see [ExecutedActions][a11.sdk.llm_tools.runner.ExecutedActions]).
 USER_FACING_LOG_PORT = "user_facing_log"
 
 #: Where a turn's user-facing tool logs ride, in the

@@ -757,11 +757,7 @@ void BindHttp(py::module_& module) {
           [](const net::HttpSseWireStream& self) {
             return HttpHeadersToPython(self.GetHttpRequestHeaders());
           },
-          "Return the HTTP headers carried on the underlying SSE request. "
-          "This is the base class shared by the client and server SSE wire "
-          "streams that transport A11 messages over an HTTP/2 Server-Sent "
-          "Events connection. Use it when building an agent that needs to "
-          "inspect the transport-level request metadata.")
+          "Return the HTTP headers carried on the underlying SSE request.")
       .def(
           "get_http_response_headers",
           [](const net::HttpSseWireStream& self) -> py::object {

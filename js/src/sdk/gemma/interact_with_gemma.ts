@@ -424,7 +424,7 @@ class GemmaStopFilter {
  * — one of them implements the sync {@link InteractionNormalizer} contract —
  * and the only thing they want is the text a message envelope holds, which is
  * always written as JSON or plain text. Anything else reads as absent, and a
- * bare value (as older callers wrote) passes through as it stands.
+ * bare value passes through as it stands.
  */
 function entryValue(item: unknown): unknown {
   if (!(item instanceof Chunk)) return item;

@@ -39,6 +39,6 @@ def test_allowed_llm_actions_match_regex_patterns():
     assert action_name_matches_allowed("get_weather", patterns)
     assert action_name_matches_allowed("list_users", patterns)
     assert not action_name_matches_allowed("delete_everything", patterns)
-    # A plain name is still matched exactly, preserving the old behaviour.
+    # A plain name is matched exactly.
     assert action_name_matches_allowed("list_users", ["list_users"])
     assert not action_name_matches_allowed("list_users_v2", ["list_users"])

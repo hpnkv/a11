@@ -627,7 +627,7 @@ async def test_remote_output_ends_on_drain_without_a_final_fragment():
         assert await asyncio.wait_for(lines.next_object(str), timeout=5) == (
             "second"
         )
-        # No final fragment was ever written, so this used to hang forever.
+        # The closure marker, not a final fragment, is what ends this read.
         assert await asyncio.wait_for(lines.next_object(str), timeout=5) is None
         writer_status = lines.writer.get_status()
         assert writer_status is not None and writer_status.is_ok()

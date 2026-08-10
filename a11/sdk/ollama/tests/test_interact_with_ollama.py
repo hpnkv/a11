@@ -163,10 +163,9 @@ async def _run(rounds, monkeypatch, *, read="text_output"):
 async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
     """Two tool-calling rounds must not reuse the same nested-action id.
 
-    Regression: the accumulator numbered tool calls per round, so the second
-    round reused ``call_0`` and its nested action resolved to the first,
-    already-closed one — feeding its input then raised "ChunkStoreWriter is
-    closed". Each round now continues the id counter.
+    The accumulator continues its id counter across rounds. A reused id would
+    resolve to the earlier round's already-closed nested action, and feeding
+    its input would raise "ChunkStoreWriter is closed".
     """
     rounds = [
         [
@@ -213,14 +212,13 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
 async def test_tool_call_ids_differ_between_turns(monkeypatch):
     """A second turn must not reuse the first turn's synthesised call ids.
 
-    Regression: the counter restarted at zero on every handler invocation, so
-    every turn's first tool call was ``call_0``. A caller keeps one session — and
-    so one node map — for a whole conversation, and the runner gives a call's
-    nested action its id verbatim, so the second message's ``call_0`` resolved to
-    the first message's already-closed nodes: feeding its input failed with
-    "ChunkStoreWriter is closed" and the model got that error where its tool
-    result should have been. This is only visible across turns, which is why the
-    per-round test above does not catch it.
+    A caller keeps one session — and so one node map — for a whole
+    conversation, and the runner gives a call's nested action its id verbatim.
+    A counter restarting at zero per handler invocation would resolve the
+    second message's ``call_0`` to the first message's closed nodes, and the
+    model would get "ChunkStoreWriter is closed" where its tool result belongs.
+    Only observable across turns, hence a separate test from the per-round one
+    above.
     """
 
     def rounds():
@@ -335,13 +333,12 @@ def test_a_claude_tool_result_is_named_for_ollama():
 def test_a_nested_tool_schema_survives_the_sdk():
     """The model is shown the fields of an object parameter, not just its type.
 
-    Regression: tools were handed to the client as plain dicts, and
-    `Tool.model_validate` coerces those into its own `Tool` — whose parameters
-    are `Property` objects with no `properties` of their own. An action taking a
-    `request` object therefore reached the model as `{"type": "object"}`, its
-    `query` and `max_results` fields silently gone, while Claude and Gemini were
-    sent the schema as written. This asserts against the SDK's real validation
-    path, so an SDK or pydantic upgrade that breaks the passthrough fails here.
+    `Tool.model_validate` coerces a plain dict into the SDK's own `Tool`, whose
+    parameters are `Property` objects carrying no nested `properties`; an
+    action taking a `request` object would then reach the model as
+    `{"type": "object"}` with its `query` and `max_results` fields gone. This
+    asserts against the SDK's real validation path, so an SDK or pydantic
+    upgrade that breaks the passthrough fails here.
     """
     request_schema = {
         "type": "object",

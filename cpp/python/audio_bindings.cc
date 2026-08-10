@@ -279,8 +279,7 @@ std::vector<AudioActionEntry> AudioActionEntries() {
   return entries;
 }
 
-// Returns the audio Actions as (name, schema, handler) triples so Python can
-// hold them, register a subset, or inspect a schema before registering.
+// Returns the audio Actions as (name, schema, handler) triples.
 // a11.sdk.audio.actions is the typed surface over this; the stub generator
 // renders bound classes inside a nested generic as `...`, so there is nothing
 // to gain from spelling the element types out here.
@@ -858,9 +857,7 @@ void BindAudio(py::module_& module) {
   module.def("audio_actions", &AudioActionsPy,
              "Return the audio Actions as (name, schema, handler) triples in "
              "protocol order, each schema's ports already wired to the "
-             "matching audio type and their serializers installed. Use these "
-             "to register a subset, inspect a schema before registering, or "
-             "hand a handler to Action.bind_handler().");
+             "matching audio type and their serializers installed.");
   module.def("register_audio_actions", &RegisterAudioActionsPy,
              py::arg("registry"),
              "Register every audio Action on `registry`, wiring each port's "

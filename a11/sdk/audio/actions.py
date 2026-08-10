@@ -22,9 +22,7 @@ registry = ActionRegistry()
 actions.register(registry)
 ```
 
-Each Action's schema and handler are also importable on their own, so a host
-can publish a subset, inspect a schema before committing to it, or bind a
-handler to an Action it built itself:
+Each Action's schema and handler are also importable on their own:
 
 ```python
 from a11.sdk.audio.actions import (
@@ -37,11 +35,11 @@ registry.register(TRANSCRIBE_AUDIO, TRANSCRIBE_AUDIO_SCHEMA,
                   TRANSCRIBE_AUDIO_HANDLER)
 ```
 
-The handlers are :class:`~a11.actions.action.NativeActionHandler` handles, not
-Python callables: pass one wherever a handler is accepted and the C++
-implementation runs directly. The value-type serialization also lives in C++,
-and each port's ``typeinfo`` is wired to the matching native audio class so
-schema-driven tooling sees the right types.
+The handlers are :class:`~a11.actions.action.NativeActionHandler` handles
+rather than Python callables: pass one wherever a handler is accepted and the
+C++ implementation runs directly. The value-type serialization also lives in
+C++, and each port's ``typeinfo`` is wired to the matching native audio class
+so schema-driven tooling sees the right types.
 """
 
 from __future__ import annotations

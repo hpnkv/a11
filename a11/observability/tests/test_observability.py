@@ -458,9 +458,9 @@ async def test_untraced_action_has_empty_ids():
 
 
 def test_process_exits_cleanly_with_batch_otlp_exporter():
-    """Regression: configuring the batch OTLP exporter and exiting without an
-    explicit shutdown must not abort ("mutex lock failed") at teardown. The
-    atexit hook flushes and joins the batch thread cleanly."""
+    """Configuring the batch OTLP exporter and exiting without an explicit
+    shutdown must not abort ("mutex lock failed") at teardown. The atexit hook
+    flushes and joins the batch thread cleanly."""
     script = textwrap.dedent("""
         import asyncio
         import a11

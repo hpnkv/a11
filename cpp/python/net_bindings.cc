@@ -663,8 +663,7 @@ Examples:
             CheckStatus(self->SetDeadline(*converted));
           },
           "Set an absolute wall-clock deadline after which the stream is "
-          "automatically aborted; pass None to clear it. Use this to bound how "
-          "long an agent interaction is allowed to run.",
+          "automatically aborted; pass None to clear it.",
           py::arg("deadline") = py::none())
       .def_property_readonly(
           "deadline",
@@ -698,7 +697,7 @@ Examples:
       .def(
           "get_id", &net::WireStream::GetId,
           "Return the stream's stable identifier, which also seeds its tracing "
-          "trace id. Use it to correlate an agent stream with logs and traces.")
+          "trace id.")
       .def(
           "get_impl",
           [](const net::WireStream& self) {
@@ -719,13 +718,10 @@ Examples:
                 std::move(second_options)));
           },
           "Create a connected pair of in-process wire streams that talk to "
-          "each "
-          "other directly in memory, with no network involved. Use this to "
-          "wire "
-          "an agent to a local service or test harness: one endpoint drives "
-          "start() while the other drives accept(). Pass shared options, or "
-          "per-endpoint first_options/second_options, to tune buffering and "
-          "timeouts.",
+          "each other directly in memory, with no network involved. One "
+          "endpoint drives start() while the other drives accept(). Pass "
+          "shared options, or per-endpoint first_options/second_options, to "
+          "tune buffering and timeouts.",
           py::arg("options") = std::nullopt,
           py::arg("first_options") = std::nullopt,
           py::arg("second_options") = std::nullopt)

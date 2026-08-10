@@ -7,12 +7,11 @@ The UI is deliberately state-agnostic: conversation history is just a flat
 read with `prompt_toolkit` (async-native, no opinion on how we hold state)
 and assistant output is streamed live with `rich`.
 
-Backend selection is not the CLI's job: every turn runs the single
+Backend selection belongs to the action: every turn runs the single
 [INTERACT_WITH_LLM_SCHEMA][a11.sdk.interact_with_llm.INTERACT_WITH_LLM_SCHEMA]
-action with an
-``x-a11-llm-provider`` header, and that action routes to the concrete backend
-and imports its SDK lazily. The CLI just reads the ``text_output`` (and, when
-verbose, ``thoughts``) stream nodes it produces.
+action with an ``x-a11-llm-provider`` header, and that action routes to the
+concrete backend and imports its SDK lazily. The CLI reads the ``text_output``
+(and, when verbose, ``thoughts``) stream nodes it produces.
 """
 
 from __future__ import annotations

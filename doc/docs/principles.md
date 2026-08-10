@@ -7,12 +7,9 @@ to hold while you read the rest of the docs.
 ## One toolkit in every language
 
 A11 exposes the same action, node, session, storage, and transport concepts in
-Python, TypeScript, and C++. These are not reduced client bindings around a
-more capable server API: each language can participate in the full runtime.
-That parity lets a team build flexible clients, backends, and peer-to-peer
-applications in the languages that fit each environment, without dividing the
-system into “capable” and “limited” sides or inventing a second protocol between
-them.
+Python, TypeScript, and C++, and each language participates in the full
+runtime. That parity lets a team build clients, backends, and peer-to-peer
+applications in the languages that fit each environment, over one protocol.
 
 ## Everything is asynchronous
 
@@ -95,8 +92,8 @@ pick at the edge:
   [signalling](api/net.md).
 
 Because the interface is stable, making an agent distributed is a transport
-swap, not a rewrite — and you can implement `WireStream` yourself to carry A11
-traffic over a transport we don't ship.
+swap — and you can implement `WireStream` yourself to carry A11 traffic over a
+transport we don't ship.
 
 ## Sessions tie it together
 

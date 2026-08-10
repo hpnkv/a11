@@ -87,13 +87,12 @@ sequence = await confirmation         # backing-store confirmation
 ```
 
 C++ returns the confirmation `Future` directly. TypeScript's `put` promise
-resolves with either the confirmed sequence or a Status. The lifecycle meaning
-is the same even though the language shape differs.
+resolves with either the confirmed sequence or a Status.
 
-Attached WireStreams receive sequenced fragments, not arbitrary Python or
-TypeScript objects. Serialization and sequence assignment therefore happen
-once at the node boundary. The same fragment identity is offered to the
-transport, while the WireStream lifecycle governs eventual delivery.
+Attached WireStreams receive sequenced fragments, so serialization and sequence
+assignment happen once at the node boundary. The same fragment identity is
+offered to the transport, while the WireStream lifecycle governs eventual
+delivery.
 
 ## 3. Declare the logical final data
 
@@ -128,24 +127,21 @@ synchronization barrier:
 - writer buffers and attachment bookkeeping can be reclaimed;
 - every attached stream is told, so a peer's mirror of the node closes too.
 
-That last point is what makes closure a shared fact rather than a local one. A
-remote reader ends a node on a fragment with `continued=false`, and closing
-writes none — so after the last teed batch the writer sends one **closure
-marker**: a status chunk (`application/x-a11-status`) carrying the metadata
-attribute `a11-close` and the OK close status. The receiving runtime does not
-store it; it applies it to its own copy of the node, which closes that mirror's
-write half and releases its readers. Draining and teeing are already
-synchronised — the close only begins once every batch has gone out — so the
-marker is the last thing a peer sees.
+That last point makes closure a shared fact. After the last teed batch the
+writer sends one **closure marker**: a status chunk
+(`application/x-a11-status`) carrying the metadata attribute `a11-close` and
+the OK close status. The receiving runtime does not store it; it applies it to
+its own copy of the node, which closes that mirror's write half and releases
+its readers. Draining and teeing are synchronised — the close only begins once
+every batch has gone out — so the marker is the last thing a peer sees.
 
 If the marker cannot be sent the store still closes, and the send error becomes
-the writer's terminal status (the same rule as a failed data tee, which cannot
-revoke confirmations already returned). A failure aborts instead of closing, and
-that direction is unchanged: an aborting action fans its status out over its own
-stream.
+the writer's terminal status; like a failed data tee, it cannot revoke
+confirmations already returned. An aborting action fans its status out over its
+own stream instead.
 
-Closing still does **not** append a final fragment. For a complete unary output,
-use this normal sequence:
+Closing does **not** append a final fragment. For a complete unary output, use
+this sequence:
 
 ```python
 await output.put_final(result)

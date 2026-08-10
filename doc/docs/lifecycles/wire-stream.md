@@ -64,12 +64,11 @@ Starting installs two callbacks:
 - the done callback runs once after full clean completion or failure.
 
 The runtime awaits the message callback before delivering another message on
-that endpoint. A slow consumer therefore applies backpressure instead of
-allowing an unbounded callback backlog.
+that endpoint, so a slow consumer applies backpressure.
 
-`start` and `accept` are startup barriers, not universally completion barriers.
-In the C++ runtime they resolve after the channel handshake; TypeScript follows
-the same model and provides `wait()` for terminal completion. In callback-based
+`start` and `accept` are startup barriers, not completion barriers. In the C++
+runtime they resolve after the channel handshake; TypeScript follows the same
+model and provides `wait()` for terminal completion. In callback-based
 Python/C++ code, signal your own event from `on_done` when a caller must await
 the complete stream.
 
@@ -101,9 +100,9 @@ this transition:
 - inbound messages continue normally;
 - peer trailers become available after its half-close arrives.
 
-Half-close is deliberately not a full close. A common request/response exchange
-has the client half-close after its request, then continue receiving streamed
-output until the service half-closes its response direction.
+In a common request/response exchange the client half-closes after its request,
+then continues receiving streamed output until the service half-closes its
+response direction.
 
 ## 4. Drain the local direction
 

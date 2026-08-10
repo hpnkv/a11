@@ -179,8 +179,7 @@ async def execute_actions_from_interaction(
     One call failing does not sink the others: every call is run, every call
     is waited for, and a failure is recorded against that call alone. The
     model asked for each of these independently and can act on a partial
-    answer — one tool being unavailable is not a reason to withhold the three
-    that worked, nor to end the turn.
+    answer.
     """
     deadline = a11.get_deadline(action)
 

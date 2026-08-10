@@ -31,9 +31,8 @@ ECHO_SCHEMA = a11.ActionSchema(
 )
 ```
 
-The browser creates the equivalent `ActionSchema` and `ActionPortSchema`.
-These are not HTTP request DTOs: they describe the same runnable action and
-streaming ports on each side.
+The browser creates the equivalent `ActionSchema` and `ActionPortSchema`,
+describing the same runnable action and streaming ports on each side.
 
 ```ts
 const echoSchema = new ActionSchema({
@@ -130,9 +129,8 @@ const output = need(await action.getOutput('output', false));
 const reply = need(await output.next({timeoutMs: 10_000}));
 ```
 
-This symmetry is the useful part: an interface field is not translated into a
-special REST body. It remains an A11 node, and the action and session retain
-their identities and lifecycle on both peers.
+This symmetry is the useful part: an interface field remains an A11 node, and
+the action and session retain their identities and lifecycle on both peers.
 
 ## 6. Display failures
 

@@ -90,7 +90,7 @@ choose an active stream.
 
 Each stream has independent pending-message counters, but total session limits
 apply across all of them. When a callback or dispatcher is slow, the stream
-pump waits for capacity instead of creating an unbounded queue.
+pump waits for capacity.
 
 ## 3. Dispatch each WireMessage
 
@@ -107,9 +107,8 @@ but the callback must explicitly call `dispatch_wire_message` /
 `dispatchWireMessage` if it still wants ordinary action/node routing. Messages
 for one stream enter the callback through a serialized pump.
 
-Action dispatch and fragment writes retain structured failures. If one element
-is invalid, diagnostics identify its element kind/index rather than collapsing
-the whole message into an opaque transport exception.
+Action dispatch and fragment writes retain structured failures: if one element
+is invalid, diagnostics identify its element kind and index.
 
 Incoming action calls resolve their schema and handler through the registry.
 Before a handler runs, it acquires either a root or nested concurrency slot.

@@ -365,9 +365,7 @@ void BindService(py::module_& module) {
           "it.",
           py::arg("stream_id"))
       .def("get_id", &service::Session::GetId,
-           "Return the session's unique identifier string. Use it to correlate "
-           "this session with logs, traces, and external bookkeeping while it "
-           "runs asynchronously.")
+           "Return the session's unique identifier string.")
       .def_property_readonly("id", &service::Session::GetId,
                              "The session's unique identifier string.")
       .def("get_node_map", &service::Session::GetNodeMap,
@@ -423,9 +421,7 @@ void BindService(py::module_& module) {
           [](const service::Session& self, const std::string& action_id) {
             return ValueOrThrow(self.GetAction(action_id));
           },
-          "Look up a running action by its id, raising if none matches. Useful "
-          "for inspecting or awaiting a specific asynchronous action you "
-          "previously dispatched.",
+          "Look up a running action by its id, raising if none matches.",
           py::arg("action_id"))
       .def(
           "cancel_action",
@@ -498,8 +494,7 @@ void BindService(py::module_& module) {
                 action.cast<std::shared_ptr<actions::Action>>()));
           },
           "Dispatch an already-constructed Action to run within the session, "
-          "returning an awaitable for its handling. Use this to inject actions "
-          "programmatically rather than via an incoming wire message.",
+          "returning an awaitable for its handling.",
           py::arg("action"))
       .def(
           "dispatch_wire_message",
@@ -580,7 +575,7 @@ Examples:
           [](service::Session& self, const py::handle& status) {
             ThrowIfNotOk(self.Abort(StatusFromPython(status)));
           },
-          R"doc(Abort the session immediately with the given error status, cancelling streams and actions. Use this when an unrecoverable error occurs.
+          R"doc(Abort the session immediately with the given error status, cancelling streams and actions.
 
 Examples:
     Propagate an authentication failure to the peer:
@@ -639,9 +634,8 @@ Examples:
                      std::move(node_map), std::move(action_registry)));
                }),
            "Create a session that buffers inbound messages for explicit "
-           "pull-based reception instead of callbacks. Use receive or "
-           "receive_with_stream_id to await messages as they stream in, which "
-           "suits agents that consume messages in their own loop.",
+           "pull-based reception instead of callbacks. receive and "
+           "receive_with_stream_id await messages as they stream in.",
            py::arg("session_id") = "", py::arg("headers") = py::none(),
            py::arg("options") = std::nullopt, py::arg("node_map") = nullptr,
            py::arg("action_registry") = nullptr)

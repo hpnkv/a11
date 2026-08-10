@@ -1242,12 +1242,12 @@ class AsyncNode:
 
     def abort_with_status(self, status: typing.Any) -> typing.Any:
         """
-        Aborts the stream with the given error status and returns a future that resolves once the abort has propagated. Use this to fail a stream so consumers observe the error instead of a normal end-of-stream.
+        Aborts the stream with the given error status and returns a future that resolves once the abort has propagated. Consumers then observe the error rather than a normal end-of-stream.
         """
 
     def attach_stream(self, stream: WireStream) -> None:
         """
-        Attaches a wire stream so this node's chunks are mirrored over the network transport. Use this to bridge a local streaming node to a remote peer; the stream is kept alive for the node's lifetime.
+        Attaches a wire stream so this node's chunks are mirrored over the network transport. The stream is kept alive for the node's lifetime.
         """
 
     def cancel(self) -> None:
@@ -1275,9 +1275,9 @@ class AsyncNode:
         """
         Consume exactly one whole value and return it deserialized.
 
-        Use this for a node that carries a single result (the common case for a
-        unary action output). Pass ``obj_type`` to deserialize to a specific
-        type, or request ``NodeFragment``/``Chunk`` to get the raw form.
+        For a node that carries a single result, such as a unary action
+        output. Pass ``obj_type`` to deserialize to a specific type, or request
+        ``NodeFragment``/``Chunk`` to get the raw form.
 
         Examples:
             Read the unary customer input of an action handler:
@@ -1325,7 +1325,7 @@ class AsyncNode:
 
     def get_id(self) -> str:
         """
-        Returns the node's stable identifier. Use this to correlate a streaming node with the rest of an agent's state, for logging, or to key it in a NodeMap. Raises if the id cannot be resolved.
+        Returns the node's stable identifier. Raises if the id cannot be resolved.
         """
 
     def get_reader_options(self) -> ChunkStoreReaderOptions:
@@ -1340,7 +1340,7 @@ class AsyncNode:
 
     def get_writer_abort_status(self) -> typing.Any:
         """
-        Returns the status the writer was aborted with, or None if the writer has not been aborted. Use this to surface the reason a stream was cut short to the rest of an agent.
+        Returns the status the writer was aborted with, or None if the writer has not been aborted.
         """
 
     def get_writer_options(self) -> ChunkStoreWriterOptions:
@@ -2340,7 +2340,7 @@ class ChunkStore:
 
     def clear_data(self, seq: typing.SupportsInt) -> typing.Any:
         """
-        Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment. Use this to reclaim memory for chunks an agent has already consumed.
+        Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment.
         """
 
     def close_writes_with_status(
@@ -2377,7 +2377,7 @@ class ChunkStore:
         deadline: typing.Any | None = None,
     ) -> typing.Any:
         """
-        Await the fragment identified by the order in which it arrived rather than its sequence number. Use this when an agent needs to replay chunks in ingestion order; the future resolves when the fragment is present or the optional deadline passes.
+        Await the fragment identified by the order in which it arrived rather than its sequence number. The future resolves when the fragment is present or the optional deadline passes.
         """
 
     def get_final_seq(self) -> typing.Any:
@@ -2394,7 +2394,7 @@ class ChunkStore:
         self, arrival_order: typing.SupportsInt
     ) -> typing.Any:
         """
-        Await the sequence number that corresponds to a given arrival order. Use this to translate ingestion-order references into the sequence numbers the rest of the API expects.
+        Await the sequence number that corresponds to a given arrival order.
         """
 
     def next(
@@ -2425,7 +2425,7 @@ class ChunkStore:
 
     def size(self) -> typing.Any:
         """
-        Await the number of fragments currently in the store. Useful for an agent to gauge backlog or progress without reading chunks.
+        Await the number of fragments currently in the store.
         """
 
 class ChunkStoreReader:
@@ -2609,7 +2609,7 @@ class ChunkStoreWriter:
 
     def abort_with_status(self, status: typing.Any) -> typing.Any:
         """
-        Abort the writer with an error status and await teardown. Use this to propagate a failure downstream so readers observe the error instead of a clean end-of-stream.
+        Abort the writer with an error status and await teardown. Readers then observe the error rather than a clean end-of-stream.
         """
 
     def attach_stream(self, stream: WireStream) -> None:
@@ -2619,7 +2619,7 @@ class ChunkStoreWriter:
 
     def cancel(self) -> typing.Any:
         """
-        Stop the writer immediately and await teardown, discarding any chunks still queued. Use this to abandon a stream an agent no longer needs.
+        Stop the writer immediately and await teardown, discarding any chunks still queued.
         """
 
     def detach_stream(self, stream: WireStream) -> None:
@@ -3649,7 +3649,7 @@ class HttpSseServerWireStream(HttpSseWireStream):
 class HttpSseWireStream(WireStream):
     def get_http_request_headers(self) -> list:
         """
-        Return the HTTP headers carried on the underlying SSE request. This is the base class shared by the client and server SSE wire streams that transport A11 messages over an HTTP/2 Server-Sent Events connection. Use it when building an agent that needs to inspect the transport-level request metadata.
+        Return the HTTP headers carried on the underlying SSE request.
         """
 
     def get_http_response_headers(self) -> typing.Any:
@@ -3680,7 +3680,7 @@ class InProcessWireStream(WireStream):
         second_options: WireStreamOptions | None = None,
     ) -> tuple[InProcessWireStream, InProcessWireStream]:
         """
-        Create a connected pair of in-process wire streams that talk to each other directly in memory, with no network involved. Use this to wire an agent to a local service or test harness: one endpoint drives start() while the other drives accept(). Pass shared options, or per-endpoint first_options/second_options, to tune buffering and timeouts.
+        Create a connected pair of in-process wire streams that talk to each other directly in memory, with no network involved. One endpoint drives start() while the other drives accept(). Pass shared options, or per-endpoint first_options/second_options, to tune buffering and timeouts.
         """
 
     def wait(self) -> typing.Any:
@@ -5177,7 +5177,7 @@ class Session:
 
     def abort(self, status: typing.Any) -> None:
         """
-        Abort the session immediately with the given error status, cancelling streams and actions. Use this when an unrecoverable error occurs.
+        Abort the session immediately with the given error status, cancelling streams and actions.
 
         Examples:
             Propagate an authentication failure to the peer:
@@ -5252,7 +5252,7 @@ class Session:
 
     def dispatch_action(self, action: typing.Any) -> typing.Any:
         """
-        Dispatch an already-constructed Action to run within the session, returning an awaitable for its handling. Use this to inject actions programmatically rather than via an incoming wire message.
+        Dispatch an already-constructed Action to run within the session, returning an awaitable for its handling.
         """
 
     def dispatch_action_message(
@@ -5278,7 +5278,7 @@ class Session:
 
     def get_action(self, action_id: str) -> Action:
         """
-        Look up a running action by its id, raising if none matches. Useful for inspecting or awaiting a specific asynchronous action you previously dispatched.
+        Look up a running action by its id, raising if none matches.
         """
 
     def get_action_registry(self) -> ActionRegistry | None:
@@ -5288,7 +5288,7 @@ class Session:
 
     def get_id(self) -> str:
         """
-        Return the session's unique identifier string. Use it to correlate this session with logs, traces, and external bookkeeping while it runs asynchronously.
+        Return the session's unique identifier string.
         """
 
     def get_node_map(self) -> NodeMap:
@@ -5538,7 +5538,7 @@ class SessionWithRecv(Session):
         action_registry: ActionRegistry | None = None,
     ) -> None:
         """
-        Create a session that buffers inbound messages for explicit pull-based reception instead of callbacks. Use receive or receive_with_stream_id to await messages as they stream in, which suits agents that consume messages in their own loop.
+        Create a session that buffers inbound messages for explicit pull-based reception instead of callbacks. receive and receive_with_stream_id await messages as they stream in.
         """
 
     async def receive(self, deadline=None):
@@ -6591,7 +6591,7 @@ class WebRtcWireStream(WireStream):
         options: WireStreamOptions = ...,
     ) -> WebRtcWireStream:
         """
-        Open a WebRTC data-channel wire stream to a peer over a shared in-process signalling service. Use this when building an agent that connects out to a named peer: it performs the ICE/SDP handshake and resolves to a WireStream you read and write logical messages on asynchronously. The returned stream carries A11-framed messages, fragmenting large payloads transparently.
+        Open a WebRTC data-channel wire stream to a named peer over a shared in-process signalling service. It performs the ICE/SDP handshake and resolves to a WireStream carrying A11-framed messages, fragmenting large payloads transparently.
         """
     @staticmethod
     @typing.overload
@@ -6614,13 +6614,13 @@ class WebRtcWireStream(WireStream):
     @property
     def peer_connection(self) -> typing.Any:
         """
-        Opaque capsule around the underlying libdatachannel PeerConnection. Useful for inspecting ICE/connection state during debugging; not required for normal streaming.
+        Opaque capsule around the underlying libdatachannel PeerConnection, for inspecting ICE/connection state during debugging.
         """
 
     @property
     def signalling_endpoint(self) -> SignallingTransport:
         """
-        Signalling transport this stream negotiated over. Lets an agent observe or reuse the channel that carried the asynchronous SDP/ICE handshake.
+        Signalling transport this stream negotiated over, the channel that carried the asynchronous SDP/ICE handshake.
         """
 
 class WebSocketClientOptions:
@@ -7091,7 +7091,7 @@ class WireStream:
 
     def get_id(self) -> str:
         """
-        Return the stream's stable identifier, which also seeds its tracing trace id. Use it to correlate an agent stream with logs and traces.
+        Return the stream's stable identifier, which also seeds its tracing trace id.
         """
 
     def get_impl(self) -> typing.Any:
@@ -7136,7 +7136,7 @@ class WireStream:
 
     def set_deadline(self, deadline: typing.Any | None = None) -> None:
         """
-        Set an absolute wall-clock deadline after which the stream is automatically aborted; pass None to clear it. Use this to bound how long an agent interaction is allowed to run.
+        Set an absolute wall-clock deadline after which the stream is automatically aborted; pass None to clear it.
         """
 
     def start(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
@@ -8002,7 +8002,7 @@ class _StringSchemaMapView:
 
 def audio_actions() -> list:
     """
-    Return the audio Actions as (name, schema, handler) triples in protocol order, each schema's ports already wired to the matching audio type and their serializers installed. Use these to register a subset, inspect a schema before registering, or hand a handler to Action.bind_handler().
+    Return the audio Actions as (name, schema, handler) triples in protocol order, each schema's ports already wired to the matching audio type and their serializers installed.
     """
 
 def audio_buffer_from_msgpack(data: bytes) -> AudioBuffer:

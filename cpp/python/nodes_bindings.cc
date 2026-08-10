@@ -186,9 +186,8 @@ void BindNodes(py::module_& module) {
           [](const nodes::AsyncNode& self) {
             return ValueOrThrow(self.GetId());
           },
-          "Returns the node's stable identifier. Use this to correlate a "
-          "streaming node with the rest of an agent's state, for logging, or "
-          "to key it in a NodeMap. Raises if the id cannot be resolved.")
+          "Returns the node's stable identifier. Raises if the id cannot be "
+          "resolved.")
       .def_property_readonly(
           "id",
           [](const nodes::AsyncNode& self) {
@@ -251,8 +250,7 @@ void BindNodes(py::module_& module) {
             }
           },
           "Rewinds the node's reader back to the start of the stream, "
-          "optionally applying new reader options. Use this to re-consume a "
-          "node's chunks from the beginning after an earlier read pass.",
+          "optionally applying new reader options.",
           py::arg("options") = std::nullopt)
       .def_property(
           "writer_options", &nodes::AsyncNode::GetWriterOptions,
@@ -287,8 +285,7 @@ void BindNodes(py::module_& module) {
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
           "Returns the status the writer was aborted with, or None if the "
-          "writer has not been aborted. Use this to surface the reason a "
-          "stream was cut short to the rest of an agent.")
+          "writer has not been aborted.")
       .def(
           "is_writable",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
@@ -319,9 +316,8 @@ void BindNodes(py::module_& module) {
             return FutureToPython(self->PutFragment(std::move(fragment)));
           },
           "Appends a pre-assembled node fragment to the stream and returns a "
-          "future resolving to its sequence number. Use this when you already "
-          "hold a NodeFragment (for example one forwarded from another node) "
-          "rather than a raw chunk.",
+          "future resolving to its sequence number, for a NodeFragment "
+          "already in hand (one forwarded from another node, say).",
           py::arg("fragment"))
       .def(
           "put_null_final",
@@ -396,9 +392,8 @@ void BindNodes(py::module_& module) {
                 self->AbortWithStatus(StatusFromPython(status)));
           },
           "Aborts the stream with the given error status and returns a future "
-          "that resolves once the abort has propagated. Use this to fail a "
-          "stream so consumers observe the error instead of a normal "
-          "end-of-stream.",
+          "that resolves once the abort has propagated. Consumers then "
+          "observe the error rather than a normal end-of-stream.",
           py::arg("status"))
       .def(
           "attach_stream",
@@ -409,8 +404,8 @@ void BindNodes(py::module_& module) {
             }
           },
           "Attaches a wire stream so this node's chunks are mirrored over the "
-          "network transport. Use this to bridge a local streaming node to a "
-          "remote peer; the stream is kept alive for the node's lifetime.",
+          "network transport. The stream is kept alive for the node's "
+          "lifetime.",
           py::arg("stream"), py::keep_alive<1, 2>())
       .def(
           "detach_stream",

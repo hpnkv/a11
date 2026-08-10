@@ -5,7 +5,7 @@ conversation. It can represent a user message, an assistant response, a set of
 tool calls, or the tool results returned to the model. A list of interactions
 therefore holds both the conversation and the work performed during it.
 
-Unlike a plain chat message, an interaction can carry structured A11 values:
+An interaction carries structured A11 values:
 
 - `content` contains serialised text, images, or provider-native response data;
 - `action_calls` and `action_inputs` describe actions requested by the model;

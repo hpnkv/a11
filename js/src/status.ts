@@ -65,7 +65,7 @@ const kDefaultStatusMessages = {
   [StatusCode.UNAUTHENTICATED]: 'Unauthenticated',
 };
 
-/** Policy used by legacy {@link getValue} when given a non-OK status. */
+/** Policy applied by {@link getValue} when given a non-OK status. */
 export enum InvalidStatusAccessBehaviour {
   /** Abort the Node process when possible. */
   TERMINATE = 'TERMINATE',

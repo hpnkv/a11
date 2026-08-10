@@ -162,10 +162,10 @@ async def test_arrival_order_reader_does_not_stop_at_early_final_arrival():
 
 @pytest.mark.asyncio
 async def test_prefetched_fragment_is_delivered_before_a_later_fetch():
-    # Regression: a fetch completing while an earlier fragment already sits in
-    # the prefetch buffer must not hand the later fragment to a waiting caller
-    # ahead of the buffered one. The caller's wake-up is coalesced away while a
-    # fetch is in flight, so ordered reads have to stay serial regardless.
+    # A fetch completing while an earlier fragment already sits in the prefetch
+    # buffer must not hand the later fragment to a waiting caller ahead of the
+    # buffered one. The caller's wake-up is coalesced away while a fetch is in
+    # flight, so ordered reads have to stay serial regardless.
     store = _GatedGetStore("serial-order")
     await store.put_many([_fragment(0), _fragment(1), _fragment(2, final=True)])
     reader = ChunkStoreReader(

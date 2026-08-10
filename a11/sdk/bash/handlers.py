@@ -9,9 +9,8 @@ validation, output processing, cleanup) lives in the manager.
 
 Each also narrates its run on the ``user_facing_log`` port, for whoever is
 showing the tool call to a person: the lifecycle handlers name the shell they
-acted on, and ``shell_execute`` names the command and how much came back, which
-is what a reader watching a command run is actually looking at. That port is not
-part of the result the model is given; see
+acted on, and ``shell_execute`` names the command and how much came back. That
+port is kept out of the result the model is given; see
 :data:`a11.sdk.llm.USER_FACING_LOG_PORT`.
 """
 
@@ -37,11 +36,9 @@ async def _write_log(action: a11.Action, log: str) -> None:
 
     The log is one whole value, so it is written as one *final* fragment: its
     readers -- the LLM tool runner, a UI showing the run -- learn from the
-    marker that they have the complete narration rather than a prefix. (Ending
-    the stream no longer depends on it: a drained writer tees a closure marker,
-    so a reader across a wire ends either way.) An empty log is terminated the
-    only way an empty stream can be, with a null final; both readers skip null
-    chunks.
+    marker that they have the complete narration rather than a prefix. An empty
+    log is terminated the only way an empty stream can be, with a null final;
+    both readers skip null chunks.
 
     Best effort: a run log is worth nothing next to the tool's actual result, so
     a port that will not take it (a caller that aborted it, say) does not fail

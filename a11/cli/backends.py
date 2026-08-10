@@ -2,12 +2,12 @@
 
 """Provider metadata for the chat CLI.
 
-Backend selection no longer happens here: the CLI hands a provider name to the
-``interact_with_llm`` action (via the ``x-a11-llm-provider`` header) and that
-action routes to the concrete ``interact_with_*`` handler, importing the SDK
-lazily. All this module keeps is the small amount of provider knowledge the CLI
-itself needs — the default model to advertise and which environment variables
-hold the API key — plus a helper to build a backend-neutral user message.
+Backend selection happens in the ``interact_with_llm`` action: the CLI hands it
+a provider name via the ``x-a11-llm-provider`` header and the action routes to
+the concrete ``interact_with_*`` handler, importing the SDK lazily. This module
+holds the provider knowledge the CLI itself needs — the default model to
+advertise and which environment variables hold the API key — plus a helper to
+build a backend-neutral user message.
 """
 
 from __future__ import annotations

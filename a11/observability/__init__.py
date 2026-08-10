@@ -208,9 +208,9 @@ def langfuse(
 def new_traceparent(*, sampled: bool = True) -> str:
     """Mint a fresh W3C ``traceparent`` value for a brand-new root trace.
 
-    Use this when the action you run/call has no upstream context and you want
-    it to start its own trace: set it as the ``TRACEPARENT_HEADER`` before
-    ``run()``/``call()`` (or just use `enable_tracing`).
+    For an action with no upstream context: set it as the
+    ``TRACEPARENT_HEADER`` before ``run()``/``call()`` (or use
+    `enable_tracing`).
     """
     trace_id = os.urandom(16).hex()
     span_id = os.urandom(8).hex()

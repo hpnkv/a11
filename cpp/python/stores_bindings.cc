@@ -337,8 +337,7 @@ Examples:
                 self->GetByArrivalOrder(arrival_order, *converted));
           },
           "Await the fragment identified by the order in which it arrived "
-          "rather than its sequence number. Use this when an agent needs to "
-          "replay chunks in ingestion order; the future resolves when the "
+          "rather than its sequence number. The future resolves when the "
           "fragment is present or the optional deadline passes.",
           py::arg("arrival_order"), py::arg("deadline") = py::none())
       .def(
@@ -391,8 +390,7 @@ Examples:
             return StoreFuture(self->ClearData(seq));
           },
           "Erase the payload of the fragment at a sequence number while "
-          "keeping its slot, and await the resulting fragment. Use this to "
-          "reclaim memory for chunks an agent has already consumed.",
+          "keeping its slot, and await the resulting fragment.",
           py::arg("seq"))
       .def(
           "get_seq_for_arrival_order",
@@ -401,8 +399,7 @@ Examples:
             return StoreFuture(self->GetSeqForArrivalOrder(arrival_order));
           },
           "Await the sequence number that corresponds to a given arrival "
-          "order. Use this to translate ingestion-order references into the "
-          "sequence numbers the rest of the API expects.",
+          "order.",
           py::arg("arrival_order"))
       .def(
           "get_final_seq",
@@ -434,8 +431,7 @@ Examples:
           [](const std::shared_ptr<ChunkStore>& self) {
             return StoreFuture(self->Size());
           },
-          "Await the number of fragments currently in the store. Useful for "
-          "an agent to gauge backlog or progress without reading chunks.")
+          "Await the number of fragments currently in the store.")
       .def(
           "get_id",
           [](const ChunkStore& self) { return ValueOrThrow(self.GetId()); },
@@ -1082,8 +1078,7 @@ Examples:
             return StoreFuture(self->Cancel());
           },
           "Stop the writer immediately and await teardown, discarding any "
-          "chunks still queued. Use this to abandon a stream an agent no "
-          "longer needs.")
+          "chunks still queued.")
       .def(
           "drain_and_close",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
@@ -1098,9 +1093,8 @@ Examples:
              const py::handle& status) {
             return StoreFuture(self->AbortWithStatus(StatusFromPython(status)));
           },
-          "Abort the writer with an error status and await teardown. Use this "
-          "to propagate a failure downstream so readers observe the error "
-          "instead of a clean end-of-stream.",
+          "Abort the writer with an error status and await teardown. Readers "
+          "then observe the error rather than a clean end-of-stream.",
           py::arg("status"))
       .def(
           "wait_for_buffer_to_drain",

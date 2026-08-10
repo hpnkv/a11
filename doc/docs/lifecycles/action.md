@@ -44,8 +44,7 @@ Remote calls expose two deliberate milestones:
 2. **completion status** — did the action and its output-writer cleanup
    ultimately succeed?
 
-Waiting for dispatch is useful for fast admission feedback, but it is not a
-substitute for waiting for completion.
+Dispatch gives fast admission feedback; only completion reports the outcome.
 
 ## 1. Configure identity and collaborators
 
@@ -116,13 +115,12 @@ Remote calls have two schema boundaries. Caller-side autofills travel with the
 call, and the last transmitted autofill fragment for each port is made final.
 The receiver resolves its own registered schema and applies any receiver-side
 autofills before fragments in the same wire message. A receiver-autofilled
-input must remain empty, so incoming data for that port is rejected rather than
-overriding a receiver-owned default. This prevents a caller from injecting a
-value into an input the receiving agent controls.
+input must remain empty, so incoming data for that port is rejected: a caller
+cannot inject a value into an input the receiving agent controls.
 
-Autofills make optional/default agent inputs part of the schema rather than
-handler boilerplate. Keep large or dynamic defaults in application code rather
-than embedding them in every dispatch message.
+Autofills make optional/default agent inputs part of the schema. Keep large or
+dynamic defaults in application code rather than embedding them in every
+dispatch message.
 
 ### 5. Run the handler
 
@@ -183,14 +181,13 @@ The peer reports dispatch through the reserved dispatch-status output node.
 - non-OK means it rejected the call, for example because the action was absent,
   invalid, unauthorized, or over a runtime boundary.
 
-Dispatch success does not imply that the handler will finish successfully. It
-is the remote equivalent of learning that work entered the queue.
+Dispatch success does not imply that the handler will finish successfully; it
+reports only that the work entered the queue.
 
 ### 5. Consume outputs while the peer runs
 
 Output nodes are ordinary AsyncNodes, so a caller can begin reading before the
-completion status arrives. This is how an LLM action streams tokens while the
-remote action remains active.
+completion status arrives.
 
 Sequence numbers and final markers belong to each output node. The action-level
 completion status describes the operation as a whole; it does not replace

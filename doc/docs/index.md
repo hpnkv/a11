@@ -32,7 +32,7 @@ asyncio.run(main())
 - **Streaming-first.** Everything is a stream of chunks. Tokens, audio frames,
   tool-call deltas, and whole objects all flow through the same
   [`AsyncNode`][a11.nodes.async_node.AsyncNode] interface, so partial output is
-  the default, not an afterthought.
+  the default.
 - **Composable actions.** An [`Action`][a11.actions.action.Action] is a unit of
   work with a schema. Actions nest and call one another, which is how you build
   an agent out of smaller, testable pieces.

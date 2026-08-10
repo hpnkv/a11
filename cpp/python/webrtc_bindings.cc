@@ -505,12 +505,10 @@ void BindWebRtc(py::module_& module) {
                 std::move(identity), std::move(peer_identity),
                 std::move(signalling), std::move(configuration), options));
           },
-          "Open a WebRTC data-channel wire stream to a peer over a shared "
-          "in-process signalling service. Use this when building an agent that "
-          "connects out to a named peer: it performs the ICE/SDP handshake and "
-          "resolves to a WireStream you read and write logical messages on "
-          "asynchronously. The returned stream carries A11-framed messages, "
-          "fragmenting large payloads transparently.",
+          "Open a WebRTC data-channel wire stream to a named peer over a "
+          "shared in-process signalling service. It performs the ICE/SDP "
+          "handshake and resolves to a WireStream carrying A11-framed "
+          "messages, fragmenting large payloads transparently.",
           py::arg("identity"), py::arg("peer_identity"), py::arg("signalling"),
           py::arg("configuration") = net::WebRtcConfiguration{},
           py::arg("options") = net::WireStreamOptions{})
@@ -551,13 +549,12 @@ void BindWebRtc(py::module_& module) {
                                   "a11.WebRtcWireStream.peer_connection");
           },
           "Opaque capsule around the underlying "
-          "libdatachannel PeerConnection. Useful for "
+          "libdatachannel PeerConnection, for "
           "inspecting ICE/connection state during "
-          "debugging; not required for normal streaming.")
+          "debugging.")
       .def_property_readonly(
           "signalling_endpoint", &net::WebRtcWireStream::signalling_endpoint,
-          "Signalling transport this stream negotiated over. "
-          "Lets an agent observe or reuse the channel that "
+          "Signalling transport this stream negotiated over, the channel that "
           "carried the asynchronous SDP/ICE handshake.");
 
   py::classh<net::WebRtcWireServer>(module, "WebRtcWireServer")

@@ -221,7 +221,7 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     assert _TOKEN in log
     # And none of it reached the result the model was given. Asserted against
     # the log actually written, so a reworded narration cannot make this pass
-    # by no longer matching a hardcoded prefix.
+    # vacuously.
     summary = log.splitlines()[0]
     assert not any(summary in str(value) for value in output)
 

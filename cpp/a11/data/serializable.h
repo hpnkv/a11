@@ -35,10 +35,10 @@
  * RegisterSerializable<my::ns::Widget>(registry);
  * @endcode
  *
- * The SerializationRegistry itself is untouched: RegisterSerializable simply
- * wraps the ADL functions into the registry's Serializer/Deserializer pairs,
- * using the tag returned by A11SerialTag as the wire type name. The registry
- * appends the @c ;type=<tag> parameter and matches it on decode.
+ * RegisterSerializable wraps the ADL functions into the registry's
+ * Serializer/Deserializer pairs, using the tag returned by A11SerialTag as the
+ * wire type name. The registry appends the @c ;type=<tag> parameter and
+ * matches it on decode.
  */
 
 #ifndef A11_DATA_SERIALIZABLE_H_
@@ -56,6 +56,7 @@
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 
@@ -69,11 +70,33 @@ namespace a11::data {
 template <typename T>
 struct TypeTag {};
 
+// The runtime's own types answer the same customization point every other
+// serializable type does, with the canonical tags from a11/data/serial_tags.h.
+// One spelling per type, shared with Python, TypeScript and Kotlin, so a Chunk
+// written by C++ reads back as `a11.Chunk` everywhere.
+inline std::string_view A11SerialTag(TypeTag<ChunkMetadata>) {
+  return kChunkMetadataTag;
+}
+inline std::string_view A11SerialTag(TypeTag<Chunk>) { return kChunkTag; }
+inline std::string_view A11SerialTag(TypeTag<NodeRef>) { return kNodeRefTag; }
+inline std::string_view A11SerialTag(TypeTag<NodeFragment>) {
+  return kNodeFragmentTag;
+}
+inline std::string_view A11SerialTag(TypeTag<Port>) { return kPortTag; }
+inline std::string_view A11SerialTag(TypeTag<ActionMessage>) {
+  return kActionMessageTag;
+}
+inline std::string_view A11SerialTag(TypeTag<WireMessage>) {
+  return kWireMessageTag;
+}
+
 namespace serializable_internal {
 
 // Unqualified calls so ADL locates the customization points in T's namespace.
-// No same-named functions are declared in a11::data, so ordinary lookup finds
-// nothing here and ADL takes over.
+// The overloads above are the only same-named functions in a11::data, and a
+// namespace-scope function found by ordinary lookup does not suppress ADL --
+// the two overload sets merge -- so a type declaring its tag in its own
+// namespace is still found.
 
 template <typename T>
 concept HasSerialTag = requires {

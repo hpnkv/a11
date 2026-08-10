@@ -217,9 +217,8 @@ TEST(SerialTagsTest, RuntimeTypesPublishTheCanonicalTags) {
 }
 
 TEST(SerialTagsTest, ARuntimeTypeIsTaggedForEveryLanguageToRead) {
-  // The gap this closes: C++ used to write ";type=Chunk", a name no other
-  // language's registry has ever known. What it writes now is what the shared
-  // table says, so a peer can resolve it.
+  // The tag C++ writes comes from the shared table, so a registry in any
+  // language can resolve it.
   SerializationRegistry registry(/*register_defaults=*/true);
   Chunk value;
   value.metadata = ChunkMetadata{.mimetype = std::string(kJsonMimetype)};

@@ -105,8 +105,7 @@ while True:
 ```
 
 The `await` admits the value to the node's bounded writer queue, applying
-backpressure instead of accumulating an unbounded list of unsent chat
-messages. The returned store confirmation does not need to be awaited here:
+backpressure. The returned store confirmation does not need to be awaited here:
 the node is drained when this producer finishes.
 
 ## 5. Finalize, drain, and close
@@ -282,6 +281,6 @@ If Bob leaves first, Alice sees the symmetric notification:
 [Bob] has quit the chat
 ```
 
-There is no chat-specific network protocol here: the two stable node IDs, the
-shared Redis-backed factory, and normal `AsyncNode` streaming and lifecycle
-operations are the whole distributed boundary.
+The two stable node IDs, the shared Redis-backed factory, and normal
+`AsyncNode` streaming and lifecycle operations are the whole distributed
+boundary.

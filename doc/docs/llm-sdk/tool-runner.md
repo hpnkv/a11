@@ -77,9 +77,9 @@ executed.log_metadata()  # {"tool_logs": b'{"call id": "..."}'}, or {}
 
 Merge `log_metadata()` into the `backend_specific_metadata` of the interaction
 carrying the tool results, which is what the included handlers do. Metadata is
-the one part of an interaction no backend turns into provider content, so the log
-stays out of the model's context while still being stored with the conversation —
-a replayed transcript can then show what a tool did, not merely that it ran.
+the one part of an interaction no backend turns into provider content, so the
+log stays out of the model's context while still being stored with the
+conversation and available to a replayed transcript.
 
 ## Make the allow-list explicit
 

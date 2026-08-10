@@ -231,7 +231,7 @@ def test_no_key_in_a_payload_is_ever_read_as_a_type():
         assert a11.from_chunk(chunk) == value
 
 
-def test_python_still_writes_the_golden_interaction():
+def test_python_writes_the_golden_interaction():
     """The fixture the other languages are held to must stay Python's output."""
     golden = json.loads(_GOLDEN.read_text())
     chunk = a11.to_chunk(golden_interaction())
@@ -253,7 +253,7 @@ def test_the_golden_interaction_round_trips():
     assert bytes(reencoded.data) == base64.b64decode(golden["base64"])
 
 
-def test_python_still_writes_the_golden_text_message_interaction():
+def test_python_writes_the_golden_text_message_interaction():
     """The shape every language's `makeTextMessageInteraction` is held to."""
     golden = json.loads(_TEXT_MESSAGE_GOLDEN.read_text())
     interaction = make_user_interaction(golden["text"])
@@ -272,8 +272,8 @@ def test_an_interaction_from_another_language_validates():
     They leave `status`, `created_at_millis` and `usage_metadata` to this
     model's defaults rather than spelling them out, so the payload is
     equivalent to Python's rather than identical — it still has to validate.
-    Above all `content` and `system_instructions` arrive as chunks: a bare
-    string there is what produced "Chunk must be validated from a mapping."
+    Above all `content` and `system_instructions` arrive as chunks; a bare
+    string there fails with "Chunk must be validated from a mapping."
     """
     golden = json.loads(_TEXT_MESSAGE_GOLDEN.read_text())
     payload = json.loads(base64.b64decode(golden["base64"]))

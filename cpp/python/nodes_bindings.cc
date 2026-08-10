@@ -13,6 +13,7 @@
 #include <absl/status/statusor.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <pybind11_abseil/no_throw_status.h>
 #include <pybind11_abseil/status_casters.h>
 
@@ -81,8 +82,8 @@ class PythonFactory {
   std::vector<PyObject*> values_;
 };
 
-py::object StatusObject(const absl::Status& status) {
-  return StatusToPython(status);
+NativeStatus StatusObject(const absl::Status& status) {
+  return NativeStatus(status);
 }
 
 }  // namespace
@@ -264,7 +265,7 @@ void BindNodes(py::module_& module) {
           "as buffering and flow control.")
       .def(
           "get_reader_status",
-          [](const nodes::AsyncNode& self) {
+          [](const nodes::AsyncNode& self) -> NativeStatus {
             return StatusObject(self.GetReaderStatus());
           },
           "Returns the current status of the node's reader. Check it to tell "
@@ -272,7 +273,7 @@ void BindNodes(py::module_& module) {
           "or has failed while streaming.")
       .def(
           "get_writer_status",
-          [](const nodes::AsyncNode& self) {
+          [](const nodes::AsyncNode& self) -> NativeStatus {
             return StatusObject(self.GetWriterStatus());
           },
           "Returns the current status of the node's writer. Check it to tell "
@@ -280,7 +281,8 @@ void BindNodes(py::module_& module) {
           "or has failed while streaming.")
       .def(
           "get_writer_abort_status",
-          [](const nodes::AsyncNode& self) -> py::object {
+          [](const nodes::AsyncNode& self)
+              -> py::typing::Optional<NativeStatus> {
             std::optional<absl::Status> status = self.GetWriterAbortStatus();
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
@@ -332,7 +334,7 @@ void BindNodes(py::module_& module) {
       .def(
           "next_fragment",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -351,7 +353,7 @@ void BindNodes(py::module_& module) {
       .def(
           "next_chunk",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -387,7 +389,7 @@ void BindNodes(py::module_& module) {
       .def(
           "abort_with_status",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
-             const py::handle& status) {
+             const PyLike<NativeStatus>& status) {
             return FutureToPython(
                 self->AbortWithStatus(StatusFromPython(status)));
           },

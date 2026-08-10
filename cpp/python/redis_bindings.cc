@@ -15,6 +15,7 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/concurrency/future.h"
 #include "python/bindings.h"
@@ -193,8 +194,8 @@ void BindRedis(py::module_& module) {
                      "Name reported through CLIENT SETNAME.")
       .def_property(
           "connect_timeout",
-          [](const redis::ClientOptions& self) {
-            return DurationToPython(self.connect_timeout);
+          [](const redis::ClientOptions& self) -> NativeDuration {
+            return NativeDuration(self.connect_timeout);
           },
           [](redis::ClientOptions& self, const py::handle& value) {
             self.connect_timeout =
@@ -203,8 +204,8 @@ void BindRedis(py::module_& module) {
           "Maximum time allowed for establishing a connection.")
       .def_property(
           "command_timeout",
-          [](const redis::ClientOptions& self) {
-            return DurationToPython(self.command_timeout);
+          [](const redis::ClientOptions& self) -> NativeDuration {
+            return NativeDuration(self.command_timeout);
           },
           [](redis::ClientOptions& self, const py::handle& value) {
             self.command_timeout =
@@ -240,7 +241,8 @@ void BindRedis(py::module_& module) {
       .def(
           "wait",
           [](const std::shared_ptr<redis::Subscription>& self,
-             std::uint64_t after, const py::object& deadline) {
+             std::uint64_t after,
+             const py::typing::Optional<NativeTime>& deadline) {
             return FutureToPython(self->Wait(after, RedisDeadline(deadline)));
           },
           "Await a message newer than generation `after`.", py::arg("after"),
@@ -273,7 +275,8 @@ void BindRedis(py::module_& module) {
       .def(
           "command",
           [](const std::shared_ptr<redis::Client>& self,
-             const py::handle& parts, const py::object& deadline) {
+             const py::handle& parts,
+             const py::typing::Optional<NativeTime>& deadline) {
             return FutureToPython(
                 self->Command(RedisParts(parts, "Redis command part"),
                               RedisDeadline(deadline)));
@@ -284,7 +287,8 @@ void BindRedis(py::module_& module) {
           "eval",
           [](const std::shared_ptr<redis::Client>& self,
              const py::handle& script, const py::handle& keys,
-             const py::handle& arguments, const py::object& deadline) {
+             const py::handle& arguments,
+             const py::typing::Optional<NativeTime>& deadline) {
             return FutureToPython(
                 self->Eval(RedisBytes(script, "Redis script"),
                            RedisParts(keys, "Redis script key"),
@@ -297,7 +301,8 @@ void BindRedis(py::module_& module) {
       .def(
           "subscribe",
           [](const std::shared_ptr<redis::Client>& self,
-             const py::handle& channel, const py::object& deadline) {
+             const py::handle& channel,
+             const py::typing::Optional<NativeTime>& deadline) {
             return FutureToPython(self->Subscribe(
                 RedisBytes(channel, "Redis channel"), RedisDeadline(deadline)));
           },

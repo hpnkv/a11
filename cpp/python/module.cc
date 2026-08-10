@@ -45,7 +45,10 @@ void InstallFailureSignalHandler() {
 PYBIND11_MODULE(_native, module) {
   InstallFailureSignalHandler();
   absl::InitializeLog();
-  absl::SetStderrThreshold(absl::LogSeverity::kInfo);
+  // Nothing is emitted until a11.logging resolves a level from the importing
+  // process's logging configuration. FATAL still reaches stderr, since it
+  // precedes process death and has nowhere else to go.
+  absl::SetStderrThreshold(absl::LogSeverity::kFatal);
   py::google::ImportStatusModule();
 
   module.doc() = "Native C++ backend for A11";
@@ -69,6 +72,8 @@ PYBIND11_MODULE(_native, module) {
   module.def("status_code_to_websocket", [](int code) {
     return a11::StatusCodeToWebSocket(static_cast<absl::StatusCode>(code));
   });
+
+  a11::python::BindLogging(module);
 
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);

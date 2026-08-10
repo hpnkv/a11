@@ -1,15 +1,12 @@
 import os
 
-from absl import logging
-
-logging._warn_preinit_stderr = False
-
 import pytest
+
+import a11
 
 
 @pytest.fixture(scope="session", autouse=True)
 def init_logging():
     os.environ["A11_DEBUG"] = "1"
-    logging.use_absl_handler()
-    logging.set_verbosity(logging.DEBUG)
-    logging.info("Logging initialized")
+    a11.enable_logging("debug")
+    a11.get_logger(__name__).info("Logging initialized")

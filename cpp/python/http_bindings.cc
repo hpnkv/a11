@@ -15,6 +15,7 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <pybind11_abseil/status_caster.h>    // IWYU pragma: keep
 #include <pybind11_abseil/statusor_caster.h>  // IWYU pragma: keep
 
@@ -67,7 +68,8 @@ absl::StatusOr<net::HttpHeaders> HttpHeadersFromPython(
   }
 }
 
-py::list HttpHeadersToPython(const net::HttpHeaders& headers) {
+py::typing::List<py::typing::Tuple<py::str, py::str>> HttpHeadersToPython(
+    const net::HttpHeaders& headers) {
   py::list result;
   for (const auto& [name, value] : headers) {
     result.append(py::make_tuple(name, value));
@@ -146,9 +148,9 @@ void* CheckedImpl(void* pointer) {
   return pointer;
 }
 
-py::object ImplCapsule(void* pointer, const char* name) {
+py::typing::Optional<py::capsule> ImplCapsule(void* pointer, const char* name) {
   if (CheckedImpl(pointer) == nullptr) {
-    return py::none();
+    return py::typing::Optional<py::capsule>(py::none());
   }
   return py::capsule(pointer, name);
 }
@@ -193,7 +195,7 @@ void BindHttp(py::module_& module) {
       .def(
           "read",
           [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
-            return FutureToPythonConverted(
+            return FutureToPythonAs<py::typing::Optional<py::bytes>>(
                 self->Read(),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
@@ -218,7 +220,8 @@ void BindHttp(py::module_& module) {
           "Future that completes when the request body stream is done.")
       .def(
           "cancel",
-          [](net::Http2RequestBodyStream& self, const py::object& status) {
+          [](net::Http2RequestBodyStream& self,
+             const py::typing::Optional<NativeStatus>& status) {
             std::optional<absl::Status> converted;
             if (!status.is_none()) {
               converted = StatusFromPython(status);
@@ -237,7 +240,9 @@ void BindHttp(py::module_& module) {
   py::class_<net::HttpRequest>(module, "HttpRequest")
       .def(py::init([](std::string_view method, std::string_view scheme,
                        std::string_view authority, std::string_view path,
-                       const py::object& headers, const py::object& body) {
+                       const py::typing::Optional<py::typing::Iterable<
+                           py::typing::Tuple<py::str, py::str>>>& headers,
+                       const py::object& body) {
              return net::HttpRequest{
                  .method = std::string(method),
                  .protocol = {},
@@ -271,7 +276,9 @@ void BindHttp(py::module_& module) {
             return HttpHeadersToPython(request.headers);
           },
           [](net::HttpRequest& request,
-             const py::object& headers) -> absl::Status {
+             const py::typing::Optional<
+                 py::typing::Iterable<py::typing::Tuple<py::str, py::str>>>&
+                 headers) -> absl::Status {
             ABSL_ASSIGN_OR_RETURN(request.headers,
                                   HttpHeadersFromPython(headers));
             return absl::OkStatus();
@@ -290,7 +297,9 @@ void BindHttp(py::module_& module) {
           "The request body as bytes.");
 
   py::class_<net::HttpResponseHead>(module, "HttpResponseHead")
-      .def(py::init([](int status, const py::object& headers) {
+      .def(py::init([](int status,
+                       const py::typing::Optional<py::typing::Iterable<
+                           py::typing::Tuple<py::str, py::str>>>& headers) {
              return net::HttpResponseHead{
                  .status = status,
                  .headers = ValueOrThrow(HttpHeadersFromPython(headers))};
@@ -304,7 +313,9 @@ void BindHttp(py::module_& module) {
           [](const net::HttpResponseHead& response) {
             return HttpHeadersToPython(response.headers);
           },
-          [](net::HttpResponseHead& response, const py::object& headers) {
+          [](net::HttpResponseHead& response,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
             response.headers = ValueOrThrow(HttpHeadersFromPython(headers));
           },
           "The response headers as a list of (name, value) pairs.");
@@ -381,8 +392,7 @@ void BindHttp(py::module_& module) {
                      "Serve/accept cleartext prior-knowledge HTTP/2.")
       .def_readwrite("enable_http1", &net::Http2Options::enable_http1,
                      "Serve/accept HTTP/1.1 (ALPN and/or cleartext).")
-      .def_readwrite("client_preference",
-                     &net::Http2Options::client_preference,
+      .def_readwrite("client_preference", &net::Http2Options::client_preference,
                      "Client protocol preference and cleartext attempt order.")
       .def_readwrite("client_allow_downgrade",
                      &net::Http2Options::client_allow_downgrade,
@@ -390,10 +400,11 @@ void BindHttp(py::module_& module) {
                      "protocol when its first attempt fails.")
       .def_property(
           "deadline",
-          [](const net::Http2Options& options) {
-            return TimeToPython(options.deadline);
+          [](const net::Http2Options& options) -> NativeTime {
+            return NativeTime(options.deadline);
           },
-          [](net::Http2Options& options, const py::object& deadline) {
+          [](net::Http2Options& options,
+             const py::typing::Optional<NativeTime>& deadline) {
             options.deadline = ValueOrThrow(TimeFromPython(deadline));
           },
           "The operation deadline.")
@@ -414,7 +425,7 @@ void BindHttp(py::module_& module) {
       .def(
           "read",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
-            return FutureToPythonConverted(
+            return FutureToPythonAs<py::typing::Optional<py::bytes>>(
                 self->Read(),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
@@ -439,7 +450,8 @@ void BindHttp(py::module_& module) {
           "Future that completes when the response stream is done.")
       .def(
           "cancel",
-          [](net::Http2ResponseStream& self, const py::object& status) {
+          [](net::Http2ResponseStream& self,
+             const py::typing::Optional<NativeStatus>& status) {
             std::optional<absl::Status> converted;
             if (!status.is_none()) {
               converted = StatusFromPython(status);
@@ -464,7 +476,7 @@ void BindHttp(py::module_& module) {
       .def(
           "read",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
-            return FutureToPythonConverted(
+            return FutureToPythonAs<py::typing::Optional<py::bytes>>(
                 self->Read(),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
@@ -492,7 +504,8 @@ void BindHttp(py::module_& module) {
           "Signal the end of the request side of the duplex stream.")
       .def(
           "abort",
-          [](net::Http2DuplexStream& self, const py::object& status) {
+          [](net::Http2DuplexStream& self,
+             const py::typing::Optional<NativeStatus>& status) {
             std::optional<absl::Status> converted;
             if (!status.is_none()) {
               converted = StatusFromPython(status);
@@ -523,7 +536,8 @@ void BindHttp(py::module_& module) {
       .def(
           "send_headers",
           [](net::Http2ResponseWriter& self, int status,
-             const py::object& headers) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
             net::HttpHeaders converted =
                 ValueOrThrow(HttpHeadersFromPython(headers));
             CallWithoutGil(
@@ -551,7 +565,9 @@ void BindHttp(py::module_& module) {
       .def(
           "send_response",
           [](net::Http2ResponseWriter& self, int status,
-             const py::object& headers, const py::object& body) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers,
+             const py::object& body) {
             net::HttpHeaders converted_headers =
                 ValueOrThrow(HttpHeadersFromPython(headers));
             std::string converted_body = ValueOrThrow(HttpBodyFromPython(body));
@@ -567,7 +583,8 @@ void BindHttp(py::module_& module) {
           py::arg("body") = py::bytes())
       .def(
           "abort",
-          [](net::Http2ResponseWriter& self, const py::handle& status) {
+          [](net::Http2ResponseWriter& self,
+             const PyLike<NativeStatus>& status) {
             absl::Status converted = StatusFromPython(status);
             CallWithoutGil([&self, converted = std::move(converted)]() mutable {
               return self.Abort(std::move(converted));
@@ -653,8 +670,9 @@ void BindHttp(py::module_& module) {
       .def(
           "request_stream",
           [](net::Http2Client& self, std::string method, std::string path,
-             const py::object& headers, const py::object& body,
-             std::string scheme) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers,
+             const py::object& body, std::string scheme) {
             // Convert Python arguments before releasing the GIL; the call then
             // blocks on the libuv loop and must not hold the GIL (see
             // ValueWithoutGil).
@@ -673,8 +691,9 @@ void BindHttp(py::module_& module) {
       .def(
           "request",
           [](net::Http2Client& self, std::string method, std::string path,
-             const py::object& headers, const py::object& body,
-             std::string scheme) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers,
+             const py::object& body, std::string scheme) {
             return FutureToPython(self.Request(
                 std::move(method), std::move(path),
                 ValueOrThrow(HttpHeadersFromPython(headers)),
@@ -686,7 +705,9 @@ void BindHttp(py::module_& module) {
       .def(
           "extended_connect",
           [](net::Http2Client& self, std::string protocol, std::string path,
-             const py::object& headers, std::string scheme) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers,
+             std::string scheme) {
             // Convert headers under the GIL, then block on the libuv loop with
             // the GIL released so the uv thread can take it (see
             // ValueWithoutGil); otherwise the loop deadlocks against this call.
@@ -760,7 +781,9 @@ void BindHttp(py::module_& module) {
           "Return the HTTP headers carried on the underlying SSE request.")
       .def(
           "get_http_response_headers",
-          [](const net::HttpSseWireStream& self) -> py::object {
+          [](const net::HttpSseWireStream& self)
+              -> py::typing::Optional<
+                  py::typing::List<py::typing::Tuple<py::str, py::str>>> {
             const std::optional<net::HttpHeaders> headers =
                 self.GetHttpResponseHeaders();
             if (!headers.has_value()) {
@@ -774,7 +797,9 @@ void BindHttp(py::module_& module) {
           "wait_for_http_headers() before relying on this value.")
       .def(
           "set_http_request_headers",
-          [](net::HttpSseWireStream& self, const py::object& headers) {
+          [](net::HttpSseWireStream& self,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
             ThrowIfNotOk(self.SetHttpRequestHeaders(
                 ValueOrThrow(HttpHeadersFromPython(headers))));
           },
@@ -784,7 +809,9 @@ void BindHttp(py::module_& module) {
           py::arg("headers"))
       .def(
           "set_http_response_headers",
-          [](net::HttpSseWireStream& self, const py::object& headers) {
+          [](net::HttpSseWireStream& self,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
             ThrowIfNotOk(self.SetHttpResponseHeaders(
                 ValueOrThrow(HttpHeadersFromPython(headers))));
           },
@@ -804,13 +831,15 @@ void BindHttp(py::module_& module) {
 
   py::classh<net::HttpSseClientWireStream, net::HttpSseWireStream>(
       module, "HttpSseClientWireStream")
-      .def(py::init([](std::string url, net::HttpSseOptions options,
-                       std::shared_ptr<net::Http2Client> client,
-                       const py::object& request_headers) {
-             return ValueOrThrow(net::HttpSseClientWireStream::Create(
-                 std::move(url), std::move(options), std::move(client),
-                 ValueOrThrow(HttpHeadersFromPython(request_headers))));
-           }),
+      .def(py::init(
+               [](std::string url, net::HttpSseOptions options,
+                  std::shared_ptr<net::Http2Client> client,
+                  const py::typing::Optional<py::typing::Iterable<
+                      py::typing::Tuple<py::str, py::str>>>& request_headers) {
+                 return ValueOrThrow(net::HttpSseClientWireStream::Create(
+                     std::move(url), std::move(options), std::move(client),
+                     ValueOrThrow(HttpHeadersFromPython(request_headers))));
+               }),
            "Construct a client-side SSE wire stream that connects to the "
            "given URL. This is the transport an A11 agent uses to exchange "
            "messages with a remote service over HTTP/2 Server-Sent Events; "
@@ -822,7 +851,8 @@ void BindHttp(py::module_& module) {
           "create",
           [](std::string url, net::HttpSseOptions options,
              std::shared_ptr<net::Http2Client> client,
-             const py::object& request_headers) {
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& request_headers) {
             return ValueOrThrow(net::HttpSseClientWireStream::Create(
                 std::move(url), std::move(options), std::move(client),
                 ValueOrThrow(HttpHeadersFromPython(request_headers))));
@@ -900,7 +930,8 @@ void BindHttp(py::module_& module) {
   module.attr("HttpSseWireStreamServer") = module.attr("HttpSseServer");
   module.def(
       "get_http_header",
-      [](const py::object& headers, std::string name) -> py::object {
+      [](const py::typing::List<py::typing::Tuple<py::str, py::str>>& headers,
+         std::string name) -> py::typing::Optional<py::str> {
         std::optional<std::string> value = net::GetHttpHeader(
             ValueOrThrow(HttpHeadersFromPython(headers)), name);
         if (!value.has_value()) {
@@ -912,7 +943,8 @@ void BindHttp(py::module_& module) {
       py::arg("headers"), py::arg("name"));
   module.def(
       "validate_http_headers",
-      [](const py::object& headers) {
+      [](const py::typing::Optional<
+          py::typing::Iterable<py::typing::Tuple<py::str, py::str>>>& headers) {
         ThrowIfNotOk(net::ValidateHttpHeaders(
             ValueOrThrow(HttpHeadersFromPython(headers))));
       },

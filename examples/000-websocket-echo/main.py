@@ -76,8 +76,7 @@ async def main(_argv: Sequence[str]):
 
 
 def sync_main(argv: Sequence[str]):
-    logging.use_absl_handler()
-    logging.set_verbosity(logging.INFO)
+    a11.enable_logging("info")
 
     a11.observability.configure_langfuse_from_env()
 

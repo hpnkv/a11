@@ -19,6 +19,7 @@
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <pybind11_abseil/absl_casters.h>
 #include <pybind11_abseil/no_throw_status.h>
 #include <pybind11_abseil/status_casters.h>
@@ -38,6 +39,17 @@
 #include "python/native_types.h"
 
 namespace a11::python {
+
+/**
+ * What a handler looks like coming back out of an Action or a registry: the
+ * Python coroutine function it was registered with, an opaque handle to a C++
+ * implementation, or nothing at all.
+ */
+class PyActionHandler : public py::object {
+  PYBIND11_OBJECT_DEFAULT(PyActionHandler, object, PyObject_Type)
+  using object::object;
+};
+
 namespace {
 
 template <typename T>
@@ -111,7 +123,7 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
           "Return True when the map has at least one entry.")
       .def(
           "__iter__",
-          [](SchemaMapView<T>& view) {
+          [](SchemaMapView<T>& view) -> py::typing::Iterator<py::str> {
             return SchemaMapToPython(view).attr("__iter__")();
           },
           "Return an iterator over the map's keys.")
@@ -155,28 +167,32 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
       .def(
           "get",
           [](SchemaMapView<T>& view, const std::string& key,
-             const py::object& default_value) -> py::object {
+             const py::typing::Optional<T>& default_value)
+              -> py::typing::Optional<T> {
             const auto found = view.values().find(key);
-            return found == view.values().end() ? default_value
-                                                : py::cast(found->second);
+            if (found == view.values().end()) {
+              return default_value;
+            }
+            return py::typing::Optional<T>(py::cast(found->second));
           },
           "Return the value for the key, or the default if it is absent.",
           py::arg("key"), py::arg("default") = py::none())
       .def(
           "keys",
-          [](SchemaMapView<T>& view) {
+          [](SchemaMapView<T>& view) -> py::typing::Iterable<py::str> {
             return SchemaMapToPython(view).attr("keys")();
           },
           "Return a view of the map's keys.")
       .def(
           "values",
-          [](SchemaMapView<T>& view) {
+          [](SchemaMapView<T>& view) -> py::typing::Iterable<T> {
             return SchemaMapToPython(view).attr("values")();
           },
           "Return a view of the map's values.")
       .def(
           "items",
-          [](SchemaMapView<T>& view) {
+          [](SchemaMapView<T>& view)
+              -> py::typing::Iterable<py::typing::Tuple<py::str, T>> {
             return SchemaMapToPython(view).attr("items")();
           },
           "Return a view of the map's (key, value) pairs.")
@@ -207,7 +223,9 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
           "Remove all entries from the map.")
       .def(
           "copy",
-          [](SchemaMapView<T>& view) { return SchemaMapToPython(view); },
+          [](SchemaMapView<T>& view) -> py::typing::Dict<py::str, T> {
+            return SchemaMapToPython(view);
+          },
           "Return a plain dict copy of the map's entries.")
       .def(
           "__eq__",
@@ -427,7 +445,7 @@ absl::StatusOr<actions::SyncActionHandler> MakeSyncActionHandler(
   });
 }
 
-py::object ActionHandlerToPython(const actions::ActionHandler& handler) {
+PyActionHandler ActionHandlerToPython(const actions::ActionHandler& handler) {
   if (!handler) {
     return py::none();
   }
@@ -488,8 +506,8 @@ py::object PortSchemaTypeInfoToPython(const std::shared_ptr<void>& typeinfo) {
       static_cast<PyObject*>(typeinfo.get()));
 }
 
-py::object StatusObject(const absl::Status& status) {
-  return StatusToPython(status);
+NativeStatus StatusObject(const absl::Status& status) {
+  return NativeStatus(status);
 }
 
 }  // namespace
@@ -523,23 +541,23 @@ void BindActions(py::module_& module) {
   py::class_<actions::ActionPortSchema>(
       module, "ActionPortSchema",
       "Schema describing a single input or output port of an action.")
-      .def(
-          py::init([](std::string name, std::string type,
-                      std::string description, bool required, bool unary,
-                      const py::object& autofills, const py::object& typeinfo) {
-            return ValidateSchema(actions::ActionPortSchema{
-                .name = std::move(name),
-                .type = std::move(type),
-                .description = std::move(description),
-                .required = required,
-                .unary = unary,
-                .autofills = ActionAutofillsFromPython(autofills),
-                .typeinfo = PortSchemaTypeInfoFromPython(typeinfo)});
-          }),
-          "Create a validated port schema.", py::arg("name"), py::arg("type"),
-          py::arg("description") = "", py::arg("required") = false,
-          py::arg("unary") = false, py::arg("autofills") = std::nullopt,
-          py::arg("typeinfo") = py::none())
+      .def(py::init([](std::string name, std::string type,
+                       std::string description, bool required, bool unary,
+                       const py::object& autofills,
+                       const py::typing::Optional<py::type>& typeinfo) {
+             return ValidateSchema(actions::ActionPortSchema{
+                 .name = std::move(name),
+                 .type = std::move(type),
+                 .description = std::move(description),
+                 .required = required,
+                 .unary = unary,
+                 .autofills = ActionAutofillsFromPython(autofills),
+                 .typeinfo = PortSchemaTypeInfoFromPython(typeinfo)});
+           }),
+           "Create a validated port schema.", py::arg("name"), py::arg("type"),
+           py::arg("description") = "", py::arg("required") = false,
+           py::arg("unary") = false, py::arg("autofills") = std::nullopt,
+           py::arg("typeinfo") = py::none())
       .def_readwrite("name", &actions::ActionPortSchema::name,
                      "The port's name.")
       .def_readwrite("type", &actions::ActionPortSchema::type,
@@ -552,7 +570,8 @@ void BindActions(py::module_& module) {
                      "Whether the port carries a single value.")
       .def_property(
           "typeinfo",
-          [](const actions::ActionPortSchema& schema) -> py::object {
+          [](const actions::ActionPortSchema& schema)
+              -> py::typing::Optional<py::type> {
             return PortSchemaTypeInfoToPython(schema.typeinfo);
           },
           [](actions::ActionPortSchema& schema, const py::object& value) {
@@ -561,7 +580,9 @@ void BindActions(py::module_& module) {
           "Optional Python type associated with the port, or None.")
       .def_property(
           "autofills",
-          [](const actions::ActionPortSchema& schema) -> py::object {
+          [](const actions::ActionPortSchema& schema)
+              -> py::typing::Optional<
+                  py::typing::List<py::typing::Optional<data::NodeFragment>>> {
             return py::cast(schema.autofills);
           },
           [](actions::ActionPortSchema& schema, const py::object& value) {
@@ -603,7 +624,8 @@ void BindActions(py::module_& module) {
                      "Human-readable description of the header.")
       .def_property(
           "default",
-          [](const actions::ActionHeaderSchema& schema) -> py::object {
+          [](const actions::ActionHeaderSchema& schema)
+              -> py::typing::Optional<py::bytes> {
             if (!schema.default_value.has_value()) {
               return py::none();
             }
@@ -635,7 +657,8 @@ void BindActions(py::module_& module) {
       .def(
           py::init([](std::string name, std::string description,
                       const py::object& inputs, const py::object& outputs,
-                      const py::object& headers,
+                      const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                          headers,
                       absl::flat_hash_map<std::string, std::string>
                           output_to_json_field) {
             return ValidateSchema(actions::ActionSchema{
@@ -797,7 +820,7 @@ void BindActions(py::module_& module) {
       py::dynamic_attr());
   action
       .def(py::init([](actions::ActionSchema schema, std::string action_id,
-                       const py::object& handler,
+                       const PyLike<PyActionHandler>& handler,
                        std::shared_ptr<nodes::NodeMap> node_map,
                        std::shared_ptr<net::WireStream> stream,
                        std::shared_ptr<service::Session> session,
@@ -859,7 +882,7 @@ void BindActions(py::module_& module) {
       .def(
           "bind_handler",
           [](const std::shared_ptr<actions::Action>& self,
-             const py::object& handler) {
+             const PyLike<PyActionHandler>& handler) {
             return ReturnAction(
                 self,
                 self->BindHandler(ValueOrThrow(MakeActionHandler(handler))));
@@ -1108,7 +1131,8 @@ Examples:
       .def(
           "call",
           [](const std::shared_ptr<actions::Action>& self,
-             const py::object& headers) {
+             const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                 headers) {
             absl::StatusOr<data::ByteMap> converted =
                 ByteMapFromPython(headers);
             if (!converted.ok()) {
@@ -1135,7 +1159,7 @@ Examples:
       .def(
           "wait_for_dispatch",
           [](const std::shared_ptr<actions::Action>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -1149,7 +1173,7 @@ Examples:
       .def(
           "wait",
           [](const std::shared_ptr<actions::Action>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -1236,7 +1260,8 @@ Examples:
           "Return the action's completion status.")
       .def(
           "get_dispatch_status",
-          [](const actions::Action& self) -> py::object {
+          [](const actions::Action& self)
+              -> py::typing::Optional<NativeStatus> {
             std::optional<absl::Status> status = self.GetDispatchStatus();
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
@@ -1250,7 +1275,8 @@ Examples:
       .def(
           "register",
           [](actions::ActionRegistry& self, std::string name,
-             actions::ActionSchema schema, const py::object& handler) {
+             actions::ActionSchema schema,
+             const PyLike<PyActionHandler>& handler) {
             ThrowIfNotOk(
                 self.Register(std::move(name), std::move(schema),
                               ValueOrThrow(MakeActionHandler(handler))));
@@ -1269,7 +1295,8 @@ Examples:
       .def(
           "register_sync",
           [](actions::ActionRegistry& self, std::string name,
-             actions::ActionSchema schema, const py::object& handler) {
+             actions::ActionSchema schema,
+             const PyLike<PyActionHandler>& handler) {
             ThrowIfNotOk(self.RegisterSync(
                 std::move(name), std::move(schema),
                 ValueOrThrow(MakeSyncActionHandler(handler))));
@@ -1344,7 +1371,7 @@ Examples:
 
   module.def(
       "status_to_chunk",
-      [](const py::handle& status, bool closing) {
+      [](const PyLike<NativeStatus>& status, bool closing) {
         return ValueOrThrow(
             data::MakeStatusChunk(StatusFromPython(status), closing));
       },
@@ -1354,8 +1381,8 @@ Examples:
       py::arg("status"), py::arg("closing") = false);
   module.def(
       "status_from_chunk",
-      [](const data::Chunk& chunk) {
-        return StatusToPython(ValueOrThrow(actions::StatusFromChunk(chunk)));
+      [](const data::Chunk& chunk) -> NativeStatus {
+        return NativeStatus(ValueOrThrow(actions::StatusFromChunk(chunk)));
       },
       "Decode an absl Status from a data chunk.", py::arg("chunk"));
   module.def("is_status_chunk", &actions::IsStatusChunk,
@@ -1382,3 +1409,17 @@ Examples:
 }
 
 }  // namespace a11::python
+
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
+
+// ActionHandler is spelled out by the stub generator; NativeActionHandler is
+// the bound class in this module.
+template <>
+struct handle_type_name<a11::python::PyActionHandler> {
+  static constexpr auto name =
+      const_name("ActionHandler | NativeActionHandler | None");
+};
+
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)

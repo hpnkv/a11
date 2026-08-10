@@ -15,7 +15,7 @@ from a11.sdk.llm_tools import runner
 
 
 async def get_weather(action: a11.Action):
-    location = await action["location"].consume()
+    location = await action["location"].consume(str)
     await action["report"].put(f"It is 22°C and sunny in {location}.")
     await action["report"].drain_and_close()
 

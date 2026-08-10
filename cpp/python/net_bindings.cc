@@ -17,6 +17,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <pybind11_abseil/no_throw_status.h>
 #include <pybind11_abseil/status_casters.h>
 
@@ -423,9 +424,9 @@ class PyWireStream : public net::WireStream,
   mutable absl::Status override_status_;
 };
 
-py::object StartStream(const std::shared_ptr<net::WireStream>& stream,
-                       bool accept, const py::object& on_message,
-                       const py::object& on_done) {
+PyFuture<py::none> StartStream(const std::shared_ptr<net::WireStream>& stream,
+                               bool accept, const py::object& on_message,
+                               const py::object& on_done) {
   absl::StatusOr<std::pair<net::OnMessage, net::OnDone>> callbacks =
       MakeStreamCallbacks(on_message, on_done);
   if (!callbacks.ok()) {
@@ -442,9 +443,9 @@ py::object StartStream(const std::shared_ptr<net::WireStream>& stream,
   return FutureToPython(std::move(task));
 }
 
-py::object VoidPointer(void* pointer, const char* name) {
+py::typing::Optional<py::capsule> VoidPointer(void* pointer, const char* name) {
   if (pointer == nullptr) {
-    return py::none();
+    return py::typing::Optional<py::capsule>(py::none());
   }
   return py::capsule(pointer, name);
 }
@@ -453,39 +454,42 @@ py::object VoidPointer(void* pointer, const char* name) {
 
 void BindNet(py::module_& module) {
   py::class_<net::WireStreamOptions>(module, "WireStreamOptions")
-      .def(
-          py::init([](const py::handle& max_buffered_incoming_messages,
-                      const py::handle& max_single_message_size,
-                      const py::handle& max_buffered_incoming_bytes,
-                      const py::handle& message_timeout_millis,
-                      const py::handle& deadline) {
-            net::WireStreamOptions options{
-                .max_buffered_incoming_messages =
-                    SizeOption(max_buffered_incoming_messages, 1024,
-                               "max_buffered_incoming_messages"),
-                .max_single_message_size = SizeOption(
-                    max_single_message_size, net::kMaxSingleMessageSize,
-                    "max_single_message_size"),
-                .max_buffered_incoming_bytes =
-                    SizeOption(max_buffered_incoming_bytes,
-                               std::numeric_limits<size_t>::max(),
-                               "max_buffered_incoming_bytes"),
-                .message_timeout = MessageTimeoutOption(message_timeout_millis),
-                .deadline = ValueOrThrow(TimeFromPython(deadline)),
-            };
-            ValidateWireStreamOptions(options);
-            return options;
-          }),
-          "Construct wire-stream options controlling buffering and timeouts "
-          "for "
-          "an agent stream. All arguments are keyword-friendly and validated "
-          "on "
-          "construction.",
-          py::arg("max_buffered_incoming_messages") = 100,
-          py::arg("max_single_message_size") = net::kMaxSingleMessageSize,
-          py::arg("max_buffered_incoming_bytes") = 32 * 1024 * 1024,
-          py::arg("message_timeout_millis") = py::none(),
-          py::arg("deadline") = py::none())
+      .def(py::init(
+               [](const py::typing::Optional<py::int_>&
+                      max_buffered_incoming_messages,
+                  const py::typing::Optional<py::int_>& max_single_message_size,
+                  const py::typing::Optional<py::int_>&
+                      max_buffered_incoming_bytes,
+                  const py::handle& message_timeout_millis,
+                  const py::typing::Optional<NativeTime>& deadline) {
+                 net::WireStreamOptions options{
+                     .max_buffered_incoming_messages =
+                         SizeOption(max_buffered_incoming_messages, 1024,
+                                    "max_buffered_incoming_messages"),
+                     .max_single_message_size = SizeOption(
+                         max_single_message_size, net::kMaxSingleMessageSize,
+                         "max_single_message_size"),
+                     .max_buffered_incoming_bytes =
+                         SizeOption(max_buffered_incoming_bytes,
+                                    std::numeric_limits<size_t>::max(),
+                                    "max_buffered_incoming_bytes"),
+                     .message_timeout =
+                         MessageTimeoutOption(message_timeout_millis),
+                     .deadline = ValueOrThrow(TimeFromPython(deadline)),
+                 };
+                 ValidateWireStreamOptions(options);
+                 return options;
+               }),
+           "Construct wire-stream options controlling buffering and timeouts "
+           "for "
+           "an agent stream. All arguments are keyword-friendly and validated "
+           "on "
+           "construction.",
+           py::arg("max_buffered_incoming_messages") = 100,
+           py::arg("max_single_message_size") = net::kMaxSingleMessageSize,
+           py::arg("max_buffered_incoming_bytes") = 32 * 1024 * 1024,
+           py::arg("message_timeout_millis") = py::none(),
+           py::arg("deadline") = py::none())
       .def_readwrite("max_buffered_incoming_messages",
                      &net::WireStreamOptions::max_buffered_incoming_messages,
                      "Maximum number of inbound messages buffered before "
@@ -499,8 +503,8 @@ void BindNet(py::module_& module) {
                      "Maximum size, in bytes, of a single wire message.")
       .def_property(
           "message_timeout",
-          [](const net::WireStreamOptions& options) {
-            return DurationToPython(options.message_timeout);
+          [](const net::WireStreamOptions& options) -> NativeDuration {
+            return NativeDuration(options.message_timeout);
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.message_timeout = MessageTimeoutOption(value);
@@ -508,8 +512,8 @@ void BindNet(py::module_& module) {
           "Per-message inactivity timeout as a duration.")
       .def_property(
           "message_timeout_millis",
-          [](const net::WireStreamOptions& options) {
-            return DurationToPython(options.message_timeout);
+          [](const net::WireStreamOptions& options) -> NativeDuration {
+            return NativeDuration(options.message_timeout);
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.message_timeout = MessageTimeoutOption(value);
@@ -517,8 +521,8 @@ void BindNet(py::module_& module) {
           "Per-message inactivity timeout expressed in milliseconds.")
       .def_property(
           "deadline",
-          [](const net::WireStreamOptions& options) {
-            return TimeToPython(options.deadline);
+          [](const net::WireStreamOptions& options) -> NativeTime {
+            return NativeTime(options.deadline);
           },
           [](net::WireStreamOptions& options, const py::object& value) {
             options.deadline = ValueOrThrow(TimeFromPython(value));
@@ -570,7 +574,9 @@ Examples:
       .def(
           "start",
           [](const std::shared_ptr<net::WireStream>& self,
-             const py::object& on_message, const py::object& on_done) {
+             const py::typing::Callable<py::object(
+                 py::typing::Optional<data::WireMessage>)>& on_message,
+             const py::typing::Callable<py::object()>& on_done) {
             return StartStream(self, false, on_message, on_done);
           },
           R"doc(Begin driving the stream as the initiating side, delivering inbound messages to `on_message` and completion to `on_done`. Callbacks are awaited as data arrives.
@@ -586,7 +592,9 @@ Examples:
       .def(
           "accept",
           [](const std::shared_ptr<net::WireStream>& self,
-             const py::object& on_message, const py::object& on_done) {
+             const py::typing::Callable<py::object(
+                 py::typing::Optional<data::WireMessage>)>& on_message,
+             const py::typing::Callable<py::object()>& on_done) {
             return StartStream(self, true, on_message, on_done);
           },
           "Begin driving the stream as the responding (server) side, "
@@ -600,7 +608,8 @@ Examples:
       .def(
           "half_close",
           [](const std::shared_ptr<net::WireStream>& self,
-             const py::object& trailers) {
+             const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                 trailers) {
             absl::StatusOr<data::ByteMap> converted =
                 ByteMapFromPython(trailers);
             if (!converted.ok()) {
@@ -636,7 +645,7 @@ Examples:
 )doc")
       .def(
           "abort",
-          [](net::WireStream& self, const py::handle& status) {
+          [](net::WireStream& self, const PyLike<NativeStatus>& status) {
             CheckStatus(self.Abort(StatusFromPython(status)));
           },
           R"doc(Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
@@ -655,7 +664,7 @@ Examples:
       .def(
           "set_deadline",
           [](const std::shared_ptr<net::WireStream>& self,
-             const py::object& deadline) {
+             const py::typing::Optional<NativeTime>& deadline) {
             absl::StatusOr<absl::Time> converted = TimeFromPython(deadline);
             if (!converted.ok()) {
               ThrowStatus(converted.status());
@@ -667,15 +676,15 @@ Examples:
           py::arg("deadline") = py::none())
       .def_property_readonly(
           "deadline",
-          [](const net::WireStream& self) {
-            return TimeToPython(self.deadline());
+          [](const net::WireStream& self) -> NativeTime {
+            return NativeTime(self.deadline());
           },
           "The stream's current absolute deadline, after which it is "
           "automatically aborted.")
       .def(
           "get_status",
-          [](const net::WireStream& self) {
-            return StatusToPython(self.GetStatus());
+          [](const net::WireStream& self) -> NativeStatus {
+            return NativeStatus(self.GetStatus());
           },
           "Return the stream's terminal status once it has finished, or OK "
           "while it is still active. Inspect this after the stream completes "
@@ -683,7 +692,8 @@ Examples:
           "learn whether the agent exchange succeeded or failed.")
       .def(
           "get_trailers",
-          [](const net::WireStream& self) -> py::object {
+          [](const net::WireStream& self)
+              -> py::typing::Optional<py::typing::Dict<py::str, py::bytes>> {
             std::optional<data::ByteMap> trailers = self.GetTrailers();
             if (!trailers.has_value()) {
               return py::none();
@@ -782,7 +792,7 @@ Examples:
       .def(
           "receive",
           [](const std::shared_ptr<net::WireStreamWithRecv>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {

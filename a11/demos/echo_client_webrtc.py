@@ -106,8 +106,7 @@ async def run(server_identity: str, signalling_url: str) -> None:
 
 
 def main() -> None:
-    logging.use_absl_handler()
-    logging.set_verbosity(logging.INFO)
+    a11.enable_logging("info")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "server_identity", help="Identity of the WebRTC peer to dial"

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/data/json.h"
 #include "a11/data/serialization.h"
@@ -591,7 +592,7 @@ void BindData(py::module_& module) {
           "Return the number of entries in the mapping.")
       .def(
           "__iter__",
-          [](const ByteMapView& value) {
+          [](const ByteMapView& value) -> py::typing::Iterator<py::str> {
             return ByteMapToPython(value.values()).attr("__iter__")();
           },
           "Return an iterator over the keys.")
@@ -632,30 +633,33 @@ void BindData(py::module_& module) {
           "Delete the entry with the given key.", py::arg("key"))
       .def(
           "keys",
-          [](const ByteMapView& value) {
+          [](const ByteMapView& value) -> py::typing::Iterable<py::str> {
             return ByteMapToPython(value.values()).attr("keys")();
           },
           "Return a view of the mapping's keys.")
       .def(
           "values",
-          [](const ByteMapView& value) {
+          [](const ByteMapView& value) -> py::typing::Iterable<py::bytes> {
             return ByteMapToPython(value.values()).attr("values")();
           },
           "Return a view of the mapping's values.")
       .def(
           "items",
-          [](const ByteMapView& value) {
+          [](const ByteMapView& value)
+              -> py::typing::Iterable<py::typing::Tuple<py::str, py::bytes>> {
             return ByteMapToPython(value.values()).attr("items")();
           },
           "Return a view of the mapping's key/value pairs.")
       .def(
           "get",
           [](const ByteMapView& value, const std::string& key,
-             const py::object& default_value) -> py::object {
+             const py::typing::Optional<py::bytes>& default_value)
+              -> py::typing::Optional<py::bytes> {
             const auto found = value.values().find(key);
-            return found == value.values().end()
-                       ? default_value
-                       : py::object(py::bytes(found->second));
+            if (found == value.values().end()) {
+              return default_value;
+            }
+            return py::typing::Optional<py::bytes>(py::bytes(found->second));
           },
           "Return the bytes for a key, or the default if it is absent.",
           py::arg("key"), py::arg("default") = py::none())
@@ -721,7 +725,8 @@ void BindData(py::module_& module) {
                      "MIME type describing the chunk payload.")
       .def_property(
           "timestamp",
-          [](const data::ChunkMetadata& value) {
+          [](const data::ChunkMetadata& value)
+              -> py::typing::Optional<NativeTime> {
             return TimestampToPython(value.timestamp);
           },
           [](data::ChunkMetadata& value, const py::object& timestamp) {
@@ -772,28 +777,29 @@ void BindData(py::module_& module) {
       module, "Chunk", "A unit of node data with optional metadata and ref.",
       py::dynamic_attr());
   chunk
-      .def(py::init([](const py::object& metadata, std::string ref,
-                       const py::handle& raw_data) {
-             std::optional<data::ChunkMetadata> converted_metadata;
-             if (!metadata.is_none()) {
-               converted_metadata = metadata.cast<data::ChunkMetadata>();
-             }
-             const std::string mimetype = converted_metadata.has_value()
-                                              ? converted_metadata->mimetype
-                                              : std::string();
-             data::Chunk result{
-                 .metadata = std::move(converted_metadata),
-                 .ref = std::move(ref),
-                 .data = ChunkDataFromPython(raw_data, mimetype)};
-             ValidateOrThrow(result);
-             return result;
-           }),
-           "Create a chunk from optional metadata, a ref, and payload data.",
-           py::arg("metadata") = py::none(), py::arg("ref") = "",
-           py::arg("data") = py::bytes())
+      .def(
+          py::init([](const py::object& metadata, std::string ref,
+                      const py::typing::Union<py::str, py::bytes, py::bytearray,
+                                              py::memoryview>& raw_data) {
+            std::optional<data::ChunkMetadata> converted_metadata;
+            if (!metadata.is_none()) {
+              converted_metadata = metadata.cast<data::ChunkMetadata>();
+            }
+            const std::string mimetype = converted_metadata.has_value()
+                                             ? converted_metadata->mimetype
+                                             : std::string();
+            data::Chunk result{.metadata = std::move(converted_metadata),
+                               .ref = std::move(ref),
+                               .data = ChunkDataFromPython(raw_data, mimetype)};
+            ValidateOrThrow(result);
+            return result;
+          }),
+          "Create a chunk from optional metadata, a ref, and payload data.",
+          py::arg("metadata") = py::none(), py::arg("ref") = "",
+          py::arg("data") = py::bytes())
       .def_property(
           "metadata",
-          [](data::Chunk& value) -> py::object {
+          [](data::Chunk& value) -> py::typing::Optional<data::ChunkMetadata> {
             if (!value.metadata.has_value()) {
               return py::none();
             }
@@ -814,8 +820,12 @@ void BindData(py::module_& module) {
                      "Reference identifying the chunk's stored payload.")
       .def_property(
           "data",
-          [](const data::Chunk& value) { return py::bytes(value.data); },
-          [](data::Chunk& value, const py::handle& raw_data) {
+          [](const data::Chunk& value) -> py::bytes {
+            return py::bytes(value.data);
+          },
+          [](data::Chunk& value,
+             const py::typing::Union<py::str, py::bytes, py::bytearray,
+                                     py::memoryview>& raw_data) {
             value.data = ChunkDataFromPython(raw_data, value.GetMimetype());
             ValidateOrThrow(value);
           },
@@ -839,7 +849,8 @@ void BindData(py::module_& module) {
       module, "NodeRef", "Reference to a byte range of another logical node.",
       py::dynamic_attr());
   node_ref
-      .def(py::init([](std::string id, const py::handle& offset,
+      .def(py::init([](std::string id,
+                       const py::typing::Optional<py::int_>& offset,
                        const py::handle& length) {
              data::NodeRef result{
                  .id = std::move(id),
@@ -872,7 +883,8 @@ void BindData(py::module_& module) {
       py::dynamic_attr());
   fragment
       .def(py::init([](const py::object& value, std::string id,
-                       const py::handle& seq, bool continued) {
+                       const py::typing::Optional<py::int_>& seq,
+                       bool continued) {
              std::variant<data::Chunk, data::NodeRef> converted;
              if (py::isinstance<data::Chunk>(value)) {
                converted = value.cast<data::Chunk>();
@@ -896,7 +908,8 @@ void BindData(py::module_& module) {
                      "Identifier of the logical node this fragment belongs to.")
       .def_property(
           "data",
-          [](data::NodeFragment& value) -> py::object {
+          [](data::NodeFragment& value)
+              -> py::typing::Union<data::Chunk, data::NodeRef> {
             if (auto* inner = std::get_if<data::Chunk>(&value.data)) {
               return py::cast(
                   inner, py::return_value_policy::reference_internal,
@@ -972,22 +985,24 @@ void BindData(py::module_& module) {
       "A message invoking a named action with input and output ports.",
       py::dynamic_attr());
   action
-      .def(py::init([](std::string id, std::string name,
-                       const py::object& inputs, const py::object& outputs,
-                       const py::object& headers) {
-             data::ActionMessage result{
-                 .id = std::move(id),
-                 .name = std::move(name),
-                 .inputs = VectorFromPython<data::Port>(inputs, "inputs"),
-                 .outputs = VectorFromPython<data::Port>(outputs, "outputs"),
-                 .headers = ByteMapValue(headers)};
-             ValidateOrThrow(result);
-             return result;
-           }),
-           "Create an action message from id, name, ports, and headers.",
-           py::arg("id") = "", py::arg("name") = "",
-           py::arg("inputs") = py::list(), py::arg("outputs") = py::list(),
-           py::arg("headers") = py::dict())
+      .def(
+          py::init([](std::string id, std::string name,
+                      const py::object& inputs, const py::object& outputs,
+                      const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                          headers) {
+            data::ActionMessage result{
+                .id = std::move(id),
+                .name = std::move(name),
+                .inputs = VectorFromPython<data::Port>(inputs, "inputs"),
+                .outputs = VectorFromPython<data::Port>(outputs, "outputs"),
+                .headers = ByteMapValue(headers)};
+            ValidateOrThrow(result);
+            return result;
+          }),
+          "Create an action message from id, name, ports, and headers.",
+          py::arg("id") = "", py::arg("name") = "",
+          py::arg("inputs") = py::list(), py::arg("outputs") = py::list(),
+          py::arg("headers") = py::dict())
       .def_readwrite("id", &data::ActionMessage::id,
                      "Identifier of the action invocation.")
       .def_readwrite("name", &data::ActionMessage::name,
@@ -1019,7 +1034,9 @@ void BindData(py::module_& module) {
                 &value.headers,
                 py::cast(&value, py::return_value_policy::reference));
           },
-          [](data::ActionMessage& value, const py::object& headers) {
+          [](data::ActionMessage& value,
+             const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                 headers) {
             value.headers = ByteMapValue(headers);
             ValidateOrThrow(value);
           },
@@ -1037,17 +1054,19 @@ void BindData(py::module_& module) {
       module, "WireMessage",
       "A wire-format message bundling node fragments and actions.",
       py::dynamic_attr());
-  wire.def(py::init([](const py::object& node_fragments,
-                       const py::object& actions, const py::object& headers) {
-             data::WireMessage result{
-                 .node_fragments = VectorFromPython<data::NodeFragment>(
-                     node_fragments, "node_fragments"),
-                 .actions =
-                     VectorFromPython<data::ActionMessage>(actions, "actions"),
-                 .headers = ByteMapValue(headers)};
-             ValidateOrThrow(result);
-             return result;
-           }),
+  wire.def(py::init(
+               [](const py::object& node_fragments, const py::object& actions,
+                  const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                      headers) {
+                 data::WireMessage result{
+                     .node_fragments = VectorFromPython<data::NodeFragment>(
+                         node_fragments, "node_fragments"),
+                     .actions = VectorFromPython<data::ActionMessage>(
+                         actions, "actions"),
+                     .headers = ByteMapValue(headers)};
+                 ValidateOrThrow(result);
+                 return result;
+               }),
            "Create a wire message from node fragments, actions, and headers.",
            py::arg("node_fragments") = py::list(),
            py::arg("actions") = py::list(), py::arg("headers") = py::dict())
@@ -1080,7 +1099,9 @@ void BindData(py::module_& module) {
                 &value.headers,
                 py::cast(&value, py::return_value_policy::reference));
           },
-          [](data::WireMessage& value, const py::object& headers) {
+          [](data::WireMessage& value,
+             const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                 headers) {
             value.headers = ByteMapValue(headers);
             ValidateOrThrow(value);
           },
@@ -1117,7 +1138,7 @@ void BindData(py::module_& module) {
              py::arg("message"));
   module.def(
       "make_half_close_message",
-      [](const py::object& trailers) {
+      [](const py::typing::Optional<PyMapping<py::str, py::bytes>>& trailers) {
         return data::MakeHalfCloseMessage(ByteMapValue(trailers));
       },
       "Build a half-close wire message carrying the given trailers.",

@@ -18,14 +18,88 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
 #include "a11/status.h"
+#include "python/native_types.h"
 
 namespace a11::python {
 
 namespace py = pybind11;
+
+/**
+ * An `asyncio.Future` resolving to @c T.
+ *
+ * Bindings that hand a future back to Python return this rather than a bare
+ * @c py::object, so the generated stub says @c asyncio.Future[T] instead of
+ * @c typing.Any. It carries no behaviour: the object is the one
+ * FutureToPythonConverted() built, and @c T only names its result.
+ */
+template <typename T>
+class PyFuture : public py::object {
+  PYBIND11_OBJECT_DEFAULT(PyFuture, object, PyObject_Type)
+  using object::object;
+};
+
+/**
+ * A @c py::object a signature reports as @c T.
+ *
+ * Naming @c T directly would make pybind convert at the boundary; this only
+ * annotates, so the binding still receives whatever the caller passed and
+ * applies its own coercion. Use it where a parameter accepts several
+ * spellings of one logical type.
+ */
+template <typename T>
+class PyLike : public py::object {
+  PYBIND11_OBJECT_DEFAULT(PyLike, object, PyObject_Type)
+  using object::object;
+};
+
+/**
+ * A read-only mapping parameter, which @c pybind11/typing.h has no wrapper
+ * for. Annotation-only, like PyLike.
+ */
+template <typename K, typename V>
+class PyMapping : public py::object {
+  PYBIND11_OBJECT_DEFAULT(PyMapping, object, PyObject_Type)
+  using object::object;
+};
+
+/**
+ * The `a11.status.StatusCode` enum member a binding hands back.
+ *
+ * The enum itself is written in Python, so pybind has no type to name; this
+ * carries the name into the signature.
+ */
+class PyStatusCode : public py::object {
+  PYBIND11_OBJECT_DEFAULT(PyStatusCode, object, PyObject_Type)
+  using object::object;
+};
+
+namespace future_internal {
+
+// The Python type a Future<T> resolves to, for the annotation.
+template <typename T>
+struct Payload {
+  using type = T;
+};
+
+template <>
+struct Payload<a11::Unit> {
+  using type = py::none;
+};
+
+template <>
+struct Payload<absl::Status> {
+  using type = NativeStatus;
+};
+
+template <typename T>
+using PayloadType = typename Payload<T>::type;
+
+}  // namespace future_internal
 
 // Owns the event loop used by a Python override. Python methods may be invoked
 // by ordinary libuv/libdatachannel threads or by A11 fibers, so they must be
@@ -143,9 +217,19 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   return py_future;
 }
 
+// Wraps a converted future so its Python result type is part of the
+// signature. @c PyPayload must match what @p converter actually returns.
+template <typename PyPayload, typename T, typename Converter>
+PyFuture<PyPayload> FutureToPythonAs(a11::Future<T> future,
+                                     Converter converter) {
+  return PyFuture<PyPayload>(
+      FutureToPythonConverted(std::move(future), std::move(converter)));
+}
+
 template <typename T>
-py::object FutureToPython(a11::Future<T> future) {
-  return FutureToPythonConverted(
+PyFuture<future_internal::PayloadType<T>> FutureToPython(
+    a11::Future<T> future) {
+  return FutureToPythonAs<future_internal::PayloadType<T>>(
       std::move(future), [](const T& value) -> py::object {
         if constexpr (std::is_same_v<T, a11::Unit>) {
           return py::none();
@@ -289,5 +373,35 @@ py::handle DataToPython(const T& value, const char* absl_nonnull class_name) {
 }
 
 }  // namespace a11::python
+
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
+
+// Renders PyFuture<T> as ``asyncio.Future[T]`` in generated signatures.
+template <typename T>
+struct handle_type_name<a11::python::PyFuture<T>> {
+  static constexpr auto name =
+      const_name("asyncio.Future[") + make_caster<T>::name + const_name("]");
+};
+
+template <typename T>
+struct handle_type_name<a11::python::PyLike<T>> {
+  static constexpr auto name = make_caster<T>::name;
+};
+
+template <typename K, typename V>
+struct handle_type_name<a11::python::PyMapping<K, V>> {
+  static constexpr auto name = const_name("collections.abc.Mapping[") +
+                               make_caster<K>::name + const_name(", ") +
+                               make_caster<V>::name + const_name("]");
+};
+
+template <>
+struct handle_type_name<a11::python::PyStatusCode> {
+  static constexpr auto name = const_name("a11.status.StatusCode");
+};
+
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)
 
 #endif  // A11_PYTHON_INTEROP_H_

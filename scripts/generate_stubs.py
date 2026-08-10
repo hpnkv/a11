@@ -92,6 +92,29 @@ def _normalise_protocol_methods(
     return "\n".join(output) + "\n"
 
 
+# Readers whose result is decided by ``obj_type``. Their runtime annotation
+# spells out every possibility; the stub narrows it to ``T | None`` and lets
+# ``T`` default to ``Any``, so ``next(obj_type=Reading)`` is ``Reading | None``
+# and a bare ``next()`` is ``Any | None``.
+_OBJ_TYPE_READERS = ("consume", "next", "next_object")
+
+_OBJ_TYPE_SIGNATURE = re.compile(
+    r"(    async def (?:%s)\(self, obj_type: type\[T\] \| None = None"
+    r"[^\n]*\) -> T) \| typing\.Any \| None:" % "|".join(_OBJ_TYPE_READERS)
+)
+
+
+def _narrow_obj_type_readers(stub: str) -> str:
+    """Tie an ``obj_type``-driven reader's result to the type it was given."""
+    stub, count = _OBJ_TYPE_SIGNATURE.subn(r"\1 | None:", stub)
+    if count != len(_OBJ_TYPE_READERS):
+        raise RuntimeError(
+            f"expected {len(_OBJ_TYPE_READERS)} obj_type readers to narrow, "
+            f"rewrote {count}"
+        )
+    return stub
+
+
 def _normalise_annotations(stub: str) -> str:
     """Resolve facade annotations and raw C++ names in generated output."""
 
@@ -197,13 +220,22 @@ def _normalise_annotations(stub: str) -> str:
     stub = re.sub(r"(?<![.\w])Self\b", "typing.Self", stub)
 
     definitions = (
-        'T = typing.TypeVar("T")\n'
+        # PEP 696 default: a reader called without an ``obj_type`` returns
+        # whatever the chunk's own tag decides, which is ``Any``.
+        'T = typing_extensions.TypeVar("T", default=typing.Any)\n'
         "class _DoneEvent(typing.Protocol):\n"
         "    def is_set(self) -> bool:\n"
         "        ...\n"
         "    async def wait(self) -> bool:\n"
         "        ...\n"
     )
+    if "ActionHandler | NativeActionHandler" in stub:
+        # The Python half of what a handler can be; the bindings name the
+        # native half themselves (see PyActionHandler in actions_bindings.cc).
+        definitions += (
+            "ActionHandler = collections.abc.Callable["
+            '["Action"], collections.abc.Awaitable[None]]\n'
+        )
     if "OnTranscription" in stub:
         definitions += (
             "OnTranscription = collections.abc.Callable["
@@ -225,6 +257,10 @@ def _normalise_annotations(stub: str) -> str:
         )
     if "os.PathLike" in stub:
         stub = stub.replace("import typing\n", "import typing\nimport os\n", 1)
+    if "typing_extensions." in stub or "typing_extensions." in definitions:
+        stub = stub.replace(
+            "import typing\n", "import typing\nimport typing_extensions\n", 1
+        )
 
     unresolved_type = re.search(r"(?:: \.\.\.(?:\s*=)?|-> \.\.\.)", stub)
     if unresolved_type is not None:
@@ -238,6 +274,7 @@ def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
     stub = path.read_text()
     stub = _normalise_protocol_methods(stub, methods)
     stub = _normalise_annotations(stub)
+    stub = _narrow_obj_type_readers(stub)
     mode = black.Mode(
         target_versions={black.TargetVersion.PY311},
         line_length=80,

@@ -14,6 +14,7 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <pybind11_abseil/no_throw_status.h>
 #include <pybind11_abseil/status_casters.h>
 
@@ -159,11 +160,12 @@ class PyChunkStore : public ChunkStore,
 };
 
 template <typename T>
-py::object StoreFuture(a11::Future<T> future) {
+PyFuture<future_internal::PayloadType<T>> StoreFuture(a11::Future<T> future) {
   return FutureToPython(std::move(future));
 }
 
-absl::StatusOr<absl::Time> PythonDeadline(const py::object& deadline) {
+absl::StatusOr<absl::Time> PythonDeadline(
+    const py::typing::Optional<NativeTime>& deadline) {
   return TimeFromPython(deadline);
 }
 
@@ -215,31 +217,33 @@ void ValidateWriterOptions(const stores::ChunkStoreWriterOptions& options) {
 
 void BindStores(py::module_& module) {
   py::class_<stores::ChunkStoreReaderOptions>(module, "ChunkStoreReaderOptions")
-      .def(py::init([](bool ordered, bool pop_chunks,
-                       const py::handle& num_chunks_to_buffer,
-                       const py::handle& offset,
-                       const py::handle& max_chunks_to_read,
-                       bool sticky_mimetype) {
-             constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
-             stores::ChunkStoreReaderOptions options{
-                 .ordered = ordered,
-                 .pop_chunks = pop_chunks,
-                 .num_chunks_to_buffer = UnsignedOption(
-                     num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
-                 .offset = static_cast<std::uint32_t>(UnsignedOption(
-                     offset, std::numeric_limits<std::uint32_t>::max(),
-                     "offset")),
-                 .max_chunks_to_read = OptionalUnsignedOption(
-                     max_chunks_to_read, kMaximum, "max_chunks_to_read"),
-                 .sticky_mimetype = sticky_mimetype};
-             ValidateReaderOptions(options);
-             return options;
-           }),
-           "Construct validated options for a ChunkStoreReader.",
-           py::arg("ordered") = true, py::arg("pop_chunks") = false,
-           py::arg("num_chunks_to_buffer") = 32, py::arg("offset") = 0,
-           py::arg("max_chunks_to_read") = py::none(),
-           py::arg("sticky_mimetype") = false)
+      .def(
+          py::init(
+              [](bool ordered, bool pop_chunks,
+                 const py::typing::Optional<py::int_>& num_chunks_to_buffer,
+                 const py::typing::Optional<py::int_>& offset,
+                 const py::typing::Optional<py::int_>& max_chunks_to_read,
+                 bool sticky_mimetype) {
+                constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
+                stores::ChunkStoreReaderOptions options{
+                    .ordered = ordered,
+                    .pop_chunks = pop_chunks,
+                    .num_chunks_to_buffer = UnsignedOption(
+                        num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
+                    .offset = static_cast<std::uint32_t>(UnsignedOption(
+                        offset, std::numeric_limits<std::uint32_t>::max(),
+                        "offset")),
+                    .max_chunks_to_read = OptionalUnsignedOption(
+                        max_chunks_to_read, kMaximum, "max_chunks_to_read"),
+                    .sticky_mimetype = sticky_mimetype};
+                ValidateReaderOptions(options);
+                return options;
+              }),
+          "Construct validated options for a ChunkStoreReader.",
+          py::arg("ordered") = true, py::arg("pop_chunks") = false,
+          py::arg("num_chunks_to_buffer") = 32, py::arg("offset") = 0,
+          py::arg("max_chunks_to_read") = py::none(),
+          py::arg("sticky_mimetype") = false)
       .def_readwrite("ordered", &stores::ChunkStoreReaderOptions::ordered,
                      "Whether chunks are delivered strictly in sequence order.")
       .def_readwrite("pop_chunks", &stores::ChunkStoreReaderOptions::pop_chunks,
@@ -260,28 +264,31 @@ void BindStores(py::module_& module) {
            "Raise if the options are not internally consistent.");
 
   py::class_<stores::ChunkStoreWriterOptions>(module, "ChunkStoreWriterOptions")
-      .def(py::init([](const py::handle& offset,
-                       const py::handle& max_chunks_to_write_at_once,
-                       const py::handle& num_chunks_to_buffer,
-                       bool sticky_mimetype) {
-             constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
-             stores::ChunkStoreWriterOptions options{
-                 .offset = static_cast<std::uint32_t>(UnsignedOption(
-                     offset, std::numeric_limits<std::uint32_t>::max(),
-                     "offset")),
-                 .max_chunks_to_write_at_once =
-                     UnsignedOption(max_chunks_to_write_at_once, kMaximum,
-                                    "max_chunks_to_write_at_once"),
-                 .num_chunks_to_buffer = OptionalUnsignedOption(
-                     num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
-                 .sticky_mimetype = sticky_mimetype};
-             ValidateWriterOptions(options);
-             return options;
-           }),
-           "Construct validated options for a ChunkStoreWriter.",
-           py::arg("offset") = 0, py::arg("max_chunks_to_write_at_once") = 8,
-           py::arg("num_chunks_to_buffer") = py::none(),
-           py::arg("sticky_mimetype") = false)
+      .def(
+          py::init(
+              [](const py::typing::Optional<py::int_>& offset,
+                 const py::typing::Optional<py::int_>&
+                     max_chunks_to_write_at_once,
+                 const py::typing::Optional<py::int_>& num_chunks_to_buffer,
+                 bool sticky_mimetype) {
+                constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
+                stores::ChunkStoreWriterOptions options{
+                    .offset = static_cast<std::uint32_t>(UnsignedOption(
+                        offset, std::numeric_limits<std::uint32_t>::max(),
+                        "offset")),
+                    .max_chunks_to_write_at_once =
+                        UnsignedOption(max_chunks_to_write_at_once, kMaximum,
+                                       "max_chunks_to_write_at_once"),
+                    .num_chunks_to_buffer = OptionalUnsignedOption(
+                        num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
+                    .sticky_mimetype = sticky_mimetype};
+                ValidateWriterOptions(options);
+                return options;
+              }),
+          "Construct validated options for a ChunkStoreWriter.",
+          py::arg("offset") = 0, py::arg("max_chunks_to_write_at_once") = 8,
+          py::arg("num_chunks_to_buffer") = py::none(),
+          py::arg("sticky_mimetype") = false)
       .def_readwrite("offset", &stores::ChunkStoreWriterOptions::offset,
                      "Sequence number at which writing begins.")
       .def_readwrite(
@@ -306,7 +313,7 @@ void BindStores(py::module_& module) {
       .def(
           "get",
           [](const std::shared_ptr<ChunkStore>& self, std::uint32_t seq,
-             const py::object& deadline) {
+             const py::typing::Optional<NativeTime>& deadline) {
             absl::StatusOr<absl::Time> converted = PythonDeadline(deadline);
             if (!converted.ok()) {
               return StoreFuture(
@@ -327,7 +334,8 @@ Examples:
       .def(
           "get_by_arrival_order",
           [](const std::shared_ptr<ChunkStore>& self,
-             std::uint64_t arrival_order, const py::object& deadline) {
+             std::uint64_t arrival_order,
+             const py::typing::Optional<NativeTime>& deadline) {
             absl::StatusOr<absl::Time> converted = PythonDeadline(deadline);
             if (!converted.ok()) {
               return StoreFuture(
@@ -343,7 +351,7 @@ Examples:
       .def(
           "next",
           [](const std::shared_ptr<ChunkStore>& self,
-             const py::object& deadline, size_t limit) {
+             const py::typing::Optional<NativeTime>& deadline, size_t limit) {
             absl::StatusOr<absl::Time> converted = PythonDeadline(deadline);
             if (!converted.ok()) {
               return StoreFuture(
@@ -411,8 +419,8 @@ Examples:
           "closure: closing the store does not create a final sequence.")
       .def(
           "close_writes_with_status",
-          [](const std::shared_ptr<ChunkStore>& self, const py::handle& status,
-             bool return_existing) {
+          [](const std::shared_ptr<ChunkStore>& self,
+             const PyLike<NativeStatus>& status, bool return_existing) {
             return StoreFuture(self->CloseWritesWithStatus(
                 StatusFromPython(status), return_existing));
           },
@@ -463,20 +471,22 @@ Examples:
   py::class_<stores::RedisChunkStoreOptions>(
       module, "RedisChunkStoreOptions",
       "Key layout and inline-payload policy for RedisChunkStore.")
-      .def(py::init([](std::string key_prefix,
-                       const py::handle& inline_data_threshold) {
-             stores::RedisChunkStoreOptions options{
-                 .key_prefix = std::move(key_prefix),
-                 .inline_data_threshold = static_cast<size_t>(UnsignedOption(
-                     inline_data_threshold, std::numeric_limits<size_t>::max(),
-                     "inline_data_threshold")),
-             };
-             const absl::Status status = options.Validate();
-             if (!status.ok()) {
-               ThrowStatus(status);
-             }
-             return options;
-           }),
+      .def(py::init(
+               [](std::string key_prefix,
+                  const py::typing::Optional<py::int_>& inline_data_threshold) {
+                 stores::RedisChunkStoreOptions options{
+                     .key_prefix = std::move(key_prefix),
+                     .inline_data_threshold = static_cast<size_t>(
+                         UnsignedOption(inline_data_threshold,
+                                        std::numeric_limits<size_t>::max(),
+                                        "inline_data_threshold")),
+                 };
+                 const absl::Status status = options.Validate();
+                 if (!status.ok()) {
+                   ThrowStatus(status);
+                 }
+                 return options;
+               }),
            "Construct validated Redis chunk-store options.",
            py::arg("key_prefix") = "a11:",
            py::arg("inline_data_threshold") = 256 * 1024)
@@ -650,32 +660,34 @@ Examples:
       module, "SQLiteChunkStoreOptions",
       "Payload, ownership and durability policy for SQLiteChunkStore.")
       .def(
-          py::init([](const py::handle& inline_data_threshold,
-                      std::string owner_id,
-                      stores::internal::SqliteSynchronous synchronous,
-                      const py::object& cross_process_poll_interval,
-                      const py::object& blob_grace_period) {
-            stores::SQLiteChunkStoreOptions options;
-            options.inline_data_threshold = static_cast<size_t>(UnsignedOption(
-                inline_data_threshold, std::numeric_limits<size_t>::max(),
-                "inline_data_threshold"));
-            options.owner_id = std::move(owner_id);
-            options.synchronous = synchronous;
-            if (!cross_process_poll_interval.is_none()) {
-              options.cross_process_poll_interval = ValueOrThrow(
-                  DurationFromPython(cross_process_poll_interval,
-                                     "cross_process_poll_interval"));
-            }
-            if (!blob_grace_period.is_none()) {
-              options.blob_grace_period = ValueOrThrow(
-                  DurationFromPython(blob_grace_period, "blob_grace_period"));
-            }
-            const absl::Status status = options.Validate();
-            if (!status.ok()) {
-              ThrowStatus(status);
-            }
-            return options;
-          }),
+          py::init(
+              [](const py::typing::Optional<py::int_>& inline_data_threshold,
+                 std::string owner_id,
+                 stores::internal::SqliteSynchronous synchronous,
+                 const py::object& cross_process_poll_interval,
+                 const py::object& blob_grace_period) {
+                stores::SQLiteChunkStoreOptions options;
+                options.inline_data_threshold = static_cast<size_t>(
+                    UnsignedOption(inline_data_threshold,
+                                   std::numeric_limits<size_t>::max(),
+                                   "inline_data_threshold"));
+                options.owner_id = std::move(owner_id);
+                options.synchronous = synchronous;
+                if (!cross_process_poll_interval.is_none()) {
+                  options.cross_process_poll_interval = ValueOrThrow(
+                      DurationFromPython(cross_process_poll_interval,
+                                         "cross_process_poll_interval"));
+                }
+                if (!blob_grace_period.is_none()) {
+                  options.blob_grace_period = ValueOrThrow(DurationFromPython(
+                      blob_grace_period, "blob_grace_period"));
+                }
+                const absl::Status status = options.Validate();
+                if (!status.ok()) {
+                  ThrowStatus(status);
+                }
+                return options;
+              }),
           "Construct validated SQLite chunk-store options.",
           py::arg("inline_data_threshold") = 128 * 1024,
           py::arg("owner_id") = "",
@@ -693,8 +705,8 @@ Examples:
                      "Durability level applied with PRAGMA synchronous.")
       .def_property(
           "cross_process_poll_interval",
-          [](const stores::SQLiteChunkStoreOptions& self) {
-            return DurationToPython(self.cross_process_poll_interval);
+          [](const stores::SQLiteChunkStoreOptions& self) -> NativeDuration {
+            return NativeDuration(self.cross_process_poll_interval);
           },
           [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
             self.cross_process_poll_interval = ValueOrThrow(
@@ -703,8 +715,8 @@ Examples:
           "How often to notice other processes' commits; zero disables it.")
       .def_property(
           "blob_grace_period",
-          [](const stores::SQLiteChunkStoreOptions& self) {
-            return DurationToPython(self.blob_grace_period);
+          [](const stores::SQLiteChunkStoreOptions& self) -> NativeDuration {
+            return NativeDuration(self.blob_grace_period);
           },
           [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
             self.blob_grace_period =
@@ -769,14 +781,14 @@ Examples:
                     "Monotonic mutation generation.")
       .def_property_readonly(
           "created_at",
-          [](const stores::SQLiteChunkStoreMetadata& self) {
-            return TimeToPython(self.created_at);
+          [](const stores::SQLiteChunkStoreMetadata& self) -> NativeTime {
+            return NativeTime(self.created_at);
           },
           "When the node row was created by its first accepted write.")
       .def_property_readonly(
           "updated_at",
-          [](const stores::SQLiteChunkStoreMetadata& self) {
-            return TimeToPython(self.updated_at);
+          [](const stores::SQLiteChunkStoreMetadata& self) -> NativeTime {
+            return NativeTime(self.updated_at);
           },
           "When the node row was last mutated.");
 
@@ -827,7 +839,7 @@ Examples:
       .def(
           "find_referrers",
           [](const std::shared_ptr<stores::SQLiteChunkStore>& self,
-             const py::handle& limit) {
+             const py::typing::Optional<py::int_>& limit) {
             return StoreFuture(
                 self->FindReferrers(static_cast<size_t>(UnsignedOption(
                     limit, std::numeric_limits<size_t>::max(), "limit"))));
@@ -929,8 +941,8 @@ Examples:
            "resolved and no further chunks are fetched.")
       .def(
           "get_status",
-          [](const stores::ChunkStoreReader& self) {
-            return StatusToPython(self.GetStatus());
+          [](const stores::ChunkStoreReader& self) -> NativeStatus {
+            return NativeStatus(self.GetStatus());
           },
           "Return the reader's current status. An agent can inspect this to "
           "distinguish a healthy stream from one that has failed or ended.")
@@ -944,7 +956,7 @@ Examples:
       .def(
           "next",
           [](const std::shared_ptr<stores::ChunkStoreReader>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -992,7 +1004,8 @@ Examples:
       .def(
           "put_chunk",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
-             data::Chunk chunk, const py::handle& seq, bool final) {
+             data::Chunk chunk, const py::typing::Optional<py::int_>& seq,
+             bool final) {
             const std::optional<std::uint64_t> converted =
                 OptionalUnsignedOption(
                     seq, std::numeric_limits<std::uint32_t>::max(), "seq");
@@ -1014,7 +1027,8 @@ Examples:
       .def(
           "enqueue_chunk",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
-             data::Chunk chunk, const py::handle& seq, bool final) {
+             data::Chunk chunk, const py::typing::Optional<py::int_>& seq,
+             bool final) {
             const std::optional<std::uint64_t> converted =
                 OptionalUnsignedOption(
                     seq, std::numeric_limits<std::uint32_t>::max(), "seq");
@@ -1053,7 +1067,8 @@ Examples:
           py::arg("final") = false)
       .def(
           "get_status",
-          [](const stores::ChunkStoreWriter& self) -> py::object {
+          [](const stores::ChunkStoreWriter& self)
+              -> py::typing::Optional<NativeStatus> {
             std::optional<absl::Status> status = self.GetStatus();
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
@@ -1062,7 +1077,8 @@ Examples:
           "closed or failed.")
       .def(
           "get_abort_status",
-          [](const stores::ChunkStoreWriter& self) -> py::object {
+          [](const stores::ChunkStoreWriter& self)
+              -> py::typing::Optional<NativeStatus> {
             std::optional<absl::Status> status = self.GetAbortStatus();
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
@@ -1090,7 +1106,7 @@ Examples:
       .def(
           "abort_with_status",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
-             const py::handle& status) {
+             const PyLike<NativeStatus>& status) {
             return StoreFuture(self->AbortWithStatus(StatusFromPython(status)));
           },
           "Abort the writer with an error status and await teardown. Readers "

@@ -1,5 +1,11 @@
 from typing import Any, Sequence
 
+from . import logging as logging
+
+# Before the submodules load, so anything they log on the way in is already
+# governed by the importing process's configuration rather than by A11.
+logging._configure_from_context()
+
 from .actions import (
     Action,
     ActionHeaderSchema,
@@ -19,6 +25,13 @@ from .data.types import (
     WireMessage,
 )
 from .data.serialization import get_global_serialization_registry
+from .logging import (
+    disable as disable_logging,
+    enable as enable_logging,
+    get_level as get_log_level,
+    get_logger,
+    set_level as set_log_level,
+)
 from .net.http2 import (
     Http2Client,
     Http2DuplexStream,

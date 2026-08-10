@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/typing.h>
 
 #include "a11/status.h"
 #include "a11/time.h"
@@ -123,7 +124,7 @@ void BindCore(py::module_& module) {
            py::arg("details") = py::list())
       .def_property(
           "code",
-          [](const NativeStatus& status) -> py::object {
+          [](const NativeStatus& status) -> PyStatusCode {
             return py::module_::import("a11.status")
                 .attr("StatusCode")(static_cast<int>(status.value().code()));
           },
@@ -136,7 +137,7 @@ void BindCore(py::module_& module) {
           &SetStatusMessage, "The human-readable status message.")
       .def_property(
           "details",
-          [](const NativeStatus& status) {
+          [](const NativeStatus& status) -> py::list {
             return JsonToPython(StatusDetails(status.value()));
           },
           &SetStatusDetails, "The structured status details, as a list.")
@@ -146,7 +147,7 @@ void BindCore(py::module_& module) {
           "Returns whether the status is OK (no error).")
       .def(
           "_as_dict",
-          [](const NativeStatus& status) {
+          [](const NativeStatus& status) -> py::dict {
             return JsonToPython(ValueOrThrow(StatusToJson(status.value())));
           },
           "Returns the status as a JSON-compatible dict.")
@@ -163,7 +164,7 @@ void BindCore(py::module_& module) {
           py::arg("right"), py::is_operator())
       .def(
           "__str__",
-          [](const NativeStatus& status) {
+          [](const NativeStatus& status) -> py::str {
             py::object code = py::module_::import("a11.status")
                                   .attr("StatusCode")(
                                       static_cast<int>(status.value().code()));
@@ -244,7 +245,8 @@ void BindCore(py::module_& module) {
       .def(
           "float_seconds",
           [](const NativeDuration& duration,
-             const py::object& infinity_value) -> py::object {
+             const py::typing::Optional<py::float_>& infinity_value)
+              -> py::typing::Optional<py::float_> {
             if (duration.value() == absl::InfiniteDuration()) {
               return infinity_value;
             }
@@ -365,7 +367,8 @@ void BindCore(py::module_& module) {
           py::arg("duration"), py::is_operator())
       .def(
           "__sub__",
-          [](const NativeTime& time, const py::object& other) -> py::object {
+          [](const NativeTime& time, const py::object& other)
+              -> py::typing::Union<NativeTime, NativeDuration> {
             if (py::isinstance<NativeDuration>(other)) {
               const auto& duration = other.cast<const NativeDuration&>();
               return py::cast(NativeTime(time.value() - duration.value()));

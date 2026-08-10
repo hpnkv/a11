@@ -15,6 +15,7 @@
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 #include <rtc/configuration.hpp>
 
 #include "a11/concurrency/future.h"
@@ -244,9 +245,10 @@ class PySignallingTransport : public net::SignallingTransport,
   mutable absl::Status read_status_;
 };
 
-py::object PointerCapsule(void* pointer, const char* name) {
+py::typing::Optional<py::capsule> PointerCapsule(void* pointer,
+                                                 const char* name) {
   if (pointer == nullptr) {
-    return py::none();
+    return py::typing::Optional<py::capsule>(py::none());
   }
   return py::capsule(pointer, name);
 }
@@ -333,10 +335,11 @@ void BindWebRtc(py::module_& module) {
                      "Media stream identifier associated with the candidate.")
       .def_property(
           "error",
-          [](const net::SignallingMessage& message) {
-            return StatusToPython(message.error);
+          [](const net::SignallingMessage& message) -> NativeStatus {
+            return NativeStatus(message.error);
           },
-          [](net::SignallingMessage& message, const py::object& status) {
+          [](net::SignallingMessage& message,
+             const PyLike<NativeStatus>& status) {
             message.error = StatusFromPython(status);
           },
           "Error status carried by ERROR messages, or OK otherwise.")
@@ -390,8 +393,8 @@ void BindWebRtc(py::module_& module) {
            "Return whether the transport is currently connected.")
       .def(
           "get_status",
-          [](const net::SignallingTransport& self) {
-            return StatusToPython(self.GetStatus());
+          [](const net::SignallingTransport& self) -> NativeStatus {
+            return NativeStatus(self.GetStatus());
           },
           "Return the current transport status.");
 
@@ -609,11 +612,10 @@ void BindWebRtc(py::module_& module) {
                      "Maximum inbound signalling message size in bytes.")
       .def_property(
           "deadline",
-          [](const net::WebSocketSignallingClientOptions& options) {
-            return TimeToPython(options.deadline);
-          },
+          [](const net::WebSocketSignallingClientOptions& options)
+              -> NativeTime { return NativeTime(options.deadline); },
           [](net::WebSocketSignallingClientOptions& options,
-             const py::object& deadline) {
+             const py::typing::Optional<NativeTime>& deadline) {
             options.deadline = ValueOrThrow(TimeFromPython(deadline));
           },
           "Deadline by which the connection must be established.")

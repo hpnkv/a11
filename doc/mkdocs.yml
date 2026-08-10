@@ -127,6 +127,7 @@ nav:
       - Transports: api/net.md
       - Sessions: api/service.md
       - Data & serialization: api/data.md
+      - Logging: api/logging.md
       - Observability: api/observability.md
       - Status & timing: api/status-timing.md
   - TypeScript reference: typescript.md

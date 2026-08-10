@@ -18,6 +18,7 @@
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -260,8 +261,7 @@ std::vector<AudioActionEntry> AudioActionEntries() {
   }
   const py::module_ native = py::module_::import("a11._native");
   std::vector<AudioActionEntry> entries;
-  const auto add = [&](std::string_view name,
-                       a11::actions::ActionSchema schema,
+  const auto add = [&](std::string_view name, a11::actions::ActionSchema schema,
                        a11::actions::ActionHandler handler) {
     AttachTypeInfo(schema, native);
     entries.push_back(AudioActionEntry{.name = name,
@@ -301,8 +301,7 @@ void RegisterAudioActionsPy(
   }
   for (AudioActionEntry& entry : AudioActionEntries()) {
     if (const absl::Status status =
-            registry->Register(std::string(entry.name),
-                               std::move(entry.schema),
+            registry->Register(std::string(entry.name), std::move(entry.schema),
                                std::move(entry.handler));
         !status.ok()) {
       ThrowStatus(status);
@@ -452,14 +451,14 @@ void BindAudio(py::module_& module) {
                     "Default sample rate in hertz.")
       .def_property_readonly(
           "default_low_input_latency",
-          [](const audio::DeviceInfo& self) {
-            return DurationToPython(self.default_low_input_latency);
+          [](const audio::DeviceInfo& self) -> NativeDuration {
+            return NativeDuration(self.default_low_input_latency);
           },
           "Suggested latency for interactive input use.")
       .def_property_readonly(
           "default_high_input_latency",
-          [](const audio::DeviceInfo& self) {
-            return DurationToPython(self.default_high_input_latency);
+          [](const audio::DeviceInfo& self) -> NativeDuration {
+            return NativeDuration(self.default_high_input_latency);
           },
           "Suggested latency for robust, buffered input use.")
       .def_readonly("is_default_input", &audio::DeviceInfo::is_default_input,
@@ -499,8 +498,8 @@ void BindAudio(py::module_& module) {
           "Sample rate, in hertz, the samples were captured at.")
       .def_property_readonly(
           "end_time",
-          [](const audio::AudioBuffer& self) {
-            return TimeToPython(self.end_time);
+          [](const audio::AudioBuffer& self) -> NativeTime {
+            return NativeTime(self.end_time);
           },
           "Best-effort instant the final sample in this buffer was taken.");
 
@@ -795,8 +794,8 @@ void BindAudio(py::module_& module) {
           "The validated native options used by this recognizer.")
       .def(
           "get_status",
-          [](const audio::SpeechRecognizer& self) {
-            return StatusToPython(self.GetStatus());
+          [](const audio::SpeechRecognizer& self) -> NativeStatus {
+            return NativeStatus(self.GetStatus());
           },
           "Return the current or final recognition status.");
 

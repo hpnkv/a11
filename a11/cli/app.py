@@ -21,8 +21,6 @@ import asyncio
 import dataclasses
 from typing import Awaitable, Callable, Sequence
 
-from absl import logging
-
 _PROG = "a11"
 _DESCRIPTION = "A11 — concurrent action and streaming runtime."
 
@@ -81,10 +79,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Imported here (not at module top) so the command registry — and any
     # provider probing it does — is only built when the CLI actually runs.
     from a11.cli.commands import COMMANDS
-    from a11 import observability
+    from a11 import logging as a11_logging, observability
 
-    logging.use_absl_handler()
-    logging.set_verbosity(logging.INFO)
+    a11_logging.enable("info")
 
     otlp_configured = observability.configure_langfuse_from_env()
 

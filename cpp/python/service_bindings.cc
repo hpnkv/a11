@@ -16,6 +16,7 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -31,6 +32,11 @@
 
 namespace a11::python {
 namespace {
+
+// What receive_with_stream_id() resolves to: the message paired with the
+// transport it arrived on, or None once the session has finished.
+using ReceivedMessage =
+    py::typing::Optional<py::typing::Tuple<data::WireMessage, py::str>>;
 
 class PythonSessionCallback {
  public:
@@ -166,14 +172,15 @@ absl::StatusOr<service::StreamMode> StreamModeFromPython(
 }
 
 service::SessionOptions MakeSessionOptions(
-    const py::handle& max_buffered_messages_total,
-    const py::handle& max_buffered_messages_per_stream,
-    const py::handle& max_concurrent_root_actions,
-    const py::handle& max_concurrent_nested_actions,
-    const py::handle& max_single_message_size,
-    const py::handle& max_buffered_bytes_total,
-    const py::handle& max_buffered_bytes_per_stream,
-    const py::object& no_stream_timeout, const py::object& deadline) {
+    const py::typing::Optional<py::int_>& max_buffered_messages_total,
+    const py::typing::Optional<py::int_>& max_buffered_messages_per_stream,
+    const py::typing::Optional<py::int_>& max_concurrent_root_actions,
+    const py::typing::Optional<py::int_>& max_concurrent_nested_actions,
+    const py::typing::Optional<py::int_>& max_single_message_size,
+    const py::typing::Optional<py::int_>& max_buffered_bytes_total,
+    const py::typing::Optional<py::int_>& max_buffered_bytes_per_stream,
+    const py::typing::Optional<NativeDuration>& no_stream_timeout,
+    const py::typing::Optional<NativeTime>& deadline) {
   service::SessionOptions options;
   options.max_buffered_messages_total = SessionSizeOption(
       max_buffered_messages_total, "max_buffered_messages_total");
@@ -212,7 +219,8 @@ void ValidateSessionOptions(const service::SessionOptions& options) {
 
 absl::StatusOr<std::shared_ptr<service::Session>> CreateSession(
     std::string session_id, const py::object& on_message,
-    const py::object& on_done, const py::object& headers,
+    const py::object& on_done,
+    const py::typing::Optional<PyMapping<py::str, py::bytes>>& headers,
     std::optional<service::SessionOptions> options,
     std::shared_ptr<nodes::NodeMap> node_map,
     std::shared_ptr<actions::ActionRegistry> registry) {
@@ -238,7 +246,8 @@ absl::StatusOr<std::shared_ptr<service::Session>> CreateSession(
 }
 
 absl::StatusOr<std::shared_ptr<service::SessionWithRecv>> CreateSessionWithRecv(
-    std::string session_id, const py::object& headers,
+    std::string session_id,
+    const py::typing::Optional<PyMapping<py::str, py::bytes>>& headers,
     std::optional<service::SessionOptions> options,
     std::shared_ptr<nodes::NodeMap> node_map,
     std::shared_ptr<actions::ActionRegistry> registry) {
@@ -297,8 +306,8 @@ void BindService(py::module_& module) {
                      "Maximum bytes buffered per stream.")
       .def_property(
           "no_stream_timeout",
-          [](const service::SessionOptions& options) {
-            return DurationToPython(options.no_stream_timeout);
+          [](const service::SessionOptions& options) -> NativeDuration {
+            return NativeDuration(options.no_stream_timeout);
           },
           [](service::SessionOptions& options, const py::object& value) {
             options.no_stream_timeout =
@@ -307,8 +316,8 @@ void BindService(py::module_& module) {
           "How long the session waits with no active stream before finishing.")
       .def_property(
           "deadline",
-          [](const service::SessionOptions& options) {
-            return TimeToPython(options.deadline);
+          [](const service::SessionOptions& options) -> NativeTime {
+            return NativeTime(options.deadline);
           },
           [](service::SessionOptions& options, const py::object& value) {
             options.deadline = ValueOrThrow(TimeFromPython(value));
@@ -326,7 +335,9 @@ void BindService(py::module_& module) {
   session
       .def(py::init(
                [](std::string session_id, const py::object& on_stream_message,
-                  const py::object& on_stream_done, const py::object& headers,
+                  const py::object& on_stream_done,
+                  const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                      headers,
                   std::optional<service::SessionOptions> options,
                   std::shared_ptr<nodes::NodeMap> node_map,
                   std::shared_ptr<actions::ActionRegistry> action_registry) {
@@ -442,7 +453,7 @@ void BindService(py::module_& module) {
       .def(
           "await_all_actions",
           [](const std::shared_ptr<service::Session>& self,
-             const py::object& timeout) {
+             const py::typing::Optional<NativeDuration>& timeout) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
@@ -532,8 +543,8 @@ void BindService(py::module_& module) {
           "completed asynchronously.")
       .def(
           "get_status",
-          [](const service::Session& self) {
-            return StatusToPython(self.GetStatus());
+          [](const service::Session& self) -> NativeStatus {
+            return NativeStatus(self.GetStatus());
           },
           "Return the session's terminal status, indicating whether it "
           "completed successfully or was aborted.")
@@ -572,7 +583,7 @@ Examples:
 )doc")
       .def(
           "abort",
-          [](service::Session& self, const py::handle& status) {
+          [](service::Session& self, const PyLike<NativeStatus>& status) {
             ThrowIfNotOk(self.Abort(StatusFromPython(status)));
           },
           R"doc(Abort the session immediately with the given error status, cancelling streams and actions.
@@ -606,14 +617,15 @@ Examples:
           py::arg("message"), py::arg("stream_id") = "")
       .def_property_readonly(
           "deadline",
-          [](const service::Session& self) {
-            return TimeToPython(self.deadline());
+          [](const service::Session& self) -> NativeTime {
+            return NativeTime(self.deadline());
           },
           "The absolute time after which the session will be "
           "aborted.")
       .def(
           "set_deadline",
-          [](service::Session& self, const py::object& deadline) {
+          [](service::Session& self,
+             const py::typing::Optional<NativeTime>& deadline) {
             ThrowIfNotOk(
                 self.SetDeadline(ValueOrThrow(TimeFromPython(deadline))));
           },
@@ -625,7 +637,9 @@ Examples:
   py::classh<service::SessionWithRecv, service::Session>(module,
                                                          "SessionWithRecv")
       .def(py::init(
-               [](std::string session_id, const py::object& headers,
+               [](std::string session_id,
+                  const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                      headers,
                   std::optional<service::SessionOptions> options,
                   std::shared_ptr<nodes::NodeMap> node_map,
                   std::shared_ptr<actions::ActionRegistry> action_registry) {
@@ -642,17 +656,17 @@ Examples:
       .def(
           "receive_with_stream_id",
           [](const std::shared_ptr<service::SessionWithRecv>& self,
-             const py::object& deadline) {
+             const py::typing::Optional<NativeTime>& deadline) {
             absl::StatusOr<absl::Time> converted = TimeFromPython(deadline);
             if (!converted.ok()) {
-              return FutureToPythonConverted(
+              return FutureToPythonAs<ReceivedMessage>(
                   a11::FailedFuture<
                       std::optional<service::ReceivedSessionMessage>>(
                       converted.status()),
                   [](const std::optional<service::ReceivedSessionMessage>&)
                       -> py::object { return py::none(); });
             }
-            return FutureToPythonConverted(
+            return FutureToPythonAs<ReceivedMessage>(
                 self->ReceiveWithStreamId(*converted),
                 [](const std::optional<service::ReceivedSessionMessage>& value)
                     -> py::object {
@@ -671,7 +685,7 @@ Examples:
       .def(
           "receive",
           [](const std::shared_ptr<service::SessionWithRecv>& self,
-             const py::object& deadline) {
+             const py::typing::Optional<NativeTime>& deadline) {
             absl::StatusOr<absl::Time> converted = TimeFromPython(deadline);
             if (!converted.ok()) {
               return FutureToPython(
@@ -687,7 +701,7 @@ Examples:
 
   module.def(
       "normalize_session_headers",
-      [](const py::object& headers) {
+      [](const py::typing::Optional<PyMapping<py::str, py::bytes>>& headers) {
         data::ByteMap converted = ValueOrThrow(ByteMapFromPython(headers));
         return ByteMapToPython(ValueOrThrow(
             service::NormalizeSessionHeaders(std::move(converted))));

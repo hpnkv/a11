@@ -115,8 +115,7 @@ async def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
 
 
 def main() -> None:
-    logging.use_absl_handler()
-    logging.set_verbosity(logging.DEBUG)
+    a11.enable_logging("debug")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(

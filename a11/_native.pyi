@@ -11,14 +11,18 @@ import httpx
 import collections.abc
 import msgpack._cmsgpack
 import typing
+import typing_extensions
 import os
 
-T = typing.TypeVar("T")
+T = typing_extensions.TypeVar("T", default=typing.Any)
 
 class _DoneEvent(typing.Protocol):
     def is_set(self) -> bool: ...
     async def wait(self) -> bool: ...
 
+ActionHandler = collections.abc.Callable[
+    ["Action"], collections.abc.Awaitable[None]
+]
 OnTranscription = collections.abc.Callable[
     [str | None], collections.abc.Awaitable[None]
 ]
@@ -161,6 +165,7 @@ __all__: list[str] = [
     "create_in_process_wire_stream_pair",
     "default_audio_input_device",
     "default_redis_client",
+    "emit_log",
     "get_http_header",
     "is_close_status_chunk",
     "is_half_close_message",
@@ -177,6 +182,10 @@ __all__: list[str] = [
     "register_audio_actions",
     "reset_default_redis_client",
     "set_default_redis_client",
+    "set_log_sink",
+    "set_min_log_level",
+    "set_stderr_threshold",
+    "set_vlog_level",
     "status_code_from_http",
     "status_code_from_websocket",
     "status_code_to_http",
@@ -228,7 +237,7 @@ class Action:
         self,
         schema: ActionSchema,
         action_id: str = "",
-        handler: typing.Any | None = None,
+        handler: ActionHandler | NativeActionHandler | None = None,
         *,
         node_map: NodeMap | None = None,
         stream: WireStream | None = None,
@@ -266,7 +275,9 @@ class Action:
         loop.
         """
 
-    def bind_handler(self, handler: typing.Any) -> Action:
+    def bind_handler(
+        self, handler: ActionHandler | NativeActionHandler | None
+    ) -> Action:
         """
         Bind the action's handler and return the action.
         """
@@ -301,7 +312,9 @@ class Action:
         Set default stream binding for outputs and return the action.
         """
 
-    def call(self, wire_headers: typing.Any | None = None) -> typing.Any:
+    def call(
+        self, wire_headers: collections.abc.Mapping[str, bytes] | None = None
+    ) -> asyncio.Future[Action]:
         """
         Dispatch the action remotely and return a future of the action.
 
@@ -359,12 +372,12 @@ class Action:
         Return the action's wire message representation.
         """
 
-    def get_dispatch_status(self) -> typing.Any:
+    def get_dispatch_status(self) -> Status | None:
         """
         Return the action's dispatch status, or None when not dispatched.
         """
 
-    def get_handler(self) -> typing.Any:
+    def get_handler(self) -> ActionHandler | NativeActionHandler | None:
         """
         Return the action's Python handler, or None.
         """
@@ -424,7 +437,7 @@ class Action:
         Return the action's bound session.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the action's completion status.
         """
@@ -554,14 +567,14 @@ class Action:
         Set the span status explicitly ('ok', 'error' or 'unset').
         """
 
-    def wait(self, timeout: typing.Any | None = None) -> typing.Any:
+    def wait(self, timeout: Duration | None = None) -> asyncio.Future[Action]:
         """
         Return a future that resolves when the action completes.
         """
 
     def wait_for_dispatch(
-        self, timeout: typing.Any | None = None
-    ) -> typing.Any:
+        self, timeout: Duration | None = None
+    ) -> asyncio.Future[Status]:
         """
         Return a future that resolves when the action has been dispatched.
         """
@@ -660,7 +673,7 @@ class ActionHeaderSchema:
         """
 
     @property
-    def default(self) -> typing.Any:
+    def default(self) -> bytes | None:
         """
         Default header value as bytes, or None when unset.
         """
@@ -738,7 +751,7 @@ class ActionMessage:
         name: str = "",
         inputs: typing.Any = [],
         outputs: typing.Any = [],
-        headers: typing.Any = {},
+        headers: collections.abc.Mapping[str, bytes] | None = {},
     ) -> None:
         """
         Create an action message from id, name, ports, and headers.
@@ -783,7 +796,9 @@ class ActionMessage:
         Byte-string header map attached to the action.
         """
     @headers.setter
-    def headers(self, arg1: typing.Any) -> None: ...
+    def headers(
+        self, arg1: collections.abc.Mapping[str, bytes] | None
+    ) -> None: ...
 
     @property
     def id(self) -> str:
@@ -846,7 +861,7 @@ class ActionPortSchema:
         required: bool = False,
         unary: bool = False,
         autofills: typing.Any | None = None,
-        typeinfo: typing.Any | None = None,
+        typeinfo: type | None = None,
     ) -> None:
         """
         Create a validated port schema.
@@ -866,7 +881,7 @@ class ActionPortSchema:
         """
 
     @property
-    def autofills(self) -> typing.Any:
+    def autofills(self) -> list[NodeFragment | None] | None:
         """
         Node fragments used to autofill the port, or None entries.
         """
@@ -906,7 +921,7 @@ class ActionPortSchema:
     def type(self, arg0: str) -> None: ...
 
     @property
-    def typeinfo(self) -> typing.Any:
+    def typeinfo(self) -> type | None:
         """
         Optional Python type associated with the port, or None.
         """
@@ -936,7 +951,9 @@ class ActionRegistry:
         Return a copy of the registry, optionally clearing autofills.
         """
 
-    def get_handler(self, action_name: str) -> typing.Any:
+    def get_handler(
+        self, action_name: str
+    ) -> ActionHandler | NativeActionHandler | None:
         """
         Return the handler registered under the given action name: the Python callable it was registered with, a NativeActionHandler when the action is implemented in C++, or None when it has no handler.
         """
@@ -987,7 +1004,7 @@ class ActionRegistry:
         self,
         action_name: str,
         schema: ActionSchema,
-        handler: typing.Any | None = None,
+        handler: ActionHandler | NativeActionHandler | None = None,
     ) -> None:
         """
         Register an action with a schema and optional async handler.
@@ -1001,7 +1018,10 @@ class ActionRegistry:
         """
 
     def register_sync(
-        self, action_name: str, schema: ActionSchema, handler: typing.Any
+        self,
+        action_name: str,
+        schema: ActionSchema,
+        handler: ActionHandler | NativeActionHandler | None,
     ) -> None:
         """
         Register an action with a schema and a synchronous handler.
@@ -1040,7 +1060,7 @@ class ActionSchema:
         description: str = "",
         inputs: typing.Any = {},
         outputs: typing.Any = {},
-        headers: typing.Any = {},
+        headers: collections.abc.Mapping[str, bytes] | None = {},
         output_to_json_field: collections.abc.Mapping[str, str] = {},
     ) -> None:
         """
@@ -1240,7 +1260,7 @@ class AsyncNode:
         control how Python objects map to chunks.
         """
 
-    def abort_with_status(self, status: typing.Any) -> typing.Any:
+    def abort_with_status(self, status: Status) -> asyncio.Future[None]:
         """
         Aborts the stream with the given error status and returns a future that resolves once the abort has propagated. Consumers then observe the error rather than a normal end-of-stream.
         """
@@ -1271,7 +1291,7 @@ class AsyncNode:
         timeout: Duration | None = None,
         mimetype_patterns: str | typing.Sequence[str] = "",
         allow_none: bool = False,
-    ) -> T | typing.Any | None:
+    ) -> T | None:
         """
         Consume exactly one whole value and return it deserialized.
 
@@ -1313,7 +1333,7 @@ class AsyncNode:
         Detaches a previously attached wire stream so the node stops mirroring its chunks over that transport.
         """
 
-    def drain_and_close(self) -> typing.Any:
+    def drain_and_close(self) -> asyncio.Future[None]:
         """
         Returns a future that resolves once all buffered chunks have been flushed and the writer is closed. This does not mark a chunk as final: call put_final() or put_null_final() first when readers must synchronise on the logical end of the stream.
         """
@@ -1333,12 +1353,12 @@ class AsyncNode:
         Return a copy of the reader's current options.
         """
 
-    def get_reader_status(self) -> typing.Any:
+    def get_reader_status(self) -> Status:
         """
         Returns the current status of the node's reader. Check it to tell whether the consuming end of the stream is healthy, has completed, or has failed while streaming.
         """
 
-    def get_writer_abort_status(self) -> typing.Any:
+    def get_writer_abort_status(self) -> Status | None:
         """
         Returns the status the writer was aborted with, or None if the writer has not been aborted.
         """
@@ -1348,12 +1368,12 @@ class AsyncNode:
         Return a copy of the writer's current options.
         """
 
-    def get_writer_status(self) -> typing.Any:
+    def get_writer_status(self) -> Status:
         """
         Returns the current status of the node's writer. Check it to tell whether the producing end of the stream is healthy, has completed, or has failed while streaming.
         """
 
-    def is_writable(self) -> typing.Any:
+    def is_writable(self) -> asyncio.Future[bool]:
         """
         Returns a future that resolves once it is known whether the node can currently accept writes. Await it before producing chunks to respect backpressure rather than blocking a busy stream.
         """
@@ -1383,7 +1403,7 @@ class AsyncNode:
         obj_type: type[T] | None = None,
         timeout: Duration | None = None,
         mimetype_patterns: str | typing.Sequence[str] = "",
-    ) -> T | typing.Any | None:
+    ) -> T | None:
         """
         Alias for `next_object`: the next deserialized value or ``None``.
 
@@ -1414,7 +1434,7 @@ class AsyncNode:
         obj_type: type[T] | None = None,
         timeout: Duration | None = None,
         mimetype_patterns: str | typing.Sequence[str] = "",
-    ) -> T | typing.Any | None:
+    ) -> T | None:
         """
         Read and deserialize the next value, or ``None`` at end of stream.
         """
@@ -1537,7 +1557,7 @@ class AsyncNode:
         Replace the writer options and return ``self`` for chaining.
         """
 
-    def wait_for_buffer_to_drain(self) -> typing.Any:
+    def wait_for_buffer_to_drain(self) -> asyncio.Future[None]:
         """
         Returns a future that resolves once the write buffer has drained. Await it to apply backpressure from a fast producer, letting consumers catch up before you push more chunks.
         """
@@ -1625,7 +1645,7 @@ class AudioBuffer:
         """
 
     @property
-    def end_time(self) -> typing.Any:
+    def end_time(self) -> Time:
         """
         Best-effort instant the final sample in this buffer was taken.
         """
@@ -1767,13 +1787,13 @@ class AudioDeviceInfo:
 
     def __repr__(self) -> str: ...
     @property
-    def default_high_input_latency(self) -> typing.Any:
+    def default_high_input_latency(self) -> Duration:
         """
         Suggested latency for robust, buffered input use.
         """
 
     @property
-    def default_low_input_latency(self) -> typing.Any:
+    def default_low_input_latency(self) -> Duration:
         """
         Suggested latency for interactive input use.
         """
@@ -2128,7 +2148,7 @@ class Chunk:
         self,
         metadata: typing.Any | None = None,
         ref: str = "",
-        data: typing.Any = b"",
+        data: str | bytes | bytearray | memoryview = b"",
     ) -> None:
         """
         Create a chunk from optional metadata, a ref, and payload data.
@@ -2188,10 +2208,10 @@ class Chunk:
         Raw payload bytes of the chunk.
         """
     @data.setter
-    def data(self, arg1: typing.Any) -> None: ...
+    def data(self, arg1: str | bytes | bytearray | memoryview) -> None: ...
 
     @property
-    def metadata(self) -> typing.Any:
+    def metadata(self) -> ChunkMetadata | None:
         """
         Optional metadata describing the chunk.
         """
@@ -2325,7 +2345,7 @@ class ChunkMetadata:
     def mimetype(self, arg0: str) -> None: ...
 
     @property
-    def timestamp(self) -> typing.Any:
+    def timestamp(self) -> Time | None:
         """
         Optional timestamp associated with the chunk.
         """
@@ -2338,14 +2358,16 @@ class ChunkStore:
         Construct the abstract base. Subclass this in Python to back an agent with a custom asynchronous chunk store; every data method returns an awaitable so callers never block the event loop.
         """
 
-    def clear_data(self, seq: typing.SupportsInt) -> typing.Any:
+    def clear_data(
+        self, seq: typing.SupportsInt
+    ) -> asyncio.Future[NodeFragment]:
         """
         Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment.
         """
 
     def close_writes_with_status(
-        self, status: typing.Any, return_status_if_already_closed: bool = False
-    ) -> typing.Any:
+        self, status: Status, return_status_if_already_closed: bool = False
+    ) -> asyncio.Future[Status]:
         """
         Seal the store against further writes with a terminal status and await completion. Waiting readers are released. With `return_status_if_already_closed`, a repeated close returns the status recorded by the first.
 
@@ -2358,8 +2380,8 @@ class ChunkStore:
         """
 
     def get(
-        self, seq: typing.SupportsInt, deadline: typing.Any | None = None
-    ) -> typing.Any:
+        self, seq: typing.SupportsInt, deadline: Time | None = None
+    ) -> asyncio.Future[NodeFragment]:
         """
         Await the fragment stored at a sequence number. The future resolves when the fragment is available or the optional deadline elapses.
 
@@ -2372,15 +2394,13 @@ class ChunkStore:
         """
 
     def get_by_arrival_order(
-        self,
-        arrival_order: typing.SupportsInt,
-        deadline: typing.Any | None = None,
-    ) -> typing.Any:
+        self, arrival_order: typing.SupportsInt, deadline: Time | None = None
+    ) -> asyncio.Future[NodeFragment]:
         """
         Await the fragment identified by the order in which it arrived rather than its sequence number. The future resolves when the fragment is present or the optional deadline passes.
         """
 
-    def get_final_seq(self) -> typing.Any:
+    def get_final_seq(self) -> asyncio.Future[int | None]:
         """
         Await the explicitly marked final sequence, or None if no fragment has declared finality. Finality is independent of write closure: closing the store does not create a final sequence.
         """
@@ -2392,19 +2412,19 @@ class ChunkStore:
 
     def get_seq_for_arrival_order(
         self, arrival_order: typing.SupportsInt
-    ) -> typing.Any:
+    ) -> asyncio.Future[int]:
         """
         Await the sequence number that corresponds to a given arrival order.
         """
 
     def next(
-        self, deadline: typing.Any | None = None, limit: typing.SupportsInt = 1
-    ) -> typing.Any:
+        self, deadline: Time | None = None, limit: typing.SupportsInt = 1
+    ) -> asyncio.Future[list[NodeFragment | None]]:
         """
         Await up to `limit` of the next available fragments as a stream. This is the primary way an agent consumes chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
         """
 
-    def put(self, fragment: NodeFragment) -> typing.Any:
+    def put(self, fragment: NodeFragment) -> asyncio.Future[int]:
         """
         Append a single fragment and await its assigned sequence number. The future resolves once the backing store accepts the write.
 
@@ -2418,12 +2438,12 @@ class ChunkStore:
 
     def put_many(
         self, fragments: collections.abc.Sequence[NodeFragment]
-    ) -> typing.Any:
+    ) -> asyncio.Future[list[int]]:
         """
         Append several fragments in one batch and await their assigned sequence numbers. Prefer this over repeated `put` calls when an agent emits many chunks at once, to reduce round-trips.
         """
 
-    def size(self) -> typing.Any:
+    def size(self) -> asyncio.Future[int]:
         """
         Await the number of fragments currently in the store.
         """
@@ -2454,7 +2474,7 @@ class ChunkStoreReader:
         Start the background read pump if it is not already running. Reading normally starts it lazily; call this to begin buffering before the first `next`.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the reader's current status. An agent can inspect this to distinguish a healthy stream from one that has failed or ended.
         """
@@ -2481,7 +2501,7 @@ class ChunkStoreReader:
             ```
         """
 
-    def wait(self) -> typing.Any:
+    def wait(self) -> asyncio.Future[None]:
         """
         Await completion of the background read pump. The returned future resolves once the reader has drained the store or been cancelled.
         """
@@ -2523,9 +2543,9 @@ class ChunkStoreReaderOptions:
         self,
         ordered: bool = True,
         pop_chunks: bool = False,
-        num_chunks_to_buffer: typing.Any = 32,
-        offset: typing.Any = 0,
-        max_chunks_to_read: typing.Any | None = None,
+        num_chunks_to_buffer: typing.SupportsInt | None = 32,
+        offset: typing.SupportsInt | None = 0,
+        max_chunks_to_read: typing.SupportsInt | None = None,
         sticky_mimetype: bool = False,
     ) -> None:
         """
@@ -2607,7 +2627,7 @@ class ChunkStoreWriter:
         once.
         """
 
-    def abort_with_status(self, status: typing.Any) -> typing.Any:
+    def abort_with_status(self, status: Status) -> asyncio.Future[None]:
         """
         Abort the writer with an error status and await teardown. Readers then observe the error rather than a clean end-of-stream.
         """
@@ -2617,7 +2637,7 @@ class ChunkStoreWriter:
         Tee stored fragments to an additional wire stream. After the store accepts a batch, the writer calls send on attached streams; a successful send confirms local transport admission, not peer delivery. A transport failure stops later writes but cannot revoke the current batch's store confirmations. The writer keeps the stream alive while attached.
         """
 
-    def cancel(self) -> typing.Any:
+    def cancel(self) -> asyncio.Future[None]:
         """
         Stop the writer immediately and await teardown, discarding any chunks still queued.
         """
@@ -2627,13 +2647,16 @@ class ChunkStoreWriter:
         Stop mirroring fragments to a previously attached wire stream. Raises if the stream was not attached.
         """
 
-    def drain_and_close(self) -> typing.Any:
+    def drain_and_close(self) -> asyncio.Future[None]:
         """
         Flush every queued chunk, close the writer, and await completion. This does not append a final fragment: mark the last chunk final before draining when readers need a final sequence number.
         """
 
     def enqueue_chunk(
-        self, chunk: Chunk, seq: typing.Any | None = None, final: bool = False
+        self,
+        chunk: Chunk,
+        seq: typing.SupportsInt | None = None,
+        final: bool = False,
     ) -> tuple:
         """
         Enqueue a chunk and get back a (confirmation, admission) pair of awaitables. Unlike `put_chunk`, this exposes backpressure explicitly: `admission` resolves when the chunk is accepted into the bounded queue (None if it fit immediately) and `confirmation` resolves with the sequence assigned by the backing store. An agent awaits admission to pace production and confirmation to know the store accepted the write.
@@ -2644,12 +2667,12 @@ class ChunkStoreWriter:
         Start the background flush loop if it is not already running. Writing normally starts it lazily; call this to begin flushing before the first chunk is enqueued.
         """
 
-    def get_abort_status(self) -> typing.Any:
+    def get_abort_status(self) -> Status | None:
         """
         Return the status the writer was aborted with, or None if it was not aborted. Use this to distinguish a clean close from an error-driven abort.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status | None:
         """
         Return the writer's terminal status, or None while it is still open. An agent can poll this to detect that the stream has closed or failed.
         """
@@ -2694,7 +2717,7 @@ class ChunkStoreWriter:
             ```
         """
 
-    def wait_for_buffer_to_drain(self) -> typing.Any:
+    def wait_for_buffer_to_drain(self) -> asyncio.Future[None]:
         """
         Await until the in-flight write buffer empties. An agent can use this as a backpressure checkpoint before enqueuing more chunks.
         """
@@ -2734,9 +2757,9 @@ class ChunkStoreWriterOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        offset: typing.Any = 0,
-        max_chunks_to_write_at_once: typing.Any = 8,
-        num_chunks_to_buffer: typing.Any | None = None,
+        offset: typing.SupportsInt | None = 0,
+        max_chunks_to_write_at_once: typing.SupportsInt | None = 8,
+        num_chunks_to_buffer: typing.SupportsInt | None = None,
         sticky_mimetype: bool = False,
     ) -> None:
         """
@@ -2873,8 +2896,8 @@ class Duration:
         """
 
     def float_seconds(
-        self, infinity_value: typing.Any | None = None
-    ) -> typing.Any:
+        self, infinity_value: typing.SupportsFloat | None = None
+    ) -> float | None:
         """
         Returns the duration in seconds as a float; infinity_value is returned for a positive-infinite duration.
         """
@@ -2894,7 +2917,7 @@ class Http2Client:
     @staticmethod
     def connect(
         host: str, port: typing.SupportsInt, options: Http2Options = ...
-    ) -> typing.Any:
+    ) -> asyncio.Future[Http2Client]:
         """
         Asynchronously connect to an HTTP/2 server, returning a future that resolves to the connected client.
         """
@@ -2910,14 +2933,14 @@ class Http2Client:
         self,
         protocol: str,
         path: str,
-        headers: typing.Any | None = None,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         scheme: str = "",
     ) -> Http2DuplexStream:
         """
         Open an extended CONNECT duplex stream for bidirectional data.
         """
 
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Return an opaque capsule wrapping the native client handle.
         """
@@ -2926,10 +2949,10 @@ class Http2Client:
         self,
         method: str,
         path: str,
-        headers: typing.Any | None = None,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         body: typing.Any = b"",
         scheme: str = "",
-    ) -> typing.Any:
+    ) -> asyncio.Future[HttpResponse]:
         """
         Send a request and await the full buffered response.
         """
@@ -2938,7 +2961,7 @@ class Http2Client:
         self,
         method: str,
         path: str,
-        headers: typing.Any | None = None,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         body: typing.Any = b"",
         scheme: str = "",
     ) -> Http2ResponseStream:
@@ -2973,7 +2996,7 @@ class Http2Client:
 class Http2DuplexStream:
     def __aiter__(self): ...
     async def __anext__(self) -> bytes: ...
-    def abort(self, status: typing.Any | None = None) -> None:
+    def abort(self, status: Status | None = None) -> None:
         """
         Abort the duplex stream with an optional status.
         """
@@ -2983,17 +3006,17 @@ class Http2DuplexStream:
         Signal the end of the request side of the duplex stream.
         """
 
-    def headers(self) -> typing.Any:
+    def headers(self) -> asyncio.Future[HttpResponseHead]:
         """
         Await the response head (status and headers).
         """
 
-    def read(self) -> typing.Any:
+    def read(self) -> asyncio.Future[bytes | None]:
         """
         Await the next chunk of response data, or None at end of stream.
         """
 
-    def wait_done(self) -> typing.Any:
+    def wait_done(self) -> asyncio.Future[None]:
         """
         Await completion of the duplex stream.
         """
@@ -3004,7 +3027,7 @@ class Http2DuplexStream:
         """
 
     @property
-    def done(self) -> typing.Any:
+    def done(self) -> asyncio.Future[None]:
         """
         Future that completes when the duplex stream is done.
         """
@@ -3043,12 +3066,12 @@ class Http2Options:
     def client_preference(self, arg0: HttpProtocolPreference) -> None: ...
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         The operation deadline.
         """
     @deadline.setter
-    def deadline(self, arg1: typing.Any) -> None: ...
+    def deadline(self, arg1: Time | None) -> None: ...
 
     @property
     def enable_h2(self) -> bool:
@@ -3117,23 +3140,23 @@ class Http2Options:
 class Http2RequestBodyStream:
     def __aiter__(self): ...
     async def __anext__(self) -> bytes: ...
-    def cancel(self, status: typing.Any | None = None) -> None:
+    def cancel(self, status: Status | None = None) -> None:
         """
         Cancel the request body stream with an optional status.
         """
 
-    def read(self) -> typing.Any:
+    def read(self) -> asyncio.Future[bytes | None]:
         """
         Await the next chunk of request body data, or None at end of stream.
         """
 
-    def wait_done(self) -> typing.Any:
+    def wait_done(self) -> asyncio.Future[None]:
         """
         Await completion of the request body stream.
         """
 
     @property
-    def done(self) -> typing.Any:
+    def done(self) -> asyncio.Future[None]:
         """
         Future that completes when the request body stream is done.
         """
@@ -3147,28 +3170,28 @@ class Http2RequestBodyStream:
 class Http2ResponseStream:
     def __aiter__(self): ...
     async def __anext__(self) -> bytes: ...
-    def cancel(self, status: typing.Any | None = None) -> None:
+    def cancel(self, status: Status | None = None) -> None:
         """
         Cancel the response stream with an optional status.
         """
 
-    def headers(self) -> typing.Any:
+    def headers(self) -> asyncio.Future[HttpResponseHead]:
         """
         Await the response head (status and headers).
         """
 
-    def read(self) -> typing.Any:
+    def read(self) -> asyncio.Future[bytes | None]:
         """
         Await the next chunk of response body data, or None at end of stream.
         """
 
-    def wait_done(self) -> typing.Any:
+    def wait_done(self) -> asyncio.Future[None]:
         """
         Await completion of the response stream.
         """
 
     @property
-    def done(self) -> typing.Any:
+    def done(self) -> asyncio.Future[None]:
         """
         Future that completes when the response stream is done.
         """
@@ -3180,7 +3203,7 @@ class Http2ResponseStream:
         """
 
 class Http2ResponseWriter:
-    def abort(self, status: typing.Any) -> None:
+    def abort(self, status: Status) -> None:
         """
         Abort the response with the given status.
         """
@@ -3191,7 +3214,9 @@ class Http2ResponseWriter:
         """
 
     def send_headers(
-        self, status: typing.SupportsInt, headers: typing.Any | None = None
+        self,
+        status: typing.SupportsInt,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """
         Send the response status and headers.
@@ -3200,14 +3225,14 @@ class Http2ResponseWriter:
     def send_response(
         self,
         status: typing.SupportsInt,
-        headers: typing.Any | None = None,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         body: typing.Any = b"",
     ) -> None:
         """
         Send a complete response (status, headers, and body) at once.
         """
 
-    def wait_done(self) -> typing.Any:
+    def wait_done(self) -> asyncio.Future[None]:
         """
         Await completion of the response.
         """
@@ -3218,7 +3243,7 @@ class Http2ResponseWriter:
         """
 
     @property
-    def done(self) -> typing.Any:
+    def done(self) -> asyncio.Future[None]:
         """
         Future that completes when the response is done.
         """
@@ -3255,7 +3280,7 @@ class Http2Server:
 
     def __enter__(self) -> "Http2Server": ...
     def __exit__(self, exc_type, exc, traceback) -> None: ...
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Return an opaque capsule wrapping the native server handle.
         """
@@ -3377,7 +3402,7 @@ class HttpRequest:
         scheme: str = "http",
         authority: str = "",
         path: str = "/",
-        headers: typing.Any | None = None,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         body: typing.Any = b"",
     ) -> None:
         """
@@ -3407,12 +3432,14 @@ class HttpRequest:
         """
 
     @property
-    def headers(self) -> list:
+    def headers(self) -> list[tuple[str, str]]:
         """
         The request headers as a list of (name, value) pairs.
         """
     @headers.setter
-    def headers(self, arg1: typing.Any) -> None: ...
+    def headers(
+        self, arg1: collections.abc.Iterable[tuple[str, str]] | None
+    ) -> None: ...
 
     @property
     def method(self) -> str:
@@ -3472,19 +3499,23 @@ class HttpResponse:
 
 class HttpResponseHead:
     def __init__(
-        self, status: typing.SupportsInt = 0, headers: typing.Any | None = None
+        self,
+        status: typing.SupportsInt = 0,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """
         Construct an HTTP response head (status and headers).
         """
 
     @property
-    def headers(self) -> list:
+    def headers(self) -> list[tuple[str, str]]:
         """
         The response headers as a list of (name, value) pairs.
         """
     @headers.setter
-    def headers(self, arg1: typing.Any) -> None: ...
+    def headers(
+        self, arg1: collections.abc.Iterable[tuple[str, str]] | None
+    ) -> None: ...
 
     @property
     def status(self) -> int:
@@ -3500,7 +3531,9 @@ class HttpSseClientWireStream(HttpSseWireStream):
         url: str,
         options: HttpSseOptions = ...,
         client: Http2Client | None = None,
-        request_headers: typing.Any | None = None,
+        request_headers: (
+            collections.abc.Iterable[tuple[str, str]] | None
+        ) = None,
     ) -> HttpSseClientWireStream:
         """
         Create a client-side SSE wire stream connecting to the given URL, optionally reusing an existing HTTP/2 client. Prefer this factory when wiring an agent's outbound transport, and drive the returned stream asynchronously as SSE events arrive.
@@ -3511,7 +3544,9 @@ class HttpSseClientWireStream(HttpSseWireStream):
         url: str,
         options: HttpSseOptions = ...,
         client: Http2Client | None = None,
-        request_headers: typing.Any | None = None,
+        request_headers: (
+            collections.abc.Iterable[tuple[str, str]] | None
+        ) = None,
     ) -> None:
         """
         Construct a client-side SSE wire stream that connects to the given URL. This is the transport an A11 agent uses to exchange messages with a remote service over HTTP/2 Server-Sent Events; the connection is opened lazily and runs asynchronously, so await the stream's lifecycle futures rather than blocking.
@@ -3617,7 +3652,7 @@ class HttpSseServer:
         Stop the server and release its resources.
         """
 
-    def wait_for_stream(self) -> typing.Any:
+    def wait_for_stream(self) -> asyncio.Future[HttpSseServerWireStream]:
         """
         Await the next incoming SSE wire stream from a connecting client.
         """
@@ -3641,33 +3676,37 @@ class HttpSseServer:
         """
 
 class HttpSseServerWireStream(HttpSseWireStream):
-    def accepted(self) -> typing.Any:
+    def accepted(self) -> asyncio.Future[None]:
         """
         Await acceptance of this server-side SSE wire stream. This is the server counterpart delivered to your on_connect handler when a client opens an SSE connection; await this future to know the stream has been fully established before your agent starts sending messages on it.
         """
 
 class HttpSseWireStream(WireStream):
-    def get_http_request_headers(self) -> list:
+    def get_http_request_headers(self) -> list[tuple[str, str]]:
         """
         Return the HTTP headers carried on the underlying SSE request.
         """
 
-    def get_http_response_headers(self) -> typing.Any:
+    def get_http_response_headers(self) -> list[tuple[str, str]] | None:
         """
         Return the HTTP response headers negotiated for the SSE connection, or None if they have not arrived yet. Because the connection is established asynchronously, prefer awaiting wait_for_http_headers() before relying on this value.
         """
 
-    def set_http_request_headers(self, headers: typing.Any) -> None:
+    def set_http_request_headers(
+        self, headers: collections.abc.Iterable[tuple[str, str]] | None
+    ) -> None:
         """
         Set the HTTP headers to send on the underlying SSE request. Call this before the stream connects to attach auth or routing metadata that your agent's transport needs.
         """
 
-    def set_http_response_headers(self, headers: typing.Any) -> None:
+    def set_http_response_headers(
+        self, headers: collections.abc.Iterable[tuple[str, str]] | None
+    ) -> None:
         """
         Set the HTTP headers to send on the SSE response. Used on the server side to attach transport metadata before the streaming response is flushed to the client.
         """
 
-    def wait_for_http_headers(self) -> typing.Any:
+    def wait_for_http_headers(self) -> asyncio.Future[None]:
         """
         Await the exchange of HTTP headers for the SSE connection. Because SSE wire streams connect asynchronously, await this future before reading response headers or assuming the stream is live.
         """
@@ -3683,7 +3722,7 @@ class InProcessWireStream(WireStream):
         Create a connected pair of in-process wire streams that talk to each other directly in memory, with no network involved. One endpoint drives start() while the other drives accept(). Pass shared options, or per-endpoint first_options/second_options, to tune buffering and timeouts.
         """
 
-    def wait(self) -> typing.Any:
+    def wait(self) -> asyncio.Future[None]:
         """
         Await until this in-process stream has fully finished. Block on this to know a local agent exchange has completed before tearing the pair down.
         """
@@ -3761,7 +3800,7 @@ class NodeFragment:
         self,
         data: typing.Any,
         id: str = "",
-        seq: typing.Any | None = None,
+        seq: typing.SupportsInt | None = None,
         continued: bool = False,
     ) -> None:
         """
@@ -3820,7 +3859,7 @@ class NodeFragment:
     def continued(self, arg0: bool) -> None: ...
 
     @property
-    def data(self) -> typing.Any:
+    def data(self) -> Chunk | NodeRef:
         """
         Payload of the fragment as either a Chunk or a NodeRef.
         """
@@ -3944,7 +3983,10 @@ class NodeRef:
         """
 
     def __init__(
-        self, id: str, offset: typing.Any = 0, length: typing.Any | None = None
+        self,
+        id: str,
+        offset: typing.SupportsInt | None = 0,
+        length: typing.Any | None = None,
     ) -> None:
         """
         Create a node reference from an id, byte offset, and length.
@@ -4379,7 +4421,7 @@ class RedisChunkStoreOptions:
     def __init__(
         self,
         key_prefix: str = "a11:",
-        inline_data_threshold: typing.Any = 262144,
+        inline_data_threshold: typing.SupportsInt | None = 262144,
     ) -> None:
         """
         Construct validated Redis chunk-store options.
@@ -4553,7 +4595,7 @@ class RedisClientOptions:
     def client_name(self, arg0: str) -> None: ...
 
     @property
-    def command_timeout(self) -> typing.Any:
+    def command_timeout(self) -> Duration:
         """
         Default maximum time allowed for one command.
         """
@@ -4561,7 +4603,7 @@ class RedisClientOptions:
     def command_timeout(self, arg1: typing.Any) -> None: ...
 
     @property
-    def connect_timeout(self) -> typing.Any:
+    def connect_timeout(self) -> Duration:
         """
         Maximum time allowed for establishing a connection.
         """
@@ -4943,7 +4985,7 @@ class SQLiteChunkStoreMetadata:
         """
 
     @property
-    def created_at(self) -> typing.Any:
+    def created_at(self) -> Time:
         """
         When the node row was created by its first accepted write.
         """
@@ -5009,7 +5051,7 @@ class SQLiteChunkStoreMetadata:
         """
 
     @property
-    def updated_at(self) -> typing.Any:
+    def updated_at(self) -> Time:
         """
         When the node row was last mutated.
         """
@@ -5042,7 +5084,7 @@ class SQLiteChunkStoreOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        inline_data_threshold: typing.Any = 131072,
+        inline_data_threshold: typing.SupportsInt | None = 131072,
         owner_id: str = "",
         synchronous: SQLiteSynchronous = ...,
         cross_process_poll_interval: typing.Any | None = None,
@@ -5066,7 +5108,7 @@ class SQLiteChunkStoreOptions:
         """
 
     @property
-    def blob_grace_period(self) -> typing.Any:
+    def blob_grace_period(self) -> Duration:
         """
         How long an unreferenced blob survives before a sweep removes it.
         """
@@ -5074,7 +5116,7 @@ class SQLiteChunkStoreOptions:
     def blob_grace_period(self, arg1: typing.Any) -> None: ...
 
     @property
-    def cross_process_poll_interval(self) -> typing.Any:
+    def cross_process_poll_interval(self) -> Duration:
         """
         How often to notice other processes' commits; zero disables it.
         """
@@ -5166,7 +5208,7 @@ class Session:
         session_id: str = "",
         on_stream_message: typing.Any | None = None,
         on_stream_done: typing.Any | None = None,
-        headers: typing.Any | None = None,
+        headers: collections.abc.Mapping[str, bytes] | None = None,
         options: SessionOptions | None = None,
         node_map: NodeMap | None = None,
         action_registry: ActionRegistry | None = None,
@@ -5175,7 +5217,7 @@ class Session:
         Create an A11 session that multiplexes wire streams and actions. Streams deliver messages asynchronously to the optional on_stream_message and on_stream_done callbacks, which may be coroutines. This is the top-level object an agent drives to exchange wire messages and run actions.
         """
 
-    def abort(self, status: typing.Any) -> None:
+    def abort(self, status: Status) -> None:
         """
         Abort the session immediately with the given error status, cancelling streams and actions.
 
@@ -5221,7 +5263,7 @@ class Session:
 
     def add_stream(
         self, stream: WireStream, mode: typing.Any = "start"
-    ) -> typing.Any:
+    ) -> asyncio.Future[None]:
         """
         Attach a wire stream and begin pumping its messages, returning an awaitable for the stream's lifetime. `mode` selects whether this side starts (`"start"`) or accepts (`"accept"`) the stream.
 
@@ -5234,8 +5276,8 @@ class Session:
         """
 
     def await_all_actions(
-        self, timeout: typing.Any | None = None
-    ) -> typing.Any:
+        self, timeout: Duration | None = None
+    ) -> asyncio.Future[None]:
         """
         Return an awaitable that resolves once all in-flight actions have finished, or the optional timeout elapses. Await this to synchronize on the session's outstanding asynchronous work before proceeding.
         """
@@ -5250,7 +5292,7 @@ class Session:
         Request cancellation of every action currently running in the session. Each action unwinds asynchronously; await await_all_actions to observe completion.
         """
 
-    def dispatch_action(self, action: typing.Any) -> typing.Any:
+    def dispatch_action(self, action: typing.Any) -> asyncio.Future[None]:
         """
         Dispatch an already-constructed Action to run within the session, returning an awaitable for its handling.
         """
@@ -5259,19 +5301,21 @@ class Session:
         self,
         action_message: ActionMessage,
         origin_stream: WireStream | None = None,
-    ) -> typing.Any:
+    ) -> asyncio.Future[None]:
         """
         Dispatch an action message, resolving it against the action registry and running the resulting action. Returns an awaitable that completes when the action has been handled; origin_stream attributes the message to a source stream.
         """
 
-    def dispatch_node_fragment(self, fragment: NodeFragment) -> typing.Any:
+    def dispatch_node_fragment(
+        self, fragment: NodeFragment
+    ) -> asyncio.Future[int]:
         """
         Dispatch a node fragment into the session's NodeMap and return an awaitable resolving to the applied revision. Fragments are applied asynchronously in order, letting an agent stream incremental document updates.
         """
 
     def dispatch_wire_message(
         self, message: WireMessage, origin_stream: WireStream | None = None
-    ) -> typing.Any:
+    ) -> asyncio.Future[None]:
         """
         Route a wire message through the session as though it arrived on a stream, returning an awaitable for its processing. origin_stream optionally records which stream the message is attributed to.
         """
@@ -5296,7 +5340,7 @@ class Session:
         Return the NodeMap backing this session's node state. Node fragments dispatched to the session are applied to this map as messages stream in.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the session's terminal status, indicating whether it completed successfully or was aborted.
         """
@@ -5346,7 +5390,7 @@ class Session:
         Replace the ActionRegistry used to resolve incoming action messages, raising on failure. Active actions are rebound for later nested-name resolution; configure it before dispatch to avoid mixing registry versions.
         """
 
-    def set_deadline(self, deadline: typing.Any | None = None) -> None:
+    def set_deadline(self, deadline: Time | None = None) -> None:
         """
         Set the absolute deadline after which the session is aborted; passing None clears it to no deadline. The session enforces this asynchronously as time passes.
         """
@@ -5361,7 +5405,7 @@ class Session:
         Return the (stream_id, stream) pairs currently attached to the session. Streams are added and removed asynchronously as peers connect and disconnect, so treat the result as a snapshot taken at call time.
         """
 
-    def wait_done(self) -> typing.Any:
+    def wait_done(self) -> asyncio.Future[None]:
         """
         Return an awaitable that resolves when the session has fully finished. Await this to block until every stream and action has completed asynchronously.
         """
@@ -5375,7 +5419,7 @@ class Session:
     def action_registry(self, arg1: ActionRegistry) -> None: ...
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         The absolute time after which the session will be aborted.
         """
@@ -5423,15 +5467,15 @@ class SessionOptions:
     def __init__(
         self,
         *,
-        max_buffered_messages_total: typing.Any = 256,
-        max_buffered_messages_per_stream: typing.Any = 32,
-        max_concurrent_root_actions: typing.Any = 32,
-        max_concurrent_nested_actions: typing.Any = 128,
-        max_single_message_size: typing.Any = 33554432,
-        max_buffered_bytes_total: typing.Any = 33554432,
-        max_buffered_bytes_per_stream: typing.Any = 4194304,
-        no_stream_timeout: typing.Any | None = None,
-        deadline: typing.Any | None = None,
+        max_buffered_messages_total: typing.SupportsInt | None = 256,
+        max_buffered_messages_per_stream: typing.SupportsInt | None = 32,
+        max_concurrent_root_actions: typing.SupportsInt | None = 32,
+        max_concurrent_nested_actions: typing.SupportsInt | None = 128,
+        max_single_message_size: typing.SupportsInt | None = 33554432,
+        max_buffered_bytes_total: typing.SupportsInt | None = 33554432,
+        max_buffered_bytes_per_stream: typing.SupportsInt | None = 4194304,
+        no_stream_timeout: Duration | None = None,
+        deadline: Time | None = None,
     ) -> None:
         """
         Construct session limits and timeouts; all parameters are keyword-only.
@@ -5451,7 +5495,7 @@ class SessionOptions:
         """
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         Absolute time after which the session is aborted.
         """
@@ -5521,7 +5565,7 @@ class SessionOptions:
     def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
-    def no_stream_timeout(self) -> typing.Any:
+    def no_stream_timeout(self) -> Duration:
         """
         How long the session waits with no active stream before finishing.
         """
@@ -5532,7 +5576,7 @@ class SessionWithRecv(Session):
     def __init__(
         self,
         session_id: str = "",
-        headers: typing.Any | None = None,
+        headers: collections.abc.Mapping[str, bytes] | None = None,
         options: SessionOptions | None = None,
         node_map: NodeMap | None = None,
         action_registry: ActionRegistry | None = None,
@@ -5636,12 +5680,12 @@ class SignallingMessage:
     def description_type(self, arg0: str) -> None: ...
 
     @property
-    def error(self) -> typing.Any:
+    def error(self) -> Status:
         """
         Error status carried by ERROR messages, or OK otherwise.
         """
     @error.setter
-    def error(self, arg1: typing.Any) -> None: ...
+    def error(self, arg1: Status) -> None: ...
 
     @property
     def mid(self) -> str:
@@ -5764,7 +5808,7 @@ class SignallingTransport:
         Return whether the transport is currently connected.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the current transport status.
         """
@@ -5823,7 +5867,7 @@ class SpeechRecognizer:
         the next user turn without reloading model weights.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the current or final recognition status.
         """
@@ -6145,12 +6189,12 @@ class Status:
         Returns a debug representation of the status.
         """
 
-    def __str__(self) -> typing.Any:
+    def __str__(self) -> str:
         """
         Returns a 'CODE: message' string form of the status.
         """
 
-    def _as_dict(self) -> typing.Any:
+    def _as_dict(self) -> dict:
         """
         Returns the status as a JSON-compatible dict.
         """
@@ -6188,7 +6232,7 @@ class Status:
         """
 
     @property
-    def code(self) -> typing.Any:
+    def code(self) -> a11.status.StatusCode:
         """
         The canonical status code.
         """
@@ -6196,7 +6240,7 @@ class Status:
     def code(self, arg1: typing.SupportsInt) -> None: ...
 
     @property
-    def details(self) -> typing.Any:
+    def details(self) -> list:
         """
         The structured status details, as a list.
         """
@@ -6300,7 +6344,7 @@ class Time:
         Returns a debug representation of the time.
         """
 
-    def __sub__(self, other: typing.Any) -> typing.Any:
+    def __sub__(self, other: typing.Any) -> Time | Duration:
         """
         Returns the duration between two times, or a time shifted back by a duration.
         """
@@ -6606,13 +6650,13 @@ class WebRtcWireStream(WireStream):
         """
 
     @property
-    def data_channel(self) -> typing.Any:
+    def data_channel(self) -> typing_extensions.CapsuleType | None:
         """
         Opaque capsule around the underlying libdatachannel DataChannel. Exposed for advanced interop and diagnostics; agent code normally reads and writes through the WireStream API rather than touching this directly.
         """
 
     @property
-    def peer_connection(self) -> typing.Any:
+    def peer_connection(self) -> typing_extensions.CapsuleType | None:
         """
         Opaque capsule around the underlying libdatachannel PeerConnection, for inspecting ICE/connection state during debugging.
         """
@@ -6732,12 +6776,12 @@ class WebSocketSignallingClient(SignallingTransport):
         identity: str,
         on_message: typing.Any | None = None,
         options: WebSocketSignallingClientOptions = ...,
-    ) -> typing.Any:
+    ) -> asyncio.Future[WebSocketSignallingClient]:
         """
         Asynchronously connect to a WebSocket signalling server, resolving to a client once registered under the given identity.
         """
 
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Opaque capsule around the native implementation, for interop.
         """
@@ -6754,12 +6798,12 @@ class WebSocketSignallingClientOptions:
         """
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         Deadline by which the connection must be established.
         """
     @deadline.setter
-    def deadline(self, arg1: typing.Any) -> None: ...
+    def deadline(self, arg1: Time | None) -> None: ...
 
     @property
     def http2_options(self) -> Http2Options:
@@ -6789,7 +6833,7 @@ class WebSocketSignallingServer:
 
     def __enter__(self) -> WebSocketSignallingServer: ...
     def __exit__(self, exc_type, exc, traceback) -> None: ...
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Opaque capsule around the native implementation, for interop.
         """
@@ -6887,7 +6931,7 @@ class WebSocketWireServer:
 
     def __enter__(self) -> WebSocketWireServer: ...
     def __exit__(self, exc_type, exc, traceback) -> None: ...
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Return an opaque native handle to the underlying implementation, or None. Intended for advanced interop.
         """
@@ -6980,7 +7024,7 @@ class WireMessage:
         self,
         node_fragments: typing.Any = [],
         actions: typing.Any = [],
-        headers: typing.Any = {},
+        headers: collections.abc.Mapping[str, bytes] | None = {},
     ) -> None:
         """
         Create a wire message from node fragments, actions, and headers.
@@ -7038,7 +7082,9 @@ class WireMessage:
         Byte-string header map attached to the message.
         """
     @headers.setter
-    def headers(self, arg1: typing.Any) -> None: ...
+    def headers(
+        self, arg1: collections.abc.Mapping[str, bytes] | None
+    ) -> None: ...
 
     @property
     def node_fragments(self) -> _NodeFragmentVectorView:
@@ -7056,7 +7102,7 @@ class WireStream:
         Construct the abstract WireStream base. Subclass this in Python to implement a custom asynchronous, bidirectional transport for an agent; the abstract operations (send, start/accept, get_status, get_trailers, ...) are dispatched to your overrides.
         """
 
-    def abort(self, status: typing.Any) -> None:
+    def abort(self, status: Status) -> None:
         """
         Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
 
@@ -7071,12 +7117,16 @@ class WireStream:
             ```
         """
 
-    def accept(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
+    def accept(
+        self,
+        on_message: collections.abc.Callable[[WireMessage | None], typing.Any],
+        on_done: collections.abc.Callable[[], typing.Any],
+    ) -> asyncio.Future[None]:
         """
         Begin driving the stream as the responding (server) side, delivering each inbound message to the asynchronous on_message callback and end-of-stream to on_done. Use this instead of start() when this endpoint is answering an incoming agent connection. Returns an awaitable that resolves when acceptance completes; use on_done as the terminal barrier.
         """
 
-    def drain_outgoing_messages(self) -> typing.Any:
+    def drain_outgoing_messages(self) -> asyncio.Future[None]:
         """
         Await until every queued outbound message has been handed to the transport. Call `half_close` first so buffered output is not dropped.
 
@@ -7094,22 +7144,24 @@ class WireStream:
         Return the stream's stable identifier, which also seeds its tracing trace id.
         """
 
-    def get_impl(self) -> typing.Any:
+    def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Return an opaque native handle to the underlying implementation, or None. Intended for advanced interop, not normal agent code.
         """
 
-    def get_status(self) -> typing.Any:
+    def get_status(self) -> Status:
         """
         Return the stream's terminal status once it has finished, or OK while it is still active. Inspect this after the stream completes to learn whether the agent exchange succeeded or failed.
         """
 
-    def get_trailers(self) -> typing.Any:
+    def get_trailers(self) -> dict[str, bytes] | None:
         """
         Return the trailers (final metadata) the peer sent at half-close, or None if none were received. Read this after the stream ends to recover end-of-turn metadata from the agent exchange.
         """
 
-    def half_close(self, trailers: typing.Any | None = None) -> None:
+    def half_close(
+        self, trailers: collections.abc.Mapping[str, bytes] | None = None
+    ) -> None:
         """
         Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
 
@@ -7134,12 +7186,16 @@ class WireStream:
             ```
         """
 
-    def set_deadline(self, deadline: typing.Any | None = None) -> None:
+    def set_deadline(self, deadline: Time | None = None) -> None:
         """
         Set an absolute wall-clock deadline after which the stream is automatically aborted; pass None to clear it.
         """
 
-    def start(self, on_message: typing.Any, on_done: typing.Any) -> typing.Any:
+    def start(
+        self,
+        on_message: collections.abc.Callable[[WireMessage | None], typing.Any],
+        on_done: collections.abc.Callable[[], typing.Any],
+    ) -> asyncio.Future[None]:
         """
         Begin driving the stream as the initiating side, delivering inbound messages to `on_message` and completion to `on_done`. Callbacks are awaited as data arrives.
 
@@ -7152,7 +7208,7 @@ class WireStream:
         """
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         The stream's current absolute deadline, after which it is automatically aborted.
         """
@@ -7174,11 +7230,11 @@ class WireStreamOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        max_buffered_incoming_messages: typing.Any = 100,
-        max_single_message_size: typing.Any = 33554432,
-        max_buffered_incoming_bytes: typing.Any = 33554432,
+        max_buffered_incoming_messages: typing.SupportsInt | None = 100,
+        max_single_message_size: typing.SupportsInt | None = 33554432,
+        max_buffered_incoming_bytes: typing.SupportsInt | None = 33554432,
         message_timeout_millis: typing.Any | None = None,
-        deadline: typing.Any | None = None,
+        deadline: Time | None = None,
     ) -> None:
         """
         Construct wire-stream options controlling buffering and timeouts for an agent stream. All arguments are keyword-friendly and validated on construction.
@@ -7198,7 +7254,7 @@ class WireStreamOptions:
         """
 
     @property
-    def deadline(self) -> typing.Any:
+    def deadline(self) -> Time:
         """
         Absolute wall-clock deadline after which the stream is aborted.
         """
@@ -7232,7 +7288,7 @@ class WireStreamOptions:
     def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
-    def message_timeout(self) -> typing.Any:
+    def message_timeout(self) -> Duration:
         """
         Per-message inactivity timeout as a duration.
         """
@@ -7240,7 +7296,7 @@ class WireStreamOptions:
     def message_timeout(self, arg1: typing.Any) -> None: ...
 
     @property
-    def message_timeout_millis(self) -> typing.Any:
+    def message_timeout_millis(self) -> Duration:
         """
         Per-message inactivity timeout expressed in milliseconds.
         """
@@ -7253,17 +7309,19 @@ class WireStreamWithRecv(WireStream):
         Wrap a callback-based WireStream in a pull-oriented adapter that exposes receive().
         """
 
-    def accept(self) -> typing.Any:
+    def accept(self) -> asyncio.Future[None]:
         """
         Accept on the wrapped stream as the responding side; returns an awaitable.
         """
 
-    def receive(self, timeout: typing.Any | None = None) -> typing.Any:
+    def receive(
+        self, timeout: Duration | None = None
+    ) -> asyncio.Future[WireMessage | None]:
         """
         Await the next inbound message, or None at end of stream, honoring the optional timeout.
         """
 
-    def start(self) -> typing.Any:
+    def start(self) -> asyncio.Future[None]:
         """
         Start the wrapped stream as the initiating side; returns an awaitable.
         """
@@ -7305,7 +7363,7 @@ class _ActionHeaderSchemaMapView:
         Return the value stored under the given key.
         """
 
-    def __iter__(self) -> typing.Any:
+    def __iter__(self) -> collections.abc.Iterator[str]:
         """
         Return an iterator over the map's keys.
         """
@@ -7330,22 +7388,24 @@ class _ActionHeaderSchemaMapView:
         Remove all entries from the map.
         """
 
-    def copy(self) -> dict:
+    def copy(self) -> dict[str, ActionHeaderSchema]:
         """
         Return a plain dict copy of the map's entries.
         """
 
-    def get(self, key: str, default: typing.Any | None = None) -> typing.Any:
+    def get(
+        self, key: str, default: ActionHeaderSchema | None = None
+    ) -> ActionHeaderSchema | None:
         """
         Return the value for the key, or the default if it is absent.
         """
 
-    def items(self) -> typing.Any:
+    def items(self) -> collections.abc.Iterable[tuple[str, ActionHeaderSchema]]:
         """
         Return a view of the map's (key, value) pairs.
         """
 
-    def keys(self) -> typing.Any:
+    def keys(self) -> collections.abc.Iterable[str]:
         """
         Return a view of the map's keys.
         """
@@ -7355,7 +7415,7 @@ class _ActionHeaderSchemaMapView:
         Merge the entries of another mapping into this map.
         """
 
-    def values(self) -> typing.Any:
+    def values(self) -> collections.abc.Iterable[ActionHeaderSchema]:
         """
         Return a view of the map's values.
         """
@@ -7512,7 +7572,7 @@ class _ActionPortSchemaMapView:
         Return the value stored under the given key.
         """
 
-    def __iter__(self) -> typing.Any:
+    def __iter__(self) -> collections.abc.Iterator[str]:
         """
         Return an iterator over the map's keys.
         """
@@ -7537,22 +7597,24 @@ class _ActionPortSchemaMapView:
         Remove all entries from the map.
         """
 
-    def copy(self) -> dict:
+    def copy(self) -> dict[str, ActionPortSchema]:
         """
         Return a plain dict copy of the map's entries.
         """
 
-    def get(self, key: str, default: typing.Any | None = None) -> typing.Any:
+    def get(
+        self, key: str, default: ActionPortSchema | None = None
+    ) -> ActionPortSchema | None:
         """
         Return the value for the key, or the default if it is absent.
         """
 
-    def items(self) -> typing.Any:
+    def items(self) -> collections.abc.Iterable[tuple[str, ActionPortSchema]]:
         """
         Return a view of the map's (key, value) pairs.
         """
 
-    def keys(self) -> typing.Any:
+    def keys(self) -> collections.abc.Iterable[str]:
         """
         Return a view of the map's keys.
         """
@@ -7562,7 +7624,7 @@ class _ActionPortSchemaMapView:
         Merge the entries of another mapping into this map.
         """
 
-    def values(self) -> typing.Any:
+    def values(self) -> collections.abc.Iterable[ActionPortSchema]:
         """
         Return a view of the map's values.
         """
@@ -7593,7 +7655,7 @@ class _ByteMapView:
         Return the bytes stored under the given key.
         """
 
-    def __iter__(self) -> typing.Any:
+    def __iter__(self) -> collections.abc.Iterator[str]:
         """
         Return an iterator over the keys.
         """
@@ -7623,17 +7685,17 @@ class _ByteMapView:
         Return a plain dict copy of the mapping.
         """
 
-    def get(self, key: str, default: typing.Any | None = None) -> typing.Any:
+    def get(self, key: str, default: bytes | None = None) -> bytes | None:
         """
         Return the bytes for a key, or the default if it is absent.
         """
 
-    def items(self) -> typing.Any:
+    def items(self) -> collections.abc.Iterable[tuple[str, bytes]]:
         """
         Return a view of the mapping's key/value pairs.
         """
 
-    def keys(self) -> typing.Any:
+    def keys(self) -> collections.abc.Iterable[str]:
         """
         Return a view of the mapping's keys.
         """
@@ -7643,7 +7705,7 @@ class _ByteMapView:
         Merge entries from another mapping into this one.
         """
 
-    def values(self) -> typing.Any:
+    def values(self) -> collections.abc.Iterable[bytes]:
         """
         Return a view of the mapping's values.
         """
@@ -7945,7 +8007,7 @@ class _StringSchemaMapView:
         Return the value stored under the given key.
         """
 
-    def __iter__(self) -> typing.Any:
+    def __iter__(self) -> collections.abc.Iterator[str]:
         """
         Return an iterator over the map's keys.
         """
@@ -7970,22 +8032,22 @@ class _StringSchemaMapView:
         Remove all entries from the map.
         """
 
-    def copy(self) -> dict:
+    def copy(self) -> dict[str, str]:
         """
         Return a plain dict copy of the map's entries.
         """
 
-    def get(self, key: str, default: typing.Any | None = None) -> typing.Any:
+    def get(self, key: str, default: str | None = None) -> str | None:
         """
         Return the value for the key, or the default if it is absent.
         """
 
-    def items(self) -> typing.Any:
+    def items(self) -> collections.abc.Iterable[tuple[str, str]]:
         """
         Return a view of the map's (key, value) pairs.
         """
 
-    def keys(self) -> typing.Any:
+    def keys(self) -> collections.abc.Iterable[str]:
         """
         Return a view of the map's keys.
         """
@@ -7995,7 +8057,7 @@ class _StringSchemaMapView:
         Merge the entries of another mapping into this map.
         """
 
-    def values(self) -> typing.Any:
+    def values(self) -> collections.abc.Iterable[str]:
         """
         Return a view of the map's values.
         """
@@ -8039,7 +8101,16 @@ def default_redis_client() -> RedisClient:
     Return the process-global client configured from A11_REDIS_*.
     """
 
-def get_http_header(headers: typing.Any, name: str) -> typing.Any:
+def emit_log(
+    severity: typing.SupportsInt,
+    message: str,
+    verbosity: typing.SupportsInt = -1,
+) -> None:
+    """
+    Write one entry to the native log, so an application can check that its logging configuration reaches the C++ runtime. FATAL is not available here.
+    """
+
+def get_http_header(headers: list[tuple[str, str]], name: str) -> str | None:
     """
     Look up a header value by name, returning None if it is absent.
     """
@@ -8064,12 +8135,16 @@ def list_audio_devices() -> list[AudioDeviceInfo]:
     Return metadata for every audio device, in index order.
     """
 
-def make_half_close_message(trailers: typing.Any = {}) -> WireMessage:
+def make_half_close_message(
+    trailers: collections.abc.Mapping[str, bytes] | None = {},
+) -> WireMessage:
     """
     Build a half-close wire message carrying the given trailers.
     """
 
-def normalize_session_headers(headers: typing.Any | None = None) -> dict:
+def normalize_session_headers(
+    headers: collections.abc.Mapping[str, bytes] | None = None,
+) -> dict:
     """
     Normalize a session headers mapping, returning the canonicalized header dict.
     """
@@ -8130,21 +8205,43 @@ def set_default_redis_client(client: RedisClient) -> None:
     Replace the process-global Redis client.
     """
 
+def set_log_sink(callback: typing.Any) -> None:
+    """
+    Route native log entries to `callback(severity, verbosity, filename, line, message, unix_seconds)`, replacing any previously installed sink. None removes the sink. FATAL entries are never routed; Abseil writes those to stderr with a backtrace.
+    """
+
+def set_min_log_level(severity: typing.SupportsInt) -> None:
+    """
+    Drop native log entries below this absl severity (0=INFO, 1=WARNING, 2=ERROR, 3=FATAL) before they are formatted.
+    """
+
+def set_stderr_threshold(severity: typing.SupportsInt) -> None:
+    """
+    Write native log entries at or above this absl severity straight to stderr, bypassing any installed sink.
+    """
+
+def set_vlog_level(level: typing.SupportsInt) -> None:
+    """
+    Emit VLOG(n) entries for n at or below this level. 0 disables them.
+    """
+
 def status_code_from_http(arg0: typing.SupportsInt) -> int: ...
 def status_code_from_websocket(arg0: typing.SupportsInt) -> int: ...
 def status_code_to_http(arg0: typing.SupportsInt) -> int: ...
 def status_code_to_websocket(arg0: typing.SupportsInt) -> int: ...
-def status_from_chunk(chunk: Chunk) -> typing.Any:
+def status_from_chunk(chunk: Chunk) -> Status:
     """
     Decode an absl Status from a data chunk.
     """
 
-def status_to_chunk(status: typing.Any, closing: bool = False) -> Chunk:
+def status_to_chunk(status: Status, closing: bool = False) -> Chunk:
     """
     Encode an absl Status as a data chunk. With closing=True the chunk is a node closure marker rather than a value: it reports that the producer drained the node and closed its write half with that status.
     """
 
-def validate_http_headers(headers: typing.Any) -> None:
+def validate_http_headers(
+    headers: collections.abc.Iterable[tuple[str, str]] | None,
+) -> None:
     """
     Validate a collection of HTTP headers, raising on error.
     """

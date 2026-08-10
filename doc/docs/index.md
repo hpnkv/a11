@@ -45,7 +45,9 @@ asyncio.run(main())
   ([`WireStream`][a11.net.wire_stream.WireStream]) are explicit extension
   points — swap in your own without touching agent logic.
 - **Observable.** Tracing is emitted natively over OTLP/HTTP; point it at
-  Langfuse or any OpenTelemetry backend.
+  Langfuse or any OpenTelemetry backend. Logs from the C++ runtime arrive as
+  ordinary `logging` records, under whatever configuration the
+  process already has.
 
 ## Where to go next
 

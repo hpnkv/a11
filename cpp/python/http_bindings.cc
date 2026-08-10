@@ -3,15 +3,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <Python.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -20,6 +23,9 @@
 #include <pybind11_abseil/statusor_caster.h>  // IWYU pragma: keep
 
 #include "a11/concurrency/future.h"
+#include "a11/net/http/download.h"
+#include "a11/net/http/fetch.h"
+#include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/http_sse_wire_stream.h"
 #include "a11/net/wire_stream.h"
@@ -186,6 +192,35 @@ auto ValueWithoutGil(Operation&& operation) {
     return std::forward<Operation>(operation)();
   }();
   return ValueOrThrow(std::move(result));
+}
+
+/// A progress callback as Python sees it: `Callable[[int, int], None] | None`.
+using OnProgressPython = py::typing::Optional<
+    py::typing::Callable<void(py::int_, py::int_)>>;
+
+/**
+ * Wraps a Python progress callable for a fetch or download.
+ *
+ * The callback runs on the pooled fiber doing the transfer, not on the asyncio
+ * loop, so it has to take the GIL itself. A callback that raises is reported and
+ * dropped rather than propagated: a broken progress bar is not a reason to fail
+ * a download that is otherwise succeeding, and letting the exception cross the
+ * fiber boundary would surface as an unrelated Unknown status.
+ */
+net::OnFetchProgress ProgressFromPython(const py::object& on_progress) {
+  if (on_progress.is_none()) {
+    return {};
+  }
+  auto shared = std::make_shared<py::object>(on_progress);
+  return [shared](std::uint64_t done, std::uint64_t total) {
+    py::gil_scoped_acquire acquire;
+    try {
+      (*shared)(done, total);
+    } catch (const py::error_already_set& error) {
+      PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                       "a11 progress callback raised: %s", error.what());
+    }
+  };
 }
 
 }  // namespace
@@ -928,6 +963,170 @@ void BindHttp(py::module_& module) {
                              "The underlying HTTP/2 server.");
 
   module.attr("HttpSseWireStreamServer") = module.attr("HttpSseServer");
+
+  py::class_<net::ParsedUrl>(module, "ParsedUrl")
+      .def(py::init<>(), "Construct an empty parsed URL.")
+      .def_readwrite("scheme", &net::ParsedUrl::scheme,
+                     "Lowercase scheme, without \"://\".")
+      .def_readwrite("host", &net::ParsedUrl::host,
+                     "Hostname or IP literal, without IPv6 brackets.")
+      .def_readwrite("port", &net::ParsedUrl::port,
+                     "Explicit port, or the scheme's default.")
+      .def_readwrite("path", &net::ParsedUrl::path,
+                     "Path beginning with '/', or empty when none was given.")
+      .def_readwrite("query", &net::ParsedUrl::query,
+                     "Query without the leading '?'.")
+      .def_property_readonly("secure", &net::ParsedUrl::secure,
+                             "Whether the scheme implies TLS.")
+      .def_property_readonly("authority", &net::ParsedUrl::authority,
+                             "The authority as a header value.")
+      .def_property_readonly("target", &net::ParsedUrl::target,
+                             "The request target: path and query, at least \"/\".")
+      .def_property_readonly("origin", &net::ParsedUrl::origin,
+                             "scheme://authority, with no trailing slash.")
+      .def("__str__", &net::ParsedUrl::ToString)
+      .def("__repr__", [](const net::ParsedUrl& url) {
+        return absl::StrCat("ParsedUrl('", url.ToString(), "')");
+      });
+
+  module.def(
+      "parse_url",
+      [](std::string_view url) { return ValueOrThrow(net::ParseUrl(url)); },
+      "Parse an absolute http/https/ws/wss URL, raising on a malformed one.",
+      py::arg("url"));
+  module.def(
+      "resolve_url_reference",
+      [](const net::ParsedUrl& base, std::string_view reference) {
+        return ValueOrThrow(net::ResolveReference(base, reference));
+      },
+      "Resolve a reference (such as a Location header) against a base URL.",
+      py::arg("base"), py::arg("reference"));
+
+  py::class_<net::FetchOptions>(module, "FetchOptions")
+      .def(py::init<>(), "Construct default fetch options.")
+      .def_readwrite("method", &net::FetchOptions::method,
+                     "Request method.")
+      .def_property(
+          "headers",
+          [](const net::FetchOptions& options) {
+            return HttpHeadersToPython(options.headers);
+          },
+          [](net::FetchOptions& options,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
+            options.headers = ValueOrThrow(HttpHeadersFromPython(headers));
+          },
+          "Extra request headers as a list of (name, value) pairs.")
+      .def_property(
+          "body",
+          [](const net::FetchOptions& options) {
+            return py::bytes(options.body);
+          },
+          [](net::FetchOptions& options, const py::object& body) {
+            options.body = ValueOrThrow(HttpBodyFromPython(body));
+          },
+          "Request body, for methods that take one.")
+      .def_readwrite("max_redirects", &net::FetchOptions::max_redirects,
+                     "Redirects to follow; 0 returns the 3xx response itself.")
+      .def_readwrite("transport", &net::FetchOptions::transport,
+                     "Transport settings; tls.enabled follows the URL scheme.")
+      .def_readwrite("default_user_agent",
+                     &net::FetchOptions::default_user_agent,
+                     "Send a default user-agent when headers omit one.")
+      .def_property(
+          "timeout",
+          [](const net::FetchOptions& options) -> NativeDuration {
+            return NativeDuration(options.timeout);
+          },
+          [](net::FetchOptions& options,
+             const py::typing::Optional<NativeDuration>& timeout) {
+            options.timeout = ValueOrThrow(DurationFromPython(timeout));
+          },
+          "Wall-clock bound on the whole operation, redirects included.")
+      .def(
+          "validate",
+          [](const net::FetchOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Validate the options, raising on error.");
+
+  py::class_<net::DownloadOptions>(module, "DownloadOptions")
+      .def(py::init<>(), "Construct default download options.")
+      .def_property(
+          "destination",
+          [](const net::DownloadOptions& options) {
+            return options.destination.string();
+          },
+          [](net::DownloadOptions& options, std::string destination) {
+            options.destination = std::move(destination);
+          },
+          "Final path; parent directories are created.")
+      .def_readwrite("expected_sha1", &net::DownloadOptions::expected_sha1,
+                     "Expected SHA-1 as hex, or empty to skip verification.")
+      .def_readwrite("fetch", &net::DownloadOptions::fetch,
+                     "Request settings.")
+      .def_property(
+          "on_progress",
+          [](const net::DownloadOptions&) -> OnProgressPython {
+            // Write-only: what is stored is a C++ closure over the Python
+            // callable, not the callable itself, so there is nothing to hand
+            // back.
+            return py::none();
+          },
+          [](net::DownloadOptions& options,
+             const OnProgressPython& on_progress) {
+            options.on_progress = ProgressFromPython(on_progress);
+          },
+          "Callable taking (bytes_done, bytes_total); write-only.");
+
+  module.def(
+      "fetch",
+      [](std::string url, const py::typing::Optional<net::FetchOptions>&
+                              options) {
+        return FutureToPython(net::Fetch(
+            std::move(url),
+            options.is_none() ? net::FetchOptions{}
+                              : options.cast<net::FetchOptions>()));
+      },
+      R"doc(Fetch a URL and buffer the whole response.
+
+Follows redirects, maps a 4xx/5xx onto a status error, and enables TLS from the
+scheme. Awaitable.
+
+Examples:
+    ```python
+    response = await a11.net.http.fetch("https://example.com/index.html")
+    print(response.head.status, len(response.body))
+    ```
+)doc",
+      py::arg("url"), py::arg("options") = py::none());
+
+  module.def(
+      "download",
+      [](std::string url, net::DownloadOptions options) {
+        return FutureToPythonAs<py::str>(
+            net::Download(std::move(url), std::move(options)),
+            [](const std::filesystem::path& path) -> py::object {
+              return py::str(path.string());
+            });
+      },
+      R"doc(Download a URL to a verified file, atomically.
+
+Returns the destination path. A destination that already exists and matches
+``expected_sha1`` is returned without touching the network. Awaitable.
+)doc",
+      py::arg("url"), py::arg("options"));
+
+  module.def(
+      "file_sha1",
+      [](std::string path) {
+        return ValueWithoutGil([&path] {
+          return net::FileSha1(std::filesystem::path(path));
+        });
+      },
+      "Compute the SHA-1 of a file as lowercase hex. Blocks.",
+      py::arg("path"));
+
   module.def(
       "get_http_header",
       [](const py::typing::List<py::typing::Tuple<py::str, py::str>>& headers,

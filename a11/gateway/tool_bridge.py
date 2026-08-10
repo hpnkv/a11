@@ -57,6 +57,51 @@ REGISTER_TOOLS_SCHEMA = a11.ActionSchema(
 )
 
 
+def describe_port(port: a11.ActionPortSchema, *, user_facing: bool) -> dict:
+    """One port, as `_ports` reads it back."""
+    described: dict[str, Any] = {
+        "name": port.name,
+        "type": port.type,
+        "description": port.description,
+        "required": bool(port.required),
+        "unary": bool(port.unary),
+    }
+    if user_facing:
+        described["user_facing"] = True
+    return described
+
+
+def describe_tool(schema: a11.ActionSchema) -> dict:
+    """An ActionSchema as the descriptor `__register_tools__` expects.
+
+    This is the *port* description the bridge rebuilds a callable schema from --
+    not the JSON-Schema tool definition a model is shown, which is a different
+    document produced by
+    [get_tool_definitions][a11.sdk.llm_tools.runner.get_tool_definitions]. A
+    client needs both, for different ports, and announcing the latter here
+    silently yields a proxy with no inputs at all: the model's arguments then
+    have nowhere to land and the call fails with "unexpected input".
+
+    Mirrors what the IntelliJ plugin's Kotlin side sends, so both clients get
+    proxies built the same way.
+    """
+    return {
+        "name": schema.name,
+        "description": schema.description,
+        "inputs": [
+            describe_port(port, user_facing=False)
+            for port in schema.inputs.values()
+        ],
+        "outputs": [
+            # The log port is the one the model must never see; flagging it is
+            # what moves it onto USER_FACING_LOG_PORT on the far side.
+            describe_port(port, user_facing=port.name == USER_FACING_LOG_PORT)
+            for port in schema.outputs.values()
+        ],
+        "output_to_json_field": dict(schema.output_to_json_field),
+    }
+
+
 def _ports(
     entries: list[dict[str, Any]],
 ) -> dict[str, a11.ActionPortSchema]:
@@ -176,14 +221,29 @@ class RemoteToolBridge:
             ).to_exception()
 
         registered: list[str] = []
+        shadowed: list[str] = []
         async for descriptor in action["tools"]:
             tool = _BridgedTool(descriptor)
+            # A peer announcing a name this side also serves shadows it:
+            # `register` replaces, and the registry is a per-connection copy, so
+            # no other session sees the substitution. That is the behaviour we
+            # want — the peer asked for *its* tool to run the model's calls, and
+            # a client whose whole point is its own shell (`a11 chat`) must be
+            # able to announce `shell_execute` to a gateway that serves one too.
+            # It is worth a log line because it is otherwise invisible.
+            if self._registry.is_registered(tool.name):
+                shadowed.append(tool.name)
             self._registry.register(
                 tool.name, tool.schema, self._make_proxy(tool)
             )
             registered.append(tool.name)
 
         logging.info("registered %d remote tool(s)", len(registered))
+        if shadowed:
+            logging.info(
+                "peer tools shadow local ones on this connection: %s",
+                ", ".join(shadowed),
+            )
         await action["ok"].put({"registered": registered}, final=True)
         await action["ok"].drain_and_close()
 

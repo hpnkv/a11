@@ -105,6 +105,8 @@ from .redis.client import (
     reset_default_client as reset_default_redis_client,
     set_default_client as set_default_redis_client,
 )
+from .service.service import Service, ServiceOptions
+from .service.serving import serving
 from .service.session import (
     normalise_headers,
     Session,

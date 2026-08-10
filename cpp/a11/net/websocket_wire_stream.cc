@@ -23,6 +23,7 @@
 
 #include "a11/concurrency/future.h"
 #include "a11/net/channel_wire_stream.h"
+#include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/internal/binary_channel.h"
 #include "a11/net/internal/http2_websocket_channel.h"
@@ -32,12 +33,6 @@
 namespace a11::net {
 namespace {
 
-struct ParsedWebSocketUrl {
-  std::string host;
-  std::uint16_t port = 0;
-  std::string path;
-  bool secure = false;
-};
 
 std::string NewWebSocketId() {
   absl::BitGen generator;
@@ -46,65 +41,14 @@ std::string NewWebSocketId() {
                          absl::Uniform<std::uint64_t>(generator));
 }
 
-absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
-  ParsedWebSocketUrl result;
-  std::string_view remainder;
-  if (absl::StartsWith(url, "ws://")) {
-    url.remove_prefix(5);
-    result.secure = false;
-    result.port = 80;
-    remainder = url;
-  } else if (absl::StartsWith(url, "wss://")) {
-    url.remove_prefix(6);
-    result.secure = true;
-    result.port = 443;
-    remainder = url;
-  } else {
+/** Parses a `ws`/`wss` URL, rejecting the schemes this transport cannot dial. */
+absl::StatusOr<ParsedUrl> ParseWebSocketUrl(std::string_view url) {
+  ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseUrl(url));
+  if (parsed.scheme != "ws" && parsed.scheme != "wss") {
     return absl::InvalidArgumentError(
         "WebSocket URL must start with ws:// or wss://");
   }
-  const size_t slash = remainder.find('/');
-  std::string_view authority = remainder.substr(0, slash);
-  result.path = slash == std::string_view::npos
-                    ? "/"
-                    : std::string(remainder.substr(slash));
-  if (authority.empty()) {
-    return absl::InvalidArgumentError("WebSocket URL host must not be empty");
-  }
-
-  std::string_view port_text;
-  if (authority.front() == '[') {
-    const size_t bracket = authority.find(']');
-    if (bracket == std::string_view::npos) {
-      return absl::InvalidArgumentError("WebSocket IPv6 host is malformed");
-    }
-    result.host = std::string(authority.substr(1, bracket - 1));
-    if (bracket + 1 < authority.size()) {
-      if (authority[bracket + 1] != ':') {
-        return absl::InvalidArgumentError("WebSocket authority is malformed");
-      }
-      port_text = authority.substr(bracket + 2);
-    }
-  } else {
-    const size_t colon = authority.rfind(':');
-    if (colon != std::string_view::npos && authority.find(':') == colon) {
-      result.host = std::string(authority.substr(0, colon));
-      port_text = authority.substr(colon + 1);
-    } else {
-      result.host = std::string(authority);
-    }
-  }
-  if (result.host.empty()) {
-    return absl::InvalidArgumentError("WebSocket URL host must not be empty");
-  }
-  if (!port_text.empty()) {
-    unsigned int port = 0;
-    if (!absl::SimpleAtoi(port_text, &port) || port == 0 || port > 65535) {
-      return absl::InvalidArgumentError("WebSocket URL port is invalid");
-    }
-    result.port = static_cast<std::uint16_t>(port);
-  }
-  return result;
+  return parsed;
 }
 
 }  // namespace
@@ -119,15 +63,17 @@ absl::StatusOr<std::shared_ptr<WebSocketWireStream>>
 WebSocketWireStream::CreateClient(std::string url, WireStreamOptions options,
                                   WebSocketClientOptions websocket_options) {
   ABSL_RETURN_IF_ERROR(options.Validate());
-  ABSL_ASSIGN_OR_RETURN(ParsedWebSocketUrl parsed, ParseWebSocketUrl(url));
-  websocket_options.http2_options.tls.enabled = parsed.secure;
+  ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseWebSocketUrl(url));
+  websocket_options.http2_options.tls.enabled = parsed.secure();
   websocket_options.http2_options.deadline =
       std::min(websocket_options.http2_options.deadline, options.deadline);
   ABSL_RETURN_IF_ERROR(websocket_options.Validate());
   internal::Http2WebSocketClientConfig config{
+      // target(), not path: a pathless URL must still request "/", and any
+      // query belongs in the request line.
       .host = std::move(parsed.host),
       .port = parsed.port,
-      .path = std::move(parsed.path),
+      .path = parsed.target(),
       .headers = std::move(websocket_options.headers),
       .http2_options = websocket_options.http2_options,
       .max_message_size = options.max_single_message_size,

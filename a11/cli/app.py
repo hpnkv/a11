@@ -81,7 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from a11.cli.commands import COMMANDS
     from a11 import logging as a11_logging, observability
 
-    a11_logging.enable("info")
+    # a11_logging.enable("info")
 
     otlp_configured = observability.configure_langfuse_from_env()
 

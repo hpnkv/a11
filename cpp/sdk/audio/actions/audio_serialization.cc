@@ -199,8 +199,8 @@ std::string_view A11SerialTag(a11::data::TypeTag<SpeechRecognizerOptions>) {
 absl::StatusOr<nlohmann::json> A11ToJson(const SpeechRecognizerOptions& value) {
   const SpeechRecognizerOptions d;
   nlohmann::json json = nlohmann::json::object();
-  if (value.model_path != d.model_path) {
-    json["model_path"] = value.model_path;
+  if (value.model != d.model) {
+    json["model"] = value.model;
   }
   if (value.language != d.language) {
     json["language"] = value.language;
@@ -247,8 +247,8 @@ absl::StatusOr<nlohmann::json> A11ToJson(const SpeechRecognizerOptions& value) {
   if (value.max_speech_seconds != d.max_speech_seconds) {
     json["max_speech_seconds"] = value.max_speech_seconds;
   }
-  if (value.vad_model_path != d.vad_model_path) {
-    json["vad_model_path"] = value.vad_model_path;
+  if (value.vad_model != d.vad_model) {
+    json["vad_model"] = value.vad_model;
   }
   if (value.silero_threshold != d.silero_threshold) {
     json["silero_threshold"] = value.silero_threshold;
@@ -263,7 +263,7 @@ absl::StatusOr<SpeechRecognizerOptions> A11FromJson(
         "SpeechRecognizerOptions JSON must be an object");
   }
   SpeechRecognizerOptions v;
-  ABSL_ASSIGN_OR_RETURN(v.model_path, GetOr(json, "model_path", v.model_path));
+  ABSL_ASSIGN_OR_RETURN(v.model, GetOr(json, "model", v.model));
   ABSL_ASSIGN_OR_RETURN(v.language, GetOr(json, "language", v.language));
   ABSL_ASSIGN_OR_RETURN(v.translate, GetOr(json, "translate", v.translate));
   ABSL_ASSIGN_OR_RETURN(v.inference_threads,
@@ -292,8 +292,8 @@ absl::StatusOr<SpeechRecognizerOptions> A11FromJson(
                         GetOr(json, "speech_pad_millis", v.speech_pad_millis));
   ABSL_ASSIGN_OR_RETURN(v.max_speech_seconds, GetOr(json, "max_speech_seconds",
                                                     v.max_speech_seconds));
-  ABSL_ASSIGN_OR_RETURN(v.vad_model_path,
-                        GetOr(json, "vad_model_path", v.vad_model_path));
+  ABSL_ASSIGN_OR_RETURN(v.vad_model,
+                        GetOr(json, "vad_model", v.vad_model));
   ABSL_ASSIGN_OR_RETURN(v.silero_threshold,
                         GetOr(json, "silero_threshold", v.silero_threshold));
   if (absl::Status valid = v.Validate(); !valid.ok()) {

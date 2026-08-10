@@ -2,16 +2,22 @@
 
 """Interactive chat loop for ``a11 chat``.
 
-The UI is deliberately state-agnostic: conversation history is just a flat
-``list[Interaction]`` that `ChatUI` threads back into each turn. Input is
-read with `prompt_toolkit` (async-native, no opinion on how we hold state)
-and assistant output is streamed live with `rich`.
+`ChatUI` is presentation and nothing else. The processing -- the LLM call, tool
+dispatch, conversation persistence -- happens on a *gateway*: either one the user
+is already running, or one started inside this process and reached over an
+in-memory stream pair. Either way the turn is driven by
+[run_turn][a11.client.turn.run_turn], the same loop every A11 client uses, and
+rendered from the [PresentationBlock][a11.sdk.presentation.PresentationBlock]s
+that loop produces.
 
-Backend selection belongs to the action: every turn runs the single
-[INTERACT_WITH_LLM_SCHEMA][a11.sdk.interact_with_llm.INTERACT_WITH_LLM_SCHEMA]
-action with an ``x-a11-llm-provider`` header, and that action routes to the
-concrete backend and imports its SDK lazily. The CLI reads the ``text_output``
-(and, when verbose, ``thoughts``) stream nodes it produces.
+So what is left here: read a line with `prompt_toolkit` (async-native, no
+opinion on how we hold state), draw blocks with `rich`, handle the slash
+commands, and splice speech into the prompt. Conversation history is still just
+a flat ``list[Interaction]``.
+
+The shell tools are announced to the gateway rather than requested from it,
+which means the model's commands run in *this* process -- the user's shell, cwd
+and environment -- even when the gateway is somewhere else.
 """
 
 from __future__ import annotations
@@ -27,18 +33,16 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
-from rich.markdown import Markdown
-from rich.text import Text
 
 from a11 import observability
 from a11.cli.backends import PROVIDERS, Provider, make_user_interaction
-from a11.sdk.interact_with_llm import (
-    INTERACT_WITH_LLM_SCHEMA,
-    interact_with_llm,
-)
-from a11.sdk.llm import Interaction, LlmHeaders
+from a11.cli.presentation_render import render_blocks
+from a11.client.connection import GatewayConnection, open_gateway
+from a11.client.turn import TurnConfig, run_turn
+from a11.sdk.llm import Interaction
+from a11.sdk.presentation import PresentationReducer
 from a11.status import Status, StatusCode, StatusException
 
 if TYPE_CHECKING:
@@ -54,6 +58,26 @@ _HELP = (
 )
 
 
+class _Repaint:
+    """A `PresentationSink` that calls one function on any change.
+
+    The terminal's answer to incremental rendering: rather than track which
+    block moved, redraw the turn and let `rich` diff it.
+    """
+
+    def __init__(self, paint) -> None:
+        self._paint = paint
+
+    def on_block_opened(self, block) -> None:
+        self._paint()
+
+    def on_block_appended(self, block, delta: str) -> None:
+        self._paint()
+
+    def on_block_closed(self, block) -> None:
+        self._paint()
+
+
 class ChatUI:
     """A single interactive chat session over a swappable LLM backend."""
 
@@ -61,6 +85,7 @@ class ChatUI:
         self,
         provider: Provider,
         model: str,
+        connection: GatewayConnection,
         *,
         verbose: bool = False,
         shell_tools: bool = True,
@@ -68,6 +93,7 @@ class ChatUI:
         voice_model: str = "tiny.en",
         extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
+        self._connection = connection
         self._provider = provider
         self._model = model
         self._verbose = verbose
@@ -86,31 +112,47 @@ class ChatUI:
         self._voice_accepting = False
         self._recognizer: SpeechRecognizer | None = None
 
-        # Shell tools: a registry of the four shell Actions, their tool
-        # definitions, the pattern that permits them, and the system prompt
-        # that teaches the model to use them. Built once and reused each turn.
-        self._registry: a11.ActionRegistry | None = None
+        # Shell tools: their definitions, and the system prompt that teaches
+        # the model to use them. The Actions themselves are registered on the
+        # connection's session registry, because the gateway reverse-dispatches
+        # the model's calls back to *this* process to run them.
+        # Two different documents, for two different ports. The definitions are
+        # the JSON-Schema tool descriptions the *model* is shown; the descriptors
+        # are the port schemas the gateway rebuilds a callable proxy from.
+        # Announcing the wrong one gives a proxy with no inputs, and every tool
+        # call fails with "unexpected input".
         self._tool_definitions: list[dict] = []
-        self._allowed_actions = ""
+        self._tool_descriptors: list[dict] = []
+        self._tool_names: list[str] = []
         self._system_prompt = ""
+        self._tools_announced = False
         if shell_tools:
             self._enable_shell_tools()
 
     def _enable_shell_tools(self) -> None:
+        """Prepare this side's shell tools, to be announced once connected.
+
+        They are the client's tools, not the gateway's: `a11 chat` exists to run
+        commands in the user's own shell and working directory, and a gateway --
+        which may be shared, or in a container -- is the wrong place for that.
+        So nothing asks the gateway for its `shell_*` actions; these are
+        announced over the bridge and run here.
+        """
+        from a11.gateway.tool_bridge import describe_tool
         from a11.sdk import bash
         from a11.sdk.llm_tools.runner import get_tool_definitions
 
-        registry = a11.ActionRegistry()
+        registry = self._connection.session.action_registry
         bash.register(registry)
         names = [schema.name for schema, _ in bash.SHELL_ACTIONS]
-        self._registry = registry
+        self._tool_names = names
         self._tool_definitions = get_tool_definitions(registry, names)
-        self._allowed_actions = "shell_.*"
-        # Chat runs outside an A11 Session, so shells are globally scoped and
-        # the global cap is the one the model should be told about.
-        self._system_prompt = bash.get_system_prompt(
-            max_shells=bash.MAX_GLOBAL_SHELLS
-        )
+        self._tool_descriptors = [
+            describe_tool(registry.get_schema(name)) for name in names
+        ]
+        # Chat now runs inside a Session, so shells are scoped to it and the
+        # per-session cap is the one the model should be told about.
+        self._system_prompt = bash.get_system_prompt()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -122,8 +164,18 @@ class ChatUI:
         self._traceparent = self._chat_span.traceparent()
         self._console.print(_HELP, style="dim", markup=False)
         self._print_status()
+        self._console.print(
+            f"gateway: [bold]{self._connection.description}[/]",
+            style="dim",
+            highlight=False,
+        )
         if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
+        # Announced once per connection: the gateway registers a proxy per tool
+        # and reverse-dispatches the model's calls back here to run them.
+        if self._tool_descriptors and not self._tools_announced:
+            await self._connection.announce_tools(self._tool_descriptors)
+            self._tools_announced = True
         if self._voice_enabled:
             await self._prepare_voice()
 
@@ -234,30 +286,7 @@ class ChatUI:
     # -- one conversational turn ------------------------------------------
 
     async def _turn(self, text: str) -> None:
-        interact = (
-            a11.Action(INTERACT_WITH_LLM_SCHEMA)
-            .bind_handler(interact_with_llm)
-            .set_header(LlmHeaders.PROVIDER.value, self._provider.name)
-            .set_header(LlmHeaders.MODEL.value, self._model)
-            .set_header(LlmHeaders.API_KEY.value, self._provider.api_key())
-            .set_header(LlmHeaders.BASE_URL.value, self._provider.base_url)
-            .set_header(
-                LlmHeaders.ALLOWED_LLM_ACTIONS.value, self._allowed_actions
-            )
-        )
-        # Tool calls the backend makes are dispatched against this registry.
-        if self._registry is not None:
-            interact.bind_registry(self._registry)
-        # Applied last so a user-supplied header overrides the default above.
-        for key, value in self._extra_headers:
-            interact.set_header(key, value)
-        observability.enable_tracing(
-            interact,
-            traceparent=self._traceparent,
-            baggage={"langfuse.trace.name": "chat_ui"},
-        )
-        interact.run()
-
+        """Run one turn on the gateway and draw what it produces."""
         user_interaction = make_user_interaction(text)
         # The tool system prompt rides on the first interaction of the
         # conversation (every backend reads system instructions only there).
@@ -266,80 +295,70 @@ class ChatUI:
                 a11.to_chunk(self._system_prompt)
             ]
 
-        text_buf: list[str] = []
-        thoughts_buf: list[str] = []
         live = Live(
             console=self._console,
             refresh_per_second=16,
             transient=False,
             vertical_overflow="visible",
         )
-        live.start()
+        reducer = PresentationReducer()
 
-        def render() -> None:
-            parts: list[object] = []
-            if self._verbose and thoughts_buf:
-                parts.append(
-                    Text("".join(thoughts_buf).strip(), style="dim italic")
-                )
-            if text_buf:
-                parts.append(Markdown("".join(text_buf)))
-            live.update(Group(*parts))
+        def paint() -> None:
+            """Redraw the whole turn.
 
-        async def pump(node_name: str, buf: list[str]) -> None:
-            async for chunk in interact[node_name]:
-                buf.append(chunk)
-                render()
+            Wholesale rather than incremental: `rich`'s Live already diffs, and
+            a block can change after it was first drawn -- a tool run's log
+            arrives in the interaction *after* the call that produced it.
+            """
+            live.update(render_blocks(reducer.blocks, verbose=self._verbose))
 
-        async def log_events() -> None:
+        reducer = PresentationReducer(_Repaint(paint))
+
+        config = TurnConfig(
+            provider=self._provider.name,
+            model=self._model,
+            api_key=self._provider.api_key(),
+            base_url=self._provider.base_url,
+            # The names this client announced, and only those. The header gates
+            # every tool the model may see, bridged ones included, so announcing
+            # is not enough on its own -- the same two steps the IDE plugin
+            # takes. Because a peer's tool shadows a gateway tool of the same
+            # name on this connection, these names resolve to *this* process's
+            # shells rather than the gateway's.
+            allowed_actions=",".join(self._tool_names),
+            extra_headers=self._extra_headers,
+            traceparent=self._traceparent,
             # The raw provider events, shown only under -v. They are *not* used
-            # to reconstruct text/thoughts — those come from their own nodes.
-            async for event in interact["event_stream"]:
-                self._console.log(event)
+            # to reconstruct text or thoughts -- those come from their own ports.
+            # `run_turn` drains the port either way.
+            on_event=(self._console.log if self._verbose else None),
+        )
 
         self._console.print(
             f"[bold green]{self._provider.name}[/]", highlight=False
         )
-        readers = [asyncio.create_task(pump("text_output", text_buf))]
-        if self._verbose:
-            readers.append(asyncio.create_task(pump("thoughts", thoughts_buf)))
-            readers.append(asyncio.create_task(log_events()))
-
+        live.start()
         try:
-            async with (
-                interact["interactions"] as interactions,
-                interact["config"],
-                interact["tools"] as tools,
-            ):
-                # The config node is left empty (closed on block exit) so the
-                # backend applies its own default request config.
-                for interaction in self._history:
-                    await interactions.put(interaction)
-                await interactions.put_final(user_interaction)
-                for tool in self._tool_definitions:
-                    await tools.put(tool)
-                await tools.put_null_final()
-
-            new_interactions: list[Interaction] = []
-            async for interaction in interact["new_interactions"]:
-                new_interactions.append(interaction)
-
-            await asyncio.gather(*readers)
-
+            new_interactions = await run_turn(
+                self._connection,
+                self._history,
+                user_interaction,
+                self._tool_definitions,
+                config,
+                reducer,
+            )
+            # History grows only on success, matching what the gateway recorded.
             self._history.append(user_interaction)
             self._history.extend(new_interactions)
-
         except StatusException as exc:
-            self._console.print(
-                f"error: {exc.status.message}", style="red", markup=False
-            )
+            reducer.on_error(exc.status)
+            live.update(render_blocks(reducer.blocks, verbose=self._verbose))
         except Exception as exc:  # pragma: no cover - defensive
-            self._console.print(f"error: {exc}", style="red", markup=False)
+            reducer.on_error(
+                Status(code=StatusCode.INTERNAL, message=str(exc))
+            )
+            live.update(render_blocks(reducer.blocks, verbose=self._verbose))
         finally:
-            for reader in readers:
-                if not reader.done():
-                    reader.cancel()
-            await asyncio.gather(*readers, return_exceptions=True)
             if live.is_started:
                 live.stop()
             self._console.print()
@@ -355,20 +374,20 @@ class ChatUI:
                 SpeechRecognizerOptions,
             )
 
-            model_path: Path = await asyncio.to_thread(
-                ensure_voice_model, self._voice_model, self._console
+            # Both resolve on A11's fiber pool and are awaited directly; the
+            # download does not need a worker thread of its own.
+            model: Path = await ensure_voice_model(
+                self._voice_model, self._console
             )
             # Silero VAD gates the decoder on genuine speech, so brief noise
             # while the user gathers their thoughts does not spawn transcription.
-            vad_model_path: Path = await asyncio.to_thread(
-                ensure_vad_model, self._console
-            )
+            vad_model: Path = await ensure_vad_model(self._console)
             language = "en" if self._voice_model.endswith(".en") else "auto"
             options = SpeechRecognizerOptions(
-                language=language, vad_model_path=str(vad_model_path)
+                language=language, vad_model=str(vad_model)
             )
             self._recognizer = await asyncio.to_thread(
-                SpeechRecognizer, model_path, None, options
+                SpeechRecognizer, model, None, options
             )
             self._console.print(
                 f"voice input: [bold]{self._voice_model}[/] · microphone on "
@@ -468,6 +487,7 @@ async def run_chat(
     provider_name: str,
     model: str | None,
     *,
+    gateway: str | None = None,
     verbose: bool = False,
     shell_tools: bool = True,
     voice: bool = True,
@@ -476,8 +496,23 @@ async def run_chat(
 ) -> int:
     """Run the interactive chat loop against ``provider_name``.
 
-    Returns a process exit code. Unknown providers are reported as a short
-    message; provider-SDK / API-key problems surface inside the loop.
+    Args:
+        provider_name: Which LLM backend to use.
+        model: Model id, or None for the provider's default.
+        gateway: An explicit gateway URL. When given it must be reachable, and
+            the command fails if it is not -- silently running a local gateway
+            instead would execute the user's tools somewhere they did not
+            choose. When omitted, an already-running gateway at the default
+            endpoint is used, and otherwise one is started in this process.
+        verbose: Show thoughts and token usage.
+        shell_tools: Offer this side's shell tools to the model.
+        voice: Enable speech input.
+        voice_model: Transcription model shorthand or path.
+        extra_headers: Headers set on every turn, overriding the defaults.
+
+    Returns:
+        A process exit code. 2 for an unknown backend or an unreachable
+        explicit gateway; provider-SDK and API-key problems surface in the loop.
     """
     console = Console()
     provider = PROVIDERS.get(provider_name)
@@ -489,12 +524,25 @@ async def run_chat(
         )
         return 2
 
-    return await ChatUI(
-        provider,
-        model or provider.default_model,
-        verbose=verbose,
-        shell_tools=shell_tools,
-        voice=voice,
-        voice_model=voice_model,
-        extra_headers=extra_headers,
-    ).run()
+    try:
+        async with open_gateway(gateway) as connection:
+            return await ChatUI(
+                provider,
+                model or provider.default_model,
+                connection,
+                verbose=verbose,
+                shell_tools=shell_tools,
+                voice=voice,
+                voice_model=voice_model,
+                extra_headers=extra_headers,
+            ).run()
+    except StatusException as exc:
+        # Only reached when the *connection* failed; a failure inside a turn is
+        # drawn in the transcript and does not end the session.
+        target = gateway or "the default gateway endpoint"
+        console.print(
+            f"could not reach {target}: {exc.status.message}",
+            style="red",
+            markup=False,
+        )
+        return 2

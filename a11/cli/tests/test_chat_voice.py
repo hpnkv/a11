@@ -4,15 +4,23 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 
 import pytest
 from rich.console import Console
 
+import a11
 from a11.cli.backends import PROVIDERS
+from a11.client.connection import GatewayConnection
 from a11.cli.chat_ui import ChatUI
-from a11.cli.voice import VOICE_MODELS, VoiceModel, ensure_voice_model
+from a11.cli.voice import (
+    DEFAULT_VOICE_MODEL,
+    VAD_MODEL,
+    VOICE_MODELS,
+    ensure_voice_model,
+    voice_cache_dir,
+)
+from a11.status import StatusCode, StatusException
 
 
 def _console() -> tuple[Console, io.StringIO]:
@@ -20,58 +28,59 @@ def _console() -> tuple[Console, io.StringIO]:
     return Console(file=output, force_terminal=False), output
 
 
-def test_verified_cached_model_skips_download(tmp_path, monkeypatch):
-    payload = b"small fake whisper model"
-    digest = hashlib.sha1(payload, usedforsecurity=False).hexdigest()
-    model = VoiceModel("test", digest, 1)
-    monkeypatch.setitem(VOICE_MODELS, "test", model)
-    destination = tmp_path / model.filename
-    destination.write_bytes(payload)
+def test_the_model_table_comes_from_the_native_registry():
+    """One table, so the CLI's choices and the gateway's cannot drift.
 
-    def fail_download(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("cached model should not be downloaded")
-
-    monkeypatch.setattr("urllib.request.urlopen", fail_download)
-    console, output = _console()
-    assert (
-        ensure_voice_model("test", console, cache_dir=tmp_path) == destination
-    )
-    assert "cached" in output.getvalue()
+    Downloading, verifying and the atomic rename are the native registry's job
+    and are covered by the C++ suites; what has to hold here is that this module
+    reports the same catalogue the actions accept.
+    """
+    assert set(VOICE_MODELS) == {"tiny", "tiny.en", "base", "base.en"}
+    assert DEFAULT_VOICE_MODEL in VOICE_MODELS
+    base = VOICE_MODELS["base.en"]
+    assert base.filename == "ggml-base.en.bin"
+    assert base.url.endswith("/ggml-base.en.bin")
+    assert len(base.sha1) == 40
+    assert VAD_MODEL.name == "silero-v5.1.2"
 
 
-def test_download_is_verified_and_moved_into_cache(tmp_path, monkeypatch):
-    payload = b"downloaded fake whisper model"
-    digest = hashlib.sha1(payload, usedforsecurity=False).hexdigest()
-    model = VoiceModel("test", digest, 1)
-    monkeypatch.setitem(VOICE_MODELS, "test", model)
+def test_the_cache_directory_is_the_one_the_cli_has_always_used():
+    # Not XDG-derived: a second spelling would re-download every model a user
+    # already has.
+    assert voice_cache_dir().parts[-3:] == (".cache", "a11", "audio")
 
-    class Response(io.BytesIO):
-        headers = {"Content-Length": str(len(payload))}
 
-        def __enter__(self):
-            return self
+@pytest.mark.asyncio
+async def test_an_existing_file_is_accepted_as_a_model(tmp_path):
+    """A path is as good as a shorthand, and reaches no network."""
+    model = tmp_path / "hand-built.bin"
+    model.write_bytes(b"not really a whisper model")
+    console, _ = _console()
 
-        def __exit__(self, exc_type, exc, traceback):
-            del exc_type, exc, traceback
-            self.close()
+    assert await ensure_voice_model(str(model), console) == model
 
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda request, timeout: Response(payload),
-    )
-    console, output = _console()
-    destination = ensure_voice_model("test", console, cache_dir=tmp_path)
 
-    assert destination.read_bytes() == payload
-    assert "downloading voice model" in output.getvalue()
+@pytest.mark.asyncio
+async def test_an_unknown_shorthand_names_the_valid_ones(tmp_path):
+    console, _ = _console()
+    with pytest.raises(StatusException) as caught:
+        await ensure_voice_model("enormous.en", console)
+    assert caught.value.status.code == StatusCode.INVALID_ARGUMENT
+    # The message has to be actionable, since the flag accepts free-form paths
+    # too and so cannot be validated by argparse alone.
+    assert "tiny.en" in caught.value.status.message
 
 
 @pytest.mark.asyncio
 async def test_transcriptions_only_edit_an_active_user_prompt():
+    class _Session:
+        action_registry = a11.ActionRegistry()
+        node_map = None
+
     ui = ChatUI(
         PROVIDERS["ollama"],
         "test-model",
+        GatewayConnection(_Session(), None, embedded=True),
         shell_tools=False,
         voice=True,
     )

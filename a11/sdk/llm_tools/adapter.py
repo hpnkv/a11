@@ -6,6 +6,12 @@ import a11
 
 from a11.sdk.llm_tools import jsonschema_utils
 
+#: In ``ActionSchema.output_to_json_field``, mapping a port to this instead of a
+#: field name means "this port *is* the whole result". Mirrors
+#: ``ActionSchema::kWholeJson`` in C++ and ``WHOLE_JSON_OUTPUT`` in Kotlin; it
+#: had no Python spelling before, which is how two readings of it drifted apart.
+WHOLE_JSON_OUTPUT = "$"
+
 
 class ToolAdapter:
     def __init__(self, schema: a11.ActionSchema):
@@ -94,7 +100,10 @@ class ToolAdapter:
                 "properties": properties,
                 "required": required_nodes,
             }
-        elif len(substitutions) == 1 and list(substitutions.values())[0] == "$":
+        elif (
+            len(substitutions) == 1
+            and next(iter(substitutions.values())) == WHOLE_JSON_OUTPUT
+        ):
             schema = properties[list(substitutions.keys())[0]]
         else:
             for name, substitution in substitutions.items():

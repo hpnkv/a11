@@ -1,15 +1,19 @@
 # Copyright 2026 The A11 Authors.
 
-"""Visible, integrity-checked whisper.cpp model downloads for ``a11 chat``."""
+"""Visible, integrity-checked whisper.cpp model downloads for ``a11 chat``.
+
+The model table, the cache directory and the verified-atomic download all live
+in C++ (``cpp/sdk/audio/model_registry.h``), because the actions that need them
+run wherever the gateway runs. What is left here is the part that is genuinely a
+CLI concern: rendering progress with `rich`.
+"""
 
 from __future__ import annotations
 
-import dataclasses
-import hashlib
-import os
-import urllib.request
 from pathlib import Path
 
+from a11 import _native
+from a11._native import AudioModelSpec
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -20,171 +24,93 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-_MODEL_ROOT = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
-_VAD_MODEL_ROOT = "https://huggingface.co/ggml-org/whisper-vad/resolve/main"
+AudioModelSpec.__module__ = __name__
 
-
-@dataclasses.dataclass(frozen=True)
-class VoiceModel:
-    """One supported whisper.cpp model artifact (transcription or VAD)."""
-
-    name: str
-    sha1: str
-    size_mib: int
-    # Repository the ``ggml-<name>.bin`` artifact is fetched from. Transcription
-    # models live in the whisper.cpp repo; the Silero VAD model in whisper-vad.
-    root: str = _MODEL_ROOT
-
-    @property
-    def filename(self) -> str:
-        return f"ggml-{self.name}.bin"
-
-    @property
-    def url(self) -> str:
-        return f"{self.root}/{self.filename}"
-
-
-# Hashes are published by the upstream whisper.cpp model repository. Restrict
-# chat to tiny/base so startup, local inference, and wheel testing remain sane.
-VOICE_MODELS: dict[str, VoiceModel] = {
-    "tiny": VoiceModel("tiny", "bd577a113a864445d4c299885e0cb97d4ba92b5f", 75),
-    "tiny.en": VoiceModel(
-        "tiny.en", "c78c86eb1a8faa21b369bcd33207cc90d64ae9df", 75
-    ),
-    "base": VoiceModel("base", "465707469ff3a37a2b9b8d8f89f2f99de7299dac", 142),
-    "base.en": VoiceModel(
-        "base.en", "137c40403d78fd54d454da0f9bd998f78703390c", 142
-    ),
+#: The transcription models `a11 chat` accepts, keyed by shorthand. Sourced from
+#: the native registry so the CLI's ``--voice-model`` choices and the gateway's
+#: accepted shorthands cannot drift apart.
+VOICE_MODELS: dict[str, AudioModelSpec] = {
+    name: _native.lookup_asr_model(name)
+    for name in _native.asr_model_shorthands()
 }
 
-DEFAULT_VOICE_MODEL = "tiny.en"
+#: The default transcription model: small enough that a first run is not a wait.
+DEFAULT_VOICE_MODEL: str = _native.DEFAULT_ASR_MODEL
 
-# whisper.cpp's Silero VAD model, fetched from the whisper-vad repository. It
-# gates each endpointed utterance so the decoder never runs on energy-gate
-# false-positives. The hash is the upstream published SHA-1.
-VAD_MODEL = VoiceModel(
-    "silero-v5.1.2",
-    "a372f48dcf0bd9e4330eef2802bc46e061c19634",
-    1,
-    root=_VAD_MODEL_ROOT,
-)
+#: whisper.cpp's Silero VAD model. It gates each endpointed utterance so the
+#: decoder never runs on energy-gate false positives.
+VAD_MODEL: AudioModelSpec = _native.lookup_vad_model(_native.DEFAULT_VAD_MODEL)
 
 
 def voice_cache_dir() -> Path:
-    """Return the model cache required by the CLI contract."""
-    return Path.home() / ".cache" / "a11" / "audio"
+    """Return the directory shorthand models are cached in."""
+    return Path(_native.audio_model_cache_dir())
 
 
-def _file_sha1(path: Path) -> str:
-    digest = hashlib.sha1(usedforsecurity=False)
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+async def ensure_voice_model(name: str, console: Console) -> Path:
+    """Return a verified transcription-model path, downloading if needed.
 
+    Args:
+        name: A shorthand from `VOICE_MODELS`, or a path to a model file.
+        console: Console the progress bar is drawn on.
 
-def ensure_voice_model(
-    name: str,
-    console: Console,
-    *,
-    cache_dir: Path | None = None,
-) -> Path:
-    """Return a verified transcription-model path, downloading if needed."""
-    try:
-        model = VOICE_MODELS[name]
-    except KeyError as error:
-        choices = ", ".join(VOICE_MODELS)
-        raise ValueError(
-            f"unknown voice model {name!r}; choose from {choices}"
-        ) from error
-    return _ensure_model(model, console, cache_dir=cache_dir)
+    Returns:
+        The local model path.
 
-
-def ensure_vad_model(console: Console, *, cache_dir: Path | None = None) -> Path:
-    """Return a verified Silero VAD model path, downloading if needed."""
-    return _ensure_model(VAD_MODEL, console, cache_dir=cache_dir)
-
-
-def _ensure_model(
-    model: VoiceModel,
-    console: Console,
-    *,
-    cache_dir: Path | None = None,
-) -> Path:
-    """Return a verified model path, downloading it with visible progress.
-
-    A complete download is written beside the destination and atomically moved
-    into place only after its upstream SHA-1 matches. Existing verified files
-    are reused. A corrupt cache entry is left recoverable until its replacement
-    is ready.
+    Raises:
+        StatusException: When ``name`` is neither a known shorthand nor an
+            existing file, or the download fails its digest check.
     """
-    name = model.name
-    directory = cache_dir or voice_cache_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / model.filename
-    if destination.is_file() and _file_sha1(destination) == model.sha1:
-        console.print(
-            f"voice model: [bold]{name}[/] · {destination} (cached)",
-            style="dim",
-        )
-        return destination
+    return await _resolve(_native.resolve_asr_model, name, console)
 
-    if destination.exists():
-        console.print(
-            f"voice model cache is invalid; replacing {destination}",
-            style="yellow",
-            markup=False,
-        )
 
-    temporary = directory / f".{model.filename}.{os.getpid()}.download"
-    console.print(
-        f"downloading voice model [bold]{name}[/] "
-        f"(~{model.size_mib} MiB) to {destination}"
-    )
-    request = urllib.request.Request(
-        model.url,
-        headers={"User-Agent": "a11-chat/voice-model"},
-    )
-    digest = hashlib.sha1(usedforsecurity=False)
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            content_length = response.headers.get("Content-Length")
-            total = int(content_length) if content_length else None
-            with (
-                temporary.open("wb") as output,
-                Progress(
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                    console=console,
-                ) as progress,
-            ):
-                task = progress.add_task(model.filename, total=total)
-                while chunk := response.read(1024 * 1024):
-                    output.write(chunk)
-                    digest.update(chunk)
-                    progress.update(task, advance=len(chunk))
+async def ensure_vad_model(console: Console) -> Path:
+    """Return a verified Silero VAD model path, downloading if needed."""
+    return await _resolve(_native.resolve_vad_model, VAD_MODEL.name, console)
 
-        actual = digest.hexdigest()
-        if actual != model.sha1:
-            raise RuntimeError(
-                f"downloaded {model.filename} has SHA-1 {actual}; "
-                f"expected {model.sha1}"
+
+async def _resolve(resolve, spec: str, console: Console) -> Path:
+    """Resolve ``spec`` through ``resolve``, drawing a progress bar if it fetches.
+
+    The bar is created lazily, on the first progress callback: a cache hit never
+    reaches the network and should not flash an empty bar on its way past.
+    """
+    progress: Progress | None = None
+    task = None
+
+    def on_progress(done: int, total: int) -> None:
+        nonlocal progress, task
+        if progress is None:
+            progress = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
             )
-        temporary.replace(destination)
+            progress.start()
+            task = progress.add_task(spec, total=total or None)
+        progress.update(task, completed=done, total=total or None)
+
+    try:
+        path = Path(await resolve(spec, on_progress))
     finally:
-        temporary.unlink(missing_ok=True)
-    console.print(f"voice model ready: {destination}", style="green")
-    return destination
+        if progress is not None:
+            progress.stop()
+    if progress is None:
+        console.print(f"voice model: [bold]{spec}[/] · {path} (cached)",
+                      style="dim")
+    else:
+        console.print(f"voice model ready: {path}", style="green")
+    return path
 
 
 __all__ = [
     "DEFAULT_VOICE_MODEL",
     "VAD_MODEL",
     "VOICE_MODELS",
-    "VoiceModel",
+    "AudioModelSpec",
     "ensure_vad_model",
     "ensure_voice_model",
     "voice_cache_dir",

@@ -52,7 +52,7 @@ install_native_options(
 install_native_options(
     SpeechRecognizerOptions,
     {
-        "model_path": (str, ""),
+        "model": (str, ""),
         "language": (str, "auto"),
         "translate": (bool, False),
         "inference_threads": (int, 0),
@@ -68,7 +68,7 @@ install_native_options(
         "min_silence_millis": (int, 600),
         "speech_pad_millis": (int, 160),
         "max_speech_seconds": (int, 30),
-        "vad_model_path": (str, ""),
+        "vad_model": (str, ""),
         "silero_threshold": (float, 0.5),
     },
 )
@@ -267,7 +267,7 @@ class _SpeechRecognizerProtocol:
 
     def __init__(
         self,
-        model_path: str | os.PathLike[str],
+        model: str | os.PathLike[str],
         source: AudioInput | AudioSubscription | None = None,
         options: SpeechRecognizerOptions | Mapping[str, Any] | None = None,
     ) -> None:
@@ -283,16 +283,16 @@ class _SpeechRecognizerProtocol:
             options = SpeechRecognizerOptions()
         elif not isinstance(options, SpeechRecognizerOptions):
             options = SpeechRecognizerOptions.model_validate(options)
-        _native_recognizer_init(self, os.fspath(model_path), source, options)
+        _native_recognizer_init(self, os.fspath(model), source, options)
 
     @staticmethod
     def create(
-        model_path: str | os.PathLike[str],
+        model: str | os.PathLike[str],
         source: AudioInput | AudioSubscription | None = None,
         options: SpeechRecognizerOptions | Mapping[str, Any] | None = None,
     ) -> SpeechRecognizer:
         """Load a model and construct a recognizer."""
-        return SpeechRecognizer(model_path, source, options)
+        return SpeechRecognizer(model, source, options)
 
     async def start(
         self,

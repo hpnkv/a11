@@ -3,12 +3,14 @@
 import abc
 import base64
 import enum
+import logging
 import re
 import uuid
 from typing import Any, Callable, ClassVar, Literal
 
 import a11
 from a11.data import serial_tags
+from a11.data.serialization import get_global_serialization_registry
 from a11.status import Status, StatusCode
 from pydantic import (
     BaseModel,
@@ -557,29 +559,118 @@ def interaction_backend(interaction: Interaction) -> str | None:
     return value or None
 
 
-def normalize_interaction(interaction: Interaction) -> NormalizedMessage:
-    """Build the normalized view of a (foreign) interaction via its producer.
+def _shape_text(value: Any) -> str:
+    """Best-effort text of one decoded content chunk, read by shape.
+
+    Every backend wraps its provider payload in here, so this reads the shapes
+    rather than the backend: a bare string, ``{"text": ...}``, or the
+    ``{"role": ..., "content": [{"type": "text", "text": ...}]}`` envelope that
+    the clients and the Claude/Gemini backends all produce.
+    """
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return ""
+    blocks = value.get("content")
+    if isinstance(blocks, str):
+        return blocks
+    if isinstance(blocks, list):
+        return "".join(
+            block["text"]
+            for block in blocks
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    text = value.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def normalize_by_shape(interaction: Interaction) -> NormalizedMessage:
+    """Normalize an interaction whose producer is unknown, by reading shapes.
+
+    The backend-tagged normalizers are the principled route when a conversation
+    is handed between providers, because only the producer can read its own
+    native content faithfully. But an interaction minted by a *client* carries
+    no backend tag at all, and every consumer that merely wants to display a
+    conversation needs to cope with that. This does the shape-based read those
+    consumers were each hand-rolling, and adds the parts that live outside
+    ``content`` and so need no backend knowledge: the tool calls in
+    `Interaction.action_calls` and the results in `Interaction.action_outputs`.
+    """
+    parts: list[NormalizedPart] = []
+    text: list[str] = []
+    for chunk in interaction.content:
+        try:
+            decoded = get_global_serialization_registry().from_chunk(chunk)
+        except Exception:  # noqa: BLE001 - an undecodable chunk is not fatal
+            logging.debug("undecodable content chunk", exc_info=True)
+            continue
+        text.append(_shape_text(decoded))
+    joined = "".join(text)
+    if joined:
+        parts.append(
+            NormalizedPart(type=NormalizedContentType.TEXT, text=joined)
+        )
+    for call in interaction.action_calls:
+        parts.append(
+            NormalizedPart(
+                type=NormalizedContentType.TOOL_CALL,
+                id=call.id,
+                name=call.name,
+            )
+        )
+    for call_id in interaction.action_outputs:
+        parts.append(
+            NormalizedPart(
+                type=NormalizedContentType.TOOL_RESULT, call_id=call_id
+            )
+        )
+    return NormalizedMessage(role=interaction.role, parts=parts)
+
+
+def normalize_interaction(
+    interaction: Interaction, *, strict: bool = False
+) -> NormalizedMessage:
+    """Build the normalized view of an interaction.
 
     Dispatches to the normalizer registered by the backend that produced the
-    interaction. Callers should only reach for this when the interaction is
-    tagged for a backend other than their own.
+    interaction. When the interaction carries no backend tag, or its producer's
+    normalizer is not registered in this process, falls back to
+    `normalize_by_shape` -- unless ``strict``.
+
+    Args:
+        interaction: The interaction to normalize.
+        strict: Require a registered normalizer for the producing backend.
+            Use this on the backend-to-backend handoff path, where a
+            shape-based approximation would silently drop native content the
+            receiving backend needed. Display paths want the default.
+
+    Returns:
+        The normalized view.
+
+    Raises:
+        StatusException: When ``strict`` and the interaction is untagged or its
+            backend has no registered normalizer.
     """
     backend = interaction_backend(interaction)
     if backend is None:
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message="Cannot normalize an interaction with no backend tag.",
-        ).to_exception()
+        if strict:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Cannot normalize an interaction with no backend tag.",
+            ).to_exception()
+        return normalize_by_shape(interaction)
 
     normalizer = _INTERACTION_NORMALIZERS.get(backend)
     if normalizer is None:
-        raise Status(
-            code=StatusCode.FAILED_PRECONDITION,
-            message=(
-                "No interaction normalizer is registered for backend"
-                f" {backend!r}; its module must be imported to consume its"
-                " interactions."
-            ),
-        ).to_exception()
+        if strict:
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message=(
+                    "No interaction normalizer is registered for backend"
+                    f" {backend!r}; its module must be imported to consume its"
+                    " interactions."
+                ),
+            ).to_exception()
+        return normalize_by_shape(interaction)
 
     return normalizer(interaction)

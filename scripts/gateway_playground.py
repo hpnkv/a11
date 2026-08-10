@@ -109,8 +109,8 @@ async def main(_: Sequence[str]):
         )
         await asr_options_node.put_final(
             audio.SpeechRecognizerOptions(
-                model_path="/Users/helena/.cache/a11/audio/ggml-tiny.en.bin",
-                vad_model_path=(
+                model="/Users/helena/.cache/a11/audio/ggml-tiny.en.bin",
+                vad_model=(
                     "/Users/helena/.cache/a11/audio/ggml-silero-v5.1.2.bin"
                 ),
             )

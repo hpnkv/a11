@@ -80,19 +80,14 @@ async def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
         service, signalling_options
     )
 
-    async def on_stream(stream: a11.WebRtcWireStream) -> None:
-        logging.info("Accepting WebRTC stream %s", stream.get_id())
-        session = a11.Session(action_registry=registry)
-        await session.add_stream(stream, mode="accept")
-        logging.info("Accepted WebRTC stream %s", stream.get_id())
-        await session.done.wait()
-        logging.info("WebRTC stream %s closed", stream.get_id())
+    # One A11 service; its `accept` is what the transport calls per connection.
+    a11_service = a11.Service(action_registry=registry)
 
     # Defaults to eight data channels per connection; override max_channels to
     # cap how many a single peer may open.
     configuration = WebRtcConfiguration()
     server = WebRtcWireServer.create(
-        SERVER_IDENTITY, service, on_stream, configuration
+        SERVER_IDENTITY, service, a11_service.accept, configuration
     )
     logging.info(
         "WebRTC echo server '%s' ready; signalling at ws://%s:%d",

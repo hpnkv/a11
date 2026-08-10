@@ -139,7 +139,7 @@ TEST(AudioSerializationTest, SpeechRecognizerOptionsRoundTrip) {
   SerializationRegistry registry(/*register_defaults=*/false);
   ASSERT_TRUE(RegisterAudioTypes(registry).ok());
   SpeechRecognizerOptions options;
-  options.model_path = "/models/ggml-base.bin";
+  options.model = "/models/ggml-base.bin";
   options.language = "en";
   options.translate = true;
 
@@ -149,7 +149,7 @@ TEST(AudioSerializationTest, SpeechRecognizerOptionsRoundTrip) {
   absl::StatusOr<SpeechRecognizerOptions> from_json =
       registry.FromChunk<SpeechRecognizerOptions>(*json);
   ASSERT_TRUE(from_json.ok()) << from_json.status();
-  EXPECT_EQ(from_json->model_path, "/models/ggml-base.bin");
+  EXPECT_EQ(from_json->model, "/models/ggml-base.bin");
   EXPECT_EQ(from_json->language, "en");
   EXPECT_TRUE(from_json->translate);
   EXPECT_EQ(from_json->use_gpu, SpeechRecognizerOptions{}.use_gpu);

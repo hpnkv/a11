@@ -24,6 +24,7 @@
 #include "a11/data/types.h"
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/node_map.h"
+#include "a11/service/service.h"
 #include "a11/service/session.h"
 #include "a11/status.h"
 #include "python/bindings.h"
@@ -266,6 +267,31 @@ void ThrowIfNotOk(const absl::Status& status) {
     ThrowStatus(status);
   }
 }
+
+// Release the GIL around a blocking native call, then report its status. The uv
+// loop thread completes work by touching Python objects and must be able to take
+// the GIL, so blocking while holding it deadlocks the loop.
+template <typename Operation>
+void CallWithoutGil(Operation&& operation) {
+  absl::Status status;
+  {
+    py::gil_scoped_release release;
+    status = std::forward<Operation>(operation)();
+  }
+  ThrowIfNotOk(status);
+}
+
+// As CallWithoutGil, for a blocking operation yielding an absl::StatusOr<T>.
+// Convert any Python arguments *before* calling: the GIL is not held inside.
+template <typename Operation>
+auto ValueWithoutGil(Operation&& operation) {
+  auto result = [&] {
+    py::gil_scoped_release release;
+    return std::forward<Operation>(operation)();
+  }();
+  return ValueOrThrow(std::move(result));
+}
+
 
 }  // namespace
 
@@ -698,6 +724,235 @@ Examples:
           "None once the session is done. Await this in a loop to consume the "
           "session's message stream without registering callbacks.",
           py::arg("deadline") = py::none());
+
+  // --- Service: what a peer can call, decoupled from where it listens ------
+
+  py::class_<service::ServiceOptions>(module, "ServiceOptions")
+      .def(py::init([](std::optional<service::SessionOptions> session_options,
+                       bool copy_registry_per_connection,
+                       const py::typing::Optional<
+                           PyMapping<py::str, py::bytes>>& session_headers,
+                       const py::typing::Optional<NativeDuration>&
+                           drain_timeout) {
+             service::ServiceOptions options;
+             if (session_options.has_value()) {
+               options.session_options = *session_options;
+             }
+             options.copy_registry_per_connection =
+                 copy_registry_per_connection;
+             options.session_headers =
+                 ValueOrThrow(ByteMapFromPython(session_headers));
+             if (!drain_timeout.is_none()) {
+               options.drain_timeout =
+                   ValueOrThrow(DurationFromPython(drain_timeout, false));
+             }
+             return options;
+           }),
+           "Construct service options; all parameters are keyword-only.",
+           py::kw_only(), py::arg("session_options") = std::nullopt,
+           py::arg("copy_registry_per_connection") = false,
+           py::arg("session_headers") = py::none(),
+           py::arg("drain_timeout") = py::none())
+      .def_readwrite("session_options",
+                     &service::ServiceOptions::session_options,
+                     "Limits and timeouts for every session created.")
+      .def_readwrite("copy_registry_per_connection",
+                     &service::ServiceOptions::copy_registry_per_connection,
+                     "Give each connection its own copy of the registry. Leave "
+                     "false when the connection hook makes the copy itself.")
+      .def_property(
+          "session_headers",
+          [](const service::ServiceOptions& options) {
+            return ByteMapToPython(options.session_headers);
+          },
+          [](service::ServiceOptions& options,
+             const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                 headers) {
+            options.session_headers =
+                ValueOrThrow(ByteMapFromPython(headers));
+          },
+          "Headers stamped on every session the service creates.")
+      .def_property(
+          "drain_timeout",
+          [](const service::ServiceOptions& options) -> NativeDuration {
+            return NativeDuration(options.drain_timeout);
+          },
+          [](service::ServiceOptions& options,
+             const py::typing::Optional<NativeDuration>& value) {
+            options.drain_timeout =
+                ValueOrThrow(DurationFromPython(value, false));
+          },
+          "How long draining waits for live sessions.")
+      .def(
+          "validate",
+          [](const service::ServiceOptions& options) {
+            ThrowIfNotOk(options.Validate());
+          },
+          "Validate the options, raising on error.");
+
+  py::classh<service::Service>(module, "Service", py::dynamic_attr())
+      .def(py::init([](std::shared_ptr<actions::ActionRegistry> action_registry,
+                       const py::object& on_connection,
+                       std::optional<service::ServiceOptions> options) {
+             service::OnServiceConnection hook;
+             if (!on_connection.is_none()) {
+               // The same mechanism `on_stream_message` uses: capture the
+               // asyncio loop now, and hand the call back to it from whichever
+               // fiber accepts the connection. So a Python hook -- the gateway's
+               // registry copy and tool-bridge bind -- stays plain Python.
+               std::shared_ptr<PythonSessionCallback> callback = ValueOrThrow(
+                   PythonSessionCallback::Create(on_connection,
+                                                 "on_connection"));
+               hook = [callback](std::shared_ptr<service::Session> session,
+                                 std::shared_ptr<net::WireStream> stream)
+                   -> a11::Task {
+                 return callback->Call(std::move(session), std::move(stream));
+               };
+             }
+             return ValueOrThrow(service::Service::Create(
+                 std::move(action_registry), std::move(hook),
+                 options.value_or(service::ServiceOptions{})));
+           }),
+           R"doc(A service: an action registry plus the sessions serving it.
+
+`accept` is shaped to be a transport's on-stream callback, so one service can be
+bound to several listeners, or to none at all (hand it an in-process stream). The
+optional `on_connection(session, stream)` coroutine runs once per connection,
+after the session exists and before it starts pumping -- the only window in which
+a connection can be specialised without racing its first message.
+
+Examples:
+    Serve a gateway over WebSocket:
+
+    ```python
+    service = a11.Service(action_registry=registry, on_connection=prepare)
+    server = a11.net.WebSocketWireServer.create(service.accept, options)
+    ```
+)doc",
+           py::kw_only(), py::arg("action_registry") = nullptr,
+           py::arg("on_connection") = py::none(),
+           py::arg("options") = std::nullopt)
+      .def(
+          "accept",
+          [](const std::shared_ptr<service::Service>& self,
+             std::shared_ptr<net::WireStream> stream) {
+            return FutureToPython(
+                self->Serve(std::move(stream), service::StreamMode::kAccept));
+          },
+          "Serve an accepted stream, awaiting its session's whole lifetime.",
+          py::arg("stream"))
+      .def(
+          "start",
+          [](const std::shared_ptr<service::Service>& self,
+             std::shared_ptr<net::WireStream> stream) {
+            return FutureToPython(
+                self->Serve(std::move(stream), service::StreamMode::kStart));
+          },
+          "Serve a stream this side initiated, awaiting its whole lifetime.",
+          py::arg("stream"))
+      .def(
+          "serve",
+          [](const std::shared_ptr<service::Service>& self,
+             std::shared_ptr<net::WireStream> stream, const py::object& mode) {
+            return FutureToPython(self->Serve(
+                std::move(stream), ValueOrThrow(StreamModeFromPython(mode))));
+          },
+          "Serve a stream in the given mode (\"start\" or \"accept\").",
+          py::arg("stream"), py::arg("mode") = "accept")
+      .def(
+          "start_stream_handler",
+          [](const std::shared_ptr<service::Service>& self,
+             std::shared_ptr<net::WireStream> stream, const py::object& mode) {
+            // Blocking: it awaits the connection hook and the stream handshake
+            // on a fiber. Without releasing the GIL the libuv loop cannot take
+            // it to complete either, and this deadlocks.
+            return ValueWithoutGil([&self, &stream, &mode] {
+              const service::StreamMode converted =
+                  ValueOrThrow(StreamModeFromPython(mode));
+              return self->StartStreamHandler(std::move(stream), converted);
+            });
+          },
+          "Begin serving a stream and return its session immediately.",
+          py::arg("stream"), py::arg("mode") = "accept")
+      .def(
+          "add_stream_to_session",
+          [](const std::shared_ptr<service::Service>& self,
+             std::string session_id, std::shared_ptr<net::WireStream> stream,
+             const py::object& mode) {
+            CallWithoutGil([&self, &session_id, &stream, &mode] {
+              const service::StreamMode converted =
+                  ValueOrThrow(StreamModeFromPython(mode));
+              return self->AddStreamToSession(session_id, std::move(stream),
+                                              converted);
+            });
+          },
+          "Attach another transport to an existing session.",
+          py::arg("session_id"), py::arg("stream"),
+          py::arg("mode") = "accept")
+      .def("session_ids", &service::Service::SessionIds,
+           "The ids of the sessions currently being served.")
+      .def(
+          "get_session",
+          [](const std::shared_ptr<service::Service>& self,
+             std::string_view session_id) {
+            return ValueOrThrow(self->GetSession(session_id));
+          },
+          "The session with this id, raising NOT_FOUND if there is none.",
+          py::arg("session_id"))
+      .def(
+          "get_session_for_stream",
+          [](const std::shared_ptr<service::Service>& self,
+             std::string_view stream_id) {
+            return ValueOrThrow(self->GetSessionForStream(stream_id));
+          },
+          "The session serving this stream.", py::arg("stream_id"))
+      .def_property_readonly("session_count",
+                             &service::Service::SessionCount,
+                             "How many sessions are being served.")
+      .def_property_readonly("accepting", &service::Service::accepting,
+                             "Whether new connections are still admitted.")
+      .def_property_readonly(
+          "action_registry", &service::Service::GetActionRegistry,
+          "The template registry new connections are built from.")
+      .def(
+          "set_action_registry",
+          [](const std::shared_ptr<service::Service>& self,
+             std::shared_ptr<actions::ActionRegistry> action_registry) {
+            ThrowIfNotOk(
+                self->SetActionRegistry(std::move(action_registry)));
+          },
+          "Replace the registry new connections are built from, without "
+          "interrupting any stream.",
+          py::arg("action_registry"))
+      .def(
+          "stop_accepting",
+          [](const std::shared_ptr<service::Service>& self) {
+            ThrowIfNotOk(self->StopAccepting());
+          },
+          "Refuse new connections, leaving live ones alone.")
+      .def(
+          "drain",
+          [](const std::shared_ptr<service::Service>& self,
+             const py::typing::Optional<NativeDuration>& timeout) {
+            const absl::Duration converted =
+                ValueOrThrow(DurationFromPython(timeout, false));
+            return FutureToPython(self->Drain(converted));
+          },
+          "Await the completion of every live session.",
+          py::arg("timeout") = py::none())
+      .def(
+          "abort",
+          [](const std::shared_ptr<service::Service>& self,
+             const PyLike<NativeStatus>& status) {
+            ThrowIfNotOk(self->Abort(StatusFromPython(status)));
+          },
+          "Stop accepting and abort every live session.", py::arg("status"))
+      .def(
+          "wait_done",
+          [](const std::shared_ptr<service::Service>& self) {
+            return FutureToPython(self->Done());
+          },
+          "Await the service being closed and empty.");
 
   module.def(
       "normalize_session_headers",

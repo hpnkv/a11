@@ -1,0 +1,110 @@
+{
+  "_comment": [
+    "Conversations, and the presentation blocks they must be drawn as.",
+    "Every client derives these from the stored Interactions rather than",
+    "being told them, so this is the contract that keeps a terminal and a",
+    "webview showing the same conversation the same way.",
+    "Kotlin is absent on purpose: its Interaction is an untyped",
+    "LinkedHashMap with no introspection, so a mirror there would be",
+    "string-keyed guesswork. Revisit when it becomes a real type.",
+    "Rebuild with CASES in a11/sdk/tests/test_presentation_golden.py if the",
+    "derivation changes on purpose -- and expect js/test/presentation.test.mjs",
+    "to fail until it agrees."
+  ],
+  "cases": [
+    {
+      "name": "a single untagged user message",
+      "interactions": [
+        "{\"id\":\"6713c7c0-4aa7-4bfb-aad9-b549636057d7\",\"role\":\"user\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhlbGxvIHRoZXJlIn1dfQ==\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "role": "user",
+          "text": "hello there"
+        }
+      ]
+    },
+    {
+      "name": "a tool round trip with its log",
+      "interactions": [
+        "{\"id\":\"6713c7c0-4aa7-4bfb-aad9-b549636057d7\",\"role\":\"user\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhlbGxvIHRoZXJlIn1dfQ==\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}",
+        "{\"id\":\"77d0e179-bcfa-425f-a67b-9c0a6d1dc252\",\"role\":\"model\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoibW9kZWwiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJDaGVja2luZy4ifV19\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[{\"id\":\"call-1\",\"name\":\"shell_execute\"}],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}",
+        "{\"id\":\"515be1ee-1afa-4b10-a64e-2643b1db07fe\",\"role\":\"user\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{\"call-1\":[]},\"backend_specific_metadata\":{\"tool_logs\":\"eyJjYWxsLTEiOiAiJCBwd2Rcbi9ob21lL2hlbGVuYSJ9\"},\"usage_metadata\":null}",
+        "{\"id\":\"8834bd6a-8682-4d82-ad0d-c4c3b0f21ce9\",\"role\":\"model\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoibW9kZWwiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJZb3UgYXJlIGluIHlvdXIgaG9tZSBkaXJlY3RvcnkuIn1dfQ==\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "role": "user",
+          "text": "hello there"
+        },
+        {
+          "kind": "text",
+          "role": "model",
+          "text": "Checking."
+        },
+        {
+          "kind": "tool_run",
+          "role": "model",
+          "text": "$ pwd\n/home/helena",
+          "id": "call-1",
+          "tool_name": "shell_execute"
+        },
+        {
+          "kind": "text",
+          "role": "model",
+          "text": "You are in your home directory."
+        }
+      ]
+    },
+    {
+      "name": "a failed turn with usage",
+      "interactions": [
+        "{\"id\":\"e0df8159-9a23-43f1-b3b2-5b69eec8e506\",\"role\":\"model\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoibW9kZWwiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJMZXQgbWUgdGhpbmsuIn1dfQ==\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}",
+        "{\"id\":\"ed7bf5ea-ad78-41d6-a814-aa4729d80029\",\"role\":\"model\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":4,\"message\":\"took too long\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoibW9kZWwiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJUaGF0IGRpZCBub3Qgd29yay4ifV19\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":{\"input_tokens\":11,\"output_tokens\":3,\"total_tokens\":null,\"cached_input_tokens\":null,\"cache_write_tokens\":null,\"reasoning_tokens\":null}}"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "role": "model",
+          "text": "Let me think."
+        },
+        {
+          "kind": "text",
+          "role": "model",
+          "text": "That did not work."
+        },
+        {
+          "kind": "usage",
+          "role": "model",
+          "text": "",
+          "usage": {
+            "input_tokens": 11,
+            "output_tokens": 3
+          }
+        },
+        {
+          "kind": "error",
+          "role": "model",
+          "text": "",
+          "status_code": "DEADLINE_EXCEEDED"
+        }
+      ]
+    },
+    {
+      "name": "system interactions are not drawn",
+      "interactions": [
+        "{\"id\":\"86e44fbc-b228-4df3-8e1e-fd7c935c512d\",\"role\":\"system\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIGhlbHBmdWwgYXNzaXN0YW50LiJ9XX0=\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}",
+        "{\"id\":\"6713c7c0-4aa7-4bfb-aad9-b549636057d7\",\"role\":\"user\",\"created_at_millis\":null,\"previous_interaction_id\":\"\",\"model\":\"\",\"status\":{\"code\":0,\"message\":\"\"},\"system_instructions\":[],\"action_configs\":{},\"content\":[{\"data\":\"eyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhlbGxvIHRoZXJlIn1dfQ==\",\"metadata\":{\"mimetype\":\"application/json\"}}],\"action_calls\":[],\"action_inputs\":{},\"action_outputs\":{},\"backend_specific_metadata\":{},\"usage_metadata\":null}"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "role": "user",
+          "text": "hello there"
+        }
+      ]
+    }
+  ]
+}

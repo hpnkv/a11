@@ -543,6 +543,11 @@ if (A11_BUILD_WEBRTC AND NOT A11_BUILD_HTTP)
     message(FATAL_ERROR
             "A11_BUILD_WEBRTC requires A11_BUILD_HTTP for nghttp2 signalling")
 endif ()
+if (A11_BUILD_AUDIO AND NOT A11_BUILD_HTTP)
+    message(FATAL_ERROR
+            "A11_BUILD_AUDIO requires A11_BUILD_HTTP to download whisper and "
+            "Silero models by shorthand")
+endif ()
 if (A11_BUILD_HTTP)
     pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
     find_library(
@@ -847,7 +852,10 @@ if (A11_BUILD_AUDIO)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
     target_link_libraries(
             a11_audio_actions
-            PUBLIC a11::actions a11::audio a11::concurrency a11::data a11::nodes
+            # a11::net for the model downloader: a shorthand like "base.en" is
+            # fetched into the shared cache the first time it is asked for.
+            PUBLIC a11::actions a11::audio a11::concurrency a11::data a11::net
+            a11::nodes
             $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
             $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
             PRIVATE

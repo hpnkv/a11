@@ -334,6 +334,15 @@ Http1Connection::SubmitRequest(std::string method, std::string scheme,
             }
             return absl::OkStatus();
           };
+          // Backpressure: a full response buffer stops the socket read rather
+          // than failing the transfer. Wired here as well as on the HTTP/2
+          // path, because both share Http2ResponseStream::State and a state
+          // without this hook would simply buffer without bound.
+          self->response_state_->set_read_paused = [weak](bool paused) {
+            if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
+              connection->SetReadPaused(paused);
+            }
+          };
         }
 
         struct MakeResponseEnabler final : Http2ResponseStream {
@@ -397,6 +406,15 @@ Http1Connection::SubmitDuplex(std::string protocol, std::string /*scheme*/,
               return connection->Close(std::move(status));
             }
             return absl::OkStatus();
+          };
+          // Backpressure: a full response buffer stops the socket read rather
+          // than failing the transfer. Wired here as well as on the HTTP/2
+          // path, because both share Http2ResponseStream::State and a state
+          // without this hook would simply buffer without bound.
+          self->response_state_->set_read_paused = [weak](bool paused) {
+            if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
+              connection->SetReadPaused(paused);
+            }
           };
         }
 

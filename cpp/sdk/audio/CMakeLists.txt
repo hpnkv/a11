@@ -14,4 +14,7 @@ set(A11_AUDIO_ACTIONS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/actions/audio_events.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/actions/audio_serialization.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/actions/audio_actions.cc
+    # The model catalogue sits here rather than with the base audio sources so
+    # that a11_audio does not gain a dependency on a11::net to download one.
+    ${CMAKE_CURRENT_SOURCE_DIR}/model_registry.cc
     PARENT_SCOPE)

@@ -12,6 +12,7 @@ from a11.data.serialization import get_global_serialization_registry
 from a11.data.types import Chunk
 from a11.nodes.async_node import AsyncNode
 from a11.sdk import llm
+from a11.sdk import presentation
 from a11.status import Status, StatusCode
 from a11.stores import chunk_store
 from a11.stores import chunk_store_reader
@@ -35,34 +36,6 @@ def _from_chunk(
     )
 
 
-def _chunk_text(value: Any) -> str:
-    """Best-effort text of one decoded content chunk.
-
-    Every backend wraps its own provider payload in here, so this reads the
-    shapes rather than the backend: a bare string, ``{"text": ...}``, or the
-    ``{"role": ..., "content": [{"type": "text", "text": ...}]}`` envelope that
-    the client and the Claude/Gemini backends both produce. Anything else --
-    tool-use blocks, images -- contributes nothing, which is what we want for a
-    title. ``llm.normalize_interaction`` is the principled route but needs a
-    backend tag, and the client's own user interaction does not carry one.
-    """
-    if isinstance(value, str):
-        return value
-    if not isinstance(value, dict):
-        return ""
-    blocks = value.get("content")
-    if isinstance(blocks, str):
-        return blocks
-    if isinstance(blocks, list):
-        return "".join(
-            block["text"]
-            for block in blocks
-            if isinstance(block, dict) and isinstance(block.get("text"), str)
-        )
-    text = value.get("text")
-    return text if isinstance(text, str) else ""
-
-
 def default_root() -> pathlib.Path:
     if override := os.environ.get("A11_CHUNK_STORE_DIR", ""):
         return pathlib.Path(override).expanduser()
@@ -72,15 +45,9 @@ def default_root() -> pathlib.Path:
     )
 
 
-def interaction_text(interaction: llm.Interaction) -> str:
-    """Best-effort human-readable text of an interaction's content."""
-    parts: list[str] = []
-    for chunk in interaction.content:
-        try:
-            parts.append(_chunk_text(_from_chunk(chunk)))
-        except Exception:
-            logging.debug("undecodable content chunk", exc_info=True)
-    return "".join(parts)
+#: Best-effort human-readable text of an interaction's content. The shared
+#: derivation every client uses, so a stored title matches what a reader sees.
+interaction_text = presentation.plain_text
 
 
 def make_title(interaction: llm.Interaction) -> str:

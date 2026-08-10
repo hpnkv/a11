@@ -126,17 +126,17 @@ absl::Status CallbackStatus(OnRecognitionDone& callback) {
 namespace internal {
 
 struct SpeechRecognizerState {
-  SpeechRecognizerState(std::string model_path, SpeechRecognizerOptions options,
+  SpeechRecognizerState(std::string model, SpeechRecognizerOptions options,
                         WhisperContext context,
                         std::shared_ptr<AudioInput> input,
                         std::shared_ptr<AudioSubscription> subscription)
-      : model_path(std::move(model_path)),
+      : model(std::move(model)),
         options(std::move(options)),
         context(std::move(context)),
         input(std::move(input)),
         supplied_subscription(std::move(subscription)) {}
 
-  const std::string model_path;
+  const std::string model;
   const SpeechRecognizerOptions options;
   WhisperContext context;
   const std::shared_ptr<AudioInput> input;
@@ -165,22 +165,22 @@ bool ShouldAbortInference(void* user_data) {
 }
 
 absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> LoadState(
-    std::string model_path, SpeechRecognizerOptions options,
+    std::string model, SpeechRecognizerOptions options,
     std::shared_ptr<AudioInput> input,
     std::shared_ptr<AudioSubscription> subscription) {
   ABSL_RETURN_IF_ERROR(options.Validate());
-  if (model_path.empty()) {
-    return absl::InvalidArgumentError("model_path must not be empty");
+  if (model.empty()) {
+    return absl::InvalidArgumentError("model must not be empty");
   }
   std::error_code file_error;
-  if (!std::filesystem::is_regular_file(model_path, file_error)) {
+  if (!std::filesystem::is_regular_file(model, file_error)) {
     return absl::NotFoundError(
-        absl::StrCat("Whisper model file was not found: ", model_path));
+        absl::StrCat("Whisper model file was not found: ", model));
   }
-  if (!options.vad_model_path.empty() &&
-      !std::filesystem::is_regular_file(options.vad_model_path, file_error)) {
+  if (!options.vad_model.empty() &&
+      !std::filesystem::is_regular_file(options.vad_model, file_error)) {
     return absl::NotFoundError(absl::StrCat(
-        "Silero VAD model file was not found: ", options.vad_model_path));
+        "Silero VAD model file was not found: ", options.vad_model));
   }
   if (options.language != "auto" && options.language != "" &&
       whisper_lang_id(options.language.c_str()) < 0) {
@@ -193,14 +193,14 @@ absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> LoadState(
   context_params.use_gpu = options.use_gpu;
   context_params.flash_attn = options.flash_attention;
   WhisperContext context(
-      whisper_init_from_file_with_params(model_path.c_str(), context_params));
+      whisper_init_from_file_with_params(model.c_str(), context_params));
   if (context == nullptr) {
     return absl::InvalidArgumentError(
-        absl::StrCat("whisper.cpp could not load model file: ", model_path));
+        absl::StrCat("whisper.cpp could not load model file: ", model));
   }
 
   return std::make_shared<internal::SpeechRecognizerState>(
-      std::move(model_path), std::move(options), std::move(context),
+      std::move(model), std::move(options), std::move(context),
       std::move(input), std::move(subscription));
 }
 
@@ -255,9 +255,9 @@ absl::Status TranscribeUtterance(
   // energy gate let through. whisper.cpp loads the model once and caches it in
   // its state, so this stays cheap across utterances. The temporal options are
   // shared with the energy gate; whisper's own defaults fill the rest.
-  params.vad = !state->options.vad_model_path.empty();
+  params.vad = !state->options.vad_model.empty();
   if (params.vad) {
-    params.vad_model_path = state->options.vad_model_path.c_str();
+    params.vad_model_path = state->options.vad_model.c_str();
     params.vad_params = whisper_vad_default_params();
     params.vad_params.threshold = state->options.silero_threshold;
     params.vad_params.min_speech_duration_ms =
@@ -455,7 +455,7 @@ absl::Status SpeechRecognizerOptions::Validate() const {
     return absl::InvalidArgumentError(
         "min_silence_millis must not exceed max_speech_seconds");
   }
-  if (!vad_model_path.empty() &&
+  if (!vad_model.empty() &&
       (!std::isfinite(silero_threshold) || silero_threshold <= 0.0f ||
        silero_threshold > 1.0f)) {
     return absl::InvalidArgumentError("silero_threshold must be in (0, 1]");
@@ -475,7 +475,7 @@ SpeechRecognizer::~SpeechRecognizer() {
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
-    std::string model_path, SpeechRecognizerOptions options) {
+    std::string model, SpeechRecognizerOptions options) {
   AudioInputOptions input_options{
       .device_index = -1,
       .sample_rate = 0.0,
@@ -485,41 +485,41 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
   };
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AudioInput> input,
                         AudioInput::Open(input_options));
-  return Create(std::move(model_path), std::move(input), std::move(options));
+  return Create(std::move(model), std::move(input), std::move(options));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
-    std::string model_path, std::shared_ptr<AudioInput> input,
+    std::string model, std::shared_ptr<AudioInput> input,
     SpeechRecognizerOptions options) {
   if (input == nullptr) {
     return absl::InvalidArgumentError("input must not be null");
   }
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::SpeechRecognizerState> state,
-                        LoadState(std::move(model_path), std::move(options),
+                        LoadState(std::move(model), std::move(options),
                                   std::move(input), nullptr));
   return std::shared_ptr<SpeechRecognizer>(
       new SpeechRecognizer(std::move(state)));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
-    std::string model_path, std::shared_ptr<AudioSubscription> subscription,
+    std::string model, std::shared_ptr<AudioSubscription> subscription,
     SpeechRecognizerOptions options) {
   if (subscription == nullptr) {
     return absl::InvalidArgumentError("subscription must not be null");
   }
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::SpeechRecognizerState> state,
-                        LoadState(std::move(model_path), std::move(options),
+                        LoadState(std::move(model), std::move(options),
                                   nullptr, std::move(subscription)));
   return std::shared_ptr<SpeechRecognizer>(
       new SpeechRecognizer(std::move(state)));
 }
 
 absl::StatusOr<std::shared_ptr<SpeechRecognizer>>
-SpeechRecognizer::CreateForStream(std::string model_path,
+SpeechRecognizer::CreateForStream(std::string model,
                                   SpeechRecognizerOptions options) {
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<internal::SpeechRecognizerState> state,
-      LoadState(std::move(model_path), std::move(options), nullptr, nullptr));
+      LoadState(std::move(model), std::move(options), nullptr, nullptr));
   return std::shared_ptr<SpeechRecognizer>(
       new SpeechRecognizer(std::move(state)));
 }
@@ -659,8 +659,8 @@ absl::Status SpeechRecognizer::GetStatus() const {
   return state_->status;
 }
 
-const std::string& SpeechRecognizer::model_path() const {
-  return state_->model_path;
+const std::string& SpeechRecognizer::model() const {
+  return state_->model;
 }
 
 const SpeechRecognizerOptions& SpeechRecognizer::options() const {

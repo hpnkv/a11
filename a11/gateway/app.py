@@ -1,75 +1,40 @@
-import argparse
 import logging
-from typing import cast
 
 from a11 import actions
 from a11 import net
 from a11.gateway import conversations
+from a11.gateway.config import GatewayConfig
+from a11.gateway.ping import PING_SCHEMA, ping
 from a11.gateway import conversation_actions
 from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk import bash
 from a11.sdk.audio import actions as audio_actions
-from a11.service.session import Session, SessionOptions
-from a11.status import Status
-
-PING_SCHEMA = actions.ActionSchema(
-    name="__ping",
-    description=(
-        "Ping the server to check if it is alive. Requires a single value on"
-        " the port `input`, which it returns as a single value on the port"
-        " `output`."
-    ),
-    inputs={
-        "input": actions.ActionPortSchema(
-            name="input",
-            description="Ping input value",
-            type="text/plain",
-            typeinfo=str,
-        ),
-    },
-    outputs={
-        "output": actions.ActionPortSchema(
-            name="output",
-            description="Pong response value",
-            type="text/plain",
-            typeinfo=str,
-        ),
-    },
-)
-
-
-async def _ping(action: actions.Action):
-    stream_str = "<no stream>"
-    if action.get_stream():
-        stream_str = str(action.get_stream().get_id())
-
-    logging.info(f"[{stream_str}] running ping on stream {stream_str}")
-    async with action["output"] as output_node:
-        ping_value = cast(str, await action["input"].consume(str))
-        await output_node.put_final(ping_value)
-
-    logging.info(f"[{stream_str}] ping complete")
+from a11.service.service import Service, ServiceOptions
+from a11.service.session import Session
 
 
 def _make_action_registry(
-    args: argparse.Namespace,
+    config: GatewayConfig,
     conversation_store: conversations.ConversationStore,
 ):
     registry = actions.ActionRegistry()
 
-    registry.register(PING_SCHEMA.name, PING_SCHEMA, _ping)
+    registry.register(PING_SCHEMA.name, PING_SCHEMA, ping)
 
     conversation_actions.install(registry, conversation_store)
 
-    if not args.no_shell_tools:
+    if config.shell_tools:
         for schema, handler in bash.SHELL_ACTIONS:
             registry.register(schema.name, schema, handler)
 
-    if not args.no_audio_capture:
-        pass
-
-    if not args.no_speech_recognition:
-        audio_actions.register(registry)
+    # Both groups are gated independently. Until now `--no-audio-capture` did
+    # nothing at all and `--no-speech-recognition` silently took the capture
+    # actions down with it, because registration was all-or-nothing.
+    audio_actions.register(
+        registry,
+        capture=config.audio_capture,
+        recognition=config.speech_recognition,
+    )
 
     return registry
 
@@ -94,9 +59,35 @@ class A11Gateway:
     ):
         self._conversation_store = conversation_store
         self._action_registry = action_registry
+        self.service = Service(
+            action_registry=action_registry,
+            on_connection=self._on_connection,
+            # False: the hook makes the copy itself, because the bridge must own
+            # the very copy it registers the peer's tools on.
+            options=ServiceOptions(copy_registry_per_connection=False),
+        )
 
-    async def handle_stream(self, stream: net.WireStream):
-        logging.info("incoming stream: %s", stream)
+    @property
+    def accept(self):
+        """The service's on-stream callback, for any transport listener."""
+        return self.service.accept
+
+    async def _on_connection(
+        self, session: Session, stream: net.WireStream
+    ) -> None:
+        """Specialise one connection before its session starts pumping."""
+        logging.info(
+            "connection accepted: stream %s, session %s",
+            stream.get_id(),
+            session.get_id(),
+        )
+        session.add_done_callback(
+            lambda finished: logging.info(
+                "connection closed: session %s: %s",
+                finished.get_id(),
+                finished.get_status(),
+            )
+        )
 
         # A copy per connection, because the tool bridge registers the caller's
         # own tools on it: those actions belong to this peer and must not be
@@ -104,27 +95,30 @@ class A11Gateway:
         registry = self._action_registry.copy()
         bridge = RemoteToolBridge()
         bridge.install(registry)
-
-        session = Session(
-            action_registry=registry,
-            options=SessionOptions(),
-        )
+        session.set_action_registry(registry)
         # The bridge reverse-dispatches the model's tool calls back over this
         # same stream, to the tools the peer announced on it.
         bridge.bind_session(session, stream)
 
-        await session.add_stream(stream, mode="accept")
-        await session.done.wait()
+    async def handle_stream(self, stream: net.WireStream):
+        """Serve one stream to completion.
 
-        status: Status = session.get_status()
-        if not status.is_ok():
-            logging.info("Session failed: %s", status)
+        Kept as the name every existing caller uses; `accept` is the same thing.
+        """
+        await self.service.accept(stream)
 
 
-def init_app(args: argparse.Namespace) -> A11Gateway:
+def init_app(config: GatewayConfig | None = None) -> A11Gateway:
+    """Build a gateway from `config`, defaulting to serving everything."""
+
+    from a11 import logging as a11_logging
+
+    a11_logging.enable("info")
+
+    resolved = config if config is not None else GatewayConfig()
     conversation_store = conversations.get_conversation_store(
-        args.conversation_store_root
+        resolved.conversation_store_root
     )
-    action_registry = _make_action_registry(args, conversation_store)
+    action_registry = _make_action_registry(resolved, conversation_store)
 
     return A11Gateway(conversation_store, action_registry)

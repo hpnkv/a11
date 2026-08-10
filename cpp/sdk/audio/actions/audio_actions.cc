@@ -2,14 +2,17 @@
 
 #include "sdk/audio/actions/audio_actions.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -32,6 +35,7 @@
 #include "sdk/audio/audio_buffer.h"
 #include "sdk/audio/audio_input.h"
 #include "sdk/audio/device.h"
+#include "sdk/audio/model_registry.h"
 #include "sdk/audio/speech_recognizer.h"
 #include "thread/concurrency.h"
 
@@ -43,6 +47,31 @@ using ::a11::actions::ActionHandler;
 using ::a11::actions::ActionPortSchema;
 using ::a11::actions::ActionSchema;
 using ::a11::nodes::AsyncNode;
+
+/**
+ * A progress callback that logs a model download about every 10%.
+ *
+ * A first-run fetch of a whisper model is tens or hundreds of megabytes and
+ * happens on whichever machine serves the action, so silence there reads as a
+ * hung action. Logging is deliberately coarse: this runs per body chunk.
+ */
+OnModelProgress LogModelProgress(std::string_view what) {
+  auto last_decile = std::make_shared<std::int64_t>(-1);
+  return [what = std::string(what), last_decile](std::uint64_t done,
+                                                 std::uint64_t total) {
+    if (total == 0) {
+      return;
+    }
+    const std::int64_t decile =
+        static_cast<std::int64_t>((done * 10) / std::max<std::uint64_t>(total, 1));
+    if (decile == *last_decile) {
+      return;
+    }
+    *last_decile = decile;
+    LOG(INFO) << "downloading " << what << " model: " << (decile * 10) << "% ("
+              << done << "/" << total << " bytes)";
+  };
+}
 
 // The wire mimetype (media type + language-agnostic type tag) used for a port's
 // declared `type`. The handler still chooses the encoding it Put()s.
@@ -380,17 +409,32 @@ ActionHandler MakeCaptureTranscriptionHandler() {
           SpeechRecognizerOptions asr_options,
           ReadOptionalOptions<SpeechRecognizerOptions>(
               action, "asr_options", SpeechRecognizerOptions{}));
-      if (asr_options.model_path.empty()) {
-        return absl::InvalidArgumentError(
-            "capture_transcription requires asr_options.model_path");
-      }
+      // `model` and `vad_model` accept a shorthand as well as a path, and an
+      // absent model means the default one. Resolving here -- on this action's
+      // fiber, where blocking is legal -- is what lets a remote caller ask for
+      // "base.en" without knowing where this side keeps its cache.
+      //
+      // Progress is logged rather than sent on the `events` port: the port
+      // carries a closed TranscriptionEvent enum whose tag is mirrored in the
+      // JS and Kotlin clients, and a first-run download is the operator's
+      // concern, on whose disk the cache lives.
+      // The blocking forms: this already runs on a fiber, and awaiting a
+      // nested Submit from one does not complete.
+      ABSL_ASSIGN_OR_RETURN(asr_options.model,
+                            internal::ResolveAsrModelBlocking(
+                                asr_options.model,
+                                LogModelProgress("transcription")));
+      ABSL_ASSIGN_OR_RETURN(
+          asr_options.vad_model,
+          internal::ResolveVadModelBlocking(asr_options.vad_model,
+                                            LogModelProgress("VAD")));
 
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AudioInput> input,
                             AudioInput::Open(capture_options));
-      std::string model_path = asr_options.model_path;
+      std::string model = asr_options.model;
       ABSL_ASSIGN_OR_RETURN(
           std::shared_ptr<SpeechRecognizer> recognizer,
-          SpeechRecognizer::Create(std::move(model_path), input,
+          SpeechRecognizer::Create(std::move(model), input,
                                    std::move(asr_options)));
 
       // Bridge recognizer callbacks onto the output ports. The recognizer awaits
@@ -474,18 +518,33 @@ ActionHandler MakeTranscribeAudioHandler() {
           SpeechRecognizerOptions asr_options,
           ReadOptionalOptions<SpeechRecognizerOptions>(
               action, "asr_options", SpeechRecognizerOptions{}));
-      if (asr_options.model_path.empty()) {
-        return absl::InvalidArgumentError(
-            "transcribe_audio requires asr_options.model_path");
-      }
-      std::string model_path = asr_options.model_path;
+      // `model` and `vad_model` accept a shorthand as well as a path, and an
+      // absent model means the default one. Resolving here -- on this action's
+      // fiber, where blocking is legal -- is what lets a remote caller ask for
+      // "base.en" without knowing where this side keeps its cache.
+      //
+      // Progress is logged rather than sent on the `events` port: the port
+      // carries a closed TranscriptionEvent enum whose tag is mirrored in the
+      // JS and Kotlin clients, and a first-run download is the operator's
+      // concern, on whose disk the cache lives.
+      // The blocking forms: this already runs on a fiber, and awaiting a
+      // nested Submit from one does not complete.
+      ABSL_ASSIGN_OR_RETURN(asr_options.model,
+                            internal::ResolveAsrModelBlocking(
+                                asr_options.model,
+                                LogModelProgress("transcription")));
+      ABSL_ASSIGN_OR_RETURN(
+          asr_options.vad_model,
+          internal::ResolveVadModelBlocking(asr_options.vad_model,
+                                            LogModelProgress("VAD")));
+      std::string model = asr_options.model;
       // When delivery stalls, endpoint the pending utterance a little after the
       // silence bound so genuine in-content pauses still endpoint via the VAD.
       const absl::Duration pause_after =
           absl::Milliseconds(asr_options.min_silence_millis + 500);
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<SpeechRecognizer> recognizer,
                             SpeechRecognizer::CreateForStream(
-                                std::move(model_path), std::move(asr_options)));
+                                std::move(model), std::move(asr_options)));
 
       OnTranscription on_piece =
           [pieces_out](std::optional<std::string> piece) -> a11::Task {
@@ -637,7 +696,7 @@ ActionSchema CaptureTranscriptionSchema() {
       Port("asr_options",
            TaggedMimetype(a11::data::kJsonMimetype,
                           kSpeechRecognizerOptionsTypeTag),
-           "Speech recognition parameters; model_path is required.",
+           "Speech recognition parameters; model is required.",
            /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
       "control_events",
@@ -680,7 +739,7 @@ ActionSchema TranscribeAudioSchema() {
       Port("asr_options",
            TaggedMimetype(a11::data::kJsonMimetype,
                           kSpeechRecognizerOptionsTypeTag),
-           "Speech recognition parameters; model_path is required.",
+           "Speech recognition parameters; model is required.",
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "transcription_pieces",

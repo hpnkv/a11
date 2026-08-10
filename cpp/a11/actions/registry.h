@@ -44,10 +44,18 @@ class ActionRegistry : public std::enable_shared_from_this<ActionRegistry> {
  public:
   /**
    * @brief Registers an action under @p action_name.
-   * @param action_name Name to register (must be unique).
-   * @param schema Schema describing the action's interface.
+   *
+   * Re-registering a name replaces its schema and handler rather than failing,
+   * which is what lets a connection-scoped registry copy be specialised after
+   * it is built: a peer announcing a tool this side also serves shadows it (see
+   * a11's remote tool bridge). Passing an empty @p handler registers the schema
+   * alone and drops any handler the name had.
+   *
+   * @param action_name Name to register.
+   * @param schema Schema describing the action's interface. Its `name` must
+   *        equal @p action_name.
    * @param handler Asynchronous handler; may be empty to register schema only.
-   * @return OK, or AlreadyExists when the name is taken.
+   * @return OK, or InvalidArgument when the name or schema is not valid.
    */
   absl::Status Register(std::string action_name, ActionSchema schema,
                         ActionHandler handler = {});

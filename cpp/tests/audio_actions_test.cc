@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -20,6 +21,7 @@
 #include "sdk/audio/actions/audio_events.h"
 #include "sdk/audio/audio_input.h"
 #include "sdk/audio/device.h"
+#include "sdk/audio/speech_recognizer.h"
 
 namespace a11::sdk::audio {
 namespace {
@@ -82,30 +84,51 @@ TEST(AudioActionsTest, SchemasDeclareDeadlineHeader) {
   }
 }
 
-TEST(AudioActionsTest, TranscribeAudioRequiresModelPath) {
+TEST(AudioActionsTest, TranscribeAudioRejectsAnUnresolvableModel) {
   ASSERT_TRUE(EnsureAudioTypesRegistered().ok());
   auto action =
       *Action::Create(TranscribeAudioSchema(), "tr", TranscribeAudioHandler());
-  // Close the audio input empty and omit asr_options (empty model_path).
   ASSERT_TRUE((*action->GetInput("audio", false))->PutNullFinal().Await().ok());
-  ASSERT_TRUE(
-      (*action->GetInput("asr_options", false))->PutNullFinal().Await().ok());
+  // An *absent* model is no longer an error -- it means the default shorthand,
+  // which would download. A model that is neither a shorthand nor a file still
+  // is, and needs no network to reject.
+  // Raw tagged JSON rather than the registry's typed path, as elsewhere in
+  // this file: the registry's std::any round trip does not survive crossing a
+  // translation unit.
+  data::Chunk asr_options;
+  asr_options.metadata = data::ChunkMetadata{
+      .mimetype = "application/json;type=a11.sdk.SpeechRecognizerOptions"};
+  asr_options.data = R"({"model": "no-such-model-shorthand"})";
+  ASSERT_TRUE((*action->GetInput("asr_options", false))
+                  ->PutChunk(asr_options, std::nullopt, /*final=*/true)
+                  .Await()
+                  .ok());
   ASSERT_TRUE(action->Run().ok());
-  EXPECT_EQ(action->Wait(absl::Seconds(10)).Await().status().code(),
-            absl::StatusCode::kInvalidArgument);
+  const absl::Status status = action->Wait(absl::Seconds(10)).Await().status();
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  // The message lists the shorthands that would have worked.
+  EXPECT_NE(status.message().find("tiny.en"), std::string_view::npos);
 }
 
-TEST(AudioActionsTest, CaptureTranscriptionRequiresModelPath) {
+TEST(AudioActionsTest, CaptureTranscriptionRejectsAnUnresolvableModel) {
   ASSERT_TRUE(EnsureAudioTypesRegistered().ok());
   auto action = *Action::Create(CaptureTranscriptionSchema(), "t",
                                 CaptureTranscriptionHandler());
-  // Close all inputs empty; asr_options defaults have an empty model_path.
   ASSERT_TRUE((*action->GetInput("capture_options", false))
                   ->PutNullFinal()
                   .Await()
                   .ok());
-  ASSERT_TRUE(
-      (*action->GetInput("asr_options", false))->PutNullFinal().Await().ok());
+  // Raw tagged JSON rather than the registry's typed path, as elsewhere in
+  // this file: the registry's std::any round trip does not survive crossing a
+  // translation unit.
+  data::Chunk asr_options;
+  asr_options.metadata = data::ChunkMetadata{
+      .mimetype = "application/json;type=a11.sdk.SpeechRecognizerOptions"};
+  asr_options.data = R"({"model": "no-such-model-shorthand"})";
+  ASSERT_TRUE((*action->GetInput("asr_options", false))
+                  ->PutChunk(asr_options, std::nullopt, /*final=*/true)
+                  .Await()
+                  .ok());
   ASSERT_TRUE((*action->GetInput("control_events", false))
                   ->PutNullFinal()
                   .Await()

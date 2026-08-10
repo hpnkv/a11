@@ -35,7 +35,7 @@ TEST(SpeechRecognizerOptionsTest, SileroThresholdOnlyCheckedWithModel) {
   EXPECT_TRUE(options.Validate().ok());
 
   // Once a VAD model is configured, the threshold must be a valid probability.
-  options.vad_model_path = "/tmp/does-not-need-to-exist-for-option-validation";
+  options.vad_model = "/tmp/does-not-need-to-exist-for-option-validation";
   EXPECT_EQ(options.Validate().code(), absl::StatusCode::kInvalidArgument);
   options.silero_threshold = 0.5f;
   EXPECT_TRUE(options.Validate().ok());

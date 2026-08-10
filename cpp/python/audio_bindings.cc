@@ -32,12 +32,40 @@
 #include "sdk/audio/audio_buffer.h"
 #include "sdk/audio/audio_input.h"
 #include "sdk/audio/device.h"
+#include "sdk/audio/model_registry.h"
 #include "sdk/audio/speech_recognizer.h"
 
 namespace a11::python {
 namespace {
 
 namespace audio = a11::sdk::audio;
+
+/// A model-download progress callback as Python sees it.
+using OnAudioProgressPython = py::typing::Optional<
+    py::typing::Callable<void(py::int_, py::int_)>>;
+
+/**
+ * Wraps a Python progress callable for a model download.
+ *
+ * Invoked from the fiber doing the download, so it takes the GIL itself; a
+ * callback that raises is warned about and dropped rather than failing a
+ * download that is otherwise fine.
+ */
+audio::OnModelProgress AudioProgressFromPython(const py::object& on_progress) {
+  if (on_progress.is_none()) {
+    return {};
+  }
+  auto shared = std::make_shared<py::object>(on_progress);
+  return [shared](std::uint64_t done, std::uint64_t total) {
+    py::gil_scoped_acquire acquire;
+    try {
+      (*shared)(done, total);
+    } catch (const py::error_already_set& error) {
+      PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                       "a11 model progress callback raised: %s", error.what());
+    }
+  };
+}
 
 // A read-only 2-D (channels x frames) float view over an AudioBuffer, used to
 // back the buffer protocol so `memoryview(buffer)` is zero-copy and keeps the
@@ -128,7 +156,7 @@ std::shared_ptr<audio::AudioInput> OpenAudioInput(
 }
 
 std::shared_ptr<audio::SpeechRecognizer> CreateSpeechRecognizer(
-    std::string model_path, const py::object& source,
+    std::string model, const py::object& source,
     audio::SpeechRecognizerOptions options) {
   enum class SourceKind { kDefault, kInput, kSubscription };
   SourceKind source_kind = SourceKind::kDefault;
@@ -152,16 +180,16 @@ std::shared_ptr<audio::SpeechRecognizer> CreateSpeechRecognizer(
     py::gil_scoped_release release;
     switch (source_kind) {
       case SourceKind::kDefault:
-        recognizer = audio::SpeechRecognizer::Create(std::move(model_path),
+        recognizer = audio::SpeechRecognizer::Create(std::move(model),
                                                      std::move(options));
         break;
       case SourceKind::kInput:
         recognizer = audio::SpeechRecognizer::Create(
-            std::move(model_path), std::move(input), std::move(options));
+            std::move(model), std::move(input), std::move(options));
         break;
       case SourceKind::kSubscription:
         recognizer = audio::SpeechRecognizer::Create(
-            std::move(model_path), std::move(subscription), std::move(options));
+            std::move(model), std::move(subscription), std::move(options));
         break;
     }
   }
@@ -562,7 +590,7 @@ void BindAudio(py::module_& module) {
       module, "SpeechRecognizerOptions",
       "Configuration for whisper.cpp transcription, a cheap energy VAD gate, "
       "and optional whisper.cpp Silero neural VAD.")
-      .def(py::init([](std::string model_path, std::string language,
+      .def(py::init([](std::string model, std::string language,
                        bool translate, int inference_threads, bool use_gpu,
                        bool flash_attention, bool use_context,
                        std::string initial_prompt,
@@ -570,9 +598,9 @@ void BindAudio(py::module_& module) {
                        float vad_noise_ratio, size_t vad_window_millis,
                        size_t min_speech_millis, size_t min_silence_millis,
                        size_t speech_pad_millis, size_t max_speech_seconds,
-                       std::string vad_model_path, float silero_threshold) {
+                       std::string vad_model, float silero_threshold) {
              audio::SpeechRecognizerOptions options{
-                 .model_path = std::move(model_path),
+                 .model = std::move(model),
                  .language = std::move(language),
                  .translate = translate,
                  .inference_threads = inference_threads,
@@ -588,7 +616,7 @@ void BindAudio(py::module_& module) {
                  .min_silence_millis = min_silence_millis,
                  .speech_pad_millis = speech_pad_millis,
                  .max_speech_seconds = max_speech_seconds,
-                 .vad_model_path = std::move(vad_model_path),
+                 .vad_model = std::move(vad_model),
                  .silero_threshold = silero_threshold,
              };
              const absl::Status valid = options.Validate();
@@ -598,7 +626,7 @@ void BindAudio(py::module_& module) {
              return options;
            }),
            "Construct validated speech recognition options.",
-           py::arg("model_path") = "", py::arg("language") = "auto",
+           py::arg("model") = "", py::arg("language") = "auto",
            py::arg("translate") = false, py::arg("inference_threads") = 0,
            py::arg("use_gpu") = true, py::arg("flash_attention") = true,
            py::arg("use_context") = false, py::arg("initial_prompt") = "",
@@ -608,9 +636,9 @@ void BindAudio(py::module_& module) {
            py::arg("min_speech_millis") = 250,
            py::arg("min_silence_millis") = 600,
            py::arg("speech_pad_millis") = 160,
-           py::arg("max_speech_seconds") = 30, py::arg("vad_model_path") = "",
+           py::arg("max_speech_seconds") = 30, py::arg("vad_model") = "",
            py::arg("silero_threshold") = 0.5f)
-      .def_readwrite("model_path", &audio::SpeechRecognizerOptions::model_path,
+      .def_readwrite("model", &audio::SpeechRecognizerOptions::model,
                      "Path to the whisper.cpp model; used by the transcription "
                      "action (empty is rejected there).")
       .def_readwrite("language", &audio::SpeechRecognizerOptions::language,
@@ -656,8 +684,8 @@ void BindAudio(py::module_& module) {
       .def_readwrite("max_speech_seconds",
                      &audio::SpeechRecognizerOptions::max_speech_seconds,
                      "Maximum utterance duration before splitting.")
-      .def_readwrite("vad_model_path",
-                     &audio::SpeechRecognizerOptions::vad_model_path,
+      .def_readwrite("vad_model",
+                     &audio::SpeechRecognizerOptions::vad_model,
                      "Path to a Silero VAD model; empty disables Silero VAD.")
       .def_readwrite("silero_threshold",
                      &audio::SpeechRecognizerOptions::silero_threshold,
@@ -748,11 +776,11 @@ void BindAudio(py::module_& module) {
       .def(py::init(&CreateSpeechRecognizer),
            "Load a whisper.cpp GGML/GGUF model. `source` may be an AudioInput, "
            "an AudioSubscription, or None for the default input.",
-           py::arg("model_path"), py::arg("source") = py::none(),
+           py::arg("model"), py::arg("source") = py::none(),
            py::arg("options") = audio::SpeechRecognizerOptions{})
       .def_static("create", &CreateSpeechRecognizer,
                   "Load a model and construct a speech recognizer.",
-                  py::arg("model_path"), py::arg("source") = py::none(),
+                  py::arg("model"), py::arg("source") = py::none(),
                   py::arg("options") = audio::SpeechRecognizerOptions{})
       .def(
           "start",
@@ -787,7 +815,7 @@ void BindAudio(py::module_& module) {
           "Request an orderly stop and await terminal callbacks.")
       .def_property_readonly("running", &audio::SpeechRecognizer::running,
                              "Whether a recognition run is active.")
-      .def_property_readonly("model_path", &audio::SpeechRecognizer::model_path,
+      .def_property_readonly("model", &audio::SpeechRecognizer::model,
                              "Path of the loaded whisper model.")
       .def_property_readonly(
           "options", &audio::SpeechRecognizer::options,
@@ -851,6 +879,70 @@ void BindAudio(py::module_& module) {
       },
       "Decode an AudioBuffer from A11's MessagePack representation.",
       py::arg("data"));
+
+  py::class_<audio::AudioModelSpec>(module, "AudioModelSpec")
+      .def_readonly("name", &audio::AudioModelSpec::name,
+                    "The shorthand it is known by.")
+      .def_readonly("filename", &audio::AudioModelSpec::filename,
+                    "Cache filename, ggml-<name>.bin.")
+      .def_readonly("url", &audio::AudioModelSpec::url,
+                    "Where the artifact is fetched from.")
+      .def_readonly("sha1", &audio::AudioModelSpec::sha1,
+                    "Published SHA-1, as lowercase hex.")
+      .def_readonly("size_mib", &audio::AudioModelSpec::size_mib,
+                    "Approximate size in MiB.")
+      .def("__repr__", [](const audio::AudioModelSpec& spec) {
+        return absl::StrCat("AudioModelSpec('", spec.name, "')");
+      });
+
+  module.def("asr_model_shorthands", &audio::AsrModelShorthands,
+             "The accepted transcription-model shorthands, in a stable order.");
+  module.def("vad_model_shorthands", &audio::VadModelShorthands,
+             "The accepted VAD-model shorthands.");
+  module.def(
+      "lookup_asr_model",
+      [](std::string_view shorthand) {
+        return ValueOrThrow(audio::LookupAsrModel(shorthand));
+      },
+      "Look up a transcription model by shorthand.", py::arg("shorthand"));
+  module.def(
+      "lookup_vad_model",
+      [](std::string_view shorthand) {
+        return ValueOrThrow(audio::LookupVadModel(shorthand));
+      },
+      "Look up a VAD model by shorthand.", py::arg("shorthand"));
+  module.def(
+      "audio_model_cache_dir",
+      [] { return audio::ModelCacheDir().string(); },
+      "The directory shorthand models are cached in.");
+  module.def(
+      "resolve_asr_model",
+      [](std::string spec, const OnAudioProgressPython& on_progress) {
+        return FutureToPythonAs<py::str>(
+            audio::ResolveAsrModel(std::move(spec),
+                                   AudioProgressFromPython(on_progress)),
+            [](const std::string& path) -> py::object {
+              return py::str(path);
+            });
+      },
+      "Resolve a transcription model shorthand or path to a local file, "
+      "downloading it if needed. Awaitable.",
+      py::arg("spec"), py::arg("on_progress") = py::none());
+  module.def(
+      "resolve_vad_model",
+      [](std::string spec, const OnAudioProgressPython& on_progress) {
+        return FutureToPythonAs<py::str>(
+            audio::ResolveVadModel(std::move(spec),
+                                   AudioProgressFromPython(on_progress)),
+            [](const std::string& path) -> py::object {
+              return py::str(path);
+            });
+      },
+      "Resolve a VAD model shorthand or path to a local file, downloading it "
+      "if needed. An empty spec resolves to an empty path. Awaitable.",
+      py::arg("spec"), py::arg("on_progress") = py::none());
+  module.attr("DEFAULT_ASR_MODEL") = std::string(audio::kDefaultAsrModel);
+  module.attr("DEFAULT_VAD_MODEL") = std::string(audio::kDefaultVadModel);
 
   BindAudioEvents(module);
   module.def("audio_actions", &AudioActionsPy,

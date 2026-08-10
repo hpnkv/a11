@@ -6,6 +6,9 @@ add_executable(a11_core_test
   http1_codec_test.cc
   http1_connection_test.cc
   http2_test.cc
+  http_url_test.cc
+  http_fetch_test.cc
+  http_download_test.cc
   http_sse_wire_stream_test.cc
   signalling_test.cc
   webrtc_wire_stream_test.cc
@@ -14,6 +17,7 @@ add_executable(a11_core_test
   chunk_store_writer_test.cc
   async_node_test.cc
   action_test.cc
+  service_test.cc
   session_test.cc
   in_process_wire_stream_test.cc
   wire_stream_with_recv_test.cc
@@ -63,10 +67,11 @@ if (A11_BUILD_AUDIO)
   add_executable(a11_audio_actions_test
     audio_serialization_test.cc
     audio_actions_test.cc
+    audio_model_registry_test.cc
     serial_tags_test.cc)
   target_link_libraries(
     a11_audio_actions_test PRIVATE a11::audio_actions a11::actions a11::audio
-                                   a11::concurrency a11::data a11::nodes
-                                   GTest::gtest_main)
+                                   a11::concurrency a11::data a11::net
+                                   a11::nodes GTest::gtest_main)
   add_test(NAME a11_audio_actions_test COMMAND a11_audio_actions_test)
 endif ()

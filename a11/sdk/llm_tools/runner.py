@@ -18,7 +18,7 @@ from a11.sdk.llm import (
     TOOL_LOGS_METADATA_KEY,
     USER_FACING_LOG_PORT,
 )
-from a11.sdk.llm_tools.adapter import ToolAdapter
+from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
 
 
 def get_tool_definitions(
@@ -284,18 +284,29 @@ async def execute_actions_from_interaction(
             logs[nested_action.id] = log
 
         schema = nested_action.get_schema()
-        mapped_output_names = list(schema.output_to_json_field.keys())
-        first_key = mapped_output_names[0] if mapped_output_names else None
-        if len(schema.output_to_json_field) == 1 and first_key == "$":
-            for fragment in action_outputs[first_key]:
+        mapping = dict(schema.output_to_json_field)
+        # `{"port": "$"}` means "this port *is* the whole result", so the result
+        # is that port's payload rather than an object wrapping it. The sentinel
+        # is the mapped-to *field*, matching ActionSchema's own validation
+        # (cpp/a11/actions/schema.cc), the tool-definition side
+        # ([a11.sdk.llm_tools.adapter][a11.sdk.llm_tools.adapter]) and the Kotlin
+        # port. Reading it as the key instead left the sentinel to fall through
+        # as a fragment id, where it fails name validation.
+        whole_output_port = None
+        if len(mapping) == 1:
+            port, field = next(iter(mapping.items()))
+            if field == WHOLE_JSON_OUTPUT:
+                whole_output_port = port
+        if whole_output_port is not None:
+            for fragment in action_outputs.get(whole_output_port, []):
                 fragment.id = "_"
                 all_outputs[nested_action.id].append(fragment)
             continue
 
         for output_name, fragments in action_outputs.items():
             map_to = output_name
-            if len(schema.output_to_json_field) > 0:
-                map_to = schema.output_to_json_field.get(output_name)
+            if mapping:
+                map_to = mapping.get(output_name)
 
             if map_to is None:
                 continue

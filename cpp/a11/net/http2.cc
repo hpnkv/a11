@@ -66,6 +66,61 @@ using internal::UvExecutor;
 
 namespace {
 
+/**
+ * The connection-level HTTP/2 receive window.
+ *
+ * Sized as a bandwidth-delay product with room to spare: 8 MiB covers a gigabit
+ * path at 60 ms of latency, which is well past anything a local or regional
+ * endpoint presents. The peer never has to wait for an acknowledgement to keep
+ * sending, so a bulk transfer runs at line rate rather than at
+ * window-per-round-trip.
+ *
+ * This is a *receive* window, so the cost is bounded by what a peer chooses to
+ * send ahead; A11's own reader applies backpressure separately, through
+ * Http2Options::max_buffered_response_bytes.
+ */
+/**
+ * The connection-level HTTP/2 receive window.
+ *
+ * HTTP/2 defaults both the connection and each stream to 65535 bytes, and
+ * SETTINGS_INITIAL_WINDOW_SIZE governs *streams only* -- the connection window
+ * has to be raised on its own. A window is a bandwidth-delay product: 64 KiB
+ * against a CDN edge 40 ms away is 1.6 MB/s no matter how fast the link, which
+ * is what made downloads here run at a few MB/s on a multi-gigabit connection.
+ *
+ * Shared by every stream on the connection, so it is sized above the per-stream
+ * window rather than equal to it.
+ */
+constexpr std::int32_t kConnectionWindowSize = 16 * 1024 * 1024;
+
+/**
+ * @brief The per-stream receive window, bounded by what we will buffer.
+ *
+ * A receive window is a promise to accept that much unacknowledged data, so
+ * promising more than the reader is willing to hold just moves the queue into
+ * memory we did not budget. Tying the two together means one knob --
+ * Http2Options::max_buffered_response_bytes -- sets both how much is buffered
+ * and how much may be in flight, and a caller doing a bulk transfer raises them
+ * together.
+ */
+/**
+ * How much space a response batch reserves on its first DATA frame.
+ *
+ * One TCP read commonly carries several 16 KiB frames, and a batch is bounded by
+ * what a single read delivered, so this is sized to libuv's read buffer.
+ * Reserving up front means the batch grows by appending into spare capacity
+ * rather than reallocating and copying its way up.
+ */
+constexpr size_t kResponseBatchReserve = 64 * 1024;
+
+inline std::int32_t StreamWindowSize(const Http2Options& options) {
+  constexpr size_t kFloor = 256 * 1024;
+  constexpr size_t kCeiling = 16 * 1024 * 1024;
+  return static_cast<std::int32_t>(
+      std::clamp(options.max_buffered_response_bytes, kFloor, kCeiling));
+}
+
+
 absl::Status Nghttp2Error(int code, std::string_view operation) {
   return absl::InternalError(
       absl::StrCat(operation, " failed: ", nghttp2_strerror(code)));
@@ -224,6 +279,7 @@ a11::Future<std::optional<std::string>> Http2ResponseStream::Read() {
   bool done = false;
   absl::Status status;
   std::shared_ptr<a11::Promise<std::optional<std::string>>> promise;
+  std::function<void(bool)> resume;
   {
     thread::MutexLock lock(&state_->mu);
     if (state_->pending_read != nullptr) {
@@ -236,13 +292,23 @@ a11::Future<std::optional<std::string>> Http2ResponseStream::Read() {
       state_->chunks.pop_front();
       state_->buffered_bytes -= chunk.size();
       has_chunk = true;
+      // Resume at the low-water mark rather than as soon as one chunk leaves,
+      // so a reader keeping pace does not toggle the socket on every chunk.
+      if (state_->buffered_bytes <= state_->max_buffered_bytes / 2) {
+        resume = state_->set_read_paused;
+      }
     } else if (state_->done) {
       done = true;
       status = state_->status;
     } else {
       promise = std::make_shared<a11::Promise<std::optional<std::string>>>();
       state_->pending_read = promise;
+      // Nothing buffered and someone is waiting: definitely take more.
+      resume = state_->set_read_paused;
     }
+  }
+  if (resume) {
+    resume(false);
   }
   if (has_chunk) {
     return a11::ReadyFuture(std::optional<std::string>(std::move(chunk)));
@@ -607,6 +673,12 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     size_t outbound_offset = 0;
     bool outbound_finished = false;
     std::shared_ptr<Http2ResponseStream::State> response;
+    /**
+     * Response DATA received so far in this receive batch, not yet handed to
+     * the reader. See FlushResponseData: one buffer per TCP read rather than
+     * one per DATA frame.
+     */
+    std::string pending_response_data;
     std::shared_ptr<Http2RequestBodyStream::State> request_body;
     std::shared_ptr<Http2ResponseWriter::State> writer;
   };
@@ -650,7 +722,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     }
     const nghttp2_settings_entry settings[] = {
         {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 256},
-        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 1024 * 1024},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,
+         static_cast<std::uint32_t>(StreamWindowSize(options_))},
         {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}};
     const size_t settings_count =
         server_ ? std::size(settings) : std::size(settings) - 1;
@@ -659,10 +732,67 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (result != 0) {
       return Nghttp2Error(result, "nghttp2_submit_settings");
     }
+    // SETTINGS_INITIAL_WINDOW_SIZE above governs *stream* windows only. The
+    // connection-level receive window is separate and stays at HTTP/2's 65535
+    // default unless it is raised explicitly, which caps the whole connection at
+    // 64 KiB in flight -- one bandwidth-delay product of about 10 MB/s on a 6 ms
+    // path, and far less once per-frame acknowledgement latency dominates. It is
+    // the difference between a few MB/s and line rate on a fast link.
+    result = nghttp2_session_set_local_window_size(
+        session_, NGHTTP2_FLAG_NONE, /*stream_id=*/0, kConnectionWindowSize);
+    if (result != 0) {
+      return Nghttp2Error(result, "nghttp2_session_set_local_window_size");
+    }
     return InitializeTransport(std::move(prebuffered_));
   }
 
   // --- HttpTransport seams. ---
+
+  /**
+   * @brief Hand this batch's accumulated response DATA to the reader.
+   *
+   * nghttp2 delivers one callback per DATA frame -- 16 KiB by default -- so a
+   * bulk transfer would otherwise cost an allocation, a promise resolution, a
+   * fiber wake-up and a downstream write *per frame*. Everything that arrived in
+   * one TCP read is handed over together instead, which costs no latency at all:
+   * the bytes were already here, and the reader was going to be woken for them
+   * regardless.
+   *
+   * Must run before the response is finished, or a reader would see end-of-
+   * stream ahead of the last data.
+   */
+  void FlushResponseData(Stream* stream) {
+    if (stream == nullptr || stream->pending_response_data.empty() ||
+        stream->response == nullptr) {
+      return;
+    }
+    std::string batch = std::move(stream->pending_response_data);
+    stream->pending_response_data.clear();
+    const absl::Status pushed = stream->response->Push(std::move(batch));
+    if (!pushed.ok()) {
+      // The reader is gone or the stream is already over; the data has nowhere
+      // to go and the stream should stop.
+      stream->response->Finish(pushed);
+      (void)nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream->id,
+                                      NGHTTP2_INTERNAL_ERROR);
+    }
+  }
+
+  /// Finish a response, delivering anything still accumulated first.
+  void FinishResponse(Stream* stream, const absl::Status& status) {
+    if (stream == nullptr || stream->response == nullptr) {
+      return;
+    }
+    FlushResponseData(stream);
+    stream->response->Finish(status);
+  }
+
+  void FlushAllResponseData() {
+    for (auto& [stream_id, stream] : streams_) {
+      (void)stream_id;
+      FlushResponseData(stream.get());
+    }
+  }
 
   absl::Status OnInboundPlaintext(const char* data, size_t size) override {
     const ssize_t consumed = nghttp2_session_mem_recv(
@@ -675,6 +805,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::DataLossError(
           "nghttp2 did not consume the complete TCP frame");
     }
+    // The batch boundary: everything this read carried is delivered as one
+    // buffer per stream.
+    FlushAllResponseData();
     return SendSession();
   }
 
@@ -767,6 +900,14 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
           return absl::OkStatus();
         }
         return self->CancelRequest(stream_id, std::move(status));
+      };
+      // Backpressure: a full response buffer stops the socket read, which
+      // closes the TCP window back to the peer. See
+      // Http2ResponseStream::State::set_read_paused.
+      stream->response->set_read_paused = [weak](bool paused) {
+        if (const std::shared_ptr<Http2Connection> self = weak.lock()) {
+          self->SetReadPaused(paused);
+        }
       };
     }
 
@@ -862,6 +1003,11 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
           return absl::OkStatus();
         }
         return self->CancelRequest(stream_id, std::move(status));
+      };
+      stream->response->set_read_paused = [weak](bool paused) {
+        if (const std::shared_ptr<Http2Connection> self = weak.lock()) {
+          self->SetReadPaused(paused);
+        }
       };
     }
 
@@ -1246,7 +1392,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
           self->CompleteResponseHeaders(stream);
           if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
             stream->remote_end = true;
-            stream->response->Finish(absl::OkStatus());
+            self->FinishResponse(stream, absl::OkStatus());
           }
         }
       } else if (frame->hd.type == NGHTTP2_DATA &&
@@ -1260,7 +1406,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
             self->DispatchRequest(stream);
           }
         } else if (stream->response != nullptr) {
-          stream->response->Finish(absl::OkStatus());
+          self->FinishResponse(stream, absl::OkStatus());
         }
       }
       return 0;
@@ -1311,14 +1457,13 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         stream->request.body.append(reinterpret_cast<const char*>(data),
                                     length);
       } else if (stream->response != nullptr) {
-        absl::Status pushed = stream->response->Push(
-            std::string(reinterpret_cast<const char*>(data), length));
-        if (!pushed.ok()) {
-          stream->response->Finish(pushed);
-          const int reset = nghttp2_submit_rst_stream(
-              session, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_ENHANCE_YOUR_CALM);
-          return reset == 0 ? 0 : NGHTTP2_ERR_CALLBACK_FAILURE;
+        // Accumulated, not pushed: the batch is delivered once this TCP read is
+        // fully parsed. See FlushResponseData.
+        if (stream->pending_response_data.empty()) {
+          stream->pending_response_data.reserve(kResponseBatchReserve);
         }
+        stream->pending_response_data.append(
+            reinterpret_cast<const char*>(data), length);
       }
       return 0;
     } catch (const std::exception& error) {

@@ -49,6 +49,7 @@ __all__: list[str] = [
     "AudioDeviceInfo",
     "AudioInput",
     "AudioInputOptions",
+    "AudioModelSpec",
     "AudioSubscription",
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
@@ -62,13 +63,17 @@ __all__: list[str] = [
     "ChunkStoreReaderOptions",
     "ChunkStoreWriter",
     "ChunkStoreWriterOptions",
+    "DEFAULT_ASR_MODEL",
     "DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS",
     "DEFAULT_SSE_CONNECT_ENDPOINT",
     "DEFAULT_SSE_MESSAGE_ENDPOINT",
+    "DEFAULT_VAD_MODEL",
     "DESCRIPTION",
+    "DownloadOptions",
     "Duration",
     "EMPTY_WIRE_MESSAGE_SIZE",
     "ERROR",
+    "FetchOptions",
     "Http2Client",
     "Http2DuplexStream",
     "Http2Options",
@@ -99,6 +104,7 @@ __all__: list[str] = [
     "OTEL_BAGGAGE_HEADER",
     "OTEL_TRACEPARENT_HEADER",
     "OTEL_TRACESTATE_HEADER",
+    "ParsedUrl",
     "Port",
     "RedisChunkStore",
     "RedisChunkStoreKeys",
@@ -120,6 +126,8 @@ __all__: list[str] = [
     "SSE_STREAM_ID_HEADER",
     "START",
     "SerializationRegistry",
+    "Service",
+    "ServiceOptions",
     "Session",
     "SessionOptions",
     "SessionWithRecv",
@@ -158,19 +166,26 @@ __all__: list[str] = [
     "WireStream",
     "WireStreamOptions",
     "WireStreamWithRecv",
+    "asr_model_shorthands",
     "audio_actions",
     "audio_buffer_from_msgpack",
     "audio_buffer_to_msgpack",
     "audio_device_info",
+    "audio_model_cache_dir",
     "create_in_process_wire_stream_pair",
     "default_audio_input_device",
     "default_redis_client",
+    "download",
     "emit_log",
+    "fetch",
+    "file_sha1",
     "get_http_header",
     "is_close_status_chunk",
     "is_half_close_message",
     "is_status_chunk",
     "list_audio_devices",
+    "lookup_asr_model",
+    "lookup_vad_model",
     "make_half_close_message",
     "normalize_session_headers",
     "obs_clear_recorded_spans",
@@ -179,8 +194,12 @@ __all__: list[str] = [
     "obs_recorded_spans",
     "obs_shutdown",
     "obs_start_span",
+    "parse_url",
     "register_audio_actions",
     "reset_default_redis_client",
+    "resolve_asr_model",
+    "resolve_url_reference",
+    "resolve_vad_model",
     "set_default_redis_client",
     "set_log_sink",
     "set_min_log_level",
@@ -192,6 +211,7 @@ __all__: list[str] = [
     "status_code_to_websocket",
     "status_from_chunk",
     "status_to_chunk",
+    "vad_model_shorthands",
     "validate_http_headers",
     "validate_name_string",
 ]
@@ -2071,6 +2091,38 @@ class AudioInputOptions:
     @sample_rate.setter
     def sample_rate(self, arg0: typing.SupportsFloat) -> None: ...
 
+class AudioModelSpec:
+    def __repr__(self) -> str: ...
+    @property
+    def filename(self) -> str:
+        """
+        Cache filename, ggml-<name>.bin.
+        """
+
+    @property
+    def name(self) -> str:
+        """
+        The shorthand it is known by.
+        """
+
+    @property
+    def sha1(self) -> str:
+        """
+        Published SHA-1, as lowercase hex.
+        """
+
+    @property
+    def size_mib(self) -> int:
+        """
+        Approximate size in MiB.
+        """
+
+    @property
+    def url(self) -> str:
+        """
+        Where the artifact is fetched from.
+        """
+
 class AudioSubscription:
     """
     A live subscription delivering fixed-size buffers from an AudioInput.
@@ -2865,6 +2917,57 @@ class ChunkStoreWriterOptions:
     @sticky_mimetype.setter
     def sticky_mimetype(self, arg0: bool) -> None: ...
 
+class DownloadOptions:
+    def __init__(self) -> None:
+        """
+        Construct default download options.
+        """
+
+    @property
+    def destination(self) -> str:
+        """
+        Final path; parent directories are created.
+        """
+    @destination.setter
+    def destination(self, arg1: str) -> None: ...
+
+    @property
+    def expected_sha1(self) -> str:
+        """
+        Expected SHA-1 as hex, or empty to skip verification.
+        """
+    @expected_sha1.setter
+    def expected_sha1(self, arg0: str) -> None: ...
+
+    @property
+    def fetch(self) -> FetchOptions:
+        """
+        Request settings.
+        """
+    @fetch.setter
+    def fetch(self, arg0: FetchOptions) -> None: ...
+
+    @property
+    def on_progress(
+        self,
+    ) -> (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ):
+        """
+        Callable taking (bytes_done, bytes_total); write-only.
+        """
+    @on_progress.setter
+    def on_progress(
+        self,
+        arg1: (
+            collections.abc.Callable[
+                [typing.SupportsInt, typing.SupportsInt], None
+            ]
+            | None
+        ),
+    ) -> None: ...
+
 class Duration:
     @staticmethod
     def _negative_infinity() -> Duration:
@@ -2966,6 +3069,75 @@ class Duration:
         """
         The duration as a whole number of nanoseconds.
         """
+
+class FetchOptions:
+    def __init__(self) -> None:
+        """
+        Construct default fetch options.
+        """
+
+    def validate(self) -> None:
+        """
+        Validate the options, raising on error.
+        """
+
+    @property
+    def body(self) -> bytes:
+        """
+        Request body, for methods that take one.
+        """
+    @body.setter
+    def body(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def default_user_agent(self) -> bool:
+        """
+        Send a default user-agent when headers omit one.
+        """
+    @default_user_agent.setter
+    def default_user_agent(self, arg0: bool) -> None: ...
+
+    @property
+    def headers(self) -> list[tuple[str, str]]:
+        """
+        Extra request headers as a list of (name, value) pairs.
+        """
+    @headers.setter
+    def headers(
+        self, arg1: collections.abc.Iterable[tuple[str, str]] | None
+    ) -> None: ...
+
+    @property
+    def max_redirects(self) -> int:
+        """
+        Redirects to follow; 0 returns the 3xx response itself.
+        """
+    @max_redirects.setter
+    def max_redirects(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def method(self) -> str:
+        """
+        Request method.
+        """
+    @method.setter
+    def method(self, arg0: str) -> None: ...
+
+    @property
+    def timeout(self) -> Duration:
+        """
+        Wall-clock bound on the whole operation, redirects included.
+        """
+    @timeout.setter
+    def timeout(self, arg1: Duration | None) -> None: ...
+
+    @property
+    def transport(self) -> Http2Options:
+        """
+        Transport settings; tls.enabled follows the URL scheme.
+        """
+    @transport.setter
+    def transport(self, arg0: Http2Options) -> None: ...
 
 class Http2Client:
     @staticmethod
@@ -4102,6 +4274,78 @@ class NodeRef:
         """
     @offset.setter
     def offset(self, arg0: typing.SupportsInt) -> None: ...
+
+class ParsedUrl:
+    def __init__(self) -> None:
+        """
+        Construct an empty parsed URL.
+        """
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    @property
+    def authority(self) -> str:
+        """
+        The authority as a header value.
+        """
+
+    @property
+    def host(self) -> str:
+        """
+        Hostname or IP literal, without IPv6 brackets.
+        """
+    @host.setter
+    def host(self, arg0: str) -> None: ...
+
+    @property
+    def origin(self) -> str:
+        """
+        scheme://authority, with no trailing slash.
+        """
+
+    @property
+    def path(self) -> str:
+        """
+        Path beginning with '/', or empty when none was given.
+        """
+    @path.setter
+    def path(self, arg0: str) -> None: ...
+
+    @property
+    def port(self) -> int:
+        """
+        Explicit port, or the scheme's default.
+        """
+    @port.setter
+    def port(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def query(self) -> str:
+        """
+        Query without the leading '?'.
+        """
+    @query.setter
+    def query(self, arg0: str) -> None: ...
+
+    @property
+    def scheme(self) -> str:
+        """
+        Lowercase scheme, without "://".
+        """
+    @scheme.setter
+    def scheme(self, arg0: str) -> None: ...
+
+    @property
+    def secure(self) -> bool:
+        """
+        Whether the scheme implies TLS.
+        """
+
+    @property
+    def target(self) -> str:
+        """
+        The request target: path and query, at least "/".
+        """
 
 class Port:
     """
@@ -5256,6 +5500,225 @@ class SerializationRegistry:
         Number of registered serializers.
         """
 
+class Service:
+    async def __aenter__(self) -> "Service": ...
+    async def __aexit__(self, *exc_info) -> None: ...
+    def __init__(
+        self,
+        *,
+        action_registry: ActionRegistry | None = None,
+        on_connection: typing.Any | None = None,
+        options: ServiceOptions | None = None,
+    ) -> None:
+        """
+        A service: an action registry plus the sessions serving it.
+
+        `accept` is shaped to be a transport's on-stream callback, so one service can be
+        bound to several listeners, or to none at all (hand it an in-process stream). The
+        optional `on_connection(session, stream)` coroutine runs once per connection,
+        after the session exists and before it starts pumping -- the only window in which
+        a connection can be specialised without racing its first message.
+
+        Examples:
+            Serve a gateway over WebSocket:
+
+            ```python
+            service = a11.Service(action_registry=registry, on_connection=prepare)
+            server = a11.net.WebSocketWireServer.create(service.accept, options)
+            ```
+        """
+
+    def abort(self, status: Status) -> None:
+        """
+        Stop accepting and abort every live session.
+        """
+
+    def accept(self, stream: WireStream) -> asyncio.Future[None]:
+        """
+        Serve an accepted stream, awaiting its session's whole lifetime.
+        """
+
+    async def aclose(self, *, timeout: Duration | None = None) -> None:
+        """
+        Stop accepting, then wait for what is in flight.
+
+        The graceful shutdown, in the order that makes it graceful: refusing new
+        connections first means the set being waited on cannot grow.
+        """
+
+    def add_stream_to_session(
+        self, session_id: str, stream: WireStream, mode: typing.Any = "accept"
+    ) -> None:
+        """
+        Attach another transport to an existing session.
+        """
+
+    async def drain(self, timeout: Duration | None = None) -> None:
+        """
+        Await the completion of every session currently being served.
+
+        Args:
+            timeout: How long to wait. ``None`` waits indefinitely.
+
+        Raises:
+            StatusException: ``DEADLINE_EXCEEDED`` when sessions remain after
+                ``timeout``; they are left running, so follow with `abort` if
+                they must go.
+        """
+
+    def get_session(self, session_id: str) -> Session:
+        """
+        The session with this id, raising NOT_FOUND if there is none.
+        """
+
+    def get_session_for_stream(self, stream_id: str) -> Session:
+        """
+        The session serving this stream.
+        """
+
+    def serve(
+        self, stream: WireStream, mode: typing.Any = "accept"
+    ) -> asyncio.Future[None]:
+        """
+        Serve a stream in the given mode ("start" or "accept").
+        """
+
+    def session_ids(self) -> list[str]:
+        """
+        The ids of the sessions currently being served.
+        """
+
+    def set_action_registry(
+        self, action_registry: ActionRegistry | None
+    ) -> None:
+        """
+        Replace the registry new connections are built from, without interrupting any stream.
+        """
+
+    def start(self, stream: WireStream) -> asyncio.Future[None]:
+        """
+        Serve a stream this side initiated, awaiting its whole lifetime.
+        """
+
+    def start_stream_handler(
+        self, stream: WireStream, mode: typing.Any = "accept"
+    ) -> Session:
+        """
+        Begin serving a stream and return its session immediately.
+        """
+
+    def stop_accepting(self) -> None:
+        """
+        Refuse new connections, leaving live ones alone.
+        """
+
+    def wait_done(self) -> asyncio.Future[None]:
+        """
+        Await the service being closed and empty.
+        """
+
+    @property
+    def accepting(self) -> bool:
+        """
+        Whether new connections are still admitted.
+        """
+
+    @property
+    def action_registry(self) -> ActionRegistry | None:
+        """
+        The template registry new connections are built from.
+        """
+
+    @property
+    def done(self) -> _ServiceDoneEvent:
+        """
+        An `asyncio.Event`-shaped view of the service being closed and empty.
+
+                Set once the service has stopped accepting *and* every session it was
+                serving has finished.
+
+        """
+
+    @property
+    def session_count(self) -> int:
+        """
+        How many sessions are being served.
+        """
+
+class ServiceOptions:
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
+    def __init__(
+        self,
+        *,
+        session_options: SessionOptions | None = None,
+        copy_registry_per_connection: bool = False,
+        session_headers: collections.abc.Mapping[str, bytes] | None = None,
+        drain_timeout: Duration | None = None,
+    ) -> None:
+        """
+        Construct service options; all parameters are keyword-only.
+        """
+
+    def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
+    def validate(self) -> None:
+        """
+        Validate the options, raising on error.
+        """
+
+    @property
+    def copy_registry_per_connection(self) -> bool:
+        """
+        Give each connection its own copy of the registry. Leave false when the connection hook makes the copy itself.
+        """
+    @copy_registry_per_connection.setter
+    def copy_registry_per_connection(self, arg0: bool) -> None: ...
+
+    @property
+    def drain_timeout(self) -> Duration:
+        """
+        How long draining waits for live sessions.
+        """
+    @drain_timeout.setter
+    def drain_timeout(self, arg1: Duration | None) -> None: ...
+
+    @property
+    def session_headers(self) -> dict:
+        """
+        Headers stamped on every session the service creates.
+        """
+    @session_headers.setter
+    def session_headers(
+        self, arg1: collections.abc.Mapping[str, bytes] | None
+    ) -> None: ...
+
+    @property
+    def session_options(self) -> SessionOptions:
+        """
+        Limits and timeouts for every session created.
+        """
+    @session_options.setter
+    def session_options(self, arg0: SessionOptions) -> None: ...
+
 class Session:
     def __init__(
         self,
@@ -5889,7 +6352,7 @@ class SpeechRecognizer:
 
     @staticmethod
     def create(
-        model_path: str | os.PathLike[str],
+        model: str | os.PathLike[str],
         source: AudioInput | AudioSubscription | None = None,
         options: (
             SpeechRecognizerOptions
@@ -5903,7 +6366,7 @@ class SpeechRecognizer:
 
     def __init__(
         self,
-        model_path: str | os.PathLike[str],
+        model: str | os.PathLike[str],
         source: AudioInput | AudioSubscription | None = None,
         options: (
             SpeechRecognizerOptions
@@ -5943,7 +6406,7 @@ class SpeechRecognizer:
         """
 
     @property
-    def model_path(self) -> str:
+    def model(self) -> str:
         """
         Path of the loaded whisper model.
         """
@@ -5981,7 +6444,7 @@ class SpeechRecognizerOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        model_path: str = "",
+        model: str = "",
         language: str = "auto",
         translate: bool = False,
         inference_threads: typing.SupportsInt = 0,
@@ -5997,7 +6460,7 @@ class SpeechRecognizerOptions:
         min_silence_millis: typing.SupportsInt = 600,
         speech_pad_millis: typing.SupportsInt = 160,
         max_speech_seconds: typing.SupportsInt = 30,
-        vad_model_path: str = "",
+        vad_model: str = "",
         silero_threshold: typing.SupportsFloat = 0.5,
     ) -> None:
         """
@@ -6070,12 +6533,12 @@ class SpeechRecognizerOptions:
     def min_speech_millis(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
-    def model_path(self) -> str:
+    def model(self) -> str:
         """
         Path to the whisper.cpp model; used by the transcription action (empty is rejected there).
         """
-    @model_path.setter
-    def model_path(self, arg0: str) -> None: ...
+    @model.setter
+    def model(self, arg0: str) -> None: ...
 
     @property
     def silero_threshold(self) -> float:
@@ -6126,12 +6589,12 @@ class SpeechRecognizerOptions:
     def use_gpu(self, arg0: bool) -> None: ...
 
     @property
-    def vad_model_path(self) -> str:
+    def vad_model(self) -> str:
         """
         Path to a Silero VAD model; empty disables Silero VAD.
         """
-    @vad_model_path.setter
-    def vad_model_path(self, arg0: str) -> None: ...
+    @vad_model.setter
+    def vad_model(self, arg0: str) -> None: ...
 
     @property
     def vad_noise_ratio(self) -> float:
@@ -8116,6 +8579,11 @@ class _StringSchemaMapView:
         Return a view of the map's values.
         """
 
+def asr_model_shorthands() -> list[str]:
+    """
+    The accepted transcription-model shorthands, in a stable order.
+    """
+
 def audio_actions() -> list:
     """
     Return the audio Actions as (name, schema, handler) triples in protocol order, each schema's ports already wired to the matching audio type and their serializers installed.
@@ -8134,6 +8602,11 @@ def audio_buffer_to_msgpack(buffer: AudioBuffer) -> bytes:
 def audio_device_info(index: typing.SupportsInt) -> AudioDeviceInfo:
     """
     Return metadata for the audio device at `index`.
+    """
+
+def audio_model_cache_dir() -> str:
+    """
+    The directory shorthand models are cached in.
     """
 
 def create_in_process_wire_stream_pair(
@@ -8155,6 +8628,14 @@ def default_redis_client() -> RedisClient:
     Return the process-global client configured from A11_REDIS_*.
     """
 
+def download(url: str, options: DownloadOptions) -> asyncio.Future[str]:
+    """
+    Download a URL to a verified file, atomically.
+
+    Returns the destination path. A destination that already exists and matches
+    ``expected_sha1`` is returned without touching the network. Awaitable.
+    """
+
 def emit_log(
     severity: typing.SupportsInt,
     message: str,
@@ -8162,6 +8643,27 @@ def emit_log(
 ) -> None:
     """
     Write one entry to the native log, so an application can check that its logging configuration reaches the C++ runtime. FATAL is not available here.
+    """
+
+def fetch(
+    url: str, options: FetchOptions | None = None
+) -> asyncio.Future[HttpResponse]:
+    """
+    Fetch a URL and buffer the whole response.
+
+    Follows redirects, maps a 4xx/5xx onto a status error, and enables TLS from the
+    scheme. Awaitable.
+
+    Examples:
+        ```python
+        response = await a11.net.http.fetch("https://example.com/index.html")
+        print(response.head.status, len(response.body))
+        ```
+    """
+
+def file_sha1(path: str) -> str:
+    """
+    Compute the SHA-1 of a file as lowercase hex. Blocks.
     """
 
 def get_http_header(headers: list[tuple[str, str]], name: str) -> str | None:
@@ -8187,6 +8689,16 @@ def is_status_chunk(chunk: Chunk) -> bool:
 def list_audio_devices() -> list[AudioDeviceInfo]:
     """
     Return metadata for every audio device, in index order.
+    """
+
+def lookup_asr_model(shorthand: str) -> AudioModelSpec:
+    """
+    Look up a transcription model by shorthand.
+    """
+
+def lookup_vad_model(shorthand: str) -> AudioModelSpec:
+    """
+    Look up a VAD model by shorthand.
     """
 
 def make_half_close_message(
@@ -8244,6 +8756,11 @@ def obs_start_span(
     Starts a new span with the given name and kind, optionally parented by a W3C traceparent.
     """
 
+def parse_url(url: str) -> ParsedUrl:
+    """
+    Parse an absolute http/https/ws/wss URL, raising on a malformed one.
+    """
+
 def register_audio_actions(registry: ActionRegistry | None) -> None:
     """
     Register every audio Action on `registry`, wiring each port's typeinfo to the matching audio type and ensuring their serializers are installed.
@@ -8252,6 +8769,33 @@ def register_audio_actions(registry: ActionRegistry | None) -> None:
 def reset_default_redis_client() -> None:
     """
     Clear the global Redis client so its environment is reread.
+    """
+
+def resolve_asr_model(
+    spec: str,
+    on_progress: (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ) = None,
+) -> asyncio.Future[str]:
+    """
+    Resolve a transcription model shorthand or path to a local file, downloading it if needed. Awaitable.
+    """
+
+def resolve_url_reference(base: ParsedUrl, reference: str) -> ParsedUrl:
+    """
+    Resolve a reference (such as a Location header) against a base URL.
+    """
+
+def resolve_vad_model(
+    spec: str,
+    on_progress: (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ) = None,
+) -> asyncio.Future[str]:
+    """
+    Resolve a VAD model shorthand or path to a local file, downloading it if needed. An empty spec resolves to an empty path. Awaitable.
     """
 
 def set_default_redis_client(client: RedisClient) -> None:
@@ -8293,6 +8837,11 @@ def status_to_chunk(status: Status, closing: bool = False) -> Chunk:
     Encode an absl Status as a data chunk. With closing=True the chunk is a node closure marker rather than a value: it reports that the producer drained the node and closed its write half with that status.
     """
 
+def vad_model_shorthands() -> list[str]:
+    """
+    The accepted VAD-model shorthands.
+    """
+
 def validate_http_headers(
     headers: collections.abc.Iterable[tuple[str, str]] | None,
 ) -> None:
@@ -8314,9 +8863,11 @@ CANCEL_ACTION_HEADER: str = "__action"
 CANCEL_ACTION_NAME: str = "__cancel__"
 CANDIDATE: SignallingMessageType
 CLOSE_STATUS_ATTRIBUTE: str = "a11-close"
+DEFAULT_ASR_MODEL: str = "tiny.en"
 DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS: int = 64
 DEFAULT_SSE_CONNECT_ENDPOINT: str = "/connect"
 DEFAULT_SSE_MESSAGE_ENDPOINT: str = "/streams/{id}/message"
+DEFAULT_VAD_MODEL: str = "silero-v5.1.2"
 DESCRIPTION: SignallingMessageType
 EMPTY_WIRE_MESSAGE_SIZE: int = 4
 ERROR: SignallingMessageType

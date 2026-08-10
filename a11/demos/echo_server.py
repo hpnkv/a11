@@ -55,12 +55,10 @@ async def serve(
 
     registry = make_registry()
 
-    async def accept(stream: a11.HttpSseServerWireStream) -> None:
-        logging.info("Accepting SSE stream %s", stream.get_id())
-        session = a11.Session(action_registry=registry)
-        await session.add_stream(stream, mode="accept")
-        logging.info("Accepted SSE stream %s", stream.get_id())
-        await session.done.wait()
+    # One service, and its `accept` is the listener's callback. The
+    # make-a-session-per-stream-and-wait glue this used to spell out by hand now
+    # lives in a11.service.Service.
+    service = a11.Service(action_registry=registry)
 
     options = a11.HttpSseOptions()
     options.connect_endpoint = "/demos/echo/connect"
@@ -77,7 +75,7 @@ async def serve(
         tls_options.key_pem_file = private_key
         http2_options.tls = tls_options
         options.http2_options = http2_options
-    server = a11.HttpSseServer.create(host, port, accept, options)
+    server = a11.HttpSseServer.create(host, port, service.accept, options)
     scheme = "https" if certificate else "http"
     logging.info(
         "Echo server listening at %s://%s:%d/demos/echo",

@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -33,8 +34,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 #include <uvw.hpp>
 
 #include <absl/base/no_destructor.h>
@@ -82,6 +85,27 @@ inline absl::Status TlsError(std::string_view operation) {
 }
 
 using SslContext = std::shared_ptr<SSL_CTX>;
+
+/**
+ * The socket receive buffer requested for every HTTP connection.
+ *
+ * Sized as a bandwidth-delay product for a fast path -- a few gigabits at tens
+ * of milliseconds -- because the kernel default is small enough to cap a single
+ * connection well below the link. It doubles as the slack that absorbs data
+ * already in flight when a reader pauses.
+ */
+constexpr std::size_t kSocketReceiveBufferSize = 4 * 1024 * 1024;
+
+/**
+ * How much plaintext to pull out of OpenSSL per SSL_read_ex.
+ *
+ * Reused across reads rather than allocated per call, and deliberately *not*
+ * zero-initialised: a `std::array<char, N> buf{}` costs a memset of the whole
+ * buffer on every TCP read for bytes that are about to be overwritten. Held on
+ * the transport rather than on the stack because the libuv loop runs on a
+ * std::thread, whose default stack is far smaller than the main thread's.
+ */
+constexpr std::size_t kTlsPlaintextBufferSize = 256 * 1024;
 
 // ALPN protocol identifiers in OpenSSL wire form (length-prefixed).
 inline constexpr unsigned char kH2Alpn[] = {2, 'h', '2'};
@@ -185,6 +209,41 @@ inline absl::Status LoadCertificateAndKey(SSL_CTX* context,
  * @param policy Which HTTP protocols to advertise/select over ALPN. The server
  *     ALPN callback keeps a copy alive via SSL_CTX app data.
  */
+/**
+ * @brief A CA bundle to trust when the caller named none, or "" if none is found.
+ *
+ * A11 links OpenSSL statically, so its compiled-in trust directory is the one
+ * inside the deps prefix used to build it -- a path that does not exist on the
+ * machine running the wheel. `SSL_CTX_set_default_verify_paths` therefore
+ * succeeds while loading nothing, and the first `https://` or `wss://` request
+ * fails with "unable to get local issuer certificate". Probing the platform's
+ * usual bundle is what makes a client work out of the box.
+ *
+ * `SSL_CERT_FILE` comes first because it is OpenSSL's own override and the way a
+ * container or a corporate proxy points a process at its roots.
+ */
+inline std::string DiscoverCaBundle() {
+  if (const char* configured = std::getenv("SSL_CERT_FILE");
+      configured != nullptr && *configured != '\0') {
+    return configured;
+  }
+  static constexpr std::array<const char*, 6> kCandidates = {
+      "/etc/ssl/cert.pem",                        // macOS, BSD
+      "/etc/ssl/certs/ca-certificates.crt",       // Debian, Ubuntu, Alpine
+      "/etc/pki/tls/certs/ca-bundle.crt",         // Fedora, RHEL
+      "/etc/ssl/ca-bundle.pem",                   // openSUSE
+      "/opt/homebrew/etc/openssl@3/cert.pem",     // Homebrew, Apple silicon
+      "/usr/local/etc/openssl@3/cert.pem",        // Homebrew, Intel
+  };
+  for (const char* candidate : kCandidates) {
+    std::error_code error;
+    if (std::filesystem::is_regular_file(candidate, error)) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
 inline absl::StatusOr<SslContext> CreateTlsContext(
     const Http2TlsOptions& options, bool server,
     ProtocolPolicy policy = ProtocolPolicy{}) {
@@ -219,12 +278,25 @@ inline absl::StatusOr<SslContext> CreateTlsContext(
   } else if (options.verify_peer) {
     SSL_CTX_set_verify(context.get(), SSL_VERIFY_PEER, nullptr);
     ERR_clear_error();
-    const int trusted =
-        options.ca_certificate_pem_file.empty()
-            ? SSL_CTX_set_default_verify_paths(context.get())
-            : SSL_CTX_load_verify_locations(
-                  context.get(), options.ca_certificate_pem_file.c_str(),
-                  nullptr);
+    int trusted = 0;
+    if (!options.ca_certificate_pem_file.empty()) {
+      trusted = SSL_CTX_load_verify_locations(
+          context.get(), options.ca_certificate_pem_file.c_str(), nullptr);
+    } else {
+      // Both, and in this order. The default paths cover a system OpenSSL and
+      // honour SSL_CERT_DIR; the discovered bundle covers the static build,
+      // whose compiled-in path does not exist on the running machine. Loading
+      // roots is additive, so trying both only widens what is trusted.
+      trusted = SSL_CTX_set_default_verify_paths(context.get());
+      const std::string bundle = DiscoverCaBundle();
+      if (!bundle.empty()) {
+        ERR_clear_error();
+        if (SSL_CTX_load_verify_locations(context.get(), bundle.c_str(),
+                                         nullptr) == 1) {
+          trusted = 1;
+        }
+      }
+    }
     if (trusted != 1) {
       return absl::InvalidArgumentError(
           OpenSslErrorMessage("Loading TLS trust roots"));
@@ -463,6 +535,45 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   // protocol codec has been created. `prebuffered` carries any bytes already
   // read from the socket during cleartext protocol detection; they are replayed
   // into the codec after the cleartext start (never set for a TLS transport).
+  /**
+   * @brief Stop or resume reading from the socket.
+   *
+   * The backpressure primitive. A reader whose buffers are full asks for a
+   * pause; the kernel receive buffer then fills, the TCP window closes, and the
+   * peer stops sending -- all the way back to its own sender. This is what makes
+   * a large HTTP/2 window safe: the window governs how much may be *in flight*,
+   * and this governs whether we are willing to take more at all.
+   *
+   * Without it the only bound on a fast peer is how quickly the application
+   * drains, and a consumer slower than the link overflows its buffer and the
+   * transfer fails -- which is exactly what happens on a loopback or
+   * multi-gigabit path.
+   *
+   * Safe from any thread and idempotent; the work happens on the loop.
+   */
+  void SetReadPaused(bool paused) {
+    if (read_paused_.exchange(paused) == paused) {
+      return;
+    }
+    std::weak_ptr<HttpTransport> weak = shared_from_this();
+    const auto apply = [weak, paused] {
+      std::shared_ptr<HttpTransport> self = weak.lock();
+      if (self == nullptr || self->closed_ || self->tcp_ == nullptr) {
+        return;
+      }
+      if (paused) {
+        self->tcp_->stop();
+      } else {
+        self->tcp_->read();
+      }
+    };
+    if (UvExecutor::Instance().IsLoopThread()) {
+      apply();
+    } else {
+      (void)UvExecutor::Instance().Post(apply);
+    }
+  }
+
   absl::Status InitializeTransport(std::string prebuffered = {}) {
     std::weak_ptr<HttpTransport> weak = shared_from_this();
     tcp_->on<uvw::data_event>(
@@ -491,6 +602,12 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
           }
         });
     tcp_->no_delay(true);
+    // A receive buffer sized for a fast path. The kernel's default is tens of
+    // kilobytes, which caps a single connection at buffer/RTT no matter what
+    // the HTTP/2 windows say, and is also the backstop that absorbs data still
+    // in flight when a reader pauses. Best effort: a platform that refuses the
+    // size just keeps its default.
+    tcp_->recv_buffer_size(static_cast<int>(kSocketReceiveBufferSize));
     tcp_->read();
     if (ssl_context_ != nullptr) {
       return InitializeTls();
@@ -615,6 +732,12 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   const std::shared_ptr<a11::Promise<a11::Unit>> ready_promise_;
   const a11::Task ready_future_;
   std::atomic<bool> connected_ = false;
+  /// Whether SetReadPaused has stopped the socket read; atomic because a reader
+  /// asks for it from a fiber while the loop thread acts on it.
+  std::atomic<bool> read_paused_ = false;
+  /// Decrypted-plaintext scratch, reused across reads; only the loop thread
+  /// touches it.
+  std::vector<char> plaintext_;
   bool closed_ = false;
   bool ready_published_ = false;
   bool tls_handshake_complete_ = false;
@@ -785,17 +908,38 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     if (!status.ok() || !tls_handshake_complete_) {
       return status;
     }
-    std::array<char, 16 * 1024> plaintext{};
+    // A reused member buffer: see kTlsPlaintextBufferSize. Sizing it well past
+    // a TLS record's 16 KiB means one SSL_read_ex drains many records per call.
+    if (plaintext_.empty()) {
+      plaintext_.resize(kTlsPlaintextBufferSize);
+    }
+    // SSL_read_ex returns at most one TLS record -- 16 KiB -- per call, however
+    // large the buffer. Dispatching each one separately hands the protocol a
+    // batch of one frame every time, so nothing downstream can ever amortise:
+    // one allocation, one reader wake-up and one write per 16 KiB. Filling the
+    // buffer across records first, and dispatching once, is what lets the layers
+    // above work in batches. It costs no latency -- these bytes have all arrived
+    // already.
+    size_t filled = 0;
+    const auto dispatch = [this, &filled]() -> absl::Status {
+      if (filled == 0) {
+        return absl::OkStatus();
+      }
+      const size_t ready = filled;
+      filled = 0;
+      return OnInboundPlaintext(plaintext_.data(), ready);
+    };
+
     while (true) {
       size_t length = 0;
       ERR_clear_error();
-      const int read =
-          SSL_read_ex(ssl_, plaintext.data(), plaintext.size(), &length);
+      const int read = SSL_read_ex(ssl_, plaintext_.data() + filled,
+                                   plaintext_.size() - filled, &length);
       if (read == 1) {
-        if (length == 0) {
-          continue;
+        filled += length;
+        if (filled == plaintext_.size()) {
+          ABSL_RETURN_IF_ERROR(dispatch());
         }
-        ABSL_RETURN_IF_ERROR(OnInboundPlaintext(plaintext.data(), length));
         continue;
       }
       const int error = SSL_get_error(ssl_, read);
@@ -803,14 +947,20 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
         break;
       }
       if (error == SSL_ERROR_WANT_WRITE) {
+        // Hand over what has been decrypted before blocking on the write side,
+        // so a stalled writer cannot hold finished data hostage.
+        ABSL_RETURN_IF_ERROR(dispatch());
         ABSL_RETURN_IF_ERROR(FlushTlsOutput());
         continue;
       }
       if (error == SSL_ERROR_ZERO_RETURN) {
+        ABSL_RETURN_IF_ERROR(dispatch());
         return absl::UnavailableError("TLS peer closed the connection");
       }
+      ABSL_RETURN_IF_ERROR(dispatch());
       return TlsError("Decrypting HTTP TLS data");
     }
+    ABSL_RETURN_IF_ERROR(dispatch());
     return FlushTlsOutput();
   }
 };

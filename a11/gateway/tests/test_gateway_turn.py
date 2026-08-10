@@ -15,7 +15,6 @@ turn's ``interactions`` port is filled by the peer, and recording a turn must
 not depend on the *local* write side of a port nobody on this side writes.
 """
 
-import argparse
 import asyncio
 import contextlib
 import json
@@ -26,7 +25,7 @@ import pytest
 import a11
 from a11 import net
 from a11.gateway import app as gateway_app
-from a11.gateway import conversations
+from a11.gateway import config, conversations
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import (
     Interaction,
@@ -109,18 +108,16 @@ class _FakeOllama:
 def _gateway(
     root: pathlib.Path,
 ) -> tuple[gateway_app.A11Gateway, conversations.ConversationStore]:
-    args = argparse.Namespace(
-        host="127.0.0.1",
+    settings = config.GatewayConfig(
         a11_port=0,
         conversation_store_root=root,
-        no_shell_tools=False,
-        no_audio_capture=True,
-        no_speech_recognition=True,
+        audio_capture=False,
+        speech_recognition=False,
     )
     # A store of its own, not the process-global one: two tests must not share a
     # conversation index.
     store = conversations.ConversationStore(root)
-    registry = gateway_app._make_action_registry(args, store)
+    registry = gateway_app._make_action_registry(settings, store)
     return gateway_app.A11Gateway(store, registry), store
 
 

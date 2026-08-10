@@ -220,7 +220,15 @@ def test_audio_buffer_msgpack_round_trip() -> None:
         assert abs(value - expected) < 1e-6
 
 
-def test_transcribe_audio_requires_model() -> None:
+def test_transcribe_audio_rejects_a_model_it_cannot_resolve() -> None:
+    """An unresolvable model is the remaining validation on that input.
+
+    An *absent* model is no longer an error -- it means the default shorthand,
+    which the action downloads into the shared cache. That path needs a model
+    file and a network, so it is covered by the C++ suites and by the end-to-end
+    gateway checks rather than here.
+    """
+
     async def run():
         registry = _registry()
         action = registry.make_action(actions.TRANSCRIBE_AUDIO)
@@ -228,7 +236,10 @@ def test_transcribe_audio_requires_model() -> None:
             AudioBuffer(array.array("f", [0.0] * 320), sample_rate=16000.0),
             final=True,
         )
-        await action.get_input("asr_options").put_null_final()
+        await action.get_input("asr_options").put(
+            SpeechRecognizerOptions(model="no-such-model-shorthand"),
+            final=True,
+        )
         action.run_in_background()
         try:
             await action.wait()
@@ -239,6 +250,8 @@ def test_transcribe_audio_requires_model() -> None:
     status = asyncio.run(run())
     assert status is not None
     assert status.code == StatusCode.INVALID_ARGUMENT
+    # The message lists what would have worked.
+    assert "tiny.en" in status.message
 
 
 def test_audio_schemas_declare_deadline_header() -> None:
@@ -349,6 +362,6 @@ def test_audio_input_options_new_fields() -> None:
 
 
 def test_speech_recognizer_options_model_path() -> None:
-    options = SpeechRecognizerOptions.model_validate({"model_path": "/m.bin"})
-    assert options.model_path == "/m.bin"
-    assert options.model_dump()["model_path"] == "/m.bin"
+    options = SpeechRecognizerOptions.model_validate({"model": "/m.bin"})
+    assert options.model == "/m.bin"
+    assert options.model_dump()["model"] == "/m.bin"

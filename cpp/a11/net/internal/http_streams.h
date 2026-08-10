@@ -126,6 +126,16 @@ struct Http2ResponseStream::State {
   std::shared_ptr<a11::Promise<std::optional<std::string>>> pending_read
       ABSL_GUARDED_BY(mu);
   std::function<absl::Status(absl::Status)> cancel ABSL_GUARDED_BY(mu);
+  /**
+   * Asks the transport to stop or resume reading from the socket.
+   *
+   * The buffer bound is enforced by *not taking more data* rather than by
+   * failing: a reader slower than the link is ordinary, and on a fast path it is
+   * the common case. Pausing closes the TCP window back to the peer; the earlier
+   * behaviour -- erroring once the buffer filled -- turned a slow consumer into
+   * a failed transfer.
+   */
+  std::function<void(bool)> set_read_paused ABSL_GUARDED_BY(mu);
 
   void SetHeaders(HttpResponseHead head) {
     bool publish = false;
@@ -143,6 +153,7 @@ struct Http2ResponseStream::State {
 
   absl::Status Push(std::string data) {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
+    std::function<void(bool)> pause;
     {
       thread::MutexLock lock(&mu);
       if (done) {
@@ -151,15 +162,23 @@ struct Http2ResponseStream::State {
       if (pending_read != nullptr) {
         reader = std::move(pending_read);
       } else {
-        if (buffered_bytes + data.size() > max_buffered_bytes &&
-            !chunks.empty()) {
-          return absl::ResourceExhaustedError(
-              "HTTP response exceeded max_buffered_response_bytes");
-        }
         buffered_bytes += data.size();
         chunks.push_back(std::move(data));
-        return absl::OkStatus();
+        // At the high-water mark, stop taking data rather than failing. Bytes
+        // already in flight still arrive and are still buffered, which is why
+        // this is a mark and not a hard ceiling.
+        if (buffered_bytes >= max_buffered_bytes) {
+          pause = set_read_paused;
+        }
       }
+    }
+    // Outside the lock: the transport hops to the loop thread from here.
+    if (pause) {
+      pause(true);
+      return absl::OkStatus();
+    }
+    if (reader == nullptr) {
+      return absl::OkStatus();
     }
     (void)reader->SetValue(std::optional<std::string>(std::move(data)));
     return absl::OkStatus();

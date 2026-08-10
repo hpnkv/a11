@@ -57,6 +57,17 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--gateway",
+        metavar="URL",
+        default=None,
+        help=(
+            "A11 gateway to use, e.g. ws://127.0.0.1:8011/a11. When given it"
+            " must be reachable or the command fails. When omitted, an"
+            " already-running gateway at ws://127.0.0.1:8011/a11 is used, and"
+            " otherwise one is started in this process."
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -98,6 +109,7 @@ async def _run(args: argparse.Namespace) -> int:
         backend,
         model,
         verbose=args.verbose,
+        gateway=args.gateway,
         shell_tools=not args.no_shell_tools,
         voice=not args.no_voice,
         voice_model=args.voice_model,

@@ -8,34 +8,61 @@ Checks that the CLI turns the shell tools on by default and that
 
 import argparse
 
+import a11
 from a11.cli.backends import PROVIDERS
 from a11.cli.chat_ui import ChatUI
 from a11.cli.commands.chat import CHAT_COMMAND
+from a11.client.connection import GatewayConnection
 
 
 def _provider():
     return PROVIDERS["ollama"]
 
 
+def _connection() -> GatewayConnection:
+    """A connection object with no transport behind it.
+
+    Enough for the wiring these tests check: `ChatUI` only needs somewhere to
+    register its shell Actions, and nothing here runs a turn.
+    """
+
+    class _Session:
+        action_registry = a11.ActionRegistry()
+        node_map = None
+
+    return GatewayConnection(_Session(), None, embedded=True)
+
+
 def test_shell_tools_are_on_by_default():
-    ui = ChatUI(_provider(), "some-model", shell_tools=True)
-    assert ui._registry is not None
+    connection = _connection()
+    ui = ChatUI(_provider(), "some-model", connection, shell_tools=True)
     assert [t["name"] for t in ui._tool_definitions] == [
         "shell_start",
         "shell_execute",
         "shell_list",
         "shell_exit",
     ]
-    assert ui._allowed_actions == "shell_.*"
+    # The Actions are registered on the *connection's* registry, because the
+    # gateway dispatches the model's calls back to this process to run them.
+    assert connection.session.action_registry.is_registered("shell_execute")
+    # The header names exactly what was announced: it gates every tool the model
+    # may see, bridged ones included.
+    assert ui._tool_names == [
+        "shell_start",
+        "shell_execute",
+        "shell_list",
+        "shell_exit",
+    ]
     assert "shell_execute" in ui._system_prompt
 
 
 def test_shell_tools_can_be_disabled():
-    ui = ChatUI(_provider(), "some-model", shell_tools=False)
-    assert ui._registry is None
+    connection = _connection()
+    ui = ChatUI(_provider(), "some-model", connection, shell_tools=False)
     assert ui._tool_definitions == []
-    assert ui._allowed_actions == ""
+    assert ui._tool_names == []
     assert ui._system_prompt == ""
+    assert not connection.session.action_registry.is_registered("shell_execute")
 
 
 def test_command_defines_the_no_shell_tools_flag():
@@ -44,6 +71,19 @@ def test_command_defines_the_no_shell_tools_flag():
 
     assert parser.parse_args([]).no_shell_tools is False
     assert parser.parse_args(["--no-shell-tools"]).no_shell_tools is True
+
+
+def test_command_defines_the_gateway_flag():
+    parser = argparse.ArgumentParser()
+    CHAT_COMMAND.configure(parser)
+
+    # Absent by default, which is what selects "join a running one, else start
+    # one in this process".
+    assert parser.parse_args([]).gateway is None
+    assert (
+        parser.parse_args(["--gateway", "ws://host:8011/a11"]).gateway
+        == "ws://host:8011/a11"
+    )
 
 
 def test_command_defines_voice_flags():
@@ -100,6 +140,7 @@ def test_extra_headers_are_stored_on_the_ui():
     ui = ChatUI(
         _provider(),
         "some-model",
+        _connection(),
         shell_tools=False,
         extra_headers=[("x-a11-llm-base-url", "http://host:11434")],
     )
@@ -107,6 +148,6 @@ def test_extra_headers_are_stored_on_the_ui():
 
 
 def test_voice_can_be_disabled_without_initialising_it():
-    ui = ChatUI(_provider(), "some-model", voice=False)
+    ui = ChatUI(_provider(), "some-model", _connection(), voice=False)
     assert ui._voice_enabled is False
     assert ui._recognizer is None

@@ -38,7 +38,7 @@ struct SpeechRecognizerState;
  * energy gate (the @c vad_* / @c min_* / @c speech_pad / @c max_speech fields)
  * runs on the live stream to endpoint utterances and keep silent microphone
  * input off the decoder entirely. When a Silero VAD model is supplied via
- * @c vad_model_path, whisper.cpp's neural Silero VAD then runs inside inference
+ * @c vad_model, whisper.cpp's neural Silero VAD then runs inside inference
  * on each endpointed utterance, trimming residual non-speech and rejecting
  * energy false-positives (a door slam, a keyboard tap) before the decoder sees
  * them. Silero is the accurate detector; the energy gate is the cheap trigger.
@@ -48,7 +48,7 @@ struct SpeechRecognizerOptions {
   /// takes its model path directly through Create() and ignores this field; it
   /// exists so the action layer can carry the model choice inside a single
   /// serializable options value (empty is rejected there, not here).
-  std::string model_path;
+  std::string model;
   /// Whisper language code, or "auto" to detect it per utterance.
   std::string language = "auto";
   /// Translate recognised speech to English instead of transcribing it.
@@ -85,9 +85,9 @@ struct SpeechRecognizerOptions {
   /// filters each endpointed utterance before decoding; empty disables it and
   /// leaves only the energy gate. The temporal fields above are reused as
   /// Silero's segment bounds, so both stages share one set of durations.
-  std::string vad_model_path;
+  std::string vad_model;
   /// Silero speech-probability threshold, in (0, 1]. Frames scoring below this
-  /// are treated as non-speech. Ignored when @c vad_model_path is empty.
+  /// are treated as non-speech. Ignored when @c vad_model is empty.
   float silero_threshold = 0.5f;
 
   /// Validate every option and return a descriptive status on failure.
@@ -129,24 +129,24 @@ using AudioBufferReader = std::function<a11::Future<AudioBuffer>()>;
  */
 class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
  public:
-  /// Load @p model_path and use the system's default audio input.
+  /// Load @p model and use the system's default audio input.
   static absl::StatusOr<std::shared_ptr<SpeechRecognizer>> Create(
-      std::string model_path, SpeechRecognizerOptions options = {});
+      std::string model, SpeechRecognizerOptions options = {});
 
-  /// Load @p model_path and create a fresh subscription on @p input per run.
+  /// Load @p model and create a fresh subscription on @p input per run.
   static absl::StatusOr<std::shared_ptr<SpeechRecognizer>> Create(
-      std::string model_path, std::shared_ptr<AudioInput> input,
+      std::string model, std::shared_ptr<AudioInput> input,
       SpeechRecognizerOptions options = {});
 
-  /// Load @p model_path and consume @p subscription for one recognition run.
+  /// Load @p model and consume @p subscription for one recognition run.
   static absl::StatusOr<std::shared_ptr<SpeechRecognizer>> Create(
-      std::string model_path, std::shared_ptr<AudioSubscription> subscription,
+      std::string model, std::shared_ptr<AudioSubscription> subscription,
       SpeechRecognizerOptions options = {});
 
-  /// Load @p model_path with no audio device; recognition is driven by a
+  /// Load @p model with no audio device; recognition is driven by a
   /// caller-supplied @ref AudioBufferReader passed to StartStream.
   static absl::StatusOr<std::shared_ptr<SpeechRecognizer>> CreateForStream(
-      std::string model_path, SpeechRecognizerOptions options = {});
+      std::string model, SpeechRecognizerOptions options = {});
 
   SpeechRecognizer(const SpeechRecognizer&) = delete;
   SpeechRecognizer& operator=(const SpeechRecognizer&) = delete;
@@ -188,7 +188,7 @@ class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
   [[nodiscard]] bool running() const;
   /// Current/final run status (OK before the first run and after a clean stop).
   [[nodiscard]] absl::Status GetStatus() const;
-  [[nodiscard]] const std::string& model_path() const;
+  [[nodiscard]] const std::string& model() const;
   [[nodiscard]] const SpeechRecognizerOptions& options() const;
 
  private:

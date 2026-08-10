@@ -27,6 +27,7 @@
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/internal/binary_channel.h"
 #include "a11/net/internal/http2_websocket_channel.h"
@@ -35,13 +36,6 @@
 
 namespace a11::net {
 namespace {
-
-struct ParsedWebSocketUrl {
-  std::string host;
-  std::uint16_t port = 0;
-  std::string path;
-  bool secure = false;
-};
 
 absl::StatusOr<std::string> IdentityUrl(std::string url,
                                         std::string_view identity) {
@@ -60,60 +54,14 @@ absl::StatusOr<std::string> IdentityUrl(std::string url,
   return url;
 }
 
-absl::StatusOr<ParsedWebSocketUrl> ParseWebSocketUrl(std::string_view url) {
-  ParsedWebSocketUrl result;
-  if (absl::StartsWith(url, "ws://")) {
-    url.remove_prefix(5);
-    result.port = 80;
-  } else if (absl::StartsWith(url, "wss://")) {
-    url.remove_prefix(6);
-    result.port = 443;
-    result.secure = true;
-  } else {
+/** Parses a `ws`/`wss` signalling URL, rejecting other schemes. */
+absl::StatusOr<ParsedUrl> ParseWebSocketUrl(std::string_view url) {
+  ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseUrl(url));
+  if (parsed.scheme != "ws" && parsed.scheme != "wss") {
     return absl::InvalidArgumentError(
         "WebSocket signalling URL must start with ws:// or wss://");
   }
-  const size_t slash = url.find('/');
-  const std::string_view authority = url.substr(0, slash);
-  result.path =
-      slash == std::string_view::npos ? "/" : std::string(url.substr(slash));
-  if (authority.empty()) {
-    return absl::InvalidArgumentError("Signalling URL host must not be empty");
-  }
-
-  std::string_view port_text;
-  if (authority.front() == '[') {
-    const size_t bracket = authority.find(']');
-    if (bracket == std::string_view::npos) {
-      return absl::InvalidArgumentError("Signalling IPv6 host is malformed");
-    }
-    result.host = std::string(authority.substr(1, bracket - 1));
-    if (bracket + 1 < authority.size()) {
-      if (authority[bracket + 1] != ':') {
-        return absl::InvalidArgumentError("Signalling authority is malformed");
-      }
-      port_text = authority.substr(bracket + 2);
-    }
-  } else {
-    const size_t colon = authority.rfind(':');
-    if (colon != std::string_view::npos && authority.find(':') == colon) {
-      result.host = std::string(authority.substr(0, colon));
-      port_text = authority.substr(colon + 1);
-    } else {
-      result.host = std::string(authority);
-    }
-  }
-  if (result.host.empty()) {
-    return absl::InvalidArgumentError("Signalling URL host must not be empty");
-  }
-  if (!port_text.empty()) {
-    unsigned int port = 0;
-    if (!absl::SimpleAtoi(port_text, &port) || port == 0 || port > 65535) {
-      return absl::InvalidArgumentError("Signalling URL port is invalid");
-    }
-    result.port = static_cast<std::uint16_t>(port);
-  }
-  return result;
+  return parsed;
 }
 
 absl::Status CallbackFailure(const std::exception& error) {
@@ -178,7 +126,7 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
     return a11::FailedFuture<std::shared_ptr<WebSocketSignallingClient>>(
         identity_url.status());
   }
-  absl::StatusOr<ParsedWebSocketUrl> parsed = ParseWebSocketUrl(*identity_url);
+  absl::StatusOr<ParsedUrl> parsed = ParseWebSocketUrl(*identity_url);
   if (!parsed.ok()) {
     return a11::FailedFuture<std::shared_ptr<WebSocketSignallingClient>>(
         parsed.status());
@@ -193,13 +141,13 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
       return a11::ReadyTask();
     };
   }
-  options.http2_options.tls.enabled = parsed->secure;
+  options.http2_options.tls.enabled = parsed->secure();
   options.http2_options.deadline =
       std::min(options.http2_options.deadline, options.deadline);
   internal::Http2WebSocketClientConfig config{
       .host = std::move(parsed->host),
       .port = parsed->port,
-      .path = std::move(parsed->path),
+      .path = parsed->target(),
       .headers = {},
       .http2_options = options.http2_options,
       .max_message_size = options.max_message_size,

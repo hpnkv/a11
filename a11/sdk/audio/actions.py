@@ -109,26 +109,56 @@ TRANSCRIBE_AUDIO_SCHEMA: ActionSchema = _ENTRIES[TRANSCRIBE_AUDIO][0]
 #: Native handler for ``transcribe_audio``.
 TRANSCRIBE_AUDIO_HANDLER: ActionHandler = _ENTRIES[TRANSCRIBE_AUDIO][1]
 
-#: The four (schema, handler) pairs, in protocol order.
-AUDIO_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
+#: The actions that use a microphone: device enumeration and raw capture.
+CAPTURE_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
     (LIST_AUDIO_INPUTS_SCHEMA, LIST_AUDIO_INPUTS_HANDLER),
     (CAPTURE_AUDIO_SCHEMA, CAPTURE_AUDIO_HANDLER),
+)
+
+#: The actions that run speech recognition. ``capture_transcription`` also opens
+#: a microphone, so it belongs to both groups; it is listed here because
+#: recognition is the capability that makes it worth serving.
+RECOGNITION_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
     (CAPTURE_TRANSCRIPTION_SCHEMA, CAPTURE_TRANSCRIPTION_HANDLER),
     (TRANSCRIBE_AUDIO_SCHEMA, TRANSCRIBE_AUDIO_HANDLER),
+)
+
+#: The four (schema, handler) pairs, in protocol order.
+AUDIO_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
+    *CAPTURE_ACTIONS,
+    *RECOGNITION_ACTIONS,
 )
 
 del _ENTRIES
 
 
-def register(registry: ActionRegistry) -> None:
-    """Register all four audio Actions on ``registry``.
+def register(
+    registry: ActionRegistry,
+    *,
+    capture: bool = True,
+    recognition: bool = True,
+) -> None:
+    """Register the audio Actions on ``registry``.
 
-    Installs ``list_audio_inputs``, ``capture_audio``,
-    ``capture_transcription`` and ``transcribe_audio`` (schema + native
-    handler) and ensures the audio value-type serializers are available.
-    Raises if a name is already registered.
+    The two groups are separately selectable because they need different things
+    of the host: `CAPTURE_ACTIONS` need a microphone, and `RECOGNITION_ACTIONS`
+    need a whisper model and the CPU to run it. A headless gateway may want one
+    without the other.
+
+    Args:
+        registry: Registry to register on.
+        capture: Register `CAPTURE_ACTIONS` (``list_audio_inputs``,
+            ``capture_audio``).
+        recognition: Register `RECOGNITION_ACTIONS`
+            (``capture_transcription``, ``transcribe_audio``). Note that
+            ``capture_transcription`` opens a microphone of its own, so it is
+            registered by this group rather than by ``capture``.
     """
-    for schema, handler in AUDIO_ACTIONS:
+    selected = [
+        *(CAPTURE_ACTIONS if capture else ()),
+        *(RECOGNITION_ACTIONS if recognition else ()),
+    ]
+    for schema, handler in selected:
         registry.register(schema.name, schema, handler)
 
 
@@ -138,6 +168,7 @@ for _class in (AudioControlEvent, AudioCaptureEvent, TranscriptionEvent):
 
 __all__ = [
     "AUDIO_ACTIONS",
+    "CAPTURE_ACTIONS",
     "CAPTURE_AUDIO",
     "CAPTURE_AUDIO_HANDLER",
     "CAPTURE_AUDIO_SCHEMA",
@@ -147,6 +178,7 @@ __all__ = [
     "LIST_AUDIO_INPUTS",
     "LIST_AUDIO_INPUTS_HANDLER",
     "LIST_AUDIO_INPUTS_SCHEMA",
+    "RECOGNITION_ACTIONS",
     "TRANSCRIBE_AUDIO",
     "TRANSCRIBE_AUDIO_HANDLER",
     "TRANSCRIBE_AUDIO_SCHEMA",

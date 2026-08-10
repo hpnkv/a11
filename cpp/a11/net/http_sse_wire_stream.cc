@@ -31,6 +31,7 @@
 #include "a11/data/json.h"
 #include "a11/data/msgpack.h"
 #include "a11/data/types.h"
+#include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/net/wire_stream.h"
@@ -40,72 +41,17 @@
 namespace a11::net {
 namespace {
 
-struct ParsedHttpUrl {
-  std::string scheme;
-  std::string host;
-  std::uint16_t port = 80;
-  std::string base_path;
-};
-
-absl::StatusOr<ParsedHttpUrl> ParseHttpUrl(std::string_view url) {
-  std::string scheme;
-  std::uint16_t default_port = 0;
-  if (absl::ConsumePrefix(&url, "http://")) {
-    scheme = "http";
-    default_port = 80;
-  } else if (absl::ConsumePrefix(&url, "https://")) {
-    scheme = "https";
-    default_port = 443;
-  } else {
-    return absl::InvalidArgumentError(
-        "SSE service URL must start with http:// or https://");
-  }
-  const size_t slash = url.find('/');
-  std::string_view authority = url.substr(0, slash);
-  std::string base_path =
-      slash == std::string_view::npos ? "" : std::string(url.substr(slash));
-  if (authority.empty()) {
-    return absl::InvalidArgumentError("SSE service URL has no host");
-  }
-  std::string host;
-  std::uint16_t port = default_port;
-  if (authority.front() == '[') {
-    const size_t closing = authority.find(']');
-    if (closing == std::string_view::npos) {
-      return absl::InvalidArgumentError("SSE URL has an invalid IPv6 host");
-    }
-    host = std::string(authority.substr(1, closing - 1));
-    if (closing + 1 < authority.size()) {
-      if (authority[closing + 1] != ':' ||
-          !absl::SimpleAtoi(authority.substr(closing + 2), &port)) {
-        return absl::InvalidArgumentError("SSE URL has an invalid port");
-      }
-    }
-  } else {
-    const size_t colon = authority.rfind(':');
-    if (colon != std::string_view::npos) {
-      host = std::string(authority.substr(0, colon));
-      if (!absl::SimpleAtoi(authority.substr(colon + 1), &port)) {
-        return absl::InvalidArgumentError("SSE URL has an invalid port");
-      }
-    } else {
-      host = std::string(authority);
-    }
-  }
-  if (host.empty()) {
-    return absl::InvalidArgumentError("SSE URL has no host");
-  }
-  const size_t suffix = base_path.find_first_of("?#");
-  if (suffix != std::string::npos) {
-    base_path.erase(suffix);
-  }
+/**
+ * The SSE base path: the URL's path with any trailing slash removed, so that
+ * joining an endpoint onto it never produces a double slash. The query is not
+ * part of it -- ParseUrl keeps that separate, and SSE builds its own targets.
+ */
+std::string BasePathOf(const ParsedUrl& url) {
+  std::string base_path = url.path;
   while (base_path.size() > 1 && base_path.back() == '/') {
     base_path.pop_back();
   }
-  return ParsedHttpUrl{.scheme = std::move(scheme),
-                       .host = std::move(host),
-                       .port = port,
-                       .base_path = std::move(base_path)};
+  return base_path;
 }
 
 absl::StatusOr<std::string> ResolveEndpoint(std::string_view base_path,
@@ -536,7 +482,7 @@ std::shared_ptr<InProcessWireStream> HttpSseWireStream::bridge() const {
 }
 
 struct HttpSseClientWireStream::ClientState {
-  ClientState(ParsedHttpUrl value_url, std::string value_connect_path,
+  ClientState(ParsedUrl value_url, std::string value_connect_path,
               std::string value_message_endpoint,
               std::shared_ptr<Http2Client> value_client)
       : url(std::move(value_url)),
@@ -545,7 +491,7 @@ struct HttpSseClientWireStream::ClientState {
         client(std::move(value_client)) {}
 
   mutable thread::Mutex mu;
-  const ParsedHttpUrl url;
+  const ParsedUrl url;
   const std::string connect_path;
   const std::string message_endpoint;
   std::shared_ptr<Http2Client> client ABSL_GUARDED_BY(mu);
@@ -564,7 +510,12 @@ absl::StatusOr<std::shared_ptr<HttpSseClientWireStream>>
 HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
                                 std::shared_ptr<Http2Client> client,
                                 HttpHeaders request_headers) {
-  ABSL_ASSIGN_OR_RETURN(ParsedHttpUrl parsed, ParseHttpUrl(url));
+  ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseUrl(url));
+  if (parsed.scheme != "http" && parsed.scheme != "https") {
+    return absl::InvalidArgumentError(
+        "SSE service URL must start with http:// or https://");
+  }
+  const std::string base_path = BasePathOf(parsed);
   const bool secure = parsed.scheme == "https";
   if (!secure && options.http2_options.tls.enabled) {
     return absl::InvalidArgumentError(
@@ -582,10 +533,10 @@ HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
   ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(request_headers));
   ABSL_ASSIGN_OR_RETURN(
       std::string connect_path,
-      ResolveEndpoint(parsed.base_path, options.connect_endpoint));
+      ResolveEndpoint(base_path, options.connect_endpoint));
   ABSL_ASSIGN_OR_RETURN(
       std::string message_endpoint,
-      ResolveEndpoint(parsed.base_path, options.message_endpoint));
+      ResolveEndpoint(base_path, options.message_endpoint));
   ABSL_RETURN_IF_ERROR(
       FormatMessageEndpoint(message_endpoint, "validation").status());
   ABSL_ASSIGN_OR_RETURN(
@@ -618,7 +569,7 @@ a11::Task HttpSseClientWireStream::OpenTransport() {
   return a11::SubmitTask([self = std::move(self)]() mutable -> absl::Status {
     HttpSseOptions options = self->options();
     std::shared_ptr<Http2Client> client;
-    ParsedHttpUrl url;
+    ParsedUrl url;
     std::string connect_path;
     std::string scheme;
     {

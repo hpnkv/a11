@@ -82,6 +82,12 @@ plugins:
           # native extension.
           paths: [ .. ]
           options:
+            # The stub narrows a few readers with typing.overload and, as a
+            # stub, cannot carry the implementation griffe would attach them
+            # to. Without this they would drop out of the reference entirely.
+            # Path-relative: build.sh always runs mkdocs from doc/.
+            extensions:
+              - griffe_overloads.py:PromoteOverloads
             docstring_style: google
             show_source: false
             show_root_heading: true

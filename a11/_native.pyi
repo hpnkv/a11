@@ -382,11 +382,22 @@ class Action:
         Return the action's Python handler, or None.
         """
 
-    def get_header(self, name: str, decode: bool = False) -> bytes | str | None:
+    @typing.overload
+    def get_header(
+        self, name: str, decode: typing.Literal[False] = False
+    ) -> bytes | None:
         """
         Return header ``name`` (``None`` if absent); ``decode`` UTF-8 to
         ``str``.
         """
+    @typing.overload
+    def get_header(
+        self, name: str, decode: typing.Literal[True] = True
+    ) -> str | None: ...
+    @typing.overload
+    def get_header(
+        self, name: str, decode: bool = False
+    ) -> bytes | str | None: ...
 
     def get_id(self) -> str:
         """
@@ -1285,13 +1296,14 @@ class AsyncNode:
         Cancels the node's writer, unblocking any pending put or drain awaits on the producing side of the stream.
         """
 
+    @typing.overload
     async def consume(
         self,
         obj_type: type[T] | None = None,
         timeout: Duration | None = None,
         mimetype_patterns: str | typing.Sequence[str] = "",
-        allow_none: bool = False,
-    ) -> T | None:
+        allow_none: typing.Literal[False] = False,
+    ) -> T:
         """
         Consume exactly one whole value and return it deserialized.
 
@@ -1306,17 +1318,49 @@ class AsyncNode:
             customer = await action["customer"].consume(obj_type=Customer)
             ```
         """
+    @typing.overload
+    async def consume(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: Duration | None = None,
+        mimetype_patterns: str | typing.Sequence[str] = "",
+        allow_none: typing.Literal[True] = True,
+    ) -> T | None: ...
+    @typing.overload
+    async def consume(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: Duration | None = None,
+        mimetype_patterns: str | typing.Sequence[str] = "",
+        allow_none: bool = False,
+    ) -> T | None: ...
 
+    @typing.overload
     async def consume_chunk(
-        self, timeout: Duration | None = None, allow_none: bool = False
-    ) -> Chunk | None:
+        self,
+        timeout: Duration | None = None,
+        allow_none: typing.Literal[False] = False,
+    ) -> Chunk:
         """
         Consume exactly one whole value and return its raw chunk.
         """
-
-    async def consume_fragment(
+    @typing.overload
+    async def consume_chunk(
+        self,
+        timeout: Duration | None = None,
+        allow_none: typing.Literal[True] = True,
+    ) -> Chunk | None: ...
+    @typing.overload
+    async def consume_chunk(
         self, timeout: Duration | None = None, allow_none: bool = False
-    ) -> NodeFragment | None:
+    ) -> Chunk | None: ...
+
+    @typing.overload
+    async def consume_fragment(
+        self,
+        timeout: Duration | None = None,
+        allow_none: typing.Literal[False] = False,
+    ) -> NodeFragment:
         """
         Read exactly one whole value's fragment, enforcing the terminator.
 
@@ -1327,6 +1371,16 @@ class AsyncNode:
         empty, or holding nothing but a null final — yields ``None`` instead of
         raising. Requires an ordered reader.
         """
+    @typing.overload
+    async def consume_fragment(
+        self,
+        timeout: Duration | None = None,
+        allow_none: typing.Literal[True] = True,
+    ) -> NodeFragment | None: ...
+    @typing.overload
+    async def consume_fragment(
+        self, timeout: Duration | None = None, allow_none: bool = False
+    ) -> NodeFragment | None: ...
 
     def detach_stream(self, stream: WireStream) -> None:
         """

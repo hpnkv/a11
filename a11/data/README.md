@@ -282,8 +282,8 @@ from a11.data.types import Chunk
 
 
 def deserialize_with_metadata(chunk: Chunk) -> str:
-    encoding = chunk.metadata.get_attribute("encoding", decode=True)
-    return chunk.data.decode(encoding or "utf-8")
+    encoding = chunk.metadata.get_attribute("encoding")
+    return chunk.data.decode(encoding.decode() if encoding else "utf-8")
 
 
 registry.register_deserializer(

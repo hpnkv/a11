@@ -1,4 +1,6 @@
-from typing import Any, Sequence
+from typing import Any, Sequence, TypeVar, overload
+
+_T = TypeVar("_T")
 
 from . import logging as logging
 
@@ -204,6 +206,31 @@ def to_chunk(obj: Any, mimetype: str = "") -> Chunk:
     always have an exact MIME type and a stable Python type identifier.
     """
     return get_global_serialization_registry().to_chunk(obj, mimetype)
+
+
+@overload
+def from_chunk(
+    chunk: Chunk,
+    mimetype_patterns: str | Sequence[str],
+    obj_type: type[_T],
+) -> _T: ...
+
+
+@overload
+def from_chunk(
+    chunk: Chunk,
+    mimetype_patterns: str | Sequence[str] = "",
+    *,
+    obj_type: type[_T],
+) -> _T: ...
+
+
+@overload
+def from_chunk(
+    chunk: Chunk,
+    mimetype_patterns: str | Sequence[str] = "",
+    obj_type: None = None,
+) -> Any: ...
 
 
 def from_chunk(

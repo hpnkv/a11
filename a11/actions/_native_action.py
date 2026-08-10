@@ -21,7 +21,7 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal, overload
 
 from a11 import _native
 from a11._native_protocol import attach_protocol
@@ -165,6 +165,21 @@ class _ActionProtocol:
                 await result
 
         return asyncio.ensure_future(_run())
+
+    @overload
+    def get_header(
+        self, name: str, decode: Literal[False] = False
+    ) -> bytes | None: ...
+
+    @overload
+    def get_header(
+        self, name: str, decode: Literal[True] = True
+    ) -> str | None: ...
+
+    @overload
+    def get_header(
+        self, name: str, decode: bool = False
+    ) -> bytes | str | None: ...
 
     def get_header(self, name: str, decode: bool = False) -> bytes | str | None:
         """Return header ``name`` (``None`` if absent); ``decode`` UTF-8 to

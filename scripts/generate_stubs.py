@@ -115,6 +115,137 @@ def _narrow_obj_type_readers(stub: str) -> str:
     return stub
 
 
+# Readers that raise on an empty node unless ``allow_none`` says otherwise, so
+# the default call can never return None.
+_ALLOW_NONE_READERS = ("consume", "consume_chunk", "consume_fragment")
+
+_ALLOW_NONE_SIGNATURE = re.compile(
+    r"^    async def (?P<name>%s)\((?P<params>self.*?), "
+    r"allow_none: bool = False\) -> (?P<returns>.+) \| None:$"
+    % "|".join(_ALLOW_NONE_READERS)
+)
+
+
+def _take_docstring(lines: list[str], index: int) -> tuple[list[str], int]:
+    """The docstring block starting at ``index``, and the line after it."""
+    if index >= len(lines) or lines[index].strip() != '"""':
+        return [], index
+    block = [lines[index]]
+    index += 1
+    while index < len(lines) and lines[index].strip() != '"""':
+        block.append(lines[index])
+        index += 1
+    if index < len(lines):
+        block.append(lines[index])
+        index += 1
+    return block, index
+
+
+def _split_on_allow_none(stub: str) -> str:
+    """Let ``allow_none`` decide whether a reader's result is optional.
+
+    ``await node.consume(obj_type=Reading)`` cannot return None — the reader
+    raises on an empty node — so the default overload drops it, and only
+    ``allow_none=True`` widens. A third, plain-``bool`` overload keeps a
+    computed flag type-checking, at the cost of the union.
+
+    Runs on unformatted stubgen output, where a signature is a single line.
+    """
+    output: list[str] = []
+    lines = stub.splitlines()
+    rewritten = 0
+    index = 0
+    while index < len(lines):
+        match = _ALLOW_NONE_SIGNATURE.match(lines[index])
+        if match is None:
+            output.append(lines[index])
+            index += 1
+            continue
+
+        name = match.group("name")
+        params = match.group("params")
+        returns = match.group("returns")
+        index += 1
+        docstring, index = _take_docstring(lines, index)
+
+        def signature(flag: str, result: str) -> str:
+            return (
+                f"    async def {name}({params}, allow_none: {flag})"
+                f" -> {result}:"
+            )
+
+        # Every overload needs a default, since ``allow_none`` follows
+        # defaulted parameters. The ``= True`` is never what an omitted
+        # argument resolves to: the Literal[False] overload comes first.
+        output.append("    @typing.overload")
+        output.append(signature("typing.Literal[False] = False", returns))
+        output.extend(docstring or ["        ..."])
+        output.append("    @typing.overload")
+        output.append(
+            signature("typing.Literal[True] = True", f"{returns} | None")
+            + " ..."
+        )
+        output.append("    @typing.overload")
+        output.append(signature("bool = False", f"{returns} | None") + " ...")
+        rewritten += 1
+
+    if rewritten != len(_ALLOW_NONE_READERS):
+        raise RuntimeError(
+            f"expected {len(_ALLOW_NONE_READERS)} allow_none readers to "
+            f"split, rewrote {rewritten}"
+        )
+    return "\n".join(output) + "\n"
+
+
+_DECODE_SIGNATURE = re.compile(
+    r"^    def (?P<name>get_header)\((?P<params>self.*?), "
+    r"decode: bool = False\) -> bytes \| str \| None:$"
+)
+
+
+def _split_on_decode(stub: str) -> str:
+    """Let ``decode`` decide whether a header reads back as str or bytes."""
+    output: list[str] = []
+    lines = stub.splitlines()
+    rewritten = 0
+    index = 0
+    while index < len(lines):
+        match = _DECODE_SIGNATURE.match(lines[index])
+        if match is None:
+            output.append(lines[index])
+            index += 1
+            continue
+
+        name = match.group("name")
+        params = match.group("params")
+        index += 1
+        docstring, index = _take_docstring(lines, index)
+
+        def signature(flag: str, result: str) -> str:
+            return f"    def {name}({params}, decode: {flag}) -> {result}:"
+
+        output.append("    @typing.overload")
+        output.append(
+            signature("typing.Literal[False] = False", "bytes | None")
+        )
+        output.extend(docstring or ["        ..."])
+        output.append("    @typing.overload")
+        output.append(
+            signature("typing.Literal[True] = True", "str | None") + " ..."
+        )
+        output.append("    @typing.overload")
+        output.append(
+            signature("bool = False", "bytes | str | None") + " ..."
+        )
+        rewritten += 1
+
+    if rewritten != 1:
+        raise RuntimeError(
+            f"expected 1 decode-driven reader to split, rewrote {rewritten}"
+        )
+    return "\n".join(output) + "\n"
+
+
 def _normalise_annotations(stub: str) -> str:
     """Resolve facade annotations and raw C++ names in generated output."""
 
@@ -275,6 +406,8 @@ def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
     stub = _normalise_protocol_methods(stub, methods)
     stub = _normalise_annotations(stub)
     stub = _narrow_obj_type_readers(stub)
+    stub = _split_on_allow_none(stub)
+    stub = _split_on_decode(stub)
     mode = black.Mode(
         target_versions={black.TargetVersion.PY311},
         line_length=80,

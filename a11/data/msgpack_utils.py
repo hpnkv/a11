@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Callable, TypeVar, Sequence
+from typing import Any, Callable, Literal, Sequence, TypeVar, overload
 
 import msgpack
 
@@ -94,12 +94,39 @@ def datetime_from_micros(
     return _EPOCH + datetime.timedelta(microseconds=micros)
 
 
+@overload
+def unpack(
+    unpacker: msgpack.Unpacker,
+    cls: type[T] | Sequence[type],
+    *,
+    allow_none: Literal[False] = False,
+) -> T: ...
+
+
+@overload
+def unpack(
+    unpacker: msgpack.Unpacker,
+    cls: type[T] | Sequence[type],
+    *,
+    allow_none: Literal[True],
+) -> T | None: ...
+
+
+@overload
+def unpack(
+    unpacker: msgpack.Unpacker,
+    cls: type[T] | Sequence[type],
+    *,
+    allow_none: bool,
+) -> T | None: ...
+
+
 def unpack(
     unpacker: msgpack.Unpacker,
     cls: type[T] | Sequence[type],
     *,
     allow_none: bool = False,
-) -> T:
+) -> T | None:
     try:
         unpacked = unpacker.unpack()
     except Exception as exc:
@@ -132,13 +159,43 @@ def unpack(
     ).to_exception()
 
 
+@overload
+def unpackb(
+    data: bytes | bytearray | memoryview,
+    cls: type[T] | Sequence[type[T]],
+    unpack_fn: Callable[[bytes], Any] | None = None,
+    *,
+    allow_none: Literal[False] = False,
+) -> T: ...
+
+
+@overload
+def unpackb(
+    data: bytes | bytearray | memoryview,
+    cls: type[T] | Sequence[type[T]],
+    unpack_fn: Callable[[bytes], Any] | None = None,
+    *,
+    allow_none: Literal[True],
+) -> T | None: ...
+
+
+@overload
+def unpackb(
+    data: bytes | bytearray | memoryview,
+    cls: type[T] | Sequence[type[T]],
+    unpack_fn: Callable[[bytes], Any] | None = None,
+    *,
+    allow_none: bool,
+) -> T | None: ...
+
+
 def unpackb(
     data: bytes | bytearray | memoryview,
     cls: type[T] | Sequence[type[T]],
     unpack_fn: Callable[[bytes], Any] | None = None,
     *,
     allow_none: bool = False,
-) -> T:
+) -> T | None:
     data = ensure_memoryview(data)
 
     if data[0] == b"\xc0" and allow_none:

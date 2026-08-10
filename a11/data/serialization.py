@@ -27,7 +27,7 @@ import re
 import urllib.parse
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence, TypeVar, cast
+from typing import Any, Callable, Sequence, TypeVar, cast, overload
 
 import msgpack
 import pydantic
@@ -56,6 +56,7 @@ _GENERIC_TAGS = frozenset(
 _MIME_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _MIME_PART_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z?*\[\]-]+$")
 _F = TypeVar("_F", bound=Callable[..., Any])
+_T = TypeVar("_T")
 
 
 def _status_boundary(fn: _F) -> _F:
@@ -708,6 +709,31 @@ class SerializationRegistry:
             metadata=types.ChunkMetadata(mimetype=exact_mimetype),
             data=data,
         )
+
+    @overload
+    def from_chunk(
+        self,
+        chunk: types.Chunk,
+        mimetype_patterns: str | Sequence[str],
+        obj_type: type[_T],
+    ) -> _T: ...
+
+    @overload
+    def from_chunk(
+        self,
+        chunk: types.Chunk,
+        mimetype_patterns: str | Sequence[str] = "",
+        *,
+        obj_type: type[_T],
+    ) -> _T: ...
+
+    @overload
+    def from_chunk(
+        self,
+        chunk: types.Chunk,
+        mimetype_patterns: str | Sequence[str] = "",
+        obj_type: None = None,
+    ) -> Any: ...
 
     @_status_boundary
     def from_chunk(

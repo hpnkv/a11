@@ -1,0 +1,20 @@
+{
+  "name": "a11-clion-webview",
+  "version": "0.2.3",
+  "private": true,
+  "description": "JCEF webview (chat + action explorer) for the A11 JetBrains IDE plugin.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --platform=browser --external:ws --minify --outfile=../src/main/resources/webview/app.js",
+    "build:dev": "esbuild src/main.ts --bundle --format=iife --platform=browser --external:ws --sourcemap=inline --outfile=../src/main/resources/webview/app.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@curiositystack/a11": "file:../../js",
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}

@@ -56,6 +56,15 @@ The handler sends those definitions to the chosen provider. If the model calls
 one, the handler uses the included runner, returns the action output to the
 model, and continues until the model produces an answer or the deadline ends.
 
+Sending the definitions is optional for actions the handler's own registry
+already holds. Before the request, the handler collects the turn's tools with
+`runner.collect_tools`: the definitions on the `tools` port that the allow-list
+matches, **plus** every registered action name it matches that the caller did not
+describe. So a remote caller that sets `x-a11-allowed-llm-actions` to
+`shell_.*` is offered the server's shell tools without having to reproduce their
+schemas, and a caller that does not is not offered them at all — the allow-list
+is both the permission and the request.
+
 Read visible text as it streams, and retain completed interactions separately:
 
 ```python

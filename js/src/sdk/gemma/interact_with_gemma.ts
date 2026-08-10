@@ -22,9 +22,9 @@ import {
   ActionSchema,
 } from '../../action_schema.js';
 import type { AsyncNode } from '../../async_node.js';
-import { utf8Decode } from '../../bytes.js';
+import { utf8Decode, utf8Encode } from '../../bytes.js';
 import { Chunk } from '../../data.js';
-import { JSON_MIMETYPE } from '../../serialization.js';
+import { JSON_MIMETYPE, toChunk } from '../../serialization.js';
 import {
   invalidArgumentError,
   isOk,
@@ -629,13 +629,20 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     // Persist the assistant turn as a Gemma-tagged interaction. Store the same
     // cleaned text the reader saw, with any stray control tokens removed.
     const replyText = sanitizeGemmaText(visible);
+    // `content` holds Chunks, not raw objects — the backend-neutral envelope has
+    // to be serialized into one, exactly as every other backend does.
+    const replyChunk = await toChunk({
+      role: 'model',
+      content: [{ type: 'text', text: replyText }],
+    });
+    if (!isOk(replyChunk)) return replyChunk;
     const assistant = makeInteraction({
       role: Role.ASSISTANT,
       model,
       created_at_millis: Date.now(),
       previous_interaction_id: previousInteractionId,
-      content: [{ role: 'model', content: [{ type: 'text', text: replyText }] }],
-      backend_specific_metadata: { [BACKEND_METADATA_KEY]: Backend.GEMMA },
+      content: [replyChunk],
+      backend_specific_metadata: { [BACKEND_METADATA_KEY]: utf8Encode(Backend.GEMMA) },
     });
     if (!isOk(assistant)) return assistant;
     const put = await newInteractionsNode.put(assistant, { final: true });

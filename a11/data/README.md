@@ -4,16 +4,25 @@
 `a11.data.types.Chunk`. A registry maps a Python type and a representation
 MIME type to serializer and deserializer callbacks.
 
-The registry adds a stable `type` parameter to every chunk it creates:
+A chunk's metadata is the only thing that says how to read its bytes. When the
+value is one the format already describes, the media type is the whole story:
 
 ```text
-application/json;type=object
-application/x-msgpack;type=Reading
+application/json
+application/x-msgpack
 ```
 
-JSON-native values use language-neutral tags (`object`, `array`, `integer`,
-`number`, `string`, `boolean`, and `null`). Other values retain an explicit
-application type so one representation can still recover the correct type.
+When it is not, a stable `type` parameter names it:
+
+```text
+application/x-msgpack;type=Reading
+application/json;type=a11.sdk.Interaction
+```
+
+The seven JSON-native shapes (`object`, `array`, `integer`, `number`, `string`,
+`boolean`, `null`) never carry a parameter — writing `;type=object` on an object
+says nothing a parser did not already know. Nothing inside the payload names a
+type either: a serialized value is ordinary JSON or MessagePack.
 
 ## Quick start
 
@@ -31,7 +40,7 @@ chunk = registry.to_chunk(
 )
 
 print(chunk.get_mimetype())
-# application/json;type=object
+# application/json
 
 reading = registry.from_chunk(chunk)
 assert reading == {"sensor": "outside", "temperature": 18.5}
@@ -46,13 +55,12 @@ representation. The standard registry registers JSON first:
 
 ```python
 chunk = registry.to_chunk([1, 2, 3])
-assert chunk.get_mimetype() == "application/json;type=array"
+assert chunk.get_mimetype() == "application/json"
 ```
 
 At the wire boundary, a top-level Python `tuple` is the same JSON `array` as a
 `list`, so default decoding returns a `list`. Pass `obj_type=tuple` when a
-Python consumer specifically needs a tuple. Nested extended values can still
-retain their application type as described below.
+Python consumer specifically needs a tuple.
 
 ## Standard codecs
 
@@ -74,11 +82,16 @@ Both representations support:
 - `a11.timing.Time` and `a11.timing.Duration`, including infinities
 - native types from `a11.data.types`, with Pydantic-compatible protocols
 
-Nested special values are preserved too. For example, a dictionary can contain
-tuples, arbitrary bytes, UUIDs, or Pydantic models and recover those values
-with their original types. The codecs use internal tags where the underlying
-format cannot represent a Python type directly, so use the registry to decode
-payloads containing those values.
+A value at the top of a chunk keeps its Python type, because the chunk's `type`
+parameter names it: `bytes` come back as `bytes`, a `set` as a `set`, a
+`datetime` as a `datetime`.
+
+Values *nested inside* schemaless data do not. A dictionary is serialized as a
+JSON object, so `{"payload": b"\xff"}` reads back as `{"payload": "/w=="}` —
+what JSON can say about it, and nothing more. Nesting keeps its fidelity when a
+schema names it: a Pydantic model's `bytes` field, or a `list[Chunk]`, is
+rebuilt from the annotation. Declare a model for structured payloads rather
+than relying on a bare dictionary to carry Python types.
 
 ## Selecting and matching MIME types
 
@@ -97,8 +110,11 @@ type wins, followed by registration order:
 
 ```python
 chunk = registry.to_chunk({"answer": 42}, "application/*")
-assert chunk.get_mimetype() == "application/json;type=object"
+assert chunk.get_mimetype() == "application/json"
 ```
+
+A selector chooses the representation only. The object's own type decides the
+tag, so a `type` parameter in the selector is ignored.
 
 Normally `from_chunk()` reads the exact MIME type from the chunk:
 
@@ -135,8 +151,14 @@ Selectors route to a codec; they are not decode-error recovery. Once a handler
 matches, its deserialization error is returned rather than trying a later
 selector.
 
-Use `obj_type` when the chunk MIME type does not identify a type, or when the
-caller requires a particular result type:
+Without an `obj_type`, the chunk's `type` parameter decides what comes back; if
+it names nothing — because it is absent, or because the module that would
+define it was never imported — the payload decodes to whatever its format
+describes, a `dict`, a `list` or a scalar.
+
+Pass `obj_type` when the caller requires a particular result type. The registry
+makes a best effort to produce it and reports the deserializer's own error when
+the data will not fit:
 
 ```python
 value = registry.from_chunk(

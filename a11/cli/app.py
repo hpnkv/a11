@@ -21,6 +21,8 @@ import asyncio
 import dataclasses
 from typing import Awaitable, Callable, Sequence
 
+from absl import logging
+
 _PROG = "a11"
 _DESCRIPTION = "A11 — concurrent action and streaming runtime."
 
@@ -80,6 +82,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # provider probing it does — is only built when the CLI actually runs.
     from a11.cli.commands import COMMANDS
     from a11 import observability
+
+    logging.use_absl_handler()
+    logging.set_verbosity(logging.INFO)
 
     otlp_configured = observability.configure_langfuse_from_env()
 

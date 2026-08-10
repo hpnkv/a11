@@ -15,13 +15,18 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  ACTION_STATUS_MIMETYPE,
   ActionMessage,
+  CLOSE_STATUS_ATTRIBUTE,
   Chunk,
   ChunkMetadata,
   NodeFragment,
   SerializationRegistry,
+  decodeStatusChunk,
   fromChunk,
+  isCloseStatusChunk,
   isOk,
+  statusToChunk,
   makeTextMessageInteraction,
   makeOllamaCreateChatConfig,
   toChunk,
@@ -96,6 +101,41 @@ test('the runtime and SDK types are registered under their canonical tags', () =
   }
 });
 
+test('a status chunk is the one shape every language writes', () => {
+  const fixture = testdata('status_chunk.json');
+  assert.equal(ACTION_STATUS_MIMETYPE, fixture.mimetype);
+  assert.equal(CLOSE_STATUS_ATTRIBUTE, fixture.close_attribute);
+
+  for (const testCase of fixture.cases) {
+    const status = {code: testCase.code, message: testCase.message, details: testCase.details};
+    const chunk = need(statusToChunk(status));
+    assert.equal(chunk.mimetype, fixture.mimetype, testCase.name);
+    assert.equal(Buffer.from(chunk.data).toString('base64'), testCase.base64, testCase.name);
+    assert.equal(isCloseStatusChunk(chunk), false, testCase.name);
+    const decoded = need(decodeStatusChunk(chunk));
+    assert.equal(decoded.status.code, testCase.code, testCase.name);
+    assert.equal(decoded.status.message, testCase.message, testCase.name);
+    assert.deepEqual(decoded.status.details ?? [], testCase.details, testCase.name);
+  }
+});
+
+test('a closure marker only adds the shared attribute', () => {
+  const fixture = testdata('status_chunk.json');
+  const ok = {code: 0, message: ''};
+  const plain = need(statusToChunk(ok));
+  const marker = need(statusToChunk(ok, true));
+
+  // The marker rides on the metadata, so the payload is the plain status.
+  assert.deepEqual(marker.data, plain.data);
+  assert.equal(marker.mimetype, plain.mimetype);
+  assert.equal(isCloseStatusChunk(marker), true);
+  assert.equal(isCloseStatusChunk(plain), false);
+  assert.deepEqual(
+    [...marker.metadata.attributes].map(([key, value]) => [key, Buffer.from(value).toString()]),
+    [[fixture.close_attribute, '1']],
+  );
+});
+
 test("Python's interaction decodes into real objects, not anonymous fields", async () => {
   const { chunk } = goldenChunk();
 
@@ -105,7 +145,7 @@ test("Python's interaction decodes into real objects, not anonymous fields", asy
   assert.equal(interaction.model, 'golden-model');
   // The point of the exercise: what a turn *did* survives the crossing.
   assert.ok(interaction.content[0] instanceof Chunk);
-  assert.equal(interaction.content[0].mimetype, 'application/json;type=object');
+  assert.equal(interaction.content[0].mimetype, 'application/json');
   assert.ok(interaction.action_calls[0] instanceof ActionMessage);
   assert.equal(interaction.action_calls[0].name, 'rename_symbol');
   assert.ok(interaction.action_inputs.p[0] instanceof NodeFragment);
@@ -178,66 +218,64 @@ test('an ordinary object is still ordinary data', async () => {
   // own {code, message} is data, not a Status.
   const chunk = need(await toChunk({ code: 0, message: 'hi' }));
 
-  assert.equal(chunk.mimetype, 'application/json;type=object');
+  assert.equal(chunk.mimetype, 'application/json');
   assert.equal(valueTag(need(await fromChunk(chunk))), null);
 });
 
-test('a payload written before the tags were unified still reads', async () => {
-  const legacy = {
-    id: 'x',
-    role: 'user',
-    status: {
-      __a11_serialized_type__: 'a11.value',
-      value: { code: 0, message: '' },
-      class_name: 'Status',
-    },
-    content: [
-      {
-        __a11_serialized_type__: 'a11.value',
-        value: {
-          data: { __a11_serialized_type__: 'bytes', value: 'ImhpIg==' },
-          metadata: { mimetype: 'application/json;type=string' },
-        },
-        class_name: 'Chunk',
-      },
-    ],
-    usage_metadata: {
-      __a11_serialized_type__: 'pydantic',
-      value: { input_tokens: 2 },
-      class_name: 'a11.sdk.llm.UsageMetadata',
-    },
+test('a serialized interaction carries no tags', async () => {
+  // The model's own schema says what everything is; nothing repeats it. The
+  // chunk's `;type=` names the payload, and from there every nested value sits
+  // in a field whose declared type identifies it.
+  const keys = (value) => {
+    if (Array.isArray(value)) return value.flatMap(keys);
+    if (value !== null && typeof value === 'object') {
+      return Object.entries(value).flatMap(([key, item]) => [key, ...keys(item)]);
+    }
+    return [];
   };
-  const chunk = new Chunk({
-    data: new TextEncoder().encode(JSON.stringify(legacy)),
-    metadata: new ChunkMetadata({ mimetype: 'application/json;type=a11.sdk.llm.Interaction' }),
+  const interaction = need(await makeTextMessageInteraction('hi', 'be brief'));
+  const chunk = need(await toChunk(interaction));
+
+  const payload = JSON.parse(new TextDecoder().decode(chunk.data));
+  assert.deepEqual(keys(payload).filter((key) => key.startsWith('!')), []);
+  assert.deepEqual(payload.content[0], {
+    data: 'eyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhpIn1dfQ==',
+    metadata: { mimetype: 'application/json' },
   });
 
-  const interaction = need(await fromChunk(chunk));
-
-  assert.ok(interaction.content[0] instanceof Chunk);
-  assert.equal(valueTag(interaction.status), tags.STATUS_TAG);
-  assert.equal(interaction.usage_metadata.input_tokens, 2);
+  // And it still comes back as Chunks, from the schema alone.
+  const decoded = need(await fromChunk(chunk));
+  assert.ok(decoded.content[0] instanceof Chunk);
+  assert.ok(decoded.system_instructions[0] instanceof Chunk);
+  assert.equal(need(await fromChunk(decoded.system_instructions[0])), 'be brief');
 });
 
-test('an unknown class_name is reported rather than silently passed through', async () => {
-  const payload = {
-    content: [
-      {
-        __a11_serialized_type__: 'pydantic',
-        value: { anything: 1 },
-        class_name: 'some.other.Model',
-      },
-    ],
-  };
+test('no key in a payload is ever read as a type', async () => {
+  // A payload is data. Nothing in it names a type, so nothing is escaped.
+  // A11 once wrote a nested value's type as the sole key of a one-entry object
+  // ({"!a11.Chunk": {...}}), which meant a caller's own object of that shape
+  // had to be escaped on the way out. The type lives in the chunk's metadata
+  // now, so these go out byte-for-byte as written.
+  for (const value of [
+    { [`!${tags.CHUNK_TAG}`]: 'not one' },
+    { '!whatever': [1, 2] },
+    { '!a': 1, b: 2 },
+  ]) {
+    const chunk = need(await toChunk(value));
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(chunk.data)), value);
+    assert.deepEqual(need(await fromChunk(chunk)), value);
+  }
+});
+
+test('an unloadable type tag still yields the payload', async () => {
+  // A peer that never imported the naming module still holds valid JSON, and
+  // is entitled to read it as such rather than be refused.
   const chunk = new Chunk({
-    data: new TextEncoder().encode(JSON.stringify(payload)),
-    metadata: new ChunkMetadata({ mimetype: `application/json;type=${tags.INTERACTION_TAG}` }),
+    data: new TextEncoder().encode('{"anything":1}'),
+    metadata: new ChunkMetadata({ mimetype: 'application/json;type=some.other.Model' }),
   });
 
-  const result = await fromChunk(chunk);
-
-  assert.ok(!isOk(result));
-  assert.match(result.message, /some\.other\.Model/);
+  assert.deepEqual(need(await fromChunk(chunk)), { anything: 1 });
 });
 
 test('a registry built before an SDK import still sees its codecs', async () => {

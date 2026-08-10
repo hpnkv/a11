@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A11</title>
+  <style>
+    /* Theme variables; Kotlin overrides these from the IDE look-and-feel. */
+    :root {
+      --a11-bg: #2b2d30;
+      --a11-bg-alt: #1e1f22;
+      --a11-fg: #dfe1e5;
+      --a11-muted: #8b8f96;
+      --a11-border: #43454a;
+      --a11-accent: #3574f0;
+      --a11-accent-fg: #ffffff;
+      --a11-user-bg: #2f436a;
+      --a11-assistant-bg: #333539;
+      --a11-error: #e06c75;
+      --a11-json-key: #c77dbb;
+      --a11-json-string: #6aab73;
+      --a11-json-number: #2aacb8;
+      --a11-json-keyword: #cf8e6d;
+      --a11-font: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+      --a11-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      %%THEME_VARS%%
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--a11-bg);
+      color: var(--a11-fg);
+      font-family: var(--a11-font);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    /* The view mounted into #app brings its own layout; an id selector here would
+       outrank the view classes below and flatten their grid/flex — keep this to
+       the box itself. The top border is the separator under the tool window
+       header ("A11 Chat" / "A11 Actions"), which the IDE draws above us; with
+       border-box sizing it eats 1px of the 100vh rather than overflowing. */
+    #app {
+      height: 100vh;
+      border-top: 1px solid var(--a11-border);
+    }
+
+    /* ---------- Chat ---------- */
+    .chat-view { height: 100%; display: flex; flex-direction: column; }
+
+    /* The bar above the transcript: new chat, and the history toggle. */
+    .chat-bar {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--a11-border);
+    }
+    button.quiet {
+      background: none;
+      color: var(--a11-muted);
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    button.quiet:hover:enabled { background: var(--a11-bg-alt); color: var(--a11-fg); }
+    button.quiet.active { background: var(--a11-bg-alt); color: var(--a11-fg); }
+
+    /* The history takes the transcript's place while it is open, so both are
+       just rows of the same column and only one of them ever scrolls. Which one
+       shows is driven by a class on the view rather than the `hidden` attribute:
+       both are `display: flex`, and that outranks `[hidden] { display: none }`,
+       so `hidden` alone would leave the two stacked on top of each other. */
+    .history-panel {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      background: var(--a11-bg-alt);
+    }
+    .chat-view:not(.history-open) .history-panel { display: none; }
+    .chat-view.history-open .transcript { display: none; }
+    .history-note { padding: 14px; color: var(--a11-muted); }
+    .history-note.error { color: var(--a11-error); white-space: pre-wrap; }
+    .history-item {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      width: 100%;
+      text-align: left;
+      background: none;
+      color: var(--a11-fg);
+      border: none;
+      border-bottom: 1px solid var(--a11-border);
+      border-radius: 0;
+      padding: 9px 12px;
+    }
+    /* `:not(.selected)` is load-bearing: `:hover:enabled` is the more specific
+       selector, so without it hovering the current conversation would paint over
+       its selection colour. */
+    .history-item:hover:enabled:not(.selected) { background: var(--a11-bg); }
+    .history-item.selected { background: var(--a11-accent); color: var(--a11-accent-fg); }
+    .history-item.selected .history-item-date { color: var(--a11-accent-fg); opacity: 0.85; }
+    .history-item-title {
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .history-item-date { flex: 0 0 auto; font-size: 11px; color: var(--a11-muted); }
+    .transcript {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 14px 14px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      /* No smooth scrolling: token-by-token follow needs the position to settle
+         synchronously, or mid-animation scroll events read as "user scrolled up". */
+      overflow-anchor: none;
+    }
+    .bubble {
+      max-width: 92%;
+      padding: 8px 12px;
+      border-radius: 12px;
+      white-space: normal;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: var(--a11-user-bg);
+      border-bottom-right-radius: 4px;
+      white-space: pre-wrap;
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: var(--a11-assistant-bg);
+      border-bottom-left-radius: 4px;
+    }
+    .bubble-body.muted { color: var(--a11-muted); font-style: italic; }
+    .bubble-body.error { color: var(--a11-error); white-space: pre-wrap; }
+    .bubble-body > :first-child { margin-top: 0; }
+    .bubble-body > :last-child { margin-bottom: 0; }
+    .bubble-body p { margin: 6px 0; }
+    .bubble-body pre {
+      background: var(--a11-bg-alt);
+      border: 1px solid var(--a11-border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      overflow-x: auto;
+      font-family: var(--a11-mono);
+      font-size: 12px;
+    }
+    .bubble-body code {
+      font-family: var(--a11-mono);
+      font-size: 12px;
+      background: var(--a11-bg-alt);
+      padding: 1px 5px;
+      border-radius: 5px;
+    }
+    .bubble-body pre code { background: none; padding: 0; }
+    .bubble-body ul, .bubble-body ol { margin: 6px 0; padding-left: 22px; }
+    .bubble-body a { color: var(--a11-accent); }
+
+    .thinking { display: inline-flex; gap: 4px; align-items: center; padding: 2px 0; }
+    .thinking .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--a11-muted);
+      animation: a11-blink 1.2s infinite ease-in-out;
+    }
+    .thinking .dot:nth-child(2) { animation-delay: 0.2s; }
+    .thinking .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes a11-blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+    /* Collapsible "thinking" panel: one per thinking phase, in the turn where
+       that phase happened, streaming while it lasts and then collapsing to a
+       single toggle (kept, not removed). Tools the model ran while still
+       thinking sit inside it, between the runs of thought they came from. */
+    .thinking-details {
+      border-left: 2px solid var(--a11-border);
+      padding-left: 8px;
+    }
+    .thinking-details + .bubble-body,
+    .thinking-details + .tool-run,
+    .bubble-body + .thinking-details,
+    .tool-run + .thinking-details { margin-top: 8px; }
+    .thinking-details > .tool-run { margin-top: 6px; }
+    .thinking-details > .tool-run + .thoughts-body { margin-top: 6px; }
+    .thinking-details > summary {
+      color: var(--a11-muted);
+      font-style: italic;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .thinking-details > summary::-webkit-details-marker { display: none; }
+    .thinking-details > summary::before {
+      content: '▸ ';
+      display: inline-block;
+      transition: transform 0.1s ease;
+    }
+    .thinking-details[open] > summary::before { content: '▾ '; }
+    .thinking-details[open] > summary { margin-bottom: 4px; }
+    .thoughts-body {
+      color: var(--a11-muted);
+      font-style: italic;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+
+    /* One folded box per tool the model ran, in the order the turn ran them:
+       summary line always visible, the rest of the plugin's run log revealed on
+       click. Never sent to the model. */
+    .bubble-body + .bubble-body, .tool-run + .bubble-body { margin-top: 6px; }
+    .bubble-body + .tool-run { margin-top: 6px; }
+    .tool-run + .tool-run { margin-top: 4px; }
+    .tool-run {
+      border: 1px solid var(--a11-border);
+      border-radius: 8px;
+      background: var(--a11-bg-alt);
+      font-size: 12px;
+    }
+    .tool-run > summary {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 9px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .tool-run.empty > summary { cursor: default; }
+    .tool-run > summary::-webkit-details-marker { display: none; }
+    .tool-run > summary::before { content: '▸'; color: var(--a11-muted); font-size: 10px; }
+    .tool-run[open] > summary::before { content: '▾'; }
+    .tool-run.empty > summary::before { visibility: hidden; }
+    .tool-run-name { font-family: var(--a11-mono); font-size: 11px; color: var(--a11-muted); }
+    .tool-run-summary { flex: 1 1 auto; }
+    .tool-run-body {
+      padding: 0 9px 8px 24px;
+      color: var(--a11-fg);
+      overflow-wrap: anywhere;
+    }
+    .tool-run-body > :first-child { margin-top: 0; }
+    .tool-run-body > :last-child { margin-bottom: 0; }
+    .tool-run-body p { margin: 5px 0; }
+    .tool-run-body ul, .tool-run-body ol { margin: 5px 0; padding-left: 20px; }
+    .tool-run-body code { font-family: var(--a11-mono); font-size: 11px; }
+    .tool-run-body pre {
+      background: var(--a11-bg);
+      border: 1px solid var(--a11-border);
+      border-radius: 6px;
+      padding: 8px;
+      overflow-x: auto;
+      font-size: 11px;
+    }
+
+    .composer {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      padding: 10px 12px;
+      border-top: 1px solid var(--a11-border);
+      background: var(--a11-bg);
+    }
+    .composer textarea {
+      flex: 1 1 auto;
+      resize: none;
+      background: var(--a11-bg-alt);
+      color: var(--a11-fg);
+      border: 1px solid var(--a11-border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-family: var(--a11-font);
+      font-size: 13px;
+      line-height: 1.45;
+      /* Room for a few lines of prompt before it starts growing. */
+      min-height: 72px;
+      max-height: 260px;
+    }
+    .composer textarea:focus { outline: none; border-color: var(--a11-accent); }
+    button {
+      background: var(--a11-accent);
+      color: var(--a11-accent-fg);
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+
+    /* ---------- Action explorer ---------- */
+    .actions-view { height: 100%; display: grid; grid-template-columns: 220px 1fr; }
+    .action-list {
+      border-right: 1px solid var(--a11-border);
+      overflow-y: auto;
+      background: var(--a11-bg-alt);
+    }
+    .action-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      width: 100%;
+      text-align: left;
+      background: none;
+      color: var(--a11-fg);
+      border: none;
+      border-bottom: 1px solid var(--a11-border);
+      border-radius: 0;
+      padding: 9px 12px;
+    }
+    .action-item.selected { background: var(--a11-accent); color: var(--a11-accent-fg); }
+    .action-item.selected .action-item-desc { color: var(--a11-accent-fg); opacity: 0.85; }
+    .action-item-name { font-family: var(--a11-mono); font-size: 12px; }
+    .action-item-desc { font-size: 11px; color: var(--a11-muted); }
+    .action-detail { overflow-y: auto; padding: 16px 18px; }
+    .action-detail h2 { margin: 0 0 4px; font-family: var(--a11-mono); font-size: 16px; }
+    .action-description { margin: 0 0 14px; color: var(--a11-muted); }
+    /* ---------- Ports and schema-built forms ---------- */
+    .port {
+      border: 1px solid var(--a11-border);
+      border-radius: 10px;
+      padding: 10px 12px 12px;
+      margin-bottom: 12px;
+    }
+    .port-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+    .port-name { font-family: var(--a11-mono); font-size: 13px; }
+    .port-flag {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--a11-muted);
+      border: 1px solid var(--a11-border);
+      border-radius: 20px;
+      padding: 1px 7px;
+    }
+    .port-type { margin-left: auto; font-family: var(--a11-mono); font-size: 11px; color: var(--a11-muted); }
+    .port-hint { margin: 6px 0 0; }
+    .port.outputs { border-style: dashed; }
+    .output-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+    .output-name { font-family: var(--a11-mono); font-size: 12px; }
+    .schema-fields { margin-top: 4px; padding-left: 10px; border-left: 1px solid var(--a11-border); }
+    .schema-field { display: flex; align-items: baseline; gap: 8px; margin-top: 5px; }
+    .schema-field-name { font-family: var(--a11-mono); font-size: 12px; }
+    .schema-field-type { font-family: var(--a11-mono); font-size: 11px; color: var(--a11-muted); }
+    .schema-fields .field-hint { margin: 1px 0 0; }
+
+    .field { margin-top: 10px; }
+    .field-label { display: block; font-size: 11px; color: var(--a11-muted); margin-bottom: 4px; }
+    .field-required { color: var(--a11-accent); margin-left: 3px; }
+    .field-hint { margin: 0 0 5px; font-size: 11px; color: var(--a11-muted); }
+    .field-input {
+      width: 100%;
+      background: var(--a11-bg-alt);
+      color: var(--a11-fg);
+      border: 1px solid var(--a11-border);
+      border-radius: 7px;
+      padding: 6px 9px;
+      font-family: var(--a11-font);
+      font-size: 13px;
+    }
+    .field-input:focus { outline: none; border-color: var(--a11-accent); }
+    .field-checkbox { width: 15px; height: 15px; accent-color: var(--a11-accent); }
+    .field-object > .field:first-child { margin-top: 4px; }
+
+    .field-list { margin-top: 6px; }
+    .field-list-items { display: flex; flex-direction: column; gap: 8px; }
+    .field-list-items:not(.empty) { margin-bottom: 8px; }
+    .field-list-item { display: flex; align-items: flex-start; gap: 8px; }
+    .field-list-index {
+      flex: 0 0 auto;
+      min-width: 18px;
+      margin-top: 5px;
+      font-family: var(--a11-mono);
+      font-size: 11px;
+      color: var(--a11-muted);
+      text-align: right;
+    }
+    .field-list-body { flex: 1 1 auto; min-width: 0; }
+    .field-list-item.object-item > .field-list-body {
+      border-left: 1px solid var(--a11-border);
+      padding-left: 10px;
+    }
+    .ghost-button {
+      background: none;
+      color: var(--a11-accent);
+      border: 1px dashed var(--a11-border);
+      border-radius: 7px;
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    .ghost-button:hover { border-color: var(--a11-accent); }
+    .ghost-button.remove { flex: 0 0 auto; margin-top: 2px; color: var(--a11-muted); border-style: solid; }
+
+    /* Highlighted JSON editor: a tokenized <pre> under a transparent-text
+       <textarea>, both in one grid cell so the caret lines up with the colors. */
+    .json-editor-wrapper { margin-top: 4px; }
+    .json-editor {
+      display: grid;
+      background: var(--a11-bg-alt);
+      border: 1px solid var(--a11-border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .json-editor:focus-within { border-color: var(--a11-accent); }
+    .json-editor.invalid { border-color: var(--a11-error); }
+    .json-highlight, .json-input {
+      grid-area: 1 / 1;
+      margin: 0;
+      padding: 9px 11px;
+      min-height: 62px;
+      font-family: var(--a11-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      tab-size: 2;
+    }
+    .json-highlight { pointer-events: none; color: var(--a11-fg); }
+    .json-input {
+      resize: none;
+      overflow: hidden;
+      border: none;
+      background: transparent;
+      color: transparent;
+      caret-color: var(--a11-fg);
+    }
+    .json-input:focus { outline: none; }
+    .json-input::placeholder { color: var(--a11-muted); }
+    .json-key { color: var(--a11-json-key); }
+    .json-string { color: var(--a11-json-string); }
+    .json-number { color: var(--a11-json-number); }
+    .json-keyword { color: var(--a11-json-keyword); }
+    .json-punct { color: var(--a11-muted); }
+    .json-hint { display: none; margin: 4px 0 0; font-size: 11px; color: var(--a11-error); }
+    .json-hint.visible { display: block; }
+
+    .action-controls { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+    .timing { color: var(--a11-muted); font-size: 12px; }
+    .json-output {
+      background: var(--a11-bg-alt);
+      border: 1px solid var(--a11-border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--a11-mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 40px;
+    }
+    .json-output.error, .error { color: var(--a11-error); }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <!-- View selector + JS↔Kotlin bridge, substituted by A11WebView.kt. -->
+  <script>window.__A11_VIEW = "%%VIEW%%";</script>
+  <script>%%BRIDGE_JS%%</script>
+  <!-- The app bundle (esbuild IIFE), inlined by A11WebView.kt. -->
+  <script>%%APP_JS%%</script>
+</body>
+</html>

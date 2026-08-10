@@ -3,11 +3,15 @@
 """The canonical cross-language serialization tags.
 
 A serialized A11 value names its type with a *tag*: the ``type`` parameter of
-the chunk's MIME type (``application/json;type=a11.Chunk``), and the
-``class_name`` of a nested ``a11.value``/``pydantic`` wire object. The tag is
-what a peer in another language matches on, so the same class must carry the
-same tag in every implementation — this module is that table for Python, and
-its siblings hold the identical strings:
+the chunk's MIME type (``application/json;type=a11.Chunk``). That is the only
+place a type is ever named. Nothing inside the payload repeats it -- a declared
+model's fields say what they hold, and schemaless data is just data. A value
+the format already describes (an object, an array, a string) carries no tag at
+all, so a bare ``application/json`` is a complete description.
+
+The tag is what a peer in another language matches on, so the same class must
+carry the same tag in every implementation — this module is that table for
+Python, and its siblings hold the identical strings:
 
   * C++ — ``cpp/a11/data/serial_tags.h`` (returned by the ``A11SerialTag`` ADL
     customization point).
@@ -38,10 +42,8 @@ class Interaction(BaseModel):
 Native (pybind11) classes cannot carry one, so
 `a11.data.serialization.SerializationRegistry` pins theirs from `CORE_TAGS`.
 
-Renaming a tag is a wire-format change. Readers stay compatible with the
-historical bare class names (``Chunk``, ``Status``) through the class-name
-fallback in ``SerializationRegistry._resolve_type``; writers always emit the
-canonical tag below.
+Renaming a tag is a wire-format change: a peer that has not been rebuilt will
+fail to resolve the new name rather than silently mis-read it.
 """
 
 from __future__ import annotations

@@ -238,10 +238,14 @@ absl::Status TranscribeUtterance(
   params.initial_prompt = state->options.initial_prompt.empty()
                               ? nullptr
                               : state->options.initial_prompt.c_str();
+  // A null language already makes whisper_full auto-detect before it decodes.
+  // detect_language is the separate "detect and return" switch: it makes
+  // whisper_full stop right after detection and yield zero segments, so it must
+  // stay false here or transcription silently produces nothing.
   params.language = state->options.language == "auto"
                         ? nullptr
                         : state->options.language.c_str();
-  params.detect_language = state->options.language == "auto";
+  params.detect_language = false;
   params.abort_callback = &ShouldAbortInference;
   params.abort_callback_user_data = state;
 

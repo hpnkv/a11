@@ -35,6 +35,7 @@
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
+#include "python/native_types.h"
 
 namespace a11::python {
 namespace {
@@ -394,6 +395,13 @@ absl::StatusOr<actions::ActionHandler> MakeActionHandler(
   if (callable.is_none()) {
     return actions::ActionHandler{};
   }
+  // A handler that is already native (an SDK Action implemented in C++, handed
+  // back by ActionHandlerToPython) passes straight through: wrapping it in a
+  // PythonActionCallback would bounce every invocation through the interpreter
+  // for no reason, and would need a running loop the native handler does not.
+  if (py::isinstance<NativeActionHandler>(callable)) {
+    return callable.cast<NativeActionHandler>().value();
+  }
   absl::StatusOr<std::shared_ptr<PythonActionCallback>> owner =
       PythonActionCallback::Create(callable, true);
   if (!owner.ok()) {
@@ -425,8 +433,11 @@ py::object ActionHandlerToPython(const actions::ActionHandler& handler) {
   }
   const auto* python = handler.target<AsyncPythonActionHandler>();
   if (python == nullptr) {
-    ThrowStatus(absl::UnimplementedError(
-        "The Action handler was not created from a Python callable"));
+    // A handler implemented in C++ has no Python callable behind it, so hand
+    // back an opaque handle. It is accepted anywhere a handler is taken (see
+    // MakeActionHandler), which is what lets a native Action be re-registered
+    // or bound from Python.
+    return py::cast(NativeActionHandler(handler));
   }
   return python->owner->callable();
 }
@@ -484,6 +495,21 @@ py::object StatusObject(const absl::Status& status) {
 }  // namespace
 
 void BindActions(py::module_& module) {
+  py::class_<NativeActionHandler>(
+      module, "NativeActionHandler",
+      "An Action handler implemented in C++, such as one of the audio SDK's. "
+      "It is an opaque handle rather than something Python calls: pass it "
+      "wherever a handler is accepted -- ActionRegistry.register(), "
+      "Action.bind_handler() -- and the native implementation runs directly, "
+      "without a round trip through the interpreter.")
+      .def("__bool__",
+           [](const NativeActionHandler& self) {
+             return static_cast<bool>(self);
+           })
+      .def("__repr__", [](const NativeActionHandler& self) {
+        return self ? "NativeActionHandler()" : "NativeActionHandler(<empty>)";
+      });
+
   py::class_<SchemaMapView<actions::ActionPortSchema>> port_schema_map(
       module, "_ActionPortSchemaMapView",
       "Mutable dict-like view over an action schema's port map.");
@@ -1272,7 +1298,9 @@ Examples:
           [](const actions::ActionRegistry& self, const std::string& name) {
             return ActionHandlerToPython(ValueOrThrow(self.GetHandler(name)));
           },
-          "Return the Python handler registered under the given action name.",
+          "Return the handler registered under the given action name: the "
+          "Python callable it was registered with, a NativeActionHandler when "
+          "the action is implemented in C++, or None when it has no handler.",
           py::arg("action_name"))
       .def(
           "make_action",
@@ -1316,10 +1344,14 @@ Examples:
 
   module.def(
       "status_to_chunk",
-      [](const py::handle& status) {
-        return ValueOrThrow(actions::StatusToChunk(StatusFromPython(status)));
+      [](const py::handle& status, bool closing) {
+        return ValueOrThrow(
+            data::MakeStatusChunk(StatusFromPython(status), closing));
       },
-      "Encode an absl Status as a data chunk.", py::arg("status"));
+      "Encode an absl Status as a data chunk. With closing=True the chunk is a "
+      "node closure marker rather than a value: it reports that the producer "
+      "drained the node and closed its write half with that status.",
+      py::arg("status"), py::arg("closing") = false);
   module.def(
       "status_from_chunk",
       [](const data::Chunk& chunk) {
@@ -1329,8 +1361,13 @@ Examples:
   module.def("is_status_chunk", &actions::IsStatusChunk,
              "Return True when the chunk carries an action status.",
              py::arg("chunk"));
+  module.def("is_close_status_chunk", &actions::IsCloseStatusChunk,
+             "Return True when the chunk is a status chunk marking that a "
+             "node's write half was closed, rather than a status value.",
+             py::arg("chunk"));
   module.attr("ACTION_STATUS_MIMETYPE") =
       std::string(actions::kActionStatusMimetype);
+  module.attr("CLOSE_STATUS_ATTRIBUTE") = std::string(data::kCloseAttribute);
   module.attr("ACTION_STATUS_OUTPUT") =
       std::string(actions::kActionStatusOutput);
   module.attr("ACTION_DISPATCH_STATUS_OUTPUT") =

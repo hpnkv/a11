@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "a11/actions/schema.h"
 #include "python/bindings.h"
 #include "python/interop.h"
+#include "python/native_types.h"
 #include "sdk/audio/actions/audio_actions.h"
 #include "sdk/audio/actions/audio_events.h"
 #include "sdk/audio/actions/audio_serialization.h"
@@ -240,37 +242,73 @@ void AttachTypeInfo(a11::actions::ActionSchema& schema,
   }
 }
 
-// Registers the three C++ audio Actions on `registry`, attaching the bound
-// Python audio classes as each port's typeinfo (C++ cannot fabricate those).
-void RegisterAudioActionsPy(
-    const std::shared_ptr<a11::actions::ActionRegistry>& registry) {
-  if (registry == nullptr) {
-    ThrowStatus(absl::InvalidArgumentError("registry must not be None"));
-  }
+// One audio Action, ready to register: its name, its schema with the bound
+// Python audio classes attached as port typeinfo (C++ cannot fabricate those),
+// and its native handler.
+struct AudioActionEntry {
+  std::string_view name;
+  a11::actions::ActionSchema schema;
+  a11::actions::ActionHandler handler;
+};
+
+// The four audio Actions in protocol order. Both the Python export and
+// RegisterAudioActionsPy build from this, so they cannot drift apart.
+std::vector<AudioActionEntry> AudioActionEntries() {
   if (const absl::Status status = audio::EnsureAudioTypesRegistered();
       !status.ok()) {
     ThrowStatus(status);
   }
   const py::module_ native = py::module_::import("a11._native");
-  const auto register_one = [&](std::string_view name,
-                                a11::actions::ActionSchema schema,
-                                a11::actions::ActionHandler handler) {
+  std::vector<AudioActionEntry> entries;
+  const auto add = [&](std::string_view name,
+                       a11::actions::ActionSchema schema,
+                       a11::actions::ActionHandler handler) {
     AttachTypeInfo(schema, native);
-    if (const absl::Status status = registry->Register(
-            std::string(name), std::move(schema), std::move(handler));
+    entries.push_back(AudioActionEntry{.name = name,
+                                       .schema = std::move(schema),
+                                       .handler = std::move(handler)});
+  };
+  add(audio::kListAudioInputsAction, audio::ListAudioInputsSchema(),
+      audio::ListAudioInputsHandler());
+  add(audio::kCaptureAudioAction, audio::CaptureAudioSchema(),
+      audio::CaptureAudioHandler());
+  add(audio::kCaptureTranscriptionAction, audio::CaptureTranscriptionSchema(),
+      audio::CaptureTranscriptionHandler());
+  add(audio::kTranscribeAudioAction, audio::TranscribeAudioSchema(),
+      audio::TranscribeAudioHandler());
+  return entries;
+}
+
+// Returns the audio Actions as (name, schema, handler) triples so Python can
+// hold them, register a subset, or inspect a schema before registering.
+// a11.sdk.audio.actions is the typed surface over this; the stub generator
+// renders bound classes inside a nested generic as `...`, so there is nothing
+// to gain from spelling the element types out here.
+py::list AudioActionsPy() {
+  py::list result;
+  for (AudioActionEntry& entry : AudioActionEntries()) {
+    result.append(py::make_tuple(
+        py::str(std::string(entry.name)), py::cast(std::move(entry.schema)),
+        py::cast(NativeActionHandler(std::move(entry.handler)))));
+  }
+  return result;
+}
+
+// Registers every C++ audio Action on `registry`.
+void RegisterAudioActionsPy(
+    const std::shared_ptr<a11::actions::ActionRegistry>& registry) {
+  if (registry == nullptr) {
+    ThrowStatus(absl::InvalidArgumentError("registry must not be None"));
+  }
+  for (AudioActionEntry& entry : AudioActionEntries()) {
+    if (const absl::Status status =
+            registry->Register(std::string(entry.name),
+                               std::move(entry.schema),
+                               std::move(entry.handler));
         !status.ok()) {
       ThrowStatus(status);
     }
-  };
-  register_one(audio::kListAudioInputsAction, audio::ListAudioInputsSchema(),
-               audio::ListAudioInputsHandler());
-  register_one(audio::kCaptureAudioAction, audio::CaptureAudioSchema(),
-               audio::CaptureAudioHandler());
-  register_one(audio::kCaptureTranscriptionAction,
-               audio::CaptureTranscriptionSchema(),
-               audio::CaptureTranscriptionHandler());
-  register_one(audio::kTranscribeAudioAction, audio::TranscribeAudioSchema(),
-               audio::TranscribeAudioHandler());
+  }
 }
 
 void BindAudioEvents(py::module_& module) {
@@ -817,13 +855,17 @@ void BindAudio(py::module_& module) {
       py::arg("data"));
 
   BindAudioEvents(module);
+  module.def("audio_actions", &AudioActionsPy,
+             "Return the audio Actions as (name, schema, handler) triples in "
+             "protocol order, each schema's ports already wired to the "
+             "matching audio type and their serializers installed. Use these "
+             "to register a subset, inspect a schema before registering, or "
+             "hand a handler to Action.bind_handler().");
   module.def("register_audio_actions", &RegisterAudioActionsPy,
              py::arg("registry"),
-             "Register the list_audio_inputs, capture_audio and "
-             "capture_transcription Actions on `registry`, wiring each port's "
-             "typeinfo "
-             "to the matching audio type and ensuring their serializers are "
-             "installed.");
+             "Register every audio Action on `registry`, wiring each port's "
+             "typeinfo to the matching audio type and ensuring their "
+             "serializers are installed.");
 }
 
 }  // namespace a11::python

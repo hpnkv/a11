@@ -1,4 +1,4 @@
-import { type ByteSource, toBytes } from './bytes.js';
+import { type ByteMap, type ByteSource, toBytes } from './bytes.js';
 import { Chunk, ChunkMetadata, NodeFragment, validateName } from './data.js';
 import { decodeStatus, packStatus, type DecodedStatus } from './status_codec.js';
 import {
@@ -13,6 +13,12 @@ import {
 
 /** MIME type used for structured action dispatch/completion status chunks. */
 export const ACTION_STATUS_MIMETYPE = 'application/x-a11-status';
+/**
+ * Chunk metadata attribute marking a status chunk as a closure marker: the
+ * producer drained the node and closed its write half with that status. The
+ * marker carries no application value and is never stored.
+ */
+export const CLOSE_STATUS_ATTRIBUTE = 'a11-close';
 /** Reserved output node carrying the action's eventual completion status. */
 export const ACTION_STATUS_OUTPUT = '__status__';
 /** Reserved output node acknowledging whether a remote call was dispatched. */
@@ -354,12 +360,20 @@ export interface ActionSettings {
   clearOutputsAfterRun?: boolean;
 }
 
-/** Encode a structured action status as a reserved-MIME chunk. */
-export function statusToChunk(status: Status): StatusOr<Chunk> {
+/**
+ * Encode a structured action status as a reserved-MIME chunk.
+ *
+ * With `closing` set the chunk is a node lifecycle marker rather than a value:
+ * it says the producer drained the node and closed its write half with this
+ * status. See {@link CLOSE_STATUS_ATTRIBUTE}.
+ */
+export function statusToChunk(status: Status, closing = false): StatusOr<Chunk> {
   const bytes = packStatus(status);
   if (!isOk(bytes)) return bytes;
+  const attributes: ByteMap = new Map();
+  if (closing) attributes.set(CLOSE_STATUS_ATTRIBUTE, Uint8Array.from([0x31])); // '1'
   return Chunk.create({
-    metadata: new ChunkMetadata({ mimetype: ACTION_STATUS_MIMETYPE }),
+    metadata: new ChunkMetadata({ mimetype: ACTION_STATUS_MIMETYPE, attributes }),
     data: bytes,
   });
 }
@@ -384,4 +398,9 @@ export function statusFromChunk(chunk: Chunk): Status {
 /** Whether a chunk carries the reserved action status MIME type. */
 export function isStatusChunk(chunk: Chunk): boolean {
   return chunk instanceof Chunk && chunk.mimetype === ACTION_STATUS_MIMETYPE;
+}
+
+/** Whether a chunk is a status chunk reporting that a node's writer closed. */
+export function isCloseStatusChunk(chunk: Chunk): boolean {
+  return isStatusChunk(chunk) && chunk.metadata?.attributes.has(CLOSE_STATUS_ATTRIBUTE) === true;
 }

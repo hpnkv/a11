@@ -17,6 +17,7 @@ import {
   a11PeerFromString,
   a11PeerToString,
   interactWithGemma,
+  interactionBackend,
   isOk,
   makeInteraction,
   makeTextMessageInteraction,
@@ -134,7 +135,7 @@ test('interact_with_gemma streams tokens and produces an assistant turn', async 
     const newInteractions = need(await action.getOutput('new_interactions', false));
     const assistant = need(parseInteraction(need(await newInteractions.next())));
     assert.equal(assistant.role, 'model');
-    assert.equal(assistant.backend_specific_metadata.backend, 'gemma');
+    assert.equal(interactionBackend(assistant), 'gemma');
 
     need(await action.wait(5_000));
   } finally {

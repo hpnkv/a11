@@ -1,0 +1,37 @@
+<idea-plugin>
+    <id>dev.curiositystack.a11.clion</id>
+    <name>A11 Chat</name>
+    <vendor email="hello@curiositystack.dev" url="https://github.com/hpnkv/a11">Curiosity Stack</vendor>
+
+    <description><![CDATA[
+        An AI chat tool window for JetBrains IDEs, powered by <b>A11</b>. The chat runs
+        against an <b>A11 gateway</b> (<code>a11 gateway</code>) over a WebSocket
+        and can call tools backed by the IDE — open editors, project indexes,
+        symbols, and refactorings — plus the
+        gateway's shell tools, so the model can answer questions grounded in your
+        actual project. The gateway is expected at
+        <code>ws://127.0.0.1:8011/a11</code>; configure it under
+        Preferences → Tools → A11 Chat.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="A11 Chat"
+                    anchor="right"
+                    icon="AllIcons.Toolwindows.ToolWindowMessages"
+                    factoryClass="dev.curiositystack.a11.clion.ui.ChatToolWindowFactory"/>
+
+        <toolWindow id="A11 Actions"
+                    anchor="right"
+                    icon="AllIcons.Toolwindows.ToolWindowRun"
+                    factoryClass="dev.curiositystack.a11.clion.ui.ActionsToolWindowFactory"/>
+
+        <applicationService serviceImplementation="dev.curiositystack.a11.clion.settings.A11Settings"/>
+        <applicationConfigurable
+                parentId="tools"
+                instance="dev.curiositystack.a11.clion.settings.A11Configurable"
+                id="dev.curiositystack.a11.clion.settings"
+                displayName="A11 Chat"/>
+    </extensions>
+</idea-plugin>

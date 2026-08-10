@@ -178,6 +178,13 @@ class ChunkStoreWriter {
    *  write a null final chunk through AsyncNode) before draining when readers
    *  need a final sequence number to identify the logical end of the stream.
    *
+   *  Attached streams are told: after the last batch is flushed and teed, the
+   *  writer sends one closure marker -- a status chunk carrying
+   *  `data::kCloseAttribute` and the OK close status -- so a mirror of this
+   *  node on the far side closes its own write half. A peer that cannot be
+   *  reached does not keep the store open; the send error surfaces as this
+   *  writer's terminal status and through the returned awaitable.
+   *
    *  @return
    *    An awaitable that resolves once the flush and storage close complete.
    */
@@ -210,10 +217,11 @@ class ChunkStoreWriter {
    *    Mirror persisted fragments to an additional wire stream.
    *
    *  After the store accepts a batch, the writer calls `WireStream::Send()` on
-   *  each attached stream. A successful send means local transport admission,
-   *  not remote delivery. A transport failure stops subsequent writes but
-   *  cannot revoke store confirmations returned for the current batch. The
-   *  writer keeps the stream alive while attached.
+   *  each attached stream, and DrainAndClose() follows the last batch with a
+   *  closure marker. A successful send means local transport admission, not
+   *  remote delivery. A transport failure stops subsequent writes but cannot
+   *  revoke store confirmations returned for the current batch. The writer
+   *  keeps the stream alive while attached.
    *
    *  @param stream
    *    The wire stream to fan output out to.

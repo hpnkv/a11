@@ -65,8 +65,9 @@ def default_json_example(registry: SerializationRegistry) -> None:
     describe_chunk(chunk)
     print(f"JSON payload: {chunk.data.decode('utf-8')}")
 
-    # The language-neutral JSON type is carried by ";type=object", so no
-    # obj_type hint is needed when reading a chunk produced by the registry.
+    # JSON already describes an object, so the chunk carries no ";type="
+    # parameter. Reading it back needs no hint either: the format is the whole
+    # description, and a bare "application/json" decodes to a dict.
     restored = registry.from_chunk(chunk)
     assert type(restored) is dict
     assert restored == value
@@ -74,26 +75,41 @@ def default_json_example(registry: SerializationRegistry) -> None:
 
 
 def nested_values_example(registry: SerializationRegistry) -> None:
-    print_heading("Nested Python values")
+    print_heading("Where a Python type survives, and where it does not")
 
-    # JSON does not natively distinguish tuples, sets, bytes, UUIDs, or dates.
-    # The standard codec tags such nested values so their exact types survive.
-    value = {
-        "sample_ids": {
-            uuid.UUID("1aa70f8e-96f6-4674-b7f9-9d12c2f2ab2c"),
-            uuid.UUID("cc75b7df-0034-4e45-acf8-072916ac4f5f"),
-        },
-        "window": (datetime.date(2026, 7, 24), timing.Duration.seconds(30)),
-        "raw": b"\x00\xff",
-    }
-    chunk = registry.to_chunk(value, JSON_MIMETYPE)
-    restored = registry.from_chunk(chunk)
+    # At the top of a chunk, the ";type=" parameter names the value, so its
+    # exact Python type comes back.
+    for value in (
+        b"\x00\xff",
+        uuid.UUID("1aa70f8e-96f6-4674-b7f9-9d12c2f2ab2c"),
+        datetime.date(2026, 7, 24),
+        timing.Duration.seconds(30),
+        {"a", "b"},
+    ):
+        chunk = registry.to_chunk(value, JSON_MIMETYPE)
+        restored = registry.from_chunk(chunk)
+        assert type(restored) is type(value) and restored == value
+        print(f"{chunk.get_mimetype()} -> {restored!r}")
 
+    # Nested in a plain dictionary, there is nowhere left to say it. JSON has
+    # no bytes, so the payload holds base64 and that is what reads back. This
+    # is not a lossy encoding of a Python value -- it is JSON saying what JSON
+    # can say.
+    chunk = registry.to_chunk({"raw": b"\x00\xff"}, JSON_MIMETYPE)
     describe_chunk(chunk)
-    assert restored == value
-    assert isinstance(restored["window"], tuple)
-    assert isinstance(restored["raw"], bytes)
-    print("tuple, set, UUID, date, Duration, and bytes all survived")
+    assert registry.from_chunk(chunk) == {"raw": "AP8="}
+    print("nested bytes read back as the base64 JSON carried")
+
+    # Declare a model when nested values must keep their types: the field's own
+    # annotation is what rebuilds them, and it costs the payload nothing.
+    class Window(pydantic.BaseModel):
+        started_on: datetime.date
+        raw: bytes
+
+    window = Window(started_on=datetime.date(2026, 7, 24), raw=b"\x00\xff")
+    restored = registry.from_chunk(registry.to_chunk(window, JSON_MIMETYPE))
+    assert restored == window and isinstance(restored.raw, bytes)
+    print(f"a declared model keeps them: {restored!r}")
 
 
 def msgpack_example(registry: SerializationRegistry) -> None:
@@ -102,7 +118,8 @@ def msgpack_example(registry: SerializationRegistry) -> None:
     value = bytearray(b"\x00binary\xff")
 
     # Select MessagePack explicitly when a compact binary representation is
-    # preferable. The resulting MIME remains exact, including the Python type.
+    # preferable. A bytearray is not a shape MessagePack describes, so the
+    # resulting MIME names it.
     chunk = registry.to_chunk(value, MSGPACK_MIMETYPE)
     describe_chunk(chunk)
 
@@ -176,9 +193,10 @@ def explicit_mimetype_example(registry: SerializationRegistry) -> None:
     print(f"metadata-free JSON: {restored!r}")
 
     # Explicit selectors are authoritative. Here the data is JSON even though
-    # stale metadata says MessagePack. The useful type tag is still retained.
+    # stale metadata says MessagePack. A selector corrects the representation;
+    # it does not rename the value.
     stale = types.Chunk(
-        metadata=types.ChunkMetadata(mimetype=f"{MSGPACK_MIMETYPE};type=object"),
+        metadata=types.ChunkMetadata(mimetype=MSGPACK_MIMETYPE),
         data=b'{"metadata":"overridden"}',
     )
     restored = registry.from_chunk(stale, JSON_MIMETYPE)

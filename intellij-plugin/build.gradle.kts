@@ -1,0 +1,113 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    kotlin("jvm") version "2.2.0"
+    // IntelliJ Platform Gradle Plugin 2.x.
+    id("org.jetbrains.intellij.platform") version "2.2.1"
+}
+
+group = providers.gradleProperty("pluginGroup").get()
+version = providers.gradleProperty("pluginVersion").get()
+
+repositories {
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+dependencies {
+    intellijPlatform {
+        // The IDE this is compiled and `runIde`-ed against. It is *not* a
+        // restriction on where the plugin may be installed: nothing here depends
+        // on a product-specific module or API, and plugin.xml asks only for
+        // `com.intellij.modules.platform`, so the artifact installs in every
+        // JetBrains IDE. CLion stays the development target because that is the
+        // IDE this is developed in.
+        create(
+            IntelliJPlatformType.CLion,
+            providers.gradleProperty("platformVersion").get(),
+        )
+        // No bundled plugins: everything used lives in the platform itself, and a
+        // product-bundled dependency here is exactly what would make the plugin
+        // uninstallable in IDEs that do not ship it.
+        bundledPlugins(emptyList<String>())
+
+        pluginVerifier()
+        zipSigner()
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+    }
+
+    // The A11 Kotlin compatibility layer (composite build). Exclude its
+    // transitive kotlinx-coroutines: the IntelliJ Platform ships its own
+    // *patched* coroutines (with a custom EDT MainDispatcher). A second,
+    // unpatched copy on the runtime/test classpath shadows it and breaks the
+    // platform's coroutine dispatch — which manifests as the platform test
+    // harness spinning forever in teardown (checkEditorsReleased). Coroutines
+    // are provided by the platform at runtime, so we only need them to compile.
+    implementation("dev.curiositystack.a11:a11-kotlin") {
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core-jvm")
+    }
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
+    testImplementation("junit:junit:4.13.2")
+}
+
+kotlin {
+    jvmToolchain(21)
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
+}
+
+intellijPlatform {
+    pluginConfiguration {
+        id = "dev.curiositystack.a11.clion"
+        name = providers.gradleProperty("pluginName")
+        version = providers.gradleProperty("pluginVersion")
+        ideaVersion {
+            sinceBuild = providers.gradleProperty("pluginSinceBuild")
+            untilBuild = provider { null } // no upper bound; verified via pluginVerifier
+        }
+    }
+
+    // Verify the "runs in any IDE" claim rather than asserting it: the verifier
+    // checks the built plugin against the recommended IDE set for the declared
+    // compatibility range, which spans products, not just CLion releases.
+    pluginVerification {
+        ides {
+            recommended()
+        }
+    }
+}
+
+// Builds the JCEF webview bundle (chat + action explorer) into plugin resources.
+// It first builds the local TypeScript A11 library (`../js`) that the webview
+// depends on, then bundles the webview with esbuild. Requires Node.js >= 20.
+val buildWebview by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Build the JCEF webview bundle into src/main/resources/webview/app.js."
+    workingDir = layout.projectDirectory.asFile
+    inputs.dir(layout.projectDirectory.dir("webview/src"))
+    inputs.file(layout.projectDirectory.file("webview/package.json"))
+    inputs.dir(layout.projectDirectory.dir("../js/src"))
+    inputs.file(layout.projectDirectory.file("../js/package.json"))
+    outputs.file(layout.projectDirectory.file("src/main/resources/webview/app.js"))
+    // Install dependencies only when missing (first build / CI); otherwise just
+    // run the local, offline builds so the task never needs the network.
+    commandLine(
+        "bash", "-c",
+        "[ -d ../js/node_modules ] || npm --prefix ../js ci; npm --prefix ../js run build && " +
+            "{ [ -d webview/node_modules ] || npm --prefix webview ci; }; npm --prefix webview run build",
+    )
+}
+
+tasks {
+    processResources {
+        dependsOn(buildWebview)
+    }
+
+    // Fast dev loop: `./gradlew runIde` launches a sandbox CLion with the plugin.
+    // The platform auto-reloads the plugin on rebuild while runIde is running.
+    // The chat needs a gateway to talk to: run `a11 gateway` alongside it.
+}

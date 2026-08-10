@@ -64,7 +64,9 @@ async iteration to drain its configured range.
 a confirmation future after bounded admission. Await that future when the
 application must checkpoint only after storage accepts the chunk, then call
 [`drain_and_close`][a11.stores.chunk_store_writer.ChunkStoreWriter.drain_and_close]
-at producer shutdown.
+at producer shutdown. Closing also tees a closure marker to every attached
+stream, so a peer mirroring this node closes its own write half — see
+[the node lifecycle](../lifecycles/async-node.md#4-drain-and-close-writes).
 
 ::: a11.stores.chunk_store_writer.ChunkStoreWriter
 

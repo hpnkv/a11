@@ -57,6 +57,30 @@ encode provider content. For example, `interact_with_claude` builds Anthropic
 `action_outputs`, emits that interaction, and only then asks Claude to
 continue.
 
+## Narrate a run without telling the model
+
+An action may declare an output port named `user_facing_log`
+(`a11.sdk.llm.USER_FACING_LOG_PORT`). It carries the tool's own account of what
+it did, written for the person watching: a summary line, then whatever detail is
+worth reading. The shell tools in `a11.sdk.bash` all declare one.
+
+The runner drains that port like any other — an unread port would stall the
+action writing it — but keeps it out of the tool result the model is shown, and
+returns it as that call's log instead:
+
+```python
+executed = await execute_actions_from_interaction(assistant_interaction, action)
+
+executed.logs            # {tool call id: log}, only for calls that wrote one
+executed.log_metadata()  # {"tool_logs": b'{"call id": "..."}'}, or {}
+```
+
+Merge `log_metadata()` into the `backend_specific_metadata` of the interaction
+carrying the tool results, which is what the included handlers do. Metadata is
+the one part of an interaction no backend turns into provider content, so the log
+stays out of the model's context while still being stored with the conversation —
+a replayed transcript can then show what a tool did, not merely that it ran.
+
 ## Make the allow-list explicit
 
 The registry defines what the application *can* run. The header defines what

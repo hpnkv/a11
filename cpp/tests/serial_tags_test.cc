@@ -18,11 +18,18 @@
 #include <string_view>
 #include <vector>
 
+#include <absl/status/status.h>
+#include <absl/status/statusor.h>
+#include <absl/strings/escaping.h>
+#include <absl/strings/str_cat.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
+#include "a11/data/serialization.h"
+#include "a11/data/types.h"
+#include "a11/status.h"
 #include "sdk/audio/actions/audio_serialization.h"
 
 namespace a11::data {
@@ -94,6 +101,139 @@ TEST(SerialTagsTest, CppConstantsMatchTheSharedTable) {
   std::sort(shared.begin(), shared.end());
   std::sort(ours.begin(), ours.end());
   EXPECT_EQ(shared, ours);
+}
+
+nlohmann::json SharedStatusChunk() {
+  const std::filesystem::path path =
+      (std::filesystem::path(A11_CPP_SOURCE_ROOT).parent_path() /
+       std::filesystem::path(__FILE__))
+          .parent_path()
+          .parent_path()
+          .parent_path() /
+      "testdata" / "status_chunk.json";
+  std::ifstream stream(path);
+  EXPECT_TRUE(stream.is_open()) << "cannot open " << path;
+  std::stringstream buffer;
+  buffer << stream.rdbuf();
+  return nlohmann::json::parse(buffer.str());
+}
+
+TEST(SerialTagsTest, StatusChunksMatchTheSharedShape) {
+  const nlohmann::json fixture = SharedStatusChunk();
+  EXPECT_EQ(fixture["mimetype"].get<std::string>(), kStatusMimetype);
+  EXPECT_EQ(fixture["close_attribute"].get<std::string>(), kCloseAttribute);
+
+  for (const nlohmann::json& test_case : fixture["cases"]) {
+    const std::string name = test_case["name"].get<std::string>();
+    const absl::Status status = MakeStatus(
+        static_cast<absl::StatusCode>(test_case["code"].get<int>()),
+        test_case["message"].get<std::string>(), test_case["details"]);
+
+    const absl::StatusOr<Chunk> chunk = MakeStatusChunk(status);
+    ASSERT_TRUE(chunk.ok()) << name << ": " << chunk.status();
+    EXPECT_EQ(chunk->GetMimetype(), fixture["mimetype"].get<std::string>())
+        << name;
+    EXPECT_EQ(absl::Base64Escape(chunk->data),
+              test_case["base64"].get<std::string>())
+        << name;
+    EXPECT_FALSE(IsCloseStatusChunk(*chunk)) << name;
+
+    const absl::StatusOr<absl::Status> decoded = StatusFromStatusChunk(*chunk);
+    ASSERT_TRUE(decoded.ok()) << name << ": " << decoded.status();
+    EXPECT_EQ(decoded->code(), status.code()) << name;
+    EXPECT_EQ(decoded->message(), status.message()) << name;
+    EXPECT_EQ(StatusDetails(*decoded), StatusDetails(status)) << name;
+  }
+}
+
+TEST(SerialTagsTest, AClosureMarkerOnlyAddsTheSharedAttribute) {
+  const nlohmann::json fixture = SharedStatusChunk();
+  const absl::StatusOr<Chunk> plain = MakeStatusChunk(absl::OkStatus());
+  const absl::StatusOr<Chunk> marker = MakeStatusChunk(absl::OkStatus(), true);
+  ASSERT_TRUE(plain.ok()) << plain.status();
+  ASSERT_TRUE(marker.ok()) << marker.status();
+
+  // The marker rides on the metadata, so the payload is the plain status.
+  EXPECT_EQ(marker->data, plain->data);
+  EXPECT_EQ(marker->GetMimetype(), plain->GetMimetype());
+  EXPECT_TRUE(IsCloseStatusChunk(*marker));
+  ASSERT_TRUE(marker->metadata.has_value());
+  const ByteMap expected = {
+      {fixture["close_attribute"].get<std::string>(), "1"}};
+  EXPECT_EQ(marker->metadata->attributes, expected);
+}
+
+TEST(SerialTagsTest, AGenericPayloadCarriesNoTypeParameter) {
+  SerializationRegistry registry(/*register_defaults=*/true);
+  const nlohmann::json value = {{"answer", 42}};
+
+  const absl::StatusOr<Chunk> chunk = registry.ToChunk(value);
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  // JSON already says this is an object; the mimetype does not repeat it.
+  EXPECT_EQ(chunk->GetMimetype(), kJsonMimetype);
+
+  const absl::StatusOr<nlohmann::json> decoded =
+      registry.FromChunk<nlohmann::json>(*chunk);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ(*decoded, value);
+}
+
+TEST(SerialTagsTest, ABareMimetypeIsACompleteDescription) {
+  SerializationRegistry registry(/*register_defaults=*/true);
+  Chunk chunk;
+  chunk.metadata = ChunkMetadata{.mimetype = std::string(kJsonMimetype)};
+  chunk.data = R"({"answer":42})";
+
+  const absl::StatusOr<nlohmann::json> decoded =
+      registry.FromChunk<nlohmann::json>(chunk);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ((*decoded)["answer"].get<int>(), 42);
+}
+
+TEST(SerialTagsTest, ATaggedPayloadIsStillReadableAsPlainJson) {
+  // The type parameter names what the payload *is*, not what a reader is
+  // allowed to ask for. A peer that never loaded the naming module still holds
+  // valid JSON, and is entitled to read it as such.
+  SerializationRegistry registry(/*register_defaults=*/true);
+  Chunk chunk;
+  chunk.metadata = ChunkMetadata{
+      .mimetype = absl::StrCat(kJsonMimetype, ";type=", kInteractionTag)};
+  chunk.data = R"({"model":"golden-model"})";
+
+  const absl::StatusOr<nlohmann::json> decoded =
+      registry.FromChunk<nlohmann::json>(chunk);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ((*decoded)["model"].get<std::string>(), "golden-model");
+}
+
+TEST(SerialTagsTest, RuntimeTypesPublishTheCanonicalTags) {
+  EXPECT_EQ(A11SerialTag(TypeTag<ChunkMetadata>{}), kChunkMetadataTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<Chunk>{}), kChunkTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<NodeRef>{}), kNodeRefTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<NodeFragment>{}), kNodeFragmentTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<Port>{}), kPortTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<ActionMessage>{}), kActionMessageTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<WireMessage>{}), kWireMessageTag);
+}
+
+TEST(SerialTagsTest, ARuntimeTypeIsTaggedForEveryLanguageToRead) {
+  // The gap this closes: C++ used to write ";type=Chunk", a name no other
+  // language's registry has ever known. What it writes now is what the shared
+  // table says, so a peer can resolve it.
+  SerializationRegistry registry(/*register_defaults=*/true);
+  Chunk value;
+  value.metadata = ChunkMetadata{.mimetype = std::string(kJsonMimetype)};
+  value.data = R"({"answer":42})";
+
+  const absl::StatusOr<Chunk> chunk = registry.ToChunk(value);
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  EXPECT_EQ(chunk->GetMimetype(),
+            absl::StrCat(kMsgpackMimetype, ";type=", kChunkTag));
+
+  const absl::StatusOr<Chunk> decoded = registry.FromChunk<Chunk>(*chunk);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ(decoded->data, value.data);
+  EXPECT_EQ(decoded->GetMimetype(), value.GetMimetype());
 }
 
 TEST(SerialTagsTest, AudioTypesPublishTheCanonicalTags) {

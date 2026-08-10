@@ -116,6 +116,45 @@ async def test_state_persists_across_executions(manager):
 
 
 @pytest.mark.asyncio
+async def test_a_completed_run_declares_where_its_output_ends(manager):
+    """A run that finished says so, so a reader can tell it was not cut short.
+
+    Finality is carried by the last line rather than a trailing null chunk: the
+    LLM tool runner collects every fragment, and a null (octet-stream) one would
+    reach decoders that cannot deserialize it.
+    """
+    registry = _registry(manager)
+    result = await _drive(
+        registry, "shell_execute", command="echo one; echo two"
+    )
+
+    output = result["output_lines"]
+    fragments = []
+    while (fragment := await output.next_fragment()) is not None:
+        fragments.append(fragment)
+
+    assert [a11.from_chunk(f.data) for f in fragments] == ["one", "two"]
+    assert [f.continued for f in fragments] == [True, False]
+    assert not any(f.data.is_null() for f in fragments)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_output_is_closed_without_claiming_finality(manager):
+    """Nothing was produced, so there is no last fragment to mark.
+
+    Closing is enough to end the reader -- including one across a wire, which
+    takes the writer's closure marker as end-of-stream.
+    """
+    registry = _registry(manager)
+    result = await _drive(registry, "shell_execute", command="true")
+
+    output = result["output_lines"]
+    assert await _lines(result, "output_lines") == []
+    assert await output.get_chunk_store().get_final_seq() is None
+    assert not await output.is_writable()
+
+
+@pytest.mark.asyncio
 async def test_stderr_is_interleaved_into_output(manager):
     registry = _registry(manager)
     result = await _drive(
@@ -129,9 +168,7 @@ async def test_stderr_is_interleaved_into_output(manager):
 @pytest.mark.asyncio
 async def test_transient_shell_leaves_no_shell_behind(manager):
     registry = _registry(manager)
-    result = await _drive(
-        registry, "shell_execute", command="echo transient"
-    )
+    result = await _drive(registry, "shell_execute", command="echo transient")
     assert await _lines(result, "output_lines") == ["transient"]
     listed = await _drive(registry, "shell_list")
     assert await _lines(listed, "shell_ids") == []
@@ -217,3 +254,63 @@ async def test_exit_requires_the_shell_id_header(manager):
     with pytest.raises(StatusException) as raised:
         await _drive(registry, "shell_exit")
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+
+
+@pytest.mark.asyncio
+async def test_each_action_narrates_its_run_for_the_user(manager):
+    """Every shell action says what it did on its user-facing log port.
+
+    The log is for the person watching, so what is asserted is that it names the
+    things a reader needs to identify the run rather than any particular
+    wording. Which things depends on the action: the lifecycle ones name the
+    shell, because that is all they did, and `shell_execute` names the command
+    and its output, which is what a reader is actually looking at.
+    """
+    registry = _registry(manager)
+
+    started = await _drive(registry, "shell_start")
+    shell_id = await started["shell_id"].next_object(str)
+    start_log = "".join(await _lines(started, bash.USER_FACING_LOG_PORT))
+    assert shell_id in start_log
+
+    executed = await _drive(
+        registry,
+        "shell_execute",
+        headers={bash.SHELL_ID_HEADER: shell_id},
+        command="echo hello",
+    )
+    assert await _lines(executed, "output_lines") == ["hello"]
+    execute_log = "".join(await _lines(executed, bash.USER_FACING_LOG_PORT))
+    assert "echo hello" in execute_log
+    assert "1 line of output" in execute_log
+    assert "hello" in execute_log.rsplit("```", 2)[-2]
+
+    listed = await _drive(registry, "shell_list")
+    assert shell_id in "".join(await _lines(listed, bash.USER_FACING_LOG_PORT))
+
+    exited = await _drive(
+        registry, "shell_exit", headers={bash.SHELL_ID_HEADER: shell_id}
+    )
+    assert shell_id in "".join(await _lines(exited, bash.USER_FACING_LOG_PORT))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_command_is_narrated_and_still_fails(manager):
+    registry = _registry(manager)
+    action = registry.make_action("shell_execute")
+    action.set_header(bash.SHELL_ID_HEADER, b"missing")
+    action.run()
+    await action["command"].put("echo hi", final=True)
+    for input_name in action.get_schema().inputs:
+        await action[input_name].drain_and_close()
+
+    log = "".join(await _lines(action, bash.USER_FACING_LOG_PORT))
+    with pytest.raises(StatusException) as raised:
+        await asyncio.wait_for(action.wait(), timeout=30)
+    assert raised.value.status.code == StatusCode.NOT_FOUND
+    # A run that died is the one most worth narrating, so the log leads with
+    # the reason rather than the output summary it never got to write.
+    assert log.casefold().startswith("error:")
+    assert "missing" in log
+    # And the command still shows, so a reader knows what died.
+    assert "echo hi" in log

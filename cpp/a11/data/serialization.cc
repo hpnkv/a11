@@ -26,6 +26,8 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/data/msgpack.h"
+#include "a11/data/serial_tags.h"
+#include "a11/data/serializable.h"
 #include "a11/data/types.h"
 #include "thread/boost_primitives.h"
 
@@ -139,13 +141,27 @@ bool Matches(const Mimetype& registration, const Mimetype& selection) {
   return true;
 }
 
+// Tags a JSON or MessagePack payload already spells out for itself. A chunk
+// holding one of these carries no type parameter: writing ";type=object" on an
+// object says nothing a parser did not already know, and it stops a peer that
+// only has "application/json" from being understood.
+bool IsGenericTag(std::string_view tag) {
+  static constexpr std::string_view kGeneric[] = {
+      "json",   "object",  "array",   "string",
+      "number", "integer", "boolean", "null"};
+  return std::find(std::begin(kGeneric), std::end(kGeneric), tag) !=
+         std::end(kGeneric);
+}
+
 std::string FormatExactMimetype(const Mimetype& mimetype,
                                 std::string_view type_name) {
   std::string result = mimetype.media_type;
   for (const auto& [key, value] : mimetype.parameters) {
     absl::StrAppend(&result, ";", key, "=", value);
   }
-  absl::StrAppend(&result, ";type=", type_name);
+  if (!IsGenericTag(type_name)) {
+    absl::StrAppend(&result, ";type=", type_name);
+  }
   return result;
 }
 
@@ -196,11 +212,13 @@ absl::StatusOr<nlohmann::json> DeserializeJsonMsgpack(const Chunk& chunk) {
   }
 }
 
+// Registers a runtime type's MessagePack representation under the canonical
+// cross-language tag it publishes through A11SerialTag, so the chunk a C++ peer
+// writes names the same type Python, TypeScript and Kotlin look for.
 template <typename T>
-absl::Status RegisterNative(SerializationRegistry* registry,
-                            std::string type_name) {
+absl::Status RegisterNative(SerializationRegistry* registry) {
   return registry->Register<T>(
-      std::move(type_name), std::string(kMsgpackMimetype),
+      SerialTypeTag<T>(), std::string(kMsgpackMimetype),
       [](const T& value) -> absl::StatusOr<Chunk> {
         ABSL_ASSIGN_OR_RETURN(Bytes encoded, value.ToMsgpack());
         return Chunk{.data = std::move(encoded)};
@@ -267,13 +285,9 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
   }
+  // A registration names a representation. Which type it produces is the
+  // template argument, so any type parameter here is redundant.
   ABSL_ASSIGN_OR_RETURN(Mimetype parsed, ParseMimetype(mimetype, false));
-  const auto encoded_type = parsed.parameters.find("type");
-  if (encoded_type != parsed.parameters.end() &&
-      encoded_type->second != type_name) {
-    return absl::InvalidArgumentError(
-        "A registered type parameter must equal type_name");
-  }
   parsed = WithoutType(std::move(parsed));
   Impl* impl = GetImpl();
   thread::MutexLock lock(&impl->mu);
@@ -301,13 +315,9 @@ absl::Status SerializationRegistry::RegisterDeserializerErased(
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
   }
+  // A registration names a representation. Which type it produces is the
+  // template argument, so any type parameter here is redundant.
   ABSL_ASSIGN_OR_RETURN(Mimetype parsed, ParseMimetype(mimetype, false));
-  const auto encoded_type = parsed.parameters.find("type");
-  if (encoded_type != parsed.parameters.end() &&
-      encoded_type->second != type_name) {
-    return absl::InvalidArgumentError(
-        "A registered type parameter must equal type_name");
-  }
   parsed = WithoutType(std::move(parsed));
   Impl* impl = GetImpl();
   thread::MutexLock lock(&impl->mu);
@@ -366,16 +376,11 @@ absl::StatusOr<Chunk> SerializationRegistry::ToChunkErased(
       if (registration.type != type) {
         continue;
       }
+      // A selector picks a representation; the value's own type decides the
+      // tag, so a type parameter in it is ignored.
       if (selection.has_value() &&
           !Matches(registration.mimetype, *selection)) {
         continue;
-      }
-      if (selection.has_value()) {
-        const auto requested_type = selection->parameters.find("type");
-        if (requested_type != selection->parameters.end() &&
-            !WildcardMatches(registration.type_name, requested_type->second)) {
-          continue;
-        }
       }
       if (selected == nullptr || registration.order < selected->order) {
         selected = &registration;
@@ -431,35 +436,28 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
     for (const std::string& pattern_text : mimetype_patterns) {
       ABSL_ASSIGN_OR_RETURN(Mimetype pattern,
                             ParseMimetype(pattern_text, true));
-      if (actual.has_value() && Matches(*actual, pattern)) {
-        selectors.push_back(*actual);
-      } else {
-        if (actual.has_value() &&
-            pattern.parameters.find("type") == pattern.parameters.end()) {
-          const auto encoded = actual->parameters.find("type");
-          if (encoded != actual->parameters.end()) {
-            pattern.parameters["type"] = encoded->second;
-          }
-        }
-        selectors.push_back(std::move(pattern));
-      }
+      // An explicit selector is authoritative, so it stands in for the chunk's
+      // own media type when the two disagree -- which is how stale metadata
+      // gets repaired.
+      selectors.push_back(actual.has_value() && Matches(*actual, pattern)
+                              ? *actual
+                              : std::move(pattern));
     }
   }
 
+  // The caller named the type it wants through the template argument, so the
+  // chunk's own tag has nothing left to decide: a payload written as
+  // "application/json;type=a11.sdk.Interaction" is still valid JSON, and
+  // FromChunk<nlohmann::json> is entitled to read it as such.
   ErasedDeserializer deserializer;
   {
     const Impl* impl = GetImpl();
     thread::MutexLock lock(&impl->mu);
     for (const Mimetype& selector : selectors) {
-      const auto encoded_type = selector.parameters.find("type");
       const DeserializerRegistration* selected = nullptr;
       for (const DeserializerRegistration& registration : impl->deserializers) {
         if (registration.type != requested_type ||
             !Matches(registration.mimetype, selector)) {
-          continue;
-        }
-        if (encoded_type != selector.parameters.end() &&
-            registration.type_name != encoded_type->second) {
           continue;
         }
         if (selected == nullptr || registration.order < selected->order) {
@@ -490,13 +488,13 @@ absl::Status SerializationRegistry::RegisterDefaults() {
   ABSL_RETURN_IF_ERROR(
       Register<nlohmann::json>("json", std::string(kMsgpackMimetype),
                                SerializeJsonMsgpack, DeserializeJsonMsgpack));
-  ABSL_RETURN_IF_ERROR(RegisterNative<ChunkMetadata>(this, "ChunkMetadata"));
-  ABSL_RETURN_IF_ERROR(RegisterNative<Chunk>(this, "Chunk"));
-  ABSL_RETURN_IF_ERROR(RegisterNative<NodeRef>(this, "NodeRef"));
-  ABSL_RETURN_IF_ERROR(RegisterNative<NodeFragment>(this, "NodeFragment"));
-  ABSL_RETURN_IF_ERROR(RegisterNative<Port>(this, "Port"));
-  ABSL_RETURN_IF_ERROR(RegisterNative<ActionMessage>(this, "ActionMessage"));
-  return RegisterNative<WireMessage>(this, "WireMessage");
+  ABSL_RETURN_IF_ERROR(RegisterNative<ChunkMetadata>(this));
+  ABSL_RETURN_IF_ERROR(RegisterNative<Chunk>(this));
+  ABSL_RETURN_IF_ERROR(RegisterNative<NodeRef>(this));
+  ABSL_RETURN_IF_ERROR(RegisterNative<NodeFragment>(this));
+  ABSL_RETURN_IF_ERROR(RegisterNative<Port>(this));
+  ABSL_RETURN_IF_ERROR(RegisterNative<ActionMessage>(this));
+  return RegisterNative<WireMessage>(this);
 }
 
 size_t SerializationRegistry::serializer_count() const {

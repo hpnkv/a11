@@ -172,7 +172,6 @@ function registerConfigCodec<S extends z.ZodType>(
 ): (value?: unknown) => StatusOr<z.infer<S>> {
   registerWireValueCodec<z.infer<S>>({
     tag,
-    kind: 'pydantic',
     test: testTagged(tag),
     // A shallow copy: handing the encoder the object it is already walking
     // would read as a cycle. See the note in `llm.ts`.

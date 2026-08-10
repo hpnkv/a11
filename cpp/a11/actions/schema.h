@@ -32,8 +32,7 @@
 namespace a11::actions {
 
 /** @brief Mimetype marking a chunk that carries an action status. */
-inline constexpr std::string_view kActionStatusMimetype =
-    "application/x-a11-status";
+inline constexpr std::string_view kActionStatusMimetype = data::kStatusMimetype;
 /** @brief Reserved output port name carrying the action's completion status. */
 inline constexpr std::string_view kActionStatusOutput = "__status__";
 /** @brief Reserved output port name carrying the remote dispatch status. */
@@ -153,8 +152,22 @@ struct ActionSettings {
 absl::StatusOr<data::Chunk> StatusToChunk(const absl::Status& status);
 /** @brief Decodes a status previously encoded by StatusToChunk. */
 absl::StatusOr<absl::Status> StatusFromChunk(const data::Chunk& chunk);
-/** @brief Whether @p chunk carries an encoded action status. */
-bool IsStatusChunk(const data::Chunk& chunk);
+/**
+ * @brief Whether @p chunk carries an encoded action status.
+ *
+ * The same predicate as ::a11::data::IsStatusChunk, re-exported here because
+ * status chunks are an action-protocol concept even though the encoding lives
+ * with the wire types.
+ */
+using data::IsStatusChunk;
+/**
+ * @brief Whether @p chunk is a status chunk reporting write-half closure.
+ *
+ * Such a chunk is a node lifecycle marker rather than a value: it says the
+ * producer drained the node and closed its writer with that status. See
+ * ::a11::data::kCloseAttribute.
+ */
+using data::IsCloseStatusChunk;
 
 }  // namespace a11::actions
 

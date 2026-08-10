@@ -2,8 +2,10 @@
   "_comment": [
     "The canonical A11 serialization tags, once, for every language.",
     "A tag is what identifies a type on the wire: the `type` parameter of a",
-    "chunk's MIME type, and the `class_name` of a nested a11.value/pydantic",
-    "wire object. Each language keeps its own constants (a11/data/serial_tags.py,",
+    "chunk's MIME type. It is the only place a type is ever named -- nothing",
+    "inside a payload repeats it, and a value the format already describes",
+    "(an object, an array, a string) carries no tag at all. Each language",
+    "keeps its own constants (a11/data/serial_tags.py,",
     "cpp/a11/data/serial_tags.h, js/src/serial_tags.ts,",
     "kotlin/src/main/kotlin/a11/SerialTags.kt) and asserts them against this",
     "file in its test suite, so a tag renamed in one language and forgotten in",

@@ -75,29 +75,46 @@ test('nested A11 wire values round-trip without exceptions', () => {
   assert.equal(malformed.code, StatusCode.INVALID_ARGUMENT);
 });
 
-test('default serialization uses language-neutral JSON tags', async () => {
+test('a value JSON already describes carries no type parameter', async () => {
   const registry = new SerializationRegistry({ registerDefaults: true });
-  const cases = [
-    [null, 'null'],
-    [true, 'boolean'],
-    [12, 'integer'],
-    [1.5, 'number'],
-    ['hello', 'string'],
-    [[1, 2], 'array'],
-    [{ answer: 42 }, 'object'],
-  ];
+  const values = [null, true, 12, 1.5, 'hello', [1, 2], { answer: 42 }];
 
-  for (const [value, tag] of cases) {
+  for (const value of values) {
     const chunk = await registry.toChunk(value);
     assert.equal(isOk(chunk), true);
-    assert.equal(chunk.mimetype, `application/json;type=${tag}`);
+    // JSON says as much on its own; repeating it in the mimetype would only
+    // stop a peer holding a bare `application/json` from being understood.
+    assert.equal(chunk.mimetype, 'application/json');
     const decoded = await registry.fromChunk(chunk);
     assert.equal(isOk(decoded), true);
     assert.deepEqual(decoded, value);
   }
 });
 
-test('TypeScript-native extended values and legacy Python tags interoperate', async () => {
+test('a bare mimetype is a complete description', async () => {
+  const registry = new SerializationRegistry({ registerDefaults: true });
+  const chunk = new Chunk({
+    metadata: new ChunkMetadata({ mimetype: 'application/json' }),
+    data: new TextEncoder().encode('{"answer":42}'),
+  });
+
+  assert.deepEqual(await registry.fromChunk(chunk), { answer: 42 });
+});
+
+test('an unloadable type tag still yields the payload', async () => {
+  // A peer that never imported the naming module still holds valid JSON.
+  const registry = new SerializationRegistry({ registerDefaults: true });
+  const chunk = new Chunk({
+    metadata: new ChunkMetadata({
+      mimetype: 'application/json;type=never.imported.Model',
+    }),
+    data: new TextEncoder().encode('{"answer":42}'),
+  });
+
+  assert.deepEqual(await registry.fromChunk(chunk), { answer: 42 });
+});
+
+test('TypeScript-native extended values round-trip', async () => {
   const registry = new SerializationRegistry({ registerDefaults: true });
   const date = new Date('2026-08-03T10:11:12.345Z');
   const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
@@ -107,7 +124,9 @@ test('TypeScript-native extended values and legacy Python tags interoperate', as
     date,
     blob,
     new Set(['a', 'b']),
-    new Map([[1, 'one']]),
+    // A Map goes out as an object, so its keys come back as the strings JSON
+    // and MessagePack can spell. Nothing in the payload says otherwise.
+    new Map([['one', 1]]),
     2n ** 60n,
     new Uint8Array([0, 1, 255]),
   ];
@@ -130,12 +149,6 @@ test('TypeScript-native extended values and legacy Python tags interoperate', as
       assert.deepEqual(decoded, value);
     }
   }
-
-  const legacy = new Chunk({
-    metadata: new ChunkMetadata({ mimetype: 'application/json;type=dict' }),
-    data: new TextEncoder().encode('{"answer":42}'),
-  });
-  assert.deepEqual(await registry.fromChunk(legacy), { answer: 42 });
 
   const jsonBytes = await registry.toChunk(
     new Uint8Array([4, 5, 6]),

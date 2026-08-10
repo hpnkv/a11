@@ -12,13 +12,17 @@
 import { z } from 'zod';
 
 import type { Action } from '../action.js';
-import { utf8Decode } from '../bytes.js';
-import { Chunk } from '../data.js';
+import { base64Decode, utf8Decode } from '../bytes.js';
+import { ActionMessage, Chunk, NodeFragment } from '../data.js';
 import { toChunk } from '../serialization.js';
 import {
   ACTION_CONFIG_TAG,
+  ACTION_MESSAGE_TAG,
+  CHUNK_TAG,
   INTERACTION_TAG,
+  NODE_FRAGMENT_TAG,
   PEER_TAG,
+  STATUS_TAG,
   USAGE_METADATA_TAG,
 } from '../serial_tags.js';
 import {
@@ -26,6 +30,7 @@ import {
   tagValue,
   testTagged,
   valueTag,
+  wireValueCodecByTag,
   type Fields,
 } from '../wire_values.js';
 import {
@@ -110,6 +115,66 @@ function taggedOr<S extends z.ZodType>(tag: string, schema: S) {
     schema.transform((value) => tagValue({ ...(value as object) }, tag) as z.infer<S>),
   ]);
 }
+
+/**
+ * A field holding one of the runtime's own classes — a `Chunk`, a `Status`.
+ *
+ * Nothing on the wire says which class this is; the field's type does, and this
+ * is where that is written down. A value arrives as the bare field map its
+ * sender dumped, and the codec registered for `tag` rebuilds it. An instance a
+ * TypeScript caller supplied directly passes straight through.
+ */
+function wireValueField<T>(tag: string) {
+  return z.unknown().transform((value, ctx): T => {
+    const codec = wireValueCodecByTag(tag);
+    if (codec === null) {
+      ctx.addIssue({ code: 'custom', message: `No wire value codec for ${tag}.` });
+      return z.NEVER;
+    }
+    if (codec.test(value)) return value as T;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      ctx.addIssue({ code: 'custom', message: `Expected the fields of a ${tag}.` });
+      return z.NEVER;
+    }
+    const loaded: StatusOr<unknown> = codec.load(value as Fields);
+    if (!isOk(loaded)) {
+      ctx.addIssue({ code: 'custom', message: (loaded as NonOkStatus).message });
+      return z.NEVER;
+    }
+    return loaded as T;
+  });
+}
+
+/**
+ * A `dict[str, bytes]` field.
+ *
+ * The values are bytes, so that is what a caller supplies. Untagged, the wire
+ * spells them as base64 in JSON and as real bytes in MessagePack, and a string
+ * is read as the former — text belongs in the field as its encoded bytes, via
+ * `utf8Encode`, not as a string that would be indistinguishable from base64.
+ */
+const byteRecordSchema = z
+  .record(
+    z.string(),
+    // `z.instanceof` narrows to `Uint8Array<ArrayBuffer>`, which rejects the
+    // `Uint8Array<ArrayBufferLike>` that `utf8Encode` and friends return.
+    z.union([
+      z.custom<Uint8Array>((value) => value instanceof Uint8Array),
+      z.string(),
+    ]).transform((value, ctx) => {
+      if (value instanceof Uint8Array) return value;
+      const decoded = base64Decode(value);
+      if (!isOk(decoded)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'A byte field takes bytes or the base64 the wire spells them as.',
+        });
+        return z.NEVER;
+      }
+      return decoded;
+    }),
+  )
+  .default({});
 
 /** Global WebRTC signalling endpoint used when an `rtc` peer omits one. */
 export const GLOBAL_WEBRTC_SIGNALLING_ENDPOINT = 'wss://a11.services/ice';
@@ -224,11 +289,7 @@ export function a11PeerFromString(peer: string): StatusOr<A11Peer> {
 
 export const a11ActionConfigSchema = z.object({
   peer: z.union([z.string(), taggedOr(PEER_TAG, a11PeerSchema)]).default('a11://$sender'),
-  // `dict[str, bytes]` on the Python side; see the note on an interaction's
-  // `backend_specific_metadata`.
-  header_autofills: z
-    .record(z.string(), z.union([z.instanceof(Uint8Array), z.string()]))
-    .default({}),
+  header_autofills: byteRecordSchema,
 });
 export type A11ActionConfig = z.infer<typeof a11ActionConfigSchema>;
 
@@ -241,25 +302,37 @@ const interactionSchema = z
     created_at_millis: z.number().int().nullish(),
     previous_interaction_id: z.string().default(''),
     model: z.string().default(''),
-    status: z.unknown().optional(),
-    system_instructions: z.array(z.unknown()).default([]),
-    action_configs: z.record(z.string(), z.unknown()).default({}),
-    content: z.array(z.unknown()).default([]),
-    action_calls: z.array(z.unknown()).default([]),
-    action_inputs: z.record(z.string(), z.array(z.unknown())).default({}),
-    action_outputs: z.record(z.string(), z.array(z.unknown())).default({}),
-    // `dict[str, bytes]` on the Python side; a peer sends raw bytes, which the
-    // decoder has already turned into a Uint8Array by the time this runs. A
-    // string is accepted so a TypeScript caller can set one by hand.
-    backend_specific_metadata: z
-      .record(z.string(), z.union([z.instanceof(Uint8Array), z.string()]))
+    // These types are the only thing that says what the wire carries here, so
+    // they mirror the Python model's annotations exactly. Loosening one back to
+    // `z.unknown()` would leave its values as anonymous field maps.
+    status: wireValueField<Status>(STATUS_TAG).optional(),
+    system_instructions: z.array(wireValueField<Chunk>(CHUNK_TAG)).default([]),
+    action_configs: z
+      .record(z.string(), taggedOr(ACTION_CONFIG_TAG, a11ActionConfigSchema))
       .default({}),
+    content: z.array(wireValueField<Chunk>(CHUNK_TAG)).default([]),
+    action_calls: z.array(wireValueField<ActionMessage>(ACTION_MESSAGE_TAG)).default([]),
+    action_inputs: z
+      .record(z.string(), z.array(wireValueField<NodeFragment>(NODE_FRAGMENT_TAG)))
+      .default({}),
+    action_outputs: z
+      .record(z.string(), z.array(wireValueField<NodeFragment>(NODE_FRAGMENT_TAG)))
+      .default({}),
+    backend_specific_metadata: byteRecordSchema,
     usage_metadata: taggedOr(USAGE_METADATA_TAG, usageMetadataSchema).nullish(),
   })
   .loose();
 
 /** Portable, backend-independent record of one turn in a conversation. */
 export type Interaction = z.infer<typeof interactionSchema>;
+
+/**
+ * What may be *supplied* for an interaction, before validation fills it in.
+ *
+ * Looser than {@link Interaction} itself: a byte field accepts base64, and a
+ * `Chunk` field accepts either a Chunk or the bare fields a peer sent.
+ */
+export type InteractionInput = z.input<typeof interactionSchema>;
 
 /**
  * Validate and default-fill an unknown value into an {@link Interaction}.
@@ -278,7 +351,7 @@ export function parseInteraction(value: unknown): StatusOr<Interaction> {
 
 /** Build a fully defaulted {@link Interaction} from a partial one. */
 export function makeInteraction(
-  partial: Partial<Interaction> = {},
+  partial: Partial<InteractionInput> = {},
 ): StatusOr<Interaction> {
   return parseInteraction(partial);
 }
@@ -350,7 +423,6 @@ function registerModelCodec<S extends z.ZodType>(
 ): void {
   registerWireValueCodec<z.infer<S>>({
     tag,
-    kind: 'pydantic',
     test: testTagged(tag),
     dump: (value) => ({ ...(value as Fields) }),
     load: (fields) => {
@@ -483,7 +555,9 @@ export function registerInteractionNormalizer(
 /** The backend that produced `interaction`, or `null` if untagged. */
 export function interactionBackend(interaction: Interaction): string | null {
   const value = interaction.backend_specific_metadata?.[BACKEND_METADATA_KEY];
-  return value ? String(value) : null;
+  if (value === undefined) return null;
+  const text = utf8Decode(value);
+  return isOk(text) && text ? text : null;
 }
 
 /** Build the normalized view of a (foreign) interaction via its producer. */

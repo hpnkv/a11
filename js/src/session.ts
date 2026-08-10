@@ -6,6 +6,7 @@ import {
   CANCEL_ACTION_HEADER,
   CANCEL_ACTION_NAME,
   decodeStatusChunk,
+  isCloseStatusChunk,
   isStatusChunk,
   statusToChunk,
 } from './action_schema.js';
@@ -774,6 +775,30 @@ export class Session {
       const chunk = fragment.getChunk();
       let protocolStatus: Status | null = null;
       let action: Action | null = null;
+
+      // A closure marker reports that the peer drained the node and closed its
+      // write half; it carries no value, so it is applied to the local mirror
+      // rather than stored. Checked before the reserved status nodes so that
+      // closing an Action's status node is not read as a second status value.
+      if (isOk(chunk) && isCloseStatusChunk(chunk)) {
+        const decoded = decodeStatusChunk(chunk);
+        if (!isOk(decoded)) return decoded;
+        const seq = fragment.seq ?? 0;
+        // Dropping a marker for a released node loses nothing, whereas creating
+        // one would resurrect it.
+        const mirror = this.nodeMap.getIfExists(fragment.id);
+        if (!isOk(mirror)) return mirror;
+        if (mirror === null) return seq;
+        const writable = await mirror.isWritable();
+        if (!isOk(writable)) return writable;
+        if (!writable) return seq;
+        const applied = isOk(decoded.status)
+          ? await mirror.drainAndClose()
+          : await mirror.abortWithStatus(decoded.status);
+        if (!isOk(applied)) return applied;
+        return seq;
+      }
+
       if (special !== null) {
         if (!isOk(chunk) || !isStatusChunk(chunk)) {
           return invalidArgumentError(

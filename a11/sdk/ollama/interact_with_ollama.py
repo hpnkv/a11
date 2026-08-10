@@ -1,8 +1,12 @@
 # Copyright 2026 The A11 Authors.
 
 import asyncio
+import contextlib
 import dataclasses
 import traceback
+import uuid
+import warnings
+from collections.abc import Callable
 from typing import Any
 
 from absl import logging
@@ -162,11 +166,20 @@ def _ollama_to_normalized(
 
 def _ollama_from_normalized(
     message: llm.NormalizedMessage,
+    resolve_call_name: Callable[[str], str | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate a normalized message into one or more Ollama messages.
 
     Text and images fold into a single message; each tool result becomes its
     own ``role: "tool"`` message, as Ollama expects.
+
+    Ollama identifies a tool result by *name*, where every other backend
+    identifies it by the id of the call it answers — so a result bridged from
+    one of them arrives with an id and no name. ``resolve_call_name`` is what
+    turns that id back into the name the model called, from the tool calls seen
+    earlier in this conversation; without it a Claude conversation continued on
+    Ollama sends `tool_name: "toolu_01..."`, a name the model never saw and
+    cannot match to anything it asked for.
     """
     role = "assistant" if message.role == llm.Role.ASSISTANT else "user"
     text_chunks: list[str] = []
@@ -190,11 +203,14 @@ def _ollama_from_normalized(
                 }
             )
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
+            name = part.name
+            if not name and part.call_id and resolve_call_name is not None:
+                name = resolve_call_name(part.call_id)
             tool_results.append(
                 {
                     "role": "tool",
                     "content": part.content or "",
-                    "tool_name": part.call_id or "",
+                    "tool_name": name or part.call_id or "",
                 }
             )
 
@@ -228,11 +244,15 @@ class Conversation:
     _interactions: list[llm.Interaction]
     _messages: list[dict[str, Any]]
     _system_instructions: list[str]
+    _call_names: dict[str, str]
 
     def __init__(self):
         self._interactions = []
         self._messages = []
         self._system_instructions = []
+        # Call id → tool name, learned from the tool calls of every foreign
+        # assistant turn fed in, so their results can be named for Ollama.
+        self._call_names = {}
 
     @property
     def last_interaction_id(self):
@@ -312,8 +332,16 @@ class Conversation:
         if backend is not None and backend != llm.Backend.OLLAMA:
             # Produced by another backend: bridge it through the normalized
             # representation and leave the interaction's own content untouched.
+            normalized = llm.normalize_interaction(interaction)
+            for part in normalized.parts:
+                if (
+                    part.type == llm.NormalizedContentType.TOOL_CALL
+                    and part.id
+                    and part.name
+                ):
+                    self._call_names[part.id] = part.name
             messages = _ollama_from_normalized(
-                llm.normalize_interaction(interaction)
+                normalized, self._call_names.get
             )
         else:
             # Tagged as ours, or untagged (optimistically treated as native).
@@ -383,15 +411,23 @@ class _StreamAccumulator:
     (their arguments already parsed) rather than as a partial-JSON stream, so
     they are simply collected as they appear.
 
-    Ollama tool calls carry no id of their own, so one is synthesised. The
-    ``base_id`` offset makes those ids unique across the whole conversation:
-    each tool-calling round runs its own accumulator, and a fresh counter per
-    round would reuse ``call_0`` every round. Colliding ids let the second
-    round's nested tool action resolve to the first round's (already-closed)
-    one, so feeding its inputs fails with "ChunkStoreWriter is closed".
+    Ollama tool calls carry no id of their own, so one is synthesised — and a
+    synthesised id has to be unique for the life of the *session*, not of this
+    turn. The runner gives a call's nested action that id verbatim, and an
+    action's node ids are `"<id>#<port>"` in the session's node map, so a
+    repeated id resolves to an earlier call's already-closed nodes: feeding the
+    new call's inputs then fails with "ChunkStoreWriter is closed", and the model
+    is handed that instead of a tool result.
+
+    Hence both halves of an id. ``prefix`` is drawn once per turn, which is what
+    keeps the second user message in a conversation from reusing the first's
+    ``call_0`` — the counter alone is per-invocation and resets. ``base_id``
+    then keeps the rounds *within* a turn apart, each of which runs its own
+    accumulator.
     """
 
-    def __init__(self, base_id: int = 0):
+    def __init__(self, prefix: str, base_id: int = 0):
+        self._prefix = prefix
         self._base_id = base_id
         self._content = ""
         self._thinking = ""
@@ -411,7 +447,7 @@ class _StreamAccumulator:
             self._tool_calls.append(
                 _ToolCall(
                     name=function.name,
-                    id=f"call_{index}",
+                    id=f"{self._prefix}_{index}",
                     params=dict(function.arguments or {}),
                 )
             )
@@ -724,21 +760,71 @@ def _build_options(config: CreateChatConfig) -> dict[str, Any]:
     return options
 
 
+class _PassthroughTool(ollama.Tool):
+    """A tool whose JSON Schema reaches the model the way it was written.
+
+    The Ollama SDK's own `Tool` is not a JSON Schema carrier: a parameter is a
+    `Tool.Function.Parameters.Property`, which has `type`, `items`,
+    `description` and `enum` and nothing else. Hand it a schema with an object
+    parameter and the object's *own* `properties` and `required` are dropped on
+    validation, without a word — so an action whose input port takes
+    `{"query", "max_results"}` reaches the model as an opaque
+    `request: {"type": "object"}`, and the model has to guess at fields it was
+    never shown. Every other backend gets the schema `collect_tools` produced.
+
+    Overriding `function` with an unconstrained type is what stops that: the
+    client validates each tool with `Tool.model_validate`, which passes a
+    subclass instance straight through instead of coercing it, so the schema is
+    serialized as given.
+
+    Pydantic still notices that the value is not a `Function` while serializing
+    the request, and says so — see [_serializing_a_raw_tool_schema][]. The
+    payload is unaffected either way.
+    """
+
+    function: Any = None
+
+
+@contextlib.contextmanager
+def _serializing_a_raw_tool_schema():
+    """Silence the one warning `_PassthroughTool` is expected to produce.
+
+    Handing pydantic a value that is deliberately not of the declared type earns
+    a `PydanticSerializationUnexpectedValue` warning per serialized tool, from a
+    stack that varies enough that the interpreter's "once per location" rule does
+    not collapse them: a handful of lines of pydantic internals in the log for
+    every turn, describing something already known and intended.
+
+    Narrow on purpose — this filter matches that warning's own text, so anything
+    else pydantic or the SDK has to say still comes through. The window is the
+    `chat` call itself, which builds and serializes the request without ever
+    suspending, so no other task can run inside it (`warnings` filters are
+    process-global, and this would otherwise not be ours to change).
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Pydantic serializer warnings",
+            category=UserWarning,
+        )
+        yield
+
+
 def _build_tools(
     requested_tools: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> list[ollama.Tool]:
     """Convert A11 tool definitions into Ollama function tools."""
-    tools: list[dict[str, Any]] = []
+    tools: list[ollama.Tool] = []
     for tool in requested_tools:
         tools.append(
-            {
-                "type": "function",
-                "function": {
+            _PassthroughTool(
+                type="function",
+                function={
                     "name": tool["name"],
                     "description": tool.get("description", ""),
                     "parameters": tool.get("input_schema", {}),
                 },
-            }
+            )
         )
     return tools
 
@@ -783,24 +869,17 @@ async def interact_with_ollama(action: a11.Action):
 
     client = get_ollama_client(base_url, api_key)
 
-    allowed_patterns = llm.get_allowed_llm_action_patterns(action)
-    requested_tools = [
-        tool async for tool in action["tools"].iter_with_deadline(deadline)
-    ]
-    tools = []
-    for tool in requested_tools:
-        if not llm.action_name_matches_allowed(tool["name"], allowed_patterns):
-            logging.warning(
-                "Tool `%s` was requested, but isn't allowed.", tool["name"]
-            )
-            continue
-        tools.append(tool)
+    tools = await runner.collect_tools(action, deadline)
     ollama_tools = _build_tools(tools)
     options = _build_options(config)
 
-    # Tool-call ids must be unique across the whole conversation, not just
-    # within one round (see `_StreamAccumulator`), so the counter lives out here
-    # and advances by the number of tool calls each round produces.
+    # Tool-call ids must be unique across the whole session, not just within one
+    # round or one turn (see `_StreamAccumulator`). The counter lives out here so
+    # it advances by the number of tool calls each round produces, and the prefix
+    # is drawn per turn so the *next* user message in this conversation cannot
+    # collide with this one's calls — a caller keeps one session for a whole
+    # conversation, and every turn's handler starts this counter at zero.
+    call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     try:
         while True:
@@ -812,22 +891,25 @@ async def interact_with_ollama(action: a11.Action):
             messages.extend(conversation.messages)
 
             try:
-                stream = await client.chat(
-                    model=model,
-                    messages=messages,
-                    tools=ollama_tools or None,
-                    stream=True,
-                    think=config.think,
-                    format="json" if config.json_output else None,
-                    options=options,
-                    keep_alive=config.keep_alive,
-                )
+                with _serializing_a_raw_tool_schema():
+                    stream = await client.chat(
+                        model=model,
+                        messages=messages,
+                        tools=ollama_tools or None,
+                        stream=True,
+                        think=config.think,
+                        format="json" if config.json_output else None,
+                        options=options,
+                        keep_alive=config.keep_alive,
+                    )
             except ollama.ResponseError as exc:
                 raise Status(
                     code=StatusCode.INTERNAL, message=str(exc)
                 ).to_exception() from exc
 
-            accumulator = _StreamAccumulator(next_tool_call_id)
+            accumulator = _StreamAccumulator(
+                call_id_prefix, next_tool_call_id
+            )
             snapshot = None
 
             async for chunk in stream:
@@ -893,7 +975,11 @@ async def interact_with_ollama(action: a11.Action):
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
-                    llm.BACKEND_METADATA_KEY: str(llm.Backend.OLLAMA).encode()
+                    llm.BACKEND_METADATA_KEY: str(llm.Backend.OLLAMA).encode(),
+                    # What the tools said to the user, kept beside their
+                    # results rather than in them: metadata is the one part of
+                    # an interaction no backend turns into provider content.
+                    **executed.log_metadata(),
                 },
                 content=[
                     a11.to_chunk(

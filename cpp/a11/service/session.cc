@@ -92,16 +92,6 @@ absl::Status CallbackException(const std::exception& error) {
   return absl::UnknownError(error.what());
 }
 
-nlohmann::json StatusJson(const absl::Status& status) {
-  absl::StatusOr<nlohmann::json> encoded = StatusToJson(status);
-  if (encoded.ok()) {
-    return std::move(*encoded);
-  }
-  return nlohmann::json{{"code", static_cast<int>(status.code())},
-                        {"message", std::string(status.message())},
-                        {"details", nlohmann::json::array()}};
-}
-
 }  // namespace
 
 struct Session::StreamState {
@@ -540,7 +530,7 @@ a11::Task Session::AwaitAllActions(absl::Duration timeout) {
     }
     nlohmann::json details = nlohmann::json::array();
     for (const absl::Status& failure : failures) {
-      details.push_back({{"status", StatusJson(failure)}});
+      details.push_back({{"status", StatusToJsonOrEmptyDetails(failure)}});
     }
     return MakeStatus(
         code, absl::StrCat(failures.size(), " Actions completed with errors."),
@@ -599,6 +589,34 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
     const data::Chunk* chunk = std::get_if<data::Chunk>(&fragment.data);
     std::shared_ptr<actions::Action> action;
     std::optional<absl::Status> protocol_status;
+
+    // A closure marker reports that the peer drained the node and closed its
+    // write half; it carries no value, so it is applied to the local mirror
+    // rather than stored. This is checked before the reserved status nodes so
+    // that closing an Action's status node is not mistaken for a second status
+    // value for that Action.
+    if (chunk != nullptr && actions::IsCloseStatusChunk(*chunk)) {
+      ABSL_ASSIGN_OR_RETURN(absl::Status closed,
+                            actions::StatusFromChunk(*chunk));
+      const std::uint32_t seq = fragment.seq.value_or(0);
+      // Nothing is lost by dropping a marker for a node that no longer exists,
+      // whereas creating one would resurrect a released node.
+      ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> mirror,
+                            self->GetNodeMap()->GetIfExists(fragment.id));
+      if (mirror == nullptr) {
+        return seq;
+      }
+      ABSL_ASSIGN_OR_RETURN(bool writable, mirror->IsWritable().Await());
+      if (!writable) {
+        return seq;
+      }
+      const a11::Task applied =
+          closed.ok() ? mirror->DrainAndClose()
+                      : mirror->AbortWithStatus(std::move(closed));
+      ABSL_RETURN_IF_ERROR(applied.Await().status());
+      return seq;
+    }
+
     if (special.has_value()) {
       if (!chunk || !actions::IsStatusChunk(*chunk)) {
         return absl::InvalidArgumentError(
@@ -860,9 +878,10 @@ a11::Task Session::DispatchWireMessage(
           if (failure.status.code() != code) {
             code = absl::StatusCode::kUnknown;
           }
-          details.push_back({{"element_type", failure.element_type},
-                             {"element_index", failure.element_index},
-                             {"status", StatusJson(failure.status)}});
+          details.push_back(
+              {{"element_type", failure.element_type},
+               {"element_index", failure.element_index},
+               {"status", StatusToJsonOrEmptyDetails(failure.status)}});
         }
         return MakeStatus(
             code,

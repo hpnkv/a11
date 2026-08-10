@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "The status chunk, once, for every language.",
+    "A11 carries a status as data in exactly one shape: a chunk of `mimetype`",
+    "whose payload is the concatenated-MessagePack (code, message, details)",
+    "record. Action dispatch/completion statuses, node aborts and the closure",
+    "marker a drained writer tees all use this one shape, so the encoders must",
+    "agree byte for byte. Each language builds these cases with its own helper",
+    "(a11.actions.status_to_chunk, a11::data::MakeStatusChunk,",
+    "js/src/action_schema.ts statusToChunk, Kotlin ActionSchema.statusToChunk)",
+    "and asserts them against this file, so a divergence fails a test instead",
+    "of a conversation.",
+    "`close_attribute` is the chunk-metadata attribute that marks a status as a",
+    "node closure marker rather than a value. It rides on the metadata, so a",
+    "marker's payload is byte-identical to the same status written plainly.",
+    "`base64` is that payload."
+  ],
+  "mimetype": "application/x-a11-status",
+  "close_attribute": "a11-close",
+  "cases": [
+    {
+      "name": "ok",
+      "code": 0,
+      "message": "",
+      "details": [],
+      "base64": "AKCQ"
+    },
+    {
+      "name": "failure_with_details",
+      "code": 15,
+      "message": "boom",
+      "details": [{ "reason": "disk" }],
+      "base64": "D6Rib29tkYGmcmVhc29upGRpc2s="
+    }
+  ]
+}

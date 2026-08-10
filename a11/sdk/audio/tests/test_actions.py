@@ -12,6 +12,7 @@ import asyncio
 import pytest
 
 import a11
+from a11.data import serial_tags, types
 from a11.data.serialization import get_global_serialization_registry
 from a11.status import StatusCode, StatusException
 from a11.sdk.audio import actions
@@ -34,15 +35,119 @@ def _registry() -> a11.ActionRegistry:
     return registry
 
 
-def test_register_installs_three_actions() -> None:
+_NAMES_IN_PROTOCOL_ORDER = (
+    actions.LIST_AUDIO_INPUTS,
+    actions.CAPTURE_AUDIO,
+    actions.CAPTURE_TRANSCRIPTION,
+    actions.TRANSCRIBE_AUDIO,
+)
+
+
+def test_register_installs_every_action() -> None:
     registry = _registry()
-    for name in (
-        actions.LIST_AUDIO_INPUTS,
-        actions.CAPTURE_AUDIO,
-        actions.CAPTURE_TRANSCRIPTION,
-    ):
+    for name in _NAMES_IN_PROTOCOL_ORDER:
         assert registry.is_registered(name)
         registry.get_schema(name).validate()  # raises if invalid
+
+
+def test_exported_pairs_cover_every_action_in_order() -> None:
+    assert tuple(
+        schema.name for schema, _ in actions.AUDIO_ACTIONS
+    ) == _NAMES_IN_PROTOCOL_ORDER
+    for schema, handler in actions.AUDIO_ACTIONS:
+        schema.validate()  # raises if invalid
+        assert isinstance(handler, a11.actions.NativeActionHandler)
+        assert handler  # a registered action always has a handler
+
+
+def test_exported_schema_matches_the_registered_one() -> None:
+    registered = _registry().get_schema(actions.CAPTURE_AUDIO)
+    exported = actions.CAPTURE_AUDIO_SCHEMA
+    assert exported.name == registered.name
+    assert set(exported.inputs) == set(registered.inputs)
+    assert set(exported.outputs) == set(registered.outputs)
+    assert (
+        exported.outputs["audio"].typeinfo
+        is registered.outputs["audio"].typeinfo
+    )
+
+
+def test_can_register_a_single_exported_action() -> None:
+    registry = a11.ActionRegistry()
+    registry.register(
+        actions.TRANSCRIBE_AUDIO,
+        actions.TRANSCRIBE_AUDIO_SCHEMA,
+        actions.TRANSCRIBE_AUDIO_HANDLER,
+    )
+    assert registry.is_registered(actions.TRANSCRIBE_AUDIO)
+    # Registering one must not drag the others in.
+    assert not registry.is_registered(actions.CAPTURE_AUDIO)
+
+
+def test_get_handler_returns_a_reusable_native_handle() -> None:
+    registry = _registry()
+    handler = registry.get_handler(actions.CAPTURE_AUDIO)
+    assert isinstance(handler, a11.actions.NativeActionHandler)
+    assert handler
+    # The handle a registry hands back is accepted wherever a handler is taken.
+    other = a11.ActionRegistry()
+    other.register(actions.CAPTURE_AUDIO, actions.CAPTURE_AUDIO_SCHEMA, handler)
+    assert other.is_registered(actions.CAPTURE_AUDIO)
+
+
+def test_native_handler_binds_to_an_action() -> None:
+    action = a11.Action(actions.LIST_AUDIO_INPUTS_SCHEMA).bind_handler(
+        actions.LIST_AUDIO_INPUTS_HANDLER
+    )
+    assert action is not None
+
+
+@pytest.mark.asyncio
+async def test_exported_pair_runs_end_to_end() -> None:
+    """A native handler registered from Python actually runs.
+
+    ``list_audio_inputs`` only enumerates devices, so this is headless-safe: a
+    machine with no inputs yields an empty stream rather than an error. Read at
+    the chunk level -- ``AudioDeviceInfo`` has no Python deserializer yet (see
+    ``test_device_info_has_no_python_codec``), and what this asserts is that the
+    native handler ran and emitted correctly tagged output.
+    """
+    registry = a11.ActionRegistry()
+    registry.register(
+        actions.LIST_AUDIO_INPUTS,
+        actions.LIST_AUDIO_INPUTS_SCHEMA,
+        actions.LIST_AUDIO_INPUTS_HANDLER,
+    )
+    action = registry.make_action(actions.LIST_AUDIO_INPUTS)
+    action.run()
+    chunks = []
+    while (chunk := await action["inputs"].next_chunk()) is not None:
+        if not chunk.is_null():
+            chunks.append(chunk)
+    await action.wait()
+    for chunk in chunks:
+        assert chunk.metadata.mimetype == (
+            f"application/json;type={serial_tags.AUDIO_DEVICE_INFO}"
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "AudioDeviceInfo has a wire tag but no Python codec, so"
+        " list_audio_inputs output cannot be deserialized. Registering one"
+        " means mapping its Duration latency fields to the seconds-as-double"
+        " form A11ToJson(DeviceInfo) writes. Drop this marker once it exists."
+    ),
+)
+def test_device_info_is_deserializable() -> None:
+    chunk = types.Chunk()
+    chunk.metadata = types.ChunkMetadata(
+        mimetype=f"application/json;type={serial_tags.AUDIO_DEVICE_INFO}"
+    )
+    chunk.data = b'{"index": 0, "name": "Test Microphone"}'
+    decoded = get_global_serialization_registry().from_chunk(chunk, "", None)
+    assert decoded.name == "Test Microphone"
 
 
 def test_list_audio_inputs_typeinfo() -> None:

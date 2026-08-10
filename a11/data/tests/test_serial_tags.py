@@ -4,8 +4,8 @@
 
 `testdata/serial_tags.json` is the one table every language answers to. These
 tests assert Python's constants against it, that the types actually carrying
-those tags agree, and that a payload written before the tags were canonicalised
-still reads — the three ways this contract can quietly rot.
+those tags agree, and that the tags reach the wire in the shape the other
+languages read — the three ways this contract can quietly rot.
 """
 
 import base64
@@ -24,7 +24,12 @@ from a11.sdk.llm import (
     Role,
     UsageMetadata,
 )
-from a11.status import Status
+from a11.actions import (
+    is_close_status_chunk,
+    status_from_chunk,
+    status_to_chunk,
+)
+from a11.status import Status, StatusCode
 
 _TESTDATA = pathlib.Path(__file__).resolve().parents[3] / "testdata"
 _FIXTURE = _TESTDATA / "serial_tags.json"
@@ -107,6 +112,45 @@ def test_core_types_are_pinned_to_their_canonical_tag():
     assert CORE_TYPE_TAGS[Status] == serial_tags.STATUS
 
 
+def _status_chunk_fixture() -> dict:
+    return json.loads((_TESTDATA / "status_chunk.json").read_text())
+
+
+def test_python_writes_the_pinned_status_chunk():
+    """One shape for every status A11 carries as data, in every language."""
+    fixture = _status_chunk_fixture()
+    for case in fixture["cases"]:
+        status = Status(
+            code=StatusCode(case["code"]),
+            message=case["message"],
+            details=case["details"],
+        )
+        chunk = status_to_chunk(status)
+
+        assert chunk.get_mimetype() == fixture["mimetype"], case["name"]
+        assert base64.b64encode(bytes(chunk.data)).decode() == case["base64"], (
+            case["name"]
+        )
+        assert not is_close_status_chunk(chunk), case["name"]
+        assert status_from_chunk(chunk) == status, case["name"]
+
+
+def test_a_closure_marker_only_adds_the_pinned_attribute():
+    """The marker rides on metadata: its payload is the plain status."""
+    fixture = _status_chunk_fixture()
+    status = Status.ok()
+
+    marker = status_to_chunk(status, closing=True)
+
+    assert marker.get_mimetype() == fixture["mimetype"]
+    assert bytes(marker.data) == bytes(status_to_chunk(status).data)
+    assert is_close_status_chunk(marker)
+    assert dict(marker.metadata.attributes) == {
+        fixture["close_attribute"]: b"1"
+    }
+    assert status_from_chunk(marker) == status
+
+
 def test_a_subclass_does_not_inherit_its_base_tag():
     """Inheriting a tag would make a subclass serialize as its base."""
 
@@ -116,22 +160,75 @@ def test_a_subclass_does_not_inherit_its_base_tag():
     assert _declared_serial_tag(Narrower) is None
 
 
-def test_the_canonical_tags_reach_the_wire():
+def _keys(payload: object) -> set[str]:
+    """Every mapping key anywhere in a decoded payload."""
+    if isinstance(payload, dict):
+        return set(payload) | {
+            key for item in payload.values() for key in _keys(item)
+        }
+    if isinstance(payload, list):
+        return {key for item in payload for key in _keys(item)}
+    return set()
+
+
+def test_a_serialized_interaction_carries_no_tags():
+    """The model's own fields say what everything is; nothing repeats it.
+
+    The chunk's `;type=` parameter names the payload, and from there every
+    nested value sits in a field whose declared type identifies it -- `content`
+    is a list of Chunks, `status` a Status. A tag anywhere inside would be
+    saying a second time what the schema already said. A nested chunk holding
+    plain JSON says so and stops there: `application/json`, with no `;type=`
+    to repeat what the format already spells out.
+    """
     interaction = Interaction(
         content=[a11.to_chunk("hi")],
-        action_configs={"x": A11ActionConfig()},
+        action_configs={"x": A11ActionConfig(peer=A11Peer())},
         usage_metadata=UsageMetadata(input_tokens=1),
+        backend_specific_metadata={"stop": b"\xff\x00"},
     )
     chunk = a11.to_chunk(interaction)
 
-    expected = f"application/json;type={serial_tags.INTERACTION}"
-    assert chunk.get_mimetype() == expected
+    assert chunk.get_mimetype() == (
+        f"application/json;type={serial_tags.INTERACTION}"
+    )
     payload = json.loads(bytes(chunk.data))
-    assert payload["content"][0]["class_name"] == serial_tags.CHUNK
-    assert payload["status"]["class_name"] == serial_tags.STATUS
-    config = payload["action_configs"]["x"]
-    assert config["class_name"] == serial_tags.ACTION_CONFIG
-    assert payload["usage_metadata"]["class_name"] == serial_tags.USAGE_METADATA
+    tagged = {key for key in _keys(payload) if key.startswith("!")}
+    assert not tagged, f"tags survived in a declared model: {tagged}"
+
+    # Bare, and rebuilt from the annotations alone.
+    assert payload["content"][0] == {
+        "data": "ImhpIg==",
+        "metadata": {"mimetype": "application/json"},
+    }
+    assert payload["status"] == {"code": 0, "message": ""}
+    assert payload["action_configs"]["x"]["peer"]["identity"] == "$sender"
+
+    decoded = a11.from_chunk(chunk, "", Interaction)
+    assert isinstance(decoded.content[0], a11.Chunk)
+    assert a11.from_chunk(decoded.content[0]) == "hi"
+    assert isinstance(decoded.usage_metadata, UsageMetadata)
+    assert isinstance(decoded.action_configs["x"].peer, A11Peer)
+    # Base64, not UTF-8: a byte field that is not text has to survive too.
+    assert decoded.backend_specific_metadata["stop"] == b"\xff\x00"
+
+
+def test_no_key_in_a_payload_is_ever_read_as_a_type():
+    """A payload is data. Nothing in it names a type, so nothing is escaped.
+
+    A11 once wrote a nested value's type as the sole key of a one-entry object
+    (`{"!a11.Chunk": {...}}`), which meant a caller's own mapping of that shape
+    had to be escaped on the way out. The type lives in the chunk's metadata
+    now, so these go out byte-for-byte as written.
+    """
+    for value in (
+        {f"!{serial_tags.CHUNK}": "not one"},
+        {"!whatever": [1, 2]},
+        {"!a": 1, "b": 2},
+    ):
+        chunk = a11.to_chunk(value)
+        assert json.loads(bytes(chunk.data)) == value
+        assert a11.from_chunk(chunk) == value
 
 
 def test_python_still_writes_the_golden_interaction():
@@ -194,49 +291,7 @@ def test_an_interaction_from_another_language_validates():
         "role": "user",
         "content": [{"type": "text", "text": golden["text"]}],
     }
-    assert a11.from_chunk(decoded.system_instructions[0]) == (
-        golden["system_prompt"]
+    assert (
+        a11.from_chunk(decoded.system_instructions[0])
+        == (golden["system_prompt"])
     )
-
-
-def test_a_payload_written_before_the_rename_still_reads():
-    """Peers on the previous release wrote bare and module-qualified names."""
-    legacy = {
-        "id": "x",
-        "role": "user",
-        "status": {
-            "__a11_serialized_type__": "a11.value",
-            "value": {"code": 0, "message": ""},
-            "class_name": "Status",
-        },
-        "content": [
-            {
-                "__a11_serialized_type__": "a11.value",
-                "value": {
-                    "data": {
-                        "__a11_serialized_type__": "bytes",
-                        "value": "ImhpIg==",
-                    },
-                    "metadata": {"mimetype": "application/json;type=string"},
-                },
-                "class_name": "Chunk",
-            }
-        ],
-        "usage_metadata": {
-            "__a11_serialized_type__": "pydantic",
-            "value": {"input_tokens": 2},
-            "class_name": "a11.sdk.llm.UsageMetadata",
-        },
-    }
-    chunk = a11.Chunk(
-        data=json.dumps(legacy).encode(),
-        metadata=a11.ChunkMetadata(
-            mimetype="application/json;type=a11.sdk.llm.Interaction"
-        ),
-    )
-
-    decoded = a11.from_chunk(chunk, "", Interaction)
-
-    assert isinstance(decoded, Interaction)
-    assert a11.from_chunk(decoded.content[0]) == "hi"
-    assert decoded.usage_metadata.input_tokens == 2

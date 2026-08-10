@@ -186,6 +186,41 @@ test('sessions call an Action with streaming input and output', async () => {
   await closePair(pair.client, pair.server);
 });
 
+test('a drained remote output ends the caller without a final fragment', async () => {
+  const schema = outputSchema('streamer');
+  const serverRegistry = new ActionRegistry();
+  assert.equal(isOk(serverRegistry.register('streamer', schema, async (action) => {
+    const result = await action.getOutput('result');
+    if (!isOk(result)) return result;
+    // Plain puts only: nothing here declares finality, so the caller can only
+    // end on the closure marker the writer tees when the node is drained.
+    const first = await result.put('first');
+    if (!isOk(first)) return first;
+    const second = await result.put('second');
+    return isOk(second) ? okStatus() : second;
+  })), true);
+  const clientRegistry = new ActionRegistry();
+  assert.equal(isOk(clientRegistry.register('streamer', schema)), true);
+  const pair = await sessionPair(serverRegistry, clientRegistry);
+
+  const action = clientRegistry.makeAction('streamer', {
+    nodeMap: pair.client.getNodeMap(),
+    stream: pair.clientStream,
+    session: pair.client,
+  });
+  assert.equal(isOk(action), true);
+  const result = await action.getOutput('result', false);
+  assert.equal(isOk(result), true);
+  assert.equal(isOk(await action.call()), true);
+  assert.equal(isOk(await action.waitForDispatch(2000)), true);
+  assert.equal(await result.next(2000), 'first');
+  assert.equal(await result.next(2000), 'second');
+  assert.equal(await result.next(2000), null);
+  assert.equal(await result.isWritable(), false);
+  assert.equal(isOk(await action.wait(2000)), true);
+  await closePair(pair.client, pair.server);
+});
+
 test('remote dispatch and handler failures remain Action-local statuses', async () => {
   const missingSchema = outputSchema('missing');
   const clientRegistry = new ActionRegistry();

@@ -2,11 +2,15 @@
  * The canonical cross-language serialization tags.
  *
  * A serialized A11 value names its type with a *tag*: the `type` parameter of
- * the chunk's MIME type (`application/json;type=a11.Chunk`), and the
- * `class_name` of a nested `a11.value`/`pydantic` wire object. The tag is what
- * a peer in another language matches on, so the same class must carry the same
- * tag in every implementation — this module is that table for TypeScript, and
- * its siblings hold the identical strings:
+ * the chunk's MIME type (`application/json;type=a11.Chunk`). That is the only
+ * place a type is ever named. Nothing inside the payload repeats it — a
+ * declared model's fields say what they hold, and schemaless data is just data.
+ * A value the format already describes (an object, an array, a string) carries
+ * no tag at all, so a bare `application/json` is a complete description.
+ *
+ * The tag is what a peer in another language matches on, so the same class must
+ * carry the same tag in every implementation — this module is that table for
+ * TypeScript, and its siblings hold the identical strings:
  *
  *   - Python — `a11/data/serial_tags.py` (declared per class with an
  *     `A11_SERIAL_TAG` ClassVar).
@@ -65,37 +69,3 @@ export const AUDIO_CONTROL_EVENT_TAG = 'a11.sdk.AudioControlEvent';
 export const AUDIO_CAPTURE_EVENT_TAG = 'a11.sdk.AudioCaptureEvent';
 export const TRANSCRIPTION_EVENT_TAG = 'a11.sdk.TranscriptionEvent';
 
-/**
- * Tags a peer on the previous release may still write, mapped to the canonical
- * one. Readers accept both; writers only ever emit the canonical tag.
- */
-export const LEGACY_SERIAL_TAGS: Readonly<Record<string, string>> = {
-  // The runtime's own types were identified by their bare Python class name.
-  ChunkMetadata: CHUNK_METADATA_TAG,
-  Chunk: CHUNK_TAG,
-  NodeRef: NODE_REF_TAG,
-  NodeFragment: NODE_FRAGMENT_TAG,
-  Port: PORT_TAG,
-  ActionMessage: ACTION_MESSAGE_TAG,
-  WireMessage: WIRE_MESSAGE_TAG,
-  Status: STATUS_TAG,
-  Time: TIME_TAG,
-  Duration: DURATION_TAG,
-  // SDK models were identified by their module-qualified Python name.
-  'a11.sdk.llm.Interaction': INTERACTION_TAG,
-  'a11.sdk.llm.A11Peer': PEER_TAG,
-  'a11.sdk.llm.A11ActionConfig': ACTION_CONFIG_TAG,
-  'a11.sdk.llm.UsageMetadata': USAGE_METADATA_TAG,
-  'a11.sdk.audio.AudioBuffer': AUDIO_BUFFER_TAG,
-  'a11.sdk.audio.AudioInputOptions': AUDIO_INPUT_OPTIONS_TAG,
-  'a11.sdk.audio.SpeechRecognizerOptions': SPEECH_RECOGNIZER_OPTIONS_TAG,
-  'a11.sdk.audio.AudioDeviceInfo': AUDIO_DEVICE_INFO_TAG,
-  'a11.sdk.audio.AudioControlEvent': AUDIO_CONTROL_EVENT_TAG,
-  'a11.sdk.audio.AudioCaptureEvent': AUDIO_CAPTURE_EVENT_TAG,
-  'a11.sdk.audio.TranscriptionEvent': TRANSCRIPTION_EVENT_TAG,
-};
-
-/** Resolve a tag that may be a historical alias to its canonical form. */
-export function canonicalSerialTag(tag: string): string {
-  return LEGACY_SERIAL_TAGS[tag] ?? tag;
-}

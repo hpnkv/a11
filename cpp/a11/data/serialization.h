@@ -6,10 +6,18 @@
  *
  * a11::data::SerializationRegistry maps a C++ type together with a media type
  * (its representation) to a serializer/deserializer pair, so arbitrary values
- * can be converted to and from ::a11::data::Chunk. A serialized chunk records
- * both halves: its mimetype embeds a stable type tag (for example
- * @c "application/json;type=..."), letting the deserializer recover the
- * intended type. JSON and MessagePack codecs are available as defaults.
+ * can be converted to and from ::a11::data::Chunk.
+ *
+ * A chunk's metadata is the only thing that says how to read its bytes. The
+ * media type gives the representation, and when the value is not one the
+ * format already describes, a @c type parameter names it
+ * (@c "application/json;type=a11.sdk.Interaction"). Nothing inside the payload
+ * repeats that. A bare @c "application/json" is therefore a complete
+ * description: it reads back as a @c nlohmann::json. Asking FromChunk for a
+ * particular @c T is a request the registry makes a best effort to satisfy,
+ * reporting the codec's own error when the data will not fit.
+ *
+ * JSON and MessagePack codecs are available as defaults.
  */
 
 #ifndef A11_DATA_SERIALIZATION_H_
@@ -71,7 +79,9 @@ class SerializationRegistry {
 
   /**
    * @brief Registers a serializer for type @c T and an exact media type.
-   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param type_name Wire tag identifying @c T in serialized chunks. Tags a
+   *        format already describes (@c json, @c object, @c string, ...) are
+   *        not written; the media type alone says as much.
    * @param mimetype Exact media type produced by @p serializer.
    * @param serializer Callable converting a @c T to a Chunk.
    * @return OK on success, or an error (e.g. when @p serializer is empty).
@@ -102,7 +112,9 @@ class SerializationRegistry {
 
   /**
    * @brief Registers a deserializer for type @c T and an exact media type.
-   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param type_name Wire tag identifying @c T in serialized chunks. Tags a
+   *        format already describes (@c json, @c object, @c string, ...) are
+   *        not written; the media type alone says as much.
    * @param mimetype Exact media type accepted by @p deserializer.
    * @param deserializer Callable reconstructing a @c T from a Chunk.
    * @return OK on success, or an error (e.g. when @p deserializer is empty).
@@ -135,7 +147,9 @@ class SerializationRegistry {
    * On failure to register the deserializer, the serializer added by this
    * call is rolled back.
    *
-   * @param type_name Wire tag identifying @c T in serialized chunks.
+   * @param type_name Wire tag identifying @c T in serialized chunks. Tags a
+   *        format already describes (@c json, @c object, @c string, ...) are
+   *        not written; the media type alone says as much.
    * @param mimetype Exact media type for both codecs.
    * @param serializer Callable converting a @c T to a Chunk.
    * @param deserializer Callable reconstructing a @c T from a Chunk.
@@ -175,9 +189,11 @@ class SerializationRegistry {
    * @param chunk Chunk to decode.
    * @param mimetype_patterns Optional ordered media-type selectors (may use
    *        wildcards); the first that matches the chunk is used. When empty,
-   *        the chunk's own mimetype selects the codec.
+   *        the chunk's own mimetype selects the codec. A selector chooses the
+   *        representation only -- @c T is what decides the result type, so the
+   *        chunk's own @c type parameter does not have to agree with it.
    * @return The decoded value, or an error when no codec matches or the
-   *         result is not a @c T.
+   *         data cannot be read as a @c T.
    */
   template <typename T>
   absl::StatusOr<T> FromChunk(

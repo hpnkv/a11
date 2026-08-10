@@ -102,6 +102,12 @@ await action["text"].drain_and_close()            # ...and seal it
 print(await action["result"].consume())           # -> "HELLO"
 ```
 
+Sealing a port carries across the connection as well as locally: closing a
+writer tees a closure marker to the stream, so the peer's copy of that node
+closes too. A handler that streams with plain `put()` and then closes therefore
+ends the caller's read even though it never marked a fragment final — see
+[the node lifecycle](../lifecycles/async-node.md#4-drain-and-close-writes).
+
 ## Putting it together
 
 Do the setup — registering the handler, creating the sessions — **inside your

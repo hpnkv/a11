@@ -26,6 +26,7 @@ from a11.status import Status, StatusCode, StatusException
 from a11._native import ACTION_STATUS_MIMETYPE
 from a11._native import ACTION_STATUS_OUTPUT
 from a11._native import ACTION_DISPATCH_STATUS_OUTPUT
+from a11._native import NativeActionHandler
 
 #: Reserved remote action name used to request cooperative cancellation.
 CANCEL_ACTION_NAME = getattr(_native, "CANCEL_ACTION_NAME", "__cancel__")
@@ -39,8 +40,13 @@ DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS = getattr(
     _native, "DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS", 64
 )
 
-#: Async/sync application callable invoked by ``Action.run()``.
-ActionHandler = Callable[["Action"], Awaitable[None] | None]
+#: Async/sync application callable invoked by ``Action.run()``, or an opaque
+#: handle to an Action implemented in C++ (see
+#: [NativeActionHandler][a11.actions.action.NativeActionHandler]). Both are
+#: accepted by ``ActionRegistry.register()`` and ``Action.bind_handler()``.
+ActionHandler = (
+    Callable[["Action"], Awaitable[None] | None] | NativeActionHandler
+)
 #: Hook invoked once when cooperative action cancellation is requested.
 OnActionCancelled = Callable[["Action"], Any]
 
@@ -55,6 +61,7 @@ for _schema_type in (
     ActionHeaderSchema,
     ActionSchema,
     ActionSettings,
+    NativeActionHandler,
 ):
     _schema_type.__module__ = __name__
 
@@ -370,19 +377,24 @@ for _schema_type in _ACTION_VALIDATORS:
     _schema_type.__get_pydantic_json_schema__ = classmethod(_action_json_schema)
 
 
-def status_to_chunk(status: Status) -> types.Chunk:
+def status_to_chunk(status: Status, closing: bool = False) -> types.Chunk:
     """Encode an action dispatch/completion status as a typed Chunk.
 
     A11 writes these chunks to its reserved action status output nodes so a
     remote caller can distinguish dispatch acknowledgement from eventual
     completion without losing structured status details.
+
+    With ``closing`` set the chunk is a node lifecycle marker instead of a
+    value: it reports that the producer drained the node and closed its write
+    half with ``status``. A writer tees one of these to its attached streams
+    when it closes, which is how a peer's mirror of the node closes too.
     """
     if not isinstance(status, Status):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message="status must be a Status instance.",
         ).to_exception()
-    return _native.status_to_chunk(status)
+    return _native.status_to_chunk(status, closing)
 
 
 def status_from_chunk(chunk: types.Chunk) -> Status:
@@ -398,6 +410,17 @@ def status_from_chunk(chunk: types.Chunk) -> Status:
 def is_status_chunk(chunk: types.Chunk) -> bool:
     """Return whether ``chunk`` carries A11's action-status mimetype."""
     return isinstance(chunk, types.Chunk) and _native.is_status_chunk(chunk)
+
+
+def is_close_status_chunk(chunk: types.Chunk) -> bool:
+    """Return whether ``chunk`` is a node closure marker.
+
+    Such a chunk reports that the producer drained the node and closed its
+    write half with that status; it is not a value and is never stored.
+    """
+    return isinstance(chunk, types.Chunk) and _native.is_close_status_chunk(
+        chunk
+    )
 
 
 class DefaultHeaders(enum.StrEnum):
@@ -466,7 +489,9 @@ __all__ = [
     "ActionPortSchema",
     "ActionSchema",
     "ActionSettings",
+    "NativeActionHandler",
     "OnActionCancelled",
+    "is_close_status_chunk",
     "is_status_chunk",
     "status_from_chunk",
     "status_to_chunk",

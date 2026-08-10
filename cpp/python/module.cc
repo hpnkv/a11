@@ -13,6 +13,8 @@
 
 #include "a11/data/types.h"
 #include "a11/status.h"
+#include "absl/log/globals.h"
+#include "absl/log/initialize.h"
 #include "python/bindings.h"
 #include "python/casters.h"
 
@@ -42,6 +44,8 @@ void InstallFailureSignalHandler() {
 
 PYBIND11_MODULE(_native, module) {
   InstallFailureSignalHandler();
+  absl::InitializeLog();
+  absl::SetStderrThreshold(absl::LogSeverity::kInfo);
   py::google::ImportStatusModule();
 
   module.doc() = "Native C++ backend for A11";

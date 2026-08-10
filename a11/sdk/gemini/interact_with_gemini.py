@@ -868,18 +868,7 @@ async def interact_with_gemini(action: a11.Action):
 
     client = get_gemini_client(api_key)
 
-    allowed_patterns = llm.get_allowed_llm_action_patterns(action)
-    requested_tools = [
-        tool async for tool in action["tools"].iter_with_deadline(deadline)
-    ]
-    tools = []
-    for tool in requested_tools:
-        if not llm.action_name_matches_allowed(tool["name"], allowed_patterns):
-            logging.warning(
-                "Tool `%s` was requested, but isn't allowed.", tool["name"]
-            )
-            continue
-        tools.append(tool)
+    tools = await runner.collect_tools(action, deadline)
     gemini_tools = _build_tools(tools, config)
     generation_config = _build_generation_config(config)
 
@@ -1049,7 +1038,11 @@ async def interact_with_gemini(action: a11.Action):
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
-                    llm.BACKEND_METADATA_KEY: str(llm.Backend.GEMINI).encode()
+                    llm.BACKEND_METADATA_KEY: str(llm.Backend.GEMINI).encode(),
+                    # What the tools said to the user, kept beside their
+                    # results rather than in them: metadata is the one part of
+                    # an interaction no backend turns into provider content.
+                    **executed.log_metadata(),
                 },
                 content=[
                     a11.to_chunk(

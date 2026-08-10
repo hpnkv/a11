@@ -21,9 +21,31 @@ from typing import ClassVar
 from pydantic import BaseModel, Field, field_validator
 
 import a11
+from a11.sdk.llm import USER_FACING_LOG_PORT
 
 #: Header naming the shell an action should act on.
 SHELL_ID_HEADER = "x-a11-shell-id"
+
+
+def _user_facing_log_port() -> a11.ActionPortSchema:
+    """The port each shell Action narrates its run on, for the user's eyes.
+
+    Every one of the four declares it, so a UI driving these tools can show what
+    a call did -- which shell, which command, what came back -- without parsing
+    the result the model was given. The LLM tool runner drains this port and
+    keeps it out of that result; see
+    [USER_FACING_LOG_PORT][a11.sdk.llm.USER_FACING_LOG_PORT].
+    """
+    return a11.ActionPortSchema(
+        USER_FACING_LOG_PORT,
+        "text/plain",
+        description=(
+            "Narration of this call for the person watching: first line a"
+            " one-sentence summary, the rest markdown detail. Not part of the"
+            " tool result."
+        ),
+        required=False,
+    )
 
 
 class A11ShellExecuteParameters(BaseModel):
@@ -70,6 +92,7 @@ SHELL_START_SCHEMA = a11.ActionSchema(
             unary=True,
             required=True,
         ),
+        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
 )
 
@@ -109,6 +132,7 @@ SHELL_EXECUTE_SCHEMA = a11.ActionSchema(
             description="Output lines produced by the command, if any.",
             required=False,
         ),
+        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
     headers=a11.DEFAULT_ACTION_HEADERS
     | {
@@ -135,6 +159,7 @@ SHELL_LIST_SCHEMA = a11.ActionSchema(
             description="Id of each running shell in the caller's scope.",
             required=False,
         ),
+        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
 )
 
@@ -145,6 +170,9 @@ SHELL_EXIT_SCHEMA = a11.ActionSchema(
         "Terminate a shell started with shell_start, releasing its resources."
         " Fails with NOT_FOUND if no shell with the given id is running."
     ),
+    outputs={
+        USER_FACING_LOG_PORT: _user_facing_log_port(),
+    },
     headers={
         SHELL_ID_HEADER: a11.ActionHeaderSchema(
             SHELL_ID_HEADER,

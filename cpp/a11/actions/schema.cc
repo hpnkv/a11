@@ -13,7 +13,6 @@
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 
-#include "a11/data/msgpack.h"
 #include "a11/data/types.h"
 
 namespace a11::actions {
@@ -114,12 +113,7 @@ absl::Status ActionSchema::MapOutputToJson(std::string output_name,
 }
 
 absl::StatusOr<data::Chunk> StatusToChunk(const absl::Status& status) {
-  ABSL_ASSIGN_OR_RETURN(std::string bytes, data::PackStatus(status));
-  return data::Chunk{
-      .metadata =
-          data::ChunkMetadata{.mimetype = std::string(kActionStatusMimetype)},
-      .data = std::move(bytes),
-  };
+  return data::MakeStatusChunk(status);
 }
 
 absl::StatusOr<absl::Status> StatusFromChunk(const data::Chunk& chunk) {
@@ -129,17 +123,13 @@ absl::StatusOr<absl::Status> StatusFromChunk(const data::Chunk& chunk) {
     result.AssignStatus(std::move(validation));
     return result;
   }
-  if (!IsStatusChunk(chunk)) {
+  if (!data::IsStatusChunk(chunk)) {
     absl::StatusOr<absl::Status> result;
     result.AssignStatus(
         absl::InvalidArgumentError("Chunk does not contain an Action status"));
     return result;
   }
-  return data::UnpackStatus(chunk.data);
-}
-
-bool IsStatusChunk(const data::Chunk& chunk) {
-  return chunk.GetMimetype() == kActionStatusMimetype;
+  return data::StatusFromStatusChunk(chunk);
 }
 
 }  // namespace a11::actions

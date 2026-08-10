@@ -199,6 +199,17 @@ absl::StatusOr<nlohmann::json> StatusToJson(const absl::Status& status) {
   }
 }
 
+nlohmann::json StatusToJsonOrEmptyDetails(const absl::Status& status) {
+  absl::StatusOr<nlohmann::json> encoded = StatusToJson(status);
+  if (encoded.ok()) {
+    return std::move(*encoded);
+  }
+  // Only the details payload can fail to encode, so drop just that.
+  return nlohmann::json{{"code", static_cast<int>(status.code())},
+                        {"message", std::string(status.message())},
+                        {"details", nlohmann::json::array()}};
+}
+
 absl::StatusOr<absl::Status> StatusFromJson(const nlohmann::json& value) {
   try {
     if (!value.is_object() || value.find("code") == value.end() ||

@@ -49,6 +49,7 @@ __all__: list[str] = [
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
     "CANDIDATE",
+    "CLOSE_STATUS_ATTRIBUTE",
     "ChannelFramingOptions",
     "Chunk",
     "ChunkMetadata",
@@ -87,6 +88,7 @@ __all__: list[str] = [
     "LocalChunkStore",
     "MAX_SINGLE_MESSAGE_SIZE",
     "MSGPACK_MIMETYPE",
+    "NativeActionHandler",
     "NodeFragment",
     "NodeMap",
     "NodeRef",
@@ -152,6 +154,7 @@ __all__: list[str] = [
     "WireStream",
     "WireStreamOptions",
     "WireStreamWithRecv",
+    "audio_actions",
     "audio_buffer_from_msgpack",
     "audio_buffer_to_msgpack",
     "audio_device_info",
@@ -159,6 +162,7 @@ __all__: list[str] = [
     "default_audio_input_device",
     "default_redis_client",
     "get_http_header",
+    "is_close_status_chunk",
     "is_half_close_message",
     "is_status_chunk",
     "list_audio_devices",
@@ -934,7 +938,7 @@ class ActionRegistry:
 
     def get_handler(self, action_name: str) -> typing.Any:
         """
-        Return the Python handler registered under the given action name.
+        Return the handler registered under the given action name: the Python callable it was registered with, a NativeActionHandler when the action is implemented in C++, or None when it has no handler.
         """
 
     def get_schema(self, action_name: str) -> ActionSchema:
@@ -1656,13 +1660,26 @@ class AudioCaptureEvent:
     """
 
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
     @staticmethod
     def buffers_dropped(count: typing.SupportsInt) -> AudioCaptureEvent: ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
     @staticmethod
     def started() -> AudioCaptureEvent: ...
     @staticmethod
     def stopped() -> AudioCaptureEvent: ...
-    def __eq__(self, arg0: object) -> bool: ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
     def __init__(
         self, kind: str = "started", dropped: typing.SupportsInt = 0
     ) -> None:
@@ -1671,6 +1688,13 @@ class AudioCaptureEvent:
         """
 
     def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
 
     @property
     def dropped(self) -> int:
@@ -1694,19 +1718,39 @@ class AudioControlEvent:
     """
 
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
     @staticmethod
     def stop() -> AudioControlEvent:
         """
         A stop command that finishes capture gracefully.
         """
 
-    def __eq__(self, arg0: object) -> bool: ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
     def __init__(self, command: str = "stop") -> None:
         """
         Construct a control event.
         """
 
     def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
 
     @property
     def command(self) -> str:
@@ -3655,6 +3699,14 @@ class LocalChunkStore(ChunkStore):
         """
         Create an in-memory ChunkStore identified by `id`. This is the default backing store for an agent running in a single process: all reads and writes stay in local memory yet still return awaitables, so it composes with the same async reader and writer as remote stores.
         """
+
+class NativeActionHandler:
+    """
+    An Action handler implemented in C++, such as one of the audio SDK's. It is an opaque handle rather than something Python calls: pass it wherever a handler is accepted -- ActionRegistry.register(), Action.bind_handler() -- and the native implementation runs directly, without a round trip through the interpreter.
+    """
+
+    def __bool__(self) -> bool: ...
+    def __repr__(self) -> str: ...
 
 class NodeFragment:
     """
@@ -6265,6 +6317,11 @@ class TranscriptionEvent:
     """
 
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    _a11_options_installed: typing.ClassVar[bool] = True
+    @staticmethod
+    def __get_pydantic_core_schema__(option_cls, _source_type, _handler): ...
+    @staticmethod
+    def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
     @staticmethod
     def capture_started() -> TranscriptionEvent: ...
     @staticmethod
@@ -6273,13 +6330,28 @@ class TranscriptionEvent:
     def inference_started() -> TranscriptionEvent: ...
     @staticmethod
     def inference_stopped() -> TranscriptionEvent: ...
-    def __eq__(self, arg0: object) -> bool: ...
+    @staticmethod
+    def model_json_schema(
+        option_cls, **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    @staticmethod
+    def model_validate(option_cls, value: typing.Any, **_: typing.Any): ...
+    def __copy__(self): ...
+    def __deepcopy__(self, _memo): ...
+    def __eq__(self, other: object) -> bool: ...
     def __init__(self, kind: str = "capture_started") -> None:
         """
         Construct a transcription event.
         """
 
     def __repr__(self) -> str: ...
+    def model_copy(
+        self,
+        *,
+        update: collections.abc.Mapping[str, typing.Any] | None = None,
+        deep: bool = False,
+    ): ...
+    def model_dump(self, **_: typing.Any) -> dict[str, typing.Any]: ...
 
     @property
     def kind(self) -> str:
@@ -7928,6 +8000,11 @@ class _StringSchemaMapView:
         Return a view of the map's values.
         """
 
+def audio_actions() -> list:
+    """
+    Return the audio Actions as (name, schema, handler) triples in protocol order, each schema's ports already wired to the matching audio type and their serializers installed. Use these to register a subset, inspect a schema before registering, or hand a handler to Action.bind_handler().
+    """
+
 def audio_buffer_from_msgpack(data: bytes) -> AudioBuffer:
     """
     Decode an AudioBuffer from A11's MessagePack representation.
@@ -7965,6 +8042,11 @@ def default_redis_client() -> RedisClient:
 def get_http_header(headers: typing.Any, name: str) -> typing.Any:
     """
     Look up a header value by name, returning None if it is absent.
+    """
+
+def is_close_status_chunk(chunk: Chunk) -> bool:
+    """
+    Return True when the chunk is a status chunk marking that a node's write half was closed, rather than a status value.
     """
 
 def is_half_close_message(message: WireMessage) -> bool:
@@ -8035,7 +8117,7 @@ def obs_start_span(
 
 def register_audio_actions(registry: ActionRegistry | None) -> None:
     """
-    Register the list_audio_inputs, capture_audio and capture_transcription Actions on `registry`, wiring each port's typeinfo to the matching audio type and ensuring their serializers are installed.
+    Register every audio Action on `registry`, wiring each port's typeinfo to the matching audio type and ensuring their serializers are installed.
     """
 
 def reset_default_redis_client() -> None:
@@ -8057,9 +8139,9 @@ def status_from_chunk(chunk: Chunk) -> typing.Any:
     Decode an absl Status from a data chunk.
     """
 
-def status_to_chunk(status: typing.Any) -> Chunk:
+def status_to_chunk(status: typing.Any, closing: bool = False) -> Chunk:
     """
-    Encode an absl Status as a data chunk.
+    Encode an absl Status as a data chunk. With closing=True the chunk is a node closure marker rather than a value: it reports that the producer drained the node and closed its write half with that status.
     """
 
 def validate_http_headers(headers: typing.Any) -> None:
@@ -8080,6 +8162,7 @@ ACTION_STATUS_OUTPUT: str = "__status__"
 CANCEL_ACTION_HEADER: str = "__action"
 CANCEL_ACTION_NAME: str = "__cancel__"
 CANDIDATE: SignallingMessageType
+CLOSE_STATUS_ATTRIBUTE: str = "a11-close"
 DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS: int = 64
 DEFAULT_SSE_CONNECT_ENDPOINT: str = "/connect"
 DEFAULT_SSE_MESSAGE_ENDPOINT: str = "/streams/{id}/message"

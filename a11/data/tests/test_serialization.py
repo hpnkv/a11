@@ -16,35 +16,41 @@ from a11.data.serialization import (
 from a11.status import Status, StatusCode, StatusException
 
 
+#: Values a JSON or MessagePack payload already describes. They travel under a
+#: bare media type, and a reader that only has the bytes still gets them right.
+_GENERIC_VALUES = [
+    {"key": [1, "two", None]},
+    [1, 2.5, True],
+    (1, "two"),
+    1.25,
+    "héllo",
+    True,
+    None,
+]
+
+#: Values the formats have no shape for. The chunk's ``;type=`` is what makes
+#: them recoverable, so each must name itself.
+_TAGGED_VALUES = [
+    {1, 2},
+    frozenset({1, 2}),
+    b"\x00\xff",
+    bytearray(b"\x00\xff"),
+    datetime.datetime(2024, 1, 2, 3, 4, 5, 6, tzinfo=datetime.timezone.utc),
+    datetime.date(2024, 1, 2),
+    datetime.time(3, 4, 5, 6),
+    datetime.timedelta(days=-2, seconds=3, microseconds=4),
+    uuid.UUID("b8a06a7a-b3ac-4b10-b634-9b2c8272e2f8"),
+    timing.Time.from_nanoseconds_since_epoch(-123),
+    timing.infinite_future(),
+    timing.infinite_past(),
+    timing.Duration(-123),
+    timing.infinite_duration(),
+    -timing.infinite_duration(),
+]
+
+
 @pytest.mark.parametrize("mimetype", [JSON_MIMETYPE, MSGPACK_MIMETYPE])
-@pytest.mark.parametrize(
-    "value",
-    [
-        {1: ("value", b"\x00\xff")},
-        [1, {2, 3}],
-        (1, "two"),
-        {1, 2},
-        frozenset({1, 2}),
-        2**100,
-        1.25,
-        "héllo",
-        b"\x00\xff",
-        bytearray(b"\x00\xff"),
-        True,
-        None,
-        datetime.datetime(2024, 1, 2, 3, 4, 5, 6, tzinfo=datetime.timezone.utc),
-        datetime.date(2024, 1, 2),
-        datetime.time(3, 4, 5, 6),
-        datetime.timedelta(days=-2, seconds=3, microseconds=4),
-        uuid.UUID("b8a06a7a-b3ac-4b10-b634-9b2c8272e2f8"),
-        timing.Time.from_nanoseconds_since_epoch(-123),
-        timing.infinite_future(),
-        timing.infinite_past(),
-        timing.Duration(-123),
-        timing.infinite_duration(),
-        -timing.infinite_duration(),
-    ],
-)
+@pytest.mark.parametrize("value", _GENERIC_VALUES + _TAGGED_VALUES)
 def test_default_codecs_round_trip_required_types(mimetype, value):
     registry = SerializationRegistry(register_defaults=True)
 
@@ -60,20 +66,70 @@ def test_default_codecs_round_trip_required_types(mimetype, value):
         bool: "boolean",
         type(None): "null",
     }
-    expected_tag = canonical_tags.get(
+    tag = canonical_tags.get(
         type(value), CORE_TYPE_TAGS.get(type(value), type(value).__name__)
     )
-    assert chunk.get_mimetype() == f"{mimetype};type={expected_tag}"
+    # A tag the format already implies is left off: the media type alone is a
+    # complete description of an object, an array, a string or a number.
+    expected = (
+        mimetype
+        if tag in canonical_tags.values()
+        else f"{mimetype};type={tag}"
+    )
+    assert chunk.get_mimetype() == expected
+
     result = registry.from_chunk(chunk)
     if type(value) is tuple:
-        # A language-neutral JSON array decodes to each language's native
-        # array representation unless the caller explicitly requests tuple.
+        # A JSON array decodes to each language's native array representation
+        # unless the caller explicitly requests tuple.
         assert type(result) is list
         assert result == list(value)
         assert registry.from_chunk(chunk, obj_type=tuple) == value
     else:
         assert type(result) is type(value)
         assert result == value
+
+
+def test_a_bare_mimetype_is_a_complete_description():
+    """Bytes plus a media type are enough; no type parameter is required."""
+    registry = SerializationRegistry(register_defaults=True)
+    chunk = types.Chunk(
+        metadata=types.ChunkMetadata(mimetype=JSON_MIMETYPE),
+        data=b'{"answer":42}',
+    )
+
+    assert registry.from_chunk(chunk) == {"answer": 42}
+    # Naming a type asks for a best effort, not a different parse.
+    assert registry.from_chunk(chunk, obj_type=dict) == {"answer": 42}
+    # Asking for something the data cannot fill is a real error.
+    with pytest.raises(StatusException) as raised:
+        registry.from_chunk(chunk, obj_type=list)
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+
+
+def test_an_unloadable_type_tag_still_yields_the_payload():
+    """A peer that never imported the naming module can still read the data."""
+    registry = SerializationRegistry(register_defaults=True)
+    chunk = types.Chunk(
+        metadata=types.ChunkMetadata(
+            mimetype=f"{JSON_MIMETYPE};type=never.imported.Model"
+        ),
+        data=b'{"answer":42}',
+    )
+
+    assert registry.from_chunk(chunk) == {"answer": 42}
+
+
+def test_messagepack_reports_integers_it_cannot_represent():
+    """JSON carries arbitrary precision; MessagePack says so when it cannot."""
+    registry = SerializationRegistry(register_defaults=True)
+
+    json_chunk = registry.to_chunk(2**100, JSON_MIMETYPE)
+    assert registry.from_chunk(json_chunk) == 2**100
+
+    with pytest.raises(StatusException) as raised:
+        registry.to_chunk(2**100, MSGPACK_MIMETYPE)
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 
 
 class _NestedModel(pydantic.BaseModel):

@@ -587,6 +587,105 @@ async def test_remote_call_has_symmetric_io_and_status():
 
 
 @pytest.mark.asyncio
+async def test_remote_output_ends_on_drain_without_a_final_fragment():
+    """A drained output ends a remote reader, with no final fragment written.
+
+    The handler streams with plain puts and never marks finality, so the only
+    thing that can end the caller's read is the closure marker the writer tees
+    when it closes.
+    """
+    schema = ActionSchema(name="stream", outputs={"lines": _port("lines")})
+
+    async def handler(action: Action) -> None:
+        await _confirm(await action["lines"].put("first"))
+        await _confirm(await action["lines"].put("second"))
+
+    registry = ActionRegistry()
+    registry.register("stream", schema, handler)
+    client_stream, server_stream = InProcessWireStream.create_pair()
+    client = Session(options=_session_options())
+    server = Session(options=_session_options(), action_registry=registry)
+    await asyncio.gather(
+        client.add_stream(client_stream),
+        server.add_stream(server_stream, mode="accept"),
+    )
+
+    try:
+        action = registry.make_action(
+            "stream",
+            node_map=client.node_map,
+            stream=client_stream,
+            session=client,
+        )
+        lines = action["lines"]
+        await action.call()
+
+        assert (await action.wait_for_dispatch()).is_ok()
+        assert await asyncio.wait_for(lines.next_object(str), timeout=5) == (
+            "first"
+        )
+        assert await asyncio.wait_for(lines.next_object(str), timeout=5) == (
+            "second"
+        )
+        # No final fragment was ever written, so this used to hang forever.
+        assert await asyncio.wait_for(lines.next_object(str), timeout=5) is None
+        writer_status = lines.writer.get_status()
+        assert writer_status is not None and writer_status.is_ok()
+        assert await action.wait() is action
+    finally:
+        await _close_session_pair(client, server, client_stream, server_stream)
+
+
+@pytest.mark.asyncio
+async def test_remote_input_mirror_closes_when_the_caller_drains_it():
+    """The same marker travels caller -> receiver, closing an input mirror."""
+    schema = ActionSchema(
+        name="sink",
+        inputs={"lines": _port("lines")},
+        outputs={"count": _port("count")},
+    )
+    seen: list[str] = []
+    drained = asyncio.Event()
+
+    async def handler(action: Action) -> None:
+        while (line := await action["lines"].next_object(str)) is not None:
+            seen.append(line)
+        # Reaching here at all means the mirrored input ended locally.
+        drained.set()
+        await _confirm(await action["count"].put(str(len(seen)), final=True))
+
+    registry = ActionRegistry()
+    registry.register("sink", schema, handler)
+    client_stream, server_stream = InProcessWireStream.create_pair()
+    client = Session(options=_session_options())
+    server = Session(options=_session_options(), action_registry=registry)
+    await asyncio.gather(
+        client.add_stream(client_stream),
+        server.add_stream(server_stream, mode="accept"),
+    )
+
+    try:
+        action = registry.make_action(
+            "sink",
+            node_map=client.node_map,
+            stream=client_stream,
+            session=client,
+        )
+        await action.call()
+        assert (await action.wait_for_dispatch()).is_ok()
+        await _confirm(await action["lines"].put("one"))
+        await _confirm(await action["lines"].put("two"))
+        await action["lines"].drain_and_close()
+
+        await asyncio.wait_for(drained.wait(), timeout=5)
+        assert seen == ["one", "two"]
+        assert await action["count"].consume(str) == "2"
+        assert await action.wait() is action
+    finally:
+        await _close_session_pair(client, server, client_stream, server_stream)
+
+
+@pytest.mark.asyncio
 async def test_remote_handler_error_propagates_status_and_output_abort():
     failure = Status(code=StatusCode.DATA_LOSS, message="remote handler failed")
     schema = ActionSchema(

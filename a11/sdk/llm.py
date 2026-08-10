@@ -479,6 +479,24 @@ class InteractionAdapter(metaclass=abc.ABCMeta):
 
 BACKEND_METADATA_KEY = "backend"
 
+#: Output port carrying a tool's narration of its own run, written for the
+#: person watching rather than for the model.
+#:
+#: An action that declares it is saying "this port is not part of the tool
+#: contract": the LLM tool runner drains it, keeps it out of the tool result the
+#: model is shown, and files it under the call id instead (see
+#: [ExecutedActions][a11.sdk.llm_tools.runner.ExecutedActions]).
+USER_FACING_LOG_PORT = "user_facing_log"
+
+#: Where a turn's user-facing tool logs ride, in the
+#: ``backend_specific_metadata`` of the interaction carrying that turn's tool
+#: results: JSON bytes of ``{tool call id: log}``.
+#:
+#: They live there rather than on a port because that is the one part of an
+#: interaction no backend turns into provider content -- the log must never
+#: reach the model, but a conversation replayed from storage is poorer for it.
+TOOL_LOGS_METADATA_KEY = "tool_logs"
+
 
 class Backend(enum.StrEnum):
     CLAUDE = "claude"

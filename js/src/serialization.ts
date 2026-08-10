@@ -2,14 +2,10 @@ import { decode, encode } from '@msgpack/msgpack';
 
 import { toBytesAsync, utf8Decode, utf8Encode, type AsyncByteSource } from './bytes.js';
 import { Chunk, ChunkMetadata } from './data.js';
-import { canonicalSerialTag } from './serial_tags.js';
 import {
-  WIRE_CLASS_NAME,
-  unwrapWireValue,
   wireValueCodecCount,
   wireValueCodecFor,
   wireValueCodecs,
-  wrapWireValue,
   type Fields,
 } from './wire_values.js';
 import {
@@ -29,21 +25,7 @@ export const MSGPACK_MIMETYPE = 'application/x-msgpack';
 /** Raw byte/blob codec media type. */
 export const OCTET_STREAM_MIMETYPE = 'application/octet-stream';
 
-const WIRE_TAG = '__a11_serialized_type__';
-const WIRE_VALUE = 'value';
 const MIME_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const LEGACY_TYPE_TAGS: Readonly<Record<string, string>> = {
-  dict: 'object',
-  list: 'array',
-  tuple: 'array',
-  int: 'integer',
-  float: 'number',
-  str: 'string',
-  bool: 'boolean',
-  NoneType: 'null',
-  bytearray: 'bytes',
-  frozenset: 'set',
-};
 
 interface ParsedMimetype {
   mediaType: string;
@@ -79,9 +61,20 @@ function parseMimetype(value: string, patterns = false): StatusOr<ParsedMimetype
   return { mediaType, parameters };
 }
 
+/**
+ * Tags a JSON or MessagePack payload already spells out for itself.
+ *
+ * A chunk holding one of these carries no type parameter: writing `;type=object`
+ * on an object says nothing a parser did not already know, and it stops a peer
+ * that only has `application/json` from being understood.
+ */
+const GENERIC_TAGS = new Set([
+  'object', 'array', 'string', 'integer', 'number', 'boolean', 'null',
+]);
+
 function formatMimetype(mimetype: ParsedMimetype, tag: string): string {
   const parameters = [...mimetype.parameters].filter(([name]) => name !== 'type');
-  parameters.push(['type', encodeURIComponent(tag)]);
+  if (!GENERIC_TAGS.has(tag)) parameters.push(['type', encodeURIComponent(tag)]);
   return `${mimetype.mediaType}${parameters.map(([name, value]) => `;${name}=${value}`).join('')}`;
 }
 
@@ -94,9 +87,16 @@ function wildcardMatches(value: string, pattern: string): boolean {
   }
 }
 
+/**
+ * Whether a chunk's own mimetype is one the caller asked for.
+ *
+ * The `type` parameter takes no part: a selector chooses a *representation*,
+ * and which type comes back is settled separately by the tag.
+ */
 function mimetypeMatches(actual: ParsedMimetype, selection: ParsedMimetype): boolean {
   if (!wildcardMatches(actual.mediaType, selection.mediaType)) return false;
   for (const [name, expected] of selection.parameters) {
+    if (name === 'type') continue;
     const value = actual.parameters.get(name);
     if (value === undefined || !wildcardMatches(value, expected)) return false;
   }
@@ -106,17 +106,10 @@ function mimetypeMatches(actual: ParsedMimetype, selection: ParsedMimetype): boo
 function registrationMatches(
   registered: ParsedMimetype,
   selection: ParsedMimetype,
-  tag: string,
 ): boolean {
   if (!wildcardMatches(registered.mediaType, selection.mediaType)) return false;
   for (const [name, expected] of selection.parameters) {
-    if (name === 'type') {
-      let decoded: string;
-      try { decoded = decodeURIComponent(expected); }
-      catch { return false; }
-      if (!wildcardMatches(tag, canonicalTypeTag(decoded))) return false;
-      continue;
-    }
+    if (name === 'type') continue;
     const value = registered.parameters.get(name);
     if (value !== undefined && !wildcardMatches(value, expected)) return false;
   }
@@ -163,33 +156,37 @@ function canonicalJsonTag(value: unknown): string | null {
   return null;
 }
 
-function canonicalTypeTag(tag: string): string {
-  // Two generations of alias: the Python type names JSON-native values used to
-  // carry, and the bare/module-qualified names A11's own types carried before
-  // the tags were unified across languages.
-  return LEGACY_TYPE_TAGS[tag] ?? canonicalSerialTag(tag);
-}
-
-function wireTag(name: string, value: unknown): Record<string, unknown> {
-  return { [WIRE_TAG]: name, [WIRE_VALUE]: value };
-}
-
-function toWire(value: unknown, binary: boolean, topLevel = false, seen = new Set<object>()): StatusOr<unknown> {
+/**
+ * Encode `value` as a JSON- or MessagePack-ready tree.
+ *
+ * Nothing here is tagged. A `Uint8Array` becomes base64 (or, in MessagePack,
+ * real bytes), a `Date` becomes an ISO string, a `Set` becomes an array —
+ * exactly what the format can say, and no more. Recovering the original type is
+ * the reader's job, and it does that from the chunk's `;type=`.
+ */
+function toWire(
+  value: unknown,
+  binary: boolean,
+  seen = new Set<object>(),
+): StatusOr<unknown> {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return value;
-    return wireTag('float', Number.isNaN(value) ? 'nan' : value > 0 ? '+inf' : '-inf');
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint') {
+    // JSON writes an exact integer literal; MessagePack has nowhere to put one
+    // wider than 64 bits, and says so rather than quietly re-spelling it.
+    if (!binary) return value;
+    if (value < -(2n ** 63n) || value > 2n ** 64n - 1n) {
+      return invalidArgumentError(
+        'MessagePack cannot represent integers outside the 64-bit range; use JSON for arbitrary-precision integers.',
+      );
+    }
+    return value;
   }
-  if (typeof value === 'bigint') return wireTag('bigint', value.toString());
-  if (value instanceof Uint8Array) {
-    if (topLevel && binary) return value;
-    const encoded = binary ? value : bytesToBase64(value);
-    return wireTag('bytes', encoded);
-  }
-  if (value instanceof ArrayBuffer) return toWire(new Uint8Array(value), binary, topLevel, seen);
+  if (value instanceof Uint8Array) return binary ? value : bytesToBase64(value);
+  if (value instanceof ArrayBuffer) return toWire(new Uint8Array(value), binary, seen);
   if (value instanceof Date) {
     if (!Number.isFinite(value.getTime())) return invalidArgumentError('Cannot serialize an invalid Date.');
-    return topLevel ? value.toISOString() : wireTag('datetime', value.toISOString());
+    return value.toISOString();
   }
   if (typeof value !== 'object') {
     return invalidArgumentError(`Values of type ${typeof value} cannot be serialized by the default codecs.`);
@@ -197,54 +194,38 @@ function toWire(value: unknown, binary: boolean, topLevel = false, seen = new Se
   if (seen.has(value)) return invalidArgumentError('Cyclic values cannot be serialized.');
   seen.add(value);
   try {
-    if (Array.isArray(value)) {
+    if (Array.isArray(value) || value instanceof Set) {
       const result: unknown[] = [];
       for (const item of value) {
-        const encoded = toWire(item, binary, false, seen);
+        const encoded = toWire(item, binary, seen);
         if (!isOk(encoded)) return encoded;
         result.push(encoded);
       }
       return result;
     }
-    if (value instanceof Set) {
-      const result: unknown[] = [];
-      for (const item of value) {
-        const encoded = toWire(item, binary, false, seen);
-        if (!isOk(encoded)) return encoded;
-        result.push(encoded);
-      }
-      return topLevel ? result : wireTag('set', result);
-    }
     if (value instanceof Map) {
-      const pairs: unknown[] = [];
+      const result: Record<string, unknown> = {};
       for (const [key, item] of value) {
-        const encodedKey = toWire(key, binary, false, seen);
-        if (!isOk(encodedKey)) return encodedKey;
-        const encodedValue = toWire(item, binary, false, seen);
-        if (!isOk(encodedValue)) return encodedValue;
-        pairs.push([encodedKey, encodedValue]);
+        const encoded = toWire(item, binary, seen);
+        if (!isOk(encoded)) return encoded;
+        result[String(key)] = encoded;
       }
-      return wireTag('map', pairs);
+      return result;
     }
-    // A registered class -- a Chunk in an interaction's content, a Status, an
-    // SDK model -- is written as a tagged object naming its type, so the peer
-    // can rebuild it rather than receive an anonymous bag of fields. At the top
-    // level the chunk's own `;type=` parameter already says what this is, so the
-    // fields go out bare.
+    // A registered class — a Chunk, a Status, an SDK model — is written as its
+    // own fields. The chunk's `;type=` says which class produced them.
     const wireValue = wireValueCodecFor(value);
     if (wireValue !== null) {
       const dumped = wireValue.dump(value);
       if (!isOk(dumped)) return dumped;
-      const encoded = toWire(dumped, binary, true, seen);
-      if (!isOk(encoded)) return encoded;
-      return topLevel ? encoded : wrapWireValue(wireValue, encoded);
+      return toWire(dumped, binary, seen);
     }
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
       return invalidArgumentError(`Objects of type ${value.constructor?.name ?? 'unknown'} cannot be serialized by the default codecs.`);
     }
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      const encoded = toWire(item, binary, false, seen);
+      const encoded = toWire(item, binary, seen);
       if (!isOk(encoded)) return encoded;
       result[key] = encoded;
     }
@@ -252,80 +233,6 @@ function toWire(value: unknown, binary: boolean, topLevel = false, seen = new Se
   } finally {
     seen.delete(value);
   }
-}
-
-function fromWire(value: unknown): StatusOr<unknown> {
-  if (Array.isArray(value)) {
-    const result: unknown[] = [];
-    for (const item of value) {
-      const decoded = fromWire(item);
-      if (!isOk(decoded)) return decoded;
-      result.push(decoded);
-    }
-    return result;
-  }
-  if (typeof value !== 'object' || value === null || value instanceof Uint8Array) return value;
-  const object = value as Record<string, unknown>;
-  const tag = object[WIRE_TAG];
-  if (typeof tag !== 'string') {
-    const result: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(object)) {
-      const decoded = fromWire(item);
-      if (!isOk(decoded)) return decoded;
-      result[key] = decoded;
-    }
-    return result;
-  }
-  const encoded = object[WIRE_VALUE];
-  if (tag === 'float') {
-    if (encoded === 'nan') return Number.NaN;
-    if (encoded === '+inf') return Number.POSITIVE_INFINITY;
-    if (encoded === '-inf') return Number.NEGATIVE_INFINITY;
-    return invalidArgumentError('Invalid tagged float.');
-  }
-  if (tag === 'bigint' || tag === 'int') {
-    if (typeof encoded !== 'string' || !/^-?\d+$/.test(encoded)) return invalidArgumentError('Invalid tagged integer.');
-    try { return BigInt(encoded); } catch (error) { return invalidArgumentError('Invalid tagged integer.', [], error); }
-  }
-  if (tag === 'bytes' || tag === 'bytearray') {
-    if (encoded instanceof Uint8Array) return new Uint8Array(encoded);
-    if (typeof encoded !== 'string') return invalidArgumentError('Invalid tagged bytes.');
-    return base64ToBytes(encoded);
-  }
-  if (tag === 'datetime') {
-    if (typeof encoded !== 'string') return invalidArgumentError('Invalid tagged datetime.');
-    const date = new Date(encoded);
-    return Number.isFinite(date.getTime()) ? date : invalidArgumentError('Invalid tagged datetime.');
-  }
-  if (tag === 'set') {
-    const decoded = fromWire(encoded);
-    return isOk(decoded) && Array.isArray(decoded)
-      ? new Set(decoded)
-      : isOk(decoded) ? invalidArgumentError('Invalid tagged set.') : decoded;
-  }
-  if (tag === 'map' || tag === 'dict') {
-    if (!Array.isArray(encoded)) return invalidArgumentError('Invalid tagged map.');
-    const result = new Map<unknown, unknown>();
-    for (const pair of encoded) {
-      if (!Array.isArray(pair) || pair.length !== 2) return invalidArgumentError('Invalid tagged map entry.');
-      const key = fromWire(pair[0]);
-      if (!isOk(key)) return key;
-      const item = fromWire(pair[1]);
-      if (!isOk(item)) return item;
-      result.set(key, item);
-    }
-    return result;
-  }
-  if (tag === 'tuple') {
-    // JavaScript has no tuple runtime type; arrays are its native equivalent.
-    return fromWire(encoded);
-  }
-  if (tag === 'a11.value' || tag === 'pydantic') {
-    const decoded = fromWire(encoded);
-    if (!isOk(decoded)) return decoded;
-    return unwrapWireValue(object[WIRE_CLASS_NAME], decoded);
-  }
-  return invalidArgumentError(`Unsupported A11 serialization tag: ${tag}.`);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -348,10 +255,11 @@ function base64ToBytes(value: string): StatusOr<Uint8Array> {
 }
 
 function jsonSerialize(value: unknown): StatusOr<Uint8Array> {
-  const wire = toWire(value, false, true);
+  const wire = toWire(value, false);
   if (!isOk(wire)) return wire;
   try {
-    return utf8Encode(JSON.stringify(wire));
+    return utf8Encode(JSON.stringify(wire, (_key, item: unknown) =>
+      typeof item === 'bigint' ? Number(item) : item));
   } catch (error) {
     return invalidArgumentError('Failed to serialize JSON.', [], error);
   }
@@ -361,14 +269,14 @@ function jsonDeserialize(data: Uint8Array): StatusOr<unknown> {
   const text = utf8Decode(data);
   if (!isOk(text)) return text;
   try {
-    return fromWire(JSON.parse(text) as unknown);
+    return JSON.parse(text) as unknown;
   } catch (error) {
     return invalidArgumentError('Invalid JSON data.', [], error);
   }
 }
 
 function msgpackSerialize(value: unknown): StatusOr<Uint8Array> {
-  const wire = toWire(value, true, true);
+  const wire = toWire(value, true);
   if (!isOk(wire)) return wire;
   try {
     return encode(wire);
@@ -379,20 +287,30 @@ function msgpackSerialize(value: unknown): StatusOr<Uint8Array> {
 
 function msgpackDeserialize(data: Uint8Array): StatusOr<unknown> {
   try {
-    return fromWire(decode(data, { useBigInt64: true }));
+    return decode(data, { useBigInt64: true });
   } catch (error) {
     return invalidArgumentError('Invalid MessagePack data.', [], error);
   }
 }
 
+function decodePayload(data: Uint8Array, mimetype: string): StatusOr<unknown> {
+  return mimetype === JSON_MIMETYPE
+    ? jsonDeserialize(data)
+    : msgpackDeserialize(data);
+}
+
+/**
+ * Rebuild the value a `;type=` names from the plain tree the format carried.
+ *
+ * These are the types JSON and MessagePack have no shape for, so the chunk's
+ * tag is the only thing that says what they were.
+ */
 function deserializeWireType(
   tag: string,
   data: Uint8Array,
   mimetype: string,
 ): StatusOr<unknown> {
-  const decoded = mimetype === JSON_MIMETYPE
-    ? jsonDeserialize(data)
-    : msgpackDeserialize(data);
+  const decoded = decodePayload(data, mimetype);
   if (!isOk(decoded)) return decoded;
   if (tag === 'datetime') {
     if (decoded instanceof Date) return decoded;
@@ -405,11 +323,22 @@ function deserializeWireType(
       : invalidArgumentError('Serialized datetime is invalid.');
   }
   if (tag === 'set') {
+    if (decoded instanceof Set) return decoded;
     return Array.isArray(decoded)
       ? new Set(decoded)
-      : decoded instanceof Set
-        ? decoded
-        : invalidArgumentError('Serialized set must be an array.');
+      : invalidArgumentError('Serialized set must be an array.');
+  }
+  if (tag === 'map') {
+    if (decoded instanceof Map) return decoded;
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+      return invalidArgumentError('Serialized map must be an object.');
+    }
+    return new Map(Object.entries(decoded));
+  }
+  if (tag === 'bigint') {
+    if (typeof decoded === 'bigint') return decoded;
+    if (typeof decoded === 'number' && Number.isInteger(decoded)) return BigInt(decoded);
+    return invalidArgumentError('Serialized bigint must be an integer.');
   }
   return decoded;
 }
@@ -418,11 +347,13 @@ function deserializeBytes(
   data: Uint8Array,
   mimetype: string,
 ): StatusOr<Uint8Array> {
-  const decoded = deserializeWireType('bytes', data, mimetype);
+  const decoded = decodePayload(data, mimetype);
   if (!isOk(decoded)) return decoded;
-  return decoded instanceof Uint8Array
-    ? decoded
-    : invalidArgumentError('Serialized bytes did not decode to byte data.');
+  if (decoded instanceof Uint8Array) return decoded;
+  // The chunk's `;type=bytes` already said what this is, so JSON carries it as
+  // a plain base64 string.
+  if (typeof decoded === 'string') return base64ToBytes(decoded);
+  return invalidArgumentError('Serialized bytes did not decode to byte data.');
 }
 
 /**
@@ -588,10 +519,12 @@ export class SerializationRegistry {
     try {
       const selection = mimetype === '' ? null : parseMimetype(mimetype, true);
       if (selection !== null && !isOk(selection)) return selection;
+      // A selector picks a representation; the value's own type decides the
+      // tag, so a type parameter in it is ignored.
       const candidates = [...this.wireValueCodecs(), ...this.codecs]
         .filter((codec) =>
           codec.test(value) &&
-          (selection === null || registrationMatches(codec.parsed, selection, codec.tag)),
+          (selection === null || registrationMatches(codec.parsed, selection)),
         )
         .sort((left, right) => left.order - right.order);
       if (candidates.length === 0) {
@@ -632,7 +565,14 @@ export class SerializationRegistry {
     }
   }
 
-  /** Validate MIME/type constraints, select a decoder, and return a typed value. */
+  /**
+   * Select a decoder from the chunk's metadata and return a typed value.
+   *
+   * `mimetypePatterns` constrains the *representation*. Which type comes back
+   * is the chunk's `;type=`, or `expectedTag` when the caller names one. A
+   * chunk with no type parameter is not underspecified — it holds exactly what
+   * its format describes, and decodes to that.
+   */
   async fromChunk<T = unknown>(
     chunk: Chunk,
     mimetypePatterns: string | readonly string[] = '',
@@ -650,14 +590,10 @@ export class SerializationRegistry {
       let encodedTag: string | undefined;
       try { encodedTag = encodedTagRaw === undefined ? undefined : decodeURIComponent(encodedTagRaw); }
       catch (error) { return invalidArgumentError('The chunk contains an invalid encoded type tag.', [], error); }
-      const canonicalEncodedTag = encodedTag === undefined
-        ? undefined
-        : canonicalTypeTag(encodedTag);
-      if (
-        expectedTag !== undefined &&
-        canonicalEncodedTag !== canonicalTypeTag(expectedTag)
-      ) {
-        return invalidArgumentError(`The chunk contains ${encodedTag ?? 'no type tag'}, not ${expectedTag}.`);
+      // An untagged chunk contradicts nothing: it holds what its format
+      // describes, and `expectedTag` is then a request to read it as that type.
+      if (expectedTag !== undefined && encodedTag !== undefined && encodedTag !== expectedTag) {
+        return invalidArgumentError(`The chunk contains ${encodedTag}, not ${expectedTag}.`);
       }
       const requested = typeof mimetypePatterns === 'string'
         ? (mimetypePatterns === '' ? [] : [mimetypePatterns])
@@ -673,16 +609,24 @@ export class SerializationRegistry {
           `The chunk mimetype ${chunk.mimetype} does not match the requested patterns.`,
         );
       }
-      const candidates = [...this.wireValueCodecs(), ...this.codecs].filter((codec) =>
-        (canonicalEncodedTag === undefined || codec.tag === canonicalEncodedTag) &&
-        (
-          // A Blob carries its concrete browser media type (for example,
-          // image/png) on the chunk. Its stable `blob` tag selects the
-          // binary decoder independently of that concrete media type.
-          (canonicalEncodedTag === 'blob' && codec.tag === 'blob') ||
-          registrationMatches(codec.parsed, actual, codec.tag)
-        ),
+      const wanted = encodedTag ?? expectedTag;
+      const byMediaType = [...this.wireValueCodecs(), ...this.codecs].filter((codec) =>
+        // A Blob carries its concrete browser media type (for example,
+        // image/png) on the chunk. Its stable `blob` tag selects the binary
+        // decoder independently of that concrete media type.
+        (wanted === 'blob' && codec.tag === 'blob') ||
+        registrationMatches(codec.parsed, actual),
       );
+      const generic = byMediaType.filter((codec) => GENERIC_TAGS.has(codec.tag));
+      let candidates = wanted === undefined
+        ? generic
+        : byMediaType.filter((codec) => codec.tag === wanted);
+      if (candidates.length === 0 && expectedTag === undefined) {
+        // Either nothing named a type, or the tag names one this peer never
+        // loaded. The bytes are still valid JSON or MessagePack, so hand back
+        // what the format describes rather than refusing to look at it.
+        candidates = generic.length > 0 ? generic : byMediaType;
+      }
       if (candidates.length === 0) {
         return notFoundError(`No deserializer is registered for ${chunk.mimetype}.`);
       }

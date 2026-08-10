@@ -439,7 +439,70 @@ struct ChunkStoreWriter::State
     Wake();
   }
 
+  // Closing a writer is a lifecycle fact bound peers cannot otherwise observe:
+  // a remote reader ends a node on a not-continued fragment, and closing
+  // appends none. The graceful path therefore tees one closure marker -- a
+  // status chunk carrying data::kCloseAttribute -- so a mirror on the far side
+  // closes its own write half. Draining is already synchronised with the tee:
+  // the close operation only starts once every batch has been sent, so the
+  // marker is the last thing a peer sees. The abort path sends nothing here;
+  // Action::SendNodeAbortStatuses already fans failures out.
+  absl::Status TeeClose(const absl::Status& close_status) {
+    std::vector<std::shared_ptr<net::WireStream>> streams;
+    {
+      thread::MutexLock lock(&mu);
+      if (lifecycle != Lifecycle::kClose) {
+        return absl::OkStatus();
+      }
+      streams = attached_streams;
+    }
+    if (streams.empty()) {
+      return absl::OkStatus();
+    }
+
+    absl::StatusOr<std::string> id;
+    try {
+      id = store->GetId();
+    } catch (const std::exception& error) {
+      id = absl::UnknownError(error.what());
+    } catch (...) {
+      id = absl::UnknownError(
+          "ChunkStore GetId raised a non-standard exception");
+    }
+    if (!id.ok()) {
+      return id.status();
+    }
+    absl::StatusOr<data::Chunk> chunk =
+        data::MakeStatusChunk(close_status, true);
+    if (!chunk.ok()) {
+      return chunk.status();
+    }
+    data::WireMessage message;
+    message.node_fragments.push_back(data::NodeFragment{
+        .id = *std::move(id),
+        .data = *std::move(chunk),
+        .seq = 0,
+        .continued = false,
+    });
+    for (const std::shared_ptr<net::WireStream>& stream : streams) {
+      absl::Status sent;
+      try {
+        sent = stream->Send(message);
+      } catch (const std::exception& error) {
+        sent = absl::UnknownError(error.what());
+      } catch (...) {
+        sent = absl::UnknownError(
+            "WireStream Send raised a non-standard exception");
+      }
+      if (!sent.ok()) {
+        return sent;
+      }
+    }
+    return absl::OkStatus();
+  }
+
   void StartClose(std::uint64_t generation, absl::Status requested_status) {
+    absl::Status tee_status = TeeClose(requested_status);
     a11::Future<absl::Status> pending;
     try {
       pending = store->CloseWritesWithStatus(requested_status);
@@ -461,9 +524,10 @@ struct ChunkStoreWriter::State
       }
     }
     pending.OnReady([self = shared_from_this(), generation,
-                     requested_status = std::move(requested_status)](
+                     requested_status = std::move(requested_status),
+                     tee_status = std::move(tee_status)](
                         const absl::StatusOr<absl::Status>& result) {
-      self->CloseDone(generation, requested_status, result);
+      self->CloseDone(generation, requested_status, tee_status, result);
     });
     if (cancel) {
       (void)pending.Cancel();
@@ -471,11 +535,19 @@ struct ChunkStoreWriter::State
   }
 
   void CloseDone(std::uint64_t generation, const absl::Status& requested_status,
+                 const absl::Status& tee_status,
                  const absl::StatusOr<absl::Status>& result) {
     absl::Status operation_status = result.status();
     if (result.ok() && result->code() != requested_status.code()) {
       operation_status = absl::DataLossError(
           "ChunkStore closed with a different status than requested");
+    }
+    // A failed closure marker cannot un-close the store, exactly as a failed
+    // data tee cannot revoke store confirmations. The store still closes and
+    // the send error becomes the writer's terminal status, so the producer
+    // learns its peer was never told.
+    if (operation_status.ok()) {
+      operation_status = tee_status;
     }
 
     std::shared_ptr<a11::Promise<a11::Unit>> promise;

@@ -123,6 +123,33 @@ struct Chunk {
   }
 };
 
+/** @brief Mimetype marking a chunk whose payload is a packed status. */
+inline constexpr std::string_view kStatusMimetype = "application/x-a11-status";
+/**
+ * @brief Metadata attribute marking a status chunk as a closure marker.
+ *
+ * A plain status chunk carries a value (an action's outcome) or a failure to
+ * apply to a node. One carrying this attribute instead reports that the
+ * producer has drained the node and closed its write half with that status; it
+ * holds no application value and is never stored.
+ */
+inline constexpr std::string_view kCloseAttribute = "a11-close";
+
+/**
+ * @brief Encodes @p status as a chunk of mimetype ::kStatusMimetype.
+ * @param status The status to pack.
+ * @param closing Whether to mark the chunk as a closure marker
+ *   (::kCloseAttribute), meaning the producer closed the node's write half.
+ */
+absl::StatusOr<Chunk> MakeStatusChunk(const absl::Status& status,
+                                      bool closing = false);
+/** @brief Whether @p chunk carries a packed status. */
+bool IsStatusChunk(const Chunk& chunk);
+/** @brief Whether @p chunk is a status chunk marking write-half closure. */
+bool IsCloseStatusChunk(const Chunk& chunk);
+/** @brief Decodes a status previously encoded by MakeStatusChunk. */
+absl::StatusOr<absl::Status> StatusFromStatusChunk(const Chunk& chunk);
+
 /**
  * @brief A reference to a (slice of a) logical node, in lieu of inline data.
  *

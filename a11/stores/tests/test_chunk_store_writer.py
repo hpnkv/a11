@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from a11.actions import is_close_status_chunk, status_from_chunk
 from a11.data import types
 from a11.net.wire_stream import WireStream
 from a11.status import Status, StatusCode, StatusException
@@ -93,6 +94,18 @@ class _FailingStream(WireStream):
 
     def send(self, message):
         raise RuntimeError("injected tee failure")
+
+
+class _RecordingStream(WireStream):
+    def __init__(self):
+        super().__init__()
+        self.fragments: list[types.NodeFragment] = []
+
+    def get_id(self):
+        return "recording-stream"
+
+    def send(self, message):
+        self.fragments.extend(message.node_fragments)
 
 
 @pytest.mark.asyncio
@@ -354,6 +367,44 @@ async def test_invalid_store_sequence_response_fails_with_data_loss():
     assert raised.value.status.code == StatusCode.DATA_LOSS
     assert writer.get_status().code == StatusCode.DATA_LOSS
     await store.close_writes_with_status(Status.ok())
+
+
+@pytest.mark.asyncio
+async def test_drain_tees_a_closure_marker_after_the_data():
+    store = LocalChunkStore("close-tee")
+    writer = ChunkStoreWriter(store)
+    stream = _RecordingStream()
+    writer.attach_stream(stream)  # type: ignore[arg-type]
+    # Deliberately no final fragment: the marker is all a peer gets.
+    assert await (await writer.put_chunk(_chunk(0))) == 0
+    await writer.drain_and_close()
+
+    assert len(stream.fragments) == 2
+    assert not is_close_status_chunk(stream.fragments[0].data)
+    marker = stream.fragments[1]
+    assert marker.id == "close-tee"
+    assert marker.continued is False
+    assert is_close_status_chunk(marker.data)
+    assert status_from_chunk(marker.data).is_ok()
+
+
+@pytest.mark.asyncio
+async def test_closure_marker_failure_still_closes_the_store():
+    store = LocalChunkStore("close-tee-failure")
+    writer = ChunkStoreWriter(store)
+    writer.attach_stream(_FailingStream())  # type: ignore[arg-type]
+
+    with pytest.raises(StatusException) as raised:
+        await writer.drain_and_close()
+    assert raised.value.status.code == StatusCode.UNKNOWN
+    assert writer.get_status().code == StatusCode.UNKNOWN
+    assert not writer.is_writable()
+    # The store closed regardless, so a second close reports the first status.
+    assert (
+        await store.close_writes_with_status(
+            Status.ok(), return_status_if_already_closed=True
+        )
+    ).is_ok()
 
 
 @pytest.mark.asyncio

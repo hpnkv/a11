@@ -1,3 +1,4 @@
+import { statusToChunk } from './action_schema.js';
 import { Deferred, storeCallbackScheduler } from './concurrency.js';
 import { cloneChunk, hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
 import { Chunk, NodeFragment, WireMessage } from './data.js';
@@ -506,23 +507,58 @@ export class ChunkStoreWriter {
     }
   }
 
+  /**
+   * Tell attached streams that this writer closed.
+   *
+   * A peer ends a node on a not-continued fragment and closing writes none, so
+   * the graceful path sends one closure marker after the last teed batch —
+   * draining is already synchronised with the tee, since the close only starts
+   * once every batch has gone out. Aborts send nothing here; the action layer
+   * already fans failures out.
+   */
+  private teeClose(closeStatus: Status): Status {
+    if (this.lifecycle !== 'close' || this.streams.length === 0) return okStatus();
+    let id: StatusOr<string>;
+    try { id = this.store.getId(); }
+    catch (error) { id = statusFromUnknown(error, 'ChunkStore getId raised an exception'); }
+    if (!isOk(id)) return id;
+    if (typeof id !== 'string' || id.length === 0) {
+      return dataLossError('ChunkStore getId returned an invalid node id');
+    }
+    const marker = statusToChunk(closeStatus, true);
+    if (!isOk(marker)) return marker;
+    const message = new WireMessage({
+      nodeFragments: [new NodeFragment({ id, data: marker, seq: 0, continued: false })],
+    });
+    for (const stream of this.streams) {
+      try {
+        const returned = stream.send(message);
+        if (isStatus(returned) && !isOk(returned)) return returned;
+      } catch (error) {
+        return statusFromUnknown(error, 'WireStream send raised an exception');
+      }
+    }
+    return okStatus();
+  }
+
   private startClose(requested: Status): Status {
     if (this.operation === 'close') return okStatus();
     this.operation = 'close';
     const generation = ++this.generation;
+    const teeStatus = this.teeClose(requested);
     let pending: Promise<Status>;
     try { pending = this.store.closeWritesWithStatus(requested); }
     catch (error) {
-      this.closeDone(generation, requested, statusFromUnknown(error, 'ChunkStore close raised an exception'));
+      this.closeDone(generation, requested, teeStatus, statusFromUnknown(error, 'ChunkStore close raised an exception'));
       return okStatus();
     }
     Promise.resolve(pending)
-      .then((result) => this.closeDone(generation, requested, result))
-      .catch((error: unknown) => this.closeDone(generation, requested, statusFromUnknown(error, 'ChunkStore close rejected')));
+      .then((result) => this.closeDone(generation, requested, teeStatus, result))
+      .catch((error: unknown) => this.closeDone(generation, requested, teeStatus, statusFromUnknown(error, 'ChunkStore close rejected')));
     return okStatus();
   }
 
-  private closeDone(generation: number, requested: Status, returned: unknown): void {
+  private closeDone(generation: number, requested: Status, teeStatus: Status, returned: unknown): void {
     try {
       if (this.operation !== 'close' || generation !== this.generation) return;
       this.operation = 'none';
@@ -534,6 +570,15 @@ export class ChunkStoreWriter {
       if (returned.code !== requested.code) {
         this.status = dataLossError('ChunkStore closed with a different status than requested');
         this.finishLifecycle(this.status);
+        return;
+      }
+      // A failed closure marker cannot un-close the store, exactly as a failed
+      // data tee cannot revoke store confirmations: the send error becomes the
+      // writer's terminal status so the producer learns its peer was not told.
+      if (!isOk(teeStatus)) {
+        this.status = teeStatus;
+        this.closing = false;
+        this.finishLifecycle(teeStatus);
         return;
       }
       this.status = requested;

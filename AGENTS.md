@@ -20,6 +20,15 @@
   binary and schema values; they must not introduce a second public data model.
   Python serializers and deserializers continue to operate on those native
   values.
+- A chunk's metadata is the only thing that says how to read its bytes. The
+  media type is the representation; a `type` parameter names the value when the
+  format does not already describe it. The seven JSON-native shapes (`object`,
+  `array`, `string`, `integer`, `number`, `boolean`, `null`) carry no parameter,
+  so a bare `application/json` or `application/x-msgpack` is complete and
+  decodes to a dict / `nlohmann::json` / plain object / map. Nothing inside a
+  payload names a type: a declared model's fields say what they hold, and
+  schemaless data is just data. A caller naming an `obj_type` gets a best effort
+  and a real deserialization error when the data will not fit.
 - A serializable type carries the *same* wire tag in every language:
   `a11.<Class>` for the runtime's own types, `a11.sdk.<Class>` for the SDKs,
   subpackages omitted and the name chosen for what the type is. The table lives
@@ -29,6 +38,17 @@
   `testdata/serial_tags.json` pins all four, with each suite asserting its own
   constants against it. Renaming a tag is a wire change: add the old spelling to
   the legacy alias map so readers keep accepting it, and never emit it again.
+- A status carried as data is a *status chunk*: mimetype
+  `application/x-a11-status`, payload the concatenated-MessagePack
+  `(code, message, details)` record, built in one place per language
+  (`a11::data::MakeStatusChunk`, `statusToChunk`, `status_to_chunk`) and read
+  back through that language's decoder. Action dispatch/completion statuses,
+  node aborts and the closure marker a drained writer tees all use that one
+  shape; `testdata/status_chunk.json` pins the mimetype, the `a11-close`
+  marker attribute and the payload bytes, with each suite asserting its own
+  helpers against it. It stays outside the serialization registry on purpose:
+  `StatusOr` cannot carry a non-OK status as a *value*, which is what the
+  dedicated helpers and the `DecodedStatus` box exist for.
 
 ## Concurrency architecture
 

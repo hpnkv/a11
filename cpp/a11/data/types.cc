@@ -332,6 +332,40 @@ absl::StatusOr<Chunk> Chunk::FromMsgpack(std::string_view bytes) {
   return result;
 }
 
+absl::StatusOr<Chunk> MakeStatusChunk(const absl::Status& status,
+                                      bool closing) {
+  ABSL_ASSIGN_OR_RETURN(std::string bytes, PackStatus(status));
+  ChunkMetadata metadata{.mimetype = std::string(kStatusMimetype)};
+  if (closing) {
+    ABSL_RETURN_IF_ERROR(
+        metadata.SetAttribute(std::string(kCloseAttribute), "1"));
+  }
+  return Chunk{.metadata = std::move(metadata), .data = std::move(bytes)};
+}
+
+bool IsStatusChunk(const Chunk& chunk) {
+  return chunk.GetMimetype() == kStatusMimetype;
+}
+
+bool IsCloseStatusChunk(const Chunk& chunk) {
+  return IsStatusChunk(chunk) && chunk.metadata.has_value() &&
+         chunk.metadata->attributes.contains(kCloseAttribute);
+}
+
+absl::StatusOr<absl::Status> StatusFromStatusChunk(const Chunk& chunk) {
+  absl::StatusOr<absl::Status> result;
+  if (absl::Status validation = chunk.Validate(); !validation.ok()) {
+    result.AssignStatus(std::move(validation));
+    return result;
+  }
+  if (!IsStatusChunk(chunk)) {
+    result.AssignStatus(
+        absl::InvalidArgumentError("Chunk does not contain a status"));
+    return result;
+  }
+  return UnpackStatus(chunk.data);
+}
+
 size_t NodeRef::ApproxBytes() const {
   return id.size() + 4 + (length.has_value() ? 4 : 0) + 1;
 }

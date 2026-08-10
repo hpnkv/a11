@@ -346,6 +346,10 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * should first call PutChunk(..., final=true) or PutNullFinal() so readers
    * can synchronise on the logical end of the node, then call DrainAndClose()
    * to wait for persistence and release the writer.
+   *
+   * Attached streams learn of the closure: the writer follows the last teed
+   * batch with a closure marker, so a peer holding a mirror of this node closes
+   * its write half too and its readers reach a clean end.
    * @return An awaitable that resolves once every produced chunk has been
    *   flushed and the backing store is closed to further writes.
    */
@@ -364,7 +368,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    *
    * `WireStream::Send()` confirms local transport admission, not receipt by
    * the remote agent. A send failure stops later writes but cannot revoke the
-   * current batch's store confirmations.
+   * current batch's store confirmations. DrainAndClose() also tees a closure
+   * marker to every attached stream.
    * @param stream The transport to attach; kept alive for the node's
    *   lifetime.
    * @return OK, or an error status on failure.

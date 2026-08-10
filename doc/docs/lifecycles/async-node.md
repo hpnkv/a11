@@ -125,10 +125,27 @@ synchronization barrier:
 
 - future writes are rejected;
 - readers waiting for data that can no longer arrive are released;
-- writer buffers and attachment bookkeeping can be reclaimed.
+- writer buffers and attachment bookkeeping can be reclaimed;
+- every attached stream is told, so a peer's mirror of the node closes too.
 
-It does **not** append a final fragment. For a complete unary output, use this
-normal sequence:
+That last point is what makes closure a shared fact rather than a local one. A
+remote reader ends a node on a fragment with `continued=false`, and closing
+writes none — so after the last teed batch the writer sends one **closure
+marker**: a status chunk (`application/x-a11-status`) carrying the metadata
+attribute `a11-close` and the OK close status. The receiving runtime does not
+store it; it applies it to its own copy of the node, which closes that mirror's
+write half and releases its readers. Draining and teeing are already
+synchronised — the close only begins once every batch has gone out — so the
+marker is the last thing a peer sees.
+
+If the marker cannot be sent the store still closes, and the send error becomes
+the writer's terminal status (the same rule as a failed data tee, which cannot
+revoke confirmations already returned). A failure aborts instead of closing, and
+that direction is unchanged: an aborting action fans its status out over its own
+stream.
+
+Closing still does **not** append a final fragment. For a complete unary output,
+use this normal sequence:
 
 ```python
 await output.put_final(result)

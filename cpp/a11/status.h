@@ -82,6 +82,16 @@ nlohmann::json StatusDetails(const absl::Status& status);
  */
 absl::StatusOr<nlohmann::json> StatusToJson(const absl::Status& status);
 /**
+ * @brief Serializes a status to JSON, never failing.
+ *
+ * For diagnostics that embed a status in a larger document and have nothing
+ * useful to do with an encoding failure. Falls back to the same fields with
+ * empty details, so the layout is the one StatusToJson produces either way.
+ * @param status Status to serialize.
+ * @return The JSON representation.
+ */
+nlohmann::json StatusToJsonOrEmptyDetails(const absl::Status& status);
+/**
  * @brief Reconstructs a status from its JSON representation.
  * @param value JSON produced by StatusToJson.
  * @return The reconstructed status, or an error status when @p value is

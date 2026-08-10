@@ -14,6 +14,7 @@
 
 #include "a11/data/types.h"
 #include "a11/net/in_process_wire_stream.h"
+#include "a11/net/wire_stream.h"
 #include "a11/net/wire_stream_with_recv.h"
 #include "a11/stores/chunk_store.h"
 #include "a11/stores/local_chunk_store.h"
@@ -87,6 +88,50 @@ class FailFirstCloseStore final : public ChunkStore {
   const std::shared_ptr<ChunkStore> store_;
   const absl::Status failure_;
   std::vector<absl::Status> close_statuses_;
+};
+
+/// A stream whose every Send fails, standing in for an unreachable peer.
+class FailingSendStream final : public net::WireStream {
+ public:
+  explicit FailingSendStream(absl::Status failure)
+      : failure_(std::move(failure)) {}
+
+  absl::Status Send(data::WireMessage) override { return failure_; }
+
+  a11::Task Start(net::OnMessage, net::OnDone) override {
+    return a11::ReadyTask();
+  }
+
+  a11::Task Accept(net::OnMessage, net::OnDone) override {
+    return a11::ReadyTask();
+  }
+
+  absl::Status HalfClose(data::ByteMap) override { return absl::OkStatus(); }
+
+  a11::Task DrainOutgoingMessages() override { return a11::ReadyTask(); }
+
+  absl::Status Abort(absl::Status) override { return absl::OkStatus(); }
+
+  absl::Status SetDeadline(absl::Time) override { return absl::OkStatus(); }
+
+  [[nodiscard]] absl::Time deadline() const override {
+    return absl::InfiniteFuture();
+  }
+
+  [[nodiscard]] absl::Status GetStatus() const override { return failure_; }
+
+  [[nodiscard]] std::optional<data::ByteMap> GetTrailers() const override {
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::string GetId() const override {
+    return "failing-send-stream";
+  }
+
+  [[nodiscard]] void* absl_nullable GetImpl() const override { return nullptr; }
+
+ private:
+  const absl::Status failure_;
 };
 
 TEST(ChunkStoreWriterTest, BatchesAndClosesStore) {
@@ -233,6 +278,77 @@ TEST(ChunkStoreWriterTest, TeesOnlyStoreConfirmedFragments) {
   const absl::Time shutdown_deadline = absl::Now() + absl::Seconds(5);
   ASSERT_TRUE(pair.first->Done().Await(shutdown_deadline).ok());
   ASSERT_TRUE(pair.second->Done().Await(shutdown_deadline).ok());
+}
+
+TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {
+  auto pair = *net::InProcessWireStream::CreatePair();
+  auto receiver = *net::WireStreamWithRecv::Create(pair.second);
+  ASSERT_TRUE(
+      pair.first
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [] { return a11::ReadyTask(); })
+          .Await()
+          .ok());
+  ASSERT_TRUE(receiver->Accept().Await().ok());
+
+  auto store = *LocalChunkStore::Create("writer-close-tee");
+  auto writer = *ChunkStoreWriter::Create(store);
+  ASSERT_TRUE(writer->AttachStream(pair.first).ok());
+  // Deliberately no final fragment: the marker is all a peer gets.
+  ASSERT_EQ(*writer->PutChunk(data::Chunk{.data = "sent"}).Await(), 0);
+  EXPECT_TRUE(writer->DrainAndClose().Await().ok());
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  auto data_message = receiver->Receive().Await(deadline);
+  ASSERT_TRUE(data_message.ok()) << data_message.status();
+  ASSERT_TRUE(data_message->has_value());
+  ASSERT_EQ((**data_message).node_fragments.size(), 1);
+  const data::Chunk* data_chunk =
+      std::get_if<data::Chunk>(&(**data_message).node_fragments.front().data);
+  ASSERT_NE(data_chunk, nullptr);
+  EXPECT_EQ(data_chunk->data, "sent");
+  EXPECT_FALSE(data::IsCloseStatusChunk(*data_chunk));
+
+  auto close_message = receiver->Receive().Await(deadline);
+  ASSERT_TRUE(close_message.ok()) << close_message.status();
+  ASSERT_TRUE(close_message->has_value());
+  ASSERT_EQ((**close_message).node_fragments.size(), 1);
+  const data::NodeFragment& marker = (**close_message).node_fragments.front();
+  EXPECT_EQ(marker.id, "writer-close-tee");
+  EXPECT_FALSE(marker.continued);
+  const data::Chunk* marker_chunk = std::get_if<data::Chunk>(&marker.data);
+  ASSERT_NE(marker_chunk, nullptr);
+  ASSERT_TRUE(data::IsCloseStatusChunk(*marker_chunk));
+  const absl::StatusOr<absl::Status> closed =
+      data::StatusFromStatusChunk(*marker_chunk);
+  ASSERT_TRUE(closed.ok()) << closed.status();
+  EXPECT_TRUE(closed->ok());
+
+  ASSERT_TRUE(pair.first->HalfClose().ok());
+  ASSERT_TRUE(receiver->HalfClose().ok());
+  const absl::Time shutdown_deadline = absl::Now() + absl::Seconds(5);
+  ASSERT_TRUE(pair.first->Done().Await(shutdown_deadline).ok());
+  ASSERT_TRUE(pair.second->Done().Await(shutdown_deadline).ok());
+}
+
+TEST(ChunkStoreWriterTest, ClosureMarkerFailureStillClosesTheStore) {
+  auto store = *LocalChunkStore::Create("writer-close-tee-failure");
+  auto writer = *ChunkStoreWriter::Create(store);
+  const absl::Status send_failure = absl::UnavailableError("peer is gone");
+  ASSERT_TRUE(
+      writer->AttachStream(std::make_shared<FailingSendStream>(send_failure))
+          .ok());
+
+  EXPECT_EQ(writer->DrainAndClose().Await().status(), send_failure);
+  ASSERT_TRUE(writer->GetStatus().has_value());
+  EXPECT_EQ(*writer->GetStatus(), send_failure);
+  EXPECT_FALSE(writer->IsWritable());
+  // The store closed regardless, so a second close reports the recorded status.
+  const absl::StatusOr<absl::Status> second =
+      store->CloseWritesWithStatus(absl::OkStatus(), true).Await();
+  ASSERT_TRUE(second.ok()) << second.status();
+  EXPECT_TRUE(second->ok());
 }
 
 TEST(ChunkStoreWriterTest, ManyWritersShareStacklessPump) {

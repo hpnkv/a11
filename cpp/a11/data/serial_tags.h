@@ -5,11 +5,15 @@
  * @brief The canonical cross-language serialization tags.
  *
  * A serialized A11 value names its type with a *tag*: the @c type parameter of
- * the chunk's MIME type (@c "application/json;type=a11.Chunk"), and the
- * @c class_name of a nested @c a11.value / @c pydantic wire object. The tag is
- * what a peer in another language matches on, so the same class must carry the
- * same tag in every implementation. This header is that table for C++, and its
- * siblings hold the identical strings:
+ * the chunk's MIME type (@c "application/json;type=a11.Chunk"). That is the
+ * only place a type is ever named. Nothing inside the payload repeats it -- a
+ * declared model's fields say what they hold, and schemaless data is just data.
+ * A value the format already describes (an object, an array, a string) carries
+ * no tag at all, so a bare @c "application/json" is a complete description.
+ *
+ * The tag is what a peer in another language matches on, so the same class must
+ * carry the same tag in every implementation. This header is that table for
+ * C++, and its siblings hold the identical strings:
  *
  *   - Python -- @c a11/data/serial_tags.py (declared per class with an
  *     @c A11_SERIAL_TAG ClassVar).

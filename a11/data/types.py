@@ -123,9 +123,9 @@ def _validate_metadata(value: Any, *, json_mode: bool = False) -> ChunkMetadata:
     attributes = data.get("attributes", {})
     if json_mode:
         attributes = _byte_map_from_json(attributes, "ChunkMetadata.attributes")
-    timestamp = data.get("timestamp")
-    if json_mode:
-        timestamp = _timestamp_from_json(timestamp)
+    # Accepts a datetime as-is, so this is safe in either mode -- a timestamp
+    # reaches us as an RFC 3339 string whenever the sender's field was typed.
+    timestamp = _timestamp_from_json(data.get("timestamp"))
     if "mimetype" not in data:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -385,6 +385,16 @@ def _model_construct(cls, **values: Any):
     return _VALIDATORS[cls](values)
 
 
+def validate_wire(cls: type, value: Any) -> Any:
+    """Build a native record from an already-parsed wire tree.
+
+    Wire form spells bytes as base64 and timestamps as RFC 3339, and the
+    validators accept the decoded objects too -- so this reads both a JSON tree
+    and a MessagePack one, which carries real bytes.
+    """
+    return _VALIDATORS[cls](value, json_mode=True)
+
+
 def _model_validate_json(cls, value: str | bytes | bytearray, **_: Any):
     try:
         decoded = json.loads(value)
@@ -533,8 +543,23 @@ def _model_json_schema(cls, **_: Any) -> dict[str, Any]:
 
 
 def _core_schema(cls, _source_type, _handler):
-    return core_schema.no_info_plain_validator_function(
-        cls.model_validate,
+    # How a native record validates and dumps when nested in a model.
+    #
+    # Validation has to know which mode it is in. A native record spells its
+    # byte fields as base64 in JSON and as `bytes` in Python, so a `Chunk`
+    # nested in a model validated from JSON must take the base64 path —
+    # otherwise it rejects the very payload its own dumper wrote.
+    #
+    # A comment rather than a docstring: this is attached to every native
+    # class, and `scripts/generate_stubs.py` would copy a docstring into each
+    # one's entry in `a11/_native.pyi`, seven times over.
+    return core_schema.json_or_python_schema(
+        json_schema=core_schema.no_info_plain_validator_function(
+            lambda value: _VALIDATORS[cls](value, json_mode=True)
+        ),
+        python_schema=core_schema.no_info_plain_validator_function(
+            cls.model_validate
+        ),
         serialization=core_schema.plain_serializer_function_ser_schema(
             lambda value, info: value.model_dump(mode=info.mode),
             info_arg=True,

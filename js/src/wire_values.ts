@@ -1,24 +1,21 @@
 /**
- * Class-tagged values nested inside a serialized A11 value.
+ * The tag → class table for values A11 serializes whole.
  *
  * A JSON or MessagePack payload is a tree of plain data, but some of what A11
- * puts in that tree is not plain: an `Interaction`'s `content` is a list of
- * {@link Chunk}s, its `status` is a {@link Status}, its `action_calls` are
- * {@link ActionMessage}s. Those are written as a tagged object naming the class
- * that produced them —
+ * puts on the wire is not plain: an `Interaction`, a {@link Chunk}, a
+ * {@link Status}. A chunk holding one of those names it in its metadata
+ * (`application/json;type=a11.Chunk`), and this module is what turns that name
+ * into an object and an object back into that name.
  *
- * ```json
- * {"__a11_serialized_type__": "a11.value", "value": {...}, "class_name": "a11.Chunk"}
- * ```
+ * The tag comes from the canonical table in {@link serial_tags}, so a value
+ * written by one language is read by another. The runtime's own data types and
+ * declared models such as SDK configs share one namespace: what a tag resolves
+ * to is what tells them apart.
  *
- * — and this module is the registry that turns that name back into an object,
- * and an object back into that name. It is the TypeScript counterpart of the
- * `a11.value` / `pydantic` branches of `a11/data/serialization.py`.
- *
- * The two kinds differ only in provenance: `a11.value` for the runtime's own
- * data types, `pydantic` for a declared model such as an SDK config. Both carry
- * a `class_name` from the canonical table in {@link serial_tags}, so a value
- * written by one language is read by another.
+ * Nothing inside the payload is tagged. A model's own fields say what they
+ * hold, and schemaless data is just data — a peer reading `application/json`
+ * with no type parameter gets objects, arrays and scalars, which is all the
+ * format ever promised.
  *
  * A type joins the registry through {@link registerWireValueCodec}. Values that
  * have no class of their own in TypeScript — an SDK model is a plain object
@@ -37,27 +34,16 @@ import {
   Port,
   WireMessage,
 } from './data.js';
-import { canonicalSerialTag } from './serial_tags.js';
+import { base64Decode } from './bytes.js';
 import * as tags from './serial_tags.js';
 import {
   alreadyExistsError,
   invalidArgumentError,
   isOk,
-  notFoundError,
   okStatus,
   type Status,
   type StatusOr,
 } from './status.js';
-
-/** Wire key naming the kind of a tagged object. */
-export const WIRE_TAG = '__a11_serialized_type__';
-/** Wire key holding a tagged object's payload. */
-export const WIRE_VALUE = 'value';
-/** Wire key holding a tagged object's canonical type tag. */
-export const WIRE_CLASS_NAME = 'class_name';
-
-/** The runtime's own data types; a declared model uses `pydantic`. */
-export type WireValueKind = 'a11.value' | 'pydantic';
 
 /**
  * Brand marking a plain object as an instance of a tagged A11 type.
@@ -107,9 +93,8 @@ export type Fields = Record<string, unknown>;
  * registered value without either side knowing.
  */
 export interface WireValueCodec<T = unknown> {
-  /** Canonical tag from {@link serial_tags}, written as `class_name`. */
+  /** Canonical tag from {@link serial_tags}, written as the object's key. */
   readonly tag: string;
-  readonly kind: WireValueKind;
   readonly test: (value: unknown) => boolean;
   readonly dump: (value: T) => StatusOr<Fields>;
   readonly load: (fields: Fields) => StatusOr<T>;
@@ -169,37 +154,9 @@ export function wireValueCodecCount(): number {
   return codecs.length;
 }
 
-/** The codec registered for `tag`, resolving historical aliases. */
+/** The codec registered for `tag`. */
 export function wireValueCodecByTag(tag: string): WireValueCodec | null {
-  return byTag.get(canonicalSerialTag(tag)) ?? null;
-}
-
-/** Wrap already-encoded fields as the tagged object peers expect. */
-export function wrapWireValue(codec: WireValueCodec, encoded: unknown): Fields {
-  return { [WIRE_TAG]: codec.kind, [WIRE_VALUE]: encoded, [WIRE_CLASS_NAME]: codec.tag };
-}
-
-/**
- * Read a tagged object whose payload has already been decoded.
- *
- * An unrecognised `class_name` is a NOT_FOUND, matching Python: silently
- * handing back the raw fields would produce a value that looks decoded and
- * fails much later, somewhere with no way to say what type it should have been.
- */
-export function unwrapWireValue(className: unknown, decoded: unknown): StatusOr<unknown> {
-  if (typeof className !== 'string' || className === '') {
-    return invalidArgumentError('A tagged A11 value must carry a class_name.');
-  }
-  const codec = wireValueCodecByTag(className);
-  if (codec === null) {
-    return notFoundError(
-      `No wire value codec is registered for ${className}; its module must be imported to consume its values.`,
-    );
-  }
-  if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
-    return invalidArgumentError(`A tagged ${className} must hold an object.`);
-  }
-  return codec.load(decoded as Fields);
+  return byTag.get(tag) ?? null;
 }
 
 // --- Field helpers -----------------------------------------------------------
@@ -221,6 +178,12 @@ function readString(fields: Fields, key: string, fallback = ''): string {
 function readBytes(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  // An untagged byte field arrives as base64 from JSON and as real bytes from
+  // MessagePack; both are the same field, so both have to read.
+  if (typeof value === 'string') {
+    const decoded = base64Decode(value);
+    return isOk(decoded) ? decoded : new Uint8Array();
+  }
   return new Uint8Array();
 }
 
@@ -250,10 +213,16 @@ function dumpChunkMetadata(value: ChunkMetadata): StatusOr<Fields> {
 }
 
 function loadChunkMetadata(fields: Fields): StatusOr<ChunkMetadata> {
-  const timestamp = fields['timestamp'];
+  const raw = fields['timestamp'];
+  // Untagged, a timestamp is the RFC 3339 string the field's type implies.
+  let timestamp: Date | null = raw instanceof Date ? raw : null;
+  if (typeof raw === 'string') {
+    const parsed = new Date(raw);
+    if (Number.isFinite(parsed.getTime())) timestamp = parsed;
+  }
   return new ChunkMetadata({
     mimetype: readString(fields, 'mimetype'),
-    timestamp: timestamp instanceof Date ? timestamp : null,
+    timestamp,
     attributes: readByteMap(fields['attributes']),
   });
 }
@@ -469,56 +438,48 @@ function install(): void {
   const entries: WireValueCodec<never>[] = [
     {
       tag: tags.CHUNK_METADATA_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof ChunkMetadata,
       dump: dumpChunkMetadata,
       load: loadChunkMetadata,
     },
     {
       tag: tags.CHUNK_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof Chunk,
       dump: dumpChunk,
       load: loadChunk,
     },
     {
       tag: tags.NODE_REF_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof NodeRef,
       dump: dumpNodeRef,
       load: loadNodeRef,
     },
     {
       tag: tags.NODE_FRAGMENT_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof NodeFragment,
       dump: dumpNodeFragment,
       load: loadNodeFragment,
     },
     {
       tag: tags.PORT_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof Port,
       dump: dumpPort,
       load: loadPort,
     },
     {
       tag: tags.ACTION_MESSAGE_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof ActionMessage,
       dump: dumpActionMessage,
       load: loadActionMessage,
     },
     {
       tag: tags.WIRE_MESSAGE_TAG,
-      kind: 'a11.value',
       test: (value) => value instanceof WireMessage,
       dump: dumpWireMessage,
       load: loadWireMessage,
     },
     {
       tag: tags.STATUS_TAG,
-      kind: 'a11.value',
       test: testTagged(tags.STATUS_TAG),
       dump: dumpStatus,
       load: loadStatus,

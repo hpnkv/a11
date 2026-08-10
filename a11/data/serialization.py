@@ -1,10 +1,17 @@
 """Serialization of Python objects to and from [Chunk][a11.data.types.Chunk].
 
-The registry deliberately separates a media type (the representation) from a
-value type. A serialized chunk combines the two by adding a stable ``type``
-parameter to its MIME type, for example ``application/json;type=object``.
-JSON-native types use language-neutral names; application-specific types use
-stable Python-qualified names unless explicitly configured otherwise.
+A chunk's metadata is the only thing that says how to read its bytes. The media
+type gives the representation (``application/json``, ``application/x-msgpack``)
+and, when the value is not one JSON already describes, a ``type`` parameter
+names it: ``application/json;type=a11.sdk.Interaction``. Nothing inside the
+payload repeats that -- a serialized value is ordinary JSON or MessagePack, and
+a peer holding bytes without their metadata is not expected to recover anything
+more than the format itself can express.
+
+So a bare ``application/json`` is a complete description: it decodes to a
+`dict`, `list` or scalar. Ask for a particular ``obj_type`` and the registry
+makes a best effort to produce it, reporting a real failure when the data will
+not fit.
 """
 
 import asyncio
@@ -39,6 +46,15 @@ JSON_MIMETYPE = _native.JSON_MIMETYPE
 MSGPACK_MIMETYPE = _native.MSGPACK_MIMETYPE
 
 _TYPE_PARAMETER = "type"
+
+#: Tags a JSON or MessagePack payload already spells out for itself. A chunk
+#: holding one of these carries no ``type`` parameter at all: writing
+#: ``;type=object`` on an object says nothing a parser did not already know,
+#: and it stops a peer that only has ``application/json`` from being understood.
+_GENERIC_TAGS = frozenset(
+    {"object", "array", "string", "integer", "number", "boolean", "null"}
+)
+
 _MIME_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _MIME_PART_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z?*\[\]-]+$")
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -253,22 +269,38 @@ def _import_qualified(name: str) -> type | None:
 
 
 def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
+    """The mimetype a serialized chunk carries.
+
+    The ``type`` parameter is added only when the tag says something the format
+    does not: an object, array, string or number is left bare.
+    """
     parameters = list(mimetype.without_parameter(_TYPE_PARAMETER).parameters)
-    encoded_identifier = urllib.parse.quote(
-        type_identifier, safe="!#$%&'*+.^_`|~-"
-    )
-    parameters.append((_TYPE_PARAMETER, encoded_identifier))
+    if type_identifier not in _GENERIC_TAGS:
+        parameters.append(
+            (
+                _TYPE_PARAMETER,
+                urllib.parse.quote(type_identifier, safe="!#$%&'*+.^_`|~-"),
+            )
+        )
     suffix = "".join(
         f";{name}={_format_parameter(value)}" for name, value in parameters
     )
     return f"{mimetype.media_type}{suffix}"
 
 
-def _mimetype_patterns(actual: _Mimetype, pattern: _Mimetype) -> bool:
+def _mimetype_matches(actual: _Mimetype, pattern: _Mimetype) -> bool:
+    """Whether a chunk's own mimetype is one the caller asked for.
+
+    The ``type`` parameter is not part of the comparison: a selector chooses a
+    *representation*, and which type comes back is settled separately by the
+    tag and the caller's ``obj_type``.
+    """
     if not fnmatch.fnmatchcase(actual.media_type, pattern.media_type):
         return False
     actual_parameters = dict(actual.parameters)
     for name, expected in pattern.parameters:
+        if name == _TYPE_PARAMETER:
+            continue
         actual_value = actual_parameters.get(name)
         if actual_value is None or not fnmatch.fnmatchcase(
             actual_value, expected
@@ -278,13 +310,16 @@ def _mimetype_patterns(actual: _Mimetype, pattern: _Mimetype) -> bool:
 
 
 def _registration_matches(registered: _Mimetype, selection: _Mimetype) -> bool:
+    """Whether a registration offers the representation a selector asks for.
+
+    A registration never carries a ``type`` parameter -- `_registration_key`
+    strips it -- so only the media type and any other parameters are compared.
+    """
     if not fnmatch.fnmatchcase(registered.media_type, selection.media_type):
         return False
 
     selected_parameters = dict(selection.parameters)
     for name, value in registered.parameters:
-        if name == _TYPE_PARAMETER:
-            continue
         selected_value = selected_parameters.get(name)
         if selected_value is not None and not fnmatch.fnmatchcase(
             value, selected_value
@@ -602,8 +637,9 @@ class SerializationRegistry:
 
         If ``mimetype`` is empty, the closest registered Python type wins and
         registration order chooses its preferred representation.  An explicit
-        MIME value can be exact or contain ``*`` wildcards.  Returned chunks
-        always have an exact MIME type and a stable Python type identifier.
+        MIME value selects a representation and can be exact or contain ``*``
+        wildcards; the object's own type decides the tag, so a ``type``
+        parameter in it is ignored.
         """
 
         selection = None
@@ -616,7 +652,6 @@ class SerializationRegistry:
             ).to_exception()
 
         actual_type = type(obj)
-        actual_identifiers = {actual_type.__name__, self._type_tag(actual_type)}
         candidates = [
             registration
             for registration in self._serializers
@@ -624,17 +659,6 @@ class SerializationRegistry:
             and (
                 selection is None
                 or _registration_matches(registration.mimetype, selection)
-            )
-            and (
-                selection is None
-                or selection.get_parameter(_TYPE_PARAMETER) is None
-                or any(
-                    fnmatch.fnmatchcase(
-                        identifier,
-                        cast(str, selection.get_parameter(_TYPE_PARAMETER)),
-                    )
-                    for identifier in actual_identifiers
-                )
             )
         ]
         candidates.sort(
@@ -695,12 +719,20 @@ class SerializationRegistry:
         mimetype_patterns: str | Sequence[str] = "",
         obj_type: type | None = None,
     ) -> Any:
-        """Deserialize ``chunk`` using the first matching MIME selector.
+        """Deserialize ``chunk``.
 
-        Selectors are matched in order against the chunk's MIME type and may
-        contain wildcards.  If the chunk has no MIME metadata, a supplied exact
-        selector acts as the representation.  A requested ``obj_type`` uses an
-        exact registration first and then registrations for its superclasses.
+        Selectors choose the *representation*: they are matched in order
+        against the chunk's media type and may contain wildcards.  If the chunk
+        has no MIME metadata, a supplied exact selector acts as the
+        representation.
+
+        What comes back is chosen separately.  An explicit ``obj_type`` always
+        wins and the registry makes a best effort to produce it, reporting the
+        deserializer's own error when the data will not fit.  Otherwise the
+        chunk's ``type`` parameter names the type, and when it names nothing --
+        because it is absent, or because the module that would define it was
+        never imported -- the payload decodes to whatever its format describes:
+        a `dict`, a `list`, a scalar.
         """
 
         if not isinstance(chunk, types.Chunk):
@@ -727,9 +759,20 @@ class SerializationRegistry:
         if actual_mimetype:
             actual = _parse_mimetype(actual_mimetype, allow_patterns=False)
 
+        # The tag comes from the chunk itself, never from a selector: a caller
+        # overriding a stale media type is correcting the representation, not
+        # renaming the value.
+        encoded_name = (
+            actual.get_parameter(_TYPE_PARAMETER)
+            if actual is not None
+            else None
+        )
+        target_type = obj_type
+        if target_type is None and encoded_name:
+            target_type = self._resolve_type(encoded_name)
+
         selectors = self._prepare_selectors(mimetype_patterns, actual)
         had_matching_format = False
-        had_unresolved_type = False
 
         for selection in selectors:
             format_registrations = [
@@ -741,33 +784,37 @@ class SerializationRegistry:
                 continue
             had_matching_format = True
 
-            encoded_name = selection.get_parameter(_TYPE_PARAMETER)
-            encoded_type = (
-                self._resolve_type(encoded_name) if encoded_name else None
-            )
-            target_type = self._choose_target_type(
-                obj_type, encoded_name, encoded_type
-            )
-
-            if target_type is None:
+            selected = target_type
+            if selected is None:
+                # A codec registered for exactly one type needs no help
+                # deciding what to build.
                 distinct_types = {
                     registration.obj_type
                     for registration in format_registrations
                 }
                 if len(distinct_types) == 1:
-                    target_type = next(iter(distinct_types))
-                else:
-                    had_unresolved_type = True
-                    continue
+                    selected = next(iter(distinct_types))
+
+            if selected is None:
+                # Nothing named a type, so the representation is the whole
+                # answer.  Registration order picks the codec; the built-in
+                # ones all decode the same bytes the same way.
+                registration = min(
+                    format_registrations,
+                    key=lambda registration: registration.order,
+                )
+                return self._invoke_deserializer(registration, chunk, None)
 
             candidates = [
                 registration
                 for registration in format_registrations
-                if issubclass(target_type, registration.obj_type)
+                if issubclass(selected, registration.obj_type)
             ]
             candidates.sort(
                 key=lambda registration: (
-                    _inheritance_distance(target_type, registration.obj_type),
+                    _inheritance_distance(
+                        cast(type, selected), registration.obj_type
+                    ),
                     registration.order,
                 )
             )
@@ -775,17 +822,14 @@ class SerializationRegistry:
                 continue
 
             registration = candidates[0]
-            result = self._invoke_deserializer(registration, chunk, target_type)
-            expected_type = obj_type or target_type
-            if expected_type is not None and not isinstance(
-                result, expected_type
-            ):
+            result = self._invoke_deserializer(registration, chunk, selected)
+            if not isinstance(result, selected):
                 raise Status(
                     code=StatusCode.INVALID_ARGUMENT,
                     message=(
                         "Deserializer returned"
                         f" {type(result).__name__}; expected"
-                        f" {expected_type.__name__}."
+                        f" {selected.__name__}."
                     ),
                 ).to_exception()
             return result
@@ -795,14 +839,6 @@ class SerializationRegistry:
                 code=StatusCode.INVALID_ARGUMENT,
                 message=(
                     f"The chunk cannot be deserialized as {obj_type.__name__}."
-                ),
-            ).to_exception()
-        if had_unresolved_type:
-            raise Status(
-                code=StatusCode.NOT_FOUND,
-                message=(
-                    "The chunk's MIME type does not identify a registered"
-                    " Python type."
                 ),
             ).to_exception()
         requested = (
@@ -822,16 +858,9 @@ class SerializationRegistry:
                 code=StatusCode.INVALID_ARGUMENT,
                 message="obj_type must be a type.",
             ).to_exception()
+        # A registration names a representation.  Which type it produces is
+        # the obj_type argument, so any type parameter here is redundant.
         parsed = _parse_mimetype(mimetype, allow_patterns=False)
-        encoded_type = parsed.get_parameter(_TYPE_PARAMETER)
-        if encoded_type not in {None, "*", obj_type.__name__}:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=(
-                    "A registered MIME type's type parameter must be '*' or the"
-                    f" class name {obj_type.__name__!r}."
-                ),
-            ).to_exception()
         return parsed.without_parameter(_TYPE_PARAMETER)
 
     @_status_boundary
@@ -879,18 +908,14 @@ class SerializationRegistry:
         if explicit is not None:
             return explicit
 
-        # 2. A previously-seen fully-qualified name.
+        # 2. A previously-seen declared tag or fully-qualified name.
         by_tag = self._known_by_tag.get(name)
         if by_tag is not None:
             return by_tag
 
-        # 3. Legacy bare class name (ambiguous; first-seen wins, as before).
-        known = self._known_types.get(name)
-        if known:
-            return known[0]
-
-        # 4. Scan loaded subclasses, matching the qualified name first (exact,
-        #    collision-free) and the bare name second (back-compatible).
+        # 3. Scan loaded subclasses for one that declares or qualifies as this
+        #    tag.  A bare class name is never enough: two SDKs may each define
+        #    a TextDelta, and picking whichever loaded first is a coin toss.
         visited: set[type] = set()
         pending = [
             candidate
@@ -905,7 +930,6 @@ class SerializationRegistry:
             if (
                 _declared_serial_tag(candidate) == name
                 or _qualified_name(candidate) == name
-                or candidate.__name__ == name
             ):
                 self._remember_type(candidate)
                 return candidate
@@ -914,7 +938,7 @@ class SerializationRegistry:
             except TypeError:
                 pass
 
-        # 5. Last resort: import a dotted qualified name directly.
+        # 4. Last resort: import a dotted qualified name directly.
         resolved = _import_qualified(name)
         if resolved is not None:
             self._remember_type(resolved)
@@ -961,32 +985,14 @@ class SerializationRegistry:
                     selectors.append(actual)
                 continue
             pattern = _parse_mimetype(requested_mimetype, allow_patterns=True)
-            if actual is not None and _mimetype_patterns(actual, pattern):
-                selectors.append(actual)
-                continue
-
-            # An explicit selector is authoritative. Preserve a useful type
-            # identifier from metadata when only the representation is being
-            # overridden (for example, to repair stale metadata).
-            if (
-                actual is not None
-                and pattern.get_parameter(_TYPE_PARAMETER) is None
-                and actual.get_parameter(_TYPE_PARAMETER) is not None
-            ):
-                pattern = _Mimetype(
-                    pattern.media_type,
-                    pattern.parameters
-                    + (
-                        (
-                            _TYPE_PARAMETER,
-                            cast(
-                                str,
-                                actual.get_parameter(_TYPE_PARAMETER),
-                            ),
-                        ),
-                    ),
-                )
-            selectors.append(pattern)
+            # An explicit selector is authoritative, so it stands in for the
+            # chunk's own media type when the two disagree -- which is how
+            # stale metadata gets repaired.
+            selectors.append(
+                actual
+                if actual is not None and _mimetype_matches(actual, pattern)
+                else pattern
+            )
 
         if not selectors:
             if actual is None:
@@ -1001,54 +1007,11 @@ class SerializationRegistry:
         return selectors
 
     @_status_boundary
-    def _choose_target_type(
-        self,
-        requested: type | None,
-        encoded_name: str | None,
-        encoded: type | None,
-    ) -> type | None:
-        if requested is None:
-            return encoded
-        if encoded_name is None:
-            return requested
-        # Language-neutral tags can intentionally be shared.  For example,
-        # both list and tuple use the JSON wire type "array"; an explicit
-        # requested type disambiguates them without leaking Python names.
-        if encoded_name == self._type_tag(requested):
-            return requested
-        if encoded is None:
-            accepted = {
-                requested.__name__,
-                self._type_tag(requested),
-                _qualified_name(requested),
-            }
-            if encoded_name not in accepted:
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=(
-                        f"The chunk contains {encoded_name}, not"
-                        f" {requested.__name__}."
-                    ),
-                ).to_exception()
-            return requested
-        if issubclass(encoded, requested):
-            return encoded
-        if issubclass(requested, encoded):
-            return requested
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message=(
-                f"The chunk contains {encoded.__name__}, not"
-                f" {requested.__name__}."
-            ),
-        ).to_exception()
-
-    @_status_boundary
     def _invoke_deserializer(
         self,
         registration: _DeserializerRegistration,
         chunk: types.Chunk,
-        target_type: type,
+        target_type: type | None,
     ) -> Any:
         first_argument: Any = (
             chunk if registration.receives_chunk else chunk.data
@@ -1062,14 +1025,8 @@ class SerializationRegistry:
         return registration.deserializer(first_argument)
 
 
-_WIRE_TAG = "__a11_serialized_type__"
-_WIRE_VALUE = "value"
 _MSGPACK_MIN_INT = -(2**63)
 _MSGPACK_MAX_INT = 2**64 - 1
-
-
-def _wire_tag(name: str, value: Any, **metadata: Any) -> dict[str, Any]:
-    return {_WIRE_TAG: name, _WIRE_VALUE: value, **metadata}
 
 
 def _timing_value(value: timing.Time | timing.Duration) -> int | str:
@@ -1086,6 +1043,54 @@ def _timing_value(value: timing.Time | timing.Duration) -> int | str:
     return value.nanoseconds_value
 
 
+def _nested_models(
+    annotation: Any, seen: set[type]
+) -> list[type[pydantic.BaseModel]]:
+    """Every model reachable through ``annotation``, innermost first."""
+    found: list[type[pydantic.BaseModel]] = []
+    for argument in getattr(annotation, "__args__", ()):
+        found.extend(_nested_models(argument, seen))
+    if (
+        isinstance(annotation, type)
+        and issubclass(annotation, pydantic.BaseModel)
+        and annotation not in seen
+    ):
+        seen.add(annotation)
+        for field in annotation.model_fields.values():
+            found.extend(_nested_models(field.annotation, seen))
+        found.append(annotation)
+    return found
+
+
+def _normalize_bytes_validation(model_type: type[pydantic.BaseModel]) -> None:
+    """Teach a model tree to read the base64 its byte fields are written as.
+
+    Bytes go out as base64, and pydantic's default is to read a JSON string
+    into `bytes` as UTF-8 -- which quietly mangles any payload that is not
+    text. Its base64 reader accepts the standard alphabet A11 writes as
+    well as the URL-safe one, so this only has to be turned on. Only *reading*
+    is delegated: pydantic writes URL-safe base64, so A11 keeps writing its
+    own.
+
+    Every nested model needs the same treatment, and needs it first: an outer
+    model compiles its fields' schemas into its own, so rebuilding it before
+    its members would bake in the unfixed ones.
+    """
+    if model_type in _NORMALIZED_MODELS:
+        return
+    for model in _nested_models(model_type, set()):
+        _NORMALIZED_MODELS.add(model)
+        if model.model_config.get("val_json_bytes") != "base64":
+            model.model_config = {
+                **model.model_config,
+                "val_json_bytes": "base64",
+            }
+        model.model_rebuild(force=True)
+
+
+_NORMALIZED_MODELS: set[type] = set()
+
+
 def _pydantic_values(model: pydantic.BaseModel) -> dict[str, Any]:
     result = {
         name: getattr(model, name)
@@ -1098,122 +1103,67 @@ def _pydantic_values(model: pydantic.BaseModel) -> dict[str, Any]:
     return result
 
 
-def _to_wire(
-    value: Any,
-    *,
-    binary: bool,
-    top_level: bool = False,
-    tag_for: Callable[[type], str] | None = None,
-) -> Any:
-    resolve_tag = tag_for or _qualified_name
+def _to_wire(value: Any, *, binary: bool) -> Any:
+    """Encode ``value`` as a JSON- or MessagePack-ready tree.
 
-    def rec(item: Any, *, top: bool = False) -> Any:
-        return _to_wire(item, binary=binary, top_level=top, tag_for=resolve_tag)
+    Nothing here is tagged.  A `bytes` becomes base64 (or, in MessagePack, real
+    bytes), a `datetime` becomes an ISO string, a `set` becomes an array --
+    exactly what the format can say, and no more.  Recovering the Python type
+    is the reader's job, and it does that from the chunk's ``;type=`` or the
+    caller's ``obj_type``.
+    """
+
+    def rec(item: Any) -> Any:
+        return _to_wire(item, binary=binary)
 
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, int):
         if binary and not (_MSGPACK_MIN_INT <= value <= _MSGPACK_MAX_INT):
-            return _wire_tag("int", str(value))
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "MessagePack cannot represent integers outside the 64-bit"
+                    " range; use JSON for arbitrary-precision integers."
+                ),
+            ).to_exception()
         return value
     if isinstance(value, float):
-        if math.isfinite(value):
-            return value
-        marker = (
-            "nan" if math.isnan(value) else ("+inf" if value > 0 else "-inf")
-        )
-        return _wire_tag("float", marker)
-    if isinstance(value, bytes):
-        encoded: str | bytes = (
-            value if binary else base64.b64encode(value).decode("ascii")
-        )
-        return encoded if top_level else _wire_tag("bytes", encoded)
-    if isinstance(value, bytearray):
-        encoded = (
-            bytes(value) if binary else base64.b64encode(value).decode("ascii")
-        )
-        return encoded if top_level else _wire_tag("bytearray", encoded)
-    if isinstance(value, timing.Time):
-        encoded = _timing_value(value)
-        if isinstance(encoded, int):
-            encoded = rec(encoded)
-        return encoded if top_level else _wire_tag("a11.Time", encoded)
-    if isinstance(value, timing.Duration):
-        encoded = _timing_value(value)
-        if isinstance(encoded, int):
-            encoded = rec(encoded)
-        return encoded if top_level else _wire_tag("a11.Duration", encoded)
-    if isinstance(value, datetime.datetime):
-        encoded = value.isoformat()
-        return encoded if top_level else _wire_tag("datetime", encoded)
-    if isinstance(value, datetime.date):
-        encoded = value.isoformat()
-        return encoded if top_level else _wire_tag("date", encoded)
-    if isinstance(value, datetime.time):
-        encoded = value.isoformat()
-        return encoded if top_level else _wire_tag("time", encoded)
+        # JSON has no NaN or infinity; _serialize_json rejects them. MessagePack
+        # carries them natively.
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        if binary:
+            return bytes(value)
+        return base64.b64encode(value).decode("ascii")
+    if isinstance(value, (timing.Time, timing.Duration)):
+        return _timing_value(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
     if isinstance(value, datetime.timedelta):
-        encoded = (
+        return (
             value.days * 86_400_000_000
             + value.seconds * 1_000_000
             + value.microseconds
         )
-        encoded = rec(encoded)
-        return encoded if top_level else _wire_tag("timedelta", encoded)
     if isinstance(value, uuid.UUID):
-        encoded = str(value)
-        return encoded if top_level else _wire_tag("uuid", encoded)
-    if isinstance(
-        value,
-        (
-            types.ChunkMetadata,
-            types.Chunk,
-            types.NodeRef,
-            types.NodeFragment,
-            types.Port,
-            types.ActionMessage,
-            types.WireMessage,
-            Status,
-        ),
-    ):
-        encoded = rec(value.model_dump(), top=True)
-        if top_level:
-            return encoded
-        return _wire_tag(
-            "a11.value", encoded, class_name=resolve_tag(type(value))
-        )
+        return str(value)
+    if isinstance(value, _NATIVE_DATA_TYPES):
+        # The native dumpers are exact.  In JSON mode they have already spelled
+        # bytes as base64 and timestamps as RFC 3339; in binary mode the walk
+        # below does it.
+        return rec(value.model_dump(mode="python" if binary else "json"))
     if isinstance(value, pydantic.BaseModel):
-        encoded = {
-            key: rec(item) for key, item in _pydantic_values(value).items()
-        }
-        if top_level and _WIRE_TAG not in encoded:
-            return encoded
-        return _wire_tag(
-            "pydantic",
-            encoded,
-            class_name=resolve_tag(type(value)),
-        )
+        return {key: rec(item) for key, item in _pydantic_values(value).items()}
     if isinstance(value, enum.Enum):
         return rec(value.value)
     if isinstance(value, dict):
-        if (
-            all(isinstance(key, str) for key in value)
-            and _WIRE_TAG not in value
-        ):
-            return {key: rec(item) for key, item in value.items()}
-        pairs = [[rec(key), rec(item)] for key, item in value.items()]
-        return _wire_tag("dict", pairs)
-    if isinstance(value, list):
+        # Keys go out as they are: JSON stringifies the scalars it can and
+        # rejects the rest, and MessagePack keeps them. Neither invents a
+        # representation A11 would then have to teach every peer to read.
+        return {key: rec(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
         return [rec(item) for item in value]
-    if isinstance(value, tuple):
-        values = [rec(item) for item in value]
-        return values if top_level else _wire_tag("tuple", values)
-    if isinstance(value, set):
-        values = [rec(item) for item in value]
-        return values if top_level else _wire_tag("set", values)
-    if isinstance(value, frozenset):
-        values = [rec(item) for item in value]
-        return values if top_level else _wire_tag("frozenset", values)
 
     raise Status(
         code=StatusCode.INVALID_ARGUMENT,
@@ -1286,137 +1236,19 @@ def _make_duration(value: Any) -> timing.Duration:
     return timing.Duration(value)
 
 
-def _from_wire(value: Any, resolver: Callable[[str], type | None]) -> Any:
-    if isinstance(value, list):
-        return [_from_wire(item, resolver) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    tag = value.get(_WIRE_TAG)
-    if not isinstance(tag, str):
-        return {key: _from_wire(item, resolver) for key, item in value.items()}
-    encoded = value.get(_WIRE_VALUE)
-    if tag == "int":
-        try:
-            return int(encoded)
-        except (TypeError, ValueError) as exc:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Invalid tagged integer.",
-            ).to_exception() from exc
-    if tag == "float":
-        values = {"nan": math.nan, "+inf": math.inf, "-inf": -math.inf}
-        if encoded not in values:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Invalid tagged float.",
-            ).to_exception()
-        return values[encoded]
-    if tag == "bytes":
-        return _decode_base64(encoded)
-    if tag == "bytearray":
-        return bytearray(_decode_base64(encoded))
-    if tag == "datetime":
-        return _parse_datetime(encoded, datetime.datetime)
-    if tag == "date":
-        return _parse_datetime(encoded, datetime.date)
-    if tag == "time":
-        return _parse_datetime(encoded, datetime.time)
-    if tag == "timedelta":
-        encoded = _from_wire(encoded, resolver)
-        if type(encoded) is not int:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Invalid tagged timedelta.",
-            ).to_exception()
-        return datetime.timedelta(microseconds=encoded)
-    if tag == "uuid":
-        try:
-            return uuid.UUID(encoded)
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Invalid tagged UUID.",
-            ).to_exception() from exc
-    if tag == "a11.Time":
-        return _make_time(_from_wire(encoded, resolver))
-    if tag == "a11.Duration":
-        return _make_duration(_from_wire(encoded, resolver))
-    if tag in {"tuple", "set", "frozenset"}:
-        if not isinstance(encoded, list):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Invalid tagged {tag}.",
-            ).to_exception()
-        items = [_from_wire(item, resolver) for item in encoded]
-        try:
-            return {"tuple": tuple, "set": set, "frozenset": frozenset}[tag](
-                items
-            )
-        except TypeError as exc:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Invalid tagged {tag}: {exc}.",
-            ).to_exception() from exc
-    if tag == "dict":
-        if not isinstance(encoded, list):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT, message="Invalid tagged dict."
-            ).to_exception()
-        result = {}
-        try:
-            for pair in encoded:
-                if not isinstance(pair, list) or len(pair) != 2:
-                    raise Status(
-                        code=StatusCode.INVALID_ARGUMENT,
-                        message="Invalid key/value pair in tagged dict.",
-                    ).to_exception()
-                key, item = pair
-                result[_from_wire(key, resolver)] = _from_wire(item, resolver)
-        except TypeError as exc:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Invalid tagged dict key: {exc}.",
-            ).to_exception() from exc
-        return result
-    if tag == "pydantic":
-        class_name = value.get("class_name")
-        model_type = (
-            resolver(class_name) if isinstance(class_name, str) else None
-        )
-        if model_type is None or not issubclass(model_type, pydantic.BaseModel):
-            raise Status(
-                code=StatusCode.NOT_FOUND,
-                message=(
-                    f"Pydantic model {class_name!r} is not registered or"
-                    " loaded."
-                ),
-            ).to_exception()
-        decoded = _from_wire(encoded, resolver)
-        return _validate_pydantic_model(model_type, decoded)
-    if tag == "a11.value":
-        class_name = value.get("class_name")
-        model_type = (
-            resolver(class_name) if isinstance(class_name, str) else None
-        )
-        if model_type not in _NATIVE_DATA_TYPES:
-            raise Status(
-                code=StatusCode.NOT_FOUND,
-                message=(
-                    f"A11 value type {class_name!r} is not registered or"
-                    " loaded."
-                ),
-            ).to_exception()
-        return model_type.model_validate(_from_wire(encoded, resolver))
-
-    # A normal user mapping can contain the reserved key.  Unknown tags are
-    # therefore treated as ordinary data rather than rejected.
-    return {key: _from_wire(item, resolver) for key, item in value.items()}
-
-
 def _validate_pydantic_model(
-    model_type: type[pydantic.BaseModel], value: Any
+    model_type: type[pydantic.BaseModel],
+    value: Any,
+    *,
+    binary: bool = True,
 ) -> pydantic.BaseModel:
+    """Rebuild a model from a wire tree.
+
+    A JSON tree spells the model's byte fields as base64, which only pydantic's
+    JSON validator reads as bytes -- so the tree goes back through JSON rather
+    than being validated as Python objects. A MessagePack tree already carries
+    real bytes and validates directly.
+    """
     validation_value = value
     if (
         getattr(model_type, "__pydantic_root_model__", False)
@@ -1424,9 +1256,13 @@ def _validate_pydantic_model(
         and set(value) == {"root"}
     ):
         validation_value = value["root"]
-    result = model_type.model_validate(
-        validation_value, by_alias=True, by_name=True
-    )
+    _normalize_bytes_validation(model_type)
+    if binary:
+        result = model_type.model_validate(
+            validation_value, by_alias=True, by_name=True
+        )
+    else:
+        result = _validate_model_json(model_type, json.dumps(validation_value))
     if not isinstance(result, model_type):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -1437,21 +1273,37 @@ def _validate_pydantic_model(
     return result
 
 
+def _validate_model_json(
+    model_type: type[pydantic.BaseModel], data: str | bytes
+) -> pydantic.BaseModel:
+    _normalize_bytes_validation(model_type)
+    return model_type.model_validate_json(data, by_alias=True, by_name=True)
+
+
 def _coerce_target(
     value: Any,
-    target: type,
-    resolver: Callable[[str], type | None],
+    target: type | None,
+    *,
+    binary: bool = True,
 ) -> Any:
-    value = _from_wire(value, resolver)
+    """Best-effort conversion of a decoded tree into ``target``.
+
+    ``None`` asks for nothing in particular, so the tree is the answer.  A
+    target the data cannot fill raises rather than returning something
+    plausible: that is the "real deserialization error" the caller asked to
+    hear about.
+    """
+    if target is None:
+        return value
 
     if target in _NATIVE_DATA_TYPES:
         if isinstance(value, target):
             return value
-        return target.model_validate(value)
+        return types.validate_wire(target, value)
     if issubclass(target, pydantic.BaseModel):
         if isinstance(value, target):
             return value
-        return _validate_pydantic_model(target, value)
+        return _validate_pydantic_model(target, value, binary=binary)
     if target is dict:
         if not isinstance(value, dict):
             raise Status(
@@ -1561,12 +1413,10 @@ def _coerce_target(
     return value
 
 
-def _serialize_json(
-    obj: Any, tag_for: Callable[[type], str] | None = None
-) -> bytes:
+def _serialize_json(obj: Any) -> bytes:
     try:
         return json.dumps(
-            _to_wire(obj, binary=False, top_level=True, tag_for=tag_for),
+            _to_wire(obj, binary=False),
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
@@ -1580,11 +1430,22 @@ def _serialize_json(
         ).to_exception() from exc
 
 
-def _deserialize_json(
-    data: str | bytes,
-    obj_type: type,
-    resolver: Callable[[str], type | None],
-) -> Any:
+def _deserialize_json(data: str | bytes, obj_type: type | None) -> Any:
+    # A declared model reads the payload itself: its annotations are what turn
+    # the tree back into Chunks, bytes and timestamps, and going straight to
+    # pydantic's JSON validator keeps the bytes from being read as UTF-8.
+    if (
+        isinstance(obj_type, type)
+        and obj_type not in _NATIVE_DATA_TYPES
+        and issubclass(obj_type, pydantic.BaseModel)
+    ):
+        try:
+            return _validate_model_json(obj_type, data)
+        except pydantic.ValidationError as exc:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Invalid {obj_type.__name__} JSON: {exc}",
+            ).to_exception() from exc
     try:
         decoded = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
@@ -1592,17 +1453,12 @@ def _deserialize_json(
             code=StatusCode.INVALID_ARGUMENT,
             message=f"Invalid JSON data: {exc}",
         ).to_exception() from exc
-    return _coerce_target(decoded, obj_type, resolver)
+    return _coerce_target(decoded, obj_type, binary=False)
 
 
-def _serialize_msgpack(
-    obj: Any, tag_for: Callable[[type], str] | None = None
-) -> bytes:
+def _serialize_msgpack(obj: Any) -> bytes:
     try:
-        return msgpack.packb(
-            _to_wire(obj, binary=True, top_level=True, tag_for=tag_for),
-            use_bin_type=True,
-        )
+        return msgpack.packb(_to_wire(obj, binary=True), use_bin_type=True)
     except StatusException:
         raise
     except (TypeError, ValueError, OverflowError, msgpack.PackException) as exc:
@@ -1612,11 +1468,7 @@ def _serialize_msgpack(
         ).to_exception() from exc
 
 
-def _deserialize_msgpack(
-    data: bytes,
-    obj_type: type,
-    resolver: Callable[[str], type | None],
-) -> Any:
+def _deserialize_msgpack(data: bytes, obj_type: type | None) -> Any:
     try:
         decoded = msgpack.unpackb(data, raw=False, strict_map_key=False)
     except (TypeError, ValueError, msgpack.UnpackException) as exc:
@@ -1624,7 +1476,7 @@ def _deserialize_msgpack(
             code=StatusCode.INVALID_ARGUMENT,
             message=f"Invalid MessagePack data: {exc}",
         ).to_exception() from exc
-    return _coerce_target(decoded, obj_type, resolver)
+    return _coerce_target(decoded, obj_type)
 
 
 _NATIVE_DATA_TYPES: tuple[type, ...] = (
@@ -1641,9 +1493,7 @@ _NATIVE_DATA_TYPES: tuple[type, ...] = (
 
 #: Canonical cross-language tags for the runtime's own types. They are native
 #: (pybind11) classes and so cannot declare an ``A11_SERIAL_TAG`` ClassVar the
-#: way an SDK model does; a registry pins their tags from here instead. Readers
-#: still accept the historical bare names ("Chunk", "Status") through
-#: ``SerializationRegistry._resolve_type``'s class-name fallback.
+#: way an SDK model does; a registry pins their tags from here instead.
 CORE_TYPE_TAGS: dict[type, str] = {
     types.ChunkMetadata: serial_tags.CHUNK_METADATA,
     types.Chunk: serial_tags.CHUNK,
@@ -1684,34 +1534,23 @@ DEFAULT_SERIALIZABLE_TYPES: tuple[type, ...] = (
 
 
 def _register_default_serializers(registry: SerializationRegistry) -> None:
-    def serialize_json(obj: Any) -> bytes:
-        return _serialize_json(obj, registry._type_tag)
-
-    def serialize_msgpack(obj: Any) -> bytes:
-        return _serialize_msgpack(obj, registry._type_tag)
-
-    def deserialize_json(data: str | bytes, obj_type: type) -> Any:
-        return _deserialize_json(data, obj_type, registry._resolve_type)
-
-    def deserialize_msgpack(data: bytes, obj_type: type) -> Any:
-        return _deserialize_msgpack(data, obj_type, registry._resolve_type)
-
     for obj_type in DEFAULT_SERIALIZABLE_TYPES:
         registry.register(
             obj_type,
             JSON_MIMETYPE,
-            serialize_json,
-            deserialize_json,
+            _serialize_json,
+            _deserialize_json,
         )
         registry.register(
             obj_type,
             MSGPACK_MIMETYPE,
-            serialize_msgpack,
-            deserialize_msgpack,
+            _serialize_msgpack,
+            _deserialize_msgpack,
         )
 
-    # JSON-native values use language-neutral tags.  Legacy bare Python tags
-    # remain accepted through _resolve_type's class-name compatibility path.
+    # JSON-native values use language-neutral tags rather than Python's names.
+    # These are exactly the tags _format_exact_mimetype leaves off the wire:
+    # the format already says this much.
     canonical_json_tags = {
         dict: "object",
         list: "array",

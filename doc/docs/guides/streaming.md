@@ -51,9 +51,10 @@ These do different jobs, and a correct writer usually wants **both**:
 - `put_final(value)` (equivalently `put(value)` then `put_null_final()`) marks
   the *end of the data*, so a reader knows the last value is whole.
 - `drain_and_close()` waits for buffered writes to flush, then **closes the
-  store with an OK status and refuses further writes**. On its own,
-  `put_final()` leaves the store open to more writes; without a final marker, a
-  `consume()` reader cannot tell the value was complete.
+  store with an OK status and refuses further writes**, and tells any attached
+  stream so a peer's copy of the node closes as well. On its own, `put_final()`
+  leaves the store open to more writes; without a final marker, a `consume()`
+  reader cannot tell the value was complete.
 
 A value can be anything the node's serialization registry can encode (strings,
 dicts, dataclasses, Pydantic models, …); see

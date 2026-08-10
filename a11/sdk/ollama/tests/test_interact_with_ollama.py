@@ -205,7 +205,51 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
         for interaction in new_interactions
         for call in interaction.action_calls
     ]
-    assert call_ids == ["call_0", "call_1"]
+    assert len(call_ids) == 2
+    assert len(set(call_ids)) == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_call_ids_differ_between_turns(monkeypatch):
+    """A second turn must not reuse the first turn's synthesised call ids.
+
+    Regression: the counter restarted at zero on every handler invocation, so
+    every turn's first tool call was ``call_0``. A caller keeps one session — and
+    so one node map — for a whole conversation, and the runner gives a call's
+    nested action its id verbatim, so the second message's ``call_0`` resolved to
+    the first message's already-closed nodes: feeding its input failed with
+    "ChunkStoreWriter is closed" and the model got that error where its tool
+    result should have been. This is only visible across turns, which is why the
+    per-round test above does not catch it.
+    """
+
+    def rounds():
+        return [
+            [
+                _chunk(_message(content="Looking.")),
+                _chunk(_message(tool_calls=[("get_info", {"path": "~"})])),
+                _chunk(done=True),
+            ],
+            [
+                _chunk(_message(content="Done.")),
+                _chunk(done=True),
+            ],
+        ]
+
+    def call_ids(new_interactions) -> set[str]:
+        return {
+            call.id
+            for interaction in new_interactions
+            for call in interaction.action_calls
+        }
+
+    _, first = await _run(rounds(), monkeypatch)
+    _, second = await _run(rounds(), monkeypatch)
+
+    first_ids = call_ids(first)
+    second_ids = call_ids(second)
+    assert len(first_ids) == 1 and len(second_ids) == 1
+    assert first_ids.isdisjoint(second_ids)
 
 
 @pytest.mark.asyncio
@@ -224,3 +268,161 @@ async def test_thoughts_stream_separately_from_text(monkeypatch):
 
     text, _ = await _run(rounds, monkeypatch, read="text_output")
     assert "".join(text) == "Hello."
+
+
+def test_a_claude_tool_result_is_named_for_ollama():
+    """Continuing a Claude conversation on Ollama names its tool results.
+
+    Ollama identifies a tool result by the tool's *name*; every other backend
+    identifies it by the id of the call it answers, and a bridged result
+    therefore arrives with an id and no name. Sending that id as `tool_name`
+    hands the model a name it never called — so the name is recovered from the
+    tool call in the same conversation.
+    """
+    pytest.importorskip("anthropic")
+    from a11.sdk.anthropic import interact_with_claude  # registers the normalizer
+
+    del interact_with_claude
+
+    def claude(content: dict) -> Interaction:
+        return Interaction(
+            content=[a11.to_chunk(content)],
+            backend_specific_metadata={
+                mod.llm.BACKEND_METADATA_KEY: str(
+                    mod.llm.Backend.CLAUDE
+                ).encode()
+            },
+        )
+
+    conversation = mod.Conversation()
+    conversation.feed_next_interaction(
+        claude(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "get_info",
+                        "input": {"path": "~"},
+                    }
+                ],
+            }
+        )
+    )
+    conversation.feed_next_interaction(
+        claude(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "listing of ~",
+                    }
+                ],
+            }
+        )
+    )
+
+    assistant, tool_result = conversation.messages
+    assert assistant["tool_calls"][0]["function"]["name"] == "get_info"
+    assert tool_result["role"] == "tool"
+    assert tool_result["tool_name"] == "get_info"
+    assert tool_result["content"] == "listing of ~"
+
+
+def test_a_nested_tool_schema_survives_the_sdk():
+    """The model is shown the fields of an object parameter, not just its type.
+
+    Regression: tools were handed to the client as plain dicts, and
+    `Tool.model_validate` coerces those into its own `Tool` — whose parameters
+    are `Property` objects with no `properties` of their own. An action taking a
+    `request` object therefore reached the model as `{"type": "object"}`, its
+    `query` and `max_results` fields silently gone, while Claude and Gemini were
+    sent the schema as written. This asserts against the SDK's real validation
+    path, so an SDK or pydantic upgrade that breaks the passthrough fails here.
+    """
+    request_schema = {
+        "type": "object",
+        "description": "What to search for.",
+        "properties": {
+            "query": {"type": "string", "description": "Substring to match."},
+            "max_results": {"type": "integer", "description": "How many."},
+        },
+        "required": ["query"],
+    }
+    tool = {
+        "name": "search_project",
+        "description": "Find project files.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"request": request_schema},
+            "required": ["request"],
+        },
+    }
+
+    built = mod._build_tools([tool])
+
+    # `Tool.model_validate` is exactly what the client runs on every tool it
+    # sends (`ollama._client._copy_tools`).
+    sent = ollama.Tool.model_validate(built[0]).model_dump(exclude_none=True)
+    parameters = sent["function"]["parameters"]
+    assert parameters["properties"]["request"] == request_schema
+    assert parameters["required"] == ["request"]
+
+
+@pytest.mark.asyncio
+async def test_a_raw_tool_schema_serializes_without_warnings():
+    """The passthrough tool must not narrate itself into the log every turn.
+
+    Pydantic warns when it serializes a value that is not of the declared type,
+    which is exactly what `_PassthroughTool` is; the stack varies enough that the
+    "once per location" rule does not collapse the copies, so each turn logged
+    another one. This drives the real `chat` call — which builds and serializes
+    the request, and for a streaming call does no I/O — and asserts nothing is
+    warned and nothing is lost.
+    """
+    import warnings
+
+    from ollama import AsyncClient
+
+    tool = {
+        "name": "search_project",
+        "description": "Find project files.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                }
+            },
+            "required": ["request"],
+        },
+    }
+    built = mod._build_tools([tool])
+    # Port 9 (discard) so a future SDK that does connect fails fast rather than
+    # hanging; the assertion is about warnings, not about the response.
+    client = AsyncClient(host="http://127.0.0.1:9")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with mod._serializing_a_raw_tool_schema():
+            try:
+                await client.chat(
+                    model="m",
+                    messages=[{"role": "user", "content": "hi"}],
+                    tools=built,
+                    stream=True,
+                )
+            except Exception:  # connection, if it ever gets that far
+                pass
+
+    assert [str(warning.message) for warning in caught] == []
+
+    # And the silencing did not come at the cost of the schema.
+    sent = ollama.Tool.model_validate(built[0]).model_dump(exclude_none=True)
+    request = sent["function"]["parameters"]["properties"]["request"]
+    assert request["properties"]["query"] == {"type": "string"}

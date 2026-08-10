@@ -182,11 +182,38 @@ absl::Status PutJson(AsyncNode& node, const T& value, bool final) {
   return node.PutChunk(std::move(chunk), std::nullopt, final).Await().status();
 }
 
-absl::Status PutText(AsyncNode& node, const std::string& text, bool final) {
+// Encodes a string the way every other language's registry expects one: a JSON
+// scalar, not a bare `text/plain` payload. A port's declared type is only a
+// schema label; deserializers are matched on the chunk's mimetype, and nothing
+// is registered for `text/plain`. JSON already says this is a string, so the
+// mimetype carries no type parameter to repeat it.
+data::Chunk TextChunk(const std::string& text) {
   data::Chunk chunk;
-  chunk.metadata = data::ChunkMetadata{.mimetype = "text/plain"};
-  chunk.data = text;
-  return node.PutChunk(std::move(chunk), std::nullopt, final).Await().status();
+  chunk.metadata =
+      data::ChunkMetadata{.mimetype = std::string(a11::data::kJsonMimetype)};
+  chunk.data = nlohmann::json(text).dump();
+  return chunk;
+}
+
+// Adapts a chunk write to the Task the recognizer callbacks return. The write
+// is already asynchronous -- the node's writer batches, persists and tees to
+// attached streams on its own state machine -- so a single put needs no fiber.
+// Cancellation is forwarded to the write so the Task stays a drop-in for the
+// SubmitTask this replaced: a promise-backed Future with no cancellation source
+// answers Cancel() with Unimplemented instead of unwinding the operation.
+a11::Task WriteTask(a11::Future<std::uint32_t> write) {
+  a11::Promise<a11::Unit> promise;
+  a11::Task task = promise.future();
+  promise.SetCancellationCallback([write]() { write.Cancel().IgnoreError(); })
+      .IgnoreError();
+  write.OnReady([promise = std::move(promise)](
+                    const absl::StatusOr<std::uint32_t>& result) mutable {
+    promise
+        .SetResult(result.ok() ? absl::StatusOr<a11::Unit>(a11::Unit{})
+                               : absl::StatusOr<a11::Unit>(result.status()))
+        .IgnoreError();
+  });
+  return task;
 }
 
 // -------------------------- list_audio_inputs ------------------------------
@@ -302,8 +329,8 @@ ActionHandler MakeCaptureAudioHandler() {
       // Tear down and join the watchers before touching outputs / returning.
       RequestStop(stop);
       control_node->CancelReader();
-      (void)control_task.Await();
-      (void)deadline_task.Await();
+      control_task.Await().IgnoreError();
+      deadline_task.Await().IgnoreError();
 
       if (cancelled) {
         return absl::CancelledError("capture_audio cancelled");
@@ -318,6 +345,7 @@ ActionHandler MakeCaptureAudioHandler() {
       ABSL_RETURN_IF_ERROR(events_out->DrainAndClose().Await().status());
       ABSL_RETURN_IF_ERROR(audio_out->PutNullFinal().Await().status());
       ABSL_RETURN_IF_ERROR(audio_out->DrainAndClose().Await().status());
+
       return absl::OkStatus();
     });
   };
@@ -370,13 +398,15 @@ ActionHandler MakeCaptureTranscriptionHandler() {
       // epilogue is the single finalizer for both outputs (exactly-once).
       OnTranscription on_piece =
           [pieces_out](std::optional<std::string> piece) -> a11::Task {
-        return a11::SubmitTask(
-            [pieces_out, piece = std::move(piece)]() -> absl::Status {
-              if (!piece.has_value()) {
-                return pieces_out->PutNullFinal().Await().status();
-              }
-              return PutText(*pieces_out, *piece, /*final=*/false);
-            });
+        if (piece.has_value()) {
+          return WriteTask(pieces_out->PutChunk(TextChunk(*piece)));
+        }
+        // The terminal call sequences two writer operations, so it takes a
+        // fiber; it runs once per action, not once per piece.
+        return a11::SubmitTask([pieces_out]() -> absl::Status {
+          ABSL_RETURN_IF_ERROR(pieces_out->PutNullFinal().Await().status());
+          return pieces_out->DrainAndClose().Await().status();
+        });
       };
       OnRecognitionDone on_done = [events_out]() -> a11::Task {
         return a11::SubmitTask([events_out]() -> absl::Status {
@@ -459,13 +489,13 @@ ActionHandler MakeTranscribeAudioHandler() {
 
       OnTranscription on_piece =
           [pieces_out](std::optional<std::string> piece) -> a11::Task {
-        return a11::SubmitTask(
-            [pieces_out, piece = std::move(piece)]() -> absl::Status {
-              if (!piece.has_value()) {
-                return pieces_out->PutNullFinal().Await().status();
-              }
-              return PutText(*pieces_out, *piece, /*final=*/false);
-            });
+        if (piece.has_value()) {
+          return WriteTask(pieces_out->PutChunk(TextChunk(*piece)));
+        }
+        return a11::SubmitTask([pieces_out]() -> absl::Status {
+          ABSL_RETURN_IF_ERROR(pieces_out->PutNullFinal().Await().status());
+          return pieces_out->DrainAndClose().Await().status();
+        });
       };
       OnRecognitionDone on_done = [events_out]() -> a11::Task {
         return a11::SubmitTask([events_out]() -> absl::Status {

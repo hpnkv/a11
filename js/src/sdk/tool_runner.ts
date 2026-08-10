@@ -70,15 +70,11 @@ export function getToolDefinitions(
 
 function readActionCalls(interaction: Interaction): StatusOr<ActionCall[]> {
   const calls: ActionCall[] = [];
-  for (const raw of interaction.action_calls ?? []) {
-    if (typeof raw !== 'object' || raw === null) {
-      return invalidArgumentError('Interaction action_calls entries must be objects.');
+  for (const call of interaction.action_calls ?? []) {
+    if (!call.name || !call.id) {
+      return invalidArgumentError('Each action call needs a name and id.');
     }
-    const candidate = raw as Record<string, unknown>;
-    if (typeof candidate.name !== 'string' || typeof candidate.id !== 'string') {
-      return invalidArgumentError('Each action call needs a string name and id.');
-    }
-    calls.push({ name: candidate.name, id: candidate.id });
+    calls.push({ name: call.name, id: call.id });
   }
   return calls;
 }

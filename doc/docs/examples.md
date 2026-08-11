@@ -6,6 +6,7 @@ makes it work.
 
 | Example | What you will build |
 | --- | --- |
+| [Compose actions without deploying code](guides/flow.md) | Describe a composition of existing actions in the Flow language and run it as one action. |
 | [Stream data through an AsyncNode](guides/streaming.md) | Produce and consume an ordered asynchronous stream, including clean finalisation. |
 | [A WebSocket echo session](guides/echo-session.md) | Connect a client and server session over WebSocket and stream an action result back. |
 | [Talk to a model](guides/llm.md) | Call `interact_with_llm`, feed a conversation, and print model output as it arrives. |

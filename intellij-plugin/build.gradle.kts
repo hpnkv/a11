@@ -61,6 +61,19 @@ kotlin {
 }
 
 intellijPlatform {
+    // CLion 2026.1 cannot run `traverseUI`, which is what this task does: CLion
+    // overrides the starter to relaunch itself "with the Radler language plugin"
+    // and builds the child command line with a `-D` flag where the executable
+    // should be, so it dies in a second with
+    //   Cannot run program "-DactionSystem.update.actions.warn.dataRules.on.edt=false"
+    // from CLionTraverseUIStarter — before any settings page is looked at, and
+    // identically with or without this plugin's own extensions. Searchable
+    // options only pre-index the Settings search field; every settings page this
+    // plugin contributes is still there and still found by its name. Re-enable
+    // when that starter is fixed, or when building against an IDE that does not
+    // override traverseUI (`platformType=IC`).
+    buildSearchableOptions = false
+
     pluginConfiguration {
         id = "dev.curiositystack.a11.clion"
         name = providers.gradleProperty("pluginName")

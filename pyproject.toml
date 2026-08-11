@@ -146,6 +146,9 @@ dev = [
     "pybind11-stubgen>=2.5.5",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    # a11.sdk.skill parses SKILL.md frontmatter; only the tests and the tools
+    # that generate a skill need it, so it is not a runtime dependency.
+    "pyyaml>=6.0",
     "ruff>=0.12.0",
 ]
 anthropic = [

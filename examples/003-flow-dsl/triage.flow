@@ -1,0 +1,45 @@
+# A loop with carried state, a stop condition, and a branch: the shape an agent
+# turn has, expressed without any code to deploy.
+
+flow triage {
+  describe "Run a triage step until it is confident enough, then report."
+
+  in  report:  string required "What to triage."
+  out passes:  object stream         "Every pass, as it happened."
+  out verdict: string          "What the last pass concluded."
+  out notes:   string          "The trail it left."
+
+  repeat state = {"round": 0, "notes": []} max 6 {
+    step = run triage-step(state: state)
+
+    # What the next pass starts from, and when to stop asking.
+    state <- step.next
+    until step.next.confidence >= 0.8
+
+    step.next -> passes
+
+    if step.next.done {
+      step.next.verdict -> verdict
+      # `join` the stage joins a stream; `join` the function joins a list, which
+      # is what the trail in this one value is.
+      step.next.notes | map join(it, ", ") -> notes
+    }
+  }
+}
+
+flow triage-strictly {
+  describe "Triage, but refuse a report too short to be worth a pass."
+
+  in  report:  string required
+  out verdict: string
+
+  if len(report) < 12 {
+    fail invalid_argument "that report is too short to triage"
+  }
+
+  inner = run triage(report: report)
+  inner.verdict -> verdict
+
+  skip inner.passes
+  skip inner.notes
+}

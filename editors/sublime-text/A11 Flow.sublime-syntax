@@ -1,0 +1,354 @@
+%YAML 1.2
+---
+# Syntax highlighting for the A11 Flow language (see a11/flow/ in the A11 repo).
+#
+# Install: copy this directory's files into
+#   ~/Library/Application Support/Sublime Text/Packages/A11 Flow/   (macOS)
+#   %APPDATA%\Sublime Text\Packages\A11 Flow\                       (Windows)
+#   ~/.config/sublime-text/Packages/A11 Flow/                       (Linux)
+#
+# Every keyword may be written in lower case or UPPER CASE, but not Mixed, which
+# is exactly what the patterns below accept: a word matches as a keyword only if
+# it is uniformly cased, so `For` highlights as a name just as the compiler reads
+# it as one.
+name: A11 Flow
+file_extensions: [flow]
+scope: source.a11flow
+
+variables:
+  # A name: letters, digits, underscores, and dashes between word characters.
+  name: '[A-Za-z_$][A-Za-z0-9_$]*(?:-[A-Za-z0-9_$]+)*'
+  # `word` written all lower or all upper, and not part of a longer name.
+  kw_boundary: '(?![A-Za-z0-9_$-])'
+
+contexts:
+  main:
+    - include: comments
+    - include: flow-declaration
+    - include: statements
+
+  comments:
+    - match: '#'
+      scope: punctuation.definition.comment.a11flow
+      push:
+        - meta_scope: comment.line.number-sign.a11flow
+        - match: $\n?
+          pop: true
+
+  # --- flow declarations ----------------------------------------------------
+
+  flow-declaration:
+    - match: '\b(flow|FLOW){{kw_boundary}}'
+      scope: keyword.declaration.flow.a11flow
+      push:
+        - meta_scope: meta.flow.a11flow
+        - match: '{{name}}'
+          scope: entity.name.function.flow.a11flow
+          pop: true
+        - match: '"'
+          scope: punctuation.definition.string.begin.a11flow
+          set:
+            - meta_scope: entity.name.function.flow.a11flow
+            - match: '"'
+              scope: punctuation.definition.string.end.a11flow
+              pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  # --- declarations inside a flow -------------------------------------------
+
+  port-declaration:
+    - match: '\b(in|out|IN|OUT){{kw_boundary}}(?=\s+{{name}}\s*:)'
+      scope: keyword.declaration.port.a11flow
+      push:
+        - meta_scope: meta.port.a11flow
+        - match: '{{name}}'
+          scope: variable.parameter.port.a11flow
+        - match: ':'
+          scope: punctuation.separator.a11flow
+          set:
+            - meta_scope: meta.port.a11flow
+            # `stream` and `required` follow the type, and say what the port is
+            # like rather than what it holds.
+            - match: '\b(stream|STREAM){{kw_boundary}}'
+              scope: keyword.modifier.arity.a11flow
+            - match: '\b(required|REQUIRED){{kw_boundary}}'
+              scope: keyword.modifier.required.a11flow
+            - include: port-types
+            - include: strings
+            # The brackets a generic type says what it holds in:
+            # `list[string]`, `list[a11.NodeFragment]`.
+            - match: '[\[\]]'
+              scope: punctuation.section.brackets.a11flow
+            - match: ','
+              scope: punctuation.separator.comma.a11flow
+            - match: '$\n?'
+              pop: true
+        - match: '$\n?'
+          pop: true
+
+  port-types:
+    # A type a serialisation registry knows by tag, written unquoted and dotted
+    # exactly as it was registered: `a11.sdk.AudioBuffer`. First, so a tag whose
+    # first part happens to be a built-in name is still read as one tag.
+    - match: '{{name}}(?:\.{{name}})+'
+      scope: storage.type.tag.a11flow
+    - match: |-
+        (?x) \b (
+          string|text|number|integer|int|bool|boolean
+          |object|json|list|array|bytes|any
+        ) {{kw_boundary}}
+      scope: storage.type.a11flow
+    - match: |-
+        (?x) \b (
+          STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN
+          |OBJECT|JSON|LIST|ARRAY|BYTES|ANY
+        ) {{kw_boundary}}
+      scope: storage.type.a11flow
+
+  header-declaration:
+    - match: '\b(header|HEADER){{kw_boundary}}'
+      scope: keyword.declaration.header.a11flow
+      push:
+        - match: '\b(as|AS|default|DEFAULT){{kw_boundary}}'
+          scope: keyword.other.a11flow
+        - include: strings
+        - include: literals
+        - match: '{{name}}'
+          scope: variable.other.header.a11flow
+        - match: '$\n?'
+          pop: true
+
+  describe-declaration:
+    - match: '\b(describe|DESCRIBE){{kw_boundary}}'
+      scope: keyword.other.describe.a11flow
+
+  # --- statements ------------------------------------------------------------
+
+  statements:
+    - include: comments
+    - include: port-declaration
+    - include: header-declaration
+    - include: describe-declaration
+    - include: bindings
+    - include: statement-keywords
+    - include: call
+    - include: node-expression
+    - include: node-map
+    - include: stages
+    - include: bare-stages
+    - include: operators
+    - include: strings
+    - include: literals
+    - include: builtins
+    - include: status-codes
+    - include: expression-keywords
+    - include: names
+
+  bindings:
+    # `x = call ...`, `x = node ...`, `x = wait ...`: the name being bound.
+    - match: '({{name}})\s*(=)(?=\s*(?:run|RUN|call|CALL|try|TRY|node|NODE|wait|WAIT|drain|DRAIN){{kw_boundary}})'
+      captures:
+        1: entity.name.constant.step.a11flow
+        2: keyword.operator.assignment.a11flow
+    # `state <- source`: what a repeat carries.
+    - match: '({{name}})\s*(<-)'
+      captures:
+        1: variable.other.carry.a11flow
+        2: keyword.operator.assignment.carry.a11flow
+
+  statement-keywords:
+    - match: |-
+        (?x) \b (
+          skip|wait|drain|cancel|fail|for|repeat|until|while|if|else
+          |SKIP|WAIT|DRAIN|CANCEL|FAIL|FOR|REPEAT|UNTIL|WHILE|IF|ELSE
+        ) {{kw_boundary}}
+      scope: keyword.control.a11flow
+    - match: '\b(parallel|max|PARALLEL|MAX){{kw_boundary}}'
+      scope: keyword.other.a11flow
+
+  node-map:
+    - match: '\b(nodes|NODES){{kw_boundary}}'
+      scope: keyword.declaration.nodes.a11flow
+      push:
+        - match: '{{name}}'
+          scope: entity.name.namespace.nodemap.a11flow
+          pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  node-expression:
+    # Making a node takes parentheses -- `node()`, `node(id)` -- so the word is
+    # the keyword only where one opens, and a port called `node` is a name.
+    - match: '\b(node|NODE){{kw_boundary}}(?=\s*\()'
+      scope: keyword.declaration.node.a11flow
+
+  call:
+    - match: '\b(try|TRY){{kw_boundary}}'
+      scope: keyword.control.try.a11flow
+    - match: '\b(run|RUN|call|CALL){{kw_boundary}}'
+      scope: keyword.other.call.a11flow
+      push:
+        - match: '({{name}})(?:(\.)({{name}}))*'
+          scope: entity.name.function.action.a11flow
+          pop: true
+        - match: '"'
+          scope: punctuation.definition.string.begin.a11flow
+          set:
+            - meta_scope: entity.name.function.action.a11flow
+            - match: '"'
+              scope: punctuation.definition.string.end.a11flow
+              pop: true
+        - match: '(?=\S)'
+          pop: true
+    - include: call-modifiers
+
+  call-modifiers:
+    # `headers` is only ever the second word of `forward headers "x-name"`.
+    - match: |-
+        (?x) \b (
+          tee|via|timeout|after|with|id|forward|headers
+          |TEE|VIA|TIMEOUT|AFTER|WITH|ID|FORWARD|HEADERS
+        ) {{kw_boundary}}
+      scope: storage.modifier.a11flow
+
+  # --- pipelines -------------------------------------------------------------
+
+  stages:
+    - match: '(\|)\s*'
+      captures:
+        1: keyword.operator.pipe.a11flow
+      push:
+        - match: |-
+            (?x) \b (
+              first|last|drop|truncate|batch|group|then|where|map|join|strformat|mime
+              |collect|count|distinct|text|json|packb
+              |FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|THEN|WHERE|MAP|JOIN|STRFORMAT|MIME
+              |COLLECT|COUNT|DISTINCT|TEXT|JSON|PACKB
+            ) {{kw_boundary}}
+          scope: support.function.stage.a11flow
+          pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  # `then` and `where` read as words joining two things -- `history then asked`,
+  # `hits where it.ok` -- so the pipe is optional in front of those two, and
+  # they are stages written that way too. Both take an operand, which is what
+  # tells the stage from a port of the same name: a bare `then` at the end of a
+  # statement, or in front of a `->`, is a name.
+  bare-stages:
+    - match: '\b(then|where|THEN|WHERE){{kw_boundary}}(?=[ \t]+(?:[A-Za-z_$"(\[{]|[0-9]|-[0-9]))'
+      scope: support.function.stage.a11flow
+
+  operators:
+    - match: '->'
+      scope: keyword.operator.into.a11flow
+    - match: '<-'
+      scope: keyword.operator.assignment.carry.a11flow
+    - match: '=='
+      scope: keyword.operator.comparison.a11flow
+    - match: '!='
+      scope: keyword.operator.comparison.a11flow
+    - match: '<=|>=|<|>'
+      scope: keyword.operator.comparison.a11flow
+    - match: '='
+      scope: keyword.operator.assignment.a11flow
+    - match: '\|'
+      scope: keyword.operator.pipe.a11flow
+    - match: '[{}]'
+      scope: punctuation.section.block.a11flow
+    - match: '[()]'
+      scope: punctuation.section.group.a11flow
+    - match: '[\[\]]'
+      scope: punctuation.section.brackets.a11flow
+    - match: ':'
+      scope: punctuation.separator.a11flow
+    - match: ','
+      scope: punctuation.separator.comma.a11flow
+    - match: '\.'
+      scope: punctuation.accessor.a11flow
+
+  # --- expressions -----------------------------------------------------------
+
+  expression-keywords:
+    # `expr as TYPE`, and the type it names -- which may be a registry tag,
+    # so it is read by shape rather than looked up in a list.
+    - match: '\b(as|AS){{kw_boundary}}'
+      scope: keyword.operator.cast.a11flow
+      push:
+        - match: '{{name}}(?:\.{{name}})*(?:\s*\[[^\]\n]*\])?'
+          scope: storage.type.a11flow
+          pop: true
+        - include: strings
+        - match: '(?=\S)'
+          pop: true
+    # `a11.sdk.Interaction{...}`: a value of a named type.
+    - match: '{{name}}(?:\.{{name}})+(?=\s*\{)'
+      scope: storage.type.a11flow
+    - match: '\b(status|STATUS){{kw_boundary}}'
+      scope: keyword.other.status.a11flow
+    - match: '\b(it|IT){{kw_boundary}}'
+      scope: variable.language.it.a11flow
+    - match: '\b(and|or|not|in|AND|OR|NOT|IN){{kw_boundary}}'
+      scope: keyword.operator.logical.a11flow
+
+  builtins:
+    - match: |-
+        (?x) \b (
+          len|lower|upper|trim|text|number|bool|keys|values|get|join|split
+          |merge|contains|starts-with|ends-with|replace|slice|default
+          |to_chunk|from_chunk|strformat|now|duration|time|seconds
+          |LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES|GET|JOIN|SPLIT
+          |MERGE|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE|SLICE|DEFAULT
+          |TO_CHUNK|FROM_CHUNK|STRFORMAT|NOW|DURATION|TIME|SECONDS
+        ) {{kw_boundary}} (?=\s*\()
+      scope: support.function.builtin.a11flow
+
+  status-codes:
+    - match: |-
+        (?x) \b (
+          ok|cancelled|unknown|invalid_argument|deadline_exceeded|not_found
+          |already_exists|permission_denied|resource_exhausted
+          |failed_precondition|aborted|out_of_range|unimplemented|internal
+          |unavailable|data_loss|unauthenticated
+          |OK|CANCELLED|UNKNOWN|INVALID_ARGUMENT|DEADLINE_EXCEEDED|NOT_FOUND
+          |ALREADY_EXISTS|PERMISSION_DENIED|RESOURCE_EXHAUSTED
+          |FAILED_PRECONDITION|ABORTED|OUT_OF_RANGE|UNIMPLEMENTED|INTERNAL
+          |UNAVAILABLE|DATA_LOSS|UNAUTHENTICATED
+        ) {{kw_boundary}}
+      scope: constant.language.status-code.a11flow
+
+  literals:
+    - match: '\b(true|false|null|TRUE|FALSE|NULL){{kw_boundary}}'
+      scope: constant.language.a11flow
+    # A number with a duration unit: 500ns, 250ms, 30s, 5m, 1h. Longest first,
+    # so `250ms` is milliseconds rather than a number of metres.
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?(ns|us|ms|s|m|h){{kw_boundary}}'
+      scope: constant.numeric.duration.a11flow
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?\b'
+      scope: constant.numeric.a11flow
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.double.a11flow
+        - match: '\\(?:[nrt"\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: '"'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+        - match: '$\n?'
+          scope: invalid.illegal.unterminated-string.a11flow
+          pop: true
+
+  names:
+    # `x.port` -- a call's port, a node's id, a field of a value.
+    - match: '({{name}})\s*(?=\.)'
+      captures:
+        1: variable.other.step.a11flow
+    - match: '(?<=\.)({{name}})'
+      captures:
+        1: variable.other.member.a11flow
+    - match: '{{name}}'
+      scope: variable.other.a11flow

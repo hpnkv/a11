@@ -22,6 +22,62 @@ There is also an **A11 Actions** tool window: an action explorer that lists ever
 tool the IDE exposes and lets you run it with arbitrary JSON input, for fast
 manual testing — independent of the LLM and the gateway.
 
+## The A11 Flow language
+
+The plugin also brings [A11 Flow](../doc/docs/guides/flow.md) — the language for
+describing a composition of actions — to the IDE: `.flow` files, and flows
+written **inside string literals**, which is where most of them live because a
+flow is meant to travel as text.
+
+```python
+program = flow.loads("""
+    flow shout {                          # highlighted from here
+      in  words:   string stream
+      out loudest: string
+
+      say = call text-upper(text: words)
+      say.upper | first 1 -> loudest
+    }
+""")
+```
+
+Nothing has to be configured: a string whose first real word is `flow` followed
+by a name and a `{` is treated as one, whatever language the file is in. That is
+the same treatment SQL gets in a Python string, reached the same way — a
+`MultiHostInjector` registered for `PsiLanguageInjectionHost` itself, so it is
+one implementation for every host language and every IDE. For a fragment the
+content cannot vouch for, the platform's own markers still work, because the
+language is registered like any other:
+
+```python
+# language=A11Flow
+fragment = "shout.upper | first 1 -> loudest"
+```
+
+`@Language("A11Flow")` does the same for a Java or Kotlin host, and Alt+Enter →
+*Inject language or reference* → **A11 Flow** for anything else.
+
+What a word means depends on the tokens around it, which the lexer tracks: a
+word is a stage after a `|`, a function only where it is called, and whatever
+follows a `.` is a member however it is spelled — so `page.text` reads as a port
+and `| truncate 200` as a stage. The two stages that may drop the pipe are read
+from what follows instead: `then` and `where` are stages with an operand after
+them (`history then asked`), and names without one, which is what keeps a port
+really called `then` highlighted as the port it is. `node` is the same kind of
+rule — the keyword only where its parentheses open, as in `said = node()`. A port declaration is a context of
+its own, from `in`/`out` to the end of the line, which is what lets a type be
+written as the tag a serialisation registry knows it by:
+
+```
+in  frames: list[a11.NodeFragment] stream
+out audio:  a11.sdk.AudioBuffer stream required
+```
+
+Everything up to `stream`/`required` is the type, dots and brackets included —
+there is no list of tags to fall behind, because the position says it is one.
+Colours are all customisable under
+Settings | Editor | Color Scheme | **A11 Flow**.
+
 ## Architecture
 
 ```
@@ -167,6 +223,18 @@ pick an action, enter its input JSON, hit **Run**, and inspect the result — no
 provider key or gateway needed, since it calls the IDE handlers straight through
 the bridge.
 
+### A note on `buildSearchableOptions`
+
+The build disables it (`intellijPlatform { buildSearchableOptions = false }`).
+CLion 2026.1 cannot run the `traverseUI` starter it needs: CLion replaces that
+starter with one that relaunches the IDE "with the Radler language plugin" and
+assembles the child command line with a `-D` JVM flag where the executable
+should be, so the task dies immediately in `CLionTraverseUIStarter` —
+identically with or without this plugin's extensions. The task only pre-indexes
+the Settings search field; the settings pages themselves are unaffected. Re-enable
+it when that starter is fixed, or when building against an IDE that does not
+override `traverseUI`.
+
 ## Fast dev loop / hot reload
 
 - `./gradlew runIde` keeps a sandbox IDE running; rebuilding the plugin
@@ -180,6 +248,18 @@ the bridge.
 - Gateway: `python -m pytest a11/gateway a11/sdk/llm_tools` from the repo root
   covers the tool bridge's schema mapping, and the tool runner's handling of a
   user-facing run log and of the tools a caller's patterns admit.
+- Flow language: `FlowLexerTest` checks the lexer against the rules in
+  `a11/flow/lexer.py` — token coverage, the casing rule, dashes against arrows,
+  duration units, the stages that go without a pipe, and restarting from any
+  token boundary the way incremental
+  relexing does — and `FlowInjectionTest` (`BasePlatformTestCase`) proves a flow
+  inside a string literal is really injected and prose that merely mentions one
+  is not. The word lists are checked against the parser's own tables from the
+  Python side, by `a11/flow/tests/test_editor_support.py`. `FlowLexerTest` needs
+  no platform fixture and runs in seconds; the injection test does, and shares
+  whatever fate `IdeToolsTest` meets — on a machine where the fixture hangs
+  during `CodeInsightTestFixtureImpl.setUp`, both hang, and neither is the
+  plugin's doing.
 - Plugin: `IdeToolsTest` (`BasePlatformTestCase`) builds the tool registry,
   drives `get_active_file` through an A11 action, and exercises the direct
   `IdeTools.runByName` / `listDescriptors` path the JCEF bridge uses, plus the

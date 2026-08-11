@@ -1,0 +1,79 @@
+# Composing the gateway's own tools.
+#
+# Nothing in this file is registered by this example: `shell_execute` and
+# `interact_with_llm` are actions an ordinary `a11 gateway run` already serves.
+# A flow that names them is a composition of somebody else's deployment, which
+# is the case the language was written for -- no repository change, no
+# redeploy, just text that arrives and runs.
+#
+# Which is why every step here is a `call` rather than a `run`: the work is the
+# gateway's, and `call` is the verb that says so. `run` would look for a handler
+# in this process and, finding none, say so rather than guess.
+
+flow count-changes {
+  describe "How many files the gateway's own working tree has changed."
+
+  out changed: number        "How many lines `git status` printed."
+  out files:   string stream "The lines themselves."
+
+  git = call shell_execute(command: "git status --porcelain") timeout 30s
+  skip git.user_facing_log
+
+  # One output, read twice: a stream fans out to as many readers as ask for
+  # it, and each of them sees all of it.
+  git.output_lines | where len(trim(it)) > 0 -> files
+  git.output_lines | where len(trim(it)) > 0 | count -> changed
+}
+
+flow explain-a-command {
+  describe "Run a command, and have a model explain what came back."
+
+  in  command: string required "What to run on the gateway's host."
+  out lines:   string stream   "What the command printed."
+  out verdict: string          "What the model made of it."
+
+  header "x-a11-llm-api-key"  as api_key
+  header "x-a11-llm-provider" as provider
+  header "x-a11-llm-model"    as model
+  header "x-a11-llm-base-url" as base_url
+
+  # `try` because a gateway run with `--no-shell-tools` serves no shell at all,
+  # and that is worth saying plainly rather than dying on a NOT_FOUND.
+  cmd = try call shell_execute(command: command) timeout 30s
+  skip cmd.user_facing_log
+  outcome = wait cmd
+
+  cmd.output_lines -> lines
+
+  # A guard, rather than wrapping the rest of the flow in an `if`. There is no
+  # "return" in a language with no control flow to return from -- what `fail`
+  # does is end the flow, which from the caller's side is the same thing, and
+  # leaves the interesting half of the file at one level of indentation.
+  if not outcome.ok { fail unavailable outcome.message }
+
+  llm = call interact_with_llm(
+    interactions: cmd.output_lines
+      | collect
+      | map a11.sdk.Interaction{
+          role: "user",
+          content: [to_chunk({
+            role: "user",
+            content: [{type: "text", text: join([
+              "In two sentences: what did this command do, and is anything in its output worth attention?",
+              join(["$", command], " "),
+              join(it, "\n")
+            ], "\n\n")}]
+          })]
+        },
+    config: {}
+  )
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
+
+  llm.text_output | join "" -> verdict
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+}

@@ -7,7 +7,7 @@ from a11.gateway.config import GatewayConfig
 from a11.gateway.ping import PING_SCHEMA, ping
 from a11.gateway import conversation_actions
 from a11.gateway.tool_bridge import RemoteToolBridge
-from a11.sdk import bash
+from a11.sdk import bash, flow_tools
 from a11.sdk.audio import actions as audio_actions
 from a11.service.service import Service, ServiceOptions
 from a11.service.session import Session
@@ -35,6 +35,14 @@ def _make_action_registry(
         capture=config.audio_capture,
         recognition=config.speech_recognition,
     )
+
+    # Last, so a composition can reach everything above it. These let a caller
+    # send a flow rather than a call: the actions it names run here, and only
+    # what the flow declares as an output comes back. A transcript summarised
+    # here is one summary over the wire instead of the whole transcript, and
+    # the same allowed-action patterns still decide what it may call.
+    if config.flow_tools:
+        flow_tools.register(registry)
 
     return registry
 

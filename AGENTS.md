@@ -20,6 +20,25 @@
   binary and schema values; they must not introduce a second public data model.
   Python serializers and deserializers continue to operate on those native
   values.
+- `a11/flow/` is the Flow language: a textual DSL whose programs are
+  compositions of actions that are themselves actions. It is deliberately
+  Python-only for now — lexer, parser, resolved plan, and a runtime that builds
+  nested actions and pipes their nodes — and it must stay a layer *on* the public
+  A11 surface, adding no runtime behaviour A11 does not already expose. A flow's
+  semantics are the language's contract: steps run concurrently, every called
+  output is drained, a local call's nodes stay off the wire, a stream read inside
+  a loop or branch is materialised once and replayed, and a stream is produced
+  only once something reads it (reading a status waits, and may end a node).
+  Status codes are Abseil's canonical ones; every significant word is accepted in
+  lower or upper case but never mixed. Changing any of that is a language change,
+  so keep `a11/flow/tests/`, the grammar and `REFERENCE` in
+  `a11/flow/__init__.py`, and both editor definitions — `editors/sublime-text/`
+  and the `flow` package of `intellij-plugin/` — in step with it.
+  `a11/flow/tests/test_editor_support.py` checks the editors' word lists against
+  the parser's own tables, and the plugin's `FlowLexerTest` checks its lexer
+  against `a11/flow/lexer.py`; a word the language gains and an editor does not
+  fails the Python suite. Before porting any of it to C++, the Python
+  implementation is the reference.
 - A chunk's metadata is the only thing that says how to read its bytes. The
   media type is the representation; a `type` parameter names the value when the
   format does not already describe it. The seven JSON-native shapes (`object`,

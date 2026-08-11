@@ -41,6 +41,9 @@ class GatewayConfig:
     )
     #: Serve the ``shell_*`` action family.
     shell_tools: bool = True
+    #: Serve ``flow_actions``, ``flow_check`` and ``flow_run``, which let a
+    #: caller compose the gateway's other actions into one step.
+    flow_tools: bool = True
     #: Serve ``list_audio_inputs`` and ``capture_audio``.
     audio_capture: bool = True
     #: Serve ``capture_transcription`` and ``transcribe_audio``.
@@ -65,6 +68,7 @@ class GatewayConfig:
                 args, "conversation_store_root", conversations.default_root()
             ),
             shell_tools=not getattr(args, "no_shell_tools", False),
+            flow_tools=not getattr(args, "no_flow_tools", False),
             audio_capture=not getattr(args, "no_audio_capture", False),
             speech_recognition=not getattr(
                 args, "no_speech_recognition", False

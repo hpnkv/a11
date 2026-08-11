@@ -925,6 +925,18 @@ class SerializationRegistry:
             self._known_by_tag.setdefault(declared, obj_type)
 
     @_status_boundary
+    def resolve_type(self, name: str) -> type | None:
+        """The Python type a wire tag names, or ``None`` if none is known.
+
+        The reverse of [_type_tag][a11.data.serialization.
+        SerializationRegistry._type_tag]: given ``a11.sdk.AudioBuffer``, the
+        class it identifies. What a tag resolves to depends on what has been
+        registered and imported, so a caller that gets ``None`` has learned
+        that this process does not know the type -- not that it does not exist.
+        """
+        return self._resolve_type(name)
+
+    @_status_boundary
     def _resolve_type(self, name: str) -> type | None:
         # 1. An explicitly-pinned tag always wins.
         explicit = self._tag_to_type.get(name)

@@ -1,0 +1,90 @@
+# Audio, which is where a composition earns its keep.
+#
+# Microphone into text into a model. The buffers are the reason to write this
+# as a flow: they are large, they are continuous, and nobody wants them in a
+# conversation or on a wire. Here they go from one gateway action straight into
+# another, and what comes back to the caller is sentences.
+
+flow live-captions {
+  describe "Turn the microphone into sentences, until the caller says stop."
+
+  in  asr:       object required        "Recognition options; model required."
+  in  capture:   object required        "Which input to open."
+  in  control:   object stream required "Send {command: stop} to finish."
+  out sentences: string stream          "What was said, a sentence at a time."
+  out pieces:    string stream          "The raw utterances, as decoded."
+
+  mic = call capture_audio(options: capture) timeout 600s
+  skip mic.events
+
+  # The caller holds the microphone's off switch. Nothing in the flow decides
+  # when listening ends, so the flow cannot get it wrong.
+  control -> mic.control_events
+
+  # `transcribe_audio` wants MessagePack buffers, and `capture_audio` already
+  # writes them that way -- so `packb` is free here. It is worth writing
+  # anyway: the flow says what the port needs instead of assuming what the
+  # producer does.
+  heard = call transcribe_audio(audio: mic.audio | packb, asr_options: asr)
+  skip heard.events
+
+  heard.transcription_pieces -> pieces
+
+  # A piece is one endpointed utterance: whisper cuts on silence, not on
+  # grammar, so "what is" and "a fiber?" arrive separately. `group` gathers
+  # them until one ends like a sentence.
+  heard.transcription_pieces
+    | group ends-with(trim(it), [".", "?", "!"])
+    | map trim(join(it, " "))
+    -> sentences
+}
+
+flow dictate-a-note {
+  describe "Listen until told to stop, then have a model tidy up what was said."
+
+  in  asr:      object required
+  in  capture:  object required
+  in  control:  object stream required
+  out said:     string stream "Each sentence, as it lands."
+  out note:     string        "The model's tidy version of the lot."
+
+  header "x-a11-llm-api-key"  as api_key
+  header "x-a11-llm-provider" as provider
+  header "x-a11-llm-model"    as model
+  header "x-a11-llm-base-url" as base_url
+
+  # A flow is an action, so the captions above are simply called.
+  captions = run live-captions(asr: asr, capture: capture, control: control)
+  skip captions.pieces
+
+  spoken = node()
+  captions.sentences -> spoken
+  spoken -> said
+
+  # `collect` waits for the whole transcript, which is exactly as long as the
+  # caller keeps the microphone open. The model sees it once, at the end.
+  llm = call interact_with_llm(
+    interactions: spoken
+      | collect
+      | map a11.sdk.Interaction{
+          role: "user",
+          content: [to_chunk({
+            role: "user",
+            content: [{type: "text", text: join([
+              "Tidy this dictated note into a short paragraph. Keep the words.",
+              join(it, " ")
+            ], "\n\n")}]
+          })]
+        },
+    config: {}
+  )
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
+
+  llm.text_output | join "" -> note
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+}

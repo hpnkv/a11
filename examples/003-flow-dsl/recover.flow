@@ -1,0 +1,79 @@
+# Failures a composition expects, and nodes it keeps for itself.
+#
+# `try call` says a step may fail without taking the flow down; `wait` is how the
+# flow finds out what happened; and `fail` is how it gives up on its own terms.
+
+flow resilient-read {
+  describe "Read the first candidate that works, and report on the rest."
+
+  in  urls:  string stream required "Candidates, best first."
+  out text:  string                 "The first one that could be read."
+  out tried: object stream          "What happened to each candidate."
+
+  # A node of the flow's own: somewhere to put whatever came back, from a loop
+  # whose passes cannot all write the flow's own unary output.
+  best = node()
+
+  for url in urls {
+    page = try run web-fetch(url: url)
+
+    # Reading a status waits for the call, so this is also the pass's barrier.
+    outcome = wait page
+
+    {"url": url, "ok": outcome.ok, "why": outcome.message} -> tried
+
+    # A call that failed produced nothing, so no branch is needed here: there
+    # is simply nothing to pipe.
+    page.text | truncate 120 -> best
+    skip page.bytes
+  }
+
+  best | first 1 -> text
+
+  # The loop holds `best` open while it runs, so counting it here happens once
+  # the last pass is done.
+  if (best | count) == 0 {
+    fail NOT_FOUND "none of the candidates could be read"
+  }
+}
+
+flow annotated-read {
+  describe "Read one page, keeping the notes the reader made on the way."
+
+  in  url:     string required
+  out summary: string
+  out progress: string stream
+
+  # The reader is told which node to report progress into, so its notes arrive
+  # here as it works rather than after it finishes.
+  seen = node()
+
+  page = run web-fetch(url: url)
+  reader = run take-notes(pages: page.text | truncate 200)
+      with "x-a11-progress-node": seen.id
+
+  reader.summary -> summary
+  seen -> progress
+
+  # The reader was lent the node; the flow that lent it says when it is over.
+  drain seen after reader
+  skip page.bytes
+}
+
+flow strict-read {
+  describe "Read a page, and translate a failure into the caller's terms."
+
+  in  url:  string required
+  out text: string
+
+  page = try run web-fetch(url: url)
+  outcome = wait page
+
+  if outcome.ok {
+    page.text | truncate 60 -> text
+  } else {
+    # Either raise what happened as it stands, with `fail outcome`, or say it
+    # again in terms the caller can act on.
+    fail invalid_argument outcome.message
+  }
+}

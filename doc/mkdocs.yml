@@ -113,9 +113,11 @@ nav:
           - Actions as LLM tools: llm-sdk/action-tools.md
           - Running tool calls: llm-sdk/tool-runner.md
           - Tools with interact_with_*: llm-sdk/interact-actions.md
+          - Composing tools into a flow: llm-sdk/flow-skill.md
   - Why A11: principles.md
   - Examples:
       - All examples: examples.md
+      - Compose actions without deploying code: guides/flow.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
@@ -127,6 +129,7 @@ nav:
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
+      - Flow language: api/flow.md
       - Stores: api/stores.md
       - Redis client: api/redis.md
       - SQLite store: api/sqlite.md

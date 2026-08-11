@@ -79,6 +79,11 @@ def _add_serving_flags(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable transcription actions.",
     )
+    parser.add_argument(
+        "--no-flow-tools",
+        action="store_true",
+        help="Disable the flow tools (flow_actions, flow_check, flow_run).",
+    )
 
 
 def _configure(parser: argparse.ArgumentParser) -> None:
@@ -230,10 +235,12 @@ async def _serve(args: argparse.Namespace) -> int:
         for url in served:
             logging.info("[gateway] listening on %s", url)
         logging.info(
-            "[gateway] shell tools %s, audio capture %s, speech recognition %s",
+            "[gateway] shell tools %s, audio capture %s, speech recognition"
+            " %s, flow tools %s",
             "on" if settings.shell_tools else "off",
             "on" if settings.audio_capture else "off",
             "on" if settings.speech_recognition else "off",
+            "on" if settings.flow_tools else "off",
         )
         logging.info(
             "[gateway] conversations in %s", settings.conversation_store_root
@@ -257,7 +264,12 @@ def _detach(args: argparse.Namespace) -> int:
     ]
     for extra in getattr(args, "listen", None) or []:
         passthrough += ["--listen", extra]
-    for flag in ("no_shell_tools", "no_audio_capture", "no_speech_recognition"):
+    for flag in (
+        "no_shell_tools",
+        "no_audio_capture",
+        "no_speech_recognition",
+        "no_flow_tools",
+    ):
         if getattr(args, flag, False):
             passthrough.append("--" + flag.replace("_", "-"))
 

@@ -1,0 +1,147 @@
+# Retrieval, and a real model at the end of it.
+#
+# The shape almost every "ask my documents" feature has: search, read the best
+# hits, put them in front of a model, answer from them. What makes it worth
+# writing as a flow is where the pages go -- they are fetched, trimmed, and
+# handed to the model without ever reaching whoever asked the question.
+#
+# The model here is `interact_with_llm`, the same action `a11 chat` calls. It
+# wants an `a11.sdk.Interaction`, which the flow builds itself: `to_chunk`
+# makes the content, and the type name in front of the braces makes the value.
+
+flow ask-the-pages {
+  describe "Answer a question from the pages a search turns up."
+
+  in  question: string required "What to find out."
+  out answer:   string          "The model's answer."
+  out cited:    string stream   "The pages it was given."
+  out prompt:   string          "Exactly what the model was asked."
+
+  header "x-a11-llm-api-key"  as api_key
+  header "x-a11-llm-provider" as provider
+  header "x-a11-llm-model"    as model
+  header "x-a11-llm-base-url" as base_url
+
+  search = run web-search(query: question, limit: 3)
+  skip search.debug
+
+  # The pages, gathered where one reader can see all of them. A node, because
+  # every pass of the loop below writes it and one pipeline reads it.
+  pages = node()
+
+  nodes fetched {
+    for hit in search.hits parallel 3 {
+      page = run web-fetch(url: hit.url)
+      skip page.bytes
+
+      hit.url -> cited
+      page.text | truncate 400 -> pages
+    }
+  }
+
+  # One prompt out of many pages. There is no string concatenation in Flow:
+  # `join` a list is how text is built, and a list literal is how the parts
+  # are named.
+  asked = node()
+  pages
+    | collect
+    | map join([
+        "Answer from the pages below. Say so if they do not answer it.",
+        join(["Question:", question], " "),
+        join(it, "\n\n---\n\n")
+      ], "\n\n")
+    -> asked
+
+  asked -> prompt
+
+  llm = call interact_with_llm(
+    interactions: asked | map a11.sdk.Interaction{
+      role: "user",
+      content: [to_chunk({
+        role: "user",
+        content: [{type: "text", text: it}]
+      })]
+    },
+    config: {}
+  )
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
+
+  llm.text_output | join "" -> answer
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+}
+
+# A conversation, one turn at a time.
+#
+# The turns so far come in on a port and the new question is appended to them:
+# `history | then asked`. Two statements writing to the same port would
+# interleave by arrival, which is fine for pages and wrong for a conversation --
+# `then` is the flow saying which comes first.
+#
+# What it hands back is the two interactions this turn added, so the caller can
+# pass them in as the history of the next one and keep no other state.
+flow chat-turn {
+  describe "One turn of a conversation, given the turns before it."
+
+  in  history:  a11.sdk.Interaction stream "Everything said so far."
+  in  question: string required            "What to say now."
+  out reply:    string                     "What the model answered."
+  out turn:     a11.sdk.Interaction stream "The question and the answer."
+
+  header "x-a11-llm-api-key"  as api_key
+  header "x-a11-llm-provider" as provider
+  header "x-a11-llm-model"    as model
+  header "x-a11-llm-base-url" as base_url
+
+  asked = node()
+  question | map a11.sdk.Interaction{
+    role: "user",
+    content: [to_chunk({
+      role: "user",
+      content: [{type: "text", text: it}]
+    })]
+  } -> asked
+
+  llm = call interact_with_llm(
+    interactions: history | then asked,
+    config: {}
+  )
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
+
+  llm.text_output | join "" -> reply
+
+  # The same ordering again, for what the caller will feed back in next time.
+  asked | then llm.new_interactions -> turn
+
+  skip llm.thoughts
+  skip llm.event_stream
+}
+
+# The same retrieval, answered without a model at all -- for the times a
+# gateway has no provider configured, and to show that the interesting part of
+# the flow above is the retrieval rather than the model.
+flow quote-the-pages {
+  describe "Answer with the first line of the best page, and no model."
+
+  in  question: string required
+  out answer:   string
+  out cited:    string stream
+
+  search = run web-search(query: question, limit: 1)
+  skip search.debug
+
+  for hit in search.hits {
+    page = run web-fetch(url: hit.url)
+    skip page.bytes
+
+    hit.url -> cited
+    page.text | map join(split(it, "."), ".") | truncate 160 -> answer
+  }
+}

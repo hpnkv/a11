@@ -27,6 +27,31 @@
                     icon="AllIcons.Toolwindows.ToolWindowRun"
                     factoryClass="dev.curiositystack.a11.clion.ui.ActionsToolWindowFactory"/>
 
+        <!-- The A11 Flow language: `.flow` files, and flows inside the string
+             literals of any host language (see FlowInjector). Nothing here
+             depends on a product-specific module, so it works in every IDE. -->
+        <fileType name="A11 Flow"
+                  implementationClass="dev.curiositystack.a11.clion.flow.FlowFileType"
+                  fieldName="INSTANCE"
+                  language="A11Flow"
+                  extensions="flow"/>
+        <lang.parserDefinition
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowParserDefinition"/>
+        <lang.syntaxHighlighterFactory
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowSyntaxHighlighterFactory"/>
+        <lang.commenter
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowCommenter"/>
+        <lang.braceMatcher
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowBraceMatcher"/>
+        <colorSettingsPage
+                implementation="dev.curiositystack.a11.clion.flow.FlowColorSettingsPage"/>
+        <multiHostInjector
+                implementation="dev.curiositystack.a11.clion.flow.FlowInjector"/>
+
         <applicationService serviceImplementation="dev.curiositystack.a11.clion.settings.A11Settings"/>
         <applicationConfigurable
                 parentId="tools"

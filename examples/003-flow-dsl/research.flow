@@ -1,0 +1,57 @@
+# A composition of existing actions, as text. Nothing here is repository code:
+# a gateway handed this file can run it against whatever it has registered.
+
+flow research {
+  describe "Search, read the best hits, and answer from them."
+
+  in  question: string required "What to find out."
+  out answer:   string          "The model's answer."
+  out sources:  string stream         "The pages it was based on."
+  out read:     number          "Characters the model was actually given."
+
+  header "x-a11-deadline" as deadline
+
+  search = run web-search(query: question, limit: 3)
+
+  # Dispatched now, with nothing on its `pages` port yet: the loop below streams
+  # pages in while it waits, and the port is closed for it when the loop ends.
+  brief = run llm-summarize(question: question)
+      with "x-a11-deadline": deadline
+
+  # `nodes` gives the fetches a node map of their own. Their pages never enter
+  # the session, so a peer that dispatched this flow is not sent four fetched
+  # documents to get one answer back.
+  nodes fetched {
+    for hit in search.hits parallel 2 {
+      page = run web-fetch(url: hit.url)
+
+      hit.url -> sources
+
+      # The model does not need the whole page, and everything dropped here is
+      # never serialised, never sent, and never charged for.
+      page.text | truncate 200 -> brief.pages
+
+      # Read, and keep nothing: an output nobody drains stalls its producer.
+      skip page.bytes
+    }
+  }
+
+  brief.summary    -> answer
+  brief.characters -> read
+
+  skip search.debug
+}
+
+# A flow is an action, so a flow can call one.
+flow headline {
+  describe "One line about a question, and nothing else."
+
+  in  question: string required
+  out line:     string
+
+  found = run research(question: question)
+  found.sources | first 2 | join " and " -> line
+
+  skip found.answer
+  skip found.read
+}

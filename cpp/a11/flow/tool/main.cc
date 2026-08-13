@@ -39,6 +39,7 @@
 #include "a11/flow/parser.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
+#include "a11/flow/schema.h"
 #include "a11/flow/tool/lsp.h"
 #include "a11/flow/service.h"
 #include "a11/flow/vocabulary.h"
@@ -67,6 +68,8 @@ struct Options {
   std::string target = "sublime";
   std::string root = ".";
   std::string protocol = "json";
+  /// Which shape `schema` is asked about; every one of them when empty.
+  std::string dto;
   /// What could not be read on the command line itself.
   std::string complaint;
 };
@@ -83,7 +86,8 @@ Commands:
   fmt FILE...          format: -i rewrites, --check reports what would change
   highlight FILE       what each token means, for a syntax highlighter
   parse FILE           the syntax tree, and everything wrong with the file
-  describe FILE        the resolved plan: ports, headers, node maps, steps
+  describe FILE        the resolved plan: shapes, ports, headers, node maps, steps
+  schema FILE          the JSON Schema a shape describes: --struct Name for one
   complete FILE        what may be written at --offset N or --line L --column C
   codes                every diagnostic code the language publishes
   vocabulary           every word the language gives meaning to
@@ -290,7 +294,11 @@ int Highlight(const Options& options) {
     return 0;
   }
   const LexResult lexed = Lex(source, LexOptions{.keep_comments = true});
-  for (const SemanticToken& token : flow::Highlight(lexed.tokens)) {
+  std::vector<SemanticToken> semantic = flow::Highlight(lexed.tokens);
+  // The same two passes the JSON path takes: what a token means lexically, and
+  // then the one thing only the resolver can say.
+  RefinePorts(source, semantic);
+  for (const SemanticToken& token : semantic) {
     const std::string_view text(source.data() + token.start,
                                 token.end - token.start);
     if (text == "\n") continue;
@@ -408,6 +416,17 @@ int Describe(const Options& options) {
     }
     return 1;
   }
+  for (const DtoPlan& dto : resolved.program.dtos) {
+    std::cout << "struct " << dto.name << (dto.binary ? "  (holds bytes)" : "")
+              << "\n";
+    if (!dto.description.empty()) std::cout << "  " << dto.description << "\n";
+    for (const FieldPlan& field : dto.fields) {
+      std::printf("  field  %s: %s%s\n", field.name.c_str(),
+                  field.declared.empty() ? field.type.c_str()
+                                         : field.declared.c_str(),
+                  field.required ? " (required)" : "");
+    }
+  }
   for (const FlowPlan& flow : resolved.program.flows) {
     std::cout << "flow " << flow.name << "\n";
     if (!flow.description.empty()) std::cout << "  " << flow.description << "\n";
@@ -440,6 +459,50 @@ int Describe(const Options& options) {
       }
     }
   }
+  return 0;
+}
+
+/// `a11-flow schema FILE [--struct Name]`: the JSON Schema a shape describes.
+///
+/// The half of the shape/schema translation somebody runs by hand: a `struct` is
+/// handed to whatever speaks schemas -- a model's structured-output mode, an
+/// OpenAPI document, a validator elsewhere -- and this is how it gets out. The
+/// other direction is `serve`'s `shapes` method, which takes a schema and gives
+/// back Flow source.
+int Schema(const Options& options) {
+  std::string source;
+  std::string reason;
+  const std::string& path = options.files.front();
+  if (!ReadFile(path, source, reason)) {
+    std::cerr << path << ": cannot read: " << reason << "\n";
+    return 2;
+  }
+  const ParseResult parsed = flow::Parse(source);
+  const ResolveResult resolved = Resolve(source, parsed);
+  if (resolved.HasErrors()) {
+    for (const Diagnostic& diagnostic : resolved.diagnostics) {
+      if (diagnostic.severity == Severity::kError) {
+        std::cerr << DiagnosticToText(Reported(path), diagnostic) << "\n";
+      }
+    }
+    return 1;
+  }
+  nlohmann::json schemas = nlohmann::json::object();
+  for (const DtoPlan& dto : resolved.program.dtos) {
+    if (!options.dto.empty() && dto.name != options.dto) continue;
+    schemas[dto.name] = DtoToJsonSchema(dto, resolved.program);
+  }
+  if (schemas.empty()) {
+    std::cerr << path << ": declares no shape"
+              << (options.dto.empty() ? "" : absl::StrCat(" '", options.dto, "'"))
+              << ".\n";
+    return 1;
+  }
+  // One shape asked for is that shape's schema; the whole file is an object of
+  // them, keyed by name -- so a script can ask for one and get something it can
+  // hand straight over.
+  Emit(schemas.size() == 1 && !options.dto.empty() ? schemas.begin().value()
+                                                   : schemas);
   return 0;
 }
 
@@ -637,6 +700,8 @@ Options ReadOptions(int argc, char** argv) {
       if (!absl::SimpleAtoi(value("--column"), &options.column)) {
         options.complaint = "--column is a column number.";
       }
+    } else if (argument == "--struct") {
+      options.dto = value("--struct");
     } else if (argument == "--target") {
       options.target = value("--target");
     } else if (argument == "--root") {
@@ -680,7 +745,8 @@ int Main(int argc, char** argv) {
   }
   const bool wants_file =
       command == "check" || command == "fmt" || command == "highlight" ||
-      command == "parse" || command == "describe" || command == "complete";
+      command == "parse" || command == "describe" || command == "complete" ||
+      command == "schema";
   if (wants_file && options.files.empty()) {
     std::cerr << command << " takes a file, or `-` for standard input\n";
     return 2;
@@ -690,6 +756,7 @@ int Main(int argc, char** argv) {
   if (command == "highlight") return Highlight(options);
   if (command == "parse") return Parse(options);
   if (command == "describe") return Describe(options);
+  if (command == "schema") return Schema(options);
   if (command == "complete") return Complete(options);
   if (command == "codes") return Codes(options);
   if (command == "vocabulary") return Vocabulary(options);

@@ -484,7 +484,7 @@ async def test_a_flow_that_will_not_compile_says_where(registry, tool: str):
         )
     status = raised.value.status
     assert status.code == StatusCode.INVALID_ARGUMENT
-    assert "Unknown port type" in status.message
+    assert "Unknown type" in status.message
     # The line and column are what a model needs to fix its own flow.
     assert re.search(r"flow:2:\d+:", status.message), status.message
 

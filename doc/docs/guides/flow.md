@@ -51,13 +51,13 @@ node. Everything else is a variation on those two.
 Note what is *not* being said. `brief` is dispatched before it has any pages: it
 is streaming, so the loop feeds it while it works, and A11 closes its `pages`
 port when the loop's last writer is done. Nothing declares an order between the
-search and the fetches either -- **steps run concurrently, and order comes from
+search and the fetches either — **steps run concurrently, and order comes from
 the data**. When an order really is needed, `after`, `wait` and `drain` say so
 explicitly.
 
 A port says what it holds first and what it is like afterwards: it carries one
 value unless it says `stream`, and is optional unless it says `required`. Every
-significant word may be written in lower case or upper case -- `for` or `FOR`,
+significant word may be written in lower case or upper case — `for` or `FOR`,
 `stream` or `STREAM`. Mixed case is a name, not a keyword, which keeps the rule
 easy to see.
 
@@ -70,8 +70,8 @@ out audio:    a11.sdk.AudioBuffer stream
 out raw:      "application/x-msgpack"
 ```
 
-Besides the built-in names -- `string`, `text`, `number`, `integer`, `bool`,
-`object`, `json`, `list`, `bytes`, `any` -- a type may be **a tag a
+Besides the built-in names — `string`, `text`, `number`, `integer`, `bool`,
+`object`, `json`, `list`, `bytes`, `any` — a type may be **a tag a
 serialisation registry knows a type by**, written unquoted exactly as it is
 registered: `a11.sdk.AudioBuffer`. A dotted name is read as a tag, which is what
 tells one from a misspelt built-in, and it is carried through as written --
@@ -95,7 +95,7 @@ flow research {
     """
 
   in  question: string required
-    "What to find out -- as long as this needs to be, on its own line."
+    "What to find out — as long as this needs to be, on its own line."
 }
 ```
 
@@ -305,8 +305,8 @@ one just made.
 ### Throwing values away before they cost anything
 
 `| truncate 200` cuts each page down before it is written to the summariser's
-port. What is dropped is never serialised, never sent to a peer, and -- when the
-next step is a model -- never charged for. `| first 3`, `| where it.ok`,
+port. What is dropped is never serialised, never sent to a peer, and — when the
+next step is a model — never charged for. `| first 3`, `| where it.ok`,
 `| mime "text/*"` and `| drop 1` are the same lever at different granularities,
 and they are the reason a model asked to *instrument* a composition can make it
 cheaper without changing what it computes.
@@ -314,8 +314,8 @@ cheaper without changing what it computes.
 ### Saying how a value travels
 
 `| packb` writes a value as `application/x-msgpack` instead of JSON. It is a
-no-op when the producer already wrote MessagePack -- the chunk is passed on
-untouched, type tag and all -- so putting it in front of a port that wants
+no-op when the producer already wrote MessagePack — the chunk is passed on
+untouched, type tag and all — so putting it in front of a port that wants
 packed bytes is safe whatever is upstream, and costs a re-encode only when there
 is really one to pay for.
 
@@ -368,8 +368,8 @@ for url in urls {
 best | first 1 -> text
 ```
 
-The node lands in the contextually active node map -- the enclosing `nodes`
-block's, or the action's -- so `nodes scratch` around it keeps it off the wire
+The node lands in the contextually active node map — the enclosing `nodes`
+block's, or the action's — so `nodes scratch` around it keeps it off the wire
 like anything else. `x = node(where-they-said)` attaches to a node *somebody else*
 named instead of making one, and `x.id` hands a node to an action that expects to
 be told where to write:
@@ -384,8 +384,8 @@ drain seen after reader          # the flow lent the node; the flow ends it
 ## Failures a flow expects
 
 A composition that calls four actions will sometimes have one of them fail, and
-often that is not a reason to abandon the other three. `try` says so -- on
-either verb -- and from there the flow is in charge:
+often that is not a reason to abandon the other three. `try` says so — on
+either verb — and from there the flow is in charge:
 
 ```
 page = try run web-fetch(url: url)
@@ -398,7 +398,7 @@ if outcome.ok {
 }
 ```
 
-`wait` holds until its subject is finished -- a call, or a node this flow writes
+`wait` holds until its subject is finished — a call, or a node this flow writes
 -- and bound to a name it is also how the flow *reads* that outcome, because
 waiting and finding out are the same moment. `status x` is the same value where an
 expression is expected, and `drain node` is the spelling to use beside the port it
@@ -413,7 +413,7 @@ A status is data:
 so a flow can branch on it, put it on one of its own outputs, or raise it again.
 [`fail`](../api/flow.md) takes any of Abseil's canonical codes by name in either
 case (`not_found`, `NOT_FOUND`), a number computed at runtime, or a whole status
-record -- `fail outcome` re-raises exactly what happened, and
+record — `fail outcome` re-raises exactly what happened, and
 `fail invalid_argument outcome.message` says it again in the caller's terms.
 
 Waiting on something that finished badly ends the flow with *that* status, unless
@@ -435,13 +435,36 @@ repeat state = {"round": 0} max 6 {
 
 `repeat` carries one value from each pass to the next: `state` starts at the
 literal and becomes whatever `<-` names. `until` (or `while`) ends the loop, and
-`max` bounds it regardless -- a composition that cannot terminate is not one
-worth accepting from outside.
+`max` bounds it regardless. One of the two is required: there is no default
+bound, so a `repeat` with neither is refused rather than stopping after some
+number of passes and reporting that as success.
+
+`match` pulls named fields out of text, as a stage over a stream and as a
+function over one value: `lines | match "name={name} age={age:int}"` turns
+`name=Alice   age=27` into a record with `name` and `age`. Literal text matches
+itself, a run of spaces or tabs matches any run, and a hole may say what to read
+itself as (`int`, `number`, `bool`, `word`, `line`, `rest`, `duration`, `time`,
+`json`). The pattern searches rather than anchors, so there are no wildcards to
+write, and a hole stays on its line unless it says otherwise. The stage drops a
+value the pattern does not fit and the function answers null. Where the pattern
+is written out, the fields are known: `it.name` is completed and a typo is
+reported.
+
+A `[s =] [try] { ... }` block runs its statements as one step. Everything in a
+flow's body runs at once, which is the point of it; a block is how a flow says
+"these together, and *this* is what came of them". Reading a value blocks where
+it stands, so a condition inside a block holds up only what is in the braces and
+not the rest of the body. Bound to a name it reads as a status, exactly as a call
+does; `try` says a failure inside is the flow's to handle, and without it a
+failure ends the flow the way a call's does.
 
 `for v in stream` runs its block once per value, `parallel n` runs `n` passes at
 a time. A stream read *inside* a loop or branch is materialised: the runtime
 buffers it once and replays it to every pass, which is what lets each pass see
-the same outer value.
+the same outer value. The buffer grows while it is read, so a pass waits for the
+value it asks for and not for the stream to finish — a loop reading a stream
+that is still open is not held up by it, and neither is anything written after
+the loop.
 
 ## Running one
 
@@ -470,7 +493,7 @@ A flow that will not compile raises
 
 Beyond `+` and `-` there is no arithmetic, no way to define a function, and no way to call out to
 code. An expression reads values, compares them, takes them apart with `.field`
-and `[i]`, and builds new ones -- with a fixed set of functions (`len`, `lower`,
+and `[i]`, and builds new ones — with a fixed set of functions (`len`, `lower`,
 `join`, `merge`, `default`, and a handful more). That is the whole of it, which is
 what makes accepting a flow from somewhere else and running it a reasonable thing
 to do: it can only call the actions it names, and it can only move their streams

@@ -2,6 +2,7 @@
 
 #include "a11/flow/highlight.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,9 +16,12 @@ namespace a11::flow {
 namespace {
 
 /// Every token as `semantic-kind:text`, which is what a colour scheme sees.
-std::vector<std::string> Coloured(std::string_view source) {
+std::vector<std::string> Coloured(std::string_view source,
+                                  bool resolve = false) {
   const LexResult lexed = Lex(source);
-  const std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
+  std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
+  // The second pass, where a test is about something only the resolver knows.
+  if (resolve) RefinePorts(source, semantic);
   std::vector<std::string> out;
   for (const SemanticToken& token : semantic) {
     if (token.kind == SemanticKind::kPunctuation &&
@@ -228,6 +232,98 @@ TEST(FlowHighlight, SemanticKindNamesRoundTrip) {
     EXPECT_EQ(SemanticKindFromName(SemanticKindName(kind)), kind)
         << SemanticKindName(kind);
   }
+}
+
+TEST(FlowHighlight, ADeclarationEndsAtItsLine) {
+  // `as` names a type in a cast and *renames* in a header, and the state it put
+  // the classifier in used to outlive the line -- so the first word of the next
+  // line was coloured as a type. Two header lines in a row is the shape that
+  // showed it.
+  EXPECT_EQ(Coloured("flow f {\n"
+                     "  header \"x-a\" as a\n"
+                     "  header \"x-b\" as b default 3\n"
+                     "}"),
+            (std::vector<std::string>{
+                "declaration-keyword:flow", "flow-name:f", "brace:{",
+                "declaration-keyword:header", "string:\"x-a\"",
+                "declaration-keyword:as", "identifier:a",
+                "declaration-keyword:header", "string:\"x-b\"",
+                "declaration-keyword:as", "identifier:b",
+                "declaration-keyword:default", "number:3", "brace:}"}));
+
+  // And a real cast still names a type, on its own line and no further.
+  EXPECT_EQ(Coloured("x as a11.Chunk\nheader \"y\" as y"),
+            (std::vector<std::string>{
+                "identifier:x", "declaration-keyword:as", "type:a11",
+                "punctuation:.", "type:Chunk",
+                "declaration-keyword:header", "string:\"y\"",
+                "declaration-keyword:as", "identifier:y"}));
+}
+
+TEST(FlowHighlight, APortLooksDifferentFromAFlowsOwnNames) {
+  // The one distinction that needs name resolution, so the one thing the second
+  // pass decides: a port crosses the flow's boundary and a node does not, and a
+  // reader following the data wants to see which is which.
+  constexpr std::string_view kSource =
+      "flow f {\n"
+      "  in  question: string required\n"
+      "  out answer:   string\n"
+      "  pages = node()\n"
+      "  question -> pages\n"
+      "  pages -> answer\n"
+      "}";
+  const std::vector<std::string> plain = Coloured(kSource);
+  const std::vector<std::string> resolved = Coloured(kSource, true);
+
+  // Lexically they are all identifiers: nothing in the token stream tells them
+  // apart, which is exactly why the second pass exists.
+  EXPECT_NE(std::find(plain.begin(), plain.end(), "identifier:question"),
+            plain.end());
+  EXPECT_NE(std::find(plain.begin(), plain.end(), "identifier:pages"),
+            plain.end());
+
+  // Resolved, the ports say so -- the declaration and every mention -- and the
+  // node stays an ordinary name.
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(),
+                       "port-name:question"),
+            2);
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "port-name:answer"),
+            2);
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "identifier:pages"),
+            3);
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "port-name:pages"), 0);
+}
+
+TEST(FlowHighlight, OnlyAPlainIdentifierBecomesAPort) {
+  // A member after a `.`, and a string that happens to spell a port's name, are
+  // already what they are.
+  const std::vector<std::string> resolved = Coloured(
+      "flow f {\n"
+      "  in  url: string required\n"
+      "  out b:   string\n"
+      "  hit = run x(url: url)\n"
+      "  hit.url -> b\n"
+      "  \"url\" -> b\n"
+      "}",
+      true);
+  EXPECT_NE(std::find(resolved.begin(), resolved.end(), "member:url"),
+            resolved.end());
+  EXPECT_NE(std::find(resolved.begin(), resolved.end(), "string:\"url\""),
+            resolved.end());
+  // The declaration, the argument's value, and nothing else.
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "port-name:url"), 3);
+}
+
+TEST(FlowHighlight, AShapesFieldsAreNotTheFlowsPorts) {
+  // A `struct` written after a flow is not inside it, so a field that happens to
+  // share a port's name is a field.
+  const std::vector<std::string> resolved = Coloured(
+      "flow f {\n  in url: string required\n  out b: string\n"
+      "  url -> b\n}\n"
+      "struct D {\n  url: string required\n}",
+      true);
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "port-name:url"), 2);
+  EXPECT_EQ(std::count(resolved.begin(), resolved.end(), "identifier:url"), 1);
 }
 
 }  // namespace

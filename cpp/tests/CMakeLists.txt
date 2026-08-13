@@ -40,13 +40,16 @@ add_test(NAME a11_core_test COMMAND a11_core_test)
 add_executable(a11_flow_test
   flow_complete_test.cc
   flow_diagnostic_test.cc
+  flow_dto_test.cc
   flow_emit_json_test.cc
   flow_highlight_test.cc
   flow_inspect_test.cc
   flow_format_test.cc
   flow_lexer_test.cc
+  flow_navigate_test.cc
   flow_offsets_test.cc
   flow_parser_test.cc
+  flow_pattern_test.cc
   flow_resolve_test.cc)
 target_link_libraries(a11_flow_test PRIVATE a11::flow_lang GTest::gtest_main)
 add_test(NAME a11_flow_test COMMAND a11_flow_test)
@@ -56,6 +59,7 @@ add_test(NAME a11_flow_test COMMAND a11_flow_test)
 # needs nothing but Abseil and nlohmann.
 add_executable(a11_flow_runtime_test
   flow_runtime_test.cc
+  flow_shape_test.cc
   flow_values_test.cc)
 target_link_libraries(
   a11_flow_runtime_test PRIVATE a11::flow_runtime GTest::gtest_main)

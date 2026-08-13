@@ -280,19 +280,23 @@ class FlowLexerTest {
                 "DECLARATION_KEYWORD:describe",
                 "STRING:\"a § and an 🙂 walk in\"",
                 "DECLARATION_KEYWORD:in",
-                "IDENTIFIER:q",
+                // A port, not a plain name: this is a whole flow, so the
+                // language could resolve `q` and `o` and say they are the
+                // interface. In the fragments above there is no flow to be a
+                // port of, so they stay identifiers.
+                "PORT_NAME:q",
                 "COLON::",
                 "TYPE:string",
                 "DECLARATION_KEYWORD:out",
-                "IDENTIFIER:o",
+                "PORT_NAME:o",
                 "COLON::",
                 "TYPE:string",
-                "IDENTIFIER:q",
+                "PORT_NAME:q",
                 "PIPE:|",
                 "STAGE:truncate",
                 "NUMBER:200",
                 "ARROW:->",
-                "IDENTIFIER:o",
+                "PORT_NAME:o",
                 "RIGHT_BRACE:}",
             ),
             tokens(source),

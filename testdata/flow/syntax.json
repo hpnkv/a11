@@ -4,17 +4,17 @@
     {
       "at": {
         "column": 1,
-        "end": 241,
-        "line": 4,
-        "start": 237
+        "end": 612,
+        "line": 17,
+        "start": 608
       },
       "body": [
         {
           "at": {
             "column": 3,
-            "end": 551,
-            "line": 14,
-            "start": 545
+            "end": 1067,
+            "line": 30,
+            "start": 1061
           },
           "kind": "bind",
           "name": "search",
@@ -26,17 +26,17 @@
                 {
                   "at": {
                     "column": 34,
-                    "end": 584,
-                    "line": 14,
-                    "start": 576
+                    "end": 1100,
+                    "line": 30,
+                    "start": 1092
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 34,
-                      "end": 584,
-                      "line": 14,
-                      "start": 576
+                      "end": 1100,
+                      "line": 30,
+                      "start": 1092
                     },
                     "kind": "name",
                     "name": "question"
@@ -49,17 +49,17 @@
                 {
                   "at": {
                     "column": 51,
-                    "end": 599,
-                    "line": 14,
-                    "start": 593
+                    "end": 1115,
+                    "line": 30,
+                    "start": 1109
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 51,
-                      "end": 599,
-                      "line": 14,
-                      "start": 593
+                      "end": 1115,
+                      "line": 30,
+                      "start": 1109
                     },
                     "kind": "name",
                     "name": "budget"
@@ -70,9 +70,9 @@
             ],
             "at": {
               "column": 12,
-              "end": 557,
-              "line": 14,
-              "start": 554
+              "end": 1073,
+              "line": 30,
+              "start": 1070
             },
             "kind": "call",
             "mode": "run",
@@ -81,9 +81,9 @@
               "after": [],
               "at": {
                 "column": 58,
-                "end": 601,
-                "line": 14,
-                "start": 600
+                "end": 1117,
+                "line": 30,
+                "start": 1116
               },
               "forward": [],
               "headers": [],
@@ -98,18 +98,18 @@
         {
           "at": {
             "column": 3,
-            "end": 709,
-            "line": 18,
-            "start": 704
+            "end": 1225,
+            "line": 34,
+            "start": 1220
           },
           "kind": "bind",
           "name": "pages",
           "value": {
             "at": {
               "column": 11,
-              "end": 716,
-              "line": 18,
-              "start": 712
+              "end": 1232,
+              "line": 34,
+              "start": 1228
             },
             "id": null,
             "kind": "node",
@@ -119,25 +119,25 @@
         {
           "at": {
             "column": 3,
-            "end": 727,
-            "line": 20,
-            "start": 722
+            "end": 1243,
+            "line": 36,
+            "start": 1238
           },
           "body": [
             {
               "at": {
                 "column": 5,
-                "end": 745,
-                "line": 21,
-                "start": 742
+                "end": 1261,
+                "line": 37,
+                "start": 1258
               },
               "body": [
                 {
                   "at": {
                     "column": 7,
-                    "end": 788,
-                    "line": 22,
-                    "start": 784
+                    "end": 1304,
+                    "line": 38,
+                    "start": 1300
                   },
                   "kind": "bind",
                   "name": "page",
@@ -149,24 +149,24 @@
                         {
                           "at": {
                             "column": 38,
-                            "end": 818,
-                            "line": 22,
-                            "start": 815
+                            "end": 1334,
+                            "line": 38,
+                            "start": 1331
                           },
                           "kind": "pipeline",
                           "source": {
                             "at": {
                               "column": 41,
-                              "end": 819,
-                              "line": 22,
-                              "start": 818
+                              "end": 1335,
+                              "line": 38,
+                              "start": 1334
                             },
                             "base": {
                               "at": {
                                 "column": 38,
-                                "end": 818,
-                                "line": 22,
-                                "start": 815
+                                "end": 1334,
+                                "line": 38,
+                                "start": 1331
                               },
                               "kind": "name",
                               "name": "hit"
@@ -180,9 +180,9 @@
                     ],
                     "at": {
                       "column": 14,
-                      "end": 794,
-                      "line": 22,
-                      "start": 791
+                      "end": 1310,
+                      "line": 38,
+                      "start": 1307
                     },
                     "kind": "call",
                     "mode": "call",
@@ -191,9 +191,9 @@
                       "after": [],
                       "at": {
                         "column": 46,
-                        "end": 824,
-                        "line": 22,
-                        "start": 823
+                        "end": 1340,
+                        "line": 38,
+                        "start": 1339
                       },
                       "forward": [
                         "authorization"
@@ -204,9 +204,9 @@
                           {
                             "at": {
                               "column": 26,
-                              "end": 882,
-                              "line": 24,
-                              "start": 871
+                              "end": 1398,
+                              "line": 40,
+                              "start": 1387
                             },
                             "kind": "literal",
                             "value": "text/html"
@@ -227,17 +227,17 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1094,
-                    "line": 29,
-                    "start": 1090
+                    "end": 1610,
+                    "line": 45,
+                    "start": 1606
                   },
                   "kind": "wait",
                   "subject": {
                     "at": {
                       "column": 12,
-                      "end": 1099,
-                      "line": 29,
-                      "start": 1095
+                      "end": 1615,
+                      "line": 45,
+                      "start": 1611
                     },
                     "kind": "name",
                     "name": "page"
@@ -248,48 +248,144 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1110,
-                    "line": 31,
-                    "start": 1107
+                    "end": 1753,
+                    "line": 49,
+                    "start": 1750
                   },
                   "kind": "pipe",
                   "pipeline": {
                     "at": {
                       "column": 7,
-                      "end": 1110,
-                      "line": 31,
-                      "start": 1107
+                      "end": 1753,
+                      "line": 49,
+                      "start": 1750
                     },
                     "kind": "pipeline",
                     "source": {
                       "at": {
-                        "column": 10,
-                        "end": 1111,
-                        "line": 31,
-                        "start": 1110
+                        "column": 7,
+                        "end": 1753,
+                        "line": 49,
+                        "start": 1750
                       },
-                      "base": {
-                        "at": {
-                          "column": 7,
-                          "end": 1110,
-                          "line": 31,
-                          "start": 1107
-                        },
-                        "kind": "name",
-                        "name": "hit"
-                      },
-                      "kind": "attr",
-                      "name": "url"
+                      "kind": "name",
+                      "name": "hit"
                     },
-                    "stages": []
+                    "stages": [
+                      {
+                        "arg": {
+                          "at": {
+                            "column": 17,
+                            "end": 1766,
+                            "line": 49,
+                            "start": 1760
+                          },
+                          "kind": "typed-value",
+                          "type": {
+                            "name": "Source",
+                            "parameters": [],
+                            "quoted": false,
+                            "sugared": false,
+                            "written": "Source"
+                          },
+                          "value": {
+                            "at": {
+                              "column": 23,
+                              "end": 1767,
+                              "line": 49,
+                              "start": 1766
+                            },
+                            "kind": "object",
+                            "pairs": [
+                              [
+                                "",
+                                {
+                                  "at": {
+                                    "column": 24,
+                                    "end": 1770,
+                                    "line": 49,
+                                    "start": 1767
+                                  },
+                                  "kind": "spread",
+                                  "value": {
+                                    "at": {
+                                      "column": 27,
+                                      "end": 1772,
+                                      "line": 49,
+                                      "start": 1770
+                                    },
+                                    "kind": "it"
+                                  }
+                                }
+                              ],
+                              [
+                                "url",
+                                {
+                                  "at": {
+                                    "column": 40,
+                                    "end": 1784,
+                                    "line": 49,
+                                    "start": 1783
+                                  },
+                                  "base": {
+                                    "at": {
+                                      "column": 38,
+                                      "end": 1783,
+                                      "line": 49,
+                                      "start": 1781
+                                    },
+                                    "kind": "it"
+                                  },
+                                  "kind": "attr",
+                                  "name": "url"
+                                }
+                              ],
+                              [
+                                "tags",
+                                {
+                                  "at": {
+                                    "column": 54,
+                                    "end": 1798,
+                                    "line": 49,
+                                    "start": 1797
+                                  },
+                                  "items": [
+                                    {
+                                      "at": {
+                                        "column": 55,
+                                        "end": 1808,
+                                        "line": 49,
+                                        "start": 1798
+                                      },
+                                      "kind": "literal",
+                                      "value": "searched"
+                                    }
+                                  ],
+                                  "kind": "list"
+                                }
+                              ]
+                            ]
+                          }
+                        },
+                        "at": {
+                          "column": 13,
+                          "end": 1759,
+                          "line": 49,
+                          "start": 1756
+                        },
+                        "kind": "stage",
+                        "name": "map",
+                        "takes": "expr"
+                      }
+                    ]
                   },
                   "targets": [
                     {
                       "at": {
-                        "column": 18,
-                        "end": 1125,
-                        "line": 31,
-                        "start": 1118
+                        "column": 71,
+                        "end": 1821,
+                        "line": 49,
+                        "start": 1814
                       },
                       "kind": "name",
                       "name": "sources"
@@ -300,32 +396,32 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1136,
-                    "line": 32,
-                    "start": 1132
+                    "end": 1832,
+                    "line": 50,
+                    "start": 1828
                   },
                   "kind": "pipe",
                   "pipeline": {
                     "at": {
                       "column": 7,
-                      "end": 1136,
-                      "line": 32,
-                      "start": 1132
+                      "end": 1832,
+                      "line": 50,
+                      "start": 1828
                     },
                     "kind": "pipeline",
                     "source": {
                       "at": {
                         "column": 11,
-                        "end": 1137,
-                        "line": 32,
-                        "start": 1136
+                        "end": 1833,
+                        "line": 50,
+                        "start": 1832
                       },
                       "base": {
                         "at": {
                           "column": 7,
-                          "end": 1136,
-                          "line": 32,
-                          "start": 1132
+                          "end": 1832,
+                          "line": 50,
+                          "start": 1828
                         },
                         "kind": "name",
                         "name": "page"
@@ -338,9 +434,9 @@
                         "arg": 200,
                         "at": {
                           "column": 19,
-                          "end": 1152,
-                          "line": 32,
-                          "start": 1144
+                          "end": 1848,
+                          "line": 50,
+                          "start": 1840
                         },
                         "kind": "stage",
                         "name": "truncate",
@@ -350,17 +446,17 @@
                         "arg": {
                           "at": {
                             "column": 43,
-                            "end": 1170,
-                            "line": 32,
-                            "start": 1168
+                            "end": 1866,
+                            "line": 50,
+                            "start": 1864
                           },
                           "kind": "binary",
                           "left": {
                             "at": {
                               "column": 40,
-                              "end": 1167,
-                              "line": 32,
-                              "start": 1165
+                              "end": 1863,
+                              "line": 50,
+                              "start": 1861
                             },
                             "kind": "it"
                           },
@@ -368,9 +464,9 @@
                           "right": {
                             "at": {
                               "column": 46,
-                              "end": 1173,
-                              "line": 32,
-                              "start": 1171
+                              "end": 1869,
+                              "line": 50,
+                              "start": 1867
                             },
                             "kind": "literal",
                             "value": ""
@@ -378,9 +474,9 @@
                         },
                         "at": {
                           "column": 34,
-                          "end": 1164,
-                          "line": 32,
-                          "start": 1159
+                          "end": 1860,
+                          "line": 50,
+                          "start": 1855
                         },
                         "kind": "stage",
                         "name": "where",
@@ -392,9 +488,9 @@
                     {
                       "at": {
                         "column": 52,
-                        "end": 1182,
-                        "line": 32,
-                        "start": 1177
+                        "end": 1878,
+                        "line": 50,
+                        "start": 1873
                       },
                       "kind": "name",
                       "name": "pages"
@@ -407,24 +503,24 @@
               "pipeline": {
                 "at": {
                   "column": 16,
-                  "end": 759,
-                  "line": 21,
-                  "start": 753
+                  "end": 1275,
+                  "line": 37,
+                  "start": 1269
                 },
                 "kind": "pipeline",
                 "source": {
                   "at": {
                     "column": 22,
-                    "end": 760,
-                    "line": 21,
-                    "start": 759
+                    "end": 1276,
+                    "line": 37,
+                    "start": 1275
                   },
                   "base": {
                     "at": {
                       "column": 16,
-                      "end": 759,
-                      "line": 21,
-                      "start": 753
+                      "end": 1275,
+                      "line": 37,
+                      "start": 1269
                     },
                     "kind": "name",
                     "name": "search"
@@ -434,7 +530,10 @@
                 },
                 "stages": []
               },
-              "variable": "hit"
+              "variable": "hit",
+              "variables": [
+                "hit"
+              ]
             }
           ],
           "kind": "nodes",
@@ -446,17 +545,17 @@
           ],
           "at": {
             "column": 3,
-            "end": 1201,
-            "line": 36,
-            "start": 1196
+            "end": 1897,
+            "line": 54,
+            "start": 1892
           },
           "kind": "drain",
           "target": {
             "at": {
               "column": 9,
-              "end": 1207,
-              "line": 36,
-              "start": 1202
+              "end": 1903,
+              "line": 54,
+              "start": 1898
             },
             "kind": "name",
             "name": "pages"
@@ -465,9 +564,151 @@
         {
           "at": {
             "column": 3,
-            "end": 1229,
-            "line": 38,
-            "start": 1224
+            "end": 2073,
+            "line": 58,
+            "start": 2070
+          },
+          "body": [
+            {
+              "after": [],
+              "at": {
+                "column": 5,
+                "end": 2131,
+                "line": 59,
+                "start": 2122
+              },
+              "kind": "pipe",
+              "pipeline": {
+                "at": {
+                  "column": 5,
+                  "end": 2131,
+                  "line": 59,
+                  "start": 2122
+                },
+                "kind": "pipeline",
+                "source": {
+                  "args": [
+                    {
+                      "at": {
+                        "column": 15,
+                        "end": 2140,
+                        "line": 59,
+                        "start": 2132
+                      },
+                      "kind": "literal",
+                      "value": "%s: %s"
+                    },
+                    {
+                      "at": {
+                        "column": 25,
+                        "end": 2145,
+                        "line": 59,
+                        "start": 2142
+                      },
+                      "kind": "name",
+                      "name": "url"
+                    },
+                    {
+                      "at": {
+                        "column": 30,
+                        "end": 2156,
+                        "line": 59,
+                        "start": 2147
+                      },
+                      "kind": "name",
+                      "name": "page_text"
+                    }
+                  ],
+                  "at": {
+                    "column": 5,
+                    "end": 2131,
+                    "line": 59,
+                    "start": 2122
+                  },
+                  "kind": "builtin",
+                  "name": "strformat"
+                },
+                "stages": []
+              },
+              "targets": [
+                {
+                  "at": {
+                    "column": 44,
+                    "end": 2166,
+                    "line": 59,
+                    "start": 2161
+                  },
+                  "kind": "name",
+                  "name": "notes"
+                }
+              ]
+            }
+          ],
+          "kind": "for-each",
+          "parallel": 1,
+          "pipeline": {
+            "at": {
+              "column": 25,
+              "end": 2095,
+              "line": 58,
+              "start": 2092
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 25,
+                "end": 2095,
+                "line": 58,
+                "start": 2092
+              },
+              "kind": "zip",
+              "sources": [
+                {
+                  "at": {
+                    "column": 29,
+                    "end": 2101,
+                    "line": 58,
+                    "start": 2096
+                  },
+                  "kind": "name",
+                  "name": "pages"
+                },
+                {
+                  "at": {
+                    "column": 42,
+                    "end": 2110,
+                    "line": 58,
+                    "start": 2109
+                  },
+                  "base": {
+                    "at": {
+                      "column": 36,
+                      "end": 2109,
+                      "line": 58,
+                      "start": 2103
+                    },
+                    "kind": "name",
+                    "name": "search"
+                  },
+                  "kind": "attr",
+                  "name": "hits"
+                }
+              ]
+            },
+            "stages": []
+          },
+          "variable": "page_text",
+          "variables": [
+            "page_text",
+            "url"
+          ]
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 2179,
+            "line": 62,
+            "start": 2174
           },
           "kind": "bind",
           "name": "brief",
@@ -479,17 +720,17 @@
                 {
                   "at": {
                     "column": 39,
-                    "end": 1268,
-                    "line": 38,
-                    "start": 1260
+                    "end": 2218,
+                    "line": 62,
+                    "start": 2210
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 39,
-                      "end": 1268,
-                      "line": 38,
-                      "start": 1260
+                      "end": 2218,
+                      "line": 62,
+                      "start": 2210
                     },
                     "kind": "name",
                     "name": "question"
@@ -502,17 +743,17 @@
                 {
                   "at": {
                     "column": 56,
-                    "end": 1282,
-                    "line": 38,
-                    "start": 1277
+                    "end": 2232,
+                    "line": 62,
+                    "start": 2227
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 56,
-                      "end": 1282,
-                      "line": 38,
-                      "start": 1277
+                      "end": 2232,
+                      "line": 62,
+                      "start": 2227
                     },
                     "kind": "name",
                     "name": "pages"
@@ -523,9 +764,9 @@
             ],
             "at": {
               "column": 11,
-              "end": 1235,
-              "line": 38,
-              "start": 1232
+              "end": 2185,
+              "line": 62,
+              "start": 2182
             },
             "kind": "call",
             "mode": "run",
@@ -534,9 +775,9 @@
               "after": [],
               "at": {
                 "column": 62,
-                "end": 1284,
-                "line": 38,
-                "start": 1283
+                "end": 2234,
+                "line": 62,
+                "start": 2233
               },
               "forward": [],
               "headers": [
@@ -545,9 +786,9 @@
                   {
                     "at": {
                       "column": 30,
-                      "end": 1321,
-                      "line": 39,
-                      "start": 1313
+                      "end": 2271,
+                      "line": 63,
+                      "start": 2263
                     },
                     "kind": "name",
                     "name": "deadline"
@@ -565,67 +806,179 @@
         {
           "at": {
             "column": 3,
-            "end": 1327,
-            "line": 41,
-            "start": 1325
+            "end": 2359,
+            "line": 66,
+            "start": 2356
+          },
+          "kind": "let",
+          "name": "summary",
+          "names": [
+            "summary"
+          ],
+          "pipeline": {
+            "at": {
+              "column": 17,
+              "end": 2375,
+              "line": 66,
+              "start": 2370
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 22,
+                "end": 2376,
+                "line": 66,
+                "start": 2375
+              },
+              "base": {
+                "at": {
+                  "column": 17,
+                  "end": 2375,
+                  "line": 66,
+                  "start": 2370
+                },
+                "kind": "name",
+                "name": "brief"
+              },
+              "kind": "attr",
+              "name": "summary"
+            },
+            "stages": []
+          }
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 2393,
+            "line": 67,
+            "start": 2386
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 2393,
+              "line": 67,
+              "start": 2386
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 3,
+                "end": 2393,
+                "line": 67,
+                "start": 2386
+              },
+              "kind": "name",
+              "name": "summary"
+            },
+            "stages": [
+              {
+                "arg": 4096,
+                "at": {
+                  "column": 13,
+                  "end": 2401,
+                  "line": 67,
+                  "start": 2396
+                },
+                "kind": "stage",
+                "name": "chunk",
+                "takes": "number"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 27,
+                "end": 2416,
+                "line": 67,
+                "start": 2410
+              },
+              "kind": "name",
+              "name": "frames"
+            }
+          ]
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 2569,
+            "line": 71,
+            "start": 2566
+          },
+          "kind": "let",
+          "name": "read",
+          "names": [
+            "read"
+          ],
+          "pipeline": {
+            "at": {
+              "column": 14,
+              "end": 2582,
+              "line": 71,
+              "start": 2577
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 14,
+                "end": 2582,
+                "line": 71,
+                "start": 2577
+              },
+              "kind": "name",
+              "name": "pages"
+            },
+            "stages": [
+              {
+                "arg": null,
+                "at": {
+                  "column": 22,
+                  "end": 2590,
+                  "line": 71,
+                  "start": 2585
+                },
+                "kind": "stage",
+                "name": "count",
+                "takes": "none"
+              }
+            ]
+          }
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 2595,
+            "line": 72,
+            "start": 2593
           },
           "condition": {
             "at": {
-              "column": 22,
-              "end": 1345,
-              "line": 41,
-              "start": 1344
+              "column": 11,
+              "end": 2602,
+              "line": 72,
+              "start": 2601
             },
             "kind": "binary",
             "left": {
               "at": {
                 "column": 6,
-                "end": 1329,
-                "line": 41,
-                "start": 1328
+                "end": 2600,
+                "line": 72,
+                "start": 2596
               },
-              "kind": "pipeline-value",
-              "pipeline": {
-                "at": {
-                  "column": 6,
-                  "end": 1329,
-                  "line": 41,
-                  "start": 1328
-                },
-                "kind": "pipeline",
-                "source": {
-                  "at": {
-                    "column": 7,
-                    "end": 1334,
-                    "line": 41,
-                    "start": 1329
-                  },
-                  "kind": "name",
-                  "name": "pages"
-                },
-                "stages": [
-                  {
-                    "arg": null,
-                    "at": {
-                      "column": 15,
-                      "end": 1342,
-                      "line": 41,
-                      "start": 1337
-                    },
-                    "kind": "stage",
-                    "name": "count",
-                    "takes": "none"
-                  }
-                ]
-              }
+              "kind": "name",
+              "name": "read"
             },
             "op": ">",
             "right": {
               "at": {
-                "column": 24,
-                "end": 1347,
-                "line": 41,
-                "start": 1346
+                "column": 13,
+                "end": 2604,
+                "line": 72,
+                "start": 2603
               },
               "kind": "literal",
               "value": 0
@@ -636,16 +989,16 @@
               "after": [],
               "at": {
                 "column": 5,
-                "end": 1397,
-                "line": 44,
-                "start": 1393
+                "end": 2648,
+                "line": 75,
+                "start": 2644
               },
               "code": {
                 "at": {
                   "column": 10,
-                  "end": 1407,
-                  "line": 44,
-                  "start": 1398
+                  "end": 2658,
+                  "line": 75,
+                  "start": 2649
                 },
                 "kind": "name",
                 "name": "not_found"
@@ -654,9 +1007,9 @@
               "message": {
                 "at": {
                   "column": 20,
-                  "end": 1431,
-                  "line": 44,
-                  "start": 1408
+                  "end": 2682,
+                  "line": 75,
+                  "start": 2659
                 },
                 "kind": "literal",
                 "value": "nothing worth reading"
@@ -669,37 +1022,27 @@
               "after": [],
               "at": {
                 "column": 5,
-                "end": 1359,
-                "line": 42,
-                "start": 1354
+                "end": 2618,
+                "line": 73,
+                "start": 2611
               },
               "kind": "pipe",
               "pipeline": {
                 "at": {
                   "column": 5,
-                  "end": 1359,
-                  "line": 42,
-                  "start": 1354
+                  "end": 2618,
+                  "line": 73,
+                  "start": 2611
                 },
                 "kind": "pipeline",
                 "source": {
                   "at": {
-                    "column": 10,
-                    "end": 1360,
-                    "line": 42,
-                    "start": 1359
+                    "column": 5,
+                    "end": 2618,
+                    "line": 73,
+                    "start": 2611
                   },
-                  "base": {
-                    "at": {
-                      "column": 5,
-                      "end": 1359,
-                      "line": 42,
-                      "start": 1354
-                    },
-                    "kind": "name",
-                    "name": "brief"
-                  },
-                  "kind": "attr",
+                  "kind": "name",
                   "name": "summary"
                 },
                 "stages": []
@@ -707,10 +1050,10 @@
               "targets": [
                 {
                   "at": {
-                    "column": 22,
-                    "end": 1377,
-                    "line": 42,
-                    "start": 1371
+                    "column": 16,
+                    "end": 2628,
+                    "line": 73,
+                    "start": 2622
                   },
                   "kind": "name",
                   "name": "answer"
@@ -720,36 +1063,515 @@
           ]
         },
         {
+          "at": {
+            "column": 3,
+            "end": 2917,
+            "line": 81,
+            "start": 2914
+          },
+          "kind": "let",
+          "name": "page_line",
+          "names": [
+            "page_line"
+          ],
+          "pipeline": {
+            "at": {
+              "column": 19,
+              "end": 2935,
+              "line": 81,
+              "start": 2930
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 19,
+                "end": 2935,
+                "line": 81,
+                "start": 2930
+              },
+              "kind": "name",
+              "name": "pages"
+            },
+            "stages": []
+          }
+        },
+        {
           "after": [],
           "at": {
             "column": 3,
-            "end": 1443,
-            "line": 47,
-            "start": 1439
+            "end": 2947,
+            "line": 82,
+            "start": 2938
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 2947,
+              "line": 82,
+              "start": 2938
+            },
+            "kind": "pipeline",
+            "source": {
+              "args": [
+                {
+                  "at": {
+                    "column": 13,
+                    "end": 2959,
+                    "line": 82,
+                    "start": 2948
+                  },
+                  "kind": "literal",
+                  "value": "first: %s"
+                },
+                {
+                  "at": {
+                    "column": 26,
+                    "end": 2970,
+                    "line": 82,
+                    "start": 2961
+                  },
+                  "kind": "name",
+                  "name": "page_line"
+                }
+              ],
+              "at": {
+                "column": 3,
+                "end": 2947,
+                "line": 82,
+                "start": 2938
+              },
+              "kind": "builtin",
+              "name": "strformat"
+            },
+            "stages": []
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 40,
+                "end": 2980,
+                "line": 82,
+                "start": 2975
+              },
+              "kind": "name",
+              "name": "notes"
+            }
+          ]
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 2990,
+            "line": 83,
+            "start": 2983
+          },
+          "kind": "advance",
+          "name": "page_line"
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 3012,
+            "line": 84,
+            "start": 3003
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 3012,
+              "line": 84,
+              "start": 3003
+            },
+            "kind": "pipeline",
+            "source": {
+              "args": [
+                {
+                  "at": {
+                    "column": 13,
+                    "end": 3025,
+                    "line": 84,
+                    "start": 3013
+                  },
+                  "kind": "literal",
+                  "value": "second: %s"
+                },
+                {
+                  "at": {
+                    "column": 27,
+                    "end": 3036,
+                    "line": 84,
+                    "start": 3027
+                  },
+                  "kind": "name",
+                  "name": "page_line"
+                }
+              ],
+              "at": {
+                "column": 3,
+                "end": 3012,
+                "line": 84,
+                "start": 3003
+              },
+              "kind": "builtin",
+              "name": "strformat"
+            },
+            "stages": []
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 41,
+                "end": 3046,
+                "line": 84,
+                "start": 3041
+              },
+              "kind": "name",
+              "name": "notes"
+            }
+          ]
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 3339,
+            "line": 90,
+            "start": 3334
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 3339,
+              "line": 90,
+              "start": 3334
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 3,
+                "end": 3339,
+                "line": 90,
+                "start": 3334
+              },
+              "kind": "name",
+              "name": "pages"
+            },
+            "stages": [
+              {
+                "arg": "{title:line}",
+                "at": {
+                  "column": 11,
+                  "end": 3347,
+                  "line": 90,
+                  "start": 3342
+                },
+                "kind": "stage",
+                "name": "match",
+                "takes": "string"
+              },
+              {
+                "arg": {
+                  "at": {
+                    "column": 40,
+                    "end": 3372,
+                    "line": 90,
+                    "start": 3371
+                  },
+                  "base": {
+                    "at": {
+                      "column": 38,
+                      "end": 3371,
+                      "line": 90,
+                      "start": 3369
+                    },
+                    "kind": "it"
+                  },
+                  "kind": "attr",
+                  "name": "title"
+                },
+                "at": {
+                  "column": 34,
+                  "end": 3368,
+                  "line": 90,
+                  "start": 3365
+                },
+                "kind": "stage",
+                "name": "map",
+                "takes": "expr"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 50,
+                "end": 3386,
+                "line": 90,
+                "start": 3381
+              },
+              "kind": "name",
+              "name": "notes"
+            }
+          ]
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 3392,
+            "line": 91,
+            "start": 3389
+          },
+          "kind": "let",
+          "name": "head",
+          "names": [
+            "head",
+            "tail"
+          ],
+          "pipeline": {
+            "at": {
+              "column": 20,
+              "end": 3411,
+              "line": 91,
+              "start": 3406
+            },
+            "kind": "pipeline",
+            "source": {
+              "args": [
+                {
+                  "at": {
+                    "column": 26,
+                    "end": 3433,
+                    "line": 91,
+                    "start": 3412
+                  },
+                  "kind": "literal",
+                  "value": "{head}. {tail:rest}"
+                },
+                {
+                  "at": {
+                    "column": 49,
+                    "end": 3442,
+                    "line": 91,
+                    "start": 3435
+                  },
+                  "kind": "name",
+                  "name": "summary"
+                }
+              ],
+              "at": {
+                "column": 20,
+                "end": 3411,
+                "line": 91,
+                "start": 3406
+              },
+              "kind": "builtin",
+              "name": "match"
+            },
+            "stages": []
+          }
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 3455,
+            "line": 92,
+            "start": 3446
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 3455,
+              "line": 92,
+              "start": 3446
+            },
+            "kind": "pipeline",
+            "source": {
+              "args": [
+                {
+                  "at": {
+                    "column": 13,
+                    "end": 3466,
+                    "line": 92,
+                    "start": 3456
+                  },
+                  "kind": "literal",
+                  "value": "%s || %s"
+                },
+                {
+                  "at": {
+                    "column": 25,
+                    "end": 3472,
+                    "line": 92,
+                    "start": 3468
+                  },
+                  "kind": "name",
+                  "name": "head"
+                },
+                {
+                  "at": {
+                    "column": 31,
+                    "end": 3478,
+                    "line": 92,
+                    "start": 3474
+                  },
+                  "kind": "name",
+                  "name": "tail"
+                }
+              ],
+              "at": {
+                "column": 3,
+                "end": 3455,
+                "line": 92,
+                "start": 3446
+              },
+              "kind": "builtin",
+              "name": "strformat"
+            },
+            "stages": []
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 40,
+                "end": 3488,
+                "line": 92,
+                "start": 3483
+              },
+              "kind": "name",
+              "name": "notes"
+            }
+          ]
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 3756,
+            "line": 98,
+            "start": 3749
+          },
+          "kind": "bind",
+          "name": "checked",
+          "value": {
+            "at": {
+              "column": 13,
+              "end": 3762,
+              "line": 98,
+              "start": 3759
+            },
+            "kind": "block"
+          }
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 3876,
+            "line": 103,
+            "start": 3867
+          },
+          "kind": "pipe",
+          "pipeline": {
+            "at": {
+              "column": 3,
+              "end": 3876,
+              "line": 103,
+              "start": 3867
+            },
+            "kind": "pipeline",
+            "source": {
+              "args": [
+                {
+                  "at": {
+                    "column": 13,
+                    "end": 3890,
+                    "line": 103,
+                    "start": 3877
+                  },
+                  "kind": "literal",
+                  "value": "checked: %s"
+                },
+                {
+                  "at": {
+                    "column": 35,
+                    "end": 3900,
+                    "line": 103,
+                    "start": 3899
+                  },
+                  "base": {
+                    "at": {
+                      "column": 28,
+                      "end": 3899,
+                      "line": 103,
+                      "start": 3892
+                    },
+                    "kind": "name",
+                    "name": "checked"
+                  },
+                  "kind": "attr",
+                  "name": "ok"
+                }
+              ],
+              "at": {
+                "column": 3,
+                "end": 3876,
+                "line": 103,
+                "start": 3867
+              },
+              "kind": "builtin",
+              "name": "strformat"
+            },
+            "stages": []
+          },
+          "targets": [
+            {
+              "at": {
+                "column": 43,
+                "end": 3912,
+                "line": 103,
+                "start": 3907
+              },
+              "kind": "name",
+              "name": "notes"
+            }
+          ]
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 3920,
+            "line": 105,
+            "start": 3916
           },
           "count": null,
           "kind": "skip",
           "pipeline": {
             "at": {
               "column": 8,
-              "end": 1450,
-              "line": 47,
-              "start": 1444
+              "end": 3927,
+              "line": 105,
+              "start": 3921
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 14,
-                "end": 1451,
-                "line": 47,
-                "start": 1450
+                "end": 3928,
+                "line": 105,
+                "start": 3927
               },
               "base": {
                 "at": {
                   "column": 8,
-                  "end": 1450,
-                  "line": 47,
-                  "start": 1444
+                  "end": 3927,
+                  "line": 105,
+                  "start": 3921
                 },
                 "kind": "name",
                 "name": "search"
@@ -767,9 +1589,9 @@
           "alias": "deadline",
           "at": {
             "column": 3,
-            "end": 466,
-            "line": 11,
-            "start": 460
+            "end": 982,
+            "line": 27,
+            "start": 976
           },
           "default": null,
           "description": "",
@@ -780,9 +1602,9 @@
           "alias": "budget",
           "at": {
             "column": 3,
-            "end": 504,
-            "line": 12,
-            "start": 498
+            "end": 1020,
+            "line": 28,
+            "start": 1014
           },
           "default": 3,
           "description": "",
@@ -796,9 +1618,9 @@
         {
           "at": {
             "column": 3,
-            "end": 309,
-            "line": 7,
-            "start": 307
+            "end": 680,
+            "line": 20,
+            "start": 678
           },
           "description": "What to find out.",
           "direction": "inputs",
@@ -808,16 +1630,18 @@
           "type": {
             "name": "string",
             "parameters": [],
-            "quoted": false
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
           },
           "unary": true
         },
         {
           "at": {
             "column": 3,
-            "end": 362,
-            "line": 8,
-            "start": 359
+            "end": 734,
+            "line": 22,
+            "start": 731
           },
           "description": "The answer.",
           "direction": "outputs",
@@ -827,16 +1651,18 @@
           "type": {
             "name": "string",
             "parameters": [],
-            "quoted": false
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
           },
           "unary": true
         },
         {
           "at": {
             "column": 3,
-            "end": 408,
-            "line": 9,
-            "start": 405
+            "end": 777,
+            "line": 23,
+            "start": 774
           },
           "description": "Where it came from.",
           "direction": "outputs",
@@ -844,9 +1670,53 @@
           "name": "sources",
           "required": false,
           "type": {
+            "name": "Source",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "Source"
+          },
+          "unary": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 828,
+            "line": 24,
+            "start": 825
+          },
+          "description": "Each page, against the source it came from.",
+          "direction": "outputs",
+          "kind": "port",
+          "name": "notes",
+          "required": false,
+          "type": {
             "name": "string",
             "parameters": [],
-            "quoted": false
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
+          },
+          "unary": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 903,
+            "line": 25,
+            "start": 900
+          },
+          "description": "The answer, in pieces small enough to send.",
+          "direction": "outputs",
+          "kind": "port",
+          "name": "frames",
+          "required": false,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
           },
           "unary": false
         }
@@ -854,5 +1724,183 @@
     }
   ],
   "format": "flow.syntax/v1",
-  "source": "testdata/flow/example.flow"
+  "source": "testdata/flow/example.flow",
+  "structs": [
+    {
+      "at": {
+        "column": 1,
+        "end": 321,
+        "line": 5,
+        "start": 315
+      },
+      "description": "Where an answer came from.",
+      "fields": [
+        {
+          "at": {
+            "column": 3,
+            "end": 377,
+            "line": 8,
+            "start": 374
+          },
+          "description": "The page.",
+          "kind": "field",
+          "name": "url",
+          "pattern": "^https?://",
+          "required": true,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
+          },
+          "unique": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 439,
+            "line": 9,
+            "start": 434
+          },
+          "description": "",
+          "kind": "field",
+          "name": "title",
+          "range": {
+            "maximum": 200,
+            "minimum": 1
+          },
+          "required": false,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
+          },
+          "unique": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 462,
+            "line": 10,
+            "start": 458
+          },
+          "description": "",
+          "kind": "field",
+          "name": "tags",
+          "required": false,
+          "type": {
+            "name": "list",
+            "parameters": [
+              {
+                "name": "string",
+                "parameters": [],
+                "quoted": false,
+                "sugared": false,
+                "written": "string"
+              }
+            ],
+            "quoted": false,
+            "sugared": true,
+            "written": "string[]"
+          },
+          "unique": true
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 488,
+            "line": 11,
+            "start": 484
+          },
+          "default": 0.5,
+          "description": "",
+          "kind": "field",
+          "name": "rank",
+          "range": {
+            "maximum": 1,
+            "minimum": 0
+          },
+          "required": false,
+          "type": {
+            "name": "number",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "number"
+          },
+          "unique": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 522,
+            "line": 12,
+            "start": 518
+          },
+          "default": "page",
+          "description": "",
+          "kind": "field",
+          "name": "kind",
+          "one_of": [
+            "page",
+            "paper"
+          ],
+          "required": false,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "string"
+          },
+          "unique": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 579,
+            "line": 13,
+            "start": 575
+          },
+          "description": "",
+          "kind": "field",
+          "name": "seen",
+          "required": false,
+          "type": {
+            "name": "time",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "time"
+          },
+          "unique": false
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 596,
+            "line": 14,
+            "start": 590
+          },
+          "description": "",
+          "kind": "field",
+          "name": "parent",
+          "required": false,
+          "type": {
+            "name": "Source",
+            "parameters": [],
+            "quoted": false,
+            "sugared": false,
+            "written": "Source"
+          },
+          "unique": false
+        }
+      ],
+      "kind": "struct",
+      "name": "Source"
+    }
+  ]
 }

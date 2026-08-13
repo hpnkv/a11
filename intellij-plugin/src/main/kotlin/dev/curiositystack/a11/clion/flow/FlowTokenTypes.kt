@@ -61,6 +61,16 @@ object FlowTokens {
     /** What follows a `.`: a port, a field, a node's id. */
     val MEMBER = FlowTokenType("MEMBER")
 
+    /**
+     * A port of the flow: its declaration, and every mention of it.
+     *
+     * Its own type because a port is the one name that crosses the flow's
+     * boundary -- everything else a flow binds is local plumbing -- and seeing
+     * which is which is what a reader following the data wants. The language
+     * decides it (it needs name resolution); this only carries the answer.
+     */
+    val PORT_NAME = FlowTokenType("PORT_NAME")
+
     val IDENTIFIER = FlowTokenType("IDENTIFIER")
 
     val ARROW = FlowTokenType("ARROW")

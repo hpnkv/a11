@@ -45,7 +45,7 @@ SKILL_DESCRIPTION = (
 _BODY = """\
 # Composing your tools into one step
 
-You have three tools -- `flow_actions`, `flow_check`, `flow_run` -- that let \
+You have three tools — `flow_actions`, `flow_check`, `flow_run` — that let \
 you write a *flow*: a composition of the actions you can already call, \
 dispatched as one step. A flow is text, in the A11 Flow language, and you \
 write it in the moment for the task in front of you. There is nothing to \
@@ -56,7 +56,7 @@ install and nothing to deploy.
 Calling three tools one after another means every intermediate result passes \
 through you: you read it, then you quote it into the next call. A flow moves \
 those values directly between the actions. Fetch four pages, summarise them, \
-and what comes back to you is the summary -- the pages were never in your \
+and what comes back to you is the summary — the pages were never in your \
 context, were never charged for, and were never yours to copy correctly.
 
 Reach for a flow when:
@@ -79,8 +79,8 @@ middle. Read what it returns and run another one.
 ## How to write one
 
 1. **`flow_actions`** first, unless you already did it this turn. It lists \
-every action a flow may name and -- this is the part your tool definitions do \
-not tell you -- what each one's **output ports** are called, and whether it is \
+every action a flow may name and — this is the part your tool definitions do \
+not tell you — what each one's **output ports** are called, and whether it is \
 `runnable`. You need port names on both sides of a `->`, and you need the verb.
 2. **Write the flow.** Declare inputs you will pass and outputs you want back.
 3. **`flow_check`** it. It compiles the flow and describes what it resolves to \
@@ -89,7 +89,7 @@ column. Use it whenever the flow is more than a couple of lines, or whenever \
 running it would have real effects, because running one really does call the \
 actions it names.
 4. **`flow_run`** it, passing `source` and any `inputs` (an object keyed by \
-port name -- a list for a port declared `stream`, a single value for any \
+port name — a list for a port declared `stream`, a single value for any \
 other). What comes back is an object of the flow's declared outputs.
 
 ## What will bite you
@@ -101,12 +101,12 @@ after all. Return the answer, the count, the three best hits.
 different things: `run` executes the action where the flow is running, `call` \
 puts it on the stream the flow is attached to and lets the peer do it. \
 `flow_actions` marks each one, and almost everything it offers you is \
-`runnable: true` -- so `run` is the usual verb, and a `run` of something \
+`runnable: true` — so `run` is the usual verb, and a `run` of something \
 without a handler is refused rather than quietly sent elsewhere.
 - **You may only name actions you may name.** A flow naming anything else is \
 refused before it runs. `flow_actions` is the list.
 - **Every output port of every step is read.** You do not have to name them \
-all -- the runtime drains what you ignore -- but `skip x.debug` says so \
+all — the runtime drains what you ignore — but `skip x.debug` says so \
 plainly, and is worth writing when an output is large. `skip 1 x.rows` is the \
 other one: it drops a port's first value for *every* reader, which is how you \
 throw away a header line, and several of them naming one port add up.
@@ -117,7 +117,7 @@ one the composition should handle, write `try run` (or `try call`) and then \
 rather than a bag of keys, write `a11.sdk.Interaction{{role: "user", content: \
 [...]}}` (or `{{...}} as a11.sdk.Interaction`) and it is validated into that \
 type, defaults and all. `to_chunk(value)` makes the `Chunk` such a type's \
-content is made of. Which tags exist is the host's -- ask `flow_actions` what \
+content is made of. Which tags exist is the host's — ask `flow_actions` what \
 the ports are and match them.
 - **A stream of fragments is not a stream of things.** `| group EXPR` gathers \
 values until `EXPR` holds of the one just added, then hands over the list: \
@@ -125,13 +125,21 @@ values until `EXPR` holds of the one just added, then hands over the list: \
 utterances becoming whole sentences. Reach for it whenever one value is only \
 part of what you need.
 - **Order between two streams is `| then`.** Two statements writing to the \
-same port interleave by arrival. When one lot has to come before another -- a \
-conversation's history before the new message -- write \
+same port interleave by arrival. When one lot has to come before another — a \
+conversation's history before the new message — write \
 `history | then asked -> port` and the flow reads them in that order.
 - **No arithmetic, no functions, no code.** Expressions read values, compare \
 them, take them apart, and build new ones. That is the whole of it. If the \
 task needs real computation, that is what an action is for.
-- **Bound your loops.** `repeat` takes `max n`, and it is there for a reason.
+- **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is \
+refused rather than quietly stopping after some number of passes and \
+calling that success.
+- **`fail` and `cancel` go in an `if`.** They wait for nothing, so at \
+the top of a flow's body they run at once and race every other \
+statement. Put one in an `if` or a loop body, or write `fail internal \
+"…" after x` to say what it waits for. A `fail` alone at the end of a \
+body reads like a last resort and is refused, because it is the first \
+thing that would happen.
 
 ## The language
 
@@ -139,7 +147,7 @@ task needs real computation, that is what an action is for.
 
 ## An example
 
-The action names below are examples -- use the ones `flow_actions` gives you.
+The action names below are examples — use the ones `flow_actions` gives you.
 
 ```
 flow answer-from-the-web {{
@@ -167,7 +175,7 @@ flow answer-from-the-web {{
 ```
 
 Run that with `inputs` of `{{"question": "..."}}` and you get back \
-`{{"answer": "...", "sources": ["...", "..."]}}` -- two small values, out of \
+`{{"answer": "...", "sources": ["...", "..."]}}` — two small values, out of \
 three pages you never had to read. The `nodes fetched` block is what keeps the \
 pages off the wire; without it they would be replicated to whoever dispatched \
 the composition.

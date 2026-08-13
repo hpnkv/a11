@@ -30,6 +30,7 @@ A flow's *shape* is readable as plain data with
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -60,10 +61,134 @@ TYPE_NAMES: dict[str, type | str] = {
     "list": list,
     "array": list,
     "bytes": bytes,
+    # A11's own instant and length, which the language has always had values of
+    # and now has a port type for. Named by their serialisation tags rather than
+    # by the classes: the tag is what a registry knows them by, and it is what
+    # `FlowSchema` puts in an action schema for them.
+    "time": "a11.Time",
+    "duration": "a11.Duration",
     "any": "application/json",
 }
 
 _native_describe = FlowPlan.describe
+
+#: The Python type each Flow field type gives a generated model's field.
+#:
+#: Only the scalars: a list says what it holds and a shape is another model, and
+#: both are worked out from the plan rather than looked up.
+_FIELD_TYPES: dict[str, Any] = {
+    "string": str,
+    "text": str,
+    "number": float,
+    "integer": int,
+    "int": int,
+    "bool": bool,
+    "boolean": bool,
+    "bytes": bytes,
+    "object": dict,
+    "json": Any,
+    "any": Any,
+    "list": list,
+    "array": list,
+}
+
+#: Models built from shapes, by the plan they were built from.
+#:
+#: A stream of ten thousand records is one class, not ten thousand. Keyed on the
+#: plan's own JSON because that is exactly what the model depends on: two flows
+#: declaring the same shape share a model, and a shape that changed is a
+#: different key rather than a stale hit.
+_MODELS: dict[str, Any] = {}
+
+
+def _field_type(described: Mapping[str, Any], shapes: Mapping[str, Any]) -> Any:
+    """The annotation one field of a shape gets."""
+    named = described.get("struct")
+    if named:
+        return _model_from_plans(named, shapes)
+    resolved = described.get("resolved", "json")
+    if resolved in ("list", "array"):
+        element_struct = described.get("element_struct")
+        if element_struct:
+            return list[_model_from_plans(element_struct, shapes)]  # type: ignore[misc]
+        element = described.get("element")
+        if element:
+            return list[_FIELD_TYPES.get(element, Any)]  # type: ignore[misc]
+        return list
+    if resolved == "time":
+        from a11 import Time
+
+        return Time
+    if resolved == "duration":
+        from a11 import Duration
+
+        return Duration
+    return _FIELD_TYPES.get(resolved, Any)
+
+
+def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
+    """The model for the shape `name`, building the ones it names first.
+
+    A shape may name itself, so the model goes into the cache *before* its
+    fields are built and the annotations are resolved afterwards -- which is the
+    same dance a hand-written recursive model does with a forward reference.
+    """
+    import pydantic
+
+    described = shapes[name]
+    key = json.dumps(described, sort_keys=True)
+    cached = _MODELS.get(key)
+    if cached is not None:
+        return cached
+
+    model = pydantic.create_model(name, __doc__=described.get("description") or None)
+    _MODELS[key] = model
+
+    fields = described.get("fields", {})
+    for field_name in described.get("order", list(fields)):
+        field = fields[field_name]
+        annotation = _field_type(field, shapes)
+        # Validation already happened in C++, against the one implementation of
+        # what a shape means. The model is how Python holds the result, so its
+        # own constraints stay out of the way: a field that is not required is
+        # optional here, and everything else is carried as the plan described it.
+        if not field.get("required", False):
+            annotation = annotation | None if annotation is not Any else Any
+            default = field.get("default", None)
+        else:
+            default = field.get("default", ...)
+        model.model_fields[field_name] = pydantic.fields.FieldInfo(
+            annotation=annotation,
+            default=default,
+            description=field.get("description") or None,
+        )
+    model.model_rebuild(force=True)
+    return model
+
+
+def _model_for_dto(described_json: str) -> Any:
+    """The pydantic model one shape describes, or ``None`` without pydantic.
+
+    Called from the native bridge's ``Adopt``: a value coerced to a `struct` comes
+    out of a flow as an instance of a real model, so Python code reading a
+    `struct`-typed port gets attribute access, ``model_dump()`` and everything else
+    a model gives -- rather than a mapping that merely has the right keys.
+
+    ``None`` where pydantic is not installed, which leaves the record as the
+    plain mapping the language built. A flow should run either way.
+    """
+    try:
+        import pydantic  # noqa: F401
+    except ImportError:
+        return None
+    described = json.loads(described_json)
+    # The shape itself, and every shape it names, are all in the one plan the
+    # bridge handed over -- so a nested model is built from the same data rather
+    # than from a second trip across the boundary.
+    shapes = {described["struct"]: described}
+    for nested in described.get("nested", []):
+        shapes[nested["struct"]] = nested
+    return _model_from_plans(described["struct"], shapes)
 
 
 def _port_type(declared: str) -> type | str:

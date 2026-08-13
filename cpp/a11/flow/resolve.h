@@ -37,6 +37,12 @@ enum class SymbolKind {
   kLoopVariable,
   /// What a `repeat` carries.
   kCarry,
+  /// One value, read from a stream and given a name by `let`.
+  ///
+  /// Read like any other name, and read *as a value*: it stands where an
+  /// expression does, which is the whole point of it. Never written -- a value
+  /// is what a stream was, not somewhere to put one.
+  kValue,
 };
 
 /// One name, what it is, and what became of it.
@@ -75,6 +81,26 @@ struct Symbol {
   graph::RefId ref = graph::kNone;
   /// The graph step this name *is*: a call, or a bound `wait`/`drain`.
   graph::StepId step = graph::kNone;
+  /// For a value a `let` bound: the stream it took a value *of*, and which value
+  /// of that stream it is. `advance` reads both to bind the next one, which is
+  /// what makes "the first use sees the first value" a fact rather than a hope.
+  graph::RefId value_source = graph::kNone;
+  int value_offset = 0;
+  /// The `match` pattern this value came out of, where it came out of a literal
+  /// one.
+  ///
+  /// A pattern names its fields, so this is how the tooling knows what a value
+  /// has without the language gaining a type system: the fields are in the text
+  /// that made it. Empty for everything else, including a pattern computed at run
+  /// time -- nothing is known about those and offering a guess would be worse
+  /// than offering nothing.
+  std::string pattern;
+  /// Whether this name is one *part* of a value a `let` took apart.
+  ///
+  /// A fact rather than something inferred from `value_source` being absent: the
+  /// editor path builds no graph, so every ref is absent there and a check that
+  /// read the ref would be a check an editor never runs.
+  bool value_part = false;
 };
 
 /// One flow, resolved: its plan, its names, and what is wrong with it.

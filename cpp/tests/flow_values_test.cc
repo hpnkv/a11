@@ -262,6 +262,58 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_FALSE(EvaluatedIn(R"(nonesuch("x"))").ok());
 }
 
+TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {
+  // Encoding gives text, because text is what a JSON field or a header can
+  // carry; decoding gives bytes, because that is what was encoded.
+  EXPECT_EQ(TextOf(R"(b64encode("hi there"))"), "aGkgdGhlcmU=");
+  EXPECT_EQ(EvaluatedIn(R"(b64encode("hi"))")->kind(), Value::Kind::kString);
+  EXPECT_EQ(TextOf(R"(text(b64decode("aGkgdGhlcmU=")))"), "hi there");
+  EXPECT_EQ(EvaluatedIn(R"(b64decode("aGk="))")->kind(), Value::Kind::kBytes);
+
+  // The two alphabets differ exactly where the bytes need them to: `+` and `/`
+  // against `-` and `_`. Written as base64 rather than as escapes, because the
+  // language has no `\x` and the bytes that show the difference are not text.
+  EXPECT_EQ(TextOf(R"(b64encode(b64decode("++//")))"), "++//");
+  EXPECT_EQ(TextOf(R"(b64urlencode(b64decode("++//")))"), "--__");
+  EXPECT_EQ(TextOf(R"(b64encode(b64urldecode("--__")))"), "++//");
+
+  // Padding is written, and not insisted on coming back -- the web-safe form is
+  // routinely sent without it.
+  EXPECT_EQ(TextOf(R"(b64encode("hi"))"), "aGk=");
+  EXPECT_EQ(TextOf(R"(text(b64urldecode("aGk")))"), "hi");
+
+  // Round trips, and refuses text that is not base64 at all rather than
+  // answering something plausible.
+  EXPECT_EQ(TextOf(R"(text(b64decode(b64encode("round trip"))))"),
+            "round trip");
+  EXPECT_FALSE(EvaluatedIn(R"(b64decode("not base64 at all!"))").ok());
+}
+
+TEST(FlowValues, ALiteralMaySpreadAnotherIntoItself) {
+  const Value record = Value::Object({{"a", Value::Integer(1)},
+                                      {"b", Value::Integer(2)}});
+  // A later key wins over one the spread brought in, and an earlier one does
+  // not -- which is what makes `{...it, "tags": [..]}` an override.
+  EXPECT_EQ(TextOf(R"({...it, "b": 9})", record), R"({"a": 1, "b": 9})");
+  EXPECT_EQ(TextOf(R"({"b": 9, ...it})", record), R"({"a": 1, "b": 2})");
+  // `...` is the same thing as `...`.
+  EXPECT_EQ(TextOf(R"({...it, "c": 3})", record), R"({"a": 1, "b": 2, "c": 3})");
+
+  const Value items = Value::List({Value::Integer(1), Value::Integer(2)});
+  EXPECT_EQ(TextOf(R"([...it, 3])", items), "[1, 2, 3]");
+  EXPECT_EQ(TextOf(R"([0, ...it])", items), "[0, 1, 2]");
+
+  // Spreading nothing contributes nothing rather than a hole, so a field a
+  // producer did not send does not turn into a null in the middle of a list.
+  EXPECT_EQ(TextOf(R"([1, ...it.missing, 2])",
+                   Value::Object({{"x", Value::Integer(1)}})),
+            "[1, 2]");
+  // And a value with no keys to take contributes none, rather than an invented
+  // one.
+  EXPECT_EQ(TextOf(R"({...it, "a": 1})", Value::String("not a record")),
+            R"({"a": 1})");
+}
+
 TEST(FlowValues, ItIsTheValueAStageIsLookingAt) {
   EXPECT_EQ(TextOf("it", Value::Integer(7)), "7");
   EXPECT_EQ(TextOf("it.name",

@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "a11/flow/catalogue.h"
+
 namespace a11::flow {
 
 /// What a proposal *is*, which is what an editor turns into an icon.
@@ -73,6 +75,14 @@ struct Proposal {
   std::string tail;
   /// The type of the thing proposed, where it has one: a port's declared type.
   std::string type;
+  /// The whole of what is known about it, as Markdown, for the popup an editor
+  /// shows beside the list. Empty where the name is its own explanation.
+  ///
+  /// The same text a hover over the finished word gives (see [ActionMarkdown]
+  /// and friends), because a reader choosing `interact_with_llm` from a list and
+  /// a reader hovering it afterwards are asking the same question. The `tail` is
+  /// the one-line version that fits in the list; this is what is behind it.
+  std::string documentation;
 };
 
 /// What may be written at an offset, and the word already typed there.
@@ -103,7 +113,16 @@ struct CompleteResult {
 ///
 /// A source that declares no flow is completed as though it were a flow body,
 /// which is what an injected fragment in a Python string is.
-CompleteResult CompleteAt(std::string_view source, size_t offset);
+///
+/// `known` is what the world outside the document contains -- the actions that
+/// may be called and the types that may be named. It defaults to the snapshot
+/// embedded in the language, so a standalone tool offers `make_http_request`'s
+/// ports without being configured; a frontend that has a live registry passes
+/// its own instead, which is the case an IDE tracking what an inline flow is
+/// attached to wants.
+CompleteResult CompleteAt(
+    std::string_view source, size_t offset,
+    const catalogue::Catalogue& known = catalogue::Catalogue::Builtin());
 
 /// The name of a proposal kind in the output format, in kebab case.
 std::string_view ProposalKindName(ProposalKind kind);

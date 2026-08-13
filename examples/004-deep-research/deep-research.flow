@@ -1,25 +1,68 @@
-dto DeepResearchSource {
-  id:   string required
-  url:  string required
-  type: string required
-  tags: string[] required
-}
+struct DeepResearchSource {
+  describe "A source an investigation cited, correlated to the prose by id."
 
+  id:   string required matching "^[A-Za-z0-9_-]+$" "As written in <span source>."
+  url:  string required matching "^https?://"
+  type: string required one of ["web", "paper", "book"]
+  tags: string[] required unique                    "How the source was found."
+  rank: number 0..1 default 0.5                     "How much to trust it."
+}
 
 flow investigate {
   describe "Do a single planned investigation for Deep Research"
 
-  in whole_research_brief: string stream required
+  in  whole_research_brief: string stream required
     "Summary of the whole research"
-  in investigation_brief:  string stream required
+  in  investigation_brief:  string stream required
     "Instructions for this particular investigation"
 
   out investigation: string stream required
-    "A free-form answer where some facts will include a citation by being enclosed as <span source='<id>'>text</span>"
+    "A free-form answer where some facts will include a citation by being "
+    "enclosed as <span source='<id>'>text</span>"
   out sources:       DeepResearchSource stream
     "Source objects to support citations of the investigation, correlated by ID"
 
-  # ...logic happening...
+  # What the whole research is about, and then what this particular
+  # investigation is for: one prompt, in that order, without either being
+  # buffered into a string first.
+  brief = node()
+  whole_research_brief | then investigation_brief -> brief
 
-  found_sources | map DeepResearchSource{"id": it.id, "url": it.url, "type": it.type, "tags": ["investigated"]} -> sources
+  answer = run investigate-one(brief: brief)
+  answer.prose -> investigation
+
+  # Every record the searcher found, made into the declared shape. The spread
+  # carries through whatever else the searcher sent -- it knows more about a
+  # page than this file declares -- and the keys written after it win, which is
+  # how `tags` is set without the rest being restated.
+  answer.found | map DeepResearchSource{...it, "tags": ["investigated"]} -> sources
+}
+
+flow investigate-with-notes {
+  describe "The same investigation, with a note written against each source."
+
+  in  whole_research_brief: string stream required
+  in  investigation_brief:  string stream required
+  out investigation:        string stream required
+  out annotated:            string stream "One line per source, with its note."
+
+  found = node()
+  notes = node()
+
+  inner = run investigate(
+    whole_research_brief: whole_research_brief,
+    investigation_brief: investigation_brief,
+  )
+  inner.investigation -> investigation
+  inner.sources -> found
+
+  annotate = run note-each(sources: found)
+  annotate.notes -> notes
+
+  # Two streams read in step. A source is only annotated once, and if the
+  # annotator stops early the remaining sources are still listed -- with a null
+  # where their note would have been -- rather than being dropped.
+  for source, note in zip(found, notes) {
+    strformat("%s (%s): %s", source.id, source.url, note) -> annotated
+  }
 }

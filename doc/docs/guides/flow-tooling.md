@@ -44,8 +44,11 @@ a11-flow serve --protocol json    # one request per line, one answer per line
 
 `serve --protocol lsp` speaks the Language Server Protocol: diagnostics with quick
 fixes built from each diagnostic's own edits, semantic tokens, formatting,
-completion and hover. That is a VSCode or Neovim integration with no language
-knowledge of its own — a client, a few hundred lines at most.
+completion, hover, document symbols and go-to-declaration. That is a VSCode or
+Neovim integration with no language knowledge of its own — a client, a few
+hundred lines at most. It also takes one notification of its own,
+`a11flow/setContext`, which is how a client that knows what actions and types
+are available says so for the session.
 
 `serve --protocol json` is the same capabilities with no framing to implement,
 which is what a host with a pipe and no LSP client wants:
@@ -55,8 +58,11 @@ which is what a host with a pipe and no LSP client wants:
 {"id": 1, "ok": true, "result": {"format": "flow.diagnostics/v1", ...}}
 ```
 
-The methods are `check`, `tokens`, `parse`, `plan`, `format`, `complete`, `codes`,
+The methods are `check`, `tokens`, `parse`, `plan`, `format`, `complete`,
+`describe`, `symbols`, `definition`, `catalogue`, `schema`, `shapes`, `codes`,
 `vocabulary` and `syntax`; each answers with the envelope of the same name below.
+Every one of them accepts a `context`, which is what the language knows of the
+world outside the document — see `flow.catalogue/v1`.
 `a11 flow serve` speaks the identical protocol through the Python bindings, for a
 host that already has A11 installed.
 
@@ -168,11 +174,21 @@ highlighter is making.
 The kinds are the distinctions a reader makes rather than the ones a parser makes:
 `stage`, `builtin`, `type`, `status-code`, `member`, `action-name`, `node-map-name`,
 `flow-name`, `declaration-keyword`, `statement-keyword`, `modifier-keyword`,
-`constant`, `word-operator`, `identifier`, `comment`, `string`, `number`,
-`duration`, `flow-operator`, `operator`, `brace`, `parenthesis`, `bracket`,
-`punctuation`, `bad`. An editor maps them to its own palette and needs no lexer of
-its own — the same call decides that a word after a `|` is a stage, that one past a
-port's `:` is a type, and that `join` is a function only where it is called.
+`constant`, `word-operator`, `port-name`, `identifier`, `comment`, `string`,
+`number`, `duration`, `flow-operator`, `operator`, `brace`, `parenthesis`,
+`bracket`, `punctuation`, `bad`. An editor maps them to its own palette and needs
+no lexer of its own — the same call decides that a word after a `|` is a stage,
+that one past a port's `:` is a type, and that `join` is a function only where it
+is called.
+
+`port-name` is the one that needs **name resolution** rather than the token
+stream: whether `sources` is a port of the flow or a node of its own cannot be
+told by looking at neighbouring words, and it is worth telling because a port is
+the flow's interface and a node is local plumbing. Every other kind is decided
+lexically, which is what lets an editor's lexer run on every keystroke; this one
+is a second pass applied on top. The IntelliJ plugin renders it italic in
+whatever colour identifiers already are — a slant rather than a hue, because a
+port is not a different *kind* of name, just one that crosses the boundary.
 
 `lexical` is the lexer's own name for the token (`word`, `->`, `{`), beside what it
 *means*. A client that only colours wants `kind`; one that has to drive a lexer of
@@ -314,6 +330,84 @@ After a `|` only a stage is offered; past a port's `:` only a type; after `x.` o
 what `x` actually has; after a `->` only somewhere writable. Those are facts about
 the grammar and the names in scope, and they are decided in one place.
 
+### `flow.hover/v1`
+
+What the `describe` method gives: what is at one offset, and where it came from.
+
+```json
+{
+  "format": "flow.hover/v1",
+  "found": true,
+  "text": "make_http_request",
+  "kind": "external",
+  "summary": "`make_http_request` — an action",
+  "detail": "Make one HTTP request, with every part of the response …",
+  "markdown": "…\n\n**Inputs**\n\n- `url`: str *(required)* …",
+  "range": {"start": {…}, "end": {…}},
+  "definition": {"start": {…}, "end": {…}}
+}
+```
+
+`markdown` is the whole thing an editor shows; `summary` is the one line a
+status bar wants. `definition` is there only when the thing was declared in
+*this* document — an action or a registry type has nowhere in the file to go.
+
+Deciding that the word under the caret is a port and not a stage is name
+resolution, so it happens in the language rather than in each editor. This used
+to live in the LSP adapter, which is how things end up in adapters: it was small
+when it was written.
+
+### `flow.symbols/v1`
+
+What the `symbols` method gives: what a document declares, nested as it is
+written — the shapes and the flows at the top, a shape's fields and a flow's
+ports, node maps and bound steps under them. That is a "go to symbol" list and
+an outline both. `range` is the whole construct and `selection` is the name, so
+"select symbol" takes the block and "go to symbol" puts the caret on the word.
+
+### `flow.definition/v1`
+
+Where the name at one offset was bound: `{"found": true, "range": {…}, "name":
+…, "kind": …}`, or `{"found": false}` for a word that is not a name of this
+document.
+
+### `flow.schema/v1`
+
+Both directions of the shape/schema translation. `schema` takes a document and a
+`struct` and gives the JSON Schema (draft 2020-12) it describes; `shapes` takes a
+schema and gives back **Flow source** — text that can be pasted into a file,
+read and checked in.
+
+Neither direction is the real one: a shape is what the language reads and a
+schema is what the world outside it reads. The three types JSON has no word for
+— `bytes`, `time`, `duration` — go out as strings with the encoding or format
+that says how to read them *and* an `x-a11-type` beside it, which is what makes
+coming back lossless. Field order travels in `x-a11-order`, because a JSON
+object's keys have none and a shape's fields do.
+
+### `flow.catalogue/v1`
+
+What the tools know about the world the language runs in: the actions that may
+be called and the types that may be named, each with its description and its
+ports or fields.
+
+The language links nothing but Abseil and nlohmann, so it cannot import a
+registry — what the world contains reaches it as *data*. A snapshot generated
+from the live registries
+(`scripts/generate_flow_catalogue.py` → `testdata/flow/catalogue.json`) is
+embedded, so the standalone tool completes `make_http_request`'s ports with
+nothing configured. A frontend that has a live registry sends its own:
+
+```json
+{"method": "complete", "source": "…", "offset": 42,
+ "context": {"actions": [...], "types": [...], "replace": false}}
+```
+
+which is merged over the snapshot — or replaces it, with `"replace": true`, for
+a host that knows exactly which registry an inline flow is attached to. Over
+LSP the same thing is said once per session with the `a11flow/setContext`
+notification, rather than on every keystroke.
+
 ### `flow.vocabulary/v1`
 
 Every word set the language gives meaning to: the stages and what each takes, the
@@ -368,7 +462,7 @@ from a11._native import flow
 flow.tokenize(source)      # tokens, and anything unreadable
 flow.highlight(source)     # flow.tokens/v1
 flow.parse(source)         # flow.syntax/v1
-flow.check(source)         # flow.diagnostics/v1 -- syntax, names and findings
+flow.check(source)         # flow.diagnostics/v1 — syntax, names and findings
 flow.format(source)        # flow.format/v1
 flow.complete(source, 42)  # flow.completions/v1
 flow.plan(source)          # flow.plan/v1, and the diagnostics with it
@@ -390,7 +484,7 @@ the contract between them.
 
 Nothing about the language is implemented twice. `a11.flow.loads` compiles through
 the same parser and resolver `a11 flow check` reads, and hands back the graph the
-native runtime walks -- so what `a11 flow describe` prints, what `check` refuses and
+native runtime walks — so what `a11 flow describe` prints, what `check` refuses and
 what `run` executes cannot disagree about what a file means.
 
 ## Editors

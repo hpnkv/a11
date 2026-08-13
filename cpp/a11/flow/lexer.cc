@@ -41,6 +41,18 @@ bool IsNamePart(char letter) {
   return IsNameStart(letter) || IsDigit(letter);
 }
 
+/// `…` -- U+2026, which the language does **not** spell a spread with.
+///
+/// It is looked for only to say so. Two ways of writing one operator is two
+/// ways for a file to differ from another that means the same thing, and the
+/// one that survives a copy through a chat window, a terminal without the font,
+/// and a keyboard layout without the key is the one made of three dots. So a
+/// `…` is a diagnostic with the repair attached rather than a second spelling.
+///
+/// It has to be looked for before [IsNameStart], which takes every byte at or
+/// above 0x80 for a letter so that a port may be named in any script.
+constexpr std::string_view kEllipsis = "…";
+
 /// The lexer's state, kept in one place so the rules read in order.
 class Lexer {
  public:
@@ -81,6 +93,22 @@ class Lexer {
           (letter == '-' && index_ + 1 < source_.size() &&
            IsDigit(source_[index_ + 1]))) {
         ReadNumber();
+        continue;
+      }
+      if (source_.compare(index_, kEllipsis.size(), kEllipsis) == 0) {
+        const size_t start = index_;
+        Report("flow.syntax.unexpected-character",
+               "A spread is written '...'; '…' is not one.", start,
+               start + kEllipsis.size());
+        // Read as the spread it plainly meant, with the repair travelling on the
+        // diagnostic: the rest of the statement is worth checking, and an editor
+        // can offer the fix.
+        Take(TokenKind::kSpread, start, kEllipsis.size());
+        result_.diagnostics.back().fixes.push_back(
+            Fix{.label = "Write '...'",
+                .edits = {Edit{.start = start,
+                               .end = start + kEllipsis.size(),
+                               .text = "..."}}});
         continue;
       }
       if (IsNameStart(letter)) {
@@ -328,7 +356,13 @@ class Lexer {
     bool fractional = false;
     while (index_ < source_.size() &&
            (IsDigit(source_[index_]) || source_[index_] == '.')) {
-      if (source_[index_] == '.') fractional = true;
+      if (source_[index_] == '.') {
+        // `1..200` is a range of two whole numbers, not a number with two
+        // decimal points in it. A `.` only continues the number when it is not
+        // the first of a `..`.
+        if (index_ + 1 < source_.size() && source_[index_ + 1] == '.') break;
+        fractional = true;
+      }
       ++index_;
     }
     const size_t number_end = index_;
@@ -398,7 +432,13 @@ class Lexer {
     const char next =
         index_ + 1 < source_.size() ? source_[index_ + 1] : '\0';
 
-    // Two characters first, so `->` wins over `-` and `<=` over `<`.
+    // Longest first, so `...` wins over `..` wins over `.`, `->` over `-` and
+    // `<=` over `<`.
+    if (letter == '.' && next == '.') {
+      const bool third = index_ + 2 < source_.size() && source_[index_ + 2] == '.';
+      return Take(third ? TokenKind::kSpread : TokenKind::kRange, start,
+                  third ? 3 : 2);
+    }
     if (letter == '-' && next == '>') return Take(TokenKind::kArrow, start, 2);
     if (letter == '<' && next == '-') return Take(TokenKind::kCarry, start, 2);
     if (letter == '=' && next == '=') return Take(TokenKind::kEqualEqual, start, 2);
@@ -491,6 +531,10 @@ std::string_view KindName(TokenKind kind) {
       return "word";
     case TokenKind::kDot:
       return ".";
+    case TokenKind::kRange:
+      return "..";
+    case TokenKind::kSpread:
+      return "...";
     case TokenKind::kArrow:
       return "->";
     case TokenKind::kCarry:
@@ -544,7 +588,8 @@ TokenKind KindFromName(std::string_view name) {
       TokenKind::kNewline,      TokenKind::kComment,
       TokenKind::kString,       TokenKind::kNumber,
       TokenKind::kDuration,     TokenKind::kWord,
-      TokenKind::kDot,          TokenKind::kArrow,
+      TokenKind::kDot,          TokenKind::kRange,
+      TokenKind::kSpread,       TokenKind::kArrow,
       TokenKind::kCarry,        TokenKind::kEqual,
       TokenKind::kEqualEqual,   TokenKind::kBangEqual,
       TokenKind::kLess,         TokenKind::kLessEqual,

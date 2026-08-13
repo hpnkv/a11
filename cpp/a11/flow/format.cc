@@ -25,11 +25,13 @@ namespace {
 
 /// A declaration, split into the columns a run of them lines up by.
 ///
-/// Ports and headers both: `in`/`out name: type mods "why"` and
-/// `header "x-name" as alias default v "why"` are the same four columns wearing
-/// different words, and a file reads best when each run of them lines up.
+/// Ports, headers and a shape's fields alike: `in`/`out name: type mods "why"`,
+/// `header "x-name" as alias default v "why"` and `name: type mods "why"` are
+/// the same four columns wearing different words, and a file reads best when
+/// each run of them lines up.
 struct PortColumns {
-  /// `in`, `out` or `header`, as written -- a shouted `IN` stays shouted.
+  /// `in`, `out` or `header`, as written -- a shouted `IN` stays shouted. Empty
+  /// for a field, which is the one of the three that opens with its name.
   std::string direction;
   /// The name and its colon, which travel together because they always do.
   std::string name;
@@ -37,6 +39,10 @@ struct PortColumns {
   std::string type;
   /// The description, quoted exactly as it was written.
   std::string description;
+  /// Whether this is a `struct` field. Told apart from a port by more than its
+  /// empty direction, because a run has to be all one kind and "is the direction
+  /// empty" is a fact about this line rather than about what it is.
+  bool field = false;
 };
 
 /// One line of output, before the columns of a run of ports are worked out.
@@ -174,6 +180,11 @@ class Formatter {
     // parentheses by definition.
     if (inside_group) return false;
     if (!token.IsWord()) return false;
+    // A shape has no calls and no pipelines, so nothing in one is the tail of
+    // the line above it. Without this a field named `id` or `with` -- both
+    // perfectly good field names, and both call modifiers -- would be indented
+    // as though it continued the field above.
+    if (in_dto_) return false;
     const std::string word = vocabulary::Canonical(token.text);
     if (!vocabulary::ModifierWords().contains(word) &&
         !vocabulary::BareStages().contains(word)) {
@@ -266,6 +277,10 @@ class Formatter {
       case TokenKind::kLeftParen:
       case TokenKind::kLeftBracket:
         return false;
+      // `...it` and `1..200` are each one thing: nothing goes inside them.
+      case TokenKind::kSpread:
+      case TokenKind::kRange:
+        return false;
       case TokenKind::kLeftBrace:
         // A value brace hugs its contents; a block brace never has any on its
         // line, so this only ever answers for a value.
@@ -279,6 +294,7 @@ class Formatter {
       case TokenKind::kRightParen:
       case TokenKind::kRightBracket:
       case TokenKind::kDot:
+      case TokenKind::kRange:
         return false;
       case TokenKind::kRightBrace:
         return false;
@@ -288,8 +304,12 @@ class Formatter {
                  previous.kind == TokenKind::kRightParen ||
                  previous.kind == TokenKind::kRightBracket);
       case TokenKind::kLeftBracket:
-        // `list[` and `x[0]`; a list literal anywhere else takes its space.
-        return !(previous.IsWord() ||
+        // `list[` and `x[0]`; a list literal anywhere else takes its space --
+        // including after `one of` and `default`, where the brackets hold a
+        // value rather than a type's parameters.
+        return !((previous.IsWord() &&
+                  !vocabulary::FieldModifierWords().contains(
+                      vocabulary::Canonical(previous.text))) ||
                  previous.kind == TokenKind::kRightParen ||
                  previous.kind == TokenKind::kRightBracket);
       case TokenKind::kLeftBrace:
@@ -360,6 +380,8 @@ class Formatter {
     if (ClosesBlock(token)) {
       Flush();
       block_ = std::max(0, block_ - 1);
+      if (!dto_blocks_.empty()) dto_blocks_.pop_back();
+      in_dto_ = !dto_blocks_.empty() && dto_blocks_.back();
       // A blank line before a `}` says nothing, so it is dropped rather than
       // indented: this is the one place a break the author wrote is thrown away.
       blank_pending_ = false;
@@ -400,6 +422,7 @@ class Formatter {
       if (brackets_.empty() && options_.align_ports) {
         size_t after = EmitPort(index);
         if (after == index) after = EmitHeader(index);
+        if (after == index && in_dto_) after = EmitField(index);
         if (after != index) return after;
       }
     }
@@ -419,7 +442,13 @@ class Formatter {
     if (OpensBlock(token)) {
       Append(token);
       Flush();
+      // Which kind of body this is, so a `name: type` inside a shape is read as
+      // a field and one inside a flow is not read as anything of the sort. Only
+      // the outermost matters: a `struct` holds no blocks.
+      dto_blocks_.push_back(block_ == 0 && opens_dto_);
+      opens_dto_ = false;
       ++block_;
+      in_dto_ = dto_blocks_.back();
       opened_block_ = true;
       blank_pending_ = false;
       after_block_open_ = true;
@@ -427,6 +456,12 @@ class Formatter {
       return index + 1;
     }
 
+    // `struct Name {`: remembered here, because by the time the `{` arrives the
+    // word that said what it opens is two tokens back.
+    if (block_ == 0 && token.IsWord() &&
+        vocabulary::Canonical(token.text) == "struct") {
+      opens_dto_ = true;
+    }
     Append(token);
     after_block_close_ = false;
     return index + 1;
@@ -574,6 +609,68 @@ class Formatter {
     return stop;
   }
 
+  /// Whether a field modifier takes a value, so the thing after it is that value
+  /// rather than the field's description.
+  static bool TakesAnArgument(const Token& token) {
+    if (!token.IsWord()) return false;
+    const std::string word = vocabulary::Canonical(token.text);
+    return word == "matching" || word == "default";
+  }
+
+  /// A `struct` field as its columns, or `index` unchanged if this is not one.
+  ///
+  /// The same three columns a port has, minus the direction: a field opens with
+  /// its own name. Everything after the type is one column, as a header's tail
+  /// is, because what a reader scans down a shape is the list of names and their
+  /// types -- not which of them happens to carry a pattern.
+  size_t EmitField(size_t index) {
+    if (!code_[index].IsWord()) return index;
+    if (index + 1 >= code_.size() ||
+        code_[index + 1].kind != TokenKind::kColon) {
+      return index;
+    }
+    const size_t stop = LineEnd(index);
+    size_t end = stop;
+    if (end - index < 3) return index;
+
+    std::string comment;
+    if (code_[end - 1].kind == TokenKind::kComment) {
+      comment =
+          std::string(absl::StripTrailingAsciiWhitespace(code_[end - 1].text));
+      --end;
+    }
+    // A description ends the line; anything before it is the type and what
+    // bounds it. Read from the right, and only where the string is not the
+    // argument of the word in front of it: `matching "^x"` and `default "page"`
+    // both end in a string that is not a description.
+    std::string description;
+    if (end > index + 2 && code_[end - 1].kind == TokenKind::kString &&
+        code_[end - 2].kind != TokenKind::kColon &&
+        !TakesAnArgument(code_[end - 2])) {
+      description = std::string(code_[end - 1].text);
+      --end;
+    }
+    if (end <= index + 2) return index;
+
+    PortColumns columns;
+    columns.field = true;
+    columns.name = absl::StrCat(code_[index].text, ":");
+    Token previous;
+    for (size_t at = index + 2; at < end; ++at) {
+      if (at > index + 2 && NeedsSpace(previous, code_[at])) {
+        columns.type.push_back(' ');
+      }
+      columns.type.append(code_[at].text);
+      previous = code_[at];
+    }
+    columns.description = std::move(description);
+    port_ = std::move(columns);
+    comment_ = std::move(comment);
+    Flush();
+    opened_block_ = false;
+    return stop;
+  }
+
   /// The lines, with each run of port declarations lined up.
   std::string Render() {
     // A run is consecutive declarations at one indent with nothing between them:
@@ -590,6 +687,7 @@ class Formatter {
              (lines_[run_end].description ||
               (lines_[run_end].port.has_value() &&
                lines_[run_end].indent == lines_[index].indent &&
+               lines_[run_end].port->field == lines_[index].port->field &&
                IsHeaderLine(lines_[run_end]) == header))) {
         ++run_end;
       }
@@ -624,8 +722,11 @@ class Formatter {
 
   void AlignPorts(size_t begin, size_t end) {
     // Three for a port whatever this run holds, so `in` and `out` line up across
-    // two groups of them as well as within one.
-    size_t direction_width = IsHeaderLine(lines_[begin]) ? 0 : 3;
+    // two groups of them as well as within one. A field has no such word, and a
+    // header's is only ever `header`.
+    const bool fields = lines_[begin].port->field;
+    size_t direction_width =
+        fields || IsHeaderLine(lines_[begin]) ? 0 : 3;
     size_t name_width = 0;
     size_t type_width = 0;
     bool any_description = false;
@@ -647,7 +748,8 @@ class Formatter {
       const PortColumns& port = *lines_[index].port;
       std::string text = port.direction;
       text.append(direction_width - port.direction.size(), ' ');
-      text.push_back(' ');
+      // A field has no leading word, so it has no leading space either.
+      if (direction_width > 0) text.push_back(' ');
       absl::StrAppend(&text, port.name);
       text.append(name_width - port.name.size(), ' ');
       text.push_back(' ');
@@ -678,6 +780,12 @@ class Formatter {
 
   std::vector<OutputLine> lines_;
   std::vector<Bracket> brackets_;
+  /// Whether each open block is a `struct` body, innermost last.
+  std::vector<bool> dto_blocks_;
+  /// Whether the `struct` that opens the block about to start was just read.
+  bool opens_dto_ = false;
+  /// Whether a field may be read here: see [dto_blocks_].
+  bool in_dto_ = false;
   std::string line_;
   std::string comment_;
   std::optional<PortColumns> port_;

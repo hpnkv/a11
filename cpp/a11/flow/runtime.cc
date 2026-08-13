@@ -562,14 +562,78 @@ class Lazy {
 /// What a ref read inside a loop or a branch becomes. The buffer is filled by a
 /// single reader of the underlying stream, and each pass iterates the buffer, so
 /// every pass sees the same values.
+///
+/// **It grows while it is read.** The buffer used to read its source to the *end*
+/// before handing out a single value, which made a loop that reads anything from
+/// outside it wait for that stream to finish -- and, since the buffer is one
+/// reader among the others, made every later statement reading the same ref wait
+/// with it. A `for` over one node whose body reads another could not begin until
+/// the second was closed, which is not something anything in the source says. A
+/// reader now waits for the *item it is asking for* and no further.
+///
+/// What is not fixed here, because it is what replaying means: the whole stream
+/// is held in memory once, for as long as the body that reads it runs. That is
+/// the price of every pass seeing the same values, and it is the reason only refs
+/// a nested body actually reads are buffered at all.
 class Buffer {
  public:
-  Buffer(Monitor& monitor, ReaderPtr source)
-      : monitor_(&monitor), source_(std::move(source)) {}
+  /// The items, and whether there are more coming. Held behind a shared pointer
+  /// so that a reader cannot outlive what it reads: the buffer belongs to a
+  /// [Scope] and a reader of it is handed to whatever is nested inside that
+  /// scope, which is a lifetime the type should not have to be reasoned about.
+  /// The previous buffer copied its items into every reader, so it had no such
+  /// question to answer; incremental delivery means the reader looks at the
+  /// buffer's own storage, and this is what keeps that safe.
+  class State {
+   public:
+    explicit State(Monitor& monitor) : monitor_(&monitor) {}
 
+    /// The item at `index`, once it is there; a null item at the end.
+    ///
+    /// A failure arrives *after* the items that did, which is what a [BusReader]
+    /// does with a slot's error: a pass that had read three of five values saw
+    /// three values and then a failure, rather than the failure alone.
+    absl::StatusOr<ItemPtr> At(size_t index) {
+      thread::MutexLock lock(&monitor_->mu());
+      ABSL_RETURN_IF_ERROR(monitor_->Wait(
+          [this, index] { return index < items_.size() || ended_; }));
+      if (index < items_.size()) return items_[index];
+      ABSL_RETURN_IF_ERROR(error_);
+      return ItemPtr{};
+    }
+
+    void Add(ItemPtr item) {
+      {
+        thread::MutexLock lock(&monitor_->mu());
+        items_.push_back(std::move(item));
+      }
+      // Per item, because a reader waiting for this one is waiting now.
+      monitor_->Wake();
+    }
+
+    void End(absl::Status error) {
+      {
+        thread::MutexLock lock(&monitor_->mu());
+        error_ = std::move(error);
+        ended_ = true;
+      }
+      monitor_->Wake();
+    }
+
+   private:
+    Monitor* absl_nonnull monitor_;
+    /// Whether the source has finished, one way or the other.
+    bool ended_ = false;
+    absl::Status error_;
+    std::vector<ItemPtr> items_;
+  };
+
+  Buffer(Monitor& monitor, ReaderPtr source)
+      : state_(std::make_shared<State>(monitor)), source_(std::move(source)) {}
+
+  /// Read the source, publishing each item as it arrives.
   absl::Status Fill() {
     absl::Status status;
-    std::vector<ItemPtr> items;
     while (true) {
       absl::StatusOr<ItemPtr> item = source_->Next();
       if (!item.ok()) {
@@ -577,37 +641,126 @@ class Buffer {
         break;
       }
       if (*item == nullptr) break;
-      items.push_back(*std::move(item));
+      state_->Add(*std::move(item));
     }
-    {
-      thread::MutexLock lock(&monitor_->mu());
-      items_ = std::move(items);
-      error_ = status;
-      ready_ = true;
-    }
-    monitor_->Wake();
+    state_->End(std::move(status));
     // Relayed to the readers of the buffer, not raised here: see [Bus::Pump].
     return absl::OkStatus();
   }
 
-  absl::StatusOr<ReaderPtr> Replay() {
-    std::vector<ItemPtr> items;
+  /// One reader's own cursor over the buffer.
+  absl::StatusOr<ReaderPtr> Replay();
+
+ private:
+  std::shared_ptr<State> state_;
+  ReaderPtr source_;
+};
+
+/// The one view of a stream that every *value* read of it shares.
+///
+/// **Why a value read is not just a read of the first value.** `let a = x` and
+/// `let b = x` are two values of `x`, not two names for its first: they take
+/// turns on one view of the stream. Which of them gets which is not defined, and
+/// `advance` and `after` are how a flow that cares says so. Reading the first
+/// value twice was the old behaviour, and it silently discarded everything else
+/// `x` had.
+///
+/// **A provably unary stream is different**, and is the case worth being strict
+/// about: there is one value, so every reader of it sees that one value, and a
+/// *second* value arriving is a fact about the flow that nothing else would ever
+/// report. It is read once, kept, and the stream is then required to be over.
+class ValueCursor {
+ public:
+  ValueCursor(HostBridge& bridge, ReaderPtr reader, bool unary,
+              std::string label)
+      : bridge_(&bridge), reader_(std::move(reader)), unary_(unary),
+        label_(std::move(label)) {}
+
+  /// The next value, or the kept one for a unary stream.
+  ///
+  /// One reader at a time, the way [Lazy] does it: the turn is taken under the
+  /// monitor and the *read* happens outside it, because reading waits on the
+  /// monitor itself and holding it across that is a fibre deadlocking on its own
+  /// lock. Two steps reading this stream for a value at the same moment therefore
+  /// take turns, and get two different values rather than the same one twice.
+  absl::StatusOr<Value> Next(Monitor& monitor) {
     {
-      thread::MutexLock lock(&monitor_->mu());
-      ABSL_RETURN_IF_ERROR(monitor_->Wait([this] { return ready_; }));
-      ABSL_RETURN_IF_ERROR(error_);
-      items = items_;
+      thread::MutexLock lock(&monitor.mu());
+      ABSL_RETURN_IF_ERROR(monitor.Wait([this] { return !busy_; }));
+      if (unary_ && read_) return held_;
+      busy_ = true;
     }
-    return ReaderPtr(new ListReader(std::move(items)));
+    absl::StatusOr<Value> value = Read();
+    {
+      thread::MutexLock lock(&monitor.mu());
+      busy_ = false;
+      if (unary_ && value.ok()) {
+        held_ = *value;
+        read_ = true;
+      }
+    }
+    monitor.Wake();
+    return value;
   }
 
  private:
-  Monitor* absl_nonnull monitor_;
-  ReaderPtr source_;
-  bool ready_ = false;
-  absl::Status error_;
-  std::vector<ItemPtr> items_;
+  /// One value off the stream, and for a unary one the promise checked.
+  absl::StatusOr<Value> Read() {
+    ABSL_ASSIGN_OR_RETURN(const ItemPtr item, reader_->Next());
+    Value value;
+    if (item != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(value, item->Read(bridge_));
+    }
+    if (!unary_ || item == nullptr) return value;
+    // One value was promised, so a second is an error naming what promised it:
+    // the port said so by not saying `stream`, or the pipeline said so by
+    // reducing. Reading to the end is what finds out, and for a stream of one
+    // that is one more read.
+    ABSL_ASSIGN_OR_RETURN(const ItemPtr extra, reader_->Next());
+    if (extra != nullptr) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          label_,
+          " carries one value, and a second arrived. Say 'stream' where it may "
+          "carry several, or reduce it with '| collect', '| count' or "
+          "'| first 1'."));
+    }
+    return value;
+  }
+
+  HostBridge* absl_nonnull bridge_;
+  ReaderPtr reader_;
+  bool unary_ = false;
+  std::string label_;
+  /// Whether a read is in progress, so the next caller waits its turn.
+  bool busy_ = false;
+  bool read_ = false;
+  Value held_;
 };
+
+/// A cursor over a [Buffer], waiting per item rather than for the whole stream.
+class ReplayReader : public Reader {
+ public:
+  explicit ReplayReader(std::shared_ptr<Buffer::State> state)
+      : state_(std::move(state)) {}
+
+  absl::StatusOr<ItemPtr> Next() override {
+    if (stopped_) return ItemPtr{};
+    ABSL_ASSIGN_OR_RETURN(ItemPtr item, state_->At(at_));
+    if (item != nullptr) ++at_;
+    return item;
+  }
+
+  void Stop() override { stopped_ = true; }
+
+ private:
+  std::shared_ptr<Buffer::State> state_;
+  size_t at_ = 0;
+  bool stopped_ = false;
+};
+
+absl::StatusOr<ReaderPtr> Buffer::Replay() {
+  return ReaderPtr(new ReplayReader(state_));
+}
 
 // --- Destinations ------------------------------------------------------------
 
@@ -903,6 +1056,7 @@ class Scope {
 
   absl::Status Produce(RefId ref, Bus::Emit emit);
   absl::Status ProduceStage(RefId ref, Bus::Emit emit);
+  absl::Status ProduceZip(RefId ref, Bus::Emit emit);
   absl::StatusOr<ItemPtr> StatusItem(RefId ref);
   absl::Status NodeOutcome(RefId ref, absl::Status* absl_nonnull outcome);
   absl::StatusOr<NodePtr> ReadableNode(RefId ref);
@@ -913,13 +1067,15 @@ class Scope {
   /// Read a node as items, each keeping the producer's own chunk.
   absl::Status ReadNode(const NodePtr& node, bool tolerant, Bus::Emit emit);
 
-  absl::StatusOr<Value> FirstValue(RefId ref, ExprId site);
+  absl::StatusOr<Value> ValueOf(RefId ref);
   absl::StatusOr<Value> Evaluate(ExprId expr);
   absl::StatusOr<Value> EvaluateWith(ExprId expr, const Value& it);
 
   const FlowGraph& graph() const;
   Monitor& monitor() const;
   HostBridge& bridge() const;
+  /// The shapes the program declared, for a cast or a coercion in this body.
+  const Program& shapes() const;
 
   Runner* absl_nonnull runner_;
   BodyId body_ = kNone;
@@ -932,8 +1088,15 @@ class Scope {
   absl::flat_hash_map<RefId, std::unique_ptr<Destination>> destinations_;
   absl::flat_hash_map<StepId, std::unique_ptr<CallHandle>> calls_;
   absl::flat_hash_map<StepId, bool> done_;
+  /// How a `[try] { ... }` step went, for the name bound to it to read.
+  absl::flat_hash_map<StepId, absl::Status> outcomes_;
   absl::flat_hash_map<std::string, Value> captures_;
-  absl::flat_hash_map<std::string, Value> expr_values_;
+  /// One cursor per ref, shared by every value read of it: see [ValueCursor].
+  /// On the scope that *owns* the ref, so passes of a loop take turns on the one
+  /// view of an outer stream rather than each starting it again.
+  absl::flat_hash_map<RefId, std::unique_ptr<ValueCursor>> cursors_;
+  /// Refs whose cursor is being made right now, so only one step subscribes.
+  absl::flat_hash_set<RefId> opening_cursors_;
   absl::flat_hash_map<RefId, absl::StatusOr<NodePtr>> nodes_;
   absl::flat_hash_set<RefId> opening_;
   std::vector<RefId> unwritten_;
@@ -959,6 +1122,7 @@ class Runner {
 
   Monitor& monitor() { return monitor_; }
   HostBridge& bridge() { return *bridge_; }
+  const Program& shapes() const { return program_->program(); }
   const FlowGraph& graph() const { return flow_->graph; }
   const FlowPlan& plan() const { return flow_->plan; }
   const std::shared_ptr<actions::Action>& action() const { return action_; }
@@ -1060,6 +1224,7 @@ class Runner {
 const FlowGraph& Scope::graph() const { return runner_->graph(); }
 Monitor& Scope::monitor() const { return runner_->monitor(); }
 HostBridge& Scope::bridge() const { return runner_->bridge(); }
+const Program& Scope::shapes() const { return runner_->shapes(); }
 
 // --- Wiring ------------------------------------------------------------------
 
@@ -1341,6 +1506,8 @@ absl::Status Scope::Produce(RefId ref, Bus::Emit emit) {
   switch (one.kind) {
     case RefKind::kDerived:
       return ProduceStage(ref, onward);
+    case RefKind::kZip:
+      return ProduceZip(ref, onward);
     case RefKind::kExpr: {
       ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(one.expr));
       return onward(Item::Of(value));
@@ -1379,6 +1546,67 @@ absl::Status Scope::Produce(RefId ref, Bus::Emit emit) {
   }
 }
 
+/// Read several streams in step, as one stream of tuples.
+///
+/// **No fibre of its own per source, and that is not a shortcut.** A tuple is
+/// not complete until every source has answered, so asking them one after
+/// another finishes at exactly the moment asking them at once would -- and every
+/// reader here is an ordinary subscription, which already blocks, already
+/// relays a producer's failure, and already has the buffering the analysis
+/// arranged. A fibre per source would buy nothing and would put three more
+/// lifetimes on the run's monitor.
+///
+/// A source that ends **well** is latched: from then on it contributes a null to
+/// every tuple, which is what lets a short stream be zipped against a long one
+/// without either being padded by its author. A source that ends **badly** ends
+/// the whole thing with its status, because a tuple missing a value for a reason
+/// nobody has been told about is worse than no tuple at all. It stops when every
+/// source has ended.
+absl::Status Scope::ProduceZip(RefId ref, Bus::Emit emit) {
+  const graph::Ref& one = graph().refs[ref];
+  std::vector<ReaderPtr> readers;
+  readers.reserve(one.sources.size());
+  for (const RefId source : one.sources) {
+    ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(source));
+    readers.push_back(std::move(reader));
+  }
+  std::vector<bool> ended(readers.size(), false);
+  size_t running = readers.size();
+  HostBridge& host = bridge();
+
+  while (running > 0) {
+    std::vector<Value> tuple;
+    tuple.reserve(readers.size());
+    for (size_t index = 0; index < readers.size(); ++index) {
+      if (ended[index]) {
+        tuple.push_back(Value::Null());
+        continue;
+      }
+      absl::StatusOr<ItemPtr> item = readers[index]->Next();
+      if (!item.ok()) {
+        // Give up on the rest rather than leave them reading into a buffer
+        // nothing will ever take from.
+        for (ReaderPtr& reader : readers) reader->Stop();
+        return item.status();
+      }
+      if (*item == nullptr) {
+        ended[index] = true;
+        --running;
+        tuple.push_back(Value::Null());
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(Value value, (*item)->Read(&host));
+      tuple.push_back(std::move(value));
+    }
+    // The round in which the last source ended produced nothing but the nulls
+    // that say so, and a tuple of nothing but nulls is not a value anybody
+    // wrote.
+    if (running == 0) break;
+    ABSL_RETURN_IF_ERROR(emit(Item::Of(Value::List(std::move(tuple)))));
+  }
+  return absl::OkStatus();
+}
+
 /// Read a derived ref's source and reshape it with one stage.
 absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
   const graph::Ref& one = graph().refs[ref];
@@ -1399,6 +1627,19 @@ absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
   if (name == "at") {
     const Value key = stage.indexed ? Value::Integer(stage.index)
                                     : Value::String(stage.text);
+    if (stage.named_or_indexed) {
+      // A destructuring `let`: the field where the value has one, and the
+      // position where it is a list. `Lookup` answers by the *value's* kind, so
+      // a record ignores an integer key and a list ignores a string one -- which
+      // is why this asks twice rather than choosing once.
+      const Value position = Value::Integer(stage.index);
+      return each([&](const ItemPtr& item) -> absl::Status {
+        ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+        Value found = Lookup(value, key);
+        if (found.IsNull()) found = Lookup(value, position);
+        return emit(Item::Of(std::move(found)));
+      });
+    }
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
       return emit(Item::Of(Lookup(value, key)));
@@ -1418,6 +1659,23 @@ absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
       ABSL_ASSIGN_OR_RETURN(const Value kept, EvaluateWith(stage.expr, value));
       if (!Truthy(kept)) return absl::OkStatus();
       return emit(item);
+    });
+  }
+  if (name == "match") {
+    // Compiled once: the pattern is written once in the source, and a bad one is
+    // the flow's own mistake rather than something a value could fix.
+    const pattern::Compiled compiled = pattern::Compile(stage.text);
+    if (!compiled.ok()) {
+      return Fail(absl::StrCat("The pattern '", stage.text,
+                               "' cannot be read: ", compiled.error));
+    }
+    return each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      const Value found = MatchCompiled(compiled.pattern, AsText(value));
+      // A value the pattern does not fit is dropped, which is what makes this a
+      // `where` and a `map` at once and what makes reading a log worth writing.
+      if (found.IsNull()) return absl::OkStatus();
+      return emit(Item::Of(found));
     });
   }
   if (name == "mime") {
@@ -1475,6 +1733,50 @@ absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
     }));
     if (group.empty()) return absl::OkStatus();
     return emit(Item::Of(Value::List(std::move(group))));
+  }
+  if (name == "chunk") {
+    // The other direction from `let`: one value, cut into pieces of a size
+    // somebody downstream cares about. An upload wants 64 KiB frames and a
+    // model wants a paragraph, and both are "this one value, as a stream".
+    //
+    // A byte count, because that is what the sizes people write are about --
+    // a frame, a buffer, a limit. Text is still cut on a character boundary:
+    // half a code point is not a piece of text anybody can use, and backing off
+    // a byte or two is cheaper than the bug.
+    if (stage.count <= 0) {
+      return Fail(absl::StrCat("'chunk ", stage.count,
+                               "' is not a size; a chunk holds at least one "
+                               "byte."));
+    }
+    const size_t size = static_cast<size_t>(stage.count);
+    return each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      if (!value.IsTextlike()) {
+        // Nothing to cut. A list is `batch`'s business and everything else is
+        // one value however it is looked at, so it goes through unchanged
+        // rather than being refused.
+        return emit(Item::Of(value));
+      }
+      const std::string& text = value.text();
+      const bool bytes = value.kind() == Value::Kind::kBytes;
+      size_t at = 0;
+      while (at < text.size()) {
+        size_t take = std::min(size, text.size() - at);
+        if (!bytes) {
+          // Back off to the start of the character this would have split.
+          while (take > 1 && at + take < text.size() &&
+                 (static_cast<unsigned char>(text[at + take]) & 0xC0) == 0x80) {
+            --take;
+          }
+        }
+        std::string piece = text.substr(at, take);
+        ABSL_RETURN_IF_ERROR(emit(Item::Of(
+            bytes ? Value::Bytes(std::move(piece))
+                  : Value::String(std::move(piece)))));
+        at += take;
+      }
+      return absl::OkStatus();
+    });
   }
   if (name == "then") {
     // All of this one, then all of that one. Two writers to a node interleave by
@@ -1586,6 +1888,19 @@ absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
 absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {
   const graph::Ref& one = graph().refs[ref];
   absl::Status outcome;
+  if (one.subject_step != kNone &&
+      graph().steps[one.subject_step].kind == StepKind::kBlock) {
+    // A block's outcome is recorded by the block itself, so reading it is
+    // waiting for the block to be over and then looking. Waiting for a step is
+    // what `after` does, and this is the same wait.
+    ABSL_RETURN_IF_ERROR(StepDone(one.subject_step));
+    for (Scope* at = this; at != nullptr; at = at->parent_) {
+      thread::MutexLock lock(&monitor().mu());
+      const auto found = at->outcomes_.find(one.subject_step);
+      if (found != at->outcomes_.end()) return Item::Of(StatusRecord(found->second));
+    }
+    return Item::Of(StatusRecord(absl::OkStatus()));
+  }
   if (one.subject_step != kNone) {
     ABSL_ASSIGN_OR_RETURN(CallHandle* handle, Call(one.subject_step));
     ABSL_RETURN_IF_ERROR(handle->Outcome(&outcome));
@@ -1635,23 +1950,50 @@ absl::Status Scope::NodeOutcome(RefId ref, absl::Status* absl_nonnull outcome) {
 
 // --- Expressions -------------------------------------------------------------
 
-absl::StatusOr<Value> Scope::FirstValue(RefId ref, ExprId site) {
-  const std::string key = absl::StrCat(site, ":", ref);
+absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
+  Scope* owner = Owner(ref);
+  ValueCursor* cursor = nullptr;
   {
     thread::MutexLock lock(&monitor().mu());
-    const auto found = expr_values_.find(key);
-    if (found != expr_values_.end()) return found->second;
+    // One cursor per ref, and one *subscription* per ref. The plan set aside a
+    // single reader slot for all the value reads of a ref together, so two steps
+    // arriving here at once must not both take it -- checking for the cursor and
+    // then subscribing is not enough, because both would find nothing and both
+    // would subscribe, and the second would be told the stream has more readers
+    // than the plan accounted for. Whoever arrives first makes it; the rest wait
+    // for it to be there.
+    ABSL_RETURN_IF_ERROR(monitor().Wait([owner, ref] {
+      return owner->cursors_.contains(ref) ||
+             !owner->opening_cursors_.contains(ref);
+    }));
+    const auto found = owner->cursors_.find(ref);
+    if (found != owner->cursors_.end()) {
+      cursor = found->second.get();
+    } else {
+      owner->opening_cursors_.insert(ref);
+    }
   }
-  ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(ref));
-  ABSL_ASSIGN_OR_RETURN(const ItemPtr item, reader->Next());
-  Value value;
-  if (item != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(value, item->Read(&bridge()));
+  if (cursor == nullptr) {
+    // Outside the lock: subscribing may open a node.
+    absl::StatusOr<ReaderPtr> reader = Subscribe(ref);
+    {
+      thread::MutexLock lock(&monitor().mu());
+      // Whatever happened, this ref is no longer being opened: a failure that
+      // left the flag set would leave every other reader of it waiting for a
+      // cursor nobody is making any more.
+      owner->opening_cursors_.erase(ref);
+      if (reader.ok()) {
+        const graph::Ref& one = graph().refs[ref];
+        auto made = std::make_unique<ValueCursor>(bridge(), *std::move(reader),
+                                                  one.unary, one.label);
+        cursor = made.get();
+        owner->cursors_.emplace(ref, std::move(made));
+      }
+    }
+    monitor().Wake();
+    if (!reader.ok()) return reader.status();
   }
-  reader->Stop();
-  thread::MutexLock lock(&monitor().mu());
-  expr_values_.insert_or_assign(key, value);
-  return value;
+  return cursor->Next(monitor());
 }
 
 absl::StatusOr<Value> Scope::Evaluate(ExprId expr) {
@@ -1663,14 +2005,26 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it) {
   const graph::Expr& one = graph().exprs[expr];
   if (one.node == nullptr) return Value::Null();
   absl::flat_hash_map<const syntax::Node*, Value> bound;
+  // One value per *ref* per evaluation, not per mention of it: `strformat("%s %s",
+  // x, x)` names one value twice and must not take two off the stream. Across
+  // statements they are separate reads, which is the whole point.
+  absl::flat_hash_map<RefId, Value> taken;
   for (const auto& [node, ref] : one.bound) {
-    ABSL_ASSIGN_OR_RETURN(bound[node], FirstValue(ref, expr));
+    const auto held = taken.find(ref);
+    if (held != taken.end()) {
+      bound[node] = held->second;
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(Value value, ValueOf(ref));
+    taken.emplace(ref, value);
+    bound[node] = std::move(value);
   }
   EvalContext context;
   context.bound = &bound;
   context.it = it;
   context.has_it = true;
   context.bridge = &bridge();
+  context.shapes = &shapes();
   return flow::Evaluate(*one.node, context);
 }
 
@@ -1789,6 +2143,20 @@ absl::Status Scope::Execute(StepId step) {
     }
     case StepKind::kFail:
       return Failure(step);
+    case StepKind::kBlock: {
+      // The same nesting an `if` branch runs in. What a block adds is that its
+      // outcome is *its own*: a failure inside it is the block's, and a `try`
+      // says the flow means to read it rather than end there.
+      if (one.bodies.empty()) return absl::OkStatus();
+      const absl::Status ran =
+          Scope(*runner_, one.bodies.front(), this, {}).Run();
+      {
+        thread::MutexLock lock(&monitor().mu());
+        outcomes_[step] = ran;
+      }
+      monitor().Wake();
+      return one.tolerant ? absl::OkStatus() : ran;
+    }
     case StepKind::kIf: {
       ABSL_ASSIGN_OR_RETURN(const Value taken, Evaluate(one.condition));
       const BodyId body = Truthy(taken) ? one.bodies.front() : one.bodies.back();
@@ -1969,7 +2337,10 @@ absl::Status Scope::RunRepeat(StepId step) {
   const graph::Step& one = graph().steps[step];
   const BodyId body = one.bodies.front();
   Value carried = Value::Of(one.start);
-  for (int index = 0; index < one.max_iterations; ++index) {
+  // Bounded by the author's `max` where there is one, and otherwise only by the
+  // condition: a loop that says `until` means it, however many passes that takes.
+  for (int index = 0;
+       !one.max_iterations.has_value() || index < *one.max_iterations; ++index) {
     absl::flat_hash_map<RefId, std::vector<ItemPtr>> presets;
     if (one.carry != kNone) presets[one.carry] = {Item::Of(carried)};
     if (one.index != kNone) {
@@ -1989,6 +2360,7 @@ absl::Status Scope::RunRepeat(StepId step) {
       EvalContext context;
       context.bound = &bound;
       context.bridge = &bridge();
+  context.shapes = &shapes();
       ABSL_ASSIGN_OR_RETURN(const Value holds,
                             flow::Evaluate(*condition.node, context));
       if (Truthy(holds) == one.stop_when) return absl::OkStatus();
@@ -2261,6 +2633,7 @@ std::string SchemaType(std::string_view declared) {
           {"integer", "int"},  {"int", "int"},      {"bool", "bool"},
           {"boolean", "bool"}, {"object", "dict"},  {"json", "dict"},
           {"list", "list"},    {"array", "list"},   {"bytes", "bytes"},
+          {"duration", "a11.Duration"}, {"time", "a11.Time"},
           {"any", "application/json"},
       };
   const auto found = kNames->find(declared);

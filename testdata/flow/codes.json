@@ -55,10 +55,28 @@
       "summary": "A number the language cannot read."
     },
     {
+      "code": "flow.form.bad-pattern",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'match' pattern the language cannot read: an unclosed hole, an unknown kind, or two holes with one name."
+    },
+    {
       "code": "flow.form.count-not-positive",
       "family": "form",
       "severity": "warning",
       "summary": "A count that is not a number of anything: 'parallel 0', 'skip -1'."
+    },
+    {
+      "code": "flow.form.default-on-required",
+      "family": "form",
+      "severity": "warning",
+      "summary": "A field is required and also given a default, so the default could never be used."
+    },
+    {
+      "code": "flow.form.duplicate-field",
+      "family": "form",
+      "severity": "error",
+      "summary": "A field is declared twice in one shape."
     },
     {
       "code": "flow.form.duplicate-flow",
@@ -73,10 +91,40 @@
       "summary": "A port is declared twice in one direction."
     },
     {
+      "code": "flow.form.duplicate-struct",
+      "family": "form",
+      "severity": "error",
+      "summary": "Two structs in one file are declared with the same name."
+    },
+    {
       "code": "flow.form.duration-unit",
       "family": "form",
       "severity": "error",
       "summary": "A number carrying a suffix that is not one of the duration units."
+    },
+    {
+      "code": "flow.form.empty-range",
+      "family": "form",
+      "severity": "error",
+      "summary": "A range that bounds nothing, or whose bounds are the wrong way round."
+    },
+    {
+      "code": "flow.form.field-constraint",
+      "family": "form",
+      "severity": "error",
+      "summary": "A field constraint that cannot apply to what the field holds: 'unique' on one value, 'matching' on a number."
+    },
+    {
+      "code": "flow.form.field-modifier-order",
+      "family": "form",
+      "severity": "warning",
+      "summary": "A field's modifiers are written out of the order they read in."
+    },
+    {
+      "code": "flow.form.field-type-mismatch",
+      "family": "form",
+      "severity": "error",
+      "summary": "A field's default or 'one of' value is not a value of the type the field holds."
     },
     {
       "code": "flow.form.forward-headers",
@@ -85,10 +133,34 @@
       "summary": "'headers' without the 'forward' that owns it."
     },
     {
+      "code": "flow.form.missing-field",
+      "family": "form",
+      "severity": "error",
+      "summary": "A value of a declared shape leaves out a field the shape requires and gives no default for."
+    },
+    {
       "code": "flow.form.node-parentheses",
       "family": "form",
       "severity": "error",
       "summary": "Making a node takes parentheses: 'node()' or 'node(id)'."
+    },
+    {
+      "code": "flow.form.not-json-representable",
+      "family": "form",
+      "severity": "error",
+      "summary": "A value holding bytes is asked for as JSON, which has nothing to carry them in; 'packb' is the one that does."
+    },
+    {
+      "code": "flow.form.one-of-empty",
+      "family": "form",
+      "severity": "error",
+      "summary": "'one of []' allows nothing, so nothing would validate."
+    },
+    {
+      "code": "flow.form.one-of-not-a-list",
+      "family": "form",
+      "severity": "error",
+      "summary": "'one of' is given something other than a list of constants."
     },
     {
       "code": "flow.form.port-modifier-order",
@@ -97,16 +169,52 @@
       "summary": "'stream' or 'required' is written in front of the port's type instead of after it."
     },
     {
+      "code": "flow.form.repeated-modifier",
+      "family": "form",
+      "severity": "error",
+      "summary": "A modifier that says one thing is written twice."
+    },
+    {
       "code": "flow.form.stage-argument",
       "family": "form",
       "severity": "error",
       "summary": "A stage is missing the argument it takes, or was given one of the wrong kind."
     },
     {
+      "code": "flow.form.struct-shadows-builtin",
+      "family": "form",
+      "severity": "error",
+      "summary": "A struct is named after a built-in type, which nothing could then write."
+    },
+    {
+      "code": "flow.form.unbounded-repeat",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'repeat' with no 'until', no 'while' and no 'max': nothing ends it."
+    },
+    {
+      "code": "flow.form.unconditional-cancel",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'cancel' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+    },
+    {
+      "code": "flow.form.unconditional-fail",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'fail' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+    },
+    {
       "code": "flow.form.unknown-builtin",
       "family": "form",
       "severity": "error",
       "summary": "A function call naming something that is not one of the language's fixed functions."
+    },
+    {
+      "code": "flow.form.unknown-field",
+      "family": "form",
+      "severity": "error",
+      "summary": "A value of a declared shape names a field the shape does not have."
     },
     {
       "code": "flow.form.unknown-stage",
@@ -124,7 +232,13 @@
       "code": "flow.form.unknown-type",
       "family": "form",
       "severity": "error",
-      "summary": "A port type that is neither built in nor written as a registry tag or a quoted mimetype."
+      "summary": "A type that is neither built in, nor a shape the file declares, nor written as a registry tag or a quoted mimetype."
+    },
+    {
+      "code": "flow.form.zip-empty",
+      "family": "form",
+      "severity": "error",
+      "summary": "'zip' reads streams in step, so it takes at least one."
     },
     {
       "code": "flow.name.call-as-stream",
@@ -155,6 +269,12 @@
       "family": "name",
       "severity": "error",
       "summary": "Something that cannot be read is used as a pipeline source."
+    },
+    {
+      "code": "flow.name.not-advanceable",
+      "family": "name",
+      "severity": "error",
+      "summary": "'advance' names something other than a value a 'let' bound, which is the only thing with a next value."
     },
     {
       "code": "flow.name.not-writable",
@@ -271,10 +391,22 @@
       "summary": "An 'out' port nothing in the flow writes, so a caller reading it gets nothing."
     },
     {
+      "code": "flow.unused.struct",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A struct no port, cast or other struct in the file names."
+    },
+    {
       "code": "flow.unused.try-status",
       "family": "unused",
       "severity": "weak-warning",
       "summary": "A 'try' whose status nothing reads: a failure leaves the ports it feeds silently empty."
+    },
+    {
+      "code": "flow.unused.value",
+      "family": "unused",
+      "severity": "warning",
+      "summary": "A `let` nothing reads: the stream behind it is never read either, so whatever produces it may be left waiting."
     }
   ],
   "format": "flow.codes/v1"

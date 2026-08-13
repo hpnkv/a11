@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
@@ -229,6 +230,59 @@ TEST(FlowVocabulary, CanonicalFollowsTheCompilersCasingRule) {
   EXPECT_EQ(vocabulary::Canonical(""), "");
 }
 
+TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
+  // The reference an editor shows is part of the language, so a stage or a
+  // function added to the tables without one is a hole here rather than a hover
+  // that says nothing. What the words *mean* is checked by reading them; what
+  // this checks is that each has been written at all, and written to the shape
+  // every consumer renders.
+  const auto documented = [](const vocabulary::WordDoc* doc,
+                             std::string_view name, bool takes_argument) {
+    ASSERT_NE(doc, nullptr) << name << " has no reference text";
+    EXPECT_FALSE(doc->summary.empty()) << name;
+    EXPECT_FALSE(doc->detail.empty()) << name;
+    EXPECT_FALSE(doc->example.empty()) << name;
+    // A summary is one sentence, and it is shown as one.
+    EXPECT_TRUE(absl::EndsWith(doc->summary, ".")) << name << ": "
+                                                   << doc->summary;
+    // The word itself appears in its own example, or the example is about
+    // something else.
+    EXPECT_NE(doc->example.find(name), std::string_view::npos)
+        << name << ": " << doc->example;
+    // `--` is never written in text a reader sees: a colon or an em dash.
+    for (const std::string_view text :
+         {doc->summary, doc->takes, doc->detail, doc->example}) {
+      EXPECT_EQ(text.find("--"), std::string_view::npos) << name << ": "
+                                                         << text;
+    }
+    // Something that takes nothing says nothing about what it takes, so the
+    // hover does not print an empty "Takes:" line.
+    EXPECT_EQ(doc->takes.empty(), !takes_argument) << name;
+  };
+
+  for (const std::string_view stage : vocabulary::Stages()) {
+    documented(vocabulary::StageDocumentation(stage), stage,
+               *vocabulary::StageTakes(stage) !=
+                   vocabulary::StageArgument::kNone);
+  }
+  for (const std::string_view name : vocabulary::OrderedBuiltins()) {
+    // Every function but `now()` is given something; `now()` is the clock.
+    documented(vocabulary::BuiltinDocumentation(name), name, name != "now");
+  }
+
+  // A word that is both is documented as both, and they do not say the same
+  // thing: `| text` re-writes a stream and `text(x)` re-writes one value.
+  const vocabulary::WordDoc* staged = vocabulary::StageDocumentation("text");
+  const vocabulary::WordDoc* called = vocabulary::BuiltinDocumentation("text");
+  ASSERT_NE(staged, nullptr);
+  ASSERT_NE(called, nullptr);
+  EXPECT_NE(staged->summary, called->summary);
+
+  // And a word that is neither has nothing to say here.
+  EXPECT_EQ(vocabulary::StageDocumentation("flow"), nullptr);
+  EXPECT_EQ(vocabulary::BuiltinDocumentation("truncate"), nullptr);
+}
+
 TEST(FlowVocabulary, EveryStageSaysWhatItTakes) {
   for (const std::string_view stage : vocabulary::Stages()) {
     EXPECT_TRUE(vocabulary::StageTakes(stage).has_value()) << stage;
@@ -266,6 +320,48 @@ TEST(FlowVocabulary, AStatusCodeIsAcceptedInEitherCase) {
   EXPECT_TRUE(vocabulary::IsStatusCode("not-found"));
   EXPECT_FALSE(vocabulary::IsStatusCode("Not_Found"));
   EXPECT_FALSE(vocabulary::IsStatusCode("nope"));
+}
+
+TEST(FlowLexer, ReadsRangesAndSpreadsWithoutBreakingNumbers) {
+  // `1..200` is a bound and a bound, not a number with two decimal points in
+  // it -- so the number scanner has to stop at the first of a `..`.
+  EXPECT_EQ(absl::StrJoin(Dump("1..200"), " "),
+            "number:1 ..:.. number:200");
+  EXPECT_EQ(absl::StrJoin(Dump("1.5..2"), " "), "number:1.5 ..:.. number:2");
+  EXPECT_EQ(absl::StrJoin(Dump("..9"), " "), "..:.. number:9");
+  EXPECT_EQ(absl::StrJoin(Dump("1.."), " "), "number:1 ..:..");
+  // A `.` that is not the first of a `..` still belongs to the number.
+  EXPECT_EQ(absl::StrJoin(Dump("1.5"), " "), "number:1.5");
+  EXPECT_TRUE(Codes("1..200").empty());
+
+  // Longest wins: `...` is a spread, `..` a range, `.` a dot.
+  EXPECT_EQ(absl::StrJoin(Dump("...x"), " "), "...:... word:x");
+  EXPECT_EQ(absl::StrJoin(Dump("a.b"), " "), "word:a .:. word:b");
+  // `…` is *not* a second spelling. Two ways of writing one operator is two
+  // ways for a file to differ from one that means the same thing, and the one
+  // that survives a chat window and a keyboard without the key is three dots.
+  // It is still read as the spread it plainly meant, with the repair attached,
+  // so the rest of the statement is still checked.
+  EXPECT_EQ(absl::StrJoin(Dump("…it"), " "), "...:… word:it");
+  EXPECT_EQ(absl::StrJoin(Codes("…it"), " "),
+            "flow.syntax.unexpected-character");
+  const std::vector<Diagnostic> said = Lex("…it").diagnostics;
+  ASSERT_EQ(said.size(), 1u);
+  ASSERT_EQ(said[0].fixes.size(), 1u);
+  EXPECT_EQ(said[0].fixes[0].edits[0].text, "...");
+}
+
+TEST(FlowLexer, AQuoteInsideAStringIsWrittenWithABackslash) {
+  const std::vector<Token> tokens = Lex(R"("say \"hi\" now")").tokens;
+  ASSERT_FALSE(tokens.empty());
+  EXPECT_EQ(tokens[0].kind, TokenKind::kString);
+  EXPECT_EQ(tokens[0].string_value, R"(say "hi" now)");
+  EXPECT_TRUE(Codes(R"("say \"hi\"")").empty());
+  // The escaped quote does not end the string, so what follows it is still
+  // inside: a lexer that stopped there would report the rest of the line as
+  // statements.
+  EXPECT_EQ(absl::StrJoin(Dump(R"("a\"b" -> c)"), " "),
+            R"(string:"a\"b" ->:-> word:c)");
 }
 
 TEST(FlowVocabulary, OnlyGenericTypesTakeParameters) {

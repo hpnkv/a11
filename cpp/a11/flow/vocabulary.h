@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include <absl/base/nullability.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/types/span.h>
 
@@ -58,6 +59,47 @@ std::optional<StageArgument> StageTakes(std::string_view canonical_name);
 
 /// The spelling of a stage argument kind in the output formats.
 std::string_view StageArgumentName(StageArgument argument);
+
+/// What one word of the language does, as reference an editor can show.
+///
+/// Here rather than in each editor for the reason everything else in this file is
+/// here: there are four frontends and one language. A hover, the popup beside a
+/// completion list, and `a11-flow vocabulary` are three questions with one answer,
+/// and a copy of this in the IntelliJ plugin would be a copy that goes stale the
+/// first time a stage learns a new argument.
+///
+/// Written as reference rather than as a gloss. "stage, takes number" is what the
+/// editor used to say about `truncate`, and it answers nothing a reader did not
+/// already know from looking at the line.
+struct WordDoc {
+  /// One line: what it does. A sentence, because it is shown as one.
+  std::string_view summary;
+  /// What it takes, spelled the way a reader writes it rather than as a type
+  /// name: "a count", "an expression, with `it` bound to the value in hand".
+  /// Empty where it takes nothing.
+  std::string_view takes;
+  /// How it behaves, and the caveat if it has one. Markdown, a short paragraph.
+  std::string_view detail;
+  /// One line of Flow showing it in use. Reference without an example is a
+  /// definition, and a definition is what the reader is trying to get past.
+  std::string_view example;
+};
+
+/// What a stage does, or `nullptr` where the name is not a stage.
+///
+/// Every stage in [Stages] has an entry, which `FlowVocabulary.EveryWordIs
+/// Documented` pins: a stage added to the grammar without reference text is a
+/// hole a test finds rather than one a reader finds.
+const WordDoc* absl_nullable StageDocumentation(std::string_view canonical_name);
+
+/// What a built-in function does, or `nullptr` where the name is not one.
+///
+/// A word that is both a stage and a function has an entry in each table, because
+/// they do different things: `| text` re-writes every value of a stream and
+/// `text(x)` re-writes one value. Which one a position means is the highlighter's
+/// judgement ([SemanticKind]), so whatever asks here has already been told.
+const WordDoc* absl_nullable BuiltinDocumentation(
+    std::string_view canonical_name);
 
 /// The two stages that may be written without their leading `|`.
 ///
@@ -133,7 +175,7 @@ const absl::flat_hash_set<std::string_view>& ModifierWords();
 /// modifier added here is a modifier everywhere.
 absl::Span<const std::string_view> OrderedModifiers();
 
-/// Words that open a pipeline source rather than naming one: `status`.
+/// Words that open a pipeline source rather than naming one: `status`, `zip`.
 const absl::flat_hash_set<std::string_view>& SourceWords();
 
 /// What a port says about itself after its type: `stream`, `required`.
@@ -141,6 +183,17 @@ const absl::flat_hash_set<std::string_view>& PortModifierWords();
 
 /// The same, in the order a port writes them.
 absl::Span<const std::string_view> OrderedPortModifiers();
+
+/// What a `struct` field says about itself after its type.
+///
+/// A superset of [PortModifierWords] in spirit rather than in fact -- a field is
+/// never a `stream`, and a port never has a `default` -- so the two tables are
+/// kept apart and each position consults its own.
+const absl::flat_hash_set<std::string_view>& FieldModifierWords();
+
+/// The same, in the order a field writes them, which is the order they are
+/// required to be written in.
+absl::Span<const std::string_view> OrderedFieldModifiers();
 
 /// Abseil's canonical status codes, lower case, which is what `fail` names.
 absl::Span<const std::string_view> StatusCodes();

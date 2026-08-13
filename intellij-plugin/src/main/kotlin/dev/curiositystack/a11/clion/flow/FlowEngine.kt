@@ -52,6 +52,9 @@ class FlowEngine : Disposable {
     /** The last answer for each method, keyed by the text it was about. */
     private val cache = HashMap<String, Pair<String, Map<String, Any?>>>()
 
+    /** What the world contains, when something has said: see [setContext]. */
+    private var context: Map<String, Any?>? = null
+
     /** Whether a tool was found at all, which is what "degraded" means here. */
     val available: Boolean get() = executable() != null
 
@@ -77,7 +80,55 @@ class FlowEngine : Disposable {
      * caret moves more often than a document changes.
      */
     fun complete(text: String, offset: Int): Map<String, Any?>? =
-        request(mapOf("method" to "complete", "source" to text, "offset" to offset))
+        request(
+            mapOf("method" to "complete", "source" to text, "offset" to offset) +
+                contextArgument(),
+        )
+
+    /**
+     * What is at `offset`: `flow.hover/v1`, or `null`.
+     *
+     * The whole of the judgement -- that this word is a port and not a stage,
+     * that this action has these ports, that this shape has these fields -- is
+     * the language's. This asks; it does not decide.
+     */
+    fun describe(text: String, offset: Int): Map<String, Any?>? =
+        request(
+            mapOf("method" to "describe", "source" to text, "offset" to offset) +
+                contextArgument(),
+        )
+
+    /** What the document declares, nested: `flow.symbols/v1`, or `null`. */
+    fun symbols(text: String): Map<String, Any?>? = ask("symbols", text)
+
+    /** Where the name at `offset` was bound: `flow.definition/v1`, or `null`. */
+    fun definition(text: String, offset: Int): Map<String, Any?>? =
+        request(
+            mapOf("method" to "definition", "source" to text, "offset" to offset) +
+                contextArgument(),
+        )
+
+    /**
+     * What the world outside these documents contains: the actions that may be
+     * called and the types that may be named.
+     *
+     * The language ships a snapshot of what the SDK registers, so hovering
+     * `make_http_request` says something useful with nothing configured. An IDE
+     * that knows which registry an inline flow is actually attached to sets its
+     * own here, and every completion and hover after that sees it -- which is
+     * the case this exists for. `null` puts the snapshot back.
+     */
+    fun setContext(catalogue: Map<String, Any?>?) {
+        lock.withLock {
+            context = catalogue
+            // The answers held from before described a different world.
+            cache.clear()
+        }
+    }
+
+    /** The `context` argument, where one has been set. */
+    private fun contextArgument(): Map<String, Any?> =
+        lock.withLock { context }?.let { mapOf("context" to it) } ?: emptyMap()
 
     /** One request, with the last answer reused when the text has not changed. */
     private fun ask(method: String, text: String): Map<String, Any?>? {

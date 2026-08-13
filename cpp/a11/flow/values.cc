@@ -8,12 +8,14 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <regex>
 #include <set>
 #include <utility>
 
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/escaping.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
@@ -660,6 +662,66 @@ double AsDouble(const Value& value) {
              : number.number();
 }
 
+/// One hole's text, read as the hole said to read it.
+Value AsHole(pattern::HoleType type, std::string_view text) {
+  const Value written = Value::String(std::string(text));
+  switch (type) {
+    case pattern::HoleType::kInt:
+    case pattern::HoleType::kNumber:
+      return AsNumber(written);
+    case pattern::HoleType::kBool:
+      // The matcher only ever hands `true` or `false` here, in some case.
+      return Value::Bool(absl::EqualsIgnoreCase(text, "true"));
+    case pattern::HoleType::kDuration:
+      return Value::Duration(AsDuration(written));
+    case pattern::HoleType::kTime:
+      return Value::Time(AsTime(written));
+    case pattern::HoleType::kJson:
+      return AsJson(written);
+    case pattern::HoleType::kString:
+    case pattern::HoleType::kWord:
+    case pattern::HoleType::kLine:
+    case pattern::HoleType::kRest:
+      return written;
+  }
+  return written;
+}
+
+absl::StatusOr<Value> MatchPattern(std::string_view text,
+                                   std::string_view subject) {
+  const pattern::Compiled compiled = pattern::Compile(text);
+  if (!compiled.ok()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("The pattern '", text, "' cannot be read: ",
+                     compiled.error));
+  }
+  return MatchCompiled(compiled.pattern, subject);
+}
+
+Value MatchCompiled(const pattern::Pattern& compiled,
+                    std::string_view subject) {
+  const std::optional<std::vector<pattern::Capture>> captures =
+      pattern::Match(compiled, subject);
+  if (!captures.has_value()) return Value::Null();
+
+  if (!compiled.AllNamed()) {
+    std::vector<Value> items;
+    items.reserve(captures->size());
+    for (size_t index = 0; index < captures->size(); ++index) {
+      items.push_back(
+          AsHole(compiled.holes[index].type, (*captures)[index].text));
+    }
+    return Value::List(std::move(items));
+  }
+  Value::Pairs pairs;
+  pairs.reserve(captures->size());
+  for (size_t index = 0; index < captures->size(); ++index) {
+    const pattern::Hole& hole = compiled.holes[index];
+    pairs.emplace_back(hole.name, AsHole(hole.type, (*captures)[index].text));
+  }
+  return Value::Object(std::move(pairs));
+}
+
 Value AsJson(const Value& value) {
   if (!value.IsTextlike()) return value;
   const nlohmann::json parsed =
@@ -1108,6 +1170,9 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
                                   absl::Span<const Value> arguments,
                                   HostBridge* absl_nullable bridge) {
   const Value& first = Argument(arguments, 0);
+  if (name == "match") {
+    return MatchPattern(AsText(first), AsText(Argument(arguments, 1)));
+  }
   if (name == "strformat") {
     return Value::String(Strformat(
         first, arguments.empty() ? arguments : arguments.subspan(1)));
@@ -1142,6 +1207,32 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "upper") return Value::String(absl::AsciiStrToUpper(AsText(first)));
   if (name == "trim") {
     return Value::String(std::string(absl::StripAsciiWhitespace(AsText(first))));
+  }
+  // Base64, both alphabets, both ways.
+  //
+  // Encoding gives *text*, because that is the whole point of encoding: it is
+  // what a JSON field or a header can carry. Decoding gives *bytes*, because
+  // that is what was encoded -- a flow that wants them as text says so with
+  // `text(..)`, rather than this guessing that the bytes were a string.
+  // Padding is written and, on the way back, not required: the web-safe
+  // alphabet is routinely sent without it.
+  if (name == "b64encode") {
+    return Value::String(absl::Base64Escape(AsText(first)));
+  }
+  if (name == "b64urlencode") {
+    return Value::String(absl::WebSafeBase64Escape(AsText(first)));
+  }
+  if (name == "b64decode" || name == "b64urldecode") {
+    const std::string encoded = AsText(first);
+    std::string decoded;
+    const bool ok = name == "b64decode"
+                        ? absl::Base64Unescape(encoded, &decoded)
+                        : absl::WebSafeBase64Unescape(encoded, &decoded);
+    if (!ok) {
+      return absl::InvalidArgumentError(
+          absl::StrCat(name, " was given text that is not base64."));
+    }
+    return Value::Bytes(data::Bytes(std::move(decoded)));
   }
   if (name == "text") return Value::String(AsText(first));
   if (name == "number") return AsNumber(first);
@@ -1314,11 +1405,297 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   return Invalid(absl::StrCat("Unknown function '", name, "'."));
 }
 
+namespace {
+
+/// The items `...value` contributes to a list literal.
+///
+/// A list gives its items. Anything else gives itself, one item -- spreading a
+/// value that is not a list is not a mistake worth ending a flow over, and
+/// treating it as one thing is what a reader would expect from `[...a, b]` where
+/// `a` turned out to be a single record.
+std::vector<Value> SpreadItems(const Value& value) {
+  if (value.kind() == Value::Kind::kList) return value.items();
+  if (value.IsNull()) return {};
+  return {value};
+}
+
+/// The pairs `...value` contributes to an object literal.
+///
+/// A mapping gives its pairs, and a host object gives whatever it says its
+/// fields are -- which is what lets a record that arrived as a registered type,
+/// or as a shape, be spread into a new one. Anything else gives nothing: there
+/// are no keys to take, and inventing one would be inventing data.
+Value::Pairs SpreadPairs(const Value& value) {
+  if (value.kind() == Value::Kind::kObject) return value.pairs();
+  if (value.kind() == Value::Kind::kHost) {
+    Value::Pairs pairs;
+    // A host object has no way to list its fields, so this goes through its
+    // text: a model renders as its JSON, which is exactly the mapping wanted.
+    const Value decoded = AsJson(Value::String(AsText(value)));
+    if (decoded.kind() == Value::Kind::kObject) return decoded.pairs();
+    return pairs;
+  }
+  return {};
+}
+
+}  // namespace
+
 // --- Coercion ----------------------------------------------------------------
+
+namespace {
+
+/// A field's value, or nothing where the value being coerced has none.
+///
+/// Reads out of a mapping and out of a host object alike: a value that arrived
+/// as a registered type still has fields, and a shape built from one should not
+/// have to be told which sort of thing it came from.
+const Value* absl_nullable FieldOf(const Value& value, std::string_view name,
+                                   Value& scratch) {
+  if (value.kind() == Value::Kind::kObject) return value.Get(name);
+  if (value.kind() == Value::Kind::kHost) {
+    scratch = value.host().Field(name);
+    return scratch.IsNull() ? nullptr : &scratch;
+  }
+  return nullptr;
+}
+
+/// How long a value is, for a range that bounds a length.
+size_t Extent(const Value& value) {
+  switch (value.kind()) {
+    case Value::Kind::kString:
+      return Utf8Length(value.text());
+    case Value::Kind::kBytes:
+      return value.text().size();
+    case Value::Kind::kList:
+      return value.items().size();
+    case Value::Kind::kObject:
+      return value.pairs().size();
+    default:
+      return 0;
+  }
+}
+
+/// Whether a range bounds this type's *length* rather than its magnitude.
+bool BoundsLength(std::string_view type) {
+  return type == "string" || type == "text" || type == "bytes" ||
+         type == "list" || type == "array" || type == "object" ||
+         type == "json";
+}
+
+/// The number a bound is, as a double, which is enough for every bound there is:
+/// a length is a count and a duration compares by its seconds.
+double BoundNumber(const syntax::Constant& bound) {
+  if (bound.kind == syntax::Constant::Kind::kDuration) {
+    return DurationSeconds(bound.duration);
+  }
+  return bound.AsDouble();
+}
+
+/// What a value compares as against a range on a field of this type.
+double Magnitude(const Value& value, std::string_view type) {
+  if (BoundsLength(type)) return static_cast<double>(Extent(value));
+  if (value.kind() == Value::Kind::kDuration) {
+    return DurationSeconds(value.duration());
+  }
+  if (value.kind() == Value::Kind::kTime) {
+    return absl::ToDoubleSeconds(value.time() - absl::UnixEpoch());
+  }
+  return AsDouble(value);
+}
+
+/// The value a constant is, for a default and for an allowed value.
+Value OfConstant(const syntax::Constant& constant) { return Value::Of(constant); }
+
+absl::Status FieldError(std::string_view path, std::string what) {
+  return absl::InvalidArgumentError(
+      absl::StrCat(path, ": ", std::move(what)));
+}
+
+/// One field of a shape, coerced and checked, with the path for a message.
+absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
+                                  const CoerceContext& context,
+                                  std::string_view path);
+
+/// `value` made a value of the type `field` gives, following a shape it names.
+absl::StatusOr<Value> CoerceFieldType(const FieldPlan& field,
+                                      const Value& given,
+                                      const CoerceContext& context,
+                                      std::string_view path) {
+  // A shape the program declared: validated rather than handed off, and by name
+  // rather than by tag, which is what makes it outrank one.
+  if (!field.dto_name.empty() && context.shapes != nullptr) {
+    const DtoPlan* nested = context.shapes->Dto(field.dto_name);
+    if (nested != nullptr) {
+      absl::StatusOr<Value> made = CoerceShape(*nested, given, context);
+      if (!made.ok()) {
+        return FieldError(path, std::string(made.status().message()));
+      }
+      return *std::move(made);
+    }
+  }
+  if (field.type == "list" || field.type == "array") {
+    std::vector<Value> items;
+    if (given.kind() == Value::Kind::kList) {
+      items = given.items();
+    } else if (!given.IsNull()) {
+      items.push_back(given);
+    }
+    if (!field.element.empty()) {
+      const DtoPlan* element =
+          field.element_dto_name.empty() || context.shapes == nullptr
+              ? nullptr
+              : context.shapes->Dto(field.element_dto_name);
+      for (size_t index = 0; index < items.size(); ++index) {
+        const std::string inner = absl::StrCat(path, "[", index, "]");
+        if (element != nullptr) {
+          absl::StatusOr<Value> made =
+              CoerceShape(*element, items[index], context);
+          if (!made.ok()) {
+            return FieldError(inner, std::string(made.status().message()));
+          }
+          items[index] = *std::move(made);
+          continue;
+        }
+        syntax::TypeExpression as;
+        as.name = field.element;
+        absl::StatusOr<Value> made = Coerce(items[index], as, context);
+        if (!made.ok()) return made.status();
+        items[index] = *std::move(made);
+      }
+    }
+    return Value::List(std::move(items));
+  }
+  syntax::TypeExpression as;
+  as.name = field.type;
+  return Coerce(given, as, context);
+}
+
+absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
+                                  const CoerceContext& context,
+                                  std::string_view path) {
+  absl::StatusOr<Value> made = CoerceFieldType(field, given, context, path);
+  if (!made.ok()) return made;
+  const Value& held = *made;
+
+  if (field.has_enumeration) {
+    bool allowed = false;
+    std::vector<std::string> spelled;
+    for (const syntax::Constant& one : field.enumeration) {
+      const Value candidate = OfConstant(one);
+      spelled.push_back(AsText(candidate));
+      if (candidate == held) allowed = true;
+    }
+    if (!allowed) {
+      return FieldError(path, absl::StrCat("'", AsText(held),
+                                          "' is not one of ",
+                                          absl::StrJoin(spelled, ", "), "."));
+    }
+  }
+  if (field.has_pattern && held.IsTextlike()) {
+    // ECMA-262, which is the dialect JSONSchema's `pattern` is in -- so a
+    // pattern written here and one written in a schema mean the same thing.
+    std::regex pattern;
+    try {
+      pattern.assign(field.pattern, std::regex::ECMAScript);
+    } catch (const std::regex_error&) {
+      return FieldError(path, absl::StrCat("the pattern '", field.pattern,
+                                          "' is not a regular expression."));
+    }
+    if (!std::regex_search(held.text(), pattern)) {
+      return FieldError(path, absl::StrCat("'", held.text(),
+                                          "' does not match '", field.pattern,
+                                          "'."));
+    }
+  }
+  if (!field.range.Empty()) {
+    const bool length = BoundsLength(field.type);
+    const double have = Magnitude(held, field.type);
+    const std::string_view unit = length ? " long" : "";
+    if (field.range.has_minimum &&
+        have < BoundNumber(field.range.minimum) - 1e-9) {
+      return FieldError(
+          path, absl::StrCat(length ? "is " : "is ", AsText(AsNumber(
+                                 Value::Double(have))),
+                             unit, ", and the least allowed is ",
+                             AsText(OfConstant(field.range.minimum)), "."));
+    }
+    if (field.range.has_maximum &&
+        have > BoundNumber(field.range.maximum) + 1e-9) {
+      return FieldError(
+          path, absl::StrCat("is ", AsText(AsNumber(Value::Double(have))), unit,
+                             ", and the most allowed is ",
+                             AsText(OfConstant(field.range.maximum)), "."));
+    }
+  }
+  if (field.unique && held.kind() == Value::Kind::kList) {
+    const std::vector<Value>& items = held.items();
+    for (size_t index = 0; index < items.size(); ++index) {
+      for (size_t other = index + 1; other < items.size(); ++other) {
+        if (items[index] == items[other]) {
+          return FieldError(path, absl::StrCat("holds '", AsText(items[index]),
+                                              "' twice, and its items are "
+                                              "unique."));
+        }
+      }
+    }
+  }
+  return made;
+}
+
+}  // namespace
+
+absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
+                                  const CoerceContext& context) {
+  if (value.kind() != Value::Kind::kObject &&
+      value.kind() != Value::Kind::kHost) {
+    // A shape is a record. Anything else is not a partially-filled one, and
+    // guessing which field a bare value was meant for would be inventing data.
+    return absl::InvalidArgumentError(absl::StrCat(
+        shape.name, " is a record of ", absl::StrJoin(shape.FieldNames(), ", "),
+        ", and this is ", value.IsNull() ? "nothing" : AsText(value), "."));
+  }
+
+  Value::Pairs pairs;
+  pairs.reserve(shape.fields.size());
+  for (const FieldPlan& field : shape.fields) {
+    Value scratch;
+    const Value* given = FieldOf(value, field.name, scratch);
+    if (given == nullptr || given->IsNull()) {
+      if (field.has_default) {
+        // A default is a value of the field like any other, so it goes through
+        // the same checks -- a default that would not validate is a mistake
+        // worth hearing about the first time it is used.
+        ABSL_ASSIGN_OR_RETURN(
+            Value made,
+            CoerceField(field, OfConstant(field.default_value), context,
+                        field.name));
+        pairs.emplace_back(field.name, std::move(made));
+        continue;
+      }
+      if (field.required) {
+        return absl::InvalidArgumentError(
+            absl::StrCat(shape.name, " requires '", field.name,
+                         "', and this does not give it."));
+      }
+      // Not required and no default: simply absent, which is what lets a flow
+      // ask `if not thing.field`.
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        Value made, CoerceField(field, *given, context, field.name));
+    pairs.emplace_back(field.name, std::move(made));
+  }
+
+  // The fields the shape declares, in the order it declared them, and nothing
+  // else: see the note on [CoerceShape] about extra keys.
+  Value made = Value::Object(std::move(pairs));
+  if (context.bridge == nullptr || context.shapes == nullptr) return made;
+  return context.bridge->Adopt(shape, *context.shapes, made);
+}
 
 absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
-                             HostBridge* absl_nullable bridge) {
+                             const CoerceContext& context) {
   const std::string lowered = Canonical(type.name);
   if (lowered == "string" || lowered == "text") {
     return Value::String(AsText(value));
@@ -1330,6 +1707,8 @@ absl::StatusOr<Value> Coerce(const Value& value,
   if (lowered == "bool" || lowered == "boolean") {
     return Value::Bool(Truthy(value));
   }
+  if (lowered == "duration") return Value::Duration(AsDuration(value));
+  if (lowered == "time") return Value::Time(AsTime(value));
   if (lowered == "bytes") {
     if (value.kind() == Value::Kind::kBytes) return value;
     return Value::Bytes(AsText(value));
@@ -1344,7 +1723,7 @@ absl::StatusOr<Value> Coerce(const Value& value,
     if (!type.parameters.empty()) {
       for (Value& item : items) {
         ABSL_ASSIGN_OR_RETURN(item,
-                              Coerce(item, type.parameters.front(), bridge));
+                              Coerce(item, type.parameters.front(), context));
       }
     }
     return Value::List(std::move(items));
@@ -1355,13 +1734,23 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return value;
   }
   if (lowered == "any") return value;
-  if (bridge == nullptr) {
+  // A shape this program declared, before a registry is asked: a `struct` outranks
+  // a tag of the same name, because what the file says about the name is what
+  // the file means by it. Its own spelling, not the canonical one: `struct` names
+  // are not keywords.
+  if (context.shapes != nullptr) {
+    if (const DtoPlan* shape = context.shapes->Dto(type.name);
+        shape != nullptr) {
+      return CoerceShape(*shape, value, context);
+    }
+  }
+  if (context.bridge == nullptr) {
     return Invalid(absl::StrCat(
         "Nothing here knows the type '", type.name,
         "'. A tag names a type a serialization registry has been told about, so"
         " the module defining it has to be imported where the flow runs."));
   }
-  return bridge->Coerce(type.name, value);
+  return context.bridge->Coerce(type.name, value);
 }
 
 // --- Evaluation --------------------------------------------------------------
@@ -1451,6 +1840,15 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       std::vector<Value> items;
       items.reserve(literal.items.size());
       for (const syntax::NodePtr& item : literal.items) {
+        if (const auto* spread = syntax::As<syntax::Spread>(item.get());
+            spread != nullptr) {
+          ABSL_ASSIGN_OR_RETURN(Value held,
+                                Evaluate(*spread->value, context));
+          for (Value& inner : SpreadItems(held)) {
+            items.push_back(std::move(inner));
+          }
+          continue;
+        }
         ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*item, context));
         items.push_back(std::move(value));
       }
@@ -1460,12 +1858,38 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       const auto& literal = static_cast<const syntax::ObjectLiteral&>(node);
       Value::Pairs pairs;
       pairs.reserve(literal.pairs.size());
+      // A later key wins over one a spread brought in, which is what makes
+      // `{...it, "tags": [..]}` an override and `{"tags": [..], ...it}` not.
+      const auto put = [&pairs](std::string_view key, Value value) {
+        for (auto& [existing, held] : pairs) {
+          if (existing == key) {
+            held = std::move(value);
+            return;
+          }
+        }
+        pairs.emplace_back(std::string(key), std::move(value));
+      };
       for (const auto& [key, item] : literal.pairs) {
+        if (const auto* spread = syntax::As<syntax::Spread>(item.get());
+            spread != nullptr) {
+          ABSL_ASSIGN_OR_RETURN(Value held,
+                                Evaluate(*spread->value, context));
+          for (auto& [inner_key, inner] : SpreadPairs(held)) {
+            put(inner_key, std::move(inner));
+          }
+          continue;
+        }
         ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*item, context));
-        pairs.emplace_back(key, std::move(value));
+        put(key, std::move(value));
       }
       return Value::Object(std::move(pairs));
     }
+    case syntax::NodeKind::kSpread:
+      // Only ever an item of a literal, and each of those reads it itself. One
+      // standing anywhere else is a mistake the resolver already reported; this
+      // is what keeps it from being read as the thing it was spreading.
+      return absl::InvalidArgumentError(
+          "A spread belongs in a list or an object literal.");
     case syntax::NodeKind::kAttr: {
       const auto& attr = static_cast<const syntax::Attr&>(node);
       ABSL_ASSIGN_OR_RETURN(Value base, Evaluate(*attr.base, context));
@@ -1490,7 +1914,7 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
     case syntax::NodeKind::kTypedValue: {
       const auto& typed = static_cast<const syntax::TypedValue&>(node);
       ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*typed.value, context));
-      return Coerce(value, typed.type, context.bridge);
+      return Coerce(value, typed.type, context.Coercion());
     }
     case syntax::NodeKind::kUnary: {
       const auto& unary = static_cast<const syntax::Unary&>(node);

@@ -20,6 +20,8 @@
 #include <absl/types/span.h>
 
 #include "a11/data/types.h"
+#include "a11/flow/pattern.h"
+#include "a11/flow/plan.h"
 #include "a11/flow/syntax.h"
 
 namespace a11::flow {
@@ -190,6 +192,30 @@ class HostBridge {
   /// A chunk holding `value`, in `mimetype` when one is asked for.
   virtual absl::StatusOr<data::Chunk> ToChunk(const Value& value,
                                               std::string_view mimetype) = 0;
+
+  /// How this host would rather hold a value of a shape the *language* declared.
+  ///
+  /// Called with a value that has already been validated against `shape` --
+  /// defaults filled, bounds checked, nested shapes coerced -- so this is about
+  /// presentation and nothing else. The default is to hand it back unchanged,
+  /// which is what a host with no opinion wants; the Python bindings build the
+  /// pydantic model the shape describes and wrap an instance of it, so a value on
+  /// a `struct`-typed port arrives in Python as a real model.
+  ///
+  /// Validation stays on this side of the boundary on purpose: there is one
+  /// implementation of what a shape means, and a host that disagreed with it
+  /// would be a second, quieter one.
+  /// `program` is there because a shape is not much use without the shapes it
+  /// names: a host building a type from `shape` needs the ones its fields refer
+  /// to, and looking them up again on the other side of the boundary would be a
+  /// second trip for data this side already has.
+  virtual absl::StatusOr<Value> Adopt(const DtoPlan& shape,
+                                      const Program& program,
+                                      const Value& value) {
+    (void)shape;
+    (void)program;
+    return value;
+  }
 };
 
 /// A bridge over A11's own C++ serialisation registry.
@@ -217,6 +243,26 @@ std::string AsText(const Value& value);
 ///
 /// Integral where the value was integral, so `%d` of a count is the count.
 Value AsNumber(const Value& value);
+
+/// The fields a pattern pulls out of `subject`, or null where it does not fit.
+///
+/// One implementation for both senses of `match`: the stage drops a value this
+/// answers null for, and the function hands the null on. A record when every hole
+/// is named, and a list when they are not -- `{}` is read by position, so
+/// `it[0]` is what a positional pattern gives.
+///
+/// See [pattern::Compile] for the language. A pattern that does not compile is an
+/// `invalid_argument` naming what is wrong with it, because a pattern is a
+/// literal almost every time and a silent no-match would hide a typo in it.
+absl::StatusOr<Value> MatchPattern(std::string_view pattern,
+                                   std::string_view subject);
+
+/// The same, against a pattern already compiled.
+///
+/// What a stage uses: the pattern is written once in the source and the stream
+/// may be ten thousand values, so compiling it per value would be paying for the
+/// same scan over and over.
+Value MatchCompiled(const pattern::Pattern& pattern, std::string_view subject);
 
 /// `AsNumber` as a double, for the places that only want the magnitude.
 double AsDouble(const Value& value);
@@ -291,6 +337,17 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments);
 
 // --- Evaluation --------------------------------------------------------------
 
+/// What coercion needs besides the value and the type.
+///
+/// Two things, and they are different in kind: `bridge` is the *host* -- which
+/// types have been registered where the flow runs -- and `shapes` is the
+/// *program* -- which `struct`s this text declared. A shape wins over a registry tag
+/// of the same name, which is why both are here and consulted in that order.
+struct CoerceContext {
+  HostBridge* absl_nullable bridge = nullptr;
+  const Program* absl_nullable shapes = nullptr;
+};
+
 /// What an expression is evaluated against.
 ///
 /// `bound` is the first value of each stream the expression mentions, keyed by
@@ -305,6 +362,10 @@ struct EvalContext {
   Value it;
   bool has_it = false;
   HostBridge* absl_nullable bridge = nullptr;
+  /// The shapes the program declared, for a cast written inside an expression.
+  const Program* absl_nullable shapes = nullptr;
+
+  CoerceContext Coercion() const { return {bridge, shapes}; }
 };
 
 /// Evaluate one expression.
@@ -319,12 +380,29 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
 
 /// Make `value` a value of the type `type` names.
 ///
-/// A built-in name coerces the way the matching builtin does; a tag or a
-/// mimetype goes to the host, which is the only place that knows what has been
-/// registered.
+/// A built-in name coerces the way the matching builtin does; a shape the program
+/// declared is **validated** against, field by field; a tag or a mimetype goes to
+/// the host, which is the only place that knows what has been registered.
 absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
-                             HostBridge* absl_nullable bridge);
+                             const CoerceContext& context);
+
+/// Make `value` a value of `shape`: fill its defaults, check its bounds, and
+/// coerce every field to the type the shape gives it.
+///
+/// **The one implementation of what a shape means.** The resolver checks what it
+/// can before anything runs -- a key the shape does not have, a constant of the
+/// wrong kind -- and this checks the rest, when a value actually arrives. A
+/// failure names the field it was about, by path (`parent.tags[2]`), because a
+/// flow's data comes from somewhere else and "invalid" without a path is a
+/// message nobody can act on.
+///
+/// A key the shape does not have is **dropped**, not refused: extra data is how
+/// `{…it, ..}` is useful, and a producer that sends more than a reader declared
+/// has done nothing wrong. Writing such a key out by hand is a different thing
+/// and the resolver says so.
+absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
+                                  const CoerceContext& context);
 
 /// Call one of the language's fixed functions.
 ///

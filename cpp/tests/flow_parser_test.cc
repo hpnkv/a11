@@ -127,7 +127,7 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
 
   const auto* loop = As<syntax::ForEach>(flow.body[2].get());
   ASSERT_NE(loop, nullptr);
-  EXPECT_EQ(loop->variable.text, "hit");
+  EXPECT_EQ(loop->variable().text, "hit");
   EXPECT_EQ(loop->parallel, 2);
   ASSERT_EQ(loop->body.size(), 2u);
   const auto* inner = As<syntax::Bind>(loop->body[0].get());
@@ -343,7 +343,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
       {"flow f { header \"x-a\" default a }", "flow.syntax.constant-required",
        "Expected a constant value."},
       {"# nothing here\n", "flow.syntax.unexpected",
-       "A flow file must declare at least one flow."},
+       "A flow file must declare at least one flow or struct."},
   };
   for (const Case& one : cases) {
     const ParseResult result = Parse(one.source);
@@ -541,6 +541,171 @@ TEST(FlowParser, ConstantFoldingIsWhatTheGrammarsConstantPositionsUse) {
             syntax::Constant::Kind::kObject);
   EXPECT_EQ(header.default_value.items[2].kind,
             syntax::Constant::Kind::kDouble);
+}
+
+/// The first node of a flow's body, for a test that only wants the expression.
+const syntax::Node* absl_nullable FirstStatement(const ParseResult& result) {
+  if (result.flows.empty() || result.flows[0]->body.empty()) return nullptr;
+  return result.flows[0]->body[0].get();
+}
+
+TEST(FlowParser, StringsWrittenNextToEachOtherAreOneString) {
+  // Prose that says anything outgrows the line it is written on, and `+` at run
+  // time is the wrong tool for something that is a constant.
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  describe \"one \" \"two \" \"three\"\n"
+      "  in  a: string required \"first \" \"second\"\n"
+      "  out b: string\n"
+      "  \"x \" \"y\" -> b\n"
+      "}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  EXPECT_EQ(result.flows[0]->description, "one two three");
+  EXPECT_EQ(result.flows[0]->ports[0]->description, "first second");
+
+  const auto* pipe = As<syntax::Pipe>(FirstStatement(result));
+  ASSERT_NE(pipe, nullptr);
+  const auto* literal = As<syntax::Literal>(pipe->pipeline->source.get());
+  ASSERT_NE(literal, nullptr);
+  EXPECT_EQ(literal->value.text, "x y");
+}
+
+TEST(FlowParser, ADescriptionOnItsOwnLineMayBeARunToo) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in a: string required\n"
+      "    \"first \" \"second\"\n"
+      "  out b: string\n"
+      "  a -> b\n"
+      "}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  EXPECT_EQ(result.flows[0]->ports[0]->description, "first second");
+}
+
+TEST(FlowParser, ALiteralMaySpreadAnotherIntoItself) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in a: json stream required\n"
+      "  out b: json stream\n"
+      "  a | map {...it, \"tag\": 1} -> b\n"
+      "  a | map [...it, 2] -> b\n"
+      "}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+
+  const auto* pipe = As<syntax::Pipe>(FirstStatement(result));
+  ASSERT_NE(pipe, nullptr);
+  const auto* object =
+      As<syntax::ObjectLiteral>(pipe->pipeline->stages[0]->argument.get());
+  ASSERT_NE(object, nullptr);
+  ASSERT_EQ(object->pairs.size(), 2u);
+  // A spread has no key: what it brings in keeps its own.
+  EXPECT_TRUE(object->pairs[0].first.empty());
+  const auto* spread = As<syntax::Spread>(object->pairs[0].second.get());
+  ASSERT_NE(spread, nullptr);
+  EXPECT_EQ(spread->value->kind, NodeKind::kIt);
+  EXPECT_EQ(object->pairs[1].first, "tag");
+
+  // `...` is the same thing as `...`, in a list as in an object.
+  const auto* second = As<syntax::Pipe>(result.flows[0]->body[1].get());
+  ASSERT_NE(second, nullptr);
+  const auto* list =
+      As<syntax::ListLiteral>(second->pipeline->stages[0]->argument.get());
+  ASSERT_NE(list, nullptr);
+  ASSERT_EQ(list->items.size(), 2u);
+  EXPECT_EQ(list->items[0]->kind, NodeKind::kSpread);
+}
+
+TEST(FlowParser, ASpreadOfConstantsIsStillAConstant) {
+  // A header's default has to be a constant, and splicing values that are all
+  // known here is folding rather than running anything. A later key wins, so
+  // the result is a mapping and not a list of pairs with a duplicate in it.
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  header \"x-a\" as a default {...{\"p\": 1, \"q\": 2}, \"q\": 3}\n"
+      "  header \"x-b\" as b default [...[1, 2], 3]\n"
+      "  in x: string required\n  out y: string\n  x -> y\n}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  const syntax::Constant& object = result.flows[0]->headers[0]->default_value;
+  ASSERT_EQ(object.pairs.size(), 2u);
+  EXPECT_EQ(object.pairs[0].first, "p");
+  EXPECT_EQ(object.pairs[1].first, "q");
+  EXPECT_EQ(object.pairs[1].second.integer, 3);
+  EXPECT_EQ(result.flows[0]->headers[1]->default_value.items.size(), 3u);
+}
+
+TEST(FlowParser, ATypeMayBeWrittenWithTrailingBrackets) {
+  const ParseResult result = Parse(
+      "flow f {\n  in a: string[] required\n  in b: list[string] required\n"
+      "  in c: a11.Chunk[][] required\n  out d: string\n  \"\" -> d\n}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  const syntax::TypeExpression& sugared = result.flows[0]->ports[0]->type;
+  const syntax::TypeExpression& spelled = result.flows[0]->ports[1]->type;
+  EXPECT_EQ(sugared.name, "list");
+  EXPECT_EQ(sugared.parameters[0].name, "string");
+  EXPECT_EQ(spelled.name, "list");
+  // The same type; only how it reads back differs, so a file formatted twice
+  // says what its author wrote.
+  EXPECT_TRUE(sugared.sugared);
+  EXPECT_FALSE(spelled.sugared);
+  EXPECT_EQ(sugared.ToString(), "string[]");
+  EXPECT_EQ(spelled.ToString(), "list[string]");
+  // Each `[]` wraps what was read so far, so a list of lists is two of them.
+  EXPECT_EQ(result.flows[0]->ports[2]->type.ToString(), "a11.Chunk[][]");
+}
+
+TEST(FlowParser, ReadsADtoBesideAFlow) {
+  const ParseResult result = Parse(
+      "struct S {\n  describe \"a shape\"\n"
+      "  a: string required matching \"^x\" \"why\"\n"
+      "  b: number 0..1 default 0.5\n"
+      "  c: string one of [\"p\", \"q\"]\n}\n"
+      "flow f {\n  in x: S required\n  out y: string\n  x.a -> y\n}\n");
+  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_EQ(result.dtos.size(), 1u);
+  ASSERT_EQ(result.flows.size(), 1u);
+
+  const syntax::DtoDeclaration& shape = *result.dtos[0];
+  EXPECT_EQ(shape.name.text, "S");
+  EXPECT_EQ(shape.description, "a shape");
+  ASSERT_EQ(shape.fields.size(), 3u);
+  // A keyword's quoted argument is one literal, so the description after it is
+  // still a description rather than more of the pattern.
+  EXPECT_EQ(shape.fields[0]->pattern, "^x");
+  EXPECT_EQ(shape.fields[0]->description, "why");
+  EXPECT_TRUE(shape.fields[1]->has_default);
+  EXPECT_EQ(shape.fields[2]->enumeration.size(), 2u);
+}
+
+TEST(FlowParser, AFileMayDeclareOnlyShapes) {
+  const ParseResult result = Parse("struct S {\n  a: string required\n}\n");
+  EXPECT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  EXPECT_EQ(result.dtos.size(), 1u);
+  // And a file that declares nothing at all still says so.
+  EXPECT_FALSE(Messages(Parse("x -> y\n")).empty());
+}
+
+TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
+  // Both are statements and both begin with `{`. A record's keys are strings
+  // followed by `:`, and a spread is only ever a record's; anything else opens
+  // statements. Getting this wrong turns `{"a": 1} -> out` into a block, which is
+  // how the values tests found it.
+  const auto kind = [](std::string_view source) {
+    const ParseResult result = Parse(source);
+    if (result.flows.empty() || result.flows.front()->body.empty()) return "none";
+    return syntax::NodeKindName(result.flows.front()->body.front()->kind).data();
+  };
+  EXPECT_STREQ(kind("flow f {\n  out o: json\n  {\"a\": 1} -> o\n}\n"), "pipe");
+  EXPECT_STREQ(kind("flow f {\n  out o: json\n  {} -> o\n}\n"), "pipe");
+  EXPECT_STREQ(kind("flow f {\n  in i: json\n  out o: json\n"
+                    "  {…i, \"a\": 1} -> o\n}\n"),
+               "pipe");
+  // A block whose first statement writes a string starts the same way and is not
+  // a record, because no `:` follows.
+  EXPECT_STREQ(kind("flow f {\n  out o: string\n  { \"one\" -> o }\n}\n"),
+               "block");
+  EXPECT_STREQ(kind("flow f {\n  out o: string\n  { skip o }\n}\n"), "block");
+  EXPECT_STREQ(kind("flow f {\n  out o: string\n  try { skip o }\n}\n"),
+               "block");
 }
 
 }  // namespace

@@ -18,6 +18,7 @@
 #include <absl/types/span.h>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
@@ -34,6 +35,393 @@ constexpr size_t kNoSymbol = static_cast<size_t>(-1);
 std::string Quoted(std::string_view text) {
   return absl::StrCat("'", text, "'");
 }
+
+/// The shapes a file declares, by name.
+using DtoNames = absl::flat_hash_set<std::string>;
+
+/// What a written type means, in the one place that decides it.
+///
+/// A port and a `struct` field both name a type, and they have to agree about what
+/// a name means or a field could hold something its port could not carry. The
+/// order is the whole of the rule: a **built-in** name first, so no declaration
+/// can redefine `string`; then a **shape this file declares**, which is what
+/// makes a `struct` outrank the registry; then a dotted **registry tag** or a
+/// mimetype, which only the host can check.
+class TypeReader {
+ public:
+  /// Where a diagnostic goes. A `std::function` rather than a template because
+  /// the two callers report through different objects and this is called once
+  /// per declaration, not once per value.
+  using Reporter = std::function<void(std::string_view code, std::string message,
+                                      const Location& location)>;
+
+  TypeReader(const DtoNames& dtos, Reporter report)
+      : dtos_(dtos), report_(std::move(report)) {}
+
+  /// What the type *is*, as a plan records it.
+  std::string Read(const syntax::TypeExpression& type) {
+    if (type.quoted) {
+      CheckParameters(type, {0});
+      return type.name;
+    }
+    const std::string declared = vocabulary::Canonical(type.name);
+    if (vocabulary::TypeNames().contains(declared)) {
+      const absl::Span<const int> allowed = vocabulary::TypeParameters(declared);
+      CheckParameters(type, std::vector<int>(allowed.begin(), allowed.end()));
+      return declared;
+    }
+    // A shape is written as it was declared, case and all: `struct` names are not
+    // keywords and `Canonical` would fold a shouted one into something else.
+    if (dtos_.contains(type.name)) {
+      CheckParameters(type, {0});
+      return type.name;
+    }
+    if (type.name.find('/') != std::string::npos) {
+      CheckParameters(type, {0});
+      return type.name;
+    }
+    // A dotted name is the tag a serialisation registry knows a type by. An
+    // undotted one is nothing the language knows, and is far more often a
+    // misspelt built-in than a tag somebody meant.
+    if (type.name.find('.') != std::string::npos) {
+      CheckParameters(type, {0});
+      return type.name;
+    }
+    report_("flow.form.unknown-type",
+            absl::StrCat("Unknown type ", Quoted(type.name), " (known: ",
+                         absl::StrJoin(Known(), ", "),
+                         ", a shape this file declares, a serialisation tag "
+                         "like 'a11.sdk.AudioBuffer', or a quoted mimetype)."),
+            type.location);
+    return type.name;
+  }
+
+  /// The shape `type` names, or empty where it names something else.
+  std::string DtoOf(const syntax::TypeExpression& type) const {
+    if (type.quoted) return "";
+    if (vocabulary::TypeNames().contains(vocabulary::Canonical(type.name))) {
+      return "";
+    }
+    return dtos_.contains(type.name) ? type.name : "";
+  }
+
+ private:
+  std::vector<std::string> Known() const {
+    std::vector<std::string> known;
+    for (const std::string_view name : vocabulary::TypeNames()) {
+      known.emplace_back(name);
+    }
+    std::sort(known.begin(), known.end());
+    return known;
+  }
+
+  void CheckParameters(const syntax::TypeExpression& type,
+                       const std::vector<int>& allowed) {
+    for (const syntax::TypeExpression& parameter : type.parameters) {
+      Read(parameter);
+    }
+    const int given = static_cast<int>(type.parameters.size());
+    if (std::find(allowed.begin(), allowed.end(), given) != allowed.end()) {
+      return;
+    }
+    std::vector<std::string> counts;
+    for (const int count : allowed) counts.push_back(absl::StrCat(count));
+    report_("flow.form.unknown-type",
+            absl::StrCat(Quoted(type.name), " takes ",
+                         absl::StrJoin(counts, " or "),
+                         " type parameter(s), but ", type.ToString(), " gives ",
+                         given, "."),
+            type.location);
+  }
+
+  const DtoNames& dtos_;
+  Reporter report_;
+};
+
+/// Whether a value of this type can hold text: what `matching` needs.
+bool IsTextType(std::string_view type) {
+  return type == "string" || type == "text";
+}
+
+/// Whether a value of this type is counted rather than measured: what a length
+/// range applies to, as against a value range.
+bool IsSizedType(std::string_view type) {
+  return IsTextType(type) || type == "bytes" || type == "list" ||
+         type == "array" || type == "object" || type == "json";
+}
+
+/// Whether a value of this type is a magnitude a range may bound directly.
+bool IsScalarType(std::string_view type) {
+  return type == "number" || type == "integer" || type == "int" ||
+         type == "duration" || type == "time";
+}
+
+/// Whether a constant could be a value of the named type.
+///
+/// Deliberately generous: this catches a `default "yes"` on a `bool`, not every
+/// way a value could later fail to fit. A field's real validation happens where
+/// a value arrives, and a resolver that tried to do it here would be a second,
+/// weaker copy of it.
+bool ConstantFits(const syntax::Constant& value, std::string_view type) {
+  using Kind = syntax::Constant::Kind;
+  if (type == "any" || type == "json" || value.kind == Kind::kNull) return true;
+  switch (value.kind) {
+    case Kind::kBool:
+      return type == "bool" || type == "boolean";
+    case Kind::kInteger:
+      return type == "number" || type == "integer" || type == "int" ||
+             type == "duration" || type == "time";
+    case Kind::kDouble:
+      return type == "number" || type == "duration" || type == "time";
+    case Kind::kString:
+      // A byte string is written as text and a time is written as text, so a
+      // string constant is a plausible default for either.
+      return IsTextType(type) || type == "bytes" || type == "time" ||
+             type == "duration";
+    case Kind::kDuration:
+      return type == "duration";
+    case Kind::kList:
+      return type == "list" || type == "array";
+    case Kind::kObject:
+      return type == "object";
+    case Kind::kNull:
+      return true;
+  }
+  return true;
+}
+
+/// The shapes a file declares, resolved: their fields, their types, and
+/// everything wrong with them.
+///
+/// A pass of its own and ahead of the flows, because a port may name a shape and
+/// a shape may name another one, in either order. Nothing here reads a flow, so
+/// it does not need one.
+class DtoResolver {
+ public:
+  DtoResolver(const LineIndex& lines,
+              absl::Span<const syntax::DtoDeclarationPtr> declared,
+              std::vector<Diagnostic>& diagnostics)
+      : lines_(lines), declared_(declared), diagnostics_(diagnostics) {}
+
+  std::vector<DtoPlan> Run() {
+    Collect();
+    std::vector<DtoPlan> plans;
+    plans.reserve(kept_.size());
+    for (const syntax::DtoDeclaration* declaration : kept_) {
+      plans.push_back(Resolve(*declaration));
+    }
+    MarkBinary(plans);
+    return plans;
+  }
+
+ private:
+  /// The declarations worth resolving, and the names they bind.
+  ///
+  /// A duplicate and a shape named after a built-in are both reported here and
+  /// dropped, so nothing downstream has to wonder which `string` was meant.
+  void Collect() {
+    absl::flat_hash_set<std::string> seen;
+    for (const syntax::DtoDeclarationPtr& declaration : declared_) {
+      const std::string& name = declaration->name.text;
+      if (name.empty()) continue;
+      if (vocabulary::TypeNames().contains(vocabulary::Canonical(name))) {
+        Report("flow.form.struct-shadows-builtin",
+               absl::StrCat("Shape ", Quoted(name),
+                            " is named after a built-in type, which nothing "
+                            "could then write."),
+               declaration->name.location, name);
+        continue;
+      }
+      if (!seen.insert(name).second) {
+        Report("flow.form.duplicate-struct",
+               absl::StrCat("Shape ", Quoted(name), " is declared twice."),
+               declaration->name.location, name);
+        continue;
+      }
+      names_.insert(name);
+      kept_.push_back(declaration.get());
+    }
+  }
+
+  DtoPlan Resolve(const syntax::DtoDeclaration& declaration) {
+    DtoPlan plan;
+    plan.name = declaration.name.text;
+    plan.description = declaration.description;
+    plan.location = declaration.location;
+
+    TypeReader reader(names_, [&](std::string_view code, std::string message,
+                                  const Location& location) {
+      Report(code, std::move(message), location, plan.name);
+    });
+
+    absl::flat_hash_set<std::string> seen;
+    for (const syntax::FieldDeclarationPtr& field : declaration.fields) {
+      if (field->name.text.empty()) continue;
+      if (!seen.insert(field->name.text).second) {
+        Report("flow.form.duplicate-field",
+               absl::StrCat("Field ", Quoted(field->name.text), " of ",
+                            Quoted(plan.name), " is declared twice."),
+               field->name.location, plan.name);
+        continue;
+      }
+      plan.fields.push_back(ResolveField(*field, plan.name, reader));
+    }
+    return plan;
+  }
+
+  FieldPlan ResolveField(const syntax::FieldDeclaration& field,
+                         std::string_view owner, TypeReader& reader) {
+    FieldPlan entry;
+    entry.name = field.name.text;
+    entry.declared = field.type.ToString();
+    entry.type = reader.Read(field.type);
+    entry.dto_name = reader.DtoOf(field.type);
+    if ((entry.type == "list" || entry.type == "array") &&
+        field.type.parameters.size() == 1) {
+      entry.element = reader.Read(field.type.parameters.front());
+      entry.element_dto_name = reader.DtoOf(field.type.parameters.front());
+    }
+    entry.required = field.required;
+    entry.unique = field.unique;
+    entry.range = field.range;
+    entry.pattern = field.pattern;
+    entry.has_pattern = field.has_pattern;
+    entry.enumeration = field.enumeration;
+    entry.has_enumeration = field.has_enumeration;
+    entry.default_value = field.default_value;
+    entry.has_default = field.has_default;
+    entry.description = field.description;
+    entry.location = field.location;
+    CheckField(entry, field, owner);
+    return entry;
+  }
+
+  /// The constraints, against the type they were written on.
+  ///
+  /// Every one of these is a mistake that would otherwise be found only when a
+  /// value arrived and failed to validate for a reason the author could not act
+  /// on -- `unique` on a string, a pattern on a number, a range on a bool.
+  void CheckField(const FieldPlan& entry,
+                  const syntax::FieldDeclaration& field,
+                  std::string_view owner) {
+    const std::string_view type = entry.type;
+    const bool shape = !entry.dto_name.empty();
+    if (entry.unique && type != "list" && type != "array") {
+      Report("flow.form.field-constraint",
+             absl::StrCat("'unique' says no two items are equal, and ",
+                          Quoted(entry.name), " holds one ", entry.declared,
+                          " rather than a list."),
+             field.location, owner);
+    }
+    if (entry.has_pattern && !IsTextType(type)) {
+      Report("flow.form.field-constraint",
+             absl::StrCat("'matching' compares text, and ", Quoted(entry.name),
+                          " holds ", entry.declared, "."),
+             field.location, owner);
+    }
+    if (!entry.range.Empty() && !IsSizedType(type) && !IsScalarType(type)) {
+      Report("flow.form.field-constraint",
+             absl::StrCat("A range bounds a number or a length, and ",
+                          Quoted(entry.name), " holds ", entry.declared, "."),
+             field.location, owner);
+    }
+    if (!entry.range.Empty() && entry.range.has_minimum &&
+        entry.range.has_maximum &&
+        entry.range.minimum.AsDouble() > entry.range.maximum.AsDouble()) {
+      Report("flow.form.empty-range",
+             absl::StrCat("The range on ", Quoted(entry.name),
+                          " has its bounds the wrong way round, so nothing "
+                          "would validate."),
+             field.location, owner);
+    }
+    if (IsSizedType(type) && !IsScalarType(type) && entry.range.has_minimum &&
+        entry.range.minimum.AsDouble() < 0) {
+      Report("flow.form.field-constraint",
+             absl::StrCat("A length is never negative, so the range on ",
+                          Quoted(entry.name), " bounds nothing."),
+             field.location, owner);
+    }
+    if (entry.has_default && !shape &&
+        !ConstantFits(entry.default_value, type)) {
+      Report("flow.form.field-type-mismatch",
+             absl::StrCat("The default for ", Quoted(entry.name), " is a ",
+                          syntax::ConstantKindName(entry.default_value.kind),
+                          " and the field holds ", entry.declared, "."),
+             field.location, owner);
+    }
+    if (entry.has_default && entry.required) {
+      Report("flow.form.default-on-required",
+             absl::StrCat(Quoted(entry.name),
+                          " is required, so its default could never be used."),
+             field.location, owner, Severity::kWarning);
+    }
+    if (entry.has_enumeration && !shape) {
+      for (const syntax::Constant& allowed : entry.enumeration) {
+        if (ConstantFits(allowed, type)) continue;
+        Report("flow.form.field-type-mismatch",
+               absl::StrCat("'one of' on ", Quoted(entry.name), " allows a ",
+                            syntax::ConstantKindName(allowed.kind),
+                            ", and the field holds ", entry.declared, "."),
+               field.location, owner);
+        break;
+      }
+    }
+  }
+
+  /// Which shapes hold bytes, following the shapes they name.
+  ///
+  /// A fixed point rather than a recursive walk, because shapes may name each
+  /// other in a cycle and a walk would not come back. Each round marks a shape
+  /// that names a marked one; when a round marks nothing, it is done.
+  static void MarkBinary(std::vector<DtoPlan>& plans) {
+    const auto holds_bytes = [](const FieldPlan& field) {
+      return field.type == "bytes" || field.element == "bytes";
+    };
+    for (DtoPlan& plan : plans) {
+      for (const FieldPlan& field : plan.fields) {
+        if (holds_bytes(field)) plan.binary = true;
+      }
+    }
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (DtoPlan& plan : plans) {
+        if (plan.binary) continue;
+        for (const FieldPlan& field : plan.fields) {
+          for (const std::string& named :
+               {field.dto_name, field.element_dto_name}) {
+            if (named.empty()) continue;
+            for (const DtoPlan& other : plans) {
+              if (other.name == named && other.binary) {
+                plan.binary = true;
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  void Report(std::string_view code, std::string message,
+              const Location& location, std::string_view owner,
+              Severity severity = Severity::kError) {
+    Diagnostic diagnostic;
+    diagnostic.code = std::string(code);
+    diagnostic.severity = severity;
+    diagnostic.family = Family::kForm;
+    diagnostic.message = std::move(message);
+    diagnostic.range = lines_.Between(location.start, location.end);
+    diagnostic.flow = std::string(owner);
+    diagnostics_.push_back(std::move(diagnostic));
+  }
+
+  const LineIndex& lines_;
+  absl::Span<const syntax::DtoDeclarationPtr> declared_;
+  std::vector<Diagnostic>& diagnostics_;
+  DtoNames names_;
+  std::vector<const syntax::DtoDeclaration*> kept_;
+};
 
 /// One stage as it was written: `truncate 200`, `where it.ok`.
 std::string StageLabel(const syntax::Stage& stage);
@@ -186,6 +574,14 @@ struct Ref {
   /// For an outcome: whether a bad one is the flow's business or the subject's.
   /// True where the subject is a `try` call, or a barrier on one.
   bool tolerant = false;
+  /// The shape this stream's values are, where the flow said so: a port typed
+  /// with a `struct`, or what a `map Shape{..}` or an `as Shape` just made.
+  ///
+  /// Not a type system -- the language does not have one and is not getting one
+  /// here. It is one fact carried along a pipeline, and it is carried because it
+  /// answers a question that is otherwise unanswerable until a value arrives:
+  /// whether `| json` has anything to render.
+  std::string shape;
 };
 
 /// A subject's own label, out of the outcome that names it: `status x` -> `x`.
@@ -211,7 +607,11 @@ class FlowResolver {
                std::vector<Diagnostic>& diagnostics,
                graph::GraphBuilder* absl_nullable builder = nullptr)
       : lines_(lines), declaration_(declaration), known_(known),
-        resolved_(resolved), diagnostics_(diagnostics), builder_(builder) {}
+        resolved_(resolved), diagnostics_(diagnostics), builder_(builder) {
+    // The shapes are resolved before any flow is, so this is complete by the
+    // time a port names one.
+    for (const DtoPlan& dto : known.dtos) dtos_.insert(dto.name);
+  }
 
   /// The flow's ports and headers, without resolving its body.
   ///
@@ -287,6 +687,9 @@ class FlowResolver {
         ref.name = port.name;
         ref.direction = port.direction;
         ref.writable = !input;
+        // What the declaration said: a port carries one value unless it says
+        // `stream`, and that is the only place the language states it outright.
+        ref.unary = port.unary;
         symbol.ref = builder_->AddRef(std::move(ref));
       }
       Define(root, symbol);
@@ -494,76 +897,64 @@ class FlowResolver {
   // -- types -----------------------------------------------------------------
 
   /// What a declared type gives a port, and a diagnostic where it gives nothing.
+  ///
+  /// Delegated to [TypeReader] rather than decided here: a port and a `struct`
+  /// field have to agree about what a name means, and they do so by asking the
+  /// same object.
   std::string PortType(const syntax::TypeExpression& type) {
-    if (type.quoted) {
-      CheckParameters(type, {0});
-      return type.name;
-    }
-    const std::string declared = vocabulary::Canonical(type.name);
-    if (vocabulary::TypeNames().contains(declared)) {
-      const absl::Span<const int> allowed =
-          vocabulary::TypeParameters(declared);
-      CheckParameters(type, std::vector<int>(allowed.begin(), allowed.end()));
-      return declared;
-    }
-    if (type.name.find('/') != std::string::npos) {
-      CheckParameters(type, {0});
-      return type.name;
-    }
-    // A dotted name is the tag a serialisation registry knows a type by. An
-    // undotted one is nothing the language knows, and is far more often a
-    // misspelt built-in than a tag somebody meant.
-    if (type.name.find('.') != std::string::npos) {
-      CheckParameters(type, {0});
-      return type.name;
-    }
-    std::vector<std::string> known;
-    for (const std::string_view name : vocabulary::TypeNames()) {
-      known.emplace_back(name);
-    }
-    std::sort(known.begin(), known.end());
-    Report("flow.form.unknown-type",
-           absl::StrCat("Unknown port type ", Quoted(type.name), " (known: ",
-                        absl::StrJoin(known, ", "),
-                        ", a serialisation tag like 'a11.sdk.AudioBuffer', or "
-                        "a quoted mimetype)."),
-           type.location, Severity::kError, Family::kForm);
-    return type.name;
-  }
-
-  void CheckParameters(const syntax::TypeExpression& type,
-                       const std::vector<int>& allowed) {
-    for (const syntax::TypeExpression& parameter : type.parameters) {
-      PortType(parameter);
-    }
-    const int given = static_cast<int>(type.parameters.size());
-    if (std::find(allowed.begin(), allowed.end(), given) != allowed.end()) {
-      return;
-    }
-    std::vector<std::string> counts;
-    for (const int count : allowed) counts.push_back(absl::StrCat(count));
-    Report("flow.form.unknown-type",
-           absl::StrCat(Quoted(type.name), " takes ",
-                        absl::StrJoin(counts, " or "),
-                        " type parameter(s), but ", type.ToString(), " gives ",
-                        given, "."),
-           type.location, Severity::kError, Family::kForm);
+    return TypeReader(dtos_, [this](std::string_view code, std::string message,
+                                    const Location& location) {
+             Report(code, std::move(message), location, Severity::kError,
+                    Family::kForm);
+           })
+        .Read(type);
   }
 
   // -- statements ------------------------------------------------------------
 
   /// Read a block of statements, into `body` when a graph is being built.
+  /// `guarded` says this body is an `if`, a `for` or a `repeat` body: a scope
+  /// that makes what is inside it conditional on something. Counted rather than
+  /// derived from `body`, because the editor path builds no graph and every
+  /// nested body is [graph::kNone] there, and a diagnostic that only fires when
+  /// a graph is being built is a diagnostic an editor never shows.
   std::vector<StepPlan> ResolveStatements(
       const std::vector<syntax::NodePtr>& statements, Scope& scope,
-      graph::BodyId body = graph::kNone) {
+      graph::BodyId body = graph::kNone, bool guarded = false) {
     const graph::BodyId outer = body_;
     if (body != graph::kNone) body_ = body;
+    if (guarded) ++guarded_;
     std::vector<StepPlan> steps;
     for (const syntax::NodePtr& statement : statements) {
       ResolveStatement(statement.get(), scope, steps);
     }
+    if (guarded) --guarded_;
     body_ = outer;
     return steps;
+  }
+
+  /// Whether a statement that ends the flow may stand where this one does.
+  ///
+  /// `fail` and `cancel` take no input and wait for nothing, so at the top of a
+  /// flow's body they run *at once*, racing every other statement: the flow is
+  /// over before the call three lines up has been dispatched. Read top to bottom
+  /// they look like a last resort; they are the first thing that happens.
+  ///
+  /// Inside an `if`, a `for` or a `repeat` they are conditional on something, and
+  /// an `after` is the author saying in the source what they are waiting for.
+  /// Either is enough. A `nodes` block is not, because it joins the body around
+  /// it and changes nothing about when its statements run; nor is a `{ ... }`
+  /// block, whose statements race each other exactly as a flow's own do.
+  void CheckReachedByChoice(std::string_view code, std::string_view what,
+                            const std::vector<syntax::Word>& after,
+                            const Location& location) {
+    if (guarded_ > 0 || !after.empty()) return;
+    Report(code,
+           absl::StrCat("This '", what,
+                        "' is at the top of a body with no 'after', so it runs "
+                        "at once and races every other statement in it. Put it "
+                        "in an 'if', or give it an 'after'."),
+           location, Severity::kError, Family::kForm);
   }
 
   /// A stream the runtime binds per pass: a loop's value, its index, a carry.
@@ -584,6 +975,13 @@ class FlowResolver {
     switch (statement->kind) {
       case NodeKind::kBind:
         return ResolveBind(syntax::As<syntax::Bind>(statement), scope, steps);
+      case NodeKind::kLet:
+        return ResolveLet(syntax::As<syntax::Let>(statement), scope, steps);
+      case NodeKind::kAdvance:
+        return ResolveAdvance(syntax::As<syntax::Advance>(statement), scope,
+                              steps);
+      case NodeKind::kBlock:
+        return ResolveBlock(syntax::As<syntax::Block>(statement), scope, steps);
       case NodeKind::kCallStatement: {
         const auto* held = syntax::As<syntax::CallStatement>(statement);
         ResolveCall(*held->call, scope, Label(held->call->action), steps);
@@ -713,6 +1111,8 @@ class FlowResolver {
                                   : resolved_.symbols[called].step;
         }
         step.after = ResolveAfter(cancel->after, scope, made);
+        CheckReachedByChoice("flow.form.unconditional-cancel", "cancel",
+                             cancel->after, cancel->location);
         steps.push_back(std::move(step));
         return;
       }
@@ -737,6 +1137,8 @@ class FlowResolver {
           builder_->step(made).message = message;
         }
         step.after = ResolveAfter(fail->after, scope, made);
+        CheckReachedByChoice("flow.form.unconditional-fail", "fail",
+                             fail->after, fail->location);
         steps.push_back(std::move(step));
         return;
       }
@@ -770,15 +1172,31 @@ class FlowResolver {
         }
         Scope inner;
         inner.parent = &scope;
-        Symbol variable;
-        variable.kind = SymbolKind::kLoopVariable;
-        variable.name = loop->variable.text;
-        variable.location = loop->variable.location;
-        variable.ref = item;
-        Define(inner, variable);
+        // One name is the value; several take it apart by position, each a
+        // derived stream over the one the loop binds -- so `for a, b in
+        // zip(x, y)` costs the same as reading `it[0]` and `it[1]` would, and
+        // the refs are the ones every other part of the runtime already knows
+        // how to materialise and replay.
+        const graph::BodyId outer_body = body_;
+        body_ = inner_body;
+        for (size_t at = 0; at < loop->variables.size(); ++at) {
+          Symbol variable;
+          variable.kind = SymbolKind::kLoopVariable;
+          variable.name = loop->variables[at].text;
+          variable.location = loop->variables[at].location;
+          variable.ref =
+              loop->variables.size() == 1
+                  ? item
+                  : Derive(item,
+                           AtStage(syntax::Constant::Integer(
+                               static_cast<long long>(at))),
+                           absl::StrCat(loop->variables[at].text));
+          Define(inner, variable);
+        }
+        body_ = outer_body;
         DefineIndex(inner, loop->location, index);
         step.bodies.push_back(
-            ResolveStatements(loop->body, inner, inner_body));
+            ResolveStatements(loop->body, inner, inner_body, true));
         steps.push_back(std::move(step));
         return;
       }
@@ -833,8 +1251,23 @@ class FlowResolver {
         DefineIndex(inner, repeat->location, index);
         repeats_.push_back(state);
         step.bodies.push_back(
-            ResolveStatements(repeat->body, inner, inner_body));
+            ResolveStatements(repeat->body, inner, inner_body, true));
+        // Read before the pop: `until` sets the flag on the entry the body was
+        // resolved against, not on the copy pushed in.
+        const bool stopped = repeats_.back().stopped;
         repeats_.pop_back();
+        // Nothing ends it. With the old default of `max 16` this was a loop that
+        // quietly did sixteen passes and reported success; now that a bound is
+        // only ever the author's, a loop with neither is one that runs until
+        // something cancels the flow, which nobody writes on purpose.
+        if (!stopped && !repeat->max_iterations.has_value()) {
+          Report("flow.form.unbounded-repeat",
+                 absl::StrCat(
+                     "Nothing ends this 'repeat': it has no 'until', no "
+                     "'while' and no 'max'. Say when it stops, or bound it "
+                     "with 'max n'."),
+                 repeat->location, Severity::kError, Family::kForm);
+        }
         steps.push_back(std::move(step));
         return;
       }
@@ -944,11 +1377,11 @@ class FlowResolver {
         Scope then_scope;
         then_scope.parent = &scope;
         step.bodies.push_back(
-            ResolveStatements(branch->then_body, then_scope, then_body));
+            ResolveStatements(branch->then_body, then_scope, then_body, true));
         Scope else_scope;
         else_scope.parent = &scope;
         step.bodies.push_back(
-            ResolveStatements(branch->else_body, else_scope, else_body));
+            ResolveStatements(branch->else_body, else_scope, else_body, true));
         steps.push_back(std::move(step));
         return;
       }
@@ -974,6 +1407,204 @@ class FlowResolver {
     index.implicit = true;
     index.ref = ref;
     Define(scope, index);
+  }
+
+  /// `let name = pipeline`: one value of that stream, under a name.
+  ///
+  /// Compiled to the stream with a `first 1` on the end, and a symbol that says
+  /// the name is a *value*. Everything after that is machinery the language
+  /// already has: an expression mentioning a name reads its first value, a
+  /// pipeline whose source is a name reads its stream, and a stream read by two
+  /// things is materialised once and replayed. So `let` costs one derived ref
+  /// and buys a name that can be compared, branched on and piped.
+  ///
+  /// It is **lazy**, like every other stream here: nothing is read until
+  /// something reads the name. That is what makes `let` free to write next to
+  /// the thing it describes rather than where the value is first needed -- and a
+  /// `let` nothing reads is reported, because a value nobody looked at is a line
+  /// that does nothing.
+  /// The literal `match` pattern a pipeline's values came out of, if any.
+  ///
+  /// Either the pipeline *is* a `match(..)` call or its last stage was a `match`.
+  /// Anything after that reshapes the value into something the pattern no longer
+  /// describes, so only the last stage is looked at: `| match "p" | count` is a
+  /// number, not a record.
+  static std::string PatternOf(const syntax::Pipeline& pipeline) {
+    if (!pipeline.stages.empty()) {
+      const syntax::Stage& last = *pipeline.stages.back();
+      return vocabulary::Canonical(last.name) == "match" ? last.text : "";
+    }
+    const auto* call = syntax::As<syntax::Builtin>(pipeline.source.get());
+    if (call == nullptr || vocabulary::Canonical(call->name) != "match") {
+      return "";
+    }
+    if (call->args.empty()) return "";
+    const auto* literal = syntax::As<syntax::Literal>(call->args.front().get());
+    if (literal == nullptr ||
+        literal->value.kind != syntax::Constant::Kind::kString) {
+      return "";
+    }
+    return literal->value.text;
+  }
+
+  void ResolveLet(const syntax::Let* let, Scope& scope,
+                  std::vector<StepPlan>& steps) {
+    absl::flat_hash_set<std::string> taken;
+    for (const syntax::Word& name : let->names) {
+      // Its own names as well as the scope's: `let age, age = u` defines one and
+      // shadows it with the other, which nobody writes on purpose.
+      if (Lookup(scope, name.text) != kNoSymbol || !taken.insert(name.text).second) {
+        Report("flow.name.taken",
+               absl::StrCat(Quoted(name.text),
+                            " is already taken in this scope."),
+               let->location);
+      }
+    }
+    Ref source = ResolvePipeline(*let->pipeline, scope);
+    graph::Stage one;
+    one.name = "first";
+    one.takes = vocabulary::StageArgument::kNumber;
+    one.count = 1;
+
+    const std::string written = absl::StrJoin(
+        let->names, ", ",
+        [](std::string* out, const syntax::Word& name) {
+          absl::StrAppend(out, name.text);
+        });
+
+    StepPlan step;
+    step.kind = "let";
+    step.label = written;
+    step.source = source.label;
+    step.destination = written;
+    step.location = let->location;
+    steps.push_back(std::move(step));
+
+    const std::string pattern = PatternOf(*let->pipeline);
+
+    // The one value, whatever it is taken apart into.
+    const graph::RefId value_ref =
+        Derive(source.node, std::move(one),
+               absl::StrCat(source.label, " | first 1"));
+
+    for (size_t at = 0; at < let->names.size(); ++at) {
+      const syntax::Word& name = let->names[at];
+      Symbol value;
+      value.kind = SymbolKind::kValue;
+      value.name = name.text;
+      value.location = name.location;
+      value.readable = true;
+      value.writable = false;
+      if (let->names.size() == 1) {
+        value.ref = value_ref;
+        value.pattern = pattern;
+        // Where it came from, so `advance` can name the value after this one.
+        value.value_source = source.node;
+        value.value_offset = 0;
+      } else {
+        // A part of the value: its field where the value has one, and its
+        // position where the value is a list. Which of the two is settled by the
+        // value rather than by the text, because `let name, age = user` and
+        // `let first, second = pair` are the same statement written twice.
+        graph::Stage part;
+        part.name = "at";
+        part.takes = vocabulary::StageArgument::kString;
+        part.text = name.text;
+        part.index = static_cast<long long>(at);
+        part.named_or_indexed = true;
+        value.ref = Derive(value_ref, std::move(part),
+                           absl::StrCat(source.label, " | first 1 | ",
+                                        name.text));
+        // A part has no next one of its own: the stream's next value is another
+        // whole tuple, not another `age`.
+        value.value_part = true;
+      }
+      Define(scope, value);
+    }
+  }
+
+  /// `advance name` -- the same stream's next value, under the same name.
+  ///
+  /// **Why this is an offset and not a barrier.** Written out, the second binding
+  /// is `let x = src` again with an `after` on the first, and what the `after`
+  /// buys is that the earlier binding took the earlier value. An offset gives the
+  /// same guarantee without the ordering: the *k*th binding of a name reads the
+  /// *k*th value of its stream whenever it happens to run, so the guarantee holds
+  /// however the flow is scheduled rather than because of how it was scheduled.
+  /// That is a stronger promise than a sync point, and it needs nothing to
+  /// synchronise.
+  ///
+  /// The name is rebound rather than redefined: statements written before this
+  /// one already hold the ref they resolved against, and everything after it
+  /// reads the new one. Which is what shadowing is, and is why `advance` reads
+  /// as a statement rather than as a declaration.
+  void ResolveAdvance(const syntax::Advance* advance, Scope& scope,
+                      std::vector<StepPlan>& steps) {
+    Symbol* held = Find(scope, advance->name.text);
+    if (held == nullptr) {
+      Report("flow.name.unknown",
+             absl::StrCat("Unknown name ", Quoted(advance->name.text),
+                          " (known: ", Known(scope), ")."),
+             advance->location);
+      return;
+    }
+    if (held->kind != SymbolKind::kValue) {
+      Report("flow.name.not-advanceable",
+             absl::StrCat(Quoted(advance->name.text), " is a ",
+                          SymbolKindName(held->kind),
+                          ", and only a value a 'let' bound has a next one."),
+             advance->location);
+      return;
+    }
+    // Read before defining: the new symbol shadows this one, and `Define` may
+    // move the vector these point into.
+    if (held->value_part) {
+      Report("flow.name.not-advanceable",
+             absl::StrCat(Quoted(advance->name.text),
+                          " was taken apart from another value, so it has no "
+                          "next one of its own: advance what it came from."),
+             advance->location);
+      return;
+    }
+    const graph::RefId from = held->value_source;
+    const int offset = held->value_offset + 1;
+    const std::string label = held->name;
+
+    StepPlan step;
+    step.kind = "advance";
+    step.label = label;
+    step.location = advance->location;
+    steps.push_back(std::move(step));
+
+    Symbol value;
+    value.kind = SymbolKind::kValue;
+    value.name = label;
+    value.location = advance->name.location;
+    value.readable = true;
+    value.writable = false;
+    value.value_source = from;
+    value.value_offset = offset;
+    if (from != graph::kNone) {
+      // `| drop k | first 1` is the value after the last one this name had. An
+      // empty stream past that point binds nothing, exactly as a `let` on an
+      // empty stream does.
+      graph::Stage drop;
+      drop.name = "drop";
+      drop.takes = vocabulary::StageArgument::kNumber;
+      drop.count = offset;
+      const graph::RefId dropped =
+          Derive(from, std::move(drop),
+                 absl::StrCat(builder_->flow().refs[from].label, " | drop ",
+                              offset));
+      graph::Stage first;
+      first.name = "first";
+      first.takes = vocabulary::StageArgument::kNumber;
+      first.count = 1;
+      value.ref = Derive(dropped, std::move(first),
+                         absl::StrCat(builder_->flow().refs[dropped].label,
+                                      " | first 1"));
+    }
+    Define(scope, value);
   }
 
   void ResolveBind(const syntax::Bind* bind, Scope& scope,
@@ -1016,6 +1647,44 @@ class FlowResolver {
     }
     Define(scope, barrier);
     if (steps.size() > before) steps[before].label = bind->name.text;
+  }
+
+  /// `[try] { ... }` -- a body run as one step, with an outcome of its own.
+  ///
+  /// The step carries a status the way a call does, which is what lets the
+  /// ordinary bound-statement path hand it to a name: `s = try { .. }` needs
+  /// nothing here beyond the outcome existing. A block is *not* a guarding scope
+  /// for the `fail`/`cancel` rule: its statements run at once like any body's, so
+  /// a `fail` at the top of one races them exactly as it would in the flow.
+  void ResolveBlock(const syntax::Block* block, Scope& scope,
+                    std::vector<StepPlan>& steps) {
+    StepPlan step;
+    step.kind = "block";
+    step.label = Label("block");
+    step.location = block->location;
+    graph::StepId made = graph::kNone;
+    graph::BodyId inner_body = graph::kNone;
+    if (builder_ != nullptr) {
+      made = NewStep(graph::StepKind::kBlock, step.label, block->location);
+      inner_body =
+          builder_->AddBody(absl::StrCat(step.label, ".body"), body_, made);
+      graph::Step& one = builder_->step(made);
+      one.bodies.push_back(inner_body);
+      one.tolerant = block->tolerant;
+      // Its own outcome, so a name bound to it reads how the block went. Made
+      // here rather than on demand because the bound-statement path looks for it
+      // on the step it finds.
+      graph::Ref outcome;
+      outcome.kind = graph::RefKind::kStatus;
+      outcome.label = absl::StrCat("status ", step.label);
+      outcome.owner = body_;
+      outcome.subject_step = made;
+      one.outcome = builder_->AddRef(std::move(outcome));
+    }
+    Scope inner;
+    inner.parent = &scope;
+    step.bodies.push_back(ResolveStatements(block->body, inner, inner_body));
+    steps.push_back(std::move(step));
   }
 
   void ResolveNodes(const syntax::Nodes* nodes, Scope& scope,
@@ -1349,6 +2018,16 @@ class FlowResolver {
     port.direction = direction;
     port.call = step;
     port.writable = ref.writable;
+    // A sibling flow declared its ports here, so this one is knowable. An action
+    // from a registry did not: the resolver has its name and nothing else, and
+    // guessing would be claiming something it cannot see. The runtime has the
+    // real schema and refines it there.
+    if (symbol.target != nullptr) {
+      if (const PortPlan* declared = symbol.target->Port(name, direction);
+          declared != nullptr) {
+        port.unary = declared->unary;
+      }
+    }
     ref.node = builder_->AddRef(std::move(port));
     builder_->step(step).ports.emplace(key, ref.node);
     return ref;
@@ -1358,22 +2037,125 @@ class FlowResolver {
 
   Ref ResolvePipeline(const syntax::Pipeline& pipeline, Scope& scope) {
     Ref ref = ResolveSource(pipeline.source.get(), scope);
+    // The pattern the values carry as the pipeline is walked, so `it` in a stage
+    // knows what the stage before made of them.
+    std::string previous_pattern = PatternOf(pipeline);
+    if (!pipeline.stages.empty()) previous_pattern.clear();
     for (const syntax::StagePtr& stage : pipeline.stages) {
       graph::RefId stream = graph::kNone;
       graph::ExprId expr = graph::kNone;
       if (stage->takes == vocabulary::StageArgument::kStream) {
         stream = ResolveSource(stage->argument.get(), scope).node;
       } else if (stage->argument != nullptr) {
+        // `it` is the value this stage is looking at, which is whatever the stage
+        // before it made -- so a `map` after a `match` knows the pattern's fields.
+        const std::string outer = it_pattern_;
+        it_pattern_ = previous_pattern;
         expr = ResolveExpression(stage->argument.get(), scope, true);
+        it_pattern_ = outer;
       }
+      previous_pattern =
+          vocabulary::Canonical(stage->name) == "match" ? stage->text : "";
+      CheckShapeStage(*stage, ref);
+      CheckPatternStage(*stage);
       const graph::RefId source = ref.node;
       absl::StrAppend(&ref.label, " | ", StageLabel(*stage));
       ref.kind = Ref::Kind::kDerived;
       ref.has_front = false;
       ref.writable = false;
       ref.tolerant = false;
+      ref.shape = ShapeAfter(*stage, ref.shape);
       ref.node = Derive(source, GraphStage(*stage, stream, expr), ref.label);
     }
+    return ref;
+  }
+
+  /// What a stage does to the shape a stream was carrying.
+  ///
+  /// A stage that *chooses* values keeps it -- `first 3` of a stream of shapes
+  /// is still shapes. A stage that reshapes replaces it, with whatever the new
+  /// shape is where the flow said so and with nothing where it did not.
+  std::string ShapeAfter(const syntax::Stage& stage,
+                         const std::string& carried) {
+    const std::string name = vocabulary::Canonical(stage.name);
+    if (name == "map") {
+      // `map Shape{..}` and `map it as Shape` are the two ways a pipeline says
+      // what it is making. Anything else makes something the language cannot
+      // name, which is honestly reported as nothing.
+      const auto* typed = syntax::As<syntax::TypedValue>(stage.argument.get());
+      if (typed == nullptr) return "";
+      return known_.Dto(typed->type.name) != nullptr ? typed->type.name : "";
+    }
+    if (vocabulary::PositionalStages().contains(name) || name == "then" ||
+        name == "batch" || name == "group") {
+      // `batch` and `group` make lists *of* the values, so what each value is
+      // has not changed; the rest choose among them.
+      return name == "batch" || name == "group" ? "" : carried;
+    }
+    return "";
+  }
+
+  /// The pattern a `match` stage was written with, read now rather than at run
+  /// time.
+  ///
+  /// A pattern is a literal almost every time, so a typo in one is a fact about
+  /// the text and belongs in the editor with something to point at -- not in a
+  /// failure the first value triggers. The pattern language says what is wrong
+  /// with it; this only has to place it.
+  void CheckPatternStage(const syntax::Stage& stage) {
+    if (vocabulary::Canonical(stage.name) != "match") return;
+    const pattern::Compiled compiled = pattern::Compile(stage.text);
+    if (compiled.ok()) return;
+    Report("flow.form.bad-pattern", std::string(compiled.error),
+           stage.location, Severity::kError, Family::kForm);
+  }
+
+  /// `| json` on a stream of a shape that holds bytes.
+  ///
+  /// JSON has nothing to carry a byte string in, so this is not a value that
+  /// would render oddly -- it is one that cannot be rendered at all. `packb`
+  /// can, which is what the message says.
+  void CheckShapeStage(const syntax::Stage& stage, const Ref& ref) {
+    if (ref.shape.empty()) return;
+    if (vocabulary::Canonical(stage.name) != "json") return;
+    const DtoPlan* shape = known_.Dto(ref.shape);
+    if (shape == nullptr || !shape->binary) return;
+    Report("flow.form.not-json-representable",
+           absl::StrCat(Quoted(shape->name),
+                        " holds bytes, which JSON has nothing to carry; write "
+                        "'| packb' instead."),
+           stage.location, Severity::kError, Family::kForm);
+  }
+
+  /// `zip(a, b, c)`: several streams read in step, as one stream of tuples.
+  ///
+  /// Every argument has to be a stream, and each is resolved as one -- so each
+  /// counts as a reader of whatever produces it, and the existing analysis
+  /// materialises and replays them the way it would for any other reader. An
+  /// argument that is a plain value is a stream of one, which is the same rule a
+  /// pipeline's source follows.
+  Ref ResolveZip(const syntax::Zip& zip, Scope& scope) {
+    Ref ref;
+    ref.kind = Ref::Kind::kDerived;
+    // A zip has a front -- the tuples are produced here -- but a counted `skip`
+    // on it would have to take tuples off a stream nothing else holds, and there
+    // is nowhere upstream to apply the count. `| drop n` is the one that works.
+    ref.has_front = false;
+    std::vector<std::string> labels;
+    std::vector<graph::RefId> sources;
+    for (const syntax::NodePtr& source : zip.sources) {
+      const Ref one = ResolveSource(source.get(), scope);
+      labels.push_back(one.label);
+      sources.push_back(one.node);
+    }
+    ref.label = absl::StrCat("zip(", absl::StrJoin(labels, ", "), ")");
+    if (builder_ == nullptr) return ref;
+    graph::Ref made;
+    made.kind = graph::RefKind::kZip;
+    made.label = ref.label;
+    made.owner = body_;
+    made.sources = std::move(sources);
+    ref.node = builder_->AddRef(std::move(made));
     return ref;
   }
 
@@ -1403,6 +2185,8 @@ class FlowResolver {
       case NodeKind::kPipelineValue:
         return ResolvePipeline(
             *syntax::As<syntax::PipelineValue>(expression)->pipeline, scope);
+      case NodeKind::kZip:
+        return ResolveZip(*syntax::As<syntax::Zip>(expression), scope);
       case NodeKind::kOutcome:
         return ResolveOutcome(
             syntax::As<syntax::Outcome>(expression)->subject.get(), scope);
@@ -1446,15 +2230,30 @@ class FlowResolver {
         ref.node = found->ref;
         switch (found->kind) {
           case SymbolKind::kInputPort:
-          case SymbolKind::kOutputPort:
+          case SymbolKind::kOutputPort: {
             ref.kind = Ref::Kind::kPort;
             ref.has_front = true;
             ref.writable = found->writable;
+            const syntax::PortDirection side =
+                found->kind == SymbolKind::kInputPort
+                    ? syntax::PortDirection::kInput
+                    : syntax::PortDirection::kOutput;
+            if (const PortPlan* port = resolved_.plan.Port(name->name, side);
+                port != nullptr && known_.Dto(port->type) != nullptr) {
+              ref.shape = port->type;
+            }
             break;
+          }
           case SymbolKind::kNode:
             ref.kind = Ref::Kind::kNode;
             ref.has_front = true;
             ref.writable = true;
+            break;
+          case SymbolKind::kValue:
+            // One value, ready-made. It stands where an expression does and it
+            // is a stream of one where a pipeline's source does -- which is
+            // what lets `image | chunk 65536` be written of a `let`.
+            ref.kind = Ref::Kind::kValue;
             break;
           case SymbolKind::kBarrier:
             // A named barrier reads as the status it waited for, which is the
@@ -1862,6 +2661,12 @@ class FlowResolver {
           WalkExpression(value.get(), scope, allow_it, out);
         }
         return;
+      case NodeKind::kSpread:
+        // What is spread has to be a value with parts, but which parts it has is
+        // not known until it is read; the walk is of the thing being spread.
+        WalkExpression(syntax::As<syntax::Spread>(expression)->value.get(),
+                       scope, allow_it, out);
+        return;
       case NodeKind::kBuiltin:
         for (const syntax::NodePtr& argument :
              syntax::As<syntax::Builtin>(expression)->args) {
@@ -1877,6 +2682,12 @@ class FlowResolver {
             typed->type.name.find('/') == std::string::npos &&
             !typed->type.quoted) {
           PortType(typed->type);
+        }
+        // A shape declared in this file is the one type whose fields are known
+        // here, so it is the one whose literal can be checked before it runs.
+        if (const DtoPlan* shape = known_.Dto(typed->type.name);
+            shape != nullptr) {
+          CheckShapeLiteral(*shape, typed->value.get());
         }
         WalkExpression(typed->value.get(), scope, allow_it, out);
         return;
@@ -1917,6 +2728,7 @@ class FlowResolver {
           Remember(out, expression, named->node);
           return;
         }
+        CheckMember(attr, scope);
         WalkExpression(attr->base.get(), scope, allow_it, out);
         return;
       }
@@ -1936,6 +2748,137 @@ class FlowResolver {
     }
   }
 
+  /// The field names a value is known to have, and what said so.
+  ///
+  /// Two things in this language say what a value holds: a port declared with a
+  /// `struct`, and a `match` pattern, whose holes *are* its fields. Nothing else
+  /// does, and where nothing said, nothing is checked -- a value carrying `object`
+  /// or `json` may hold anything, and reporting a field it has would be worse
+  /// than reporting none.
+  struct Fields {
+    /// What to call it in the message: `'Source'`, or `the pattern`.
+    std::string subject;
+    std::vector<std::string> names;
+  };
+
+  std::optional<Fields> FieldsOfPattern(const std::string& text) const {
+    if (text.empty()) return std::nullopt;
+    const pattern::Compiled compiled = pattern::Compile(text);
+    // A pattern that does not read is reported where it is written; nothing is
+    // known about what it names, so nothing is checked here. Nor is a positional
+    // one, which names no fields at all.
+    if (!compiled.ok() || !compiled.pattern.AllNamed()) return std::nullopt;
+    Fields found;
+    found.subject = "the pattern";
+    for (const pattern::Hole& hole : compiled.pattern.holes) {
+      found.names.push_back(hole.name);
+    }
+    return found;
+  }
+
+  std::optional<Fields> FieldsOfSymbol(const Symbol& symbol) const {
+    if (symbol.kind == SymbolKind::kValue) {
+      return FieldsOfPattern(symbol.pattern);
+    }
+    if (symbol.kind != SymbolKind::kInputPort &&
+        symbol.kind != SymbolKind::kOutputPort) {
+      return std::nullopt;
+    }
+    const syntax::PortDirection direction =
+        symbol.kind == SymbolKind::kInputPort ? syntax::PortDirection::kInput
+                                             : syntax::PortDirection::kOutput;
+    const PortPlan* port = resolved_.plan.Port(symbol.name, direction);
+    if (port == nullptr) return std::nullopt;
+    const DtoPlan* shape = known_.Dto(port->type);
+    if (shape == nullptr) return std::nullopt;
+    Fields found;
+    found.subject = Quoted(shape->name);
+    found.names = shape->FieldNames();
+    return found;
+  }
+
+  /// `x.field` against what `x` is known to hold.
+  ///
+  /// Only where the base is a name or `it`, and only one level deep: a field that
+  /// holds a record of its own says nothing about *its* keys, so `src.meta.title`
+  /// checks `meta` and stops. Conservative on purpose -- the value of this check
+  /// is that it never cries wolf.
+  void CheckMember(const syntax::Attr* attr, Scope& scope) {
+    std::optional<Fields> known;
+    if (syntax::As<syntax::It>(attr->base.get()) != nullptr) {
+      known = FieldsOfPattern(it_pattern_);
+    } else if (const auto* base = syntax::As<syntax::Name>(attr->base.get());
+               base != nullptr) {
+      const size_t index = Lookup(scope, base->name);
+      if (index == kNoSymbol) return;
+      known = FieldsOfSymbol(resolved_.symbols[index]);
+    }
+    if (!known.has_value() || known->names.empty()) return;
+    if (std::find(known->names.begin(), known->names.end(), attr->name) !=
+        known->names.end()) {
+      return;
+    }
+    Report("flow.form.unknown-field",
+           absl::StrCat(known->subject, " has no field ", Quoted(attr->name),
+                        " (it has: ", absl::StrJoin(known->names, ", "), ")."),
+           attr->location, Severity::kError, Family::kForm);
+  }
+
+  /// `Shape{...}`, against the shape it names.
+  ///
+  /// Only what is knowable without running anything: a key the shape does not
+  /// have, a constant that could not be a value of the field's type, and -- when
+  /// nothing is spread in -- a required field left out. A spread makes the set of
+  /// keys a run-time fact, so the missing-field check stands down rather than
+  /// guessing; the coercion at run time is what catches it then, with the same
+  /// words.
+  void CheckShapeLiteral(const DtoPlan& shape, const Node* value) {
+    const auto* object = syntax::As<syntax::ObjectLiteral>(value);
+    if (object == nullptr) return;
+    absl::flat_hash_set<std::string> given;
+    bool spread = false;
+    for (const auto& [key, held] : object->pairs) {
+      if (syntax::As<syntax::Spread>(held.get()) != nullptr) {
+        spread = true;
+        continue;
+      }
+      given.insert(key);
+      const FieldPlan* field = shape.Field(key);
+      if (field == nullptr) {
+        Report("flow.form.unknown-field",
+               absl::StrCat(Quoted(shape.name), " has no field ", Quoted(key),
+                            " (it has: ",
+                            absl::StrJoin(shape.FieldNames(), ", "), ")."),
+               held == nullptr ? value->location : held->location,
+               Severity::kError, Family::kForm);
+        continue;
+      }
+      // A constant is the only value whose kind is known here. Anything read at
+      // run time is checked when it arrives.
+      const std::optional<syntax::Constant> constant =
+          syntax::ConstantValue(held.get());
+      if (!constant.has_value() || !field->dto_name.empty()) continue;
+      if (ConstantFits(*constant, field->type)) continue;
+      Report("flow.form.field-type-mismatch",
+             absl::StrCat(Quoted(key), " of ", Quoted(shape.name), " holds ",
+                          field->declared, ", and this is a ",
+                          syntax::ConstantKindName(constant->kind), "."),
+             held->location, Severity::kError, Family::kForm);
+    }
+    if (spread) return;
+    std::vector<std::string> missing;
+    for (const FieldPlan& field : shape.fields) {
+      if (!field.required || field.has_default) continue;
+      if (given.contains(field.name)) continue;
+      missing.push_back(field.name);
+    }
+    if (missing.empty()) return;
+    Report("flow.form.missing-field",
+           absl::StrCat(Quoted(shape.name), " requires ",
+                        absl::StrJoin(missing, ", "), ", which this leaves out."),
+           value->location, Severity::kError, Family::kForm);
+  }
+
   void Constant(const Node* expression) {
     if (expression == nullptr) return;
     if (syntax::ConstantValue(expression).has_value()) return;
@@ -1946,6 +2889,13 @@ class FlowResolver {
   }
 
   /// What one `repeat` knows about itself while its body is being read.
+  /// The pattern `it` refers to in the stage being resolved, if any.
+  std::string it_pattern_;
+
+  /// How many `if`, `for` or `repeat` bodies enclose the statement in hand.
+  /// See [ResolveStatements] and [CheckReachedByChoice].
+  int guarded_ = 0;
+
   struct RepeatState {
     std::string label;
     /// The graph step it is, so `<-` and `until` can fill it in.
@@ -1959,6 +2909,9 @@ class FlowResolver {
   const LineIndex& lines_;
   const syntax::FlowDeclaration& declaration_;
   const Program& known_;
+  /// The shapes the file declares, for [PortType]. A set beside `known_` rather
+  /// than a scan of it: a type is read once per port and once per cast.
+  DtoNames dtos_;
   ResolvedFlow& resolved_;
   std::vector<Diagnostic>& diagnostics_;
   /// Null on the editor path: no graph, and none of the work of building one.
@@ -2000,6 +2953,27 @@ const FlowPlan* absl_nullable Program::Flow(std::string_view name) const {
   return nullptr;
 }
 
+const DtoPlan* absl_nullable Program::Dto(std::string_view name) const {
+  for (const DtoPlan& dto : dtos) {
+    if (dto.name == name) return &dto;
+  }
+  return nullptr;
+}
+
+const FieldPlan* absl_nullable DtoPlan::Field(std::string_view name) const {
+  for (const FieldPlan& field : fields) {
+    if (field.name == name) return &field;
+  }
+  return nullptr;
+}
+
+std::vector<std::string> DtoPlan::FieldNames() const {
+  std::vector<std::string> names;
+  names.reserve(fields.size());
+  for (const FieldPlan& field : fields) names.push_back(field.name);
+  return names;
+}
+
 bool ResolveResult::HasErrors() const { return FirstError() != nullptr; }
 
 const Diagnostic* absl_nullable ResolveResult::FirstError() const {
@@ -2029,6 +3003,8 @@ std::string_view SymbolKindName(SymbolKind kind) {
       return "loop-variable";
     case SymbolKind::kCarry:
       return "carry";
+    case SymbolKind::kValue:
+      return "value";
   }
   return "header";
 }
@@ -2039,9 +3015,17 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
   result.diagnostics = parsed.diagnostics;
   const LineIndex lines(source);
 
-  // Two passes over the file, for the reason a program is a set of flows rather
-  // than a sequence: every flow declares its ports before any body is read, so a
-  // call to a sibling is checked whichever order the two were written in.
+  // The shapes first, and all of them: a port may be typed with one, and a shape
+  // may name another, so neither declaration order nor the flows can be waited
+  // for.
+  result.program.dtos =
+      DtoResolver(lines, absl::MakeConstSpan(parsed.dtos), result.diagnostics)
+          .Run();
+
+  // Then two passes over the flows, for the reason a program is a set of flows
+  // rather than a sequence: every flow declares its ports before any body is
+  // read, so a call to a sibling is checked whichever order the two were written
+  // in.
   absl::flat_hash_set<std::string> seen;
   std::vector<const syntax::FlowDeclaration*> declared;
   for (const syntax::FlowDeclarationPtr& declaration : parsed.flows) {

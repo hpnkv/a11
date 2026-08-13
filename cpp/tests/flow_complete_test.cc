@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include <absl/strings/str_cat.h>
 #include <gtest/gtest.h>
 
 #include "a11/flow/vocabulary.h"
@@ -54,9 +55,10 @@ const Proposal* Find(std::string_view marked, std::string_view name) {
   return nullptr;
 }
 
-TEST(FlowComplete, OutsideAFlowThereIsOneThingToWrite) {
-  EXPECT_EQ(Names("|CARET|"), std::vector<std::string>{"flow"});
-  EXPECT_EQ(Names("flow a { }\n|CARET|"), std::vector<std::string>{"flow"});
+TEST(FlowComplete, OutsideAFlowThereAreTwoThingsToWrite) {
+  const std::vector<std::string> declarations = {"flow", "struct"};
+  EXPECT_EQ(Names("|CARET|"), declarations);
+  EXPECT_EQ(Names("flow a { }\n|CARET|"), declarations);
 }
 
 TEST(FlowComplete, AfterAPipeOnlyAStageCanFollow) {
@@ -272,8 +274,101 @@ TEST(FlowComplete, TheOrderedTablesCoverTheirSets) {
   // `forward headers` is one modifier and two words.
   EXPECT_EQ(vocabulary::OrderedModifiers().size() + 1,
             vocabulary::ModifierWords().size());
+  // So is `one of`, among a field's.
+  EXPECT_EQ(vocabulary::OrderedFieldModifiers().size() + 1,
+            vocabulary::FieldModifierWords().size());
+}
+
+TEST(FlowComplete, AnActionIsOfferedUnderItsOwnNameWhereACallMayBegin) {
+  // Somebody who knows the action types its name, not the verb in front of it.
+  // Offering action names only *after* `call` meant the list was empty for the
+  // whole of `interact_with_llm` until `call ` had been typed, which reads as
+  // the editor not knowing the action at all.
+  const Proposal* head = Find("flow f {\n  in q: string\n  |CARET|\n}\n",
+                              "make_http_request");
+  ASSERT_NE(head, nullptr);
+  // Taking it writes the statement, not a bare name that could not compile.
+  EXPECT_EQ(head->insert, "call make_http_request()");
+  EXPECT_EQ(head->caret, static_cast<int>(head->insert.size()) - 1);
+
+  const Proposal* bound =
+      Find("flow f {\n  in q: string\n  page = |CARET|\n}\n",
+           "make_http_request");
+  ASSERT_NE(bound, nullptr);
+  EXPECT_EQ(bound->insert, "call make_http_request()");
+
+  // After the verb it is the name alone, since the verb is already there.
+  const Proposal* after =
+      Find("flow f {\n  in q: string\n  page = call |CARET|\n}\n",
+           "make_http_request");
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->insert, "make_http_request()");
+}
+
+TEST(FlowComplete, AProposalCarriesWhatAPopupWouldShow) {
+  // The description beside the list is one line; deciding between two actions
+  // needs their ports, and that is the same text a hover gives.
+  const Proposal* action =
+      Find("flow f {\n  in q: string\n  page = call |CARET|\n}\n",
+           "make_http_request");
+  ASSERT_NE(action, nullptr);
+  EXPECT_NE(action->documentation.find("**Inputs**"), std::string::npos)
+      << action->documentation;
+
+  // A stage carries the language's own reference for it, which is the same text
+  // hovering the finished word gives: choosing between `collect` and `join` is
+  // exactly the moment somebody needs to know what each one does to the stream.
+  const Proposal* stage = Find("flow f {\n  in q: string\n  q | |CARET|\n}\n",
+                               "collect");
+  ASSERT_NE(stage, nullptr);
+  EXPECT_NE(stage->documentation.find("a pipeline stage"), std::string::npos)
+      << stage->documentation;
+  EXPECT_NE(stage->documentation.find("exactly one value"), std::string::npos)
+      << stage->documentation;
+
+  // And so does a function, told apart from the stage of the same name.
+  const Proposal* function =
+      Find("flow f {\n  in q: string\n  n = |CARET|\n}\n", "join");
+  ASSERT_NE(function, nullptr);
+  EXPECT_NE(function->documentation.find("a built-in function"),
+            std::string::npos)
+      << function->documentation;
+}
+
+TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
+  // The `default:` case of the member rules used to offer nothing, and said why:
+  // nothing knew a value's fields. Two things do -- a pattern names them, and a
+  // port declared with a `struct` has them -- and this is where that shows.
+  constexpr std::string_view kHead =
+      "struct Source {\n  url:  string required\n  rank: number\n}\n\n"
+      "flow f {\n  in  lines: string stream required\n"
+      "  in  src:   Source required\n  out o:     string stream\n";
+
+  // A value a literal pattern made: the fields are in the text that made it.
+  EXPECT_EQ(Names(absl::StrCat(
+                kHead,
+                "  let who = match(\"name={name} age={age:int}\", lines)\n"
+                "  strformat(\"%s\", who.|CARET|\n}\n")),
+            (std::vector<std::string>{"name", "age"}));
+
+  // `it` inside a stage that follows one: read off the tokens, because the line
+  // being typed is exactly when this is wanted.
+  EXPECT_EQ(Names(absl::StrCat(
+                kHead,
+                "  lines | match \"{level:word}: {rest:rest}\" | map it.|CARET|\n}\n")),
+            (std::vector<std::string>{"level", "rest"}));
+
+  // A port declared with a struct, which was missing too.
+  EXPECT_EQ(Names(absl::StrCat(kHead, "  strformat(\"%s\", src.|CARET|\n}\n")),
+            (std::vector<std::string>{"url", "rank"}));
+
+  // And nothing where nothing is known: no pattern, and a positional one names
+  // no fields at all.
+  EXPECT_TRUE(Names(absl::StrCat(kHead, "  lines | map it.|CARET|\n}\n")).empty());
+  EXPECT_TRUE(
+      Names(absl::StrCat(kHead, "  lines | match \"{}:{}\" | map it.|CARET|\n}\n"))
+          .empty());
 }
 
 }  // namespace
 }  // namespace a11::flow
-

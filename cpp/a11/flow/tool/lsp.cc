@@ -18,11 +18,13 @@
 #include <absl/strings/str_join.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/flow/catalogue.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
+#include "a11/flow/navigate.h"
 #include "a11/flow/offsets.h"
 #include "a11/flow/service.h"
 #include "a11/flow/vocabulary.h"
@@ -61,6 +63,10 @@ constexpr std::array kTokenTypes = {
     std::string_view("enumMember"), std::string_view("operator"),
     std::string_view("namespace"), std::string_view("property"),
     std::string_view("variable"),
+    // A port is the flow's interface, and `parameter` is the standard type
+    // every theme already distinguishes -- usually by italicising it, which is
+    // the distinction being asked for.
+    std::string_view("parameter"),
 };
 
 /// Which legend entry a meaning maps to, or `-1` for the ones a semantic
@@ -99,6 +105,8 @@ int TokenTypeOf(SemanticKind kind) {
       return 9;
     case SemanticKind::kIdentifier:
       return 10;
+    case SemanticKind::kPortName:
+      return 11;
     case SemanticKind::kBrace:
     case SemanticKind::kParenthesis:
     case SemanticKind::kBracket:
@@ -117,11 +125,13 @@ int TokenTypeOf(SemanticKind kind) {
 nlohmann::json SemanticTokenData(const Document& document) {
   const LexResult lexed =
       Lex(document.Text(), LexOptions{.keep_comments = true});
+  std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
+  RefinePorts(document.Text(), semantic);
   nlohmann::json data = nlohmann::json::array();
   int last_line = 0;
   int last_character = 0;
   const std::string& text = document.Text();
-  for (const SemanticToken& token : Highlight(lexed.tokens)) {
+  for (const SemanticToken& token : semantic) {
     const int type = TokenTypeOf(token.kind);
     if (type < 0) continue;
     size_t start = token.start;
@@ -202,45 +212,6 @@ std::string Snippet(const Proposal& proposal) {
     out.push_back(letter);
   }
   return out;
-}
-
-// --- Hover -------------------------------------------------------------------
-
-/// What the word under the caret is, in one line.
-///
-/// Read off the classifier rather than a table of prose: the honest answer to
-/// "what is this" in a language this small is what it *means here*, which is the
-/// judgement the highlighter already makes.
-std::string HoverText(const Document& document, size_t offset) {
-  const LexResult lexed =
-      Lex(document.Text(), LexOptions{.keep_comments = true});
-  const std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
-  for (size_t index = 0; index < semantic.size(); ++index) {
-    const SemanticToken& token = semantic[index];
-    if (offset < token.start || offset >= token.end) continue;
-    const std::string_view text(document.Text().data() + token.start,
-                                token.end - token.start);
-    const std::string word = vocabulary::Canonical(text);
-    std::string what(SemanticKindName(token.kind));
-    for (char& letter : what) {
-      if (letter == '-') letter = ' ';
-    }
-    std::string detail;
-    if (token.kind == SemanticKind::kStage) {
-      const auto takes = vocabulary::StageTakes(word);
-      if (takes.has_value()) {
-        detail = absl::StrCat("takes ",
-                              vocabulary::StageArgumentName(*takes));
-      }
-    } else if (token.kind == SemanticKind::kStatusCode) {
-      detail = "one of Abseil's canonical status codes";
-    } else if (token.kind == SemanticKind::kBuiltin) {
-      detail = "one of the language's fixed functions";
-    }
-    return detail.empty() ? absl::StrCat("`", text, "` -- ", what)
-                          : absl::StrCat("`", text, "` -- ", what, ", ", detail);
-  }
-  return "";
 }
 
 // --- The loop ----------------------------------------------------------------
@@ -327,7 +298,7 @@ class Server {
     return document->value("uri", std::string());
   }
 
-  nlohmann::json RangeOf(const Document& document, const Range& range) const {
+  static nlohmann::json RangeOf(const Document& document, const Range& range) {
     const auto [start_line, start_character] =
         document.PositionOf(range.start.offset);
     const auto [end_line, end_character] = document.PositionOf(range.end.offset);
@@ -510,6 +481,27 @@ class Server {
       Hover(message, params);
       return;
     }
+    if (method == "textDocument/documentSymbol") {
+      DocumentSymbols(message, params);
+      return;
+    }
+    if (method == "textDocument/definition" ||
+        method == "textDocument/declaration" ||
+        method == "textDocument/typeDefinition") {
+      // All three ask the same question of a language this size: where was this
+      // name bound. Answering them alike is what makes every one of an editor's
+      // three navigation gestures land somewhere useful.
+      Definition(message, params);
+      return;
+    }
+    if (method == "a11flow/setContext") {
+      SetContext(params);
+      // A notification: no `id`, so no answer, and the documents already open
+      // are re-checked because what the world contains may change what is wrong
+      // with them.
+      for (const auto& [uri, document] : documents_) Publish(uri, document);
+      return;
+    }
     // Anything else: an unknown request still needs an answer, or a client waits
     // for one for ever.
     if (message.contains("id")) Answer(message, nlohmann::json());
@@ -608,14 +600,112 @@ class Server {
       Answer(message, nlohmann::json());
       return;
     }
-    const std::string text = HoverText(*document, OffsetIn(*document, params));
-    if (text.empty()) {
+    // The language decides what is under the caret -- it is name resolution, and
+    // this adapter has no business doing it a second time. All that happens here
+    // is the translation into what the protocol calls a hover.
+    const Description about =
+        Describe(document->Text(), OffsetIn(*document, params), known_);
+    if (!about.found || about.markdown.empty()) {
       Answer(message, nlohmann::json());
       return;
     }
     Answer(message,
-           nlohmann::json{{"contents", nlohmann::json{{"kind", "markdown"},
-                                                      {"value", text}}}});
+           nlohmann::json{
+               {"contents", nlohmann::json{{"kind", "markdown"},
+                                           {"value", about.markdown}}},
+               {"range", RangeOf(*document, about.range)}});
+  }
+
+  void DocumentSymbols(const nlohmann::json& message,
+                       const nlohmann::json& params) {
+    const Document* document = Find(params);
+    nlohmann::json symbols = nlohmann::json::array();
+    if (document == nullptr) {
+      Answer(message, std::move(symbols));
+      return;
+    }
+    for (const DocumentSymbol& symbol : Symbols(document->Text())) {
+      symbols.push_back(SymbolJson(*document, symbol));
+    }
+    Answer(message, std::move(symbols));
+  }
+
+  void Definition(const nlohmann::json& message, const nlohmann::json& params) {
+    const Document* document = Find(params);
+    if (document == nullptr) {
+      Answer(message, nlohmann::json());
+      return;
+    }
+    const Description about =
+        Describe(document->Text(), OffsetIn(*document, params), known_);
+    if (!about.has_definition) {
+      // A word that is not a name of this document -- an action, a stage --
+      // has no location here. Null rather than an empty list, which is what a
+      // client reads as "nowhere to go".
+      Answer(message, nlohmann::json());
+      return;
+    }
+    Answer(message, nlohmann::json{{"uri", Uri(params)},
+                                   {"range", RangeOf(*document, about.definition)}});
+  }
+
+  /// One symbol, as the protocol's `DocumentSymbol`.
+  static nlohmann::json SymbolJson(const Document& document,
+                                   const DocumentSymbol& symbol) {
+    nlohmann::json children = nlohmann::json::array();
+    for (const DocumentSymbol& child : symbol.children) {
+      children.push_back(SymbolJson(document, child));
+    }
+    nlohmann::json value{{"name", symbol.name},
+                         {"kind", SymbolItemKind(symbol.kind)},
+                         {"range", RangeOf(document, symbol.range)},
+                         {"selectionRange", RangeOf(document, symbol.selection)}};
+    if (!symbol.detail.empty()) value["detail"] = symbol.detail;
+    if (!children.empty()) value["children"] = std::move(children);
+    return value;
+  }
+
+  /// The protocol's symbol kinds, by number.
+  static int SymbolItemKind(SymbolClass kind) {
+    switch (kind) {
+      case SymbolClass::kFlow:
+        return 12;  // Function
+      case SymbolClass::kDto:
+        return 23;  // Struct
+      case SymbolClass::kField:
+        return 8;  // Field
+      case SymbolClass::kPort:
+        return 8;  // Field
+      case SymbolClass::kHeader:
+        return 20;  // Key
+      case SymbolClass::kNodeMap:
+        return 2;  // Module
+      case SymbolClass::kNode:
+        return 13;  // Variable
+      case SymbolClass::kCall:
+        return 6;  // Method
+      case SymbolClass::kBarrier:
+        return 13;  // Variable
+      case SymbolClass::kVariable:
+        return 13;  // Variable
+      case SymbolClass::kExternal:
+        return 13;  // Variable
+    }
+    return 13;
+  }
+
+  /// `a11flow/setContext`: what the world outside these documents contains.
+  ///
+  /// Stateful, and deliberately so. A client that knows which action registry an
+  /// inline flow is attached to says it once, and every completion and hover for
+  /// the rest of the session sees it -- rather than repeating a catalogue of a
+  /// hundred actions on every keystroke.
+  void SetContext(const nlohmann::json& params) {
+    if (!params.is_object()) return;
+    const catalogue::Catalogue given = catalogue::Catalogue::FromJson(params);
+    known_ = params.value("replace", false)
+                 ? given
+                 : catalogue::Catalogue::Builtin().MergedWith(given);
   }
 
   static nlohmann::json Capabilities() {
@@ -629,6 +719,10 @@ class Server {
                                                  {"change", 1},
                                                  {"save", true}}},
              {"documentFormattingProvider", true},
+             {"documentSymbolProvider", true},
+             {"definitionProvider", true},
+             {"declarationProvider", true},
+             {"typeDefinitionProvider", true},
              {"hoverProvider", true},
              {"codeActionProvider", nlohmann::json{{"codeActionKinds",
                                                     nlohmann::json::array(
@@ -652,6 +746,9 @@ class Server {
   std::istream& in_;
   std::ostream& out_;
   absl::flat_hash_map<std::string, Document> documents_;
+  /// What the world outside these documents contains, for as long as this
+  /// session lasts: see [SetContext].
+  catalogue::Catalogue known_ = catalogue::Catalogue::Builtin();
   bool shutdown_ = false;
   bool exited_ = false;
 };

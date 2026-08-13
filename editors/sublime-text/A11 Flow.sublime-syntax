@@ -31,6 +31,7 @@ variables:
 contexts:
   main:
     - include: comments
+    - include: struct-declaration
     - include: flow-declaration
     - include: statements
 
@@ -60,6 +61,70 @@ contexts:
               scope: punctuation.definition.string.end.a11flow
               pop: true
         - match: '(?=\S)'
+          pop: true
+
+  # --- shape declarations -----------------------------------------------------
+
+  # `struct Name { field: type ... }`. The name is a type everywhere else in the
+  # file, so it is scoped as one here; the body is fields and nothing else,
+  # which is why it is its own context rather than a use of `statements`.
+  struct-declaration:
+    - match: '\b(struct|STRUCT){{kw_boundary}}'
+      scope: keyword.declaration.struct.a11flow
+      push:
+        - meta_scope: meta.struct.a11flow
+        - match: '{{name}}'
+          scope: entity.name.type.struct.a11flow
+          set:
+            - match: '\{'
+              scope: punctuation.section.block.begin.a11flow
+              set:
+                - meta_scope: meta.struct.body.a11flow
+                - match: '\}'
+                  scope: punctuation.section.block.end.a11flow
+                  pop: true
+                - include: comments
+                - include: describe-declaration
+                - include: field-declaration
+            - match: '(?=\S)'
+              pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  field-declaration:
+    - match: '({{name}})(?=\s*:)'
+      scope: variable.parameter.field.a11flow
+      push:
+        - meta_scope: meta.field.a11flow
+        - match: ':'
+          scope: punctuation.separator.a11flow
+          set:
+            - meta_scope: meta.field.a11flow
+            # What a field says about itself after its type: whether it has to
+            # be given, and what bounds the values it may hold.
+            - match: '\b(required|REQUIRED){{kw_boundary}}'
+              scope: keyword.modifier.required.a11flow
+            - match: '\b(unique|UNIQUE){{kw_boundary}}'
+              scope: keyword.modifier.unique.a11flow
+            - match: '\b(matching|MATCHING){{kw_boundary}}'
+              scope: keyword.modifier.matching.a11flow
+            - match: '\b(one\s+of|ONE\s+OF){{kw_boundary}}'
+              scope: keyword.modifier.one.a11flow
+            - match: '\b(default|DEFAULT){{kw_boundary}}'
+              scope: keyword.modifier.default.a11flow
+            - include: port-types
+            - include: strings
+            - include: literals
+            # `1..200`: the range between two bounds.
+            - match: '\.\.'
+              scope: keyword.operator.range.a11flow
+            - match: '[\[\]]'
+              scope: punctuation.section.brackets.a11flow
+            - match: ','
+              scope: punctuation.separator.comma.a11flow
+            - match: '$\n?'
+              pop: true
+        - match: '$\n?'
           pop: true
 
   # --- declarations inside a flow -------------------------------------------
@@ -102,9 +167,10 @@ contexts:
       scope: storage.type.tag.a11flow
     - match: |-
         (?x) \b (
-          string|text|number|integer|int|bool|boolean|object|json|list
-          |array|bytes|any|STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN
-          |OBJECT|JSON|LIST|ARRAY|BYTES|ANY
+          string|text|number|integer|int|bool|boolean|duration|time
+          |object|json|list|array|bytes|any|STRING|TEXT|NUMBER|INTEGER
+          |INT|BOOL|BOOLEAN|DURATION|TIME|OBJECT|JSON|LIST|ARRAY|BYTES
+          |ANY
         ) {{kw_boundary}}
       scope: storage.type.a11flow
 
@@ -162,8 +228,9 @@ contexts:
   statement-keywords:
     - match: |-
         (?x) \b (
-          skip|wait|drain|cancel|fail|if|for|repeat|until|while|else
-          |SKIP|WAIT|DRAIN|CANCEL|FAIL|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
+          let|advance|skip|wait|drain|cancel|fail|if|for|repeat|until
+          |while|else|LET|ADVANCE|SKIP|WAIT|DRAIN|CANCEL|FAIL|IF|FOR
+          |REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
     - match: '\b(parallel|max|PARALLEL|MAX){{kw_boundary}}'
@@ -223,10 +290,11 @@ contexts:
       push:
         - match: |-
             (?x) \b (
-              first|last|drop|truncate|batch|group|where|map|distinct
-              |then|mime|strformat|collect|count|join|text|json|packb
-              |FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|WHERE|MAP|DISTINCT
-              |THEN|MIME|STRFORMAT|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
+              first|last|drop|truncate|batch|group|where|map|match
+              |distinct|then|mime|strformat|chunk|collect|count|join
+              |text|json|packb|FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP
+              |WHERE|MAP|MATCH|DISTINCT|THEN|MIME|STRFORMAT|CHUNK
+              |COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true
@@ -286,7 +354,7 @@ contexts:
     # `a11.sdk.Interaction{...}`: a value of a named type.
     - match: '{{name}}(?:\.{{name}})+(?=\s*\{)'
       scope: storage.type.a11flow
-    - match: '\b(status|STATUS){{kw_boundary}}'
+    - match: '\b(status|zip|STATUS|ZIP){{kw_boundary}}'
       scope: keyword.other.status.a11flow
     - match: '\b(it|IT){{kw_boundary}}'
       scope: variable.language.it.a11flow
@@ -297,12 +365,14 @@ contexts:
     - match: |-
         (?x) \b (
           len|lower|upper|trim|text|number|bool|keys|values|get|join
-          |split|merge|contains|starts-with|ends-with|replace|slice
-          |default|to_chunk|from_chunk|strformat|now|duration|time
+          |split|merge|contains|starts-with|ends-with|replace|match
+          |slice|default|to_chunk|from_chunk|strformat|b64encode
+          |b64decode|b64urlencode|b64urldecode|now|duration|time
           |seconds|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES
           |GET|JOIN|SPLIT|MERGE|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE
-          |SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT|NOW|DURATION
-          |TIME|SECONDS
+          |MATCH|SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE
+          |B64DECODE|B64URLENCODE|B64URLDECODE|NOW|DURATION|TIME
+          |SECONDS
         ) {{kw_boundary}} (?=\s*\()
       scope: support.function.builtin.a11flow
 

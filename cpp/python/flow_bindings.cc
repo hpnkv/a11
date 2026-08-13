@@ -512,6 +512,35 @@ class PythonBridge : public flow::HostBridge {
       return StatusFromPythonException(error);
     }
   }
+
+  /// A value of a `struct` becomes an instance of the pydantic model that shape
+  /// describes.
+  ///
+  /// The record has already been validated against the shape on the C++ side --
+  /// there is one implementation of what a shape means -- so this is about how
+  /// Python would rather *hold* it. Building the model is Python's job because
+  /// that is where a pydantic model can exist at all; the model is cached
+  /// against the shape, so a stream of ten thousand records builds one class.
+  ///
+  /// A host that cannot build the model says so by leaving the record as it is:
+  /// a flow that ran without pydantic installed should still run, with plain
+  /// mappings, rather than fail at the first coercion.
+  absl::StatusOr<flow::Value> Adopt(const flow::DtoPlan& shape,
+                                    const flow::Program& program,
+                                    const flow::Value& value) override {
+    const py::gil_scoped_acquire acquire;
+    try {
+      const py::object model =
+          py::module_::import("a11.flow.plan")
+              .attr("_model_for_dto")(
+                  flow::DtoToJsonValue(shape, &program).dump());
+      if (model.is_none()) return value;
+      return flow::Value::Host(std::make_shared<PythonObject>(
+          model.attr("model_validate")(ValueToPython(value)), shape.name));
+    } catch (py::error_already_set& error) {
+      return StatusFromPythonException(error);
+    }
+  }
 };
 
 std::shared_ptr<flow::HostBridge> HostBridgeForPython() {

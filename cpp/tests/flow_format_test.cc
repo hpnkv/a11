@@ -89,7 +89,8 @@ std::vector<std::filesystem::path> Corpus() {
           .parent_path();
   std::vector<std::filesystem::path> paths;
   for (const std::filesystem::path& directory :
-       {root / "examples" / "003-flow-dsl", root / "scripts",
+       {root / "examples" / "003-flow-dsl",
+        root / "examples" / "004-deep-research", root / "scripts",
         root / "testdata" / "flow"}) {
     if (!std::filesystem::is_directory(directory)) continue;
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {

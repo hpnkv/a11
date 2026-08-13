@@ -11,7 +11,9 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/flow/lexer.h"
+#include "a11/flow/navigate.h"
 #include "a11/flow/parser.h"
+#include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
 #include "a11/flow/syntax.h"
@@ -37,6 +39,24 @@ constexpr size_t kNoIndex = static_cast<size_t>(-1);
 bool BoundaryKind(TokenKind kind) {
   return kind == TokenKind::kNewline || kind == TokenKind::kLeftBrace ||
          kind == TokenKind::kRightBrace;
+}
+
+/// A description as the grey text beside a proposal: one sentence, one line.
+///
+/// An action's description is prose written for a model and runs to a
+/// paragraph; a completion list has one line per item, and a paragraph in it
+/// pushes every other item off the screen. The first sentence is what a reader
+/// scanning the list actually uses, and hover shows the rest.
+std::string Summary(std::string_view description) {
+  if (description.empty()) return "";
+  std::string_view first = description.substr(0, description.find('\n'));
+  const size_t stop = first.find(". ");
+  if (stop != std::string_view::npos) first = first.substr(0, stop + 1);
+  constexpr size_t kWidest = 72;
+  if (first.size() > kWidest) {
+    return absl::StrCat(" ", first.substr(0, kWidest - 1), "…");
+  }
+  return absl::StrCat(" ", first);
 }
 
 /// The grey text an editor shows after a stage, saying what it takes.
@@ -66,8 +86,10 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
 /// than it cost.
 class Completer {
  public:
-  Completer(std::string_view source, size_t offset)
-      : source_(source), offset_(offset < source.size() ? offset : source.size()) {
+  Completer(std::string_view source, size_t offset,
+            const catalogue::Catalogue& known)
+      : source_(source), offset_(offset < source.size() ? offset : source.size()),
+        known_(known) {
     LexResult lexed = Lex(source_, LexOptions{.keep_comments = true});
     tokens_ = std::move(lexed.tokens);
     parsed_ = ParseTokens(source_, tokens_, std::move(lexed.diagnostics));
@@ -77,7 +99,7 @@ class Completer {
 
   /// Whether this text is a flow body rather than a file of flows.
   bool IsFragment() const {
-    if (!parsed_.flows.empty()) return false;
+    if (!parsed_.flows.empty() || !parsed_.dtos.empty()) return false;
     for (const Token& token : tokens_) {
       if (token.kind == TokenKind::kEnd) break;
       if (token.kind == TokenKind::kNewline ||
@@ -85,8 +107,10 @@ class Completer {
         continue;
       }
       // The first thing that is not a blank line: a fragment is anything that
-      // is not somebody part-way through typing `flow`.
-      return !(token.IsWord() && vocabulary::Canonical(token.text) == "flow");
+      // is not somebody part-way through typing a declaration.
+      if (!token.IsWord()) return true;
+      const std::string word = vocabulary::Canonical(token.text);
+      return word != "flow" && word != "struct";
     }
     return false;
   }
@@ -271,6 +295,14 @@ class Completer {
     proposal.insert = proposal.name;
     proposal.tail = std::string(tail);
     proposal.type = std::string(type);
+    // A stage and a function each have the language's own reference text,
+    // and it is the text a hover over the finished word gives: the popup
+    // beside the list is the same question, asked a moment earlier.
+    if (kind == ProposalKind::kStage) {
+      proposal.documentation = StageMarkdown(proposal.name);
+    } else if (kind == ProposalKind::kFunction) {
+      proposal.documentation = BuiltinMarkdown(proposal.name);
+    }
     proposals_.push_back(std::move(proposal));
   }
 
@@ -290,13 +322,38 @@ class Completer {
       // writes them and leaves the caret between them.
       proposal.insert = absl::StrCat(name, "()");
       proposal.caret = static_cast<int>(name.size()) + 1;
+      proposal.documentation = BuiltinMarkdown(name);
       proposals_.push_back(std::move(proposal));
     }
   }
 
   void AddTypes() {
+    // The shapes this file declares come first: they are what somebody writing
+    // in this file most likely means, and a built-in is one word away anyway.
+    for (const DtoPlan& dto : resolved_.program.dtos) {
+      Proposal proposal;
+      proposal.name = dto.name;
+      proposal.kind = ProposalKind::kType;
+      proposal.insert = dto.name;
+      proposal.tail = dto.description.empty()
+                          ? absl::StrCat(" ", dto.fields.size(), " fields")
+                          : Summary(dto.description);
+      proposal.documentation = ShapeMarkdown(dto);
+      proposals_.push_back(std::move(proposal));
+    }
     for (const std::string_view name : vocabulary::OrderedTypeNames()) {
       Add(std::string(name), ProposalKind::kType);
+    }
+    // Then the tags the host knows. Last because a built-in is what most ports
+    // carry, and a list that opened with twenty registry tags would bury them.
+    for (const catalogue::TypeInfo& type : known_.types()) {
+      Proposal proposal;
+      proposal.name = type.tag;
+      proposal.kind = ProposalKind::kType;
+      proposal.insert = type.tag;
+      proposal.tail = Summary(type.shape.description);
+      proposal.documentation = ShapeMarkdown(type.shape);
+      proposals_.push_back(std::move(proposal));
     }
   }
 
@@ -330,6 +387,8 @@ class Completer {
         return ProposalKind::kNodeMap;
       case SymbolKind::kBarrier:
         return ProposalKind::kBarrier;
+      case SymbolKind::kValue:
+        return ProposalKind::kVariable;
       case SymbolKind::kLoopVariable:
       case SymbolKind::kCarry:
         return ProposalKind::kVariable;
@@ -359,8 +418,13 @@ class Completer {
   template <typename Predicate>
   void AddNames(Predicate accept) {
     if (flow_ == nullptr) return;
+    const size_t statement =
+        line_.empty() ? offset_ : tokens_[line_.front()].start;
     for (const Symbol& symbol : flow_->symbols) {
       if (symbol.location.start > offset_) continue;
+      // Nor a name this very statement is binding: `let x = ` should not offer
+      // `x`, and a flow reads in order, so nothing bound here is in scope yet.
+      if (symbol.location.start >= statement) continue;
       if (!accept(symbol)) continue;
       Add(symbol.name, KindOf(symbol), "", TypeOf(symbol));
     }
@@ -390,11 +454,24 @@ class Completer {
   // -- the rules --------------------------------------------------------------
 
   void Propose() {
-    // Outside a flow there is exactly one thing a file may say next.
+    // Outside a flow or a shape there are exactly two things a file may say
+    // next.
     if (open_braces_.empty()) {
       Add("flow", ProposalKind::kDeclaration, " name { }");
+      Add("struct", ProposalKind::kDeclaration, " Name { }");
       return;
     }
+
+    // Inside a shape's body nothing else applies: a shape holds fields, and
+    // offering statements there would be offering what cannot be written.
+    if (InDtoBody()) {
+      ProposeField();
+      return;
+    }
+    // Inside a value of a declared shape, the fields of that shape are what the
+    // keys may be -- which is the one place the language knows the keys of an
+    // object it is looking at.
+    if (ProposeShapeField()) return;
 
     if (PreviousIs(TokenKind::kPipe)) {
       AddStages();
@@ -411,6 +488,13 @@ class Completer {
     }
     if (PreviousIs(TokenKind::kCarry)) {
       ProposeSources();
+      return;
+    }
+    // `let name = stream`: naming the value first, then reading one. Neither
+    // half is a statement position, so the ordinary list would be noise.
+    if (!line_.empty() && tokens_[line_.front()].IsWord() &&
+        vocabulary::Canonical(tokens_[line_.front()].text) == "let") {
+      if (LineHas(TokenKind::kEqual)) ProposeSources();
       return;
     }
     if (ProposeDeclaration()) return;
@@ -433,10 +517,118 @@ class Completer {
     }
   }
 
+  /// Whether the caret is directly inside a `struct` body.
+  ///
+  /// The outermost open brace is the body when the word before it is a shape's
+  /// name and the word before *that* is `struct`; "directly" is the depth
+  /// being one, since a value written in a field is not a place a field may be
+  /// declared.
+  bool InDtoBody() const {
+    if (open_braces_.size() != 1) return false;
+    const size_t brace = open_braces_.front();
+    return brace >= 2 && tokens_[brace - 1].IsWord() &&
+           tokens_[brace - 2].IsWord() &&
+           vocabulary::Canonical(tokens_[brace - 2].text) == "struct";
+  }
+
+  /// A field being written: its type, then what may bound it.
+  void ProposeField() {
+    if (line_.empty()) {
+      Add("describe", ProposalKind::kDeclaration, " \"…\"");
+      return;
+    }
+    if (!LineHas(TokenKind::kColon)) return;  // naming the field
+    if (PreviousIs(TokenKind::kColon)) {
+      AddTypes();
+      return;
+    }
+    const std::string previous = PreviousWord();
+    // These take an argument, and until it is written nothing else may be.
+    if (previous == "matching" || previous == "default" || previous == "of") {
+      return;
+    }
+    for (const std::string_view modifier : vocabulary::OrderedFieldModifiers()) {
+      bool present = false;
+      for (const size_t index : line_) {
+        const Token& token = tokens_[index];
+        if (token.IsWord() &&
+            vocabulary::Canonical(token.text) ==
+                modifier.substr(0, modifier.find(' '))) {
+          present = true;
+        }
+      }
+      if (present) continue;
+      Add(std::string(modifier), ProposalKind::kPortModifier,
+          FieldModifierTail(modifier));
+    }
+  }
+
+  /// What a field modifier takes, as grey text after it.
+  static std::string FieldModifierTail(std::string_view modifier) {
+    if (modifier == "matching") return " \"pattern\"";
+    if (modifier == "one of") return " [values]";
+    if (modifier == "default") return " value";
+    return "";
+  }
+
+  /// The keys of a `Shape{…}` being written, when the shape is one this file
+  /// declares.
+  ///
+  /// True when it answered, so the ordinary expression rules do not also run:
+  /// inside those braces a bare word is a key and nothing else.
+  bool ProposeShapeField() {
+    if (open_braces_.empty()) return false;
+    const size_t brace = open_braces_.back();
+    if (brace == 0 || !tokens_[brace - 1].IsWord()) return false;
+    // The dotted tag of `a11.sdk.AudioBuffer{` is several tokens; walk back over
+    // them so a registered type's fields are offered the way a shape's are.
+    size_t start = brace - 1;
+    while (start >= 2 && tokens_[start - 1].kind == TokenKind::kDot &&
+           tokens_[start - 2].IsWord()) {
+      start -= 2;
+    }
+    std::string named;
+    for (size_t at = start; at < brace; ++at) {
+      absl::StrAppend(&named, tokens_[at].text);
+    }
+    const DtoPlan* shape = resolved_.program.Dto(named);
+    if (shape == nullptr) {
+      // A type the host knows is the same idea as a shape this file declares,
+      // and the catalogue records it in the same form -- so this is one code
+      // path rather than two.
+      const catalogue::TypeInfo* known = known_.Type(named);
+      if (known != nullptr) shape = &known->shape;
+    }
+    if (shape == nullptr) return false;
+    // Past a key's `:` the value is an ordinary expression again.
+    for (const size_t index : line_) {
+      if (tokens_[index].kind == TokenKind::kColon) return false;
+    }
+    if (PreviousIs(TokenKind::kColon)) return false;
+    for (const FieldPlan& field : shape->fields) {
+      Proposal proposal;
+      proposal.name = field.name;
+      proposal.kind = ProposalKind::kField;
+      // A key is quoted and takes its colon, which is the whole of what has to
+      // follow it.
+      proposal.insert = absl::StrCat("\"", field.name, "\": ");
+      proposal.tail = field.required ? " (required)" : "";
+      proposal.type = field.declared;
+      proposals_.push_back(std::move(proposal));
+    }
+    return true;
+  }
+
   /// What follows a `.`: only what the thing before it actually has.
   void ProposeMembers() {
     const Token* base = Previous(1);
     if (base == nullptr || !base->IsWord() || flow_ == nullptr) return;
+    // `it` is the value a stage is looking at, so what it has is whatever the
+    // stage before said it would be.
+    if (vocabulary::Canonical(base->text) == "it") {
+      AddPatternFields(PatternBeforeCaret());
+      return;
+    }
     const Symbol* symbol = nullptr;
     for (const Symbol& candidate : flow_->symbols) {
       if (candidate.name == base->text) symbol = &candidate;
@@ -472,10 +664,87 @@ class Completer {
         Add("id", ProposalKind::kField);
         return;
       default:
-        // A port or a variable carries whatever the producer sent. Nothing here
-        // knows its fields, and guessing would offer a name that is not there.
+        // A port or a variable carries whatever the producer sent, and there are
+        // two ways the file can have said what that is: a pattern named the
+        // fields, or the port was declared with a `struct`. Where it said
+        // neither, nothing here knows and guessing would offer a name that is not
+        // there.
+        if (AddPatternFields(symbol->pattern)) return;
+        AddShapeFields(ShapeOfSymbol(*symbol));
         return;
     }
+  }
+
+  /// The struct a name carries, where the file said which: a port declared with
+  /// one, or a value read from such a port.
+  std::string ShapeOfSymbol(const Symbol& symbol) const {
+    if (flow_ == nullptr) return "";
+    for (const syntax::PortDirection direction :
+         {syntax::PortDirection::kOutput, syntax::PortDirection::kInput}) {
+      if (const PortPlan* port = flow_->plan.Port(symbol.name, direction);
+          port != nullptr) {
+        return port->type;
+      }
+    }
+    return "";
+  }
+
+  /// The fields of a declared struct, where `named` is one.
+  bool AddShapeFields(const std::string& named) {
+    if (named.empty()) return false;
+    const DtoPlan* shape = resolved_.program.Dto(named);
+    if (shape == nullptr) {
+      // A registry tag is a shape too, and the host knows its fields.
+      const catalogue::TypeInfo* type = known_.Type(named);
+      if (type == nullptr) return false;
+      shape = &type->shape;
+    }
+    for (const FieldPlan& field : shape->fields) {
+      Add(field.name, ProposalKind::kField,
+          field.required ? " (required)" : "",
+          field.declared.empty() ? field.type : field.declared);
+    }
+    return !shape->fields.empty();
+  }
+
+  /// The fields a `match` pattern names.
+  ///
+  /// The one place the language knows the fields of a value nobody declared: they
+  /// are written in the pattern that made it. A positional pattern names nothing,
+  /// so there is nothing to offer for one.
+  bool AddPatternFields(const std::string& text) {
+    if (text.empty()) return false;
+    const pattern::Compiled compiled = pattern::Compile(text);
+    if (!compiled.ok()) return false;
+    bool any = false;
+    for (const pattern::Hole& hole : compiled.pattern.holes) {
+      if (hole.name.empty()) continue;
+      Add(hole.name, ProposalKind::kField, "",
+          std::string(pattern::HoleTypeName(hole.type)));
+      any = true;
+    }
+    return any;
+  }
+
+  /// The pattern of the nearest `match` stage before the caret on this line.
+  ///
+  /// What `it.` is looking at inside a `map` or a `where` that follows one:
+  /// `lines | match "{level:word}: {rest:rest}" | map it.` knows `level` and
+  /// `rest`. Read off the tokens rather than the tree because the line being
+  /// typed is usually half-written, which is exactly when this is wanted.
+  std::string PatternBeforeCaret() const {
+    const size_t first = line_.empty() ? 0 : line_.front();
+    for (size_t at = cut_; at > first; --at) {
+      const size_t index = at - 1;
+      if (index + 1 >= tokens_.size()) continue;
+      if (!tokens_[index].IsWord()) continue;
+      if (vocabulary::Canonical(tokens_[index].text) != "match") continue;
+      if (tokens_[index + 1].kind != TokenKind::kString) return "";
+      // The *value*, not the slice: `text` still has its quotes round it, and a
+      // stray quote after a `rest` hole makes the pattern one nothing can follow.
+      return tokens_[index + 1].string_value;
+    }
+    return "";
   }
 
   void ProposeDestinations() {
@@ -556,20 +825,37 @@ class Completer {
   bool ProposeCall() {
     const std::string previous = PreviousWord();
     if (previous == "run" || previous == "call") {
-      // A call names another flow of this file, or an action registered where
-      // the flow runs -- which is not knowable from the text, so what can be
-      // offered is the flows.
-      for (const FlowPlan& candidate : resolved_.program.flows) {
-        if (flow_ != nullptr && candidate.name == flow_->plan.name) continue;
+      // A call names another flow of this file, or an action the world has.
+      // The flows first: a file that factored a step into a flow of its own
+      // means that one, and an action of the same name would be a surprise.
+      const auto offer = [&](std::string_view name,
+                             std::string_view description, ProposalKind kind,
+                             std::string documentation) {
         Proposal proposal;
-        proposal.name = candidate.name;
-        proposal.kind = ProposalKind::kFlow;
+        proposal.name = std::string(name);
+        proposal.kind = kind;
         // A call is a name and its arguments, so taking the name writes the
         // parentheses the arguments go in and leaves the caret in them.
-        proposal.insert = absl::StrCat(candidate.name, "()");
-        proposal.caret = static_cast<int>(candidate.name.size()) + 1;
-        proposal.tail = candidate.description;
+        proposal.insert = absl::StrCat(name, "()");
+        proposal.caret = static_cast<int>(name.size()) + 1;
+        proposal.tail = Summary(description);
+        // What the call target *is*, in full, for the popup beside the list.
+        // A one-line tail is what fits; deciding between two actions needs
+        // their ports, and leaving that out is what sent a reader to the docs.
+        proposal.documentation = std::move(documentation);
         proposals_.push_back(std::move(proposal));
+      };
+      absl::flat_hash_set<std::string> offered;
+      for (const FlowPlan& candidate : resolved_.program.flows) {
+        if (flow_ != nullptr && candidate.name == flow_->plan.name) continue;
+        offered.insert(candidate.name);
+        offer(candidate.name, candidate.description, ProposalKind::kFlow,
+              FlowMarkdown(candidate));
+      }
+      for (const catalogue::ActionInfo& action : known_.actions()) {
+        if (offered.contains(action.name)) continue;
+        offer(action.name, action.description, ProposalKind::kCall,
+              ActionMarkdown(action));
       }
       return true;
     }
@@ -610,25 +896,46 @@ class Completer {
 
   /// The input ports of the flow being called, each taking its colon with it.
   void ProposeArguments(std::string_view action) {
-    const FlowPlan* target = FlowNamed(action);
-    if (target == nullptr) return;
-    for (const PortPlan& port : target->ports) {
-      if (port.direction != syntax::PortDirection::kInput) continue;
-      bool given = false;
+    /// Whether this line has already given the argument.
+    const auto given = [&](std::string_view port) {
       for (const size_t index : line_) {
         const Token& token = tokens_[index];
-        if (token.IsWord() && token.text == port.name) given = true;
+        if (token.IsWord() && token.text == port) return true;
       }
-      if (given) continue;
+      return false;
+    };
+    const auto offer = [&](std::string_view name, std::string_view type,
+                           bool required, std::string_view description) {
+      if (given(name)) return;
       Proposal proposal;
-      proposal.name = port.name;
+      proposal.name = std::string(name);
       proposal.kind = ProposalKind::kPort;
       // An argument is a name and a colon; writing the colon is writing what
       // the grammar requires, not guessing what the author meant.
-      proposal.insert = absl::StrCat(port.name, ": ");
-      proposal.tail = port.required ? " (required)" : "";
-      proposal.type = port.declared;
+      proposal.insert = absl::StrCat(name, ": ");
+      proposal.tail =
+          required ? " (required)" : Summary(description);
+      proposal.type = std::string(type);
       proposals_.push_back(std::move(proposal));
+    };
+
+    if (const FlowPlan* target = FlowNamed(action); target != nullptr) {
+      for (const PortPlan& port : target->ports) {
+        if (port.direction != syntax::PortDirection::kInput) continue;
+        offer(port.name, port.declared, port.required, port.description);
+      }
+      return;
+    }
+    // Not a flow of this file: an action the world has, which is exactly what
+    // the catalogue is for. Required first, since those are the ones that have
+    // to be written.
+    const catalogue::ActionInfo* known = known_.Action(action);
+    if (known == nullptr) return;
+    for (const bool required : {true, false}) {
+      for (const catalogue::PortInfo& port : known->inputs) {
+        if (port.required != required) continue;
+        offer(port.name, port.type, port.required, port.description);
+      }
     }
   }
 
@@ -724,6 +1031,7 @@ class Completer {
       ProposeSources();
       AddFunctions();
       AddConstants(false);
+      AddCallTargets();
       return true;
     }
     if (!value_wanted) return false;
@@ -731,6 +1039,40 @@ class Completer {
     AddConstants(in_stage);
     ProposeSources();
     return true;
+  }
+
+  /// Every action and sibling flow, offered under its own name.
+  ///
+  /// Where a call may begin -- the head of a statement, the right of a `=` --
+  /// but the word `call` has not been written yet. Somebody who knows the
+  /// action types its name, not the verb, and a list that only knew action
+  /// names *after* `call` answered that with nothing at all. Taking one writes
+  /// the verb too, so what lands in the file is the statement, not a bare
+  /// name.
+  void AddCallTargets() {
+    const auto offer = [&](std::string_view name, std::string_view description,
+                           ProposalKind kind, std::string documentation) {
+      Proposal proposal;
+      proposal.name = std::string(name);
+      proposal.kind = kind;
+      proposal.insert = absl::StrCat("call ", name, "()");
+      proposal.caret = static_cast<int>(name.size()) + 6;
+      proposal.tail = Summary(description);
+      proposal.documentation = std::move(documentation);
+      proposals_.push_back(std::move(proposal));
+    };
+    absl::flat_hash_set<std::string> offered;
+    for (const FlowPlan& candidate : resolved_.program.flows) {
+      if (flow_ != nullptr && candidate.name == flow_->plan.name) continue;
+      offered.insert(candidate.name);
+      offer(candidate.name, candidate.description, ProposalKind::kFlow,
+            FlowMarkdown(candidate));
+    }
+    for (const catalogue::ActionInfo& action : known_.actions()) {
+      if (offered.contains(action.name)) continue;
+      offer(action.name, action.description, ProposalKind::kCall,
+            ActionMarkdown(action));
+    }
   }
 
   /// The head of a statement: everything a flow may say, and every name it has.
@@ -764,6 +1106,7 @@ class Completer {
     AddNames([](const Symbol& symbol) {
       return symbol.kind != SymbolKind::kNodeMap;
     });
+    AddCallTargets();
   }
 
   std::string_view source_;
@@ -771,6 +1114,8 @@ class Completer {
   std::vector<Token> tokens_;
   ParseResult parsed_;
   ResolveResult resolved_;
+  /// What the world outside this document contains: see [CompleteAt].
+  const catalogue::Catalogue& known_;
   const ResolvedFlow* flow_ = nullptr;
 
   /// Tokens `[0, cut_)` are before the caret.
@@ -791,13 +1136,14 @@ class Completer {
 
 }  // namespace
 
-CompleteResult CompleteAt(std::string_view source, size_t offset) {
-  Completer completer(source, offset);
+CompleteResult CompleteAt(std::string_view source, size_t offset,
+                          const catalogue::Catalogue& known) {
+  Completer completer(source, offset, known);
   if (!completer.IsFragment()) return completer.Run();
   const std::string wrapped =
       absl::StrCat(kFragmentPrefix, source, "\n}");
   CompleteResult result =
-      Completer(wrapped, offset + kFragmentPrefix.size()).Run();
+      Completer(wrapped, offset + kFragmentPrefix.size(), known).Run();
   result.prefix_start = result.prefix_start >= kFragmentPrefix.size()
                             ? result.prefix_start - kFragmentPrefix.size()
                             : 0;

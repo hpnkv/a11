@@ -157,12 +157,18 @@ TEST(FlowInspect, SaysWhenABarrierCannotDoAnything) {
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
                   " x = run act(p: a)\n wait x\n wait x\n x.out -> b }"),
             (std::vector<std::string>{"flow.barrier.duplicate"}));
+  // Both of these give the `cancel` an `after` or a branch, because a `cancel`
+  // at the top of a body races everything and the language refuses one -- and the
+  // inspector says nothing at all about a flow that does not resolve, so without
+  // that these would pass by going quiet rather than by being right.
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " x = run act(p: a)\n wait x\n cancel x\n x.out -> b }"),
+                  " x = run act(p: a)\n w = wait x\n cancel x after w\n"
+                  " x.out -> b }"),
             (std::vector<std::string>{"flow.barrier.cancel-after-wait"}));
   // A `cancel` *before* the wait is the ordinary way round.
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " x = run act(p: a)\n cancel x\n wait x\n x.out -> b }"),
+                  " x = run act(p: a)\n if a == \"stop\" { cancel x }\n"
+                  " wait x\n x.out -> b }"),
             (std::vector<std::string>{}));
 }
 

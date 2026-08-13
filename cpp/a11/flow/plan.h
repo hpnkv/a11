@@ -32,6 +32,55 @@ struct PortPlan {
   syntax::Location location;
 };
 
+/// One field of a `struct`, resolved.
+///
+/// The syntax node's constraints, with the type worked out the way a port's is:
+/// `declared` is what was written and `type` is what it *is*. A field naming
+/// another `struct` keeps that name in both, and `dto_name` says so, which is what
+/// saves every reader from deciding whether a bare name is a shape again.
+struct FieldPlan {
+  std::string name;
+  std::string declared;
+  std::string type;
+  /// The element type of a `list[T]`, resolved, or empty where it is not a list.
+  std::string element;
+  /// Whether the field, or a list's element, names a declared shape.
+  std::string dto_name;
+  std::string element_dto_name;
+  bool required = false;
+  bool unique = false;
+  syntax::FieldRange range;
+  std::string pattern;
+  bool has_pattern = false;
+  std::vector<syntax::Constant> enumeration;
+  bool has_enumeration = false;
+  syntax::Constant default_value;
+  bool has_default = false;
+  std::string description;
+  syntax::Location location;
+};
+
+/// One compiled `struct`: a shape a port may be typed with.
+struct DtoPlan {
+  std::string name;
+  std::string description;
+  std::vector<FieldPlan> fields;
+  /// Whether the shape holds bytes anywhere in it, directly or through another
+  /// shape it names.
+  ///
+  /// Worked out once, at resolution, because it is what decides whether `| json`
+  /// on a value of this shape can mean anything -- and working it out on demand
+  /// would mean walking a graph of shapes that may refer to each other.
+  bool binary = false;
+  syntax::Location location;
+
+  /// The field of this name, or `nullptr`.
+  const FieldPlan* absl_nullable Field(std::string_view name) const;
+
+  /// Every field name, in declaration order, for a message that lists them.
+  std::vector<std::string> FieldNames() const;
+};
+
 /// One declared header.
 struct HeaderPlan {
   std::string name;
@@ -100,12 +149,22 @@ struct FlowPlan {
   std::vector<std::string> PortNames(syntax::PortDirection direction) const;
 };
 
-/// Every flow one source file declares.
+/// Every flow and shape one source file declares.
 struct Program {
   std::string source_name;
   std::vector<FlowPlan> flows;
+  /// The shapes, in declaration order.
+  ///
+  /// Beside the flows because a shape is not any one flow's: two flows in a file
+  /// describe the same records. A name here **outranks** a serialisation
+  /// registry tag of the same name, which is the point of being able to declare
+  /// one -- what a file says about a shape is what the file means by it.
+  std::vector<DtoPlan> dtos;
 
   const FlowPlan* absl_nullable Flow(std::string_view name) const;
+
+  /// The shape of this name, or `nullptr`.
+  const DtoPlan* absl_nullable Dto(std::string_view name) const;
 };
 
 /// The `format` field of the plan envelope.

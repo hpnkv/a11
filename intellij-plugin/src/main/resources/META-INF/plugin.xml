@@ -75,6 +75,20 @@
         <formattingService
                 implementation="dev.curiositystack.a11.clion.flow.FlowFormattingService"/>
 
+        <!-- Hover, go-to-declaration and the structure view. A flow's PSI is a
+             flat token stream on purpose, since there is no second parser in
+             Kotlin, so none of these can be answered by walking a tree here.
+             Each is a question about meaning, put to the language at an offset,
+             which is also why hovering an action's name can show its ports. -->
+        <lang.documentationProvider
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowDocumentationProvider"/>
+        <lang.psiStructureViewFactory
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowStructureViewFactory"/>
+        <gotoDeclarationHandler
+                implementation="dev.curiositystack.a11.clion.flow.FlowDeclarationHandler"/>
+
         <applicationService serviceImplementation="dev.curiositystack.a11.clion.settings.A11Settings"/>
         <applicationConfigurable
                 parentId="tools"

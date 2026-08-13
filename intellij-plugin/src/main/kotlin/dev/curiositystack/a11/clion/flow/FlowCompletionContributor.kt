@@ -19,6 +19,14 @@ data class FlowProposal(
     val caret: Int,
     val tail: String,
     val type: String,
+    /**
+     * Everything known about it, as Markdown, for the popup beside the list.
+     *
+     * The same text hovering the finished word gives. Empty where the name says
+     * all there is to say -- a stage, a status code -- so the popup stays shut
+     * rather than repeating the one line already in the list.
+     */
+    val documentation: String,
 )
 
 /**
@@ -76,6 +84,7 @@ class FlowCompletionContributor : CompletionContributor() {
                 caret = (proposal["caret"] as? Number)?.toInt() ?: insert.length,
                 tail = proposal["tail"] as? String ?: "",
                 type = proposal["type"] as? String ?: "",
+                documentation = proposal["documentation"] as? String ?: "",
             )
         }
     }

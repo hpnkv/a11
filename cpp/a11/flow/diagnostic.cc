@@ -47,36 +47,88 @@ constexpr std::array kCodes = {
              "A carry names something other than what its repeat carries."},
     CodeInfo{"flow.form.bad-number", Family::kForm, Severity::kError,
              "A number the language cannot read."},
+    CodeInfo{"flow.form.bad-pattern", Family::kForm, Severity::kError,
+             "A 'match' pattern the language cannot read: an unclosed hole, an "
+             "unknown kind, or two holes with one name."},
     CodeInfo{"flow.form.count-not-positive", Family::kForm, Severity::kWarning,
              "A count that is not a number of anything: 'parallel 0', "
              "'skip -1'."},
+    CodeInfo{"flow.form.default-on-required", Family::kForm, Severity::kWarning,
+             "A field is required and also given a default, so the default "
+             "could never be used."},
+    CodeInfo{"flow.form.duplicate-field", Family::kForm, Severity::kError,
+             "A field is declared twice in one shape."},
     CodeInfo{"flow.form.duplicate-flow", Family::kForm, Severity::kError,
              "Two flows in one file are declared with the same name."},
     CodeInfo{"flow.form.duplicate-port", Family::kForm, Severity::kError,
              "A port is declared twice in one direction."},
+    CodeInfo{"flow.form.duplicate-struct", Family::kForm, Severity::kError,
+             "Two structs in one file are declared with the same name."},
     CodeInfo{"flow.form.duration-unit", Family::kForm, Severity::kError,
              "A number carrying a suffix that is not one of the duration units."},
+    CodeInfo{"flow.form.empty-range", Family::kForm, Severity::kError,
+             "A range that bounds nothing, or whose bounds are the wrong way "
+             "round."},
+    CodeInfo{"flow.form.field-constraint", Family::kForm, Severity::kError,
+             "A field constraint that cannot apply to what the field holds: "
+             "'unique' on one value, 'matching' on a number."},
+    CodeInfo{"flow.form.field-modifier-order", Family::kForm, Severity::kWarning,
+             "A field's modifiers are written out of the order they read in."},
+    CodeInfo{"flow.form.field-type-mismatch", Family::kForm, Severity::kError,
+             "A field's default or 'one of' value is not a value of the type "
+             "the field holds."},
     CodeInfo{"flow.form.forward-headers", Family::kForm, Severity::kError,
              "'headers' without the 'forward' that owns it."},
+    CodeInfo{"flow.form.missing-field", Family::kForm, Severity::kError,
+             "A value of a declared shape leaves out a field the shape requires "
+             "and gives no default for."},
     CodeInfo{"flow.form.node-parentheses", Family::kForm, Severity::kError,
              "Making a node takes parentheses: 'node()' or 'node(id)'."},
+    CodeInfo{"flow.form.not-json-representable", Family::kForm,
+             Severity::kError,
+             "A value holding bytes is asked for as JSON, which has nothing to "
+             "carry them in; 'packb' is the one that does."},
+    CodeInfo{"flow.form.one-of-empty", Family::kForm, Severity::kError,
+             "'one of []' allows nothing, so nothing would validate."},
+    CodeInfo{"flow.form.one-of-not-a-list", Family::kForm, Severity::kError,
+             "'one of' is given something other than a list of constants."},
     CodeInfo{"flow.form.port-modifier-order", Family::kForm, Severity::kError,
              "'stream' or 'required' is written in front of the port's type "
              "instead of after it."},
+    CodeInfo{"flow.form.repeated-modifier", Family::kForm, Severity::kError,
+             "A modifier that says one thing is written twice."},
     CodeInfo{"flow.form.stage-argument", Family::kForm, Severity::kError,
              "A stage is missing the argument it takes, or was given one of "
              "the wrong kind."},
+    CodeInfo{"flow.form.struct-shadows-builtin", Family::kForm,
+             Severity::kError,
+             "A struct is named after a built-in type, which nothing could "
+             "then write."},
+    CodeInfo{"flow.form.unbounded-repeat", Family::kForm, Severity::kError,
+             "A 'repeat' with no 'until', no 'while' and no 'max': nothing "
+             "ends it."},
+    CodeInfo{"flow.form.unconditional-cancel", Family::kForm, Severity::kError,
+             "A 'cancel' at the top of a flow's body with no 'after': it runs "
+             "at once rather than where it is written."},
+    CodeInfo{"flow.form.unconditional-fail", Family::kForm, Severity::kError,
+             "A 'fail' at the top of a flow's body with no 'after': it runs at "
+             "once rather than where it is written."},
     CodeInfo{"flow.form.unknown-builtin", Family::kForm, Severity::kError,
              "A function call naming something that is not one of the "
              "language's fixed functions."},
+    CodeInfo{"flow.form.unknown-field", Family::kForm, Severity::kError,
+             "A value of a declared shape names a field the shape does not "
+             "have."},
     CodeInfo{"flow.form.unknown-stage", Family::kForm, Severity::kError,
              "A pipeline stage the language does not have."},
     CodeInfo{"flow.form.unknown-status-code", Family::kForm, Severity::kError,
              "'fail' names something that is not a canonical status code, a "
              "number, or a value the flow read."},
     CodeInfo{"flow.form.unknown-type", Family::kForm, Severity::kError,
-             "A port type that is neither built in nor written as a "
-             "registry tag or a quoted mimetype."},
+             "A type that is neither built in, nor a shape the file declares, "
+             "nor written as a registry tag or a quoted mimetype."},
+    CodeInfo{"flow.form.zip-empty", Family::kForm, Severity::kError,
+             "'zip' reads streams in step, so it takes at least one."},
     CodeInfo{"flow.name.call-as-stream", Family::kName, Severity::kError,
              "A call used where one of its ports was meant."},
     CodeInfo{"flow.name.it-outside-stage", Family::kName, Severity::kError,
@@ -88,6 +140,9 @@ constexpr std::array kCodes = {
              "Something that is not a call is asked to stop."},
     CodeInfo{"flow.name.not-a-stream", Family::kName, Severity::kError,
              "Something that cannot be read is used as a pipeline source."},
+    CodeInfo{"flow.name.not-advanceable", Family::kName, Severity::kError,
+             "'advance' names something other than a value a 'let' bound, which "
+             "is the only thing with a next value."},
     CodeInfo{"flow.name.not-writable", Family::kName, Severity::kError,
              "A stream is written somewhere that cannot be written: an 'in' "
              "port, a call's output, a barrier."},
@@ -140,9 +195,14 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.unused.output-port", Family::kUnused, Severity::kWarning,
              "An 'out' port nothing in the flow writes, so a caller reading it "
              "gets nothing."},
+    CodeInfo{"flow.unused.struct", Family::kUnused, Severity::kWeakWarning,
+             "A struct no port, cast or other struct in the file names."},
     CodeInfo{"flow.unused.try-status", Family::kUnused, Severity::kWeakWarning,
              "A 'try' whose status nothing reads: a failure leaves the ports "
              "it feeds silently empty."},
+    CodeInfo{"flow.unused.value", Family::kUnused, Severity::kWarning,
+             "A `let` nothing reads: the stream behind it is never read "
+             "either, so whatever produces it may be left waiting."},
 };
 
 }  // namespace

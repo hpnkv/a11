@@ -1,5 +1,6 @@
 package dev.curiositystack.a11.clion.flow
 
+import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.psi.PsiLanguageInjectionHost
 import com.intellij.psi.util.PsiTreeUtil
@@ -15,6 +16,28 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  * whether the text is a flow.
  */
 class FlowInjectionTest : BasePlatformTestCase() {
+
+    /**
+     * Put the code-insight settings back the way they were found.
+     *
+     * Registering a documentation provider for the language makes the platform
+     * turn the javadoc auto-popup on the first time one is asked for, and the
+     * fixture's tear-down asserts that a test changed no global setting. The
+     * setting is the platform's to change and the assertion is the fixture's to
+     * make; restoring it here is what lets both be right.
+     */
+    override fun tearDown() {
+        try {
+            // Back to what a fresh instance holds, which is what the fixture
+            // compares against: restoring the value read at set-up is not the
+            // same thing, since the platform writes the field explicitly the
+            // first time it is asked and the snapshot was taken before that.
+            CodeInsightSettings.getInstance().AUTO_POPUP_JAVADOC_INFO =
+                CodeInsightSettings().AUTO_POPUP_JAVADOC_INFO
+        } finally {
+            super.tearDown()
+        }
+    }
 
     fun testAFlowInsideAStringIsInjected() {
         val injected = injectedLanguageIn(

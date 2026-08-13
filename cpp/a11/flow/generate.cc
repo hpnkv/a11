@@ -171,6 +171,31 @@ std::string PortModifierRules() {
   return out;
 }
 
+/// One rule per field modifier, each scoped by the name it is.
+///
+/// `one of` is two words with a space between them, so its pattern says so; the
+/// scope it takes is the first word, since a scope name cannot hold one.
+std::string FieldModifierRules() {
+  std::string out;
+  for (const std::string_view modifier : vocabulary::OrderedFieldModifiers()) {
+    const size_t space = modifier.find(' ');
+    const std::string pattern =
+        space == std::string_view::npos
+            ? absl::StrCat(modifier, "|", Shout(modifier))
+            : absl::StrCat(modifier.substr(0, space), "\\s+",
+                           modifier.substr(space + 1), "|",
+                           Shout(modifier.substr(0, space)), "\\s+",
+                           Shout(modifier.substr(space + 1)));
+    const std::string_view scope =
+        space == std::string_view::npos ? modifier : modifier.substr(0, space);
+    absl::StrAppend(&out, "            - match: '\\b(", pattern,
+                    "){{kw_boundary}}'\n", "              scope: keyword.modifier.",
+                    scope, ".a11flow\n");
+  }
+  if (!out.empty()) out.pop_back();
+  return out;
+}
+
 /// The Sublime grammar, with `@NAME@` where a list of words goes.
 ///
 /// The structure is hand-written because it is a judgement about the language --
@@ -210,6 +235,7 @@ variables:
 contexts:
   main:
     - include: comments
+    - include: struct-declaration
     - include: flow-declaration
     - include: statements
 
@@ -239,6 +265,61 @@ contexts:
               scope: punctuation.definition.string.end.a11flow
               pop: true
         - match: '(?=\S)'
+          pop: true
+
+  # --- shape declarations -----------------------------------------------------
+
+  # `struct Name { field: type ... }`. The name is a type everywhere else in the
+  # file, so it is scoped as one here; the body is fields and nothing else,
+  # which is why it is its own context rather than a use of `statements`.
+  struct-declaration:
+    - match: '\b(@STRUCT@){{kw_boundary}}'
+      scope: keyword.declaration.struct.a11flow
+      push:
+        - meta_scope: meta.struct.a11flow
+        - match: '{{name}}'
+          scope: entity.name.type.struct.a11flow
+          set:
+            - match: '\{'
+              scope: punctuation.section.block.begin.a11flow
+              set:
+                - meta_scope: meta.struct.body.a11flow
+                - match: '\}'
+                  scope: punctuation.section.block.end.a11flow
+                  pop: true
+                - include: comments
+                - include: describe-declaration
+                - include: field-declaration
+            - match: '(?=\S)'
+              pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  field-declaration:
+    - match: '({{name}})(?=\s*:)'
+      scope: variable.parameter.field.a11flow
+      push:
+        - meta_scope: meta.field.a11flow
+        - match: ':'
+          scope: punctuation.separator.a11flow
+          set:
+            - meta_scope: meta.field.a11flow
+            # What a field says about itself after its type: whether it has to
+            # be given, and what bounds the values it may hold.
+@FIELD_MODIFIERS@
+            - include: port-types
+            - include: strings
+            - include: literals
+            # `1..200`: the range between two bounds.
+            - match: '\.\.'
+              scope: keyword.operator.range.a11flow
+            - match: '[\[\]]'
+              scope: punctuation.section.brackets.a11flow
+            - match: ','
+              scope: punctuation.separator.comma.a11flow
+            - match: '$\n?'
+              pop: true
+        - match: '$\n?'
           pop: true
 
   # --- declarations inside a flow -------------------------------------------
@@ -555,8 +636,10 @@ std::string Sublime() {
       kSublimeTemplate,
       {
           {"@FLOW@", One("flow")},
+          {"@STRUCT@", One("struct")},
           {"@DIRECTIONS@", Inline(std::vector<std::string_view>{"in", "out"})},
           {"@PORT_MODIFIERS@", PortModifierRules()},
+          {"@FIELD_MODIFIERS@", FieldModifierRules()},
           {"@TYPES@", Wrapped(vocabulary::OrderedTypeNames(), "          ")},
           {"@HEADER@", One("header")},
           {"@HEADER_WORDS@",

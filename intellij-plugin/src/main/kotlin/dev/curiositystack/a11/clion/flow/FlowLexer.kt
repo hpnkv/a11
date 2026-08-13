@@ -120,6 +120,7 @@ class FlowLexer : LexerBase() {
         "action-name" -> FlowTokens.ACTION_NAME
         "node-map-name" -> FlowTokens.NODE_MAP_NAME
         "member" -> FlowTokens.MEMBER
+        "port-name" -> FlowTokens.PORT_NAME
         "identifier" -> FlowTokens.IDENTIFIER
         // Punctuation is told apart by what it is rather than what it means,
         // because the platform matches braces and folds on the token type.

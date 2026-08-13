@@ -45,6 +45,8 @@ std::string_view StepKindName(StepKind kind) {
       return "repeat";
     case StepKind::kIf:
       return "if";
+    case StepKind::kBlock:
+      return "block";
   }
   return "pipe";
 }
@@ -60,6 +62,12 @@ std::vector<RefId> FlowGraph::Upstreams(RefId ref) const {
     // `then` takes a stream rather than a value, and the plan has to know it is
     // read so that whatever produces it is run and counted.
     Push(found, one.stage.stream);
+  }
+  // A zip reads every one of its sources, so each is a reader slot on whatever
+  // produces it -- which is what makes the existing materialise-and-replay
+  // analysis apply to one without knowing what a zip is.
+  if (one.kind == RefKind::kZip) {
+    for (const RefId source : one.sources) Push(found, source);
   }
   return found;
 }
@@ -239,9 +247,26 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
     if (is_owned.insert(ref).second) owned.push_back(ref);
   };
 
+  // A *value* read of a ref does not get a reader of its own. Every value read
+  // of one ref in one body shares a single cursor over it (see
+  // `Scope::ValueOf`), because that is what makes two `let`s on one node two
+  // different values rather than two names for the first: they take turns on one
+  // view of the stream. So the slots are one per *stream* read plus at most one
+  // for all the value reads together.
+  //
+  // Counting one each instead would allocate slots nobody takes, and an untaken
+  // slot fills to `kQueueDepth` and then stops the producer for everybody: this
+  // is the count that has to be exactly right or the flow hangs.
+  absl::flat_hash_set<RefId> valued;
+  auto value_read = [&](RefId ref) {
+    if (ref == kNone) return;
+    own(ref);
+    if (valued.insert(ref).second) note(ref);
+  };
+
   for (const StepId step : flow.bodies[body].steps) {
     for (const RefId ref : flow.Sources(step)) note(ref);
-    for (const RefId ref : flow.ValueSources(step)) note(ref);
+    for (const RefId ref : flow.ValueSources(step)) value_read(ref);
   }
 
   // A node's id is computed once per pass however many steps name the node, so
@@ -272,7 +297,9 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
     const int reads = found == local.end() ? 0 : found->second;
     if (reads == 0 && !nested.contains(next)) continue;
     for (const RefId up : flow.Upstreams(next)) note(up);
-    for (const RefId value : flow.ValueRefs(next)) note(value);
+    // A stage's own expression reads for a value, and shares the one cursor with
+    // every other value read of the same ref.
+    for (const RefId value : flow.ValueRefs(next)) value_read(value);
     // `owned` may have grown; the loop picks the new highest next time round.
   }
 

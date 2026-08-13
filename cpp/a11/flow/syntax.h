@@ -4,6 +4,7 @@
 #define A11_FLOW_SYNTAX_H_
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -106,6 +107,12 @@ struct TypeExpression {
   std::string name;
   std::vector<TypeExpression> parameters;
   bool quoted = false;
+  /// Whether a `list[T]` was written `T[]`.
+  ///
+  /// The two are the same type and everything but the formatter treats them as
+  /// one; this is only so a document formatted twice reads the way its author
+  /// wrote it.
+  bool sugared = false;
 
   /// The type as it would be written, which is what a message quotes.
   std::string ToString() const;
@@ -121,11 +128,13 @@ enum class NodeKind {
   kLiteral,
   kListLiteral,
   kObjectLiteral,
+  kSpread,
   kIt,
   kName,
   kAttr,
   kIndex,
   kBuiltin,
+  kZip,
   kTypedValue,
   kUnary,
   kBinary,
@@ -139,6 +148,9 @@ enum class NodeKind {
   kCallExpression,
 
   kBind,
+  kLet,
+  kAdvance,
+  kBlock,
   kCallStatement,
   kPipe,
   kSkip,
@@ -157,6 +169,8 @@ enum class NodeKind {
   kPortDeclaration,
   kHeaderDeclaration,
   kFlowDeclaration,
+  kFieldDeclaration,
+  kDtoDeclaration,
 };
 
 /// The name of a node kind in the output formats, in kebab case.
@@ -212,12 +226,27 @@ struct Literal : NodeOf<NodeKind::kLiteral> {
   Constant value;
 };
 
-/// `[a, b, c]`.
+/// `...expr` -- everything `expr` holds, in the literal being written.
+///
+/// Only ever an item of a list literal or a pair of an object literal, which is
+/// why it is a node rather than a flag on those: a reader that has not been
+/// taught about spreading meets a node kind it does not know and says so,
+/// instead of quietly reading `...it` as `it`.
+struct Spread : NodeOf<NodeKind::kSpread> {
+  NodePtr value;
+};
+
+/// `[a, ...rest, c]`. An item may be a [Spread].
 struct ListLiteral : NodeOf<NodeKind::kListLiteral> {
   std::vector<NodePtr> items;
 };
 
-/// `{ "key": expr, ... }`.
+/// `{ "key": expr, ...rest }`.
+///
+/// A pair whose value is a [Spread] is one: its key is empty and means nothing,
+/// and it contributes every pair of what it holds at the point it is written.
+/// Later pairs win, so `{...it, "tags": [..]}` overrides and `{"tags": [..], ...it}`
+/// does not.
 struct ObjectLiteral : NodeOf<NodeKind::kObjectLiteral> {
   std::vector<std::pair<std::string, NodePtr>> pairs;
 };
@@ -246,6 +275,16 @@ struct Index : NodeOf<NodeKind::kIndex> {
 struct Builtin : NodeOf<NodeKind::kBuiltin> {
   std::string name;
   std::vector<NodePtr> args;
+};
+
+/// `zip(a, b, c)` -- several streams read in step, as one stream of tuples.
+///
+/// Not a [Builtin], though it is spelled like one: a builtin takes *values* and
+/// this takes *streams*, so it stands only where a pipeline's source does and
+/// the resolver has to resolve each argument as a reference rather than evaluate
+/// it. Keeping the two apart is what stops `len(zip(a, b))` from looking legal.
+struct Zip : NodeOf<NodeKind::kZip> {
+  std::vector<NodePtr> sources;
 };
 
 /// `Tag{...}` or `expr as Tag` -- a value made into a type's value.
@@ -353,6 +392,58 @@ struct Bind : NodeOf<NodeKind::kBind> {
   NodePtr value;
 };
 
+/// `let name = pipeline` -- one value, read from a stream and given a name.
+///
+/// **Why the language needs this.** Everything else here is a stream, and a
+/// stream is the right default: a flow is dataflow, and most of what moves
+/// through it is many values. But some of what moves through it is one value --
+/// a status code, an image, a summary -- and until now a flow could only reach
+/// one *inside* an expression, with `(x | first 1)` written out at every use.
+/// A name that is a value can be compared, added, indexed and branched on
+/// directly, which is what makes `if code >= 200 and code < 300` say what it
+/// means.
+///
+/// **Why it is a word and not an operator.** `name = ...` already says "a step
+/// of this flow"; the thing that differs here is the *kind of thing the name
+/// is*, and that is worth a word at the front of the line where a reader
+/// scanning the left margin sees it. It reads as one, too: `let code = ...`.
+struct Let : NodeOf<NodeKind::kLet> {
+  /// One name is the value; several take it apart -- `let name, age = user` by
+  /// field, `let first, second = pair` by position. Which of the two is meant is
+  /// a question about the value rather than about the text, so it is answered
+  /// where the value is: by name, and by position where there is no such field.
+  std::vector<Word> names;
+  PipelinePtr pipeline;
+
+  /// The first name, which is the whole value where there is only one.
+  const Word& name() const {
+    static const Word kNone;
+    return names.empty() ? kNone : names.front();
+  }
+};
+
+/// `[try] { ... }` -- a block of statements that runs as one thing.
+///
+/// Everything in a flow's body runs at once, which is the point of it; a block is
+/// how a flow says "these together, and *this* is what came of them". Inside it
+/// the ordinary rules hold, so its own statements are concurrent with each other
+/// and a condition in it blocks only what is in it. Bound to a name it reads as a
+/// status, exactly as a call does, and `try` is what says a failure inside is the
+/// flow's to handle rather than the end of it.
+struct Block : NodeOf<NodeKind::kBlock> {
+  bool tolerant = false;
+  std::vector<NodePtr> body;
+};
+
+/// `advance name` -- rebind a `let` value to the *next* value of its stream.
+///
+/// The concise form of writing the `let` again for the value after the one it
+/// has. What it buys is the guarantee a second `let` cannot give on its own:
+/// which value each use of the name sees.
+struct Advance : NodeOf<NodeKind::kAdvance> {
+  Word name;
+};
+
 /// A call whose outputs nobody names (they are drained for it).
 struct CallStatement : NodeOf<NodeKind::kCallStatement> {
   CallExpressionPtr call;
@@ -402,12 +493,23 @@ struct Fail : NodeOf<NodeKind::kFail> {
   std::vector<Word> after;
 };
 
-/// `for name in pipeline [parallel n] { ... }`.
+/// `for name[, name...] in pipeline [parallel n] { ... }`.
+///
+/// Several names take the value apart by position -- `for url, title in
+/// zip(urls, titles)` -- which is what makes `zip` worth having: the alternative
+/// is one name and `it[0]` everywhere, and a tuple whose parts have names reads
+/// like the two streams it came from.
 struct ForEach : NodeOf<NodeKind::kForEach> {
-  Word variable;
+  std::vector<Word> variables;
   PipelinePtr pipeline;
   int parallel = 1;
   std::vector<NodePtr> body;
+
+  /// The first name, which is the whole value where there is only one.
+  const Word& variable() const {
+    static const Word kNone;
+    return variables.empty() ? kNone : variables.front();
+  }
 };
 
 /// `repeat [name = expr] [max n] { ... }`.
@@ -415,7 +517,14 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// Empty where the repeat carries nothing.
   Word variable;
   NodePtr start;
-  int max_iterations = 16;
+  /// `max n`, where one was written. Nothing means no bound: the loop runs until
+  /// its `until`/`while` says to stop.
+  ///
+  /// There used to be a default of 16 here, which meant a `repeat` whose
+  /// condition never held stopped after sixteen passes and reported *success*.
+  /// A silent bound presented as a clean finish is worse than either an honest
+  /// loop or an honest error, so a bound is now only ever the author's.
+  std::optional<int> max_iterations;
   std::vector<NodePtr> body;
 };
 
@@ -496,6 +605,59 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
 
 using FlowDeclarationPtr = std::unique_ptr<FlowDeclaration>;
 
+/// A bound on a field: `1..200`, `1..`, `..200`.
+///
+/// What it bounds depends on what the field holds -- the *value* of a number, a
+/// duration or an instant, and the *length* of a string, a byte string or a
+/// list. One spelling for both because it is one idea, and because which one is
+/// meant is never in doubt once the type is known.
+struct FieldRange {
+  bool has_minimum = false;
+  bool has_maximum = false;
+  Constant minimum;
+  Constant maximum;
+
+  bool Empty() const { return !has_minimum && !has_maximum; }
+};
+
+/// One `name: type [modifiers] ["description"]` field of a `struct`.
+struct FieldDeclaration : NodeOf<NodeKind::kFieldDeclaration> {
+  Word name;
+  TypeExpression type;
+  /// Whether a value has to be given. A field that is not required and has no
+  /// default is simply absent when it was not sent.
+  bool required = false;
+  /// `unique`: no two items of a list are equal.
+  bool unique = false;
+  FieldRange range;
+  /// `matching "..."`: the pattern every value has to match, unanchored, as
+  /// JSONSchema's `pattern` is.
+  std::string pattern;
+  bool has_pattern = false;
+  /// `one of [..]`: the only values allowed.
+  std::vector<Constant> enumeration;
+  bool has_enumeration = false;
+  /// `default ..`: what a value that was not given is.
+  Constant default_value;
+  bool has_default = false;
+  std::string description;
+};
+
+using FieldDeclarationPtr = std::unique_ptr<FieldDeclaration>;
+
+/// One `struct name { ... }` declaration: a shape a port may be typed with.
+///
+/// A sibling of [FlowDeclaration] rather than something inside one, because a
+/// shape is not a flow's private business: two flows in a file describe the same
+/// records, and a caller reading the file wants the type once.
+struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
+  Word name;
+  std::string description;
+  std::vector<FieldDeclarationPtr> fields;
+};
+
+using DtoDeclarationPtr = std::unique_ptr<DtoDeclaration>;
+
 /// The constant `node` folds to, or `nullopt` where it is not one all the way
 /// down.
 ///
@@ -503,6 +665,19 @@ using FlowDeclarationPtr = std::unique_ptr<FlowDeclaration>;
 /// run time is not a constant. This is what the grammar's constant positions --
 /// a header's default -- are checked with.
 std::optional<Constant> ConstantValue(const Node* node);
+
+/// Every node `node` directly holds, in the order they were written.
+///
+/// One place that knows the shape of the tree, so a pass that only cares about
+/// *some* node kind -- which types a body names, where a symbol is declared --
+/// says so and lets this find them, rather than restating the grammar. A pass
+/// that needs to treat each kind differently still switches on the kind; this is
+/// for the ones that do not.
+///
+/// Only the tree: a [TypeExpression] is a value on a node rather than a node, and
+/// is reached through the node that holds it.
+void VisitChildren(const Node& node,
+                   const std::function<void(const Node&)>& visit);
 
 /// `a11.sdk.AudioBuffer` for a chain of plain names, or `nullopt`.
 ///

@@ -298,7 +298,7 @@ def test_a_port_type_may_be_generic_or_a_serialisation_tag():
         ),
         ("flow f { in a: list[string, object]\n }", "type parameter"),
         ("flow f { in a: string[object]\n }", "type parameter"),
-        ("flow f { in a: list[wat]\n }", "Unknown port type"),
+        ("flow f { in a: list[wat]\n }", "Unknown type"),
         ("flow f { in a: a11.sdk.AudioBuffer[string]\n }", "type parameter"),
         ("flow f { in a: list[string\n }", "Expected ']'"),
     ],
@@ -315,7 +315,7 @@ def test_a_badly_written_type_says_so(source: str, message: str):
         ("flow f { out a: string\n missing -> a }", "Unknown name"),
         ("flow f { in a: string\n a -> a }", "cannot be written"),
         ("flow f { in a: string\n a | nope -> a }", "Unknown stage"),
-        ("flow f { in a: wat\n }", "Unknown port type"),
+        ("flow f { in a: wat\n }", "Unknown type"),
         (
             (
                 "flow f { in a: string\n x = run text-upper(text: a)\n"
@@ -1576,8 +1576,9 @@ def test_a_description_may_be_long_and_may_sit_under_what_it_describes():
         }
         ''')
     described = schema.describe()["flows"][0]
-    assert described["description"] == (
-        "What this flow is for, at the length that actually takes.\n"
+    assert (
+        described["description"]
+        == "What this flow is for, at the length that actually takes.\n"
         "\n"
         "  An indented line, still indented."
     )
@@ -1636,12 +1637,18 @@ def test_a_port_carries_one_value_unless_it_says_stream():
 async def test_fail_takes_a_canonical_code_by_name_or_by_number(
     registry, written: str, code: StatusCode
 ):
+    # The `fail` is in a branch because one at the top of a body races every
+    # other statement, and the language refuses one there. The old shape of this
+    # test is the argument for the rule: it wrote `"unreachable" -> out` under a
+    # bare `fail`, which says the author believed the fail was sequenced.
     with pytest.raises(StatusException) as raised:
         await run_flow(
             f"""
             flow refuse {{
               out out: string
-              {written}
+              if true {{
+                {written}
+              }}
               "unreachable" -> out
             }}
             """,
@@ -1659,7 +1666,9 @@ async def test_a_computed_code_is_accepted(registry):
             flow refuse {
               in  code: number
               out out:  string
-              fail code "computed"
+              if code > 0 {
+                fail code "computed"
+              }
               "unreachable" -> out
             }
             """,
@@ -1820,28 +1829,30 @@ async def test_a_flow_runs_a_sibling_that_is_in_no_registry(
     """
     del note
     bodies = {
-        "inner": """
+        "inner": (
+            """
         flow inner {
           in  t: string stream
           out o: string stream
           u = run text-upper(text: t)
           u.upper -> o
         }
-        """,
-        "outer": """
+        """
+        ),
+        "outer": (
+            """
         flow outer {
           in  t: string stream
           out o: string stream
           i = run inner(t: t)
           i.o -> o
         }
-        """,
+        """
+        ),
     }
     program = flow.loads("\n".join(bodies[name] for name in order), "two.flow")
     # Deliberately not registered: only the toy actions are.
-    result = await program["outer"].invoke(
-        {"t": ["a", "b"]}, registry=registry
-    )
+    result = await program["outer"].invoke({"t": ["a", "b"]}, registry=registry)
     assert result == {"o": ["A", "B"]}
 
 
@@ -2034,9 +2045,9 @@ async def test_an_explicit_with_beats_a_forwarded_header(registry):
 def test_forward_wants_the_word_headers_after_it():
     with pytest.raises(FlowSyntaxError) as raised:
         flow.loads(
-            'flow wrong { out o: string\n'
+            "flow wrong { out o: string\n"
             ' x = run thing(a: "b") forward "x-name"\n'
-            ' x.out -> o }',
+            " x.out -> o }",
             "wrong.flow",
         )
     assert "Expected 'headers'" in str(raised.value)
@@ -2497,9 +2508,7 @@ async def _started(source: str, registry: ActionRegistry, **kwargs):
 @pytest.mark.asyncio
 async def test_a_flow_reads_a_value_written_after_it_started(registry):
     """The point of an open port: the answer comes back before the port ends."""
-    running = await _started(
-        ECHO_EACH, registry, open_inputs=("words", "once")
-    )
+    running = await _started(ECHO_EACH, registry, open_inputs=("words", "once"))
     assert sorted(running.inputs) == ["once", "words"]
 
     await (await running.inputs["words"].put("one"))

@@ -66,7 +66,8 @@ class Inspector {
       Statements(flow.declaration->body);
       Barriers(flow.plan.steps);
     }
-    (void)parsed;
+    flow_.clear();
+    UnusedShapes(parsed, resolved);
   }
 
  private:
@@ -81,6 +82,64 @@ class Inspector {
     diagnostic.range = lines_.Between(location.start, location.end);
     diagnostic.flow = flow_;
     found_.push_back(std::move(diagnostic));
+  }
+
+  /// Shapes nothing in the file names.
+  ///
+  /// A shape is used when a port is typed with it, another shape has a field of
+  /// it, or a value is made one. Unlike a port or a name, it is not scoped to a
+  /// flow -- so this asks the whole file at once, once, rather than once per
+  /// flow, which would report every shape as unused by every flow that did not
+  /// happen to mention it.
+  ///
+  /// A file that declares only shapes is a file of types, which is a reasonable
+  /// thing to write and is what a JSONSchema is turned into; nothing there is
+  /// unused, so nothing is said about it.
+  void UnusedShapes(const ParseResult& parsed, const ResolveResult& resolved) {
+    if (resolved.program.dtos.empty() || resolved.flows.empty()) return;
+    absl::flat_hash_set<std::string> named;
+    for (const DtoPlan& dto : resolved.program.dtos) {
+      for (const FieldPlan& field : dto.fields) {
+        if (!field.dto_name.empty()) named.insert(field.dto_name);
+        if (!field.element_dto_name.empty()) {
+          named.insert(field.element_dto_name);
+        }
+      }
+    }
+    for (const ResolvedFlow& flow : resolved.flows) {
+      for (const PortPlan& port : flow.plan.ports) named.insert(port.type);
+      if (flow.declaration != nullptr) NamedTypes(flow.declaration->body, named);
+    }
+    for (const syntax::DtoDeclarationPtr& declaration : parsed.dtos) {
+      if (named.contains(declaration->name.text)) continue;
+      if (resolved.program.Dto(declaration->name.text) == nullptr) continue;
+      Report("flow.unused.struct",
+             absl::StrCat("Nothing names the shape ",
+                          Quoted(declaration->name.text),
+                          ": no port carries it and no value is made one."),
+             declaration->name.location, Severity::kWeakWarning,
+             Family::kUnused);
+    }
+  }
+
+  /// Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
+  void NamedTypes(const std::vector<syntax::NodePtr>& body,
+                  absl::flat_hash_set<std::string>& named) {
+    for (const syntax::NodePtr& node : body) NamedTypes(node.get(), named);
+  }
+
+  void NamedTypes(const syntax::Node* absl_nullable node,
+                  absl::flat_hash_set<std::string>& named) {
+    if (node == nullptr) return;
+    if (const auto* typed = syntax::As<syntax::TypedValue>(node);
+        typed != nullptr) {
+      named.insert(typed->type.name);
+    }
+    // Every child, whatever the node is: a cast can be anywhere an expression
+    // can, and enumerating the places would be a list to keep in step with the
+    // grammar for no gain.
+    syntax::VisitChildren(
+        *node, [&](const syntax::Node& child) { NamedTypes(&child, named); });
   }
 
   // --- what nothing uses ----------------------------------------------------
@@ -115,6 +174,18 @@ class Inspector {
                                 Quoted(symbol.name),
                                 ". Give it a block, or name it with 'via'."),
                    symbol.location, Severity::kWeakWarning, Family::kUnused);
+          }
+          break;
+        case SymbolKind::kValue:
+          if (symbol.reads == 0) {
+            // A `let` is lazy: nothing is read until the name is, so one nobody
+            // reads is not merely a dead name -- the stream behind it is never
+            // touched either, and whatever produces it may be left waiting.
+            Report("flow.unused.value",
+                   absl::StrCat("Nothing reads ", Quoted(symbol.name),
+                                ", so the stream behind it is never read. Use "
+                                "it, or 'skip' the stream instead."),
+                   symbol.location, Severity::kWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kLoopVariable:
@@ -192,7 +263,9 @@ class Inspector {
       }
       case NodeKind::kRepeat: {
         const auto* repeat = syntax::As<syntax::Repeat>(statement);
-        Count(repeat->max_iterations, "max", repeat->location);
+        if (repeat->max_iterations.has_value()) {
+          Count(*repeat->max_iterations, "max", repeat->location);
+        }
         Statements(repeat->body);
         return;
       }

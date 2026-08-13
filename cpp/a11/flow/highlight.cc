@@ -2,13 +2,17 @@
 
 #include "a11/flow/highlight.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <absl/container/flat_hash_set.h>
 #include <absl/types/span.h>
 
+#include "a11/flow/parser.h"
+#include "a11/flow/resolve.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
 
@@ -25,6 +29,9 @@ enum class State {
   kDefault,
   /// Straight after `flow`: the flow's own name.
   kAfterFlow,
+  /// Straight after `struct`: the shape's own name, which is a type everywhere
+  /// else in the file and so is coloured as one here.
+  kAfterDto,
   /// Straight after `run`/`call`: the action being dispatched.
   kAfterCall,
   /// Straight after `nodes` or `via`: a node map.
@@ -35,6 +42,13 @@ enum class State {
   kInPortType,
   /// Straight after `as`: the type a value is being made into.
   kAfterCast,
+  /// From a `header` to the end of its line.
+  ///
+  /// Its own state because a header's `as` is not the cast the same word is
+  /// everywhere else: `header "x" as budget` *renames*, so `budget` is a name
+  /// and not a type. Without this the alias was coloured as a type and, worse,
+  /// the cast state outlived the line and swallowed the next one.
+  kInHeader,
   /// Inside the dotted tag of a `Tag{...}` value, up to the `{`.
   ///
   /// Its own state because the decision is made at the front of the chain -- a
@@ -132,7 +146,29 @@ class Classifier {
       dotted = true;
       index += 2;
     }
-    return dotted && At(index + 1).kind == TokenKind::kLeftBrace;
+    if (At(index + 1).kind != TokenKind::kLeftBrace) return false;
+    // A dotted name before a `{` is always a tag: nothing else is written that
+    // way. A *bare* one is a shape the file declares -- `Source{..}` -- unless
+    // the brace it is in front of opens a block, which is the parser's own rule
+    // and is decided by the word the line began with.
+    return dotted || !LineOpensBlock();
+  }
+
+  /// Whether the line being read is a block header: `flow x {`, `if c {`.
+  ///
+  /// The same judgement `ParserImpl::brace_literals_` makes, arrived at from the
+  /// token stream alone: only these words open a body, and each of them opens it
+  /// at the head of its line. Everywhere else a `{` holds a value.
+  bool LineOpensBlock() const {
+    size_t at = index_;
+    while (at > 0 && At(at - 1).kind != TokenKind::kNewline) --at;
+    while (at < index_ && !At(at).IsWord()) ++at;
+    if (!At(at).IsWord()) return false;
+    static const auto* const kOpeners =
+        new absl::flat_hash_set<std::string>{"flow", "struct", "nodes", "if",
+                                             "else",  "for",    "repeat",
+                                             "try"};
+    return kOpeners->contains(vocabulary::Canonical(At(at).text));
   }
 
   SemanticKind Classify(const Token& token) {
@@ -182,11 +218,19 @@ class Classifier {
         state_ != State::kAfterCast && state_ != State::kInTypeTag) {
       return SemanticKind::kMember;
     }
+    // Inside a shape, the word before a `:` is the field's own name -- whatever
+    // else that word means elsewhere. Without this a field called `id` or `with`
+    // would be coloured as the call modifier it is not.
+    if (InFieldPosition() && At(index_ + 1).kind == TokenKind::kColon) {
+      return SemanticKind::kIdentifier;
+    }
     switch (state_) {
       case State::kInTypeTag:
         return SemanticKind::kType;
       case State::kAfterFlow:
         return SemanticKind::kFlowName;
+      case State::kAfterDto:
+        return SemanticKind::kType;
       case State::kAfterCall:
         return SemanticKind::kActionName;
       case State::kAfterNodeMap:
@@ -197,10 +241,22 @@ class Classifier {
         return SemanticKind::kIdentifier;
       case State::kAfterCast:
         return SemanticKind::kType;
+      case State::kInHeader:
+        // `as` and `default` are the declaration's own words; the alias and a
+        // written-out constant are what they take.
+        if (word == "as" || word == "default") {
+          return SemanticKind::kDeclarationKeyword;
+        }
+        if (vocabulary::ConstantWords().contains(word)) {
+          return SemanticKind::kConstant;
+        }
+        return SemanticKind::kIdentifier;
       case State::kInPortType:
-        // Past a port's `:` a word is its type, built-in or a registry tag.
-        // `stream` and `required` say what the port is like instead.
-        if (vocabulary::PortModifierWords().contains(word)) {
+        // Past a port's or a field's `:` a word is its type, built-in, a shape
+        // or a registry tag. `stream`, `required`, `matching` and the rest say
+        // what the port or field is like instead.
+        if (vocabulary::PortModifierWords().contains(word) ||
+            vocabulary::FieldModifierWords().contains(word)) {
           return SemanticKind::kDeclarationKeyword;
         }
         return SemanticKind::kType;
@@ -270,17 +326,50 @@ class Classifier {
       if (token.kind == TokenKind::kLeftBrace) state_ = State::kDefault;
       return;
     }
+    // A header's declaration runs to the end of its line, and *everything* on
+    // it belongs to the declaration -- including the strings, which is what a
+    // header's name and a text default are. Checked here, before the switch
+    // below sends a string to the default case and loses the state.
+    if (state_ == State::kInHeader) {
+      if (token.kind == TokenKind::kNewline) state_ = State::kDefault;
+      return;
+    }
 
     switch (token.kind) {
       case TokenKind::kNewline:
-        // A port declaration is one line, and what follows the next one is not
-        // its type. Every other context carries across a break.
-        if (state_ == State::kInPortName || state_ == State::kInPortType) {
+        // A **declaration** is one line: what follows the next one is not its
+        // port's type, and not the type a cast on the line above asked for.
+        // Everything else carries across a break, which is what lets `call` on
+        // one line and its action on the next still be an action name -- see
+        // [NextReal].
+        //
+        // `kAfterCast` used not to be in this list, and that was the bug behind
+        // a `header "x" as alias` line colouring the *first word of the next
+        // line* as a type: the cast state outlived the line that opened it.
+        if (state_ == State::kInPortName || state_ == State::kInPortType ||
+            state_ == State::kAfterCast) {
           state_ = State::kDefault;
         }
         return;
       case TokenKind::kColon:
-        if (state_ == State::kInPortName) state_ = State::kInPortType;
+        // A port says which `:` is its own with `in`/`out`; a field has only its
+        // position to say so, which is why the depth is counted.
+        if (state_ == State::kInPortName || InFieldPosition()) {
+          state_ = State::kInPortType;
+        }
+        return;
+      case TokenKind::kLeftBrace:
+        if (expect_dto_body_) {
+          dto_body_ = braces_;
+          expect_dto_body_ = false;
+        }
+        ++braces_;
+        state_ = State::kDefault;
+        return;
+      case TokenKind::kRightBrace:
+        braces_ = std::max(0, braces_ - 1);
+        if (dto_body_ >= 0 && braces_ <= dto_body_) dto_body_ = -1;
+        state_ = State::kDefault;
         return;
       case TokenKind::kDot:
       case TokenKind::kComma:
@@ -299,7 +388,10 @@ class Classifier {
     const std::string word = vocabulary::Canonical(token.text);
     if (state_ == State::kInPortName || state_ == State::kInPortType) return;
     if (state_ == State::kAfterCast) return;
-
+    if (word == "header" && produced == SemanticKind::kDeclarationKeyword) {
+      state_ = State::kInHeader;
+      return;
+    }
     if (produced == SemanticKind::kType && TypeLiteralFollows()) {
       state_ = State::kInTypeTag;
       return;
@@ -322,6 +414,12 @@ class Classifier {
       state_ = State::kAfterFlow;
       return;
     }
+    if (word == "struct" && produced == SemanticKind::kDeclarationKeyword &&
+        At(index_ + 1).IsWord()) {
+      state_ = State::kAfterDto;
+      expect_dto_body_ = true;
+      return;
+    }
     if ((word == "run" || word == "call") &&
         produced == SemanticKind::kStatementKeyword) {
       state_ = State::kAfterCall;
@@ -338,11 +436,24 @@ class Classifier {
     state_ = State::kDefault;
   }
 
+  /// Whether a field of a shape may be written here: directly inside a `struct`
+  /// body, and not inside a value written in one.
+  bool InFieldPosition() const {
+    return dto_body_ >= 0 && braces_ == dto_body_ + 1;
+  }
+
   absl::Span<const Token> tokens_;
   size_t index_ = 0;
   State state_ = State::kDefault;
   bool after_dot_ = false;
   bool after_pipe_ = false;
+  /// How many braces are open. Counted only so a field can be told from a value
+  /// written inside one; nothing else here needs nesting.
+  int braces_ = 0;
+  /// The depth the innermost `struct` body opened at, or -1 outside one.
+  int dto_body_ = -1;
+  /// Whether the next `{` opens a shape's body.
+  bool expect_dto_body_ = false;
 };
 
 }  // namespace
@@ -383,6 +494,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "node-map-name";
     case SemanticKind::kMember:
       return "member";
+    case SemanticKind::kPortName:
+      return "port-name";
     case SemanticKind::kIdentifier:
       return "identifier";
     case SemanticKind::kFlowOperator:
@@ -413,7 +526,8 @@ SemanticKind SemanticKindFromName(std::string_view name) {
       SemanticKind::kStatusCode,        SemanticKind::kConstant,
       SemanticKind::kWordOperator,      SemanticKind::kFlowName,
       SemanticKind::kActionName,        SemanticKind::kNodeMapName,
-      SemanticKind::kMember,            SemanticKind::kIdentifier,
+      SemanticKind::kMember,            SemanticKind::kPortName,
+      SemanticKind::kIdentifier,
       SemanticKind::kFlowOperator,      SemanticKind::kOperator,
       SemanticKind::kBrace,             SemanticKind::kParenthesis,
       SemanticKind::kBracket,           SemanticKind::kPunctuation,
@@ -427,6 +541,62 @@ SemanticKind SemanticKindFromName(std::string_view name) {
 
 std::vector<SemanticToken> Highlight(absl::Span<const Token> tokens) {
   return Classifier(tokens).Run();
+}
+
+void RefinePorts(std::string_view source,
+                 std::vector<SemanticToken>& semantic) {
+  const ParseResult parsed = Parse(source);
+  const ResolveResult resolved = Resolve(source, parsed);
+  if (resolved.flows.empty()) return;
+
+  // Where each top-level declaration begins. A flow's tokens are the ones from
+  // its own `flow` to the next declaration of any kind -- which is how a `struct`
+  // written *after* a flow does not have its field names read as that flow's
+  // ports because one of them happens to share a name.
+  std::vector<size_t> boundaries;
+  for (const syntax::FlowDeclarationPtr& flow : parsed.flows) {
+    boundaries.push_back(flow->location.start);
+  }
+  for (const syntax::DtoDeclarationPtr& dto : parsed.dtos) {
+    boundaries.push_back(dto->location.start);
+  }
+  std::sort(boundaries.begin(), boundaries.end());
+
+  /// One flow's span, and the names its ports have.
+  struct Span {
+    size_t start = 0;
+    size_t end = 0;
+    absl::flat_hash_set<std::string> ports;
+  };
+  std::vector<Span> spans;
+  for (const ResolvedFlow& flow : resolved.flows) {
+    if (flow.declaration == nullptr) continue;
+    Span span;
+    span.start = flow.declaration->location.start;
+    span.end = source.size();
+    for (const size_t boundary : boundaries) {
+      if (boundary > span.start) {
+        span.end = boundary;
+        break;
+      }
+    }
+    for (const PortPlan& port : flow.plan.ports) span.ports.insert(port.name);
+    if (!span.ports.empty()) spans.push_back(std::move(span));
+  }
+  if (spans.empty()) return;
+
+  for (SemanticToken& token : semantic) {
+    // Only a plain identifier: a member after a `.`, a keyword and a string that
+    // happens to spell a port's name are all already what they are.
+    if (token.kind != SemanticKind::kIdentifier) continue;
+    const std::string_view text =
+        source.substr(token.start, token.end - token.start);
+    for (const Span& span : spans) {
+      if (token.start < span.start || token.start >= span.end) continue;
+      if (span.ports.contains(text)) token.kind = SemanticKind::kPortName;
+      break;
+    }
+  }
 }
 
 }  // namespace a11::flow

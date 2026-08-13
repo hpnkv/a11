@@ -4,6 +4,8 @@ import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.colors.TextAttributesKey.createTextAttributesKey
+import com.intellij.openapi.editor.markup.TextAttributes
+import java.awt.Font
 import com.intellij.openapi.fileTypes.SyntaxHighlighter
 import com.intellij.openapi.fileTypes.SyntaxHighlighterBase
 import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
@@ -48,6 +50,26 @@ object FlowColors {
         key("A11FLOW_MEMBER", DefaultLanguageHighlighterColors.INSTANCE_FIELD)
     val IDENTIFIER =
         key("A11FLOW_IDENTIFIER", DefaultLanguageHighlighterColors.IDENTIFIER)
+
+    /**
+     * A port of the flow: italic, in whatever colour an identifier already is.
+     *
+     * Italic rather than another colour because the distinction being drawn is
+     * not a different *kind* of thing -- a port is a name like a node is -- but
+     * where it lives: a port crosses the flow's boundary and a node does not.
+     * A slant says "this one is the interface" without spending a hue, and it
+     * reads at a glance down a column of statements.
+     *
+     * Explicit default attributes rather than a fallback key, because a fallback
+     * supplies a *colour* and there is no platform key whose meaning is "the
+     * identifier colour, in italic". Leaving the foreground unset is what makes
+     * it inherit; a user who disagrees changes it under
+     * Settings | Editor | Color Scheme | A11 Flow.
+     */
+    val PORT_NAME = createTextAttributesKey(
+        "A11FLOW_PORT_NAME",
+        TextAttributes(null, null, null, null, Font.ITALIC),
+    )
     val ARROW =
         key("A11FLOW_ARROW", DefaultLanguageHighlighterColors.OPERATION_SIGN)
     val OPERATOR =
@@ -94,6 +116,7 @@ class FlowSyntaxHighlighter : SyntaxHighlighterBase() {
             FlowTokens.ACTION_NAME to FlowColors.ACTION_NAME,
             FlowTokens.NODE_MAP_NAME to FlowColors.NODE_MAP_NAME,
             FlowTokens.MEMBER to FlowColors.MEMBER,
+            FlowTokens.PORT_NAME to FlowColors.PORT_NAME,
             FlowTokens.IDENTIFIER to FlowColors.IDENTIFIER,
             FlowTokens.ARROW to FlowColors.ARROW,
             FlowTokens.CARRY to FlowColors.ARROW,

@@ -17,6 +17,12 @@ namespace a11::flow {
 /// The flows a file declares, and everything wrong with it.
 struct ParseResult {
   std::vector<syntax::FlowDeclarationPtr> flows;
+  /// The shapes the file declares, in declaration order.
+  ///
+  /// Beside the flows rather than inside them: a `struct` is a sibling declaration,
+  /// and a file may declare one and no flow at all -- a file of types is a
+  /// perfectly good thing to have, and is what `flow.dto_from_schema` writes.
+  std::vector<syntax::DtoDeclarationPtr> dtos;
   std::vector<Diagnostic> diagnostics;
 
   /// The offset of every `{` that opens a *value* rather than a block, sorted.

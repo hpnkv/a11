@@ -1,12 +1,28 @@
-# The flow the syntax format is pinned against. Small on purpose, and still one
-# of nearly every construct the language has: a described flow with ports and a
-# header, a call with modifiers, a loop, a pipeline, a branch and a failure.
+# The file the syntax format is pinned against. Small on purpose, and still one
+# of nearly every construct the language has: a described struct with constrained
+# fields, and a described flow with ports and a header, a call with modifiers, a
+# loop, a pipeline, a branch, a block, an advanced value and a failure.
+struct Source {
+  describe "Where an answer came from."
+
+  url:    string required matching "^https?://" "The page."
+  title:  string 1..200
+  tags:   string[] unique
+  rank:   number 0..1 default 0.5
+  kind:   string one of ["page", "paper"] default "page"
+  seen:   time
+  parent: Source
+}
+
 flow example {
   describe "Read a few pages and answer from them."
 
   in  question: string required "What to find out."
-  out answer:   string          "The answer."
-  out sources:  string stream   "Where it came from."
+
+  out answer:  string        "The answer."
+  out sources: Source stream "Where it came from."
+  out notes:   string stream "Each page, against the source it came from."
+  out frames:  string stream "The answer, in pieces small enough to send."
 
   header "x-a11-deadline" as deadline
   header "x-a11-budget"   as budget default 3
@@ -28,21 +44,63 @@ flow example {
       # and a `try` whose status nothing reads is a failure nobody notices.
       wait page
 
-      hit.url -> sources
+      # A value made into a declared shape, with the rest of what `hit` holds
+      # spread in beside the key this overrides.
+      hit | map Source{...it, "url": it.url, "tags": ["searched"]} -> sources
       page.text | truncate 200 | where it != "" -> pages
     }
   }
 
   drain pages after search
 
+  # Two streams read in step, taken apart by name. A source that ends first
+  # contributes a null from then on, so the longer one is still read out.
+  for page_text, url in zip(pages, search.hits) {
+    strformat("%s: %s", url, page_text) -> notes
+  }
+
   brief = run llm-summarize(question: question, pages: pages)
       with "x-a11-deadline": deadline
 
-  if (pages | count) > 0 {
-    brief.summary -> answer
+  # The other direction: one value, cut into pieces of a size the far end wants.
+  let summary = brief.summary
+  summary | chunk 4096 -> frames
+
+  # One value, named: `budget` is a header and `read` is however many pages
+  # actually arrived, and both read as values rather than as streams.
+  let read = pages | count
+  if read > 0 {
+    summary -> answer
   } else {
     fail not_found "nothing worth reading"
   }
+
+  # Several values of one stream, one at a time. The k-th binding of a name is
+  # the k-th value of its stream, so `advance` is exact without a barrier, and
+  # statements above it keep the value they were written against.
+  let page_line = pages
+  strformat("first: %s", page_line) -> notes
+  advance page_line
+  strformat("second: %s", page_line) -> notes
+
+  # A pattern pulls named fields out of text: literal text matches itself and
+  # `{name}` captures, so a line that does not fit is dropped rather than parsed
+  # badly. Several names then take one value apart, by field where the value has
+  # one and by position where it is a list.
+  pages | match "{title:line}" | map it.title -> notes
+  let head, tail = match("{head}. {tail:rest}", summary)
+  strformat("%s || %s", head, tail) -> notes
+
+  # A block runs its statements as one step and says how they went. A condition
+  # inside it blocks what is in the braces and nothing else, which is what a
+  # block is for; `try` makes a failure inside it the flow's to read rather than
+  # the end of it.
+  checked = try {
+    if read > budget {
+      fail resource_exhausted "more pages than the budget allowed"
+    }
+  }
+  strformat("checked: %s", checked.ok) -> notes
 
   skip search.debug
 }

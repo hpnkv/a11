@@ -13,15 +13,15 @@
 flow read-a-page {
   describe "Fetch a URL and hand back its text and its status."
 
-  in  url:    string required "What to fetch."
-  out text:   string          "The body, as text."
-  out code:   number          "The response's status code."
-  out ok:     bool            "Whether the status is below 400."
+  in  url:  string required "What to fetch."
+  out text: string          "The body, as text."
+  out code: number          "The response's status code."
+  out ok:   bool            "Whether the status is below 400."
 
   page = run web-fetch(url: url)
-  page.text        -> text
+  page.text -> text
   page.status_code -> code
-  page.ok          -> ok
+  page.ok -> ok
   skip page.json
   skip page.body
   skip page.items
@@ -38,11 +38,11 @@ flow only-if-json {
   describe "Read the body only when the server says it is JSON."
 
   in  url:      string required
-  out decoded:  json          "The body, when it was JSON."
-  out declined: string        "What the server sent instead, when it was not."
+  out decoded:  json   "The body, when it was JSON."
+  out declined: string "What the server sent instead, when it was not."
 
   http = run make_http_request(url: url)
-    with "accept": "application/json"
+      with "accept": "application/json"
 
   skip http.fields
   skip http.pushes
@@ -69,21 +69,21 @@ flow only-if-json {
 flow inspect-a-url {
   describe "Everything the protocol said, on the port that carries it."
 
-  in  url:       string required
-  out code:      number        "The final status."
-  out fields:    json stream   "Every header field, in wire order."
-  out hops:      json stream   "The redirects that were followed."
-  out digest:    json          "The trailer section, after the body."
-  out carried:   json          "How the connection was carried."
-  out size:      number        "How many bytes of body arrived."
+  in  url:     string required
+  out code:    number      "The final status."
+  out fields:  json stream "Every header field, in wire order."
+  out hops:    json stream "The redirects that were followed."
+  out digest:  json        "The trailer section, after the body."
+  out carried: json        "How the connection was carried."
+  out size:    number      "How many bytes of body arrived."
 
   http = run make_http_request(url: url, options: {"accept_pushes": true})
 
   http.status_code -> code
-  http.fields      -> fields
-  http.redirects   -> hops
-  http.trailers    -> digest
-  http.connection  -> carried
+  http.fields -> fields
+  http.redirects -> hops
+  http.trailers -> digest
+  http.connection -> carried
 
   # The body is counted rather than kept: nothing here wants the bytes, and a
   # stream that is read and dropped costs nothing to hold.
@@ -103,9 +103,9 @@ flow inspect-a-url {
 flow send-a-stream {
   describe "POST a body assembled as it goes."
 
-  in  url:   string required
-  in  parts: string stream required "The body, piece by piece."
-  out answer: string               "What the server said."
+  in  url:    string required
+  in  parts:  string stream required "The body, piece by piece."
+  out answer: string                 "What the server said."
 
   http = run make_http_request(
     url: url,

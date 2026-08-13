@@ -47,7 +47,8 @@ std::vector<std::filesystem::path> Corpus() {
           .parent_path();
   std::vector<std::filesystem::path> paths;
   for (const std::filesystem::path& directory :
-       {root / "examples" / "003-flow-dsl", root / "scripts",
+       {root / "examples" / "003-flow-dsl",
+        root / "examples" / "004-deep-research", root / "scripts",
         root / "testdata" / "flow"}) {
     if (!std::filesystem::is_directory(directory)) continue;
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
@@ -172,7 +173,7 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
       {"flow f { in a: string\n repeat s = 1 { t <- a } }",
        "flow.barrier.wrong-carry", "This repeat carries 's', not 't'."},
       {"flow f { in a: wat }", "flow.form.unknown-type",
-       "Unknown port type 'wat'"},
+       "Unknown type 'wat'"},
       {"flow f { in a: list[string, object] }", "flow.form.unknown-type",
        "type parameter"},
       {"flow f { in a: string\n in a: string }", "flow.form.duplicate-port",
@@ -253,7 +254,228 @@ TEST(FlowResolve, ReportsEveryProblemRatherThanTheFirst) {
       "}\n");
   EXPECT_EQ(Codes(result),
             (std::vector<std::string>{"flow.name.unknown", "flow.name.unknown",
-                                      "flow.name.not-a-call"}));
+                                      "flow.name.not-a-call",
+                                      "flow.form.unconditional-cancel"}));
+}
+
+TEST(FlowResolve, AFailOrCancelAtTheTopOfABodyIsRefused) {
+  // These take no input and wait for nothing, so at the top of a flow's body
+  // they run at once and race every other statement: read top to bottom they
+  // look like a last resort, and they are the first thing that happens.
+  EXPECT_EQ(Codes(Check("flow f {\n  out b: string\n"
+                        "  fail internal \"no\"\n}\n")),
+            (std::vector<std::string>{"flow.form.unconditional-fail"}));
+
+  // An `if` makes it conditional on something, which is the usual fix.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  if a == \"\" { fail invalid_argument \"empty\" }\n"
+                          "  a -> b\n}\n"))
+                  .empty());
+
+  // So does a loop body, and so does an `after`, which is the author saying in
+  // the source what it is waiting for.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string stream\n  out b: string\n"
+                          "  for one in a { fail internal \"no\" }\n"
+                          "  a | first 1 -> b\n}\n"))
+                  .empty());
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  x = run act(p: a)\n  x.out -> b\n"
+                          "  fail internal \"no\" after x\n}\n"))
+                  .empty());
+
+  // A `nodes` block is not one of these: it joins the body around it, and does
+  // not change when anything in it runs.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  nodes m {\n    cancel a\n  }\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.name.not-a-call",
+                                      "flow.form.unconditional-cancel"}));
+}
+
+TEST(FlowResolve, ARepeatSaysWhenItStops) {
+  // The cap used to be 16 by default, so a `repeat` whose condition never held
+  // did sixteen passes and reported *success*. There is no default now, which
+  // makes a loop with nothing to end it something to say out loud.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  repeat n = 0 {\n    a -> b\n  }\n}\n")),
+            (std::vector<std::string>{"flow.form.unbounded-repeat"}));
+
+  // Either an `until`/`while` or the author's own `max` is enough.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  repeat n = 0 {\n    a -> b\n    until true\n"
+                          "  }\n}\n"))
+                  .empty());
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  repeat n = 0 max 4 {\n    a -> b\n  }\n}\n"))
+                  .empty());
+}
+
+constexpr std::string_view kShapes = R"(flow shapes {
+  in  one:   string required
+  in  many:  string stream required
+  out out:   string stream
+
+  header "x-a11-deadline" as deadline
+
+  made = node()
+  one -> made
+
+  many | collect  -> out
+  many | count    -> out
+  many | first 1  -> out
+  many | first 2  -> out
+  one  | text     -> out
+  one  | chunk 64 -> out
+  zip(one, one)   -> out
+  zip(one, many)  -> out
+  deadline        -> out
+  made            -> out
+}
+)";
+
+/// Whether the ref the graph labelled `label` carries at most one value.
+bool Unary(const ResolvedFlow& flow, std::string_view label) {
+  for (const graph::Ref& ref : flow.graph.refs) {
+    if (ref.label == label) return ref.unary;
+  }
+  std::vector<std::string> labels;
+  for (const graph::Ref& ref : flow.graph.refs) labels.push_back(ref.label);
+  ADD_FAILURE() << "no ref labelled '" << label << "'; the graph has: "
+                << absl::StrJoin(labels, " | ");
+  return false;
+}
+
+TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
+  // What a value read is allowed to *consume*. A claim, so the interesting half
+  // is what is not claimed: a node the flow writes from anywhere, and a port that
+  // said `stream`, are streams however they are used.
+  const ResolveResult result =
+      Resolve(kShapes, Parse(kShapes), /*build_graph=*/true);
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Codes(result), ", ");
+  ASSERT_FALSE(result.flows.empty());
+  const ResolvedFlow& flow = result.flows.front();
+
+  // Declared, which is the only place the language says it outright.
+  EXPECT_TRUE(Unary(flow, "one"));
+  EXPECT_FALSE(Unary(flow, "many"));
+  EXPECT_TRUE(Unary(flow, "header \"x-a11-deadline\""));
+  // A node is written from anywhere, including from inside a loop.
+  EXPECT_FALSE(Unary(flow, "made"));
+  // The reducing stages make one value out of however many.
+  EXPECT_TRUE(Unary(flow, "many | collect"));
+  EXPECT_TRUE(Unary(flow, "many | count"));
+  // `first 1` is how a pipeline says "the value" out loud; `first 2` is not.
+  EXPECT_TRUE(Unary(flow, "many | first 1"));
+  EXPECT_FALSE(Unary(flow, "many | first 2"));
+  // A per-value stage keeps the count it was given; `chunk` makes more.
+  EXPECT_TRUE(Unary(flow, "one | text"));
+  EXPECT_FALSE(Unary(flow, "one | chunk 64"));
+  // A zip runs until every source has ended, so one round is only certain when
+  // every source has at most one value.
+  EXPECT_TRUE(Unary(flow, "zip(one, one)"));
+  EXPECT_FALSE(Unary(flow, "zip(one, many)"));
+}
+
+TEST(FlowResolve, AdvanceOnlyMovesAValueALetBound) {
+  EXPECT_EQ(Codes(Check("flow f {\n  in q: string\n  out o: string\n"
+                        "  n = node()\n  advance n\n  q -> o\n}\n")),
+            (std::vector<std::string>{"flow.name.not-advanceable"}));
+  EXPECT_EQ(Codes(Check("flow f {\n  in q: string\n  out o: string\n"
+                        "  advance nope\n  q -> o\n}\n")),
+            (std::vector<std::string>{"flow.name.unknown"}));
+  // And the ordinary shape is clean: a value, then the next one under the same
+  // name.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in q: string stream required\n"
+                          "  out o: string stream\n  let w = q\n"
+                          "  strformat(\"%s\", w) -> o\n  advance w\n"
+                          "  strformat(\"%s\", w) -> o\n}\n"))
+                  .empty());
+}
+
+TEST(FlowResolve, APatternIsReadWhereItIsWritten) {
+  // A pattern is a literal almost every time, so a typo in one belongs in the
+  // editor rather than in the failure the first value triggers.
+  EXPECT_EQ(Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+                        "  l | match \"name={name\" -> o\n}\n")),
+            (std::vector<std::string>{"flow.form.bad-pattern"}));
+  EXPECT_EQ(Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+                        "  l | match \"{a} {a}\" -> o\n}\n")),
+            (std::vector<std::string>{"flow.form.bad-pattern"}));
+  // And a pattern that reads is left alone.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in l: string stream\n"
+                          "  out o: json stream\n"
+                          "  l | match \"name={name} age={age:int}\" -> o\n}\n"))
+                  .empty());
+}
+
+TEST(FlowResolve, ALetMayTakeAValueApart) {
+  // Both spellings resolve, and each name is its own value.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in u: json stream required\n"
+                          "  out o: string\n  let name, age = u\n"
+                          "  strformat(\"%s%s\", name, age) -> o\n}\n"))
+                  .empty());
+  // A name taken from another value has no next one of its own, and that is
+  // said on the editor path too, where there is no graph to read it from.
+  EXPECT_EQ(Codes(Check("flow f {\n  in u: json stream required\n"
+                        "  out o: string\n  let name, age = u\n"
+                        "  strformat(\"%s%s\", name, age) -> o\n"
+                        "  advance name\n}\n")),
+            (std::vector<std::string>{"flow.name.not-advanceable"}));
+  // A part taking a name something else already has is still a clash, and so is
+  // one taking a name from the same `let`: two parts called the same thing would
+  // define one and shadow it with the other.
+  EXPECT_EQ(Codes(Check("flow f {\n  in u: json stream required\n"
+                        "  out o: string\n  let age, age = u\n"
+                        "  strformat(\"%s\", age) -> o\n}\n")),
+            (std::vector<std::string>{"flow.name.taken"}));
+}
+
+TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
+  constexpr std::string_view kHead =
+      "struct Source {\n  url:  string required\n  rank: number\n}\n\n"
+      "flow f {\n  in  src:   Source required\n"
+      "  in  lines: string stream required\n  in  loose: json required\n"
+      "  out o:     string stream\n";
+
+  // A port declared with a struct, a value a literal pattern made, and `it` in a
+  // stage after a `match`: three ways the file said what a value holds, and one
+  // check for all of them.
+  EXPECT_EQ(Codes(Check(absl::StrCat(
+                kHead, "  strformat(\"%s\", src.urll) -> o\n}\n"))),
+            (std::vector<std::string>{"flow.form.unknown-field"}));
+  EXPECT_EQ(Codes(Check(absl::StrCat(
+                kHead, "  lines | match \"{a}: {b}\" | map it.c -> o\n}\n"))),
+            (std::vector<std::string>{"flow.form.unknown-field"}));
+  EXPECT_EQ(Codes(Check(absl::StrCat(
+                kHead, "  let who = match(\"name={name}\", lines)\n"
+                       "  strformat(\"%s\", who.nmae) -> o\n}\n"))),
+            (std::vector<std::string>{"flow.form.unknown-field"}));
+
+  // Spelled right, nothing said.
+  EXPECT_TRUE(Codes(Check(absl::StrCat(
+                        kHead, "  strformat(\"%s\", src.url) -> o\n"
+                               "  lines | match \"{a}: {b}\" | map it.a -> o\n"
+                               "  let who = match(\"name={name}\", lines)\n"
+                               "  strformat(\"%s\", who.name) -> o\n}\n")))
+                  .empty());
+
+  // And where the file never said, nothing is checked: a `json` port may hold
+  // anything, and `it` with no pattern behind it is anybody's guess. A check that
+  // cried wolf here would be worse than no check.
+  EXPECT_TRUE(Codes(Check(absl::StrCat(
+                        kHead, "  strformat(\"%s\", loose.anything) -> o\n"
+                               "  lines | map it.whatever -> o\n}\n")))
+                  .empty());
+  // A positional pattern names no fields, so it says nothing either.
+  EXPECT_TRUE(Codes(Check(absl::StrCat(
+                        kHead,
+                        "  lines | match \"{}:{}\" | map it.nope -> o\n}\n")))
+                  .empty());
+  // One level only: a field holding a record of its own says nothing about its
+  // keys, so the chain stops rather than guessing.
+  EXPECT_TRUE(Codes(Check(absl::StrCat(
+                        kHead, "  strformat(\"%s\", src.url.deeper) -> o\n}\n")))
+                  .empty());
 }
 
 TEST(FlowResolve, FindsNothingWrongWithAnyFlowThisRepositoryShips) {

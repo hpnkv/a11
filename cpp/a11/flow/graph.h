@@ -51,6 +51,8 @@ enum class RefKind {
   kExpr,
   /// One stage applied to another stream.
   kDerived,
+  /// Several streams read in step, as one stream of tuples: `zip(a, b)`.
+  kZip,
   /// A stream the runtime binds per pass: a loop's value, its index, or a
   /// `repeat`'s carry.
   kBound,
@@ -76,6 +78,10 @@ struct Stage {
   /// Whether `at` was written as an index rather than a field name.
   bool indexed = false;
   long long index = 0;
+  /// Whether `at` should try its name and *then* its index, which is what a
+  /// destructuring `let` needs: `let name, age = user` is by field over a record
+  /// and by position over a pair, and only the value knows which it is.
+  bool named_or_indexed = false;
 };
 
 /// One stream in the plan.
@@ -94,6 +100,20 @@ struct Ref {
   /// Whether this flow could ever write it, which is what makes it a destination
   /// rather than something finished by being read to its end.
   bool writable = false;
+  /// Whether this stream provably carries at most one value.
+  ///
+  /// A *claim*, so the default is the absence of one: something that forgets to
+  /// say is treated as a stream, which costs a check rather than being wrong. A
+  /// declared port says so (`in q: string` against `in q: string stream`), an
+  /// action's schema says so for its own ports, and everything built out of those
+  /// is derived from them by [Builder::AddRef] -- a reducing stage makes one
+  /// value out of many, a per-value stage keeps the count it was given, and a
+  /// node the flow writes from anywhere is never one.
+  ///
+  /// What it is *for*: reading a stream where a value is expected. A unary
+  /// stream can be consumed -- take the value, and a second one is an error the
+  /// language can name -- while a stream of many has to say which value it means.
+  bool unary = false;
   /// How many of this stream's first values `skip n` has spoken for.
   ///
   /// Applied where the stream is produced, upstream of the fan-out, so it is the
@@ -126,6 +146,9 @@ struct Ref {
   /// `kBound`: which of a loop's streams this is -- `item`, `index`, `carry`.
   std::string role;
   StepId bound_by = kNone;
+  /// `kZip`: the streams read in step, in the order they were written, which is
+  /// the order their values appear in each tuple.
+  std::vector<RefId> sources;
 };
 
 /// What a statement became.
@@ -143,6 +166,8 @@ enum class StepKind {
   kForEach,
   kRepeat,
   kIf,
+  /// `[try] { ... }`: a body run as one step, whose outcome is its own.
+  kBlock,
 };
 
 std::string_view StepKindName(StepKind kind);
@@ -211,7 +236,9 @@ struct Step {
   RefId carry = kNone;
   RefId carry_source = kNone;
   syntax::Constant start;
-  int max_iterations = 16;
+  /// `max n`, where one was written; nothing means the loop is bounded only by
+  /// its condition. See [syntax::Repeat::max_iterations].
+  std::optional<int> max_iterations;
   ExprId condition = kNone;
   bool stop_when = true;
 };
@@ -325,7 +352,79 @@ class GraphBuilder {
     return flow_->bodies.size() - 1;
   }
 
+  /// Whether the ref already in the graph carries at most one value.
+  bool Carries(RefId ref) const {
+    return ref != kNone && ref < flow_->refs.size() && flow_->refs[ref].unary;
+  }
+
+  /// Whether a stage yields exactly one value however many it was given.
+  ///
+  /// The reducing three, and `first 1`, which is how a pipeline says "the value"
+  /// out loud. Read from [vocabulary::ReducingStages] rather than listed again,
+  /// so a stage that joins that set is counted here without being taught.
+  static bool StageMakesOne(const Stage& stage) {
+    if (vocabulary::ReducingStages().contains(stage.name)) return true;
+    return stage.name == "first" && stage.count == 1;
+  }
+
+  /// Whether a stage yields one value per value it was given.
+  ///
+  /// Then one in gives one out. `map`, `at`, `truncate`, `text`, `json`, `packb`
+  /// and `strformat` reshape each value; `where`, `mime` and `distinct` may drop
+  /// one, which is still at most one out per one in; `batch` and `group` gather
+  /// several into a list, which is *fewer*, and `chunk` and `then` make more.
+  /// Anything the language gains is assumed not to preserve the count until it
+  /// says so, which is the safe direction.
+  static bool StagePreservesCount(const Stage& stage) {
+    static const auto* const kPerValue =
+        new absl::flat_hash_set<std::string>{"map",       "at",     "truncate",
+                                             "text",      "json",   "packb",
+                                             "strformat", "where",  "mime",
+                                             "distinct",  "first",  "last",
+                                             "drop"};
+    return kPerValue->contains(stage.name);
+  }
+
+  /// Append a ref, working out what it carries.
+  ///
+  /// Unarity is settled here rather than at each of the dozen places a ref is
+  /// made, because it is a property of the *shape* of the ref for every kind but
+  /// the two that name a declared port -- and a kind added to the language then
+  /// gets an answer by default instead of silently keeping whatever the struct's
+  /// initialiser said.
   RefId AddRef(Ref ref) {
+    switch (ref.kind) {
+      case RefKind::kHeader:
+      case RefKind::kNodeId:
+      case RefKind::kStatus:
+      case RefKind::kExpr:
+      case RefKind::kBound:
+        // One header, one id, one status record, one evaluated expression, and
+        // one value bound per pass of a loop.
+        ref.unary = true;
+        break;
+      case RefKind::kNode:
+        // A node is a stream the flow may write from anywhere, including from
+        // inside a loop, so nothing about it is provable from the plan.
+        ref.unary = false;
+        break;
+      case RefKind::kDerived:
+        ref.unary = StageMakesOne(ref.stage) ||
+                    (Carries(ref.source) && StagePreservesCount(ref.stage));
+        break;
+      case RefKind::kZip:
+        // A tuple per round, and the rounds run until every source has ended, so
+        // one round is only certain when every source has at most one value.
+        ref.unary = !ref.sources.empty();
+        for (const RefId source : ref.sources) {
+          if (!Carries(source)) ref.unary = false;
+        }
+        break;
+      case RefKind::kFlowPort:
+      case RefKind::kCallPort:
+        // Whatever the declaration said, which only the caller knows.
+        break;
+    }
     flow_->refs.push_back(std::move(ref));
     return flow_->refs.size() - 1;
   }

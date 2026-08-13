@@ -285,6 +285,13 @@ class ParserImpl {
     SkipNewlines();
     while (!At(TokenKind::kEnd)) {
       const size_t before = position_;
+      if (AtWord("struct") && Peek().kind == TokenKind::kWord) {
+        const Token& keyword = Advance();
+        result_.dtos.push_back(ParseDto(keyword));
+        SkipNewlines();
+        if (position_ == before) Advance();
+        continue;
+      }
       if (!ExpectWord("flow")) {
         // Not a declaration at all. The line is skipped rather than read as one,
         // so a stray statement outside a flow costs one diagnostic.
@@ -297,9 +304,237 @@ class ParserImpl {
       SkipNewlines();
       if (position_ == before) Advance();
     }
-    if (result_.flows.empty()) {
+    if (result_.flows.empty() && result_.dtos.empty()) {
       ReportHere("flow.syntax.unexpected",
-                 "A flow file must declare at least one flow.");
+                 "A flow file must declare at least one flow or struct.");
+    }
+  }
+
+  /// `struct Name { describe ".."  field: type modifiers ".." ... }`.
+  ///
+  /// The body is fields and nothing else: a shape has no statements, so anything
+  /// that is not a field is one diagnostic and one skipped line rather than a
+  /// statement parse that would go badly wrong.
+  syntax::DtoDeclarationPtr ParseDto(const Token& keyword) {
+    auto declaration = Make<syntax::DtoDeclaration>(keyword);
+    declaration->name = ExpectName("a struct name");
+    const std::string outer_flow = flow_name_;
+    flow_name_ = declaration->name.text;
+    if (!Expect(TokenKind::kLeftBrace)) {
+      Recover();
+      flow_name_ = outer_flow;
+      return declaration;
+    }
+    SkipNewlines();
+    while (!At(TokenKind::kRightBrace)) {
+      if (At(TokenKind::kEnd)) {
+        ReportHere("flow.syntax.unclosed",
+                   absl::StrCat("Struct ", Quoted(declaration->name.text),
+                                " is missing its closing '}'."));
+        break;
+      }
+      const size_t before = position_;
+      if (AtWord("describe") && DescribeFollows()) {
+        Advance();
+        declaration->description = ParseDescription();
+      } else if (Current().IsWord() && Peek().kind == TokenKind::kColon) {
+        declaration->fields.push_back(ParseField());
+      } else {
+        ReportHere("flow.syntax.unexpected",
+                   absl::StrCat("Expected a field ('name: type'), found ",
+                                Found(), "."));
+        Recover();
+      }
+      EndStatement();
+      if (position_ == before) Advance();
+    }
+    AcceptToken(TokenKind::kRightBrace);
+    flow_name_ = outer_flow;
+    return declaration;
+  }
+
+  /// `name: type [required] [unique] [a..b] [matching ".."] [one of [..]]
+  ///  [default v] ["description"]`.
+  ///
+  /// The modifiers are read in a loop and their order checked against the
+  /// vocabulary's, so the table says what the order is and this only enforces
+  /// it. Out of order is a diagnostic and not a refusal: the field still means
+  /// what it plainly says, and an editor should say so while it is being typed.
+  syntax::FieldDeclarationPtr ParseField() {
+    const Token& start = Current();
+    auto field = Make<syntax::FieldDeclaration>(start);
+    field->name = ExpectName("a field name");
+    Expect(TokenKind::kColon);
+    field->type = ParseType();
+
+    int reached = -1;
+    const auto ordered = [&](std::string_view modifier, const Token& at) {
+      const absl::Span<const std::string_view> order =
+          vocabulary::OrderedFieldModifiers();
+      int rank = 0;
+      for (size_t index = 0; index < order.size(); ++index) {
+        if (order[index] == modifier) rank = static_cast<int>(index);
+      }
+      if (rank < reached) {
+        Report("flow.form.field-modifier-order",
+               absl::StrCat(Quoted(modifier), " is written before ",
+                            Quoted(vocabulary::OrderedFieldModifiers()[reached]),
+                            "; a field's modifiers read ",
+                            absl::StrJoin(vocabulary::OrderedFieldModifiers(),
+                                          ", "),
+                            "."),
+               at, Severity::kWarning, Family::kForm);
+      }
+      reached = std::max(reached, rank);
+    };
+
+    while (true) {
+      const Token& at = Current();
+      if (At(TokenKind::kRange) || At(TokenKind::kNumber) ||
+          At(TokenKind::kDuration)) {
+        if (!ParseFieldRange(*field)) break;
+        continue;
+      }
+      if (!Current().IsWord()) break;
+      const std::string word = Keyword();
+      if (word == "required") {
+        Advance();
+        ordered("required", at);
+        field->required = true;
+        continue;
+      }
+      if (word == "unique") {
+        Advance();
+        ordered("unique", at);
+        field->unique = true;
+        continue;
+      }
+      if (word == "matching") {
+        Advance();
+        ordered("matching", at);
+        if (At(TokenKind::kString)) {
+          // One literal, not a run: `matching "re" "why"` is a pattern and a
+          // description, and adjacent strings joining here would eat the
+          // description instead. Concatenation is for prose and for
+          // expressions, where there is nothing for it to be mistaken for.
+          field->pattern = std::string(Advance().string_value);
+          field->has_pattern = true;
+        } else {
+          ReportHere("flow.syntax.unexpected",
+                     absl::StrCat("Expected a quoted pattern after 'matching', "
+                                  "found ", Found(), "."));
+        }
+        continue;
+      }
+      if (word == "one" && Keyword(1) == "of") {
+        Advance();
+        Advance();
+        ordered("one of", at);
+        ParseFieldEnumeration(*field);
+        continue;
+      }
+      if (word == "default") {
+        Advance();
+        ordered("default", at);
+        const Token& value_at = Current();
+        NodePtr value = ParseExpression();
+        std::optional<syntax::Constant> constant =
+            syntax::ConstantValue(value.get());
+        if (constant.has_value()) {
+          field->default_value = *std::move(constant);
+          field->has_default = true;
+        } else if (value->kind != syntax::NodeKind::kError) {
+          Report("flow.syntax.constant-required",
+                 "A field's default is a constant value.", value_at);
+        }
+        continue;
+      }
+      break;
+    }
+    field->description = ParseDescription();
+    return field;
+  }
+
+  /// `1..200`, `1..`, `..200` -- read where a field's modifiers are.
+  ///
+  /// False when what is here turned out not to be a range after all, so the
+  /// modifier loop can stop rather than spin.
+  bool ParseFieldRange(syntax::FieldDeclaration& field) {
+    const Token& start = Current();
+    syntax::FieldRange range;
+    if (!At(TokenKind::kRange)) {
+      const Token& low = Advance();
+      std::optional<syntax::Constant> minimum = BoundOf(low);
+      if (!minimum.has_value()) return false;
+      if (!At(TokenKind::kRange)) {
+        Report("flow.syntax.unexpected",
+               absl::StrCat("Expected '..' after ", Quoted(low.text),
+                            " to make it a range."),
+               low);
+        return false;
+      }
+      range.minimum = *std::move(minimum);
+      range.has_minimum = true;
+    }
+    Expect(TokenKind::kRange);
+    if (At(TokenKind::kNumber) || At(TokenKind::kDuration)) {
+      const Token& high = Advance();
+      std::optional<syntax::Constant> maximum = BoundOf(high);
+      if (maximum.has_value()) {
+        range.maximum = *std::move(maximum);
+        range.has_maximum = true;
+      }
+    }
+    if (range.Empty()) {
+      Report("flow.form.empty-range",
+             "A range bounds something: write '1..', '..200' or '1..200'.",
+             start, Severity::kError, Family::kForm);
+      return true;
+    }
+    if (!field.range.Empty()) {
+      Report("flow.form.repeated-modifier", "A field has one range.", start,
+             Severity::kError, Family::kForm);
+      return true;
+    }
+    field.range = std::move(range);
+    return true;
+  }
+
+  /// The constant a range's bound is, or nothing where the token is not one.
+  static std::optional<syntax::Constant> BoundOf(const Token& token) {
+    if (token.kind == TokenKind::kDuration) {
+      return syntax::Constant::Duration(token.duration);
+    }
+    if (token.kind != TokenKind::kNumber) return std::nullopt;
+    return token.is_integer
+               ? syntax::Constant::Integer(static_cast<long long>(token.number))
+               : syntax::Constant::Double(token.number);
+  }
+
+  void ParseFieldEnumeration(syntax::FieldDeclaration& field) {
+    const Token& at = Current();
+    NodePtr value = ParseExpression();
+    std::optional<syntax::Constant> constant =
+        syntax::ConstantValue(value.get());
+    if (!constant.has_value()) {
+      if (value->kind != syntax::NodeKind::kError) {
+        Report("flow.syntax.constant-required",
+               "'one of' takes a list of constant values.", at);
+      }
+      return;
+    }
+    if (constant->kind != syntax::Constant::Kind::kList) {
+      Report("flow.form.one-of-not-a-list",
+             "'one of' takes a list: write 'one of [\"a\", \"b\"]'.", at,
+             Severity::kError, Family::kForm);
+      return;
+    }
+    field.enumeration = std::move(constant->items);
+    field.has_enumeration = true;
+    if (field.enumeration.empty()) {
+      Report("flow.form.one-of-empty",
+             "'one of []' allows nothing, so nothing would validate.", at,
+             Severity::kError, Family::kForm);
     }
   }
 
@@ -406,13 +641,48 @@ class ParserImpl {
   /// string, and a line holding nothing but a string is not a statement in this
   /// language at all.
   std::string ParseDescription() {
-    if (At(TokenKind::kString)) return std::string(Advance().string_value);
-    size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-    if (offset == 0 || Peek(offset).kind != TokenKind::kString) return "";
-    if (!Peek(offset + 1).EndsStatement()) return "";
-    SkipNewlines();
-    return std::string(Advance().string_value);
+    std::string value;
+    if (At(TokenKind::kString)) value = ParseStringRun();
+    // Then every following line that holds nothing but strings. Prose that says
+    // anything outgrows one line, and a lone string on a line is not a statement
+    // in this language -- so a paragraph written as a stack of them is one
+    // description, and there is nothing else it could be.
+    while (true) {
+      size_t offset = 0;
+      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+      if (offset == 0 || Peek(offset).kind != TokenKind::kString) break;
+      // A run of strings on the line is still one description, so what has to
+      // end the statement is what follows the *last* of them.
+      size_t past = offset;
+      while (Peek(past).kind == TokenKind::kString) ++past;
+      if (!Peek(past).EndsStatement()) break;
+      SkipNewlines();
+      absl::StrAppend(&value, ParseStringRun());
+    }
+    return value;
+  }
+
+  /// One or more string literals written next to each other, as one string.
+  ///
+  /// Adjacent literals concatenate, the way C and Python do it, because a
+  /// description or a pattern that says anything is longer than the line it is
+  /// written on and `+` at run time is the wrong tool for a constant. A run may
+  /// cross line breaks only where a break means nothing anyway -- inside
+  /// brackets -- so a bare string alone on the next line is still not a
+  /// continuation of the statement above it.
+  std::string ParseStringRun() {
+    std::string value(Advance().string_value);
+    while (true) {
+      if (At(TokenKind::kString)) {
+        absl::StrAppend(&value, Advance().string_value);
+        continue;
+      }
+      if (brackets_ > 0 && ContinuesWith(TokenKind::kString)) {
+        SkipNewlines();
+        continue;
+      }
+      return value;
+    }
   }
 
   /// A port's type: a name, a name with type parameters, or a string.
@@ -430,14 +700,40 @@ class ParserImpl {
       return type;
     }
     type.name = ParseDottedName("a port type").text;
-    if (AcceptToken(TokenKind::kLeftBracket)) {
+    // Brackets with something inside them are the parameters a generic type is
+    // given; empty ones are the `T[]` sugar, and are read by the loop below.
+    if (At(TokenKind::kLeftBracket) && Peek().kind != TokenKind::kRightBracket) {
+      Advance();
       while (true) {
         type.parameters.push_back(ParseType());
         if (!AcceptToken(TokenKind::kComma)) break;
       }
       Expect(TokenKind::kRightBracket, "']' after the type parameters");
     }
+    // `T[][]` is a list of lists, so the suffix is read in a loop rather than
+    // once: each `[]` wraps what has been read so far.
+    while (At(TokenKind::kLeftBracket) &&
+           Peek().kind == TokenKind::kRightBracket) {
+      type = ArrayOf(std::move(type));
+    }
     return type;
+  }
+
+  /// `T[]` -- the same type `list[T]` names, having eaten the brackets.
+  ///
+  /// Sugar rather than a second spelling in the tree: everything downstream sees
+  /// a `list`, so nothing but the formatter has to know both ways of writing it.
+  /// `sugared` is what tells the formatter to write it back the way it was.
+  syntax::TypeExpression ArrayOf(syntax::TypeExpression element) {
+    Advance();
+    const Token& closing = Advance();
+    syntax::TypeExpression list;
+    list.location = element.location;
+    list.location.end = closing.end;
+    list.name = "list";
+    list.sugared = true;
+    list.parameters.push_back(std::move(element));
+    return list;
   }
 
   syntax::HeaderDeclarationPtr ParseHeader() {
@@ -493,6 +789,35 @@ class ParserImpl {
     return body;
   }
 
+  /// Whether the `{` here opens a block of statements rather than a record.
+  ///
+  /// Both begin the same way and both are statements: `{"a": 1} -> out` writes a
+  /// record to a port, and `{ "one" -> out }` is a block that writes a string.
+  /// What tells them apart is what follows the first key: a record's keys are
+  /// strings followed by `:`, and a spread is only ever a record's. Everything
+  /// else opens statements. `{}` is the empty record, because somebody writes
+  /// that and nobody writes an empty block.
+  bool OpensBlock() const {
+    if (!At(TokenKind::kLeftBrace)) return false;
+    switch (Peek().kind) {
+      case TokenKind::kRightBrace:
+      case TokenKind::kSpread:
+        return false;
+      case TokenKind::kString:
+        return Peek(2).kind != TokenKind::kColon;
+      default:
+        return true;
+    }
+  }
+
+  /// `{ ... }` as a statement, with `try` already read where it was written.
+  NodePtr ParseBlockStatement(const Token& opener, bool tolerant) {
+    auto block = Make<syntax::Block>(opener);
+    block->tolerant = tolerant;
+    block->body = ParseBlock();
+    return block;
+  }
+
   /// Whether a statement-opening word is used as a keyword here.
   bool OpensStatement(std::string_view word) const {
     if (!OpensStatementWord(word)) return false;
@@ -516,9 +841,32 @@ class ParserImpl {
       const std::string word = Keyword();
       if (OpensStatement(word)) {
         if (word == "run" || word == "call" || word == "try") {
+          // `try { ... }` is a block; `try run ..` and `try call ..` are a call.
+          if (word == "try" && Peek().kind == TokenKind::kLeftBrace) {
+            Advance();
+            return ParseBlockStatement(keyword, /*tolerant=*/true);
+          }
           auto statement = Make<syntax::CallStatement>(keyword);
           statement->call = ParseCall();
           return statement;
+        }
+        if (word == "let") {
+          Advance();
+          auto let = Make<syntax::Let>(keyword);
+          let->names.push_back(ExpectName("a name for the value"));
+          // Several names take the value apart, the way a `for` does.
+          while (AcceptToken(TokenKind::kComma)) {
+            let->names.push_back(ExpectName("another name for a part of it"));
+          }
+          Expect(TokenKind::kEqual, "'=' and the stream to read one value of");
+          let->pipeline = ParsePipeline();
+          return let;
+        }
+        if (word == "advance") {
+          Advance();
+          auto advance = Make<syntax::Advance>(keyword);
+          advance->name = ExpectName("the value to advance");
+          return advance;
         }
         if (word == "skip") {
           Advance();
@@ -581,6 +929,13 @@ class ParserImpl {
           bind->value = ParseNode();
         } else if (AtWord("wait", "drain")) {
           bind->value = ParseStatement();
+        } else if (At(TokenKind::kLeftBrace) ||
+                   (AtWord("try") && Peek().kind == TokenKind::kLeftBrace)) {
+          // Bound, so a `{` here is a block whatever it holds: a record bound to
+          // a name is not a statement this language has.
+          const Token& opener = Current();
+          const bool tolerant = AcceptWord("try");
+          bind->value = ParseBlockStatement(opener, tolerant);
         } else {
           bind->value = ParseCall();
         }
@@ -596,6 +951,8 @@ class ParserImpl {
         return carry;
       }
     }
+
+    if (OpensBlock()) return ParseBlockStatement(keyword, /*tolerant=*/false);
 
     auto pipe = Make<syntax::Pipe>(keyword);
     pipe->pipeline = ParsePipeline();
@@ -697,7 +1054,11 @@ class ParserImpl {
     const Token& keyword = Current();
     ExpectWord("for");
     auto loop = Make<syntax::ForEach>(keyword);
-    loop->variable = ExpectName("a loop variable");
+    // One name takes the whole value; several take it apart by position.
+    loop->variables.push_back(ExpectName("a loop variable"));
+    while (AcceptToken(TokenKind::kComma)) {
+      loop->variables.push_back(ExpectName("a loop variable"));
+    }
     ExpectWord("in");
     {
       const BlockHeader header(this);
@@ -1180,13 +1541,20 @@ class ParserImpl {
 
   /// Turns `Tag{...}` back on for as long as it is in scope: inside brackets a
   /// `{` cannot be opening a block.
+  ///
+  /// It also counts the depth, which is the other thing being inside brackets
+  /// means: a line break there ends nothing, so a run of strings may cross one.
   class Bracketed {
    public:
     explicit Bracketed(ParserImpl* parser)
         : parser_(parser), outer_(parser->brace_literals_) {
       parser_->brace_literals_ = true;
+      ++parser_->brackets_;
     }
-    ~Bracketed() { parser_->brace_literals_ = outer_; }
+    ~Bracketed() {
+      parser_->brace_literals_ = outer_;
+      --parser_->brackets_;
+    }
     Bracketed(const Bracketed&) = delete;
     Bracketed& operator=(const Bracketed&) = delete;
 
@@ -1245,9 +1613,8 @@ class ParserImpl {
       return outcome;
     }
     if (At(TokenKind::kString)) {
-      Advance();
       auto literal = Make<syntax::Literal>(token);
-      literal->value = syntax::Constant::String(token.string_value);
+      literal->value = syntax::Constant::String(ParseStringRun());
       return literal;
     }
     if (At(TokenKind::kNumber)) {
@@ -1298,7 +1665,8 @@ class ParserImpl {
           return list;
         }
         const size_t before = position_;
-        list->items.push_back(ParseExpression());
+        list->items.push_back(At(TokenKind::kSpread) ? ParseSpread()
+                                                     : ParseExpression());
         SkipNewlines();
         if (!AcceptToken(TokenKind::kComma)) {
           if (position_ == before) Advance();
@@ -1321,6 +1689,38 @@ class ParserImpl {
       }
       if (word == "null") return Make<syntax::Literal>(token);
       if (word == "it") return Make<syntax::It>(token);
+      // `zip(a, b)` reads several streams in step. Spelled like a function and
+      // parsed apart from one, because its arguments are streams: see
+      // [syntax::Zip].
+      if (word == "zip" && At(TokenKind::kLeftParen)) {
+        auto zip = Make<syntax::Zip>(token);
+        Advance();
+        const Bracketed brackets(this);
+        SkipNewlines();
+        while (!At(TokenKind::kRightParen)) {
+          if (At(TokenKind::kEnd) || At(TokenKind::kRightBrace)) {
+            ReportHere("flow.syntax.unclosed",
+                       "Call to 'zip' is missing its closing ')'.");
+            return zip;
+          }
+          const size_t before = position_;
+          zip->sources.push_back(ParseExpression());
+          SkipNewlines();
+          if (!AcceptToken(TokenKind::kComma)) {
+            if (position_ == before) Advance();
+            break;
+          }
+          SkipNewlines();
+          if (position_ == before) Advance();
+        }
+        Expect(TokenKind::kRightParen);
+        if (zip->sources.empty()) {
+          Report("flow.form.zip-empty",
+                 "'zip' reads streams in step, so it takes at least one.", token,
+                 Severity::kError, Family::kForm);
+        }
+        return zip;
+      }
       if (At(TokenKind::kLeftParen)) {
         if (!vocabulary::Builtins().contains(word)) {
           Report("flow.form.unknown-builtin",
@@ -1373,6 +1773,19 @@ class ParserImpl {
     return names;
   }
 
+  /// `...expr` -- what it holds, spread into the literal being written.
+  ///
+  /// The operand is a postfix expression rather than a whole one, so `...a.b` is
+  /// the spread of `a.b` and `...a + b` is not a spread of a sum: an arithmetic
+  /// expression is never a thing with parts to spread, and reading it that way
+  /// only postpones the diagnostic.
+  NodePtr ParseSpread() {
+    const Token& dots = Advance();
+    auto spread = Make<syntax::Spread>(dots);
+    spread->value = ParsePostfix();
+    return spread;
+  }
+
   /// `{ key: expr, ... }`, wherever one is allowed.
   ///
   /// Inside the braces a line break is never the end of anything, so an object
@@ -1390,9 +1803,21 @@ class ParserImpl {
         return object;
       }
       const size_t before = position_;
+      if (At(TokenKind::kSpread)) {
+        // A spread has no key: the pairs it brings in keep their own.
+        object->pairs.emplace_back(std::string(), ParseSpread());
+        SkipNewlines();
+        if (!AcceptToken(TokenKind::kComma)) {
+          if (position_ == before) Advance();
+          break;
+        }
+        SkipNewlines();
+        if (position_ == before) Advance();
+        continue;
+      }
       std::string key;
       if (At(TokenKind::kString)) {
-        key = std::string(Advance().string_value);
+        key = ParseStringRun();
       } else {
         key = ExpectName("an object key").text;
       }
@@ -1444,6 +1869,8 @@ class ParserImpl {
   size_t position_ = 0;
   /// Whether `Tag{...}` may start here: see [BlockHeader].
   bool brace_literals_ = true;
+  /// How many brackets deep this is, where a line break ends nothing.
+  int brackets_ = 0;
   /// The flow being read, so every diagnostic says which one it is in.
   std::string flow_name_;
   ParseResult result_;

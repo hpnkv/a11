@@ -128,6 +128,19 @@ nlohmann::json CompletionsToJsonValue(const CompleteResult& result);
 nlohmann::json PlanToJsonValue(std::string_view source_name,
                                const Program& program);
 
+/// One resolved shape, as the `structs` of a plan writes it.
+///
+/// Exposed on its own because a shape travels without its program: it is what a
+/// JSONSchema is made from, what a tool is handed as a type description, and
+/// what an editor shows on hover.
+///
+/// With a `program`, the shapes this one names travel with it under `nested`,
+/// innermost last -- a shape is not much use to a reader that has to build a
+/// type from it without the types its fields refer to. Self-reference is fine:
+/// a shape naming itself appears once, in `struct`.
+nlohmann::json DtoToJsonValue(const DtoPlan& dto,
+                              const Program* absl_nullable program = nullptr);
+
 /// The envelope, serialised with a trailing newline and two-space indent.
 std::string PlanToJson(std::string_view source_name, const Program& program);
 

@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/container/flat_hash_set.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <absl/types/span.h>
@@ -87,7 +88,17 @@ nlohmann::json TypeJson(const syntax::TypeExpression& type) {
   }
   return nlohmann::json{{"name", type.name},
                         {"parameters", parameters},
-                        {"quoted", type.quoted}};
+                        {"quoted", type.quoted},
+                        {"sugared", type.sugared},
+                        {"written", type.ToString()}};
+}
+
+/// A field's bounds. Absent keys are open ends, which is what `1..` means.
+nlohmann::json RangeJson(const syntax::FieldRange& range) {
+  nlohmann::json written = nlohmann::json::object();
+  if (range.has_minimum) written["minimum"] = ConstantToJsonValue(range.minimum);
+  if (range.has_maximum) written["maximum"] = ConstantToJsonValue(range.maximum);
+  return written;
 }
 
 nlohmann::json PairsJson(
@@ -237,6 +248,16 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["tolerant"] = call->tolerant;
       break;
     }
+    case syntax::NodeKind::kLet: {
+      const auto* let = syntax::As<syntax::Let>(node);
+      value["name"] = let->name().text;
+      value["names"] = WordList(let->names);
+      value["pipeline"] = NodeJson(let->pipeline.get());
+      break;
+    }
+    case syntax::NodeKind::kAdvance:
+      value["name"] = syntax::As<syntax::Advance>(node)->name.text;
+      break;
     case syntax::NodeKind::kBind: {
       const auto* bind = syntax::As<syntax::Bind>(node);
       value["name"] = bind->name.text;
@@ -290,7 +311,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     }
     case syntax::NodeKind::kForEach: {
       const auto* loop = syntax::As<syntax::ForEach>(node);
-      value["variable"] = loop->variable.text;
+      nlohmann::json names = nlohmann::json::array();
+      for (const syntax::Word& name : loop->variables) names.push_back(name.text);
+      value["variable"] = loop->variable().text;
+      value["variables"] = std::move(names);
       value["pipeline"] = NodeJson(loop->pipeline.get());
       value["parallel"] = loop->parallel;
       value["body"] = NodeList(loop->body);
@@ -302,7 +326,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
                               ? nlohmann::json(nullptr)
                               : nlohmann::json(repeat->variable.text);
       value["start"] = NodeJson(repeat->start.get());
-      value["max_iterations"] = repeat->max_iterations;
+      if (repeat->max_iterations.has_value()) {
+        value["max_iterations"] = *repeat->max_iterations;
+      }
       value["body"] = NodeList(repeat->body);
       break;
     }
@@ -374,6 +400,44 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       }
       value["headers"] = headers;
       value["body"] = NodeList(flow->body);
+      break;
+    }
+    case syntax::NodeKind::kSpread:
+      value["value"] = NodeJson(syntax::As<syntax::Spread>(node)->value.get());
+      break;
+    case syntax::NodeKind::kZip:
+      value["sources"] = NodeList(syntax::As<syntax::Zip>(node)->sources);
+      break;
+    case syntax::NodeKind::kFieldDeclaration: {
+      const auto* field = syntax::As<syntax::FieldDeclaration>(node);
+      value["name"] = field->name.text;
+      value["type"] = TypeJson(field->type);
+      value["required"] = field->required;
+      value["unique"] = field->unique;
+      value["description"] = field->description;
+      if (!field->range.Empty()) value["range"] = RangeJson(field->range);
+      if (field->has_pattern) value["pattern"] = field->pattern;
+      if (field->has_enumeration) {
+        nlohmann::json allowed = nlohmann::json::array();
+        for (const syntax::Constant& one : field->enumeration) {
+          allowed.push_back(ConstantToJsonValue(one));
+        }
+        value["one_of"] = allowed;
+      }
+      if (field->has_default) {
+        value["default"] = ConstantToJsonValue(field->default_value);
+      }
+      break;
+    }
+    case syntax::NodeKind::kDtoDeclaration: {
+      const auto* dto = syntax::As<syntax::DtoDeclaration>(node);
+      value["name"] = dto->name.text;
+      value["description"] = dto->description;
+      nlohmann::json fields = nlohmann::json::array();
+      for (const syntax::FieldDeclarationPtr& field : dto->fields) {
+        fields.push_back(NodeJson(field.get()));
+      }
+      value["fields"] = fields;
       break;
     }
   }
@@ -653,6 +717,10 @@ nlohmann::json SyntaxToJsonValue(std::string_view source,
   for (const syntax::FlowDeclarationPtr& flow : result.flows) {
     flows.push_back(NodeJson(flow.get()));
   }
+  nlohmann::json dtos = nlohmann::json::array();
+  for (const syntax::DtoDeclarationPtr& dto : result.dtos) {
+    dtos.push_back(NodeJson(dto.get()));
+  }
   nlohmann::json diagnostics = nlohmann::json::array();
   for (const Diagnostic& diagnostic : result.diagnostics) {
     diagnostics.push_back(DiagnosticToJsonValue(diagnostic));
@@ -661,6 +729,7 @@ nlohmann::json SyntaxToJsonValue(std::string_view source,
       {"format", kSyntaxFormat},
       {"source", std::string(source)},
       {"flows", flows},
+      {"structs", dtos},
       {"diagnostics", diagnostics},
   };
 }
@@ -672,7 +741,10 @@ std::string SyntaxToJson(std::string_view source, const ParseResult& result) {
 nlohmann::json TokensToJsonValue(std::string_view source_name,
                                  std::string_view source) {
   const LexResult lexed = Lex(source, LexOptions{.keep_comments = true});
-  const std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
+  std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
+  // The one part of classification that needs name resolution: which
+  // identifiers are ports of the flow they stand in. See [RefinePorts].
+  RefinePorts(source, semantic);
   nlohmann::json tokens = nlohmann::json::array();
   for (size_t index = 0; index < semantic.size(); ++index) {
     const SemanticToken& token = semantic[index];
@@ -739,6 +811,9 @@ nlohmann::json CompletionsToJsonValue(const CompleteResult& result) {
     if (proposal.caret >= 0) written["caret"] = proposal.caret;
     if (!proposal.tail.empty()) written["tail"] = proposal.tail;
     if (!proposal.type.empty()) written["type"] = proposal.type;
+    if (!proposal.documentation.empty()) {
+      written["documentation"] = proposal.documentation;
+    }
     proposals.push_back(std::move(written));
   }
   return nlohmann::json{
@@ -757,6 +832,52 @@ nlohmann::json PortToJson(const PortPlan& port) {
       {"unary", port.unary},
       {"required", port.required},
       {"description", port.description},
+  };
+}
+
+/// One resolved shape, as `flow.plan/v1` and `flow.schema/v1` write it.
+///
+/// The constraints go out only when they were written, so a plain field is a
+/// plain object and a reader can see at a glance what the author actually said.
+nlohmann::json DtoToJson(const DtoPlan& dto) {
+  nlohmann::json fields = nlohmann::json::object();
+  nlohmann::json order = nlohmann::json::array();
+  for (const FieldPlan& field : dto.fields) {
+    nlohmann::json written{
+        {"type", field.declared.empty() ? field.type : field.declared},
+        {"resolved", field.type},
+        {"required", field.required},
+        {"description", field.description},
+    };
+    if (!field.element.empty()) written["element"] = field.element;
+    if (!field.dto_name.empty()) written["struct"] = field.dto_name;
+    if (!field.element_dto_name.empty()) {
+      written["element_struct"] = field.element_dto_name;
+    }
+    if (field.unique) written["unique"] = true;
+    if (!field.range.Empty()) written["range"] = RangeJson(field.range);
+    if (field.has_pattern) written["pattern"] = field.pattern;
+    if (field.has_enumeration) {
+      nlohmann::json allowed = nlohmann::json::array();
+      for (const syntax::Constant& one : field.enumeration) {
+        allowed.push_back(ConstantToJsonValue(one));
+      }
+      written["one_of"] = allowed;
+    }
+    if (field.has_default) {
+      written["default"] = ConstantToJsonValue(field.default_value);
+    }
+    fields[field.name] = std::move(written);
+    order.push_back(field.name);
+  }
+  return nlohmann::json{
+      {"struct", dto.name},
+      {"description", dto.description},
+      {"fields", fields},
+      // The order is beside the fields rather than implied by them: a JSON
+      // object has no order a reader may rely on, and a shape's fields have one.
+      {"order", order},
+      {"binary", dto.binary},
   };
 }
 
@@ -832,11 +953,39 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
         {"steps", StepsToJson(flow.steps)},
     });
   }
+  nlohmann::json dtos = nlohmann::json::array();
+  for (const DtoPlan& dto : program.dtos) dtos.push_back(DtoToJson(dto));
   return nlohmann::json{
       {"format", kPlanFormat},
       {"source", std::string(source_name)},
       {"flows", flows},
+      {"structs", dtos},
   };
+}
+
+nlohmann::json DtoToJsonValue(const DtoPlan& dto,
+                              const Program* absl_nullable program) {
+  nlohmann::json out = DtoToJson(dto);
+  if (program == nullptr) return out;
+  // Breadth-first from this shape, skipping the ones already carried -- so a
+  // cycle of shapes travels once and a shape that names itself is not repeated.
+  std::vector<const DtoPlan*> found{&dto};
+  absl::flat_hash_set<std::string> seen{dto.name};
+  nlohmann::json nested = nlohmann::json::array();
+  for (size_t index = 0; index < found.size(); ++index) {
+    for (const FieldPlan& field : found[index]->fields) {
+      for (const std::string& named :
+           {field.dto_name, field.element_dto_name}) {
+        if (named.empty() || !seen.insert(named).second) continue;
+        const DtoPlan* next = program->Dto(named);
+        if (next == nullptr) continue;
+        found.push_back(next);
+        nested.push_back(DtoToJson(*next));
+      }
+    }
+  }
+  if (!nested.empty()) out["nested"] = std::move(nested);
+  return out;
 }
 
 std::string PlanToJson(std::string_view source_name, const Program& program) {

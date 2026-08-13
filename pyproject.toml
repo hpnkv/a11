@@ -130,7 +130,7 @@ select = ["E501"]
 # Generated pybind11 stub: its docstrings come verbatim from the C++ and
 # Python source, and the stub formatter (black in .pyi mode) does not reflow
 # docstring prose, so line length is not enforced on the generated output.
-"a11/_native.pyi" = ["E501"]
+"a11/_native/*.pyi" = ["E501"]
 
 [tool.ruff.format]
 preview = true

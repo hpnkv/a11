@@ -86,6 +86,22 @@ NativeStatus StatusObject(const absl::Status& status) {
   return NativeStatus(status);
 }
 
+// A node map's readers take its mutex, which a fibre creating a node may be
+// holding, so these wait without the GIL like everything else here. See
+// [WithoutGil].
+const auto Contains = [](const nodes::NodeMap& self,
+                         const std::string& node_id) {
+  return WithoutGil([&] { return self.Contains(node_id); });
+};
+
+const auto Ids = [](const nodes::NodeMap& self) {
+  return WithoutGil([&] { return self.Ids(); });
+};
+
+const auto Size = [](const nodes::NodeMap& self) {
+  return WithoutGil([&] { return self.Size(); });
+};
+
 }  // namespace
 
 void BindNodes(py::module_& module) {
@@ -132,7 +148,8 @@ void BindNodes(py::module_& module) {
       .def(
           "get",
           [](nodes::NodeMap& self, std::string node_id) {
-            return ValueOrThrow(self.Get(std::move(node_id)));
+            return ValueOrThrow(WithoutGil(
+                [&] { return self.Get(std::move(node_id)); }));
           },
           "Returns the node for the given id, creating it if it does not "
           "already exist.",
@@ -140,7 +157,8 @@ void BindNodes(py::module_& module) {
       .def(
           "get_if_exists",
           [](const nodes::NodeMap& self, const std::string& node_id) {
-            return ValueOrThrow(self.GetIfExists(node_id));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetIfExists(node_id); }));
           },
           "Returns the node for the given id, or None if it does not exist.",
           py::arg("node_id"))
@@ -148,23 +166,24 @@ void BindNodes(py::module_& module) {
           "discard",
           [](nodes::NodeMap& self, const std::string& node_id,
              const std::shared_ptr<nodes::AsyncNode>& expected) {
-            return ValueOrThrow(self.Discard(node_id, expected));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.Discard(node_id, expected); }));
           },
           "Removes the node for the given id, optionally only if it matches "
           "the expected node.",
           py::arg("node_id"), py::arg("expected") = nullptr)
-      .def("contains", &nodes::NodeMap::Contains,
+      .def("contains", Contains,
            "Returns whether a node with the given id exists.",
            py::arg("node_id"))
-      .def("__contains__", &nodes::NodeMap::Contains,
+      .def("__contains__", Contains,
            "Returns whether a node with the given id exists.",
            py::arg("node_id"))
-      .def("ids", &nodes::NodeMap::Ids,
+      .def("ids", Ids,
            "The id of every node the map holds, sorted.\n\nA snapshot: nodes "
            "are created on demand, so this is what was there when it was asked "
            "for.")
-      .def("size", &nodes::NodeMap::Size, "Number of nodes in the map.")
-      .def("__len__", &nodes::NodeMap::Size, "Number of nodes in the map.");
+      .def("size", Size, "Number of nodes in the map.")
+      .def("__len__", Size, "Number of nodes in the map.");
 
   py::classh<nodes::AsyncNode>(module, "AsyncNode", py::dynamic_attr())
       .def(py::init([](std::shared_ptr<stores::ChunkStore> store,
@@ -208,11 +227,15 @@ void BindNodes(py::module_& module) {
                              "The underlying chunk store backing this node "
                              "(see get_chunk_store).")
       .def_property(
-          "serialization_registry", &nodes::AsyncNode::serialization_registry,
+          "serialization_registry",
+          [](const nodes::AsyncNode& self) {
+            return WithoutGil([&] { return self.serialization_registry(); });
+          },
           [](nodes::AsyncNode& self,
              std::shared_ptr<data::SerializationRegistry> registry) {
-            const absl::Status status =
-                self.SetSerializationRegistry(std::move(registry));
+            const absl::Status status = WithoutGil([&] {
+              return self.SetSerializationRegistry(std::move(registry));
+            });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -222,23 +245,31 @@ void BindNodes(py::module_& module) {
           "how put()/next-object conversions map values to chunks.")
       .def(
           "reader",
-          [](nodes::AsyncNode& self) { return ValueOrThrow(self.reader()); },
+          [](nodes::AsyncNode& self) {
+            return ValueOrThrow(WithoutGil([&] { return self.reader(); }));
+          },
           "Returns the node's chunk-store reader, the consuming end of the "
           "stream. Read from it to pull chunks as they become available; it is "
           "kept alive for as long as you hold the returned reader.",
           py::keep_alive<0, 1>())
       .def(
           "writer",
-          [](nodes::AsyncNode& self) { return ValueOrThrow(self.writer()); },
+          [](nodes::AsyncNode& self) {
+            return ValueOrThrow(WithoutGil([&] { return self.writer(); }));
+          },
           "Returns the node's chunk-store writer, the producing end of the "
           "stream. Write to it to append chunks that readers can consume "
           "concurrently; it is kept alive for as long as you hold the returned "
           "writer.",
           py::keep_alive<0, 1>())
       .def_property(
-          "reader_options", &nodes::AsyncNode::GetReaderOptions,
+          "reader_options",
+          [](const nodes::AsyncNode& self) {
+            return WithoutGil([&] { return self.GetReaderOptions(); });
+          },
           [](nodes::AsyncNode& self, stores::ChunkStoreReaderOptions options) {
-            const absl::Status status = self.SetReaderOptions(options);
+            const absl::Status status =
+                WithoutGil([&] { return self.SetReaderOptions(options); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -249,7 +280,8 @@ void BindNodes(py::module_& module) {
           "reset_reader",
           [](nodes::AsyncNode& self,
              std::optional<stores::ChunkStoreReaderOptions> options) {
-            const absl::Status status = self.ResetReader(options);
+            const absl::Status status =
+                WithoutGil([&] { return self.ResetReader(options); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -258,9 +290,13 @@ void BindNodes(py::module_& module) {
           "optionally applying new reader options.",
           py::arg("options") = std::nullopt)
       .def_property(
-          "writer_options", &nodes::AsyncNode::GetWriterOptions,
+          "writer_options",
+          [](const nodes::AsyncNode& self) {
+            return WithoutGil([&] { return self.GetWriterOptions(); });
+          },
           [](nodes::AsyncNode& self, stores::ChunkStoreWriterOptions options) {
-            const absl::Status status = self.SetWriterOptions(options);
+            const absl::Status status =
+                WithoutGil([&] { return self.SetWriterOptions(options); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -270,7 +306,8 @@ void BindNodes(py::module_& module) {
       .def(
           "get_reader_status",
           [](const nodes::AsyncNode& self) -> NativeStatus {
-            return StatusObject(self.GetReaderStatus());
+            return StatusObject(
+                WithoutGil([&] { return self.GetReaderStatus(); }));
           },
           "Returns the current status of the node's reader. Check it to tell "
           "whether the consuming end of the stream is healthy, has completed, "
@@ -278,7 +315,8 @@ void BindNodes(py::module_& module) {
       .def(
           "get_writer_status",
           [](const nodes::AsyncNode& self) -> NativeStatus {
-            return StatusObject(self.GetWriterStatus());
+            return StatusObject(
+                WithoutGil([&] { return self.GetWriterStatus(); }));
           },
           "Returns the current status of the node's writer. Check it to tell "
           "whether the producing end of the stream is healthy, has completed, "
@@ -287,7 +325,8 @@ void BindNodes(py::module_& module) {
           "get_writer_abort_status",
           [](const nodes::AsyncNode& self)
               -> py::typing::Optional<NativeStatus> {
-            std::optional<absl::Status> status = self.GetWriterAbortStatus();
+            const std::optional<absl::Status> status =
+                WithoutGil([&] { return self.GetWriterAbortStatus(); });
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
           "Returns the status the writer was aborted with, or None if the "
@@ -295,7 +334,8 @@ void BindNodes(py::module_& module) {
       .def(
           "is_writable",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
-            return FutureToPython(self->IsWritable());
+            return FutureToPython(
+                WithoutGil([&] { return self->IsWritable(); }));
           },
           "Returns a future that resolves once it is known whether the node "
           "can currently accept writes. Await it before producing chunks to "
@@ -304,7 +344,8 @@ void BindNodes(py::module_& module) {
           "put_chunk",
           [](const std::shared_ptr<nodes::AsyncNode>& self, data::Chunk chunk,
              std::optional<std::uint32_t> seq, bool final) {
-            return FutureToPython(self->PutChunk(std::move(chunk), seq, final));
+            return FutureToPython(WithoutGil(
+                [&] { return self->PutChunk(std::move(chunk), seq, final); }));
           },
           "Appends a chunk to the stream and returns a future resolving to its "
           "sequence number. This is the primary way an agent produces "
@@ -319,7 +360,8 @@ void BindNodes(py::module_& module) {
           "put_fragment",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
              data::NodeFragment fragment) {
-            return FutureToPython(self->PutFragment(std::move(fragment)));
+            return FutureToPython(WithoutGil(
+                [&] { return self->PutFragment(std::move(fragment)); }));
           },
           "Appends a pre-assembled node fragment to the stream and returns a "
           "future resolving to its sequence number, for a NodeFragment "
@@ -329,7 +371,8 @@ void BindNodes(py::module_& module) {
           "put_null_final",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
              std::optional<std::uint32_t> seq) {
-            return FutureToPython(self->PutNullFinal(seq));
+            return FutureToPython(
+                WithoutGil([&] { return self->PutNullFinal(seq); }));
           },
           "Appends a final null marker and returns a future resolving to its "
           "sequence number. Use this to declare the logical end when there is "
@@ -346,7 +389,8 @@ void BindNodes(py::module_& module) {
                   a11::FailedFuture<std::optional<data::NodeFragment>>(
                       converted.status()));
             }
-            return FutureToPython(self->NextFragment(*converted));
+            return FutureToPython(
+                WithoutGil([&] { return self->NextFragment(*converted); }));
           },
           "Returns a future resolving to the next fragment in the stream, or "
           "None at end-of-stream. This is the consuming counterpart to "
@@ -365,7 +409,8 @@ void BindNodes(py::module_& module) {
                   a11::FailedFuture<std::optional<data::Chunk>>(
                       converted.status()));
             }
-            return FutureToPython(self->NextChunk(*converted));
+            return FutureToPython(
+                WithoutGil([&] { return self->NextChunk(*converted); }));
           },
           "Returns a future resolving to the next chunk in the stream, or None "
           "at end-of-stream. This is the consuming counterpart to put_chunk: "
@@ -376,7 +421,8 @@ void BindNodes(py::module_& module) {
       .def(
           "wait_for_buffer_to_drain",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
-            return FutureToPython(self->WaitForBufferToDrain());
+            return FutureToPython(
+                WithoutGil([&] { return self->WaitForBufferToDrain(); }));
           },
           "Returns a future that resolves once the write buffer has drained. "
           "Await it to apply backpressure from a fast producer, letting "
@@ -384,7 +430,8 @@ void BindNodes(py::module_& module) {
       .def(
           "drain_and_close",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
-            return FutureToPython(self->DrainAndClose());
+            return FutureToPython(
+                WithoutGil([&] { return self->DrainAndClose(); }));
           },
           "Returns a future that resolves once all buffered chunks have been "
           "flushed and the writer is closed. This does not mark a chunk as "
@@ -394,8 +441,9 @@ void BindNodes(py::module_& module) {
           "abort_with_status",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
              const PyLike<NativeStatus>& status) {
-            return FutureToPython(
-                self->AbortWithStatus(StatusFromPython(status)));
+            absl::Status aborted = StatusFromPython(status);
+            return FutureToPython(WithoutGil(
+                [&] { return self->AbortWithStatus(std::move(aborted)); }));
           },
           "Aborts the stream with the given error status and returns a future "
           "that resolves once the abort has propagated. Consumers then "
@@ -404,7 +452,8 @@ void BindNodes(py::module_& module) {
       .def(
           "attach_stream",
           [](nodes::AsyncNode& self, std::shared_ptr<net::WireStream> stream) {
-            const absl::Status status = self.AttachStream(std::move(stream));
+            const absl::Status status = WithoutGil(
+                [&] { return self.AttachStream(std::move(stream)); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -417,7 +466,8 @@ void BindNodes(py::module_& module) {
           "detach_stream",
           [](nodes::AsyncNode& self,
              const std::shared_ptr<net::WireStream>& stream) {
-            const absl::Status status = self.DetachStream(stream);
+            const absl::Status status =
+                WithoutGil([&] { return self.DetachStream(stream); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -425,13 +475,20 @@ void BindNodes(py::module_& module) {
           "Detaches a previously attached wire stream so the node stops "
           "mirroring its chunks over that transport.",
           py::arg("stream"))
-      .def("cancel_reader", &nodes::AsyncNode::CancelReader,
+      .def("cancel_reader",
+           [](nodes::AsyncNode& self) {
+             WithoutGil([&] { self.CancelReader(); });
+           },
            "Cancels the node's reader, unblocking any pending next-chunk or "
            "next-fragment awaits on the consuming side of the stream.")
-      .def("cancel_writer", &nodes::AsyncNode::CancelWriter,
+      .def("cancel_writer",
+           [](nodes::AsyncNode& self) {
+             WithoutGil([&] { self.CancelWriter(); });
+           },
            "Cancels the node's writer, unblocking any pending put or drain "
            "awaits on the producing side of the stream.")
-      .def("cancel", &nodes::AsyncNode::Cancel,
+      .def("cancel",
+           [](nodes::AsyncNode& self) { WithoutGil([&] { self.Cancel(); }); },
            "Cancels both the reader and the writer, tearing down all pending "
            "streaming operations on the node at once.");
 }

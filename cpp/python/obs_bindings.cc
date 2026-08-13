@@ -164,7 +164,7 @@ void Configure(const std::string& service_name,
   }
 }
 
-py::list RecordedSpans() {
+PyJsonObjects RecordedSpans() {
   // GetRecordedSpans() force-flushes the processor, which can block on the
   // exporter; drop the GIL for that and re-take it to build the Python list.
   std::vector<obs::RecordedSpan> spans;

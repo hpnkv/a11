@@ -1151,9 +1151,14 @@ if (A11_BUILD_PYTHON)
     endif ()
     install(TARGETS a11_python LIBRARY DESTINATION a11 COMPONENT python)
     install(FILES
-            "${CMAKE_CURRENT_SOURCE_DIR}/../a11/_native.pyi"
             "${CMAKE_CURRENT_SOURCE_DIR}/../a11/py.typed"
             DESTINATION a11 COMPONENT python)
+    # The stubs are a package, one file per module of the extension. See
+    # scripts/generate_stubs.py.
+    install(DIRECTORY
+            "${CMAKE_CURRENT_SOURCE_DIR}/../a11/_native/"
+            DESTINATION a11/_native COMPONENT python
+            FILES_MATCHING PATTERN "*.pyi")
     if (NOT SKBUILD)
         add_custom_target(
                 a11_python_stubs
@@ -1161,7 +1166,7 @@ if (A11_BUILD_PYTHON)
                 "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/generate_stubs.py"
                 DEPENDS a11_python
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
-                COMMENT "Generating a11/_native.pyi")
+                COMMENT "Generating a11/_native/*.pyi")
     endif ()
     if (TARGET status_py_extension_stub)
         install(TARGETS status_py_extension_stub

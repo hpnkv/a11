@@ -932,24 +932,30 @@ Examples:
            py::arg("store"),
            py::arg("options") = stores::ChunkStoreReaderOptions{},
            py::keep_alive<1, 2>())
-      .def("ensure_started", &stores::ChunkStoreReader::EnsureStarted,
+      .def("ensure_started",
+           [](stores::ChunkStoreReader& self) {
+             WithoutGil([&] { self.EnsureStarted(); });
+           },
            "Start the background read pump if it is not already running. "
            "Reading normally starts it lazily; call this to begin buffering "
            "before the first `next`.")
-      .def("cancel", &stores::ChunkStoreReader::Cancel,
+      .def("cancel",
+           [](stores::ChunkStoreReader& self) {
+             WithoutGil([&] { self.Cancel(); });
+           },
            "Stop the background read pump. Pending `next` awaitables are "
            "resolved and no further chunks are fetched.")
       .def(
           "get_status",
           [](const stores::ChunkStoreReader& self) -> NativeStatus {
-            return NativeStatus(self.GetStatus());
+            return NativeStatus(WithoutGil([&] { return self.GetStatus(); }));
           },
           "Return the reader's current status. An agent can inspect this to "
           "distinguish a healthy stream from one that has failed or ended.")
       .def(
           "wait",
           [](const stores::ChunkStoreReader& self) {
-            return StoreFuture(self.Done());
+            return StoreFuture(WithoutGil([&] { return self.Done(); }));
           },
           "Await completion of the background read pump. The returned future "
           "resolves once the reader has drained the store or been cancelled.")
@@ -964,7 +970,8 @@ Examples:
                   InvalidFuture<std::optional<data::NodeFragment>>(
                       converted.status()));
             }
-            return StoreFuture(self->Next(*converted));
+            return StoreFuture(
+                WithoutGil([&] { return self->Next(*converted); }));
           },
           "Await the next buffered fragment, or None when the stream ends "
           "or the optional timeout elapses. This is the main consumption "
@@ -977,10 +984,13 @@ Examples:
       .def_property_readonly("options", &stores::ChunkStoreReader::options,
                              "The ChunkStoreReaderOptions this reader was "
                              "created with.")
-      .def_property_readonly("buffer_size",
-                             &stores::ChunkStoreReader::buffer_size,
-                             "Number of prefetched fragments currently held in "
-                             "the reader's buffer.");
+      .def_property_readonly(
+          "buffer_size",
+          [](const stores::ChunkStoreReader& self) {
+            return WithoutGil([&] { return self.buffer_size(); });
+          },
+          "Number of prefetched fragments currently held in "
+          "the reader's buffer.");
 
   py::classh<stores::ChunkStoreWriter>(module, "ChunkStoreWriter",
                                        py::dynamic_attr())
@@ -997,7 +1007,10 @@ Examples:
            py::arg("store"),
            py::arg("options") = stores::ChunkStoreWriterOptions{},
            py::keep_alive<1, 2>())
-      .def("ensure_started", &stores::ChunkStoreWriter::EnsureStarted,
+      .def("ensure_started",
+           [](stores::ChunkStoreWriter& self) {
+             WithoutGil([&] { self.EnsureStarted(); });
+           },
            "Start the background flush loop if it is not already running. "
            "Writing normally starts it lazily; call this to begin flushing "
            "before the first chunk is enqueued.")
@@ -1009,13 +1022,14 @@ Examples:
             const std::optional<std::uint64_t> converted =
                 OptionalUnsignedOption(
                     seq, std::numeric_limits<std::uint32_t>::max(), "seq");
-            return StoreFuture(
-                self->PutChunk(std::move(chunk),
-                               converted.has_value()
-                                   ? std::optional<std::uint32_t>(
-                                         static_cast<std::uint32_t>(*converted))
-                                   : std::nullopt,
-                               final));
+            const std::optional<std::uint32_t> seq_number =
+                converted.has_value()
+                    ? std::optional<std::uint32_t>(
+                          static_cast<std::uint32_t>(*converted))
+                    : std::nullopt;
+            return StoreFuture(WithoutGil([&] {
+              return self->PutChunk(std::move(chunk), seq_number, final);
+            }));
           },
           "Write one chunk and await its assigned sequence number. This is the "
           "simple producer path for an agent: the returned future resolves "
@@ -1032,13 +1046,15 @@ Examples:
             const std::optional<std::uint64_t> converted =
                 OptionalUnsignedOption(
                     seq, std::numeric_limits<std::uint32_t>::max(), "seq");
-            stores::ChunkStoreWrite write = self->EnqueueChunk(
-                std::move(chunk),
+            const std::optional<std::uint32_t> seq_number =
                 converted.has_value()
                     ? std::optional<std::uint32_t>(
                           static_cast<std::uint32_t>(*converted))
-                    : std::nullopt,
-                final, false);
+                    : std::nullopt;
+            stores::ChunkStoreWrite write = WithoutGil([&] {
+              return self->EnqueueChunk(std::move(chunk), seq_number, final,
+                                        false);
+            });
             py::object confirmation = StoreFuture(write.confirmation);
             py::object admission = py::none();
             if (write.admitted.IsReady()) {
@@ -1069,7 +1085,8 @@ Examples:
           "get_status",
           [](const stores::ChunkStoreWriter& self)
               -> py::typing::Optional<NativeStatus> {
-            std::optional<absl::Status> status = self.GetStatus();
+            const std::optional<absl::Status> status =
+                WithoutGil([&] { return self.GetStatus(); });
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
           "Return the writer's terminal status, or None while it is still "
@@ -1079,26 +1096,31 @@ Examples:
           "get_abort_status",
           [](const stores::ChunkStoreWriter& self)
               -> py::typing::Optional<NativeStatus> {
-            std::optional<absl::Status> status = self.GetAbortStatus();
+            const std::optional<absl::Status> status =
+                WithoutGil([&] { return self.GetAbortStatus(); });
             return status.has_value() ? StatusToPython(*status) : py::none();
           },
           "Return the status the writer was aborted with, or None if it was "
           "not aborted. Use this to distinguish a clean close from an "
           "error-driven abort.")
-      .def("is_writable", &stores::ChunkStoreWriter::IsWritable,
+      .def("is_writable",
+           [](const stores::ChunkStoreWriter& self) {
+             return WithoutGil([&] { return self.IsWritable(); });
+           },
            "Return whether the writer still accepts chunks. False once the "
            "stream has been drained, closed, or aborted.")
       .def(
           "cancel",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-            return StoreFuture(self->Cancel());
+            return StoreFuture(WithoutGil([&] { return self->Cancel(); }));
           },
           "Stop the writer immediately and await teardown, discarding any "
           "chunks still queued.")
       .def(
           "drain_and_close",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-            return StoreFuture(self->DrainAndClose());
+            return StoreFuture(
+                WithoutGil([&] { return self->DrainAndClose(); }));
           },
           "Flush every queued chunk, close the writer, and await completion. "
           "This does not append a final fragment: mark the last chunk final "
@@ -1107,7 +1129,9 @@ Examples:
           "abort_with_status",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
              const PyLike<NativeStatus>& status) {
-            return StoreFuture(self->AbortWithStatus(StatusFromPython(status)));
+            absl::Status aborted = StatusFromPython(status);
+            return StoreFuture(WithoutGil(
+                [&] { return self->AbortWithStatus(std::move(aborted)); }));
           },
           "Abort the writer with an error status and await teardown. Readers "
           "then observe the error rather than a clean end-of-stream.",
@@ -1115,7 +1139,8 @@ Examples:
       .def(
           "wait_for_buffer_to_drain",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {
-            return StoreFuture(self->WaitForBufferToDrain());
+            return StoreFuture(
+                WithoutGil([&] { return self->WaitForBufferToDrain(); }));
           },
           "Await until the in-flight write buffer empties. An agent can use "
           "this as a backpressure checkpoint before enqueuing more chunks.")
@@ -1123,7 +1148,8 @@ Examples:
           "attach_stream",
           [](stores::ChunkStoreWriter& self,
              std::shared_ptr<net::WireStream> stream) {
-            const absl::Status status = self.AttachStream(std::move(stream));
+            const absl::Status status = WithoutGil(
+                [&] { return self.AttachStream(std::move(stream)); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -1139,7 +1165,8 @@ Examples:
           "detach_stream",
           [](stores::ChunkStoreWriter& self,
              const std::shared_ptr<net::WireStream>& stream) {
-            const absl::Status status = self.DetachStream(stream);
+            const absl::Status status =
+                WithoutGil([&] { return self.DetachStream(stream); });
             if (!status.ok()) {
               ThrowStatus(status);
             }
@@ -1152,10 +1179,12 @@ Examples:
       .def_property_readonly("options", &stores::ChunkStoreWriter::options,
                              "The ChunkStoreWriterOptions this writer was "
                              "created with.")
-      .def_property_readonly("queue_size",
-                             &stores::ChunkStoreWriter::queue_size,
-                             "Number of chunks currently waiting in the "
-                             "writer's flush queue.");
+      .def_property_readonly(
+          "queue_size",
+          [](const stores::ChunkStoreWriter& self) {
+            return WithoutGil([&] { return self.queue_size(); });
+          },
+          "Number of chunks currently waiting in the writer's flush queue.");
 }
 
 }  // namespace a11::python

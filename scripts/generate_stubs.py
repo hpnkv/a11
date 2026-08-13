@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
-"""Generate or verify the PEP 561 stub for A11's pybind11 module."""
+"""Generate or verify the PEP 561 stubs for A11's pybind11 module.
+
+``a11._native`` is one compiled module with a submodule (``flow``), so the stubs
+are a package -- `a11/_native/__init__.pyi` plus one file per submodule -- which
+is what pybind11-stubgen writes and what resolves ``a11._native.flow`` as a
+module for a type checker and an IDE.
+"""
 
 from __future__ import annotations
 
 import argparse
 import ast
+import builtins
 import importlib
 import inspect
 import re
 import tempfile
 import types
 from pathlib import Path
+from typing import NamedTuple
 
 import a11._native as native
 import black
 from pybind11_stubgen import main as stubgen_main
 
 ROOT = Path(__file__).resolve().parents[1]
-STUB = ROOT / "a11" / "_native.pyi"
+#: The checked-in stub *package*: ``__init__.pyi`` for ``a11._native`` and one
+#: file per submodule it exports, which is what pybind11-stubgen writes and what
+#: a type checker or an IDE needs to resolve ``a11._native.flow`` as a module.
+#: A directory of ``.pyi`` files beside ``_native.cpython-*.so`` does not shadow
+#: the extension: it is only a namespace-package candidate, and a real module
+#: wins.
+STUB = ROOT / "a11" / "_native"
 
 
 def _load_optional_public_protocols() -> None:
@@ -41,10 +55,32 @@ def _native_namespaces() -> list[types.ModuleType]:
     ]
 
 
-def _python_protocol_methods() -> dict[str, dict[str, bool]]:
+class _ProtocolMethod(NamedTuple):
+    """One attached Python method, as the stub has to render it."""
+
+    #: ``async def`` in the source, which stubgen reads as a plain function.
+    is_async: bool
+    #: Parameters the source annotated ``object``. stubgen writes those out as
+    #: ``typing.Any``, and the difference matters: a membership test annotated
+    #: ``object`` answers for any value, which is what typeshed spells it with.
+    object_parameters: frozenset[str]
+
+
+def _protocol_method(member: types.FunctionType) -> _ProtocolMethod:
+    annotated: set[str] = set()
+    for name, parameter in inspect.signature(member).parameters.items():
+        if parameter.annotation in (object, "object"):
+            annotated.add(name)
+    return _ProtocolMethod(
+        is_async=inspect.iscoroutinefunction(member),
+        object_parameters=frozenset(annotated),
+    )
+
+
+def _python_protocol_methods() -> dict[str, dict[str, _ProtocolMethod]]:
     """Return Python methods attached directly to bound native classes."""
 
-    result: dict[str, dict[str, bool]] = {}
+    result: dict[str, dict[str, _ProtocolMethod]] = {}
     for module in _native_namespaces():
         for value in vars(module).values():
             if not isinstance(value, type):
@@ -52,7 +88,7 @@ def _python_protocol_methods() -> dict[str, dict[str, bool]]:
             methods = result.setdefault(value.__name__, {})
             for name, member in vars(value).items():
                 if isinstance(member, types.FunctionType):
-                    methods[name] = inspect.iscoroutinefunction(member)
+                    methods[name] = _protocol_method(member)
     return result
 
 
@@ -85,13 +121,13 @@ def _replace_first_argument(signature: str) -> str:
 
 
 def _normalise_protocol_methods(
-    stub: str, methods: dict[str, dict[str, bool]]
+    stub: str, methods: dict[str, dict[str, _ProtocolMethod]]
 ) -> str:
     """Correct stubgen's treatment of dynamically attached Python methods."""
 
     output: list[str] = []
-    # (indent, name) per enclosing class. A submodule spliced into the one stub
-    # file nests its classes one level in, so the depth cannot be assumed.
+    # (indent, name) per enclosing class, so a nested class is attributed to
+    # itself rather than to the class it is written in.
     enclosing: list[tuple[int, str]] = []
     for line in stub.splitlines():
         stripped = line.lstrip()
@@ -105,11 +141,16 @@ def _normalise_protocol_methods(
         elif enclosing and stripped.startswith("def "):
             method_name = stripped.removeprefix("def ").split("(", 1)[0]
             class_methods = methods.get(enclosing[-1][1], {})
-            if method_name in class_methods:
+            method = class_methods.get(method_name)
+            if method is not None:
                 if output and output[-1].strip() == "@staticmethod":
                     output.pop()
                 line = _replace_first_argument(line)
-                if class_methods[method_name]:
+                for parameter in method.object_parameters:
+                    line = line.replace(
+                        f"{parameter}: typing.Any", f"{parameter}: object"
+                    )
+                if method.is_async:
                     line = f"{' ' * indent}async {line.lstrip()}"
         output.append(line)
     return "\n".join(output) + "\n"
@@ -308,10 +349,18 @@ def _split_on_decode(stub: str) -> str:
     return "\n".join(output) + "\n"
 
 
-def _normalise_annotations(stub: str) -> str:
-    """Resolve facade annotations and raw C++ names in generated output."""
+def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
+    """Resolve facade annotations and raw C++ names in generated output.
+
+    ``submodule`` names the file's own module inside ``a11._native``, whose
+    classes it refers to by bare name; the root stub is generated without one.
+    """
 
     replacements = {
+        # A submodule's own classes come out fully qualified
+        # (``a11._native.flow.FlowPlan``), and in its own file the bare name is
+        # what resolves. This has to come before the package prefix goes.
+        **({f"a11._native.{submodule}.": ""} if submodule else {}),
         "a11._native.": "",
         "_NativeAsyncNode": "AsyncNode",
         "_NativeNodeMap": "NodeMap",
@@ -389,9 +438,14 @@ def _normalise_annotations(stub: str) -> str:
         stub,
         flags=re.MULTILINE,
     )
+    # A comparison answers for *any* value rather than raising, which is what
+    # `object` says and what typeshed spells both dunders with. A membership
+    # test is not swept up with them: several of these take a `std::string` and
+    # do raise, and only the attached Python ones promise more (see
+    # [_ProtocolMethod]).
     stub = re.sub(
-        r"def __eq__\(self, (\w+): [^)]+\) -> bool:",
-        r"def __eq__(self, \1: object) -> bool:",
+        r"def (__eq__|__ne__)\(self, (\w+): [^)]+\) -> bool:",
+        r"def \1(self, \2: object) -> bool:",
         stub,
     )
     stub = re.sub(
@@ -411,6 +465,9 @@ def _normalise_annotations(stub: str) -> str:
         stub,
     )
     stub = re.sub(r"(?<![.\w])Self\b", "typing.Self", stub)
+
+    if submodule is not None:
+        return _check_annotations(stub, f"{submodule}.pyi")
 
     definitions = (
         # PEP 696 default: a reader called without an ``obj_type`` returns
@@ -455,22 +512,95 @@ def _normalise_annotations(stub: str) -> str:
             "import typing\n", "import typing\nimport typing_extensions\n", 1
         )
 
+    return _check_annotations(stub, "__init__.pyi")
+
+
+def _module_level_names(stub: str) -> set[str]:
+    """Every name a stub file defines or imports at module level."""
+    names: set[str] = set()
+    for node in ast.parse(stub).body:
+        if isinstance(
+            node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        ):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(
+                target.id
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(
+            node.target, ast.Name
+        ):
+            names.add(node.target.id)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            names.update(
+                (alias.asname or alias.name).split(".")[0]
+                for alias in node.names
+            )
+    return names
+
+
+def _import_parent_names(stub: str, root: str) -> str:
+    """Import what a submodule stub names but the root module defines.
+
+    A submodule's signatures refer to the parent module's types by bare name --
+    ``make_handler`` answers an ``ActionHandler`` -- because at runtime they are
+    one extension. In a stub package each file resolves its own names, so the
+    ones that come from the root are imported from it.
+    """
+    defined = _module_level_names(stub) | set(dir(builtins))
+    available = _module_level_names(root)
+    wanted = sorted(
+        {
+            node.id
+            for node in ast.walk(ast.parse(stub))
+            if isinstance(node, ast.Name)
+            and node.id not in defined
+            and node.id in available
+        }
+    )
+    if not wanted:
+        return stub
+    imports = f"from a11._native import {', '.join(wanted)}\n"
+    header = re.search(r"^import [^\n]+\n(?!import )", stub, flags=re.MULTILINE)
+    if header is None:
+        raise RuntimeError("submodule stub has no imports to follow")
+    return stub[: header.end()] + imports + stub[header.end() :]
+
+
+def _check_annotations(stub: str, name: str) -> str:
+    """Refuse a stub that still carries a type stubgen could not work out."""
     unresolved_type = re.search(r"(?:: \.\.\.(?:\s*=)?|-> \.\.\.)", stub)
     if unresolved_type is not None:
         line = stub.count("\n", 0, unresolved_type.start()) + 1
-        raise RuntimeError(f"unresolved generated type on line {line}")
-    ast.parse(stub, filename=str(STUB))
+        raise RuntimeError(f"unresolved generated type on {name} line {line}")
+    ast.parse(stub, filename=str(STUB / name))
     return stub
 
 
-def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
+def _normalise_stub(
+    path: Path,
+    methods: dict[str, dict[str, bool]],
+    submodule: str | None = None,
+) -> None:
+    """Rewrite one generated file in place, as the checked-in stub has it.
+
+    The overload splitting and the narrowing below are about readers of the root
+    module and count what they rewrote, so they run on that file only;
+    ``submodule`` says the file is a submodule's and takes the shared half.
+    """
     stub = path.read_text()
     stub = _normalise_protocol_methods(stub, methods)
     stub = _dedent_docstrings(stub)
-    stub = _normalise_annotations(stub)
-    stub = _narrow_obj_type_readers(stub)
-    stub = _split_on_allow_none(stub)
-    stub = _split_on_decode(stub)
+    stub = _normalise_annotations(stub, submodule)
+    if submodule is None:
+        stub = _narrow_obj_type_readers(stub)
+        stub = _split_on_allow_none(stub)
+        stub = _split_on_decode(stub)
+    else:
+        root = (path.parent / "__init__.pyi").read_text()
+        stub = _import_parent_names(stub, root)
     mode = black.Mode(
         target_versions={black.TargetVersion.PY311},
         line_length=80,
@@ -497,80 +627,34 @@ def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
     path.write_text(stub)
 
 
-def _submodule_class(name: str, stub: str) -> str:
-    """One generated submodule stub as a class the single stub file can hold.
-
-    ``a11._native`` is one compiled module with a submodule (``flow``), and
-    pybind11-stubgen writes that as a stub *package* -- ``_native/__init__.pyi``
-    plus ``_native/flow.pyi``. A directory called ``a11/_native/`` next to
-    ``_native.cpython-*.so`` is not something worth having in the source tree, so
-    the submodule is spliced into the one stub instead: its functions become
-    static methods of a private class, and the module attribute is annotated with
-    it. ``from a11._native import flow`` and ``flow.parse(...)`` both type-check
-    against that, with the real signatures rather than ``ModuleType``.
-    """
-    lines = stub.splitlines()
-    body: list[str] = []
-    index = 0
-    # The module docstring becomes the class docstring; imports and `__all__`
-    # belong to the file, not to the class.
-    docstring, index = _take_docstring(lines, 0)
-    for line in lines[index:]:
-        if line.startswith(("from __future__", "import ", "from ", "__all__")):
-            continue
-        if line.startswith("def "):
-            body.append("    @staticmethod")
-        body.append(f"    {line}" if line.strip() else "")
-    class_name = f"_{name.capitalize()}Module"
-    header = [f"class {class_name}:"]
-    header += [f"    {line}" for line in docstring] if docstring else []
-    return "\n".join([*header, *body, "", f"{name}: {class_name}", ""])
-
-
-def _inline_submodules(package: Path) -> str:
-    """The package stub as one file, with every submodule spliced in."""
-    stub = (package / "__init__.pyi").read_text()
-    for path in sorted(package.glob("*.pyi")):
-        if path.name == "__init__.pyi":
-            continue
-        name = path.stem
-        spliced = _submodule_class(name, path.read_text())
-        # The generated `from . import flow` is the line the class replaces, so
-        # the attribute keeps the place in the file it already had.
-        if f"from . import {name}\n" in stub:
-            stub = stub.replace(f"from . import {name}\n", spliced, 1)
-        else:
-            stub = f"{stub}\n{spliced}"
-    return stub
-
-
 def _generate(output_dir: Path) -> Path:
     _load_optional_public_protocols()
     protocol_methods = _python_protocol_methods()
     _expose_bound_classes_in_native_module()
-    stubgen_main(
-        [
-            native.__name__,
-            "--output-dir",
-            str(output_dir),
-            "--ignore-invalid-expressions",
-            r"^(?:a11::|<).*$",
-            "--ignore-unresolved-names",
-            r".*",
-            "--exit-code",
-        ]
-    )
-    generated = output_dir / "a11" / "_native.pyi"
+    stubgen_main([
+        native.__name__,
+        "--output-dir",
+        str(output_dir),
+        "--ignore-invalid-expressions",
+        r"^(?:a11::|<).*$",
+        "--ignore-unresolved-names",
+        r".*",
+        "--exit-code",
+    ])
     package = output_dir / "a11" / "_native"
-    if package.is_dir():
-        # A module with submodules comes out as a stub package; one file is what
-        # is checked in. See [_inline_submodules].
-        generated.write_text(_inline_submodules(package))
-        for path in sorted(package.glob("*.pyi")):
+    _normalise_stub(package / "__init__.pyi", protocol_methods)
+    written = {"__init__.pyi"}
+    for path in sorted(package.glob("*.pyi")):
+        if path.name in written:
+            continue
+        _normalise_stub(path, protocol_methods, path.stem)
+        written.add(path.name)
+    # A submodule that has gone leaves its file behind, which would then be a
+    # stub for a module that no longer exists.
+    for path in sorted(package.iterdir()):
+        if path.name not in written:
             path.unlink()
-        package.rmdir()
-    _normalise_stub(generated, protocol_methods)
-    return generated
+    return package
 
 
 def main() -> None:
@@ -578,7 +662,7 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail if the checked-in stub differs from generated output",
+        help="fail if the checked-in stubs differ from generated output",
     )
     parser.add_argument(
         "--output-dir",
@@ -595,9 +679,17 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="a11-stubs-") as temporary:
         generated = _generate(Path(temporary))
-        if not STUB.exists() or generated.read_bytes() != STUB.read_bytes():
+        expected = {
+            path.name: path.read_bytes() for path in generated.iterdir()
+        }
+        checked_in = (
+            {path.name: path.read_bytes() for path in STUB.iterdir()}
+            if STUB.is_dir()
+            else {}
+        )
+        if expected != checked_in:
             raise SystemExit(
-                "a11/_native.pyi is stale; run scripts/generate_stubs.py"
+                "a11/_native/ is stale; run scripts/generate_stubs.py"
             )
 
 

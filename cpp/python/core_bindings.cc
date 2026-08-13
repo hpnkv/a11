@@ -71,7 +71,8 @@ void SetStatusMessage(NativeStatus& status, std::string message) {
                               StatusDetails(status.value()));
 }
 
-void SetStatusDetails(NativeStatus& status, const py::handle& details) {
+void SetStatusDetails(NativeStatus& status,
+                      const PyLike<PyJsonArray>& details) {
   status.value() =
       MakeNativeStatus(static_cast<int>(status.value().code()),
                        std::string(status.value().message()), details);
@@ -137,7 +138,7 @@ void BindCore(py::module_& module) {
           &SetStatusMessage, "The human-readable status message.")
       .def_property(
           "details",
-          [](const NativeStatus& status) -> py::list {
+          [](const NativeStatus& status) -> PyJsonArray {
             return JsonToPython(StatusDetails(status.value()));
           },
           &SetStatusDetails, "The structured status details, as a list.")
@@ -147,7 +148,7 @@ void BindCore(py::module_& module) {
           "Returns whether the status is OK (no error).")
       .def(
           "_as_dict",
-          [](const NativeStatus& status) -> py::dict {
+          [](const NativeStatus& status) -> PyJsonObject {
             return JsonToPython(ValueOrThrow(StatusToJson(status.value())));
           },
           "Returns the status as a JSON-compatible dict.")

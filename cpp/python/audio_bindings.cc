@@ -308,10 +308,9 @@ std::vector<AudioActionEntry> AudioActionEntries() {
 }
 
 // Returns the audio Actions as (name, schema, handler) triples.
-// a11.sdk.audio.actions is the typed surface over this; the stub generator
-// renders bound classes inside a nested generic as `...`, so there is nothing
-// to gain from spelling the element types out here.
-py::list AudioActionsPy() {
+// a11.sdk.audio.actions is the typed surface over this; PyActionTriples is what
+// spells the element types out for the stub.
+PyActionTriples AudioActionsPy() {
   py::list result;
   for (AudioActionEntry& entry : AudioActionEntries()) {
     result.append(py::make_tuple(

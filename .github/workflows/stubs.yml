@@ -1,8 +1,8 @@
 name: Stub freshness
 
-# Verifies that a11/_native.pyi matches what scripts/generate_stubs.py produces
-# from the built extension, so the checked-in stub (the contract IDEs and the
-# docs read) never drifts from the bindings. This requires compiling the native
+# Verifies that the a11/_native/ stub package matches what
+# scripts/generate_stubs.py produces from the built extension, so the checked-in
+# stubs (the contract IDEs and the docs read) never drift from the bindings. This requires compiling the native
 # module, so it reuses the same static-dependency bootstrap as the wheel build.
 
 on:
@@ -11,7 +11,7 @@ on:
       - "cpp/**"
       - "a11/**"
       - "scripts/generate_stubs.py"
-      - "a11/_native.pyi"
+      - "a11/_native/**"
   workflow_dispatch:
 
 permissions:

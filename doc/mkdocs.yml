@@ -77,7 +77,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          # griffe reads the package (and the sibling a11/_native.pyi stub)
+          # griffe reads the package (and the sibling a11/_native/ stubs)
           # statically, so building the docs does not require the compiled
           # native extension.
           paths: [ .. ]
@@ -88,9 +88,6 @@ plugins:
             # Path-relative: build.sh always runs mkdocs from doc/.
             extensions:
               - griffe_overloads.py:PromoteOverloads
-              # `a11._native.flow` is spliced into the one stub file as a class;
-              # this gives it back the module shape alias resolution needs.
-              - griffe_native_submodules.py:NativeSubmodules
             docstring_style: google
             show_source: false
             show_root_heading: true

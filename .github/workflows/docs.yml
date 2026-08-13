@@ -2,8 +2,8 @@ name: Documentation
 
 # Builds Python, TypeScript, and C++ documentation and deploys one Pages site.
 # The Python site is produced statically by MkDocs + mkdocstrings (griffe reads
-# the a11/ source and a11/_native.pyi directly, so no native build is needed),
-# and the C++ reference by Doxygen. A separate job keeps a11/_native.pyi honest.
+# the a11/ source and the a11/_native/ stubs directly, so no native build is
+# needed), and the C++ reference by Doxygen. A separate job keeps them honest.
 
 on:
   push:

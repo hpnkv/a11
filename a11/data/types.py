@@ -552,7 +552,7 @@ def _core_schema(cls, _source_type, _handler):
     #
     # A comment rather than a docstring: this is attached to every native
     # class, and `scripts/generate_stubs.py` would copy a docstring into each
-    # one's entry in `a11/_native.pyi`, seven times over.
+    # one's entry in `a11/_native/__init__.pyi`, seven times over.
     return core_schema.json_or_python_schema(
         json_schema=core_schema.no_info_plain_validator_function(
             lambda value: _VALIDATORS[cls](value, json_mode=True)

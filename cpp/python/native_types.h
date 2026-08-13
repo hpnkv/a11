@@ -83,6 +83,17 @@ class PyActionHandler : public pybind11::object {
   using object::object;
 };
 
+// The `(name, schema, handler)` triples a module of C++ Actions hands over, for
+// a caller that registers them itself. Written out by name for the same reason
+// as PyActionHandler: pybind resolves a bound class in a signature against what
+// is registered *when the function is defined*, and these modules are bound
+// before `ActionSchema` is, so the real caster would print its C++ name and the
+// stub generator would reduce the whole nested generic to `...`.
+class PyActionTriples : public pybind11::object {
+  PYBIND11_OBJECT_DEFAULT(PyActionTriples, object, PyObject_Type)
+  using object::object;
+};
+
 }  // namespace a11::python
 
 PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
@@ -94,6 +105,13 @@ template <>
 struct handle_type_name<a11::python::PyActionHandler> {
   static constexpr auto name =
       const_name("ActionHandler | NativeActionHandler | None");
+};
+
+template <>
+struct handle_type_name<a11::python::PyActionTriples> {
+  static constexpr auto name = const_name(
+      "list[tuple[str, ActionSchema, ActionHandler | NativeActionHandler |"
+      " None]]");
 };
 
 PYBIND11_NAMESPACE_END(detail)

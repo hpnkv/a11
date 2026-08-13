@@ -330,7 +330,7 @@ absl::StatusOr<data::ByteMap> ByteMapFromPython(const py::handle& value,
   }
 }
 
-py::dict ByteMapToPython(const data::ByteMap& value) {
+PyByteMap ByteMapToPython(const data::ByteMap& value) {
   py::gil_scoped_acquire acquire;
   py::dict result;
   for (const auto& [key, bytes] : value) {

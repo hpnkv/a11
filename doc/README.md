@@ -5,7 +5,7 @@ The hosted documentation is built from three generators into one site:
 - **Python API + guides** — [MkDocs Material](https://squidfunk.github.io/mkdocs-material/)
   with [mkdocstrings](https://mkdocstrings.github.io/) (`griffe` backend). Prose
   lives in `docs/`; the API reference is generated from the docstrings in the
-  `a11/` package and the `a11/_native.pyi` stub. griffe reads these
+  `a11/` package and the `a11/_native/` stubs. griffe reads these
   **statically**, so building the docs does *not* require the compiled native
   extension.
 - **C++ internals** — [Doxygen](https://www.doxygen.nl/) themed with

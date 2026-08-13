@@ -1,6 +1,6 @@
 """Keep overload-only stub members in the generated API reference.
 
-`a11/_native.pyi` narrows a few readers with `typing.overload` — `consume`
+`a11/_native/__init__.pyi` narrows a few readers with `typing.overload` — `consume`
 returns `T` when `allow_none` is false and `T | None` when it is true — and a
 stub may not carry the implementation those overloads belong to, because a type
 checker rejects one there.

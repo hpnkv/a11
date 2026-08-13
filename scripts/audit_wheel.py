@@ -85,13 +85,17 @@ def _audit_vendored_symbols(binary: Path) -> None:
 
 def _audit_typing_files(root: Path) -> None:
     marker = root / "a11" / "py.typed"
-    stub = root / "a11" / "_native.pyi"
+    package = root / "a11" / "_native"
     if not marker.is_file():
         raise RuntimeError("wheel does not contain a11/py.typed")
-    if not stub.is_file():
-        raise RuntimeError("wheel does not contain a11/_native.pyi")
+    # The stubs are a package: the root module and one file per submodule of the
+    # extension, which is what resolves `a11._native.flow` as a module.
+    for name in ("__init__.pyi", "flow.pyi"):
+        if not (package / name).is_file():
+            raise RuntimeError(f"wheel does not contain a11/_native/{name}")
+        ast.parse((package / name).read_text(), filename=str(package / name))
+    stub = package / "__init__.pyi"
     source = stub.read_text()
-    ast.parse(source, filename=str(stub))
     for declaration in (
         "class Http2Client:",
         "class Http2Server:",

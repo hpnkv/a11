@@ -36,6 +36,14 @@
 namespace a11::python {
 namespace {
 
+// The HTTP header pairs a handshake sends, as they read back.
+using PyHeaderPairs = py::typing::List<py::typing::Tuple<py::str, py::str>>;
+
+// And as one may be *given*: pairs, or a mapping of name to value. Annotated
+// rather than converted, because the setter does that itself.
+using PyHeadersLike =
+    PyLike<py::typing::Union<PyMapping<py::str, py::str>, PyHeaderPairs>>;
+
 size_t SizeOption(const py::handle& value, size_t maximum, const char* name) {
   try {
     if (!py::isinstance<py::int_>(value) ||
@@ -821,19 +829,19 @@ Examples:
                      "HTTP/2 transport options for the client connection.")
       .def_property(
           "headers",
-          [](const net::WebSocketClientOptions& options) {
+          [](const net::WebSocketClientOptions& options) -> PyHeaderPairs {
             py::list result;
             for (const auto& [name, value] : options.headers) {
               result.append(py::make_tuple(name, value));
             }
             return result;
           },
-          [](net::WebSocketClientOptions& options, const py::object& value) {
+          [](net::WebSocketClientOptions& options, const PyHeadersLike& value) {
             net::HttpHeaders headers;
             py::object entries =
                 PyMapping_Check(value.ptr()) != 0 && py::hasattr(value, "items")
                     ? value.attr("items")()
-                    : value;
+                    : py::object(value);
             for (const py::handle item : entries) {
               py::sequence pair = py::reinterpret_borrow<py::sequence>(item);
               if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||

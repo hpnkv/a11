@@ -216,14 +216,13 @@
 - Docs live in `doc/` and build to `doc/site` via `doc/build.sh` (see
   `doc/README.md`): MkDocs Material + `mkdocstrings` for the Python API and
   guides, Doxygen + doxygen-awesome-css for the C++ internals. The Python site
-  is static — `griffe` reads `a11/` and `a11/_native.pyi`, so no native build is
-  needed to generate it. CI builds and deploys it (`.github/workflows/docs.yml`).
-- Two griffe extensions in `doc/` make the generated stub documentable:
-  `griffe_overloads.py` keeps overload-only members, and
-  `griffe_native_submodules.py` turns each submodule `scripts/generate_stubs.py`
-  splices into `a11/_native.pyi` as a private class (`flow: _FlowModule`) back
-  into a module, so `from a11._native.flow import X` resolves. A *new* native
-  submodule needs nothing added; a different splice shape does.
+  is static — `griffe` reads `a11/` and the `a11/_native/` stubs, so no native
+  build is needed to generate it. CI builds and deploys it
+  (`.github/workflows/docs.yml`).
+- One griffe extension in `doc/` makes the generated stubs documentable:
+  `griffe_overloads.py` keeps overload-only members. A native submodule is a
+  file of the stub package (`a11/_native/flow.pyi`), so
+  `from a11._native.flow import X` resolves with nothing added.
 - Python: Google-style docstrings. Write for a developer *building an AI agent* —
   explain the asynchronous, streaming intent and when to reach for a thing, not
   just its mechanics. Maintain extended prose for the core surface (`ChunkStore`,
@@ -234,8 +233,9 @@
 - C++ / pybind11: give every `.def*` real parameter names (`py::arg("...")`, not
   `arg0`) and a docstring; extended for the core surface, brief elsewhere. Prose
   belongs in the C++ header doc-comments (`///` or `/** */`) where practical.
-  After changing bindings, rebuild the extension and regenerate `a11/_native.pyi`
-  with `scripts/generate_stubs.py`; `--check` gates it in CI.
+  After changing bindings, rebuild the extension and regenerate the
+  `a11/_native/` stubs with `scripts/generate_stubs.py`; `--check` gates it in
+  CI.
 
 ## Dependencies, installation, and wheels
 

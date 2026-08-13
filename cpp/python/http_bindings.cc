@@ -278,7 +278,7 @@ std::vector<HttpActionEntry> HttpActionEntries() {
   return entries;
 }
 
-py::list HttpActionsPy() {
+PyActionTriples HttpActionsPy() {
   py::list result;
   for (HttpActionEntry& entry : HttpActionEntries()) {
     result.append(py::make_tuple(

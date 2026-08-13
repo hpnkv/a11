@@ -32,13 +32,29 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from a11._native import flow as _flow
 from a11._native_protocol import attach_protocol
 from a11.flow.diagnostics import FlowSyntaxError
 
 from a11._native.flow import FlowPlan, Program
+
+if TYPE_CHECKING:
+    # What the protocols below say they hand back. The names are the native
+    # ones, which is also how they read in the generated stub; importing them
+    # for real here would be a cycle -- `a11.actions.action` is what builds the
+    # schema a flow presents -- so the methods that need a class at runtime
+    # still import it where they use it.
+    from a11._native import (
+        ActionHandler,
+        ActionHeaderSchema,
+        ActionPortSchema,
+        ActionRegistry,
+        ActionSchema,
+        NativeActionHandler,
+    )
+    from a11.actions.action import Action
 
 #: Friendly type names, and the Python type each gives a port. The type drives
 #: the JSON schema A11 shows an LLM, so a flow's ports describe themselves as
@@ -220,7 +236,7 @@ class _FlowPlanProtocol:
     """What the native ``FlowPlan`` looks like from Python."""
 
     @property
-    def schema(self) -> Any:
+    def schema(self) -> ActionSchema:
         """The [ActionSchema][a11.actions.action.ActionSchema] a flow presents.
 
         A flow is an action: it has ports, headers and a name, so anything that
@@ -250,26 +266,28 @@ class _FlowPlanProtocol:
         })
 
     @property
-    def inputs(self) -> Mapping[str, Any]:
+    def inputs(self) -> Mapping[str, ActionPortSchema]:
         """The declared input ports, by name, as the action schema has them."""
         return self.schema.inputs
 
     @property
-    def outputs(self) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, ActionPortSchema]:
         """The declared output ports, by name, as the action schema has them."""
         return self.schema.outputs
 
     @property
-    def headers(self) -> Mapping[str, Any]:
+    def headers(self) -> Mapping[str, ActionHeaderSchema]:
         """The declared headers, by name."""
         return self.schema.headers
 
     @property
-    def handler(self) -> Any:
+    def handler(self) -> ActionHandler | NativeActionHandler | None:
         """The action handler that runs this flow."""
         return self.make_handler()
 
-    def register(self, registry: Any, name: str | None = None) -> Any:
+    def register(
+        self: FlowPlan, registry: ActionRegistry, name: str | None = None
+    ) -> FlowPlan:
         """Register this flow as an action in ``registry``.
 
         After this the composition is an action like any other: a session
@@ -279,7 +297,7 @@ class _FlowPlanProtocol:
         registry.register(name or self.name, self.schema, self.handler)
         return self
 
-    def action(self, **kwargs: Any) -> Any:
+    def action(self, **kwargs: Any) -> Action:
         """Build a standalone [Action][a11.actions.action.Action] for it."""
         from a11.actions.action import Action
 
@@ -300,7 +318,7 @@ class _FlowPlanProtocol:
 class _ProgramProtocol:
     """What the native ``Program`` is from Python: a mapping of flows."""
 
-    def __getitem__(self, name: str) -> Any:
+    def __getitem__(self, name: str) -> FlowPlan:
         found = self.get(name)
         if found is None:
             known = ", ".join(sorted(self.names)) or "none"
@@ -313,23 +331,23 @@ class _ProgramProtocol:
     def __contains__(self, name: object) -> bool:
         return isinstance(name, str) and self.get(name) is not None
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[FlowPlan]:
         return iter(self[name] for name in self.names)
 
     def __len__(self) -> int:
         return len(self.names)
 
     @property
-    def flows(self) -> dict[str, Any]:
+    def flows(self) -> dict[str, FlowPlan]:
         """Every flow, by name, in declaration order."""
         return {name: self[name] for name in self.names}
 
     @property
-    def main(self) -> Any:
+    def main(self) -> FlowPlan:
         """The first flow declared, which is the one a file is usually about."""
         return self[self.names[0]]
 
-    def register_all(self, registry: Any) -> Any:
+    def register_all(self: Program, registry: ActionRegistry) -> Program:
         """Register every flow in ``registry``."""
         for name in self.names:
             self[name].register(registry)

@@ -125,7 +125,7 @@ py::dict DiagnosticToDict(const flow::Diagnostic& diagnostic) {
   return value;
 }
 
-py::dict LexToDict(std::string_view source, bool keep_comments) {
+PyJsonObject LexToDict(std::string_view source, bool keep_comments) {
   const flow::LexResult result =
       flow::Lex(source, flow::LexOptions{.keep_comments = keep_comments});
   py::list tokens;
@@ -134,7 +134,7 @@ py::dict LexToDict(std::string_view source, bool keep_comments) {
   for (const flow::Diagnostic& diagnostic : result.diagnostics) {
     diagnostics.append(DiagnosticToDict(diagnostic));
   }
-  py::dict value;
+  PyJsonObject value;
   value["tokens"] = tokens;
   value["diagnostics"] = diagnostics;
   return value;
@@ -575,16 +575,16 @@ struct BoundProgram {
 };
 
 /// The plan of one flow, as the `flow.plan/v1` payload describes it.
-py::dict DescribeFlow(const BoundFlow& flow) {
+PyJsonObject DescribeFlow(const BoundFlow& flow) {
   const nlohmann::json envelope = flow::PlanToJsonValue(
       flow.program->source_name(), flow.program->program());
   for (const nlohmann::json& one : envelope.at("flows")) {
     if (one.value("flow", std::string()) == flow.name) {
-      return JsonToPython(one).cast<py::dict>();
+      return JsonToPython(one).cast<PyJsonObject>();
     }
   }
   // Unreachable: the handle only exists for a flow the program declares.
-  return py::dict();
+  return PyJsonObject();
 }
 
 }  // namespace
@@ -623,7 +623,8 @@ nested bodies and all.
       .def(
           "make_handler",
           [](const BoundFlow& self,
-             const py::object& dispatch_stream) -> PyActionHandler {
+             const py::typing::Optional<PyLike<net::WireStream>>&
+                 dispatch_stream) -> PyActionHandler {
             flow::RunOptions options;
             options.bridge = HostBridgeForPython();
             if (!dispatch_stream.is_none()) {
@@ -684,7 +685,7 @@ them.
              return JsonToPython(
                         flow::PlanToJsonValue(self.program->source_name(),
                                               self.program->program()))
-                 .cast<py::dict>();
+                 .cast<PyJsonObject>();
            })
       .def("__repr__", [](const BoundProgram& self) {
         std::vector<std::string> names;
@@ -712,7 +713,8 @@ turns that into ``FlowSyntaxError``.
 
   flow.def(
       "strformat",
-      [](const py::object& format, const py::iterable& arguments) {
+      [](const PyLike<py::str>& format,
+         const py::typing::Iterable<py::object>& arguments) -> std::string {
         std::vector<flow::Value> values;
         for (const py::handle& argument : arguments) {
           values.push_back(ValueFromPython(argument));
@@ -748,7 +750,7 @@ formatter need; without it the stream is what the parser reads.
       "highlight",
       [](std::string_view source, std::string_view source_name) {
         return JsonToPython(flow::TokensToJsonValue(source_name, source))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
       R"doc(Classify Flow source for colouring.
@@ -761,12 +763,13 @@ implementation of that judgement; an editor maps its names to a palette.
 
   flow.def(
       "parse",
-      [](std::string_view source, std::string_view source_name) -> py::dict {
+      [](std::string_view source,
+         std::string_view source_name) -> PyJsonObject {
         const flow::ParseResult result = flow::Parse(source);
-        // The envelope is always an object, and saying so keeps the generated
-        // stub from calling it `Any`.
+        // The envelope is always an object with known keys, and saying so keeps
+        // the generated stub from calling it `Any` or a bare `dict`.
         return JsonToPython(flow::SyntaxToJsonValue(source_name, result))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
       R"doc(Parse Flow source into its syntax tree.
@@ -793,7 +796,7 @@ column and message the Python compiler has always reported.
         flow::SortDiagnostics(resolved.diagnostics);
         return JsonToPython(flow::DiagnosticsToJsonValue(
                                 source_name, resolved.diagnostics))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
       R"doc(Everything wrong with one flow file.
@@ -810,7 +813,7 @@ is the same engine with a strict door on it, for actually running one.
       "format",
       [](std::string_view source) {
         return JsonToPython(flow::FormatToJsonValue(flow::Format(source)))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("source"),
       R"doc(Format Flow source.
@@ -826,10 +829,10 @@ returned exactly as it was, with the diagnostics saying why.
 
   flow.def(
       "codes",
-      []() {
-        py::list codes;
+      []() -> PyJsonObjects {
+        PyJsonObjects codes;
         for (const flow::CodeInfo& info : flow::KnownCodes()) {
-          py::dict value;
+          PyJsonObject value;
           value["code"] = std::string(info.code);
           value["family"] = std::string(flow::FamilyName(info.family));
           value["severity"] = std::string(flow::SeverityName(info.severity));
@@ -847,7 +850,8 @@ read either and get the same answer.
   flow.def(
       "vocabulary",
       []() {
-        return JsonToPython(flow::VocabularyToJsonValue()).cast<py::dict>();
+        return JsonToPython(flow::VocabularyToJsonValue())
+            .cast<PyJsonObject>();
       },
       R"doc(Every word set the language gives meaning to.
 
@@ -858,8 +862,8 @@ definition that still keeps a copy to it.
 
   flow.def(
       "stages",
-      []() {
-        py::dict stages;
+      []() -> PyStringMap {
+        PyStringMap stages;
         for (const std::string_view stage : flow::vocabulary::Stages()) {
           stages[py::str(std::string(stage))] =
               std::string(flow::vocabulary::StageArgumentName(
@@ -879,7 +883,7 @@ definition that still keeps a copy to it.
       [](std::string_view source, size_t offset) {
         return JsonToPython(
                    flow::CompletionsToJsonValue(flow::CompleteAt(source, offset)))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("offset"),
       R"doc(What may be written at ``offset``.
@@ -896,9 +900,9 @@ filtering twice drops what a fuzzy matcher would have kept.
       [](std::string_view source, std::string_view source_name) {
         const flow::ParseResult parsed = flow::Parse(source);
         const flow::ResolveResult resolved = flow::Resolve(source, parsed);
-        py::dict value =
+        PyJsonObject value =
             JsonToPython(flow::PlanToJsonValue(source_name, resolved.program))
-                .cast<py::dict>();
+                .cast<PyJsonObject>();
         py::list diagnostics;
         for (const flow::Diagnostic& diagnostic : resolved.diagnostics) {
           diagnostics.append(DiagnosticToDict(diagnostic));
@@ -924,7 +928,7 @@ whole truth would be misled.
               absl::StrCat("No editor definition is generated for ", target,
                            ". Ask `a11 flow syntax --help` which there are."));
         }
-        py::dict value;
+        PyStringMap value;
         value["target"] = std::string(flow::SyntaxTargetName(wanted));
         value["path"] = std::string(flow::SyntaxTargetPath(wanted));
         value["text"] = flow::GenerateSyntax(wanted);
@@ -940,11 +944,11 @@ the language reaches the editor by running this, and CI notices when nobody has.
 
   flow.def(
       "request",
-      [](const py::dict& request) {
+      [](const PyJsonObject& request) {
         // Always an object: `{ok, result}` or `{ok, error}`, which is what makes
         // the answer safe to index rather than something to type-test.
         return JsonToPython(flow::Handle(PythonToJson(request)))
-            .cast<py::dict>();
+            .cast<PyJsonObject>();
       },
       py::arg("request"),
       R"doc(One request to the language service, answered.

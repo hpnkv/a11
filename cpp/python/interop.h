@@ -78,6 +78,47 @@ class PyStatusCode : public py::object {
   using object::object;
 };
 
+/**
+ * Runs a blocking native call with the GIL released, and hands back its result.
+ *
+ * A *synchronous* binding that can block must let Python run while it waits.
+ * A11's mutexes and events are fibre-aware (@c thread::Mutex, @c
+ * thread::Select), and whoever holds one may itself need the GIL -- a Python
+ * action handler, a chunk built through the serialisation registry, a future
+ * completed onto an asyncio loop. Waiting with the GIL held closes that cycle:
+ * nothing Python can run, so the holder never finishes, so the wait never ends.
+ * The GIL is taken again before the result is turned into a Python object, so a
+ * converting call (@c ValueOrThrow, @c FutureToPython) belongs outside.
+ */
+template <typename Callable>
+auto WithoutGil(Callable&& call) -> decltype(call()) {
+  const py::gil_scoped_release release;
+  return std::forward<Callable>(call)();
+}
+
+/**
+ * A JSON object as Python holds it: @c dict[str,Any] in a signature.
+ *
+ * The payloads A11 hands over as plain data -- a `flow.diagnostics/v1`
+ * envelope, an action's headers, a recorded span -- have known keys and values
+ * of whatever JSON allows. Returning @c py::dict says only @c dict, which tells
+ * a reader of the stub nothing about the keys; this at least says what the keys
+ * are and admits that a value is anything.
+ */
+using PyJsonObject = py::typing::Dict<py::str, py::object>;
+
+/** A JSON array whose elements are whatever they are: @c list[Any]. */
+using PyJsonArray = py::typing::List<py::object>;
+
+/** A JSON array of objects: @c list[dict[str,Any]]. */
+using PyJsonObjects = py::typing::List<PyJsonObject>;
+
+/** A mapping of strings to strings: @c dict[str,str]. */
+using PyStringMap = py::typing::Dict<py::str, py::str>;
+
+/** A11's header map as Python holds it: @c dict[str,bytes]. */
+using PyByteMap = py::typing::Dict<py::str, py::bytes>;
+
 namespace future_internal {
 
 // The Python type a Future<T> resolves to, for the annotation.
@@ -148,7 +189,7 @@ py::object DurationToPython(absl::Duration value);
 
 absl::StatusOr<data::ByteMap> ByteMapFromPython(const py::handle& value,
                                                 bool none_is_empty = true);
-py::dict ByteMapToPython(const data::ByteMap& value);
+PyByteMap ByteMapToPython(const data::ByteMap& value);
 
 py::object StatusException(const absl::Status& status);
 [[noreturn]] void ThrowStatus(const absl::Status& status);

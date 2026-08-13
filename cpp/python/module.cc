@@ -78,9 +78,6 @@ PYBIND11_MODULE(_native, module) {
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);
   a11::python::BindData(module);
-  // The Flow language. Nothing else in the extension depends on it, and it
-  // depends on nothing else here: the language is a component, not a layer.
-  a11::python::BindFlow(module);
 #ifdef A11_BUILD_REDIS
   a11::python::BindRedis(module);
 #endif
@@ -91,6 +88,11 @@ PYBIND11_MODULE(_native, module) {
   // Net is registered first because store writers and later runtime classes
   // accept WireStream base pointers in their signatures.
   a11::python::BindNet(module);
+  // The Flow language. Nothing else in the extension depends on it, and it
+  // depends on nothing else here: the language is a component, not a layer.
+  // It comes after Net all the same, because `make_handler` names a WireStream
+  // in its signature and an unregistered type is written out as its C++ name.
+  a11::python::BindFlow(module);
   a11::python::BindHttp(module);
   a11::python::BindWebRtc(module);
   a11::python::BindStores(module);

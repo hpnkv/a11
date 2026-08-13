@@ -322,6 +322,48 @@ a11::Future<std::optional<std::string>> Http2ResponseStream::Read() {
   return promise->future();
 }
 
+a11::Future<HttpHeaders> Http2ResponseStream::Trailers() const {
+  return state_->trailers_future;
+}
+
+a11::Future<std::optional<HttpPushedResponse>> Http2ResponseStream::NextPush() {
+  std::optional<HttpPushedResponse> promised;
+  bool done = false;
+  absl::Status status;
+  std::shared_ptr<a11::Promise<std::optional<HttpPushedResponse>>> promise;
+  {
+    thread::MutexLock lock(&state_->mu);
+    if (state_->pending_push != nullptr) {
+      return a11::FailedFuture<std::optional<HttpPushedResponse>>(
+          absl::FailedPreconditionError(
+              "Only one HTTP/2 NextPush may be outstanding"));
+    }
+    if (!state_->pushes.empty()) {
+      promised = std::move(state_->pushes.front());
+      state_->pushes.pop_front();
+    } else if (state_->done) {
+      // Queue drained and the associated response has ended: no further promise
+      // can arrive on it.
+      done = true;
+      status = state_->status;
+    } else {
+      promise =
+          std::make_shared<a11::Promise<std::optional<HttpPushedResponse>>>();
+      state_->pending_push = promise;
+    }
+  }
+  if (promised.has_value()) {
+    return a11::ReadyFuture(std::move(promised));
+  }
+  if (done) {
+    if (!status.ok()) {
+      return a11::FailedFuture<std::optional<HttpPushedResponse>>(status);
+    }
+    return a11::ReadyFuture(std::optional<HttpPushedResponse>());
+  }
+  return promise->future();
+}
+
 a11::Task Http2ResponseStream::Done() const {
   return state_->done_future;
 }
@@ -525,6 +567,21 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         });
   }
 
+  absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitStreamingRequest(
+      std::string method, std::string scheme, std::string authority,
+      std::string path, HttpHeaders headers) override {
+    std::shared_ptr<Http2Connection> self = Self();
+    return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+        [self = std::move(self), method = std::move(method),
+         scheme = std::move(scheme), authority = std::move(authority),
+         path = std::move(path), headers = std::move(headers)]() mutable
+            -> absl::StatusOr<std::shared_ptr<Http2DuplexStream>> {
+          return self->OpenDuplexOnLoop(
+              std::move(method), /*protocol=*/{}, std::move(scheme),
+              std::move(authority), std::move(path), std::move(headers));
+        });
+  }
+
   absl::Status WriteRequest(std::int32_t stream_id, std::string data) override {
     std::shared_ptr<Http2Connection> self = Self();
     return RunStatusOnUv(
@@ -564,6 +621,15 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     });
   }
 
+  absl::Status FinishWithTrailers(std::int32_t stream_id,
+                                  HttpHeaders trailers) override {
+    std::shared_ptr<Http2Connection> self = Self();
+    return RunStatusOnUv([self = std::move(self), stream_id,
+                          trailers = std::move(trailers)]() mutable {
+      return self->FinishOnLoop(stream_id, std::move(trailers));
+    });
+  }
+
   absl::Status SendResponse(std::int32_t stream_id, int status,
                             HttpHeaders headers, std::string body) override {
     std::shared_ptr<Http2Connection> self = Self();
@@ -577,6 +643,20 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       }
       return self->FinishOnLoop(stream_id);
     });
+  }
+
+  absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> SubmitPushPromise(
+      std::int32_t stream_id, std::string method, std::string path,
+      HttpHeaders headers) override {
+    std::shared_ptr<Http2Connection> self = Self();
+    return RunOnUv<std::shared_ptr<Http2ResponseWriter>>(
+        [self = std::move(self), stream_id, method = std::move(method),
+         path = std::move(path), headers = std::move(headers)]() mutable
+            -> absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> {
+          return self->SubmitPushPromiseOnLoop(stream_id, std::move(method),
+                                               std::move(path),
+                                               std::move(headers));
+        });
   }
 
   absl::Status AbortResponse(std::int32_t stream_id,
@@ -663,15 +743,36 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     std::int32_t id = -1;
     HttpHeaders inbound_headers;
     HttpRequest request;
+    /**
+     * The origin this exchange is against, kept apart from @c request because
+     * DispatchRequest moves that into the handler. A push promise needs them
+     * afterwards: it names a request on the same origin, and an empty
+     * `:authority` is a protocol error the peer resets the stream over.
+     */
+    std::string origin_scheme;
+    std::string origin_authority;
     bool request_dispatched = false;
     bool request_too_large = false;
     bool duplex = false;
+    /// A stream this side never opened, created by a PUSH_PROMISE. Its response
+    /// head arrives as a HEADERS block with no request of ours preceding it.
+    bool pushed = false;
     bool response_headers_sent = false;
     bool response_headers_received = false;
     bool remote_end = false;
     std::deque<std::string> outbound;
     size_t outbound_offset = 0;
     bool outbound_finished = false;
+    /**
+     * A trailer section to send once the body reaches its end, and whether one
+     * is still owed.
+     *
+     * Trailers cannot be submitted up front: they follow the last DATA frame,
+     * so the data source has to withhold END_STREAM and submit them at the
+     * moment it reports EOF. See DataSourceReadCallback.
+     */
+    HttpHeaders outbound_trailers;
+    bool outbound_trailers_pending = false;
     std::shared_ptr<Http2ResponseStream::State> response;
     /**
      * Response DATA received so far in this receive batch, not yet handed to
@@ -720,15 +821,23 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return Nghttp2Error(result, server_ ? "nghttp2_session_server_new"
                                           : "nghttp2_session_client_new");
     }
-    const nghttp2_settings_entry settings[] = {
+    std::vector<nghttp2_settings_entry> settings{
         {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 256},
         {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,
-         static_cast<std::uint32_t>(StreamWindowSize(options_))},
-        {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}};
-    const size_t settings_count =
-        server_ ? std::size(settings) : std::size(settings) - 1;
-    result = nghttp2_submit_settings(session_, NGHTTP2_FLAG_NONE, settings,
-                                     settings_count);
+         static_cast<std::uint32_t>(StreamWindowSize(options_))}};
+    if (server_) {
+      // Extended CONNECT is a server's to offer. ENABLE_PUSH is deliberately
+      // absent: a server may only ever send it as 0, so saying so adds nothing.
+      settings.push_back({NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1});
+    } else {
+      // Whether this side will accept pushed responses. Sent either way --
+      // nghttp2 defaults it to 1, and a client that is not reading NextPush()
+      // must say 0 or the peer may open streams nothing will ever consume.
+      settings.push_back(
+          {NGHTTP2_SETTINGS_ENABLE_PUSH, options_.enable_push ? 1u : 0u});
+    }
+    result = nghttp2_submit_settings(session_, NGHTTP2_FLAG_NONE,
+                                     settings.data(), settings.size());
     if (result != 0) {
       return Nghttp2Error(result, "nghttp2_submit_settings");
     }
@@ -948,17 +1057,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitDuplexOnLoop(
       std::string protocol, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers) {
-    if (server_) {
-      return absl::FailedPreconditionError(
-          "A server HTTP/2 connection cannot submit requests");
-    }
-    if (closed_ || !connected_.load()) {
-      return absl::UnavailableError("HTTP/2 connection is not connected");
-    }
-    if (protocol.empty() || scheme.empty() || authority.empty() ||
-        path.empty() || path.front() != '/') {
+    if (protocol.empty()) {
       return absl::InvalidArgumentError(
-          "HTTP/2 protocol, scheme, authority, and absolute path are required");
+          "HTTP/2 extended CONNECT requires a protocol");
     }
     if (!std::all_of(protocol.begin(), protocol.end(), [](unsigned char value) {
           return value == '-' || value == '_' || value == '.' ||
@@ -967,11 +1068,41 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT protocol must be a lowercase token");
     }
+    return OpenDuplexOnLoop("CONNECT", std::move(protocol), std::move(scheme),
+                            std::move(authority), std::move(path),
+                            std::move(headers));
+  }
+
+  /**
+   * Opens a stream whose request side stays writable after its headers.
+   *
+   * Two callers want this and they differ only in their pseudo-headers: an
+   * extended CONNECT (`CONNECT` plus `:protocol`), and an ordinary method
+   * sending a body it does not have in hand yet. The mechanism is the same
+   * either way -- HEADERS without END_STREAM, and a data provider that defers
+   * until Write() feeds it -- so it is written once.
+   */
+  absl::StatusOr<std::shared_ptr<Http2DuplexStream>> OpenDuplexOnLoop(
+      std::string method, std::string protocol, std::string scheme,
+      std::string authority, std::string path, HttpHeaders headers) {
+    if (server_) {
+      return absl::FailedPreconditionError(
+          "A server HTTP/2 connection cannot submit requests");
+    }
+    if (closed_ || !connected_.load()) {
+      return absl::UnavailableError("HTTP/2 connection is not connected");
+    }
+    if (method.empty() || scheme.empty() || authority.empty() ||
+        path.empty() || path.front() != '/') {
+      return absl::InvalidArgumentError(
+          "HTTP/2 method, scheme, authority, and absolute path are required");
+    }
     const std::string_view expected_scheme = secure() ? "https" : "http";
     if (scheme != expected_scheme) {
       return absl::InvalidArgumentError(absl::StrCat(
           "This HTTP/2 connection requires scheme '", expected_scheme, "'"));
     }
+    absl::AsciiStrToUpper(&method);
     NormalizeHttpHeaders(&headers);
     ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
 
@@ -980,7 +1111,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     stream->response = std::make_shared<Http2ResponseStream::State>(
         options_.max_buffered_response_bytes);
     auto values =
-        RequestHeaders("CONNECT", scheme, authority, path, protocol, headers);
+        RequestHeaders(method, scheme, authority, path, protocol, headers);
     auto fields = MakeNv(values);
     nghttp2_data_provider provider{};
     provider.source.ptr = stream.get();
@@ -1043,7 +1174,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
                   response_weak.lock()) {
             active
                 ->Cancel(absl::DeadlineExceededError(
-                    "HTTP/2 extended CONNECT exceeded its deadline"))
+                    "HTTP/2 duplex stream exceeded its deadline"))
                 .IgnoreError();
           }
         }
@@ -1137,7 +1268,95 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     return SendSession();
   }
 
-  absl::Status FinishOnLoop(std::int32_t stream_id) {
+  /**
+   * Sends a PUSH_PROMISE on @p stream_id and prepares the promised stream.
+   *
+   * The scheme and authority are taken from the request the promise is
+   * associated with rather than asked for: a push is only ever for the same
+   * origin, and letting a caller name a different one would be a way to lie
+   * about it.
+   */
+  absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> SubmitPushPromiseOnLoop(
+      std::int32_t stream_id, std::string method, std::string path,
+      HttpHeaders headers) {
+    if (!server_) {
+      return absl::FailedPreconditionError(
+          "Only a server HTTP/2 connection can push");
+    }
+    if (closed_ || !connected_.load()) {
+      return absl::UnavailableError("HTTP/2 connection is not connected");
+    }
+    if (method.empty() || path.empty() || path.front() != '/') {
+      return absl::InvalidArgumentError(
+          "An HTTP/2 push promise needs a method and an absolute path");
+    }
+    Stream* associated = FindStream(stream_id);
+    if (associated == nullptr) {
+      return absl::NotFoundError("HTTP/2 request stream is no longer active");
+    }
+    if (associated->outbound_finished) {
+      return absl::FailedPreconditionError(
+          "An HTTP/2 push promise must be sent before the response it "
+          "accompanies is finished");
+    }
+    absl::AsciiStrToUpper(&method);
+    NormalizeHttpHeaders(&headers);
+    ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
+
+    const std::string scheme = associated->origin_scheme.empty()
+                                   ? std::string(secure() ? "https" : "http")
+                                   : associated->origin_scheme;
+    if (associated->origin_authority.empty()) {
+      // Every promised request needs an `:authority`, and the only honest source
+      // of one is the request being answered.
+      return absl::FailedPreconditionError(
+          "The request being answered has no authority to push against");
+    }
+    auto values = RequestHeaders(method, scheme, associated->origin_authority,
+                                 path, /*protocol=*/{}, headers);
+    auto fields = MakeNv(values);
+    const std::int32_t promised_id = nghttp2_submit_push_promise(
+        session_, NGHTTP2_FLAG_NONE, stream_id, fields.data(), fields.size(),
+        nullptr);
+    if (promised_id == NGHTTP2_ERR_PUSH_DISABLED) {
+      return absl::FailedPreconditionError(
+          "The peer did not enable HTTP/2 server push");
+    }
+    if (promised_id < 0) {
+      return Nghttp2Error(promised_id, "nghttp2_submit_push_promise");
+    }
+
+    auto stream = std::make_unique<Stream>();
+    stream->id = promised_id;
+    stream->writer = std::make_shared<Http2ResponseWriter::State>();
+    // The promised request, so a further push from this stream has an origin.
+    stream->request.method = method;
+    stream->request.scheme = scheme;
+    stream->request.authority = associated->origin_authority;
+    stream->request.path = path;
+    stream->request.headers = std::move(headers);
+    stream->origin_scheme = scheme;
+    stream->origin_authority = associated->origin_authority;
+    stream->remote_end = true;  // A pushed stream has no inbound request body.
+    std::shared_ptr<Http2ResponseWriter::State> writer_state = stream->writer;
+    streams_.emplace(promised_id, std::move(stream));
+
+    struct MakeWriterEnabler final : Http2ResponseWriter {
+      MakeWriterEnabler(std::weak_ptr<Http2Connection> connection,
+                        std::int32_t id,
+                        std::shared_ptr<Http2ResponseWriter::State> state)
+          : Http2ResponseWriter(std::move(connection), id, std::move(state)) {}
+    };
+    auto writer = std::make_shared<MakeWriterEnabler>(Self(), promised_id,
+                                                      std::move(writer_state));
+    if (const absl::Status sent = SendSession(); !sent.ok()) {
+      streams_.erase(promised_id);
+      return sent;
+    }
+    return std::static_pointer_cast<Http2ResponseWriter>(writer);
+  }
+
+  absl::Status FinishOnLoop(std::int32_t stream_id, HttpHeaders trailers = {}) {
     Stream* stream = FindStream(stream_id);
     if (stream == nullptr) {
       return absl::OkStatus();
@@ -1148,6 +1367,12 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     }
     if (stream->outbound_finished) {
       return absl::OkStatus();
+    }
+    if (!trailers.empty()) {
+      NormalizeHttpHeaders(&trailers);
+      ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(trailers));
+      stream->outbound_trailers = std::move(trailers);
+      stream->outbound_trailers_pending = true;
     }
     stream->outbound_finished = true;
     const int resumed = nghttp2_session_resume_data(session_, stream_id);
@@ -1268,7 +1493,34 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     }
   }
 
-  static ssize_t DataSourceReadCallback(nghttp2_session*, std::int32_t,
+  /**
+   * Sends the trailer section owed on @p stream, if any, as the body ends.
+   *
+   * nghttp2 wants this at exactly one moment: the read callback reports EOF
+   * *without* END_STREAM, and the trailing HEADERS frame closes the stream
+   * instead. Doing it anywhere earlier would put the trailers ahead of the DATA
+   * they trail; anywhere later and END_STREAM has already gone out.
+   */
+  static void SubmitPendingTrailers(nghttp2_session* session, Stream* stream,
+                                    std::uint32_t* data_flags) {
+    if (!stream->outbound_trailers_pending) {
+      return;
+    }
+    stream->outbound_trailers_pending = false;
+    std::vector<std::pair<std::string, std::string>> values(
+        stream->outbound_trailers.begin(), stream->outbound_trailers.end());
+    const std::vector<nghttp2_nv> fields = MakeNv(values);
+    if (nghttp2_submit_trailer(session, stream->id, fields.data(),
+                               fields.size()) != 0) {
+      // The stream still has to end, and END_STREAM is the only way left to do
+      // that: falling through without NO_END_STREAM loses the trailers rather
+      // than hanging the response.
+      return;
+    }
+    *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
+  }
+
+  static ssize_t DataSourceReadCallback(nghttp2_session* session, std::int32_t,
                                         std::uint8_t* buffer, size_t length,
                                         std::uint32_t* data_flags,
                                         nghttp2_data_source* source,
@@ -1280,6 +1532,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (stream->outbound.empty()) {
       if (stream->outbound_finished) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        SubmitPendingTrailers(session, stream, data_flags);
         return 0;
       }
       return NGHTTP2_ERR_DEFERRED;
@@ -1295,16 +1548,36 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     }
     if (stream->outbound.empty() && stream->outbound_finished) {
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+      SubmitPendingTrailers(session, stream, data_flags);
     }
     return static_cast<ssize_t>(copied);
+  }
+
+  /**
+   * The stream a header block belongs to.
+   *
+   * For a PUSH_PROMISE the two differ: the frame travels on the stream the
+   * promise is associated with, while the fields describe the promised stream.
+   * Everywhere else they are the same.
+   */
+  static std::int32_t HeaderTargetStream(const nghttp2_frame* frame) {
+    if (frame->hd.type == NGHTTP2_PUSH_PROMISE) {
+      return frame->push_promise.promised_stream_id;
+    }
+    return frame->hd.stream_id;
   }
 
   static int OnBeginHeadersCallback(nghttp2_session*,
                                     const nghttp2_frame* frame,
                                     void* user_data) noexcept {
     auto* self = static_cast<Http2Connection*>(user_data);
-    if (self == nullptr || frame == nullptr ||
-        frame->hd.type != NGHTTP2_HEADERS) {
+    if (self == nullptr || frame == nullptr) {
+      return 0;
+    }
+    if (frame->hd.type == NGHTTP2_PUSH_PROMISE) {
+      return self->BeginPushedStream(frame);
+    }
+    if (frame->hd.type != NGHTTP2_HEADERS) {
       return 0;
     }
     try {
@@ -1340,7 +1613,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (self == nullptr || frame == nullptr) {
       return 0;
     }
-    Stream* stream = self->FindStream(frame->hd.stream_id);
+    Stream* stream = self->FindStream(HeaderTargetStream(frame));
     if (stream == nullptr) {
       return 0;
     }
@@ -1374,6 +1647,13 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       if (stream == nullptr) {
         return 0;
       }
+      if (frame->hd.type == NGHTTP2_PUSH_PROMISE) {
+        // `stream` is the associated response, not the promised one: a promise
+        // is delivered to whoever is reading the response it came with.
+        self->CompletePushPromise(stream,
+                                  frame->push_promise.promised_stream_id);
+        return 0;
+      }
       if (frame->hd.type == NGHTTP2_HEADERS) {
         if (self->server_ && frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
           if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
@@ -1388,8 +1668,20 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
             self->DispatchRequest(stream);
           }
         } else if (!self->server_ &&
-                   frame->headers.cat == NGHTTP2_HCAT_RESPONSE) {
-          self->CompleteResponseHeaders(stream);
+                   (frame->headers.cat == NGHTTP2_HCAT_RESPONSE ||
+                    frame->headers.cat == NGHTTP2_HCAT_PUSH_RESPONSE ||
+                    frame->headers.cat == NGHTTP2_HCAT_HEADERS)) {
+          // Which of the two header blocks a response may carry this is comes
+          // from the block itself rather than from nghttp2's category: one with
+          // `:status` is a response head, and a trailer section is forbidden
+          // from carrying pseudo-headers at all. HCAT_PUSH_RESPONSE is the head
+          // of a pushed response, and HCAT_HEADERS covers the trailers of
+          // either kind.
+          if (GetHttpHeader(stream->inbound_headers, ":status").has_value()) {
+            self->CompleteResponseHeaders(stream);
+          } else {
+            self->CollectTrailers(stream);
+          }
           if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
             stream->remote_end = true;
             self->FinishResponse(stream, absl::OkStatus());
@@ -1549,6 +1841,138 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     stream->response->SetHeaders(std::move(head));
   }
 
+  /**
+   * Starts tracking a stream the peer opened with a PUSH_PROMISE.
+   *
+   * The promised stream needs a response state before its header fields arrive,
+   * because OnHeaderCallback routes them to it by id. Only a client can be
+   * pushed to; a PUSH_PROMISE arriving at a server is a protocol error, which
+   * nghttp2 has already rejected by the time this runs.
+   */
+  int BeginPushedStream(const nghttp2_frame* frame) noexcept {
+    if (server_) {
+      return 0;
+    }
+    try {
+      const std::int32_t promised = frame->push_promise.promised_stream_id;
+      if (FindStream(promised) != nullptr) {
+        return 0;
+      }
+      auto stream = std::make_unique<Stream>();
+      stream->id = promised;
+      stream->pushed = true;
+      stream->outbound_finished = true;  // A pushed stream has no request side.
+      stream->response = std::make_shared<Http2ResponseStream::State>(
+          options_.max_buffered_response_bytes);
+      streams_.emplace(promised, std::move(stream));
+      return 0;
+    } catch (const std::exception& error) {
+      pending_transport_error_ =
+          ExceptionStatus(error, "Beginning an HTTP/2 pushed stream");
+      return NGHTTP2_ERR_CALLBACK_FAILURE;
+    } catch (...) {
+      pending_transport_error_ = absl::UnknownError(
+          "Beginning an HTTP/2 pushed stream raised a non-standard exception");
+      return NGHTTP2_ERR_CALLBACK_FAILURE;
+    }
+  }
+
+  /**
+   * Hands a completed PUSH_PROMISE to the reader of the associated response.
+   *
+   * @param associated The stream the promise arrived on, whose NextPush() the
+   *        descriptor is queued for.
+   * @param promised_id The stream the pushed response will arrive on.
+   */
+  void CompletePushPromise(Stream* associated, std::int32_t promised_id) {
+    Stream* promised = FindStream(promised_id);
+    if (associated == nullptr || associated->response == nullptr ||
+        promised == nullptr || promised->response == nullptr) {
+      return;
+    }
+
+    HttpPushedResponse descriptor;
+    descriptor.method =
+        GetHttpHeader(promised->inbound_headers, ":method").value_or("GET");
+    descriptor.scheme =
+        GetHttpHeader(promised->inbound_headers, ":scheme").value_or("");
+    descriptor.authority =
+        GetHttpHeader(promised->inbound_headers, ":authority").value_or("");
+    descriptor.path =
+        GetHttpHeader(promised->inbound_headers, ":path").value_or("");
+    for (const auto& [name, value] : promised->inbound_headers) {
+      if (!name.empty() && name.front() != ':') {
+        descriptor.headers.emplace_back(name, value);
+      }
+    }
+
+    std::weak_ptr<Http2Connection> weak = Self();
+    {
+      thread::MutexLock lock(&promised->response->mu);
+      promised->response->stream_id = promised_id;
+      // Cancel() on a pushed response is how a client refuses it: the same
+      // RST_STREAM path a cancelled request takes.
+      promised->response->cancel =
+          [weak, promised_id](absl::Status status) -> absl::Status {
+        const std::shared_ptr<Http2Connection> self = weak.lock();
+        if (self == nullptr) {
+          return absl::OkStatus();
+        }
+        return self->CancelRequest(promised_id, std::move(status));
+      };
+      promised->response->set_read_paused = [weak](bool paused) {
+        if (const std::shared_ptr<Http2Connection> self = weak.lock()) {
+          self->SetReadPaused(paused);
+        }
+      };
+    }
+
+    struct MakeResponseEnabler final : Http2ResponseStream {
+      explicit MakeResponseEnabler(
+          std::shared_ptr<Http2ResponseStream::State> state)
+          : Http2ResponseStream(std::move(state)) {}
+    };
+    descriptor.response =
+        std::make_shared<MakeResponseEnabler>(promised->response);
+
+    // The associated response may already have ended -- a promise racing its
+    // own stream's END_STREAM. PushPromised() drops it in that case, so reset
+    // the pushed stream rather than leaving it open for nobody.
+    bool delivered = false;
+    {
+      thread::MutexLock lock(&associated->response->mu);
+      delivered = !associated->response->done;
+    }
+    if (!delivered) {
+      (void)nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, promised_id,
+                                      NGHTTP2_CANCEL);
+      return;
+    }
+    associated->response->PushPromised(std::move(descriptor));
+  }
+
+  /**
+   * Records a trailer section on a client stream.
+   *
+   * Held rather than published: the fields only mean anything once the body
+   * they follow has ended, and the END_STREAM that carries them does that a few
+   * lines later. Pseudo-headers are dropped -- a trailer section may not carry
+   * them, and a peer that sends one anyway should not have it mistaken for part
+   * of the section.
+   */
+  void CollectTrailers(Stream* stream) {
+    if (stream == nullptr || stream->response == nullptr) {
+      return;
+    }
+    HttpHeaders trailers;
+    for (const auto& [name, value] : stream->inbound_headers) {
+      if (!name.empty() && name.front() != ':') {
+        trailers.emplace_back(name, value);
+      }
+    }
+    stream->response->SetTrailers(std::move(trailers));
+  }
+
   void DispatchRequest(Stream* stream) {
     if (stream == nullptr || stream->request_dispatched) {
       return;
@@ -1596,6 +2020,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     stream->request.scheme = *scheme;
     stream->request.authority = authority.value_or("");
     stream->request.path = *path;
+    stream->origin_scheme = *scheme;
+    stream->origin_authority = authority.value_or("");
     if (stream->request_body != nullptr) {
       stream->request.body_stream =
           std::make_shared<MakeRequestBodyEnabler>(stream->request_body);
@@ -1693,6 +2119,25 @@ absl::Status Http2ResponseWriter::Finish() {
     return absl::OkStatus();
   }
   return connection->Finish(stream_id_);
+}
+
+absl::StatusOr<std::shared_ptr<Http2ResponseWriter>>
+Http2ResponseWriter::PushPromise(std::string method, std::string path,
+                                 HttpHeaders headers) {
+  std::shared_ptr<HttpConnection> connection = connection_.lock();
+  if (connection == nullptr) {
+    return absl::UnavailableError("HTTP/2 connection is no longer available");
+  }
+  return connection->SubmitPushPromise(stream_id_, std::move(method),
+                                       std::move(path), std::move(headers));
+}
+
+absl::Status Http2ResponseWriter::FinishWithTrailers(HttpHeaders trailers) {
+  std::shared_ptr<HttpConnection> connection = connection_.lock();
+  if (connection == nullptr) {
+    return absl::OkStatus();
+  }
+  return connection->FinishWithTrailers(stream_id_, std::move(trailers));
 }
 
 absl::Status Http2ResponseWriter::SendResponse(int status, HttpHeaders headers,
@@ -2364,6 +2809,32 @@ absl::StatusOr<std::shared_ptr<Http2DuplexStream>> Http2Client::ExtendedConnect(
                             std::move(headers));
 }
 
+absl::StatusOr<std::shared_ptr<Http2DuplexStream>>
+Http2Client::RequestStreamingBody(std::string method, std::string path,
+                                  HttpHeaders headers, std::string scheme) {
+  std::shared_ptr<HttpTransport> connection;
+  {
+    thread::MutexLock lock(&state()->mu);
+    connection = state()->connection;
+  }
+  if (connection == nullptr) {
+    return absl::UnavailableError("HTTP client is closed");
+  }
+  auto* http = dynamic_cast<HttpConnection*>(connection.get());
+  if (scheme.empty()) {
+    scheme = connection->secure() ? "https" : "http";
+  }
+  std::string authority = state()->host;
+  if (authority.find(':') != std::string::npos &&
+      (authority.empty() || authority.front() != '[')) {
+    authority = absl::StrCat("[", authority, "]");
+  }
+  authority = absl::StrCat(authority, ":", state()->port);
+  return http->SubmitStreamingRequest(std::move(method), std::move(scheme),
+                                      std::move(authority), std::move(path),
+                                      std::move(headers));
+}
+
 a11::Future<HttpResponse> Http2Client::Request(std::string method,
                                                std::string path,
                                                HttpHeaders headers,
@@ -2434,6 +2905,17 @@ bool Http2Client::connected() const {
 
 bool Http2Client::secure() const {
   return state()->options.tls.enabled;
+}
+
+bool Http2Client::multiplexed() const {
+  std::shared_ptr<HttpTransport> connection;
+  {
+    thread::MutexLock lock(&state()->mu);
+    connection = state()->connection;
+  }
+  // Which transport was negotiated is the answer; the option was only a
+  // preference, and kAuto is resolved by ALPN or by a downgrade.
+  return dynamic_cast<Http2Connection*>(connection.get()) != nullptr;
 }
 
 void* absl_nullable Http2Client::GetImpl() const {

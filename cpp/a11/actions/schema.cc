@@ -2,6 +2,7 @@
 
 #include "a11/actions/schema.h"
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -52,6 +53,19 @@ absl::Status ActionSchema::Validate() const {
         return absl::InvalidArgumentError(
             absl::StrCat("Action port name '", key, "' is reserved"));
       }
+    }
+  }
+  // A port's node id is derived from the action id and the port name alone --
+  // Action::MakeNodeId does not know the direction -- so an input and an output
+  // sharing a name are the *same node*, and writing the output would collide
+  // with whatever was fed to the input. Rejecting that here turns a puzzling
+  // runtime failure into a schema error.
+  for (const auto& key : inputs | std::views::keys) {
+    if (outputs.contains(key)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Action port name '", key,
+          "' is used for both an input and an output; the two would share one "
+          "node"));
     }
   }
   for (const auto& [key, header] : headers) {

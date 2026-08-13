@@ -69,6 +69,9 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitDuplex(
       std::string protocol, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers) override;
+  absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitStreamingRequest(
+      std::string method, std::string scheme, std::string authority,
+      std::string path, HttpHeaders headers) override;
 
   // --- HttpConnection interface. ---
   absl::Status WriteRequest(std::int32_t stream_id, std::string data) override;
@@ -77,10 +80,15 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
                            HttpHeaders headers) override;
   absl::Status Write(std::int32_t stream_id, std::string data) override;
   absl::Status Finish(std::int32_t stream_id) override;
+  absl::Status FinishWithTrailers(std::int32_t stream_id,
+                                  HttpHeaders trailers) override;
   absl::Status SendResponse(std::int32_t stream_id, int status,
                             HttpHeaders headers, std::string body) override;
   absl::Status AbortResponse(std::int32_t stream_id,
                              absl::Status status) override;
+  absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> SubmitPushPromise(
+      std::int32_t stream_id, std::string method, std::string path,
+      HttpHeaders headers) override;
   absl::StatusOr<bool> ResponseHeadersSent(std::int32_t stream_id) override;
   absl::StatusOr<bool> ResponseFinished(std::int32_t stream_id) override;
   [[nodiscard]] bool secure() const override {
@@ -116,7 +124,7 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   absl::Status SendHeadersOnLoop(std::int32_t stream_id, int status,
                                  HttpHeaders headers);
   absl::Status WriteOnLoop(std::int32_t stream_id, std::string data);
-  absl::Status FinishOnLoop(std::int32_t stream_id);
+  absl::Status FinishOnLoop(std::int32_t stream_id, HttpHeaders trailers = {});
   void FinishResponseAndAdvance();
 
   const Http2RequestHandler handler_;
@@ -161,6 +169,14 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   internal::ChunkedDecoder response_chunk_decoder_;
   size_t response_body_remaining_ = 0;
   bool client_request_sent_ = false;
+  /// This request's body is being streamed as a chunked body, so WriteRequest
+  /// frames each write and FinishRequest sends the terminating chunk.
+  bool client_request_chunked_ = false;
+  bool client_request_finished_ = false;
+
+  /// Builds and wires the client response state (cancellation, backpressure)
+  /// for a request that is about to be sent. On the loop thread.
+  void PrepareClientResponseState();
 };
 
 }  // namespace a11::net

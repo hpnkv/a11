@@ -138,6 +138,7 @@ nav:
       - Redis client: api/redis.md
       - SQLite store: api/sqlite.md
       - Transports: api/net.md
+      - HTTP actions: api/http-actions.md
       - Sessions: api/service.md
       - Data & serialization: api/data.md
       - Logging: api/logging.md

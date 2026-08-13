@@ -1,0 +1,125 @@
+# HTTP as separate streams.
+#
+# An ordinary HTTP client hands you one Response object because its language
+# gives it nothing better to hand you: headers, body and trailers are one value
+# that is only complete at the end. `make_http_request` has a port per concern,
+# and these flows are about what that buys.
+
+# The easy case first: a document, as text.
+#
+# `web-fetch` is the adapter, shaped like `fetch()`. A 4xx is not a failure here
+# -- `ok` says so and the error document is still readable, which is what you
+# want from an API that explains itself in its 422 body.
+flow read-a-page {
+  describe "Fetch a URL and hand back its text and its status."
+
+  in  url:    string required "What to fetch."
+  out text:   string          "The body, as text."
+  out code:   number          "The response's status code."
+  out ok:     bool            "Whether the status is below 400."
+
+  page = run web-fetch(url: url)
+  page.text        -> text
+  page.status_code -> code
+  page.ok          -> ok
+  skip page.json
+  skip page.body
+  skip page.items
+  skip page.headers
+}
+
+# Deciding before the body arrives.
+#
+# `status_code` and `headers` are written as soon as they are known -- before a
+# single body byte -- so this branches on the content type and never reads a body
+# it did not want. A buffered `Response` cannot express that: by the time you can
+# look at the status, you have already paid for the body.
+flow only-if-json {
+  describe "Read the body only when the server says it is JSON."
+
+  in  url:      string required
+  out decoded:  json          "The body, when it was JSON."
+  out declined: string        "What the server sent instead, when it was not."
+
+  http = run make_http_request(url: url)
+    with "accept": "application/json"
+
+  skip http.fields
+  skip http.pushes
+  skip http.redirects
+  skip http.connection
+  skip http.trailers
+
+  # `headers` is one value and it is here already; the body is still in flight.
+  if http.headers["content-type"] == "application/json" {
+    http.body | collect | map join(it, "") | json -> decoded
+    "" -> declined
+  } else {
+    http.headers["content-type"] -> declined
+    skip http.body
+  }
+  skip http.status_code
+}
+
+# The whole protocol, for a caller that wants all of it.
+#
+# Eight outputs is not eight things to remember: it is HTTP's own list, and a
+# flow reads the ones it needs and `skip`s the rest. `options.omit` does the same
+# from the other side -- it tells the action not to bother.
+flow inspect-a-url {
+  describe "Everything the protocol said, on the port that carries it."
+
+  in  url:       string required
+  out code:      number        "The final status."
+  out fields:    json stream   "Every header field, in wire order."
+  out hops:      json stream   "The redirects that were followed."
+  out digest:    json          "The trailer section, after the body."
+  out carried:   json          "How the connection was carried."
+  out size:      number        "How many bytes of body arrived."
+
+  http = run make_http_request(url: url, options: {"accept_pushes": true})
+
+  http.status_code -> code
+  http.fields      -> fields
+  http.redirects   -> hops
+  http.trailers    -> digest
+  http.connection  -> carried
+
+  # The body is counted rather than kept: nothing here wants the bytes, and a
+  # stream that is read and dropped costs nothing to hold.
+  http.body | collect | map len(join(it, "")) -> size
+
+  # Responses the server sent without being asked. Each record names a node its
+  # body was streamed into, because one port cannot interleave several bodies --
+  # which is exactly how HTTP/2 frames them too.
+  skip http.pushes
+}
+
+# A streamed upload.
+#
+# `request_body: "stream"` sends the body as it arrives rather than reading it to
+# the end first, so there is no `content-length` and no need to know the length.
+# That is the case the input port being a *stream* exists for.
+flow send-a-stream {
+  describe "POST a body assembled as it goes."
+
+  in  url:   string required
+  in  parts: string stream required "The body, piece by piece."
+  out answer: string               "What the server said."
+
+  http = run make_http_request(
+    url: url,
+    method: "POST",
+    request_body: parts,
+    options: {"request_body": "stream"}
+  ) with "content-type": "text/plain"
+
+  http.body | collect | map join(it, "") -> answer
+  skip http.status_code
+  skip http.headers
+  skip http.fields
+  skip http.trailers
+  skip http.redirects
+  skip http.pushes
+  skip http.connection
+}

@@ -132,6 +132,32 @@ TEST(Http1CodecTest, DecodesChunkedWithExtensionsAndTrailers) {
                   .ok());
   EXPECT_TRUE(complete);
   EXPECT_EQ(out, "data");
+  // The trailer section is kept, not skipped: it is the only place a checksum
+  // computed while streaming can travel.
+  ASSERT_EQ(decoder.trailers().size(), 1u);
+  EXPECT_EQ(decoder.trailers().front().first, "trailer");
+  EXPECT_EQ(decoder.trailers().front().second, "v");
+}
+
+TEST(Http1CodecTest, DecodesTrailerSectionSplitAcrossFeeds) {
+  ChunkedDecoder decoder;
+  std::string out;
+  bool complete = false;
+  // A trailer line arriving in pieces is the ordinary case on a slow link.
+  ASSERT_TRUE(decoder.Feed("2\r\nhi\r\n0\r\nx-dig", &out, &complete).ok());
+  EXPECT_FALSE(complete);
+  ASSERT_TRUE(decoder.Feed("est: abc\r\nx-count: 2\r\n\r\n", &out, &complete)
+                  .ok());
+  EXPECT_TRUE(complete);
+  EXPECT_EQ(out, "hi");
+  EXPECT_EQ(GetHttpHeader(decoder.trailers(), "x-digest"), "abc");
+  EXPECT_EQ(GetHttpHeader(decoder.trailers(), "x-count"), "2");
+}
+
+TEST(Http1CodecTest, EncodesALastChunkWithTrailers) {
+  EXPECT_EQ(EncodeLastChunk(), "0\r\n\r\n");
+  EXPECT_EQ(EncodeLastChunk({{"x-digest", "abc"}}),
+            "0\r\nx-digest: abc\r\n\r\n");
 }
 
 TEST(Http1CodecTest, RejectsBadChunkSize) {

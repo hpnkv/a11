@@ -406,6 +406,7 @@ __all__: list[str] = [
     "Http2Server",
     "Http2TlsOptions",
     "HttpProtocolPreference",
+    "HttpPushedResponse",
     "HttpRequest",
     "HttpResponse",
     "HttpResponseHead",
@@ -418,6 +419,7 @@ __all__: list[str] = [
     "InProcessWireStream",
     "JSON_MIMETYPE",
     "LocalChunkStore",
+    "MAKE_HTTP_REQUEST_ACTION",
     "MAX_SINGLE_MESSAGE_SIZE",
     "MSGPACK_MIMETYPE",
     "NativeActionHandler",
@@ -470,6 +472,7 @@ __all__: list[str] = [
     "TurnRelayType",
     "TurnServer",
     "UDP",
+    "WEB_FETCH_ACTION",
     "WHOLE_JSON",
     "WIRE_MESSAGE_VERSION",
     "WIRE_STREAM_ABORT_STATUS_HEADER",
@@ -504,6 +507,7 @@ __all__: list[str] = [
     "file_sha1",
     "flow",
     "get_http_header",
+    "http_actions",
     "is_close_status_chunk",
     "is_half_close_message",
     "is_status_chunk",
@@ -520,6 +524,7 @@ __all__: list[str] = [
     "obs_start_span",
     "parse_url",
     "register_audio_actions",
+    "register_http_actions",
     "reset_default_redis_client",
     "resolve_asr_model",
     "resolve_url_reference",
@@ -3514,6 +3519,17 @@ class Http2Client:
         Open a request and return a pull-oriented response stream for reading the response body incrementally.
         """
 
+    def request_streaming_body(
+        self,
+        method: str,
+        path: str,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
+        scheme: str = "",
+    ) -> Http2DuplexStream:
+        """
+        Open a request whose body is written incrementally afterwards, for an upload of unknown or unbounded length. Returns a duplex stream: write() sends more of the body, finish() ends it, and the response is read from the same handle. Do not set content-length.
+        """
+
     @property
     def connected(self) -> bool:
         """
@@ -3524,6 +3540,12 @@ class Http2Client:
     def host(self) -> str:
         """
         The host the client is connected to.
+        """
+
+    @property
+    def multiplexed(self) -> bool:
+        """
+        Whether this connection can carry several exchanges at once: true for HTTP/2, false for HTTP/1.1, which A11 limits to one request per connection.
         """
 
     @property
@@ -3575,6 +3597,12 @@ class Http2DuplexStream:
     def done(self) -> asyncio.Future[None]:
         """
         Future that completes when the duplex stream is done.
+        """
+
+    @property
+    def response(self) -> Http2ResponseStream:
+        """
+        The read half, for the parts of a response this facade does not forward: its trailers, and any pushed responses.
         """
 
     @property
@@ -3641,6 +3669,14 @@ class Http2Options:
         """
     @enable_http1.setter
     def enable_http1(self, arg0: bool) -> None: ...
+
+    @property
+    def enable_push(self) -> bool:
+        """
+        Client: accept HTTP/2 server pushes. Off by default, and advertised as off, so a peer cannot spend this side's streams on responses nobody asked for. A client that enables it must read Http2ResponseStream.next_push and either consume or cancel each pushed response.
+        """
+    @enable_push.setter
+    def enable_push(self, arg0: bool) -> None: ...
 
     @property
     def max_buffered_request_bytes(self) -> int:
@@ -3725,9 +3761,19 @@ class Http2ResponseStream:
         Await the response head (status and headers).
         """
 
+    def next_push(self) -> asyncio.Future[HttpPushedResponse | None]:
+        """
+        Await the next response the server pushed alongside this one, or None once this response has ended (after which no push can arrive). Requires Http2Options.enable_push.
+        """
+
     def read(self) -> asyncio.Future[bytes | None]:
         """
         Await the next chunk of response body data, or None at end of stream.
+        """
+
+    def trailers(self) -> asyncio.Future[list[tuple[str, str]]]:
+        """
+        Await the trailer fields that followed the body. Resolves to an empty list when the peer sent no trailer section, so this can be awaited without knowing whether one was coming.
         """
 
     def wait_done(self) -> asyncio.Future[None]:
@@ -3756,6 +3802,23 @@ class Http2ResponseWriter:
     def finish(self) -> None:
         """
         Signal the end of the response body.
+        """
+
+    def finish_with_trailers(
+        self, trailers: collections.abc.Iterable[tuple[str, str]] | None = None
+    ) -> None:
+        """
+        End the response body with a trailer section -- the only place a value computed while streaming (a checksum, a row count) can be reported from. Equivalent to finish() when empty.
+        """
+
+    def push_promise(
+        self,
+        method: str,
+        path: str,
+        headers: collections.abc.Iterable[tuple[str, str]] | None = None,
+    ) -> Http2ResponseWriter:
+        """
+        Promise a response the client did not ask for, returning the writer for it. Must be called before this response is finished, and fails when the client did not enable push.
         """
 
     def send_headers(
@@ -3939,6 +4002,44 @@ class HttpProtocolPreference:
     def name(self) -> str: ...
     @property
     def value(self) -> int: ...
+
+class HttpPushedResponse:
+    def __repr__(self) -> str: ...
+    @property
+    def authority(self) -> str:
+        """
+        Authority of the promised request.
+        """
+
+    @property
+    def headers(self) -> list[tuple[str, str]]:
+        """
+        Header fields of the promised request, as (name, value) pairs.
+        """
+
+    @property
+    def method(self) -> str:
+        """
+        Method of the request the server promised.
+        """
+
+    @property
+    def path(self) -> str:
+        """
+        Path and query of the promised request.
+        """
+
+    @property
+    def response(self) -> Http2ResponseStream:
+        """
+        The pushed response: its own head, body and trailers. Cancel it to refuse the push.
+        """
+
+    @property
+    def scheme(self) -> str:
+        """
+        Scheme of the promised request.
+        """
 
 class HttpRequest:
     def __init__(
@@ -8990,6 +9091,11 @@ def get_http_header(headers: list[tuple[str, str]], name: str) -> str | None:
     Look up a header value by name, returning None if it is absent.
     """
 
+def http_actions() -> list:
+    """
+    Return the HTTP Actions as (name, schema, handler) triples: make_http_request and web-fetch, in that order.
+    """
+
 def is_close_status_chunk(chunk: Chunk) -> bool:
     """
     Return True when the chunk is a status chunk marking that a node's write half was closed, rather than a status value.
@@ -9083,6 +9189,11 @@ def parse_url(url: str) -> ParsedUrl:
 def register_audio_actions(registry: ActionRegistry | None) -> None:
     """
     Register every audio Action on `registry`, wiring each port's typeinfo to the matching audio type and ensuring their serializers are installed.
+    """
+
+def register_http_actions(registry: ActionRegistry | None) -> None:
+    """
+    Register make_http_request and web-fetch on `registry`.
     """
 
 def reset_default_redis_client() -> None:
@@ -9191,6 +9302,7 @@ DESCRIPTION: SignallingMessageType
 EMPTY_WIRE_MESSAGE_SIZE: int = 4
 ERROR: SignallingMessageType
 JSON_MIMETYPE: str = "application/json"
+MAKE_HTTP_REQUEST_ACTION: str = "make_http_request"
 MAX_SINGLE_MESSAGE_SIZE: int = 33554432
 MSGPACK_MIMETYPE: str = "application/x-msgpack"
 OTEL_BAGGAGE_HEADER: str = "x-otel-baggage"
@@ -9204,6 +9316,7 @@ START: StreamMode
 TCP: TurnRelayType
 TLS: TurnRelayType
 UDP: TurnRelayType
+WEB_FETCH_ACTION: str = "web-fetch"
 WHOLE_JSON: str = "$"
 WIRE_MESSAGE_VERSION: int = 1
 WIRE_STREAM_ABORT_STATUS_HEADER: str = "x-a11-abort-status"

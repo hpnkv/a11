@@ -92,11 +92,6 @@ flow chat-turn {
   out reply:    string                     "What the model answered."
   out turn:     a11.sdk.Interaction stream "The question and the answer."
 
-  header "x-a11-llm-api-key"  as api_key
-  header "x-a11-llm-provider" as provider
-  header "x-a11-llm-model"    as model
-  header "x-a11-llm-base-url" as base_url
-
   asked = node()
   question | map a11.sdk.Interaction{
     role: "user",
@@ -110,10 +105,7 @@ flow chat-turn {
     interactions: history | then asked,
     config: {}
   )
-      with "x-a11-llm-api-key": api_key
-      with "x-a11-llm-provider": provider
-      with "x-a11-llm-model": model
-      with "x-a11-llm-base-url": base_url
+      forward headers "x-a11-llm-*"
 
   llm.text_output | join "" -> reply
 

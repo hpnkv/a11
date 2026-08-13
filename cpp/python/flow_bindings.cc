@@ -10,6 +10,7 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <nlohmann/json.hpp>
@@ -473,14 +474,28 @@ class PythonBridge : public flow::HostBridge {
 
   absl::StatusOr<flow::Value> FromChunk(const data::Chunk& chunk) override {
     const py::gil_scoped_acquire acquire;
+    absl::Status from_registry;
     try {
       const py::object registry =
           py::module_::import("a11.data.serialization")
               .attr("get_global_serialization_registry")();
       return ValueFromPython(registry.attr("from_chunk")(py::cast(chunk)));
     } catch (py::error_already_set& error) {
-      return StatusFromPythonException(error);
+      from_registry = StatusFromPythonException(error);
     }
+    // Nothing is registered for a media type that describes bytes rather than a
+    // structure -- `application/octet-stream` for a response body, `text/plain`
+    // for a log line -- and the default C++ bridge reads those as a bytes or
+    // string value rather than failing. The two bridges have to agree, or a flow
+    // that runs in a C++ host stops working in a Python one.
+    if (absl::IsNotFound(from_registry)) {
+      const std::string mimetype = chunk.GetMimetype();
+      if (absl::StartsWith(mimetype, "text/")) {
+        return flow::Value::String(chunk.data);
+      }
+      return flow::Value::Bytes(chunk.data);
+    }
+    return from_registry;
   }
 
   absl::StatusOr<data::Chunk> ToChunk(const flow::Value& value,

@@ -85,8 +85,9 @@ absl::StatusOr<BodyPlan> PlanResponseBody(std::string_view request_method,
  * @brief Incremental decoder for Transfer-Encoding: chunked bodies.
  *
  * Feed raw bytes as they arrive; decoded payload is appended to the caller's
- * output. Trailers are accepted and discarded. Sets `complete` once the
- * terminating zero-length chunk (and its trailer block) has been consumed.
+ * output. Sets `complete` once the terminating zero-length chunk (and its
+ * trailer block) has been consumed, at which point trailers() holds whatever
+ * trailer section followed.
  */
 class ChunkedDecoder {
  public:
@@ -100,6 +101,12 @@ class ChunkedDecoder {
   absl::Status Feed(std::string_view data, std::string* out, bool* complete);
 
   [[nodiscard]] bool complete() const { return state_ == State::kComplete; }
+  /**
+   * @return The trailer section that followed the last chunk, with lower-cased
+   * field names in wire order. Empty until the body is complete, and empty
+   * afterwards when the peer sent no trailers.
+   */
+  [[nodiscard]] const HttpHeaders& trailers() const { return trailers_; }
 
  private:
   enum class State { kSize, kData, kDataCrlf, kTrailer, kComplete };
@@ -107,13 +114,17 @@ class ChunkedDecoder {
   State state_ = State::kSize;
   std::string pending_;          // Partial line (size line or trailer line).
   std::uint64_t remaining_ = 0;  // Bytes left in the current chunk's data.
+  HttpHeaders trailers_;         // Trailer section, once the body completes.
 };
 
 /** @return @p data wrapped as a single chunked-transfer chunk. Empty input
  * yields an empty string (callers must not emit a zero-size data chunk). */
 std::string EncodeChunk(std::string_view data);
-/** @return The terminating zero-length chunk that ends a chunked body. */
-std::string EncodeLastChunk();
+/**
+ * @return The terminating zero-length chunk that ends a chunked body, followed
+ * by @p trailers as a trailer section when any are given.
+ */
+std::string EncodeLastChunk(const HttpHeaders& trailers = {});
 
 /** Appends "name: value\r\n" for each header to @p out (names sent as given). */
 void AppendHeaderBlock(const HttpHeaders& headers, std::string* out);

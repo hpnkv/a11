@@ -255,10 +255,20 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
           }
         } else {  // kTrailer
           const bool blank = line.empty();
-          pending_.clear();
           if (blank) {
             state_ = State::kComplete;
+          } else if (const size_t colon = line.find(':');
+                     colon != std::string_view::npos) {
+            // A malformed trailer line is dropped rather than failing the body:
+            // everything the response was actually for has already been
+            // delivered by this point.
+            std::string name(line.substr(0, colon));
+            absl::AsciiStrToLower(&name);
+            trailers_.emplace_back(
+                std::move(name),
+                std::string(absl::StripAsciiWhitespace(line.substr(colon + 1))));
           }
+          pending_.clear();
         }
         break;
       }
@@ -303,7 +313,15 @@ std::string EncodeChunk(std::string_view data) {
   return absl::StrCat(absl::Hex(data.size()), kCrlf, data, kCrlf);
 }
 
-std::string EncodeLastChunk() { return "0\r\n\r\n"; }
+std::string EncodeLastChunk(const HttpHeaders& trailers) {
+  if (trailers.empty()) {
+    return "0\r\n\r\n";
+  }
+  std::string out = "0\r\n";
+  AppendHeaderBlock(trailers, &out);
+  absl::StrAppend(&out, kCrlf);
+  return out;
+}
 
 void AppendHeaderBlock(const HttpHeaders& headers, std::string* out) {
   for (const auto& [name, value] : headers) {

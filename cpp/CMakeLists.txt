@@ -603,6 +603,9 @@ endif ()
 if (A11_BUILD_AUDIO)
     add_subdirectory(sdk/audio)
 endif ()
+if (A11_BUILD_HTTP)
+    add_subdirectory(sdk/http)
+endif ()
 add_subdirectory(python)
 
 # The bundled thread library is the scheduling substrate for every A11 task.
@@ -936,6 +939,29 @@ if (A11_BUILD_AUDIO)
             nlohmann_json::nlohmann_json a11::warnings)
 endif ()
 
+if (A11_BUILD_HTTP)
+    # HTTP as Actions: make_http_request and web-fetch. Above a11::net because it
+    # is a client of it, and above a11::actions because that is what it produces;
+    # its own target so neither of those has to know about the other.
+    add_library(a11_http_actions STATIC ${A11_HTTP_ACTIONS_SOURCES})
+    add_library(a11::http_actions ALIAS a11_http_actions)
+    set_target_properties(a11_http_actions PROPERTIES EXPORT_NAME http_actions)
+    target_include_directories(
+            a11_http_actions PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_http_actions
+            PUBLIC a11::actions a11::concurrency a11::core a11::data a11::net
+            a11::nodes
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            PRIVATE
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            nlohmann_json::nlohmann_json a11::warnings)
+endif ()
+
 if (A11_BUILD_PYTHON)
     # PEP 517 frontends run CMake through a temporary build environment. Cache a
     # stable interpreter from its Python root so an editable rebuild remains
@@ -1102,6 +1128,9 @@ if (A11_BUILD_PYTHON)
     if (A11_BUILD_AUDIO)
         target_link_libraries(a11_python PRIVATE a11::audio a11::audio_actions)
     endif ()
+    if (A11_BUILD_HTTP)
+        target_link_libraries(a11_python PRIVATE a11::http_actions)
+    endif ()
 
     # pybind11_abseil's status caster imports this extension by its canonical
     # package path. Keep direct-CMake outputs beside the source package and
@@ -1157,6 +1186,9 @@ if (A11_BUILD_SQLITE)
 endif ()
 if (A11_BUILD_AUDIO)
     list(APPEND A11_INSTALL_TARGETS a11_audio a11_audio_actions)
+endif ()
+if (A11_BUILD_HTTP)
+    list(APPEND A11_INSTALL_TARGETS a11_http_actions)
 endif ()
 if (A11_BUILD_FLOW_TOOL)
     list(APPEND A11_INSTALL_TARGETS a11_flow_tool)

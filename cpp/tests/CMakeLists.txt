@@ -8,6 +8,7 @@ add_executable(a11_core_test
   http2_test.cc
   http_url_test.cc
   http_fetch_test.cc
+  http_connection_pool_test.cc
   http_download_test.cc
   http_sse_wire_stream_test.cc
   signalling_test.cc
@@ -78,6 +79,19 @@ if (A11_BUILD_SQLITE)
     a11_sqlite_test PRIVATE a11::concurrency a11::data a11::stores
                             GTest::gtest_main)
   add_test(NAME a11_sqlite_test COMMAND a11_sqlite_test)
+endif ()
+
+if (A11_BUILD_HTTP)
+  # The two HTTP Actions, against a real Http2Server. Its own executable because
+  # a11::http_actions is the only thing under test and a focused link line is
+  # what proves that.
+  add_executable(a11_http_actions_test
+    http_actions_test.cc)
+  target_link_libraries(
+    a11_http_actions_test PRIVATE a11::http_actions a11::actions a11::concurrency
+                                  a11::data a11::net a11::nodes a11::stores
+                                  GTest::gtest_main)
+  add_test(NAME a11_http_actions_test COMMAND a11_http_actions_test)
 endif ()
 
 if (A11_BUILD_AUDIO)

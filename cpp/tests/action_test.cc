@@ -93,6 +93,30 @@ TEST(ActionTest, LocalRunStreamsDataAndPublishesStatus) {
   EXPECT_TRUE(decoded->ok());
 }
 
+TEST(ActionTest, RejectsAPortNameUsedInBothDirections) {
+  // A port's node id is derived from the action id and the port name alone, so
+  // an input and an output sharing a name are the *same node*: feeding the input
+  // would establish an end the output then cannot write past. Catching it in the
+  // schema turns a puzzling runtime failure into an obvious one.
+  actions::ActionSchema schema;
+  schema.name = "both-ways";
+  schema.inputs.emplace(
+      "body", actions::ActionPortSchema{.name = "body", .type = "text/plain"});
+  schema.outputs.emplace(
+      "body", actions::ActionPortSchema{.name = "body", .type = "text/plain"});
+  const absl::Status status = schema.Validate();
+  EXPECT_TRUE(absl::IsInvalidArgument(status)) << status;
+  EXPECT_NE(status.message().find("both an input and an output"),
+            std::string_view::npos)
+      << status.message();
+
+  // Either direction alone is fine.
+  schema.outputs.erase("body");
+  schema.outputs.emplace(
+      "text", actions::ActionPortSchema{.name = "text", .type = "text/plain"});
+  EXPECT_TRUE(schema.Validate().ok());
+}
+
 TEST(ActionTest, HandlerFailureAbortsUnfinishedOutput) {
   ActionHandler failing = [](std::shared_ptr<Action> action) {
     return a11::SubmitTask([action = std::move(action)]() -> absl::Status {

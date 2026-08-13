@@ -15,6 +15,7 @@ makes it work.
 | [Going distributed](guides/going-distributed.md) | Choose storage and transport boundaries for an agent that spans processes or machines. |
 | [Browser clients](guides/browser-clients.md) | Connect a TypeScript browser application to an A11 backend. |
 | [Local models on the web](guides/local-models-web.md) | Run a local model in a browser-facing application while retaining A11 action semantics. |
+| [HTTP as separate streams](api/http-actions.md) | Make HTTP requests with a port per protocol concern — act on the status before the body arrives, read trailers, and receive pushed responses. |
 
 Runnable companion programs live in the repository’s
 [`examples/`](https://github.com/hpnkv/a11/tree/main/examples) directory.

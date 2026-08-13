@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include <absl/status/status.h>
+#include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
@@ -106,6 +107,106 @@ TEST(Http1ConnectionTest, ChunkedStreamingResponse) {
     body += **chunk;
   }
   EXPECT_EQ(body, "data: one\n\ndata: two\n\n");
+
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
+TEST(Http1ConnectionTest, StreamsAChunkedRequestBody) {
+  auto server = Http2Server::Create(
+      "127.0.0.1", 0,
+      [](HttpRequest request,
+         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        EXPECT_EQ(GetHttpHeader(request.headers, "transfer-encoding"),
+                  "chunked");
+        const absl::Status status =
+            response->SendResponse(200, {}, absl::StrCat("got:", request.body));
+        return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
+      });
+  ASSERT_TRUE(server.ok()) << server.status();
+  auto client =
+      Http2Client::Connect("127.0.0.1", (*server)->port(), Http1ClientOptions())
+          .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+
+  auto upload = (*client)->RequestStreamingBody("POST", "/upload");
+  ASSERT_TRUE(upload.ok()) << upload.status();
+  EXPECT_TRUE((*upload)->Write("alpha").ok());
+  EXPECT_TRUE((*upload)->Write("beta").ok());
+  EXPECT_TRUE((*upload)->Finish().ok());
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  auto head = (*upload)->Headers().Await(deadline);
+  ASSERT_TRUE(head.ok()) << head.status();
+  EXPECT_EQ(head->status, 200);
+  std::string body;
+  while (true) {
+    auto chunk = (*upload)->Read().Await(deadline);
+    ASSERT_TRUE(chunk.ok()) << chunk.status();
+    if (!chunk->has_value()) break;
+    body += **chunk;
+  }
+  EXPECT_EQ(body, "got:alphabeta");
+
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
+TEST(Http1ConnectionTest, RejectsContentLengthOnAStreamedRequestBody) {
+  auto server = Http2Server::Create(
+      "127.0.0.1", 0,
+      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response) {
+        const absl::Status status = response->SendResponse(200, {}, "");
+        return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
+      });
+  ASSERT_TRUE(server.ok()) << server.status();
+  auto client =
+      Http2Client::Connect("127.0.0.1", (*server)->port(), Http1ClientOptions())
+          .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+  // The two framings are mutually exclusive; saying both is a caller error, not
+  // something to quietly pick a winner for.
+  auto upload = (*client)->RequestStreamingBody("POST", "/upload",
+                                                {{"content-length", "5"}});
+  EXPECT_TRUE(absl::IsInvalidArgument(upload.status())) << upload.status();
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
+TEST(Http1ConnectionTest, DeliversChunkedTrailers) {
+  auto server = Http2Server::Create(
+      "127.0.0.1", 0,
+      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response)
+          -> a11::Task {
+        absl::Status status = response->SendHeaders(
+            200, {{"content-type", "text/plain"}, {"trailer", "x-digest"}});
+        if (!status.ok()) return a11::FailedTask(status);
+        status = response->Write("counted");
+        if (!status.ok()) return a11::FailedTask(status);
+        status = response->FinishWithTrailers({{"x-digest", "7"}});
+        return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
+      });
+  ASSERT_TRUE(server.ok()) << server.status();
+
+  auto client =
+      Http2Client::Connect("127.0.0.1", (*server)->port(), Http1ClientOptions())
+          .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+  auto stream = (*client)->RequestStream("GET", "/trailed");
+  ASSERT_TRUE(stream.ok()) << stream.status();
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  std::string body;
+  while (true) {
+    auto chunk = (*stream)->Read().Await(deadline);
+    ASSERT_TRUE(chunk.ok()) << chunk.status();
+    if (!chunk->has_value()) break;
+    body += **chunk;
+  }
+  EXPECT_EQ(body, "counted");
+  auto trailers = (*stream)->Trailers().Await(deadline);
+  ASSERT_TRUE(trailers.ok()) << trailers.status();
+  EXPECT_EQ(GetHttpHeader(*trailers, "x-digest"), "7");
 
   EXPECT_TRUE((*client)->Close().ok());
   EXPECT_TRUE((*server)->Stop().ok());

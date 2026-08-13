@@ -1,0 +1,25 @@
+dto DeepResearchSource {
+  id:   string required
+  url:  string required
+  type: string required
+  tags: string[] required
+}
+
+
+flow investigate {
+  describe "Do a single planned investigation for Deep Research"
+
+  in whole_research_brief: string stream required
+    "Summary of the whole research"
+  in investigation_brief:  string stream required
+    "Instructions for this particular investigation"
+
+  out investigation: string stream required
+    "A free-form answer where some facts will include a citation by being enclosed as <span source='<id>'>text</span>"
+  out sources:       DeepResearchSource stream
+    "Source objects to support citations of the investigation, correlated by ID"
+
+  # ...logic happening...
+
+  found_sources | map DeepResearchSource{"id": it.id, "url": it.url, "type": it.type, "tags": ["investigated"]} -> sources
+}

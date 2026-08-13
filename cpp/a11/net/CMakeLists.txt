@@ -7,6 +7,7 @@ set(A11_NET_SOURCES
     PARENT_SCOPE)
 
 set(A11_NET_HTTP_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/http/connection_pool.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/http/download.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/http/fetch.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/http/url.cc

@@ -321,29 +321,9 @@ Http1Connection::SubmitRequest(std::string method, std::string scheme,
             request.size()));
 
         self->client_request_sent_ = true;
+        self->client_request_finished_ = true;
         self->client_method_ = method;
-        self->response_state_ = std::make_shared<Http2ResponseStream::State>(
-            self->options().max_buffered_response_bytes);
-        {
-          std::weak_ptr<Http1Connection> weak = self;
-          thread::MutexLock lock(&self->response_state_->mu);
-          self->response_state_->cancel =
-              [weak](absl::Status status) -> absl::Status {
-            if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
-              return connection->Close(std::move(status));
-            }
-            return absl::OkStatus();
-          };
-          // Backpressure: a full response buffer stops the socket read rather
-          // than failing the transfer. Wired here as well as on the HTTP/2
-          // path, because both share Http2ResponseStream::State and a state
-          // without this hook would simply buffer without bound.
-          self->response_state_->set_read_paused = [weak](bool paused) {
-            if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
-              connection->SetReadPaused(paused);
-            }
-          };
-        }
+        self->PrepareClientResponseState();
 
         struct MakeResponseEnabler final : Http2ResponseStream {
           explicit MakeResponseEnabler(
@@ -352,6 +332,92 @@ Http1Connection::SubmitRequest(std::string method, std::string scheme,
         };
         return std::static_pointer_cast<Http2ResponseStream>(
             std::make_shared<MakeResponseEnabler>(self->response_state_));
+      });
+}
+
+void Http1Connection::PrepareClientResponseState() {
+  response_state_ = std::make_shared<Http2ResponseStream::State>(
+      options().max_buffered_response_bytes);
+  std::weak_ptr<Http1Connection> weak = Self();
+  thread::MutexLock lock(&response_state_->mu);
+  response_state_->cancel = [weak](absl::Status status) -> absl::Status {
+    if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
+      return connection->Close(std::move(status));
+    }
+    return absl::OkStatus();
+  };
+  // Backpressure: a full response buffer stops the socket read rather than
+  // failing the transfer. Wired here as well as on the HTTP/2 path, because
+  // both share Http2ResponseStream::State and a state without this hook would
+  // simply buffer without bound.
+  response_state_->set_read_paused = [weak](bool paused) {
+    if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
+      connection->SetReadPaused(paused);
+    }
+  };
+}
+
+absl::StatusOr<std::shared_ptr<Http2DuplexStream>>
+Http1Connection::SubmitStreamingRequest(std::string method,
+                                        std::string /*scheme*/,
+                                        std::string authority, std::string path,
+                                        HttpHeaders headers) {
+  std::shared_ptr<Http1Connection> self = Self();
+  return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+      [self = std::move(self), method = std::move(method),
+       authority = std::move(authority), path = std::move(path),
+       headers = std::move(headers)]() mutable
+          -> absl::StatusOr<std::shared_ptr<Http2DuplexStream>> {
+        if (self->closed() || !self->connected()) {
+          return absl::UnavailableError("HTTP/1.1 connection is not connected");
+        }
+        if (self->client_request_sent_) {
+          return absl::FailedPreconditionError(
+              "HTTP/1.1 connections carry a single request; open another "
+              "connection for concurrent requests");
+        }
+        absl::AsciiStrToUpper(&method);
+        NormalizeHttpHeaders(&headers);
+        ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
+        if (GetHttpHeader(headers, "content-length").has_value()) {
+          return absl::InvalidArgumentError(
+              "A streamed HTTP/1.1 request body is chunked and must not carry "
+              "content-length");
+        }
+
+        HttpHeaders wire = std::move(headers);
+        if (GetHttpHeader(wire, "host") == std::nullopt && !authority.empty()) {
+          SetHttpHeader(&wire, "host", authority);
+        }
+        // Chunked is how HTTP/1.1 sends a body of unknown length: the head goes
+        // out now and each Write() becomes a chunk.
+        SetHttpHeader(&wire, "transfer-encoding", "chunked");
+        const std::string request =
+            internal::SerializeRequest(method, path, wire);
+        ABSL_RETURN_IF_ERROR(self->WriteApplicationData(
+            reinterpret_cast<const std::uint8_t*>(request.data()),
+            request.size()));
+
+        self->client_request_sent_ = true;
+        self->client_request_chunked_ = true;
+        self->client_method_ = method;
+        self->PrepareClientResponseState();
+
+        struct MakeResponseEnabler final : Http2ResponseStream {
+          explicit MakeResponseEnabler(
+              std::shared_ptr<Http2ResponseStream::State> state)
+              : Http2ResponseStream(std::move(state)) {}
+        };
+        struct MakeDuplexEnabler final : Http2DuplexStream {
+          MakeDuplexEnabler(std::weak_ptr<HttpConnection> connection,
+                            std::shared_ptr<Http2ResponseStream> response)
+              : Http2DuplexStream(std::move(connection), std::move(response)) {}
+        };
+        auto response =
+            std::make_shared<MakeResponseEnabler>(self->response_state_);
+        return std::static_pointer_cast<Http2DuplexStream>(
+            std::make_shared<MakeDuplexEnabler>(
+                std::weak_ptr<HttpConnection>(self), std::move(response)));
       });
 }
 
@@ -543,6 +609,9 @@ absl::Status Http1Connection::ClientParse() {
         ABSL_RETURN_IF_ERROR(response_state_->Push(std::move(decoded)));
       }
       if (complete) {
+        // Chunked is the only HTTP/1.1 framing that can carry a trailer
+        // section, and it has to be set before Finish() publishes it.
+        response_state_->SetTrailers(response_chunk_decoder_.trailers());
         response_state_->Finish(absl::OkStatus());
         state_ = ParseState::kDone;
       }
@@ -666,7 +735,17 @@ absl::Status Http1Connection::Finish(std::int32_t stream_id) {
   });
 }
 
-absl::Status Http1Connection::FinishOnLoop(std::int32_t stream_id) {
+absl::Status Http1Connection::FinishWithTrailers(std::int32_t stream_id,
+                                                 HttpHeaders trailers) {
+  std::shared_ptr<Http1Connection> self = Self();
+  return RunStatusOnUv([self = std::move(self), stream_id,
+                        trailers = std::move(trailers)]() mutable {
+    return self->FinishOnLoop(stream_id, std::move(trailers));
+  });
+}
+
+absl::Status Http1Connection::FinishOnLoop(std::int32_t stream_id,
+                                           HttpHeaders trailers) {
   if (stream_id != stream_id_ || response_finished_) {
     return absl::OkStatus();
   }
@@ -674,8 +753,13 @@ absl::Status Http1Connection::FinishOnLoop(std::int32_t stream_id) {
     return absl::FailedPreconditionError(
         "SendHeaders must be called before finishing an HTTP/1.1 response");
   }
+  // Only a chunked body has a place to put a trailer section. On a
+  // content-length response there is nowhere for them to go, so they are
+  // dropped rather than corrupting the framing.
   if (response_chunked_) {
-    const std::string last = internal::EncodeLastChunk();
+    NormalizeHttpHeaders(&trailers);
+    ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(trailers));
+    const std::string last = internal::EncodeLastChunk(trailers);
     ABSL_RETURN_IF_ERROR(WriteApplicationData(
         reinterpret_cast<const std::uint8_t*>(last.data()), last.size()));
   }
@@ -721,6 +805,14 @@ absl::Status Http1Connection::SendResponse(std::int32_t stream_id, int status,
     self->FinishResponseAndAdvance();
     return absl::OkStatus();
   });
+}
+
+absl::StatusOr<std::shared_ptr<Http2ResponseWriter>>
+Http1Connection::SubmitPushPromise(std::int32_t /*stream_id*/,
+                                   std::string /*method*/, std::string /*path*/,
+                                   HttpHeaders /*headers*/) {
+  // HTTP/1.1 has one response per request and no frame to promise another with.
+  return absl::UnimplementedError("HTTP/1.1 does not support server push");
 }
 
 absl::Status Http1Connection::AbortResponse(std::int32_t stream_id,
@@ -795,8 +887,23 @@ absl::Status Http1Connection::WriteRequest(std::int32_t /*stream_id*/,
   std::shared_ptr<Http1Connection> self = Self();
   return RunStatusOnUv(
       [self = std::move(self), data = std::move(data)]() -> absl::Status {
-        if (self->closed() || !self->client_ws_) {
-          return absl::UnavailableError("HTTP/1.1 WebSocket is not writable");
+        if (self->closed()) {
+          return absl::UnavailableError("HTTP/1.1 connection is closed");
+        }
+        // Two kinds of duplex request write here. A WebSocket's bytes are
+        // already framed by its caller and go out untouched; a streamed request
+        // body is framed as a chunk on the way.
+        if (self->client_request_chunked_) {
+          if (self->client_request_finished_) {
+            return absl::FailedPreconditionError(
+                "HTTP/1.1 request body has already finished");
+          }
+          const std::string wire = internal::EncodeChunk(data);
+          return self->WriteApplicationData(
+              reinterpret_cast<const std::uint8_t*>(wire.data()), wire.size());
+        }
+        if (!self->client_ws_) {
+          return absl::UnavailableError("HTTP/1.1 request is not writable");
         }
         return self->WriteApplicationData(
             reinterpret_cast<const std::uint8_t*>(data.data()), data.size());
@@ -804,9 +911,22 @@ absl::Status Http1Connection::WriteRequest(std::int32_t /*stream_id*/,
 }
 
 absl::Status Http1Connection::FinishRequest(std::int32_t /*stream_id*/) {
-  // The WebSocket close frame plus the eventual TCP close end the exchange;
-  // HTTP/1.1 has no separate request-side half-close to signal here.
-  return absl::OkStatus();
+  std::shared_ptr<Http1Connection> self = Self();
+  return RunStatusOnUv([self = std::move(self)]() -> absl::Status {
+    // A chunked request body ends with the terminating zero-length chunk, which
+    // is HTTP/1.1's only request-side half-close. A WebSocket has none: its
+    // close frame and the eventual TCP close end the exchange instead.
+    if (!self->client_request_chunked_ || self->client_request_finished_) {
+      return absl::OkStatus();
+    }
+    self->client_request_finished_ = true;
+    if (self->closed()) {
+      return absl::OkStatus();
+    }
+    const std::string last = internal::EncodeLastChunk();
+    return self->WriteApplicationData(
+        reinterpret_cast<const std::uint8_t*>(last.data()), last.size());
+  });
 }
 
 void Http1Connection::OnClose(const absl::Status& status) {

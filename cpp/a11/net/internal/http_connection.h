@@ -48,12 +48,31 @@ class HttpConnection {
   virtual absl::Status Write(std::int32_t stream_id, std::string data) = 0;
   /** Signals the end of the response body (server side). */
   virtual absl::Status Finish(std::int32_t stream_id) = 0;
+  /**
+   * Ends the response body with a trailer section (server side).
+   *
+   * Equivalent to Finish() when @p trailers is empty. Separate from Finish()
+   * rather than an argument to it because the two end the stream differently on
+   * the wire: a trailing HEADERS frame carries END_STREAM instead of the last
+   * DATA frame.
+   */
+  virtual absl::Status FinishWithTrailers(std::int32_t stream_id,
+                                          HttpHeaders trailers) = 0;
   /** Sends a complete response (status, headers, and body) in one call. */
   virtual absl::Status SendResponse(std::int32_t stream_id, int status,
                                     HttpHeaders headers, std::string body) = 0;
   /** Aborts the response with the given status. */
   virtual absl::Status AbortResponse(std::int32_t stream_id,
                                      absl::Status status) = 0;
+  /**
+   * Promises a pushed response on @p stream_id, returning its writer.
+   *
+   * HTTP/2 only; the HTTP/1.1 connection reports Unimplemented, since the
+   * protocol has no way to send a response that was not requested.
+   */
+  virtual absl::StatusOr<std::shared_ptr<Http2ResponseWriter>>
+  SubmitPushPromise(std::int32_t stream_id, std::string method,
+                    std::string path, HttpHeaders headers) = 0;
   /** @return Whether the response headers have been sent. */
   virtual absl::StatusOr<bool> ResponseHeadersSent(std::int32_t stream_id) = 0;
   /** @return Whether the response has been finished. */
@@ -71,6 +90,19 @@ class HttpConnection {
   virtual absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitDuplex(
       std::string protocol, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers) = 0;
+  /**
+   * Issues a request whose body is written incrementally afterwards.
+   *
+   * The same duplex facade as SubmitDuplex, for an ordinary method rather than
+   * an extended CONNECT: the request side stays writable
+   * (Http2DuplexStream::Write / Finish) while the response is read. This is how
+   * a body too large or too slow to hold in one string is uploaded -- HTTP/2
+   * sends it as DATA frames, HTTP/1.1 as a chunked body.
+   */
+  virtual absl::StatusOr<std::shared_ptr<Http2DuplexStream>>
+  SubmitStreamingRequest(std::string method, std::string scheme,
+                         std::string authority, std::string path,
+                         HttpHeaders headers) = 0;
 };
 
 }  // namespace a11::net

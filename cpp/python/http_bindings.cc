@@ -22,7 +22,10 @@
 #include <pybind11_abseil/status_caster.h>    // IWYU pragma: keep
 #include <pybind11_abseil/statusor_caster.h>  // IWYU pragma: keep
 
+#include "a11/actions/registry.h"
+#include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
+#include "a11/net/http/connection_pool.h"
 #include "a11/net/http/download.h"
 #include "a11/net/http/fetch.h"
 #include "a11/net/http/url.h"
@@ -33,6 +36,8 @@
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
+#include "python/native_types.h"
+#include "sdk/http/actions/http_actions.h"
 
 namespace a11::python {
 namespace {
@@ -197,6 +202,106 @@ auto ValueWithoutGil(Operation&& operation) {
 /// A progress callback as Python sees it: `Callable[[int, int], None] | None`.
 using OnProgressPython = py::typing::Optional<
     py::typing::Callable<void(py::int_, py::int_)>>;
+
+// GIL-reacquiring release for a Python type held as an ActionPortSchema
+// typeinfo handle. Mirrors the actions binding's own deleter so the referent
+// stays alive for exactly as long as any copy of the schema.
+void ReleaseHttpTypeInfo(void* object) {
+  if (object == nullptr || Py_IsInitialized() == 0) {
+    return;
+  }
+  const PyGILState_STATE gil = PyGILState_Ensure();
+  Py_DECREF(static_cast<PyObject*>(object));
+  PyGILState_Release(gil);
+}
+
+std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
+  Py_INCREF(cls.ptr());
+  return std::shared_ptr<void>(cls.ptr(), &ReleaseHttpTypeInfo);
+}
+
+// One HTTP Action, ready to register. Both the Python export and
+// RegisterHttpActionsPy build from this table, so they cannot drift apart.
+struct HttpActionEntry {
+  std::string_view name;
+  a11::actions::ActionSchema schema;
+  a11::actions::ActionHandler handler;
+};
+
+/**
+ * The two HTTP Actions, with Python types attached to the ports C++ cannot name.
+ *
+ * Every port here carries JSON, bytes, or a scalar, so the mapping is to Python
+ * builtins rather than to bound native classes -- an HTTP header map really is a
+ * dict and a body really is bytes, which is also why none of this needed a new
+ * serialization tag.
+ */
+std::vector<HttpActionEntry> HttpActionEntries() {
+  const auto type_for = [](std::string_view port_type) -> PyObject* {
+    if (port_type == "string") {
+      return reinterpret_cast<PyObject*>(&PyUnicode_Type);
+    }
+    if (port_type == "integer") {
+      return reinterpret_cast<PyObject*>(&PyLong_Type);
+    }
+    if (port_type == "bool") {
+      return reinterpret_cast<PyObject*>(&PyBool_Type);
+    }
+    if (port_type == "application/octet-stream") {
+      return reinterpret_cast<PyObject*>(&PyBytes_Type);
+    }
+    return nullptr;  // JSON: a dict, a list or a scalar, so nothing to pin.
+  };
+  const auto attach = [&type_for](a11::actions::ActionSchema& schema) {
+    for (auto* ports : {&schema.inputs, &schema.outputs}) {
+      for (auto& [name, port] : *ports) {
+        if (PyObject* type = type_for(port.type); type != nullptr) {
+          port.typeinfo = TypeInfoFromClass(
+              py::reinterpret_borrow<py::object>(py::handle(type)));
+        }
+      }
+    }
+  };
+  std::vector<HttpActionEntry> entries;
+  const auto add = [&](std::string_view name,
+                       a11::actions::ActionSchema schema,
+                       a11::actions::ActionHandler handler) {
+    attach(schema);
+    entries.push_back(HttpActionEntry{.name = name,
+                                      .schema = std::move(schema),
+                                      .handler = std::move(handler)});
+  };
+  add(sdk::http::kMakeHttpRequestAction, sdk::http::MakeHttpRequestSchema(),
+      sdk::http::MakeHttpRequestHandler());
+  add(sdk::http::kWebFetchAction, sdk::http::WebFetchSchema(),
+      sdk::http::WebFetchHandler());
+  return entries;
+}
+
+py::list HttpActionsPy() {
+  py::list result;
+  for (HttpActionEntry& entry : HttpActionEntries()) {
+    result.append(py::make_tuple(
+        py::str(std::string(entry.name)), py::cast(std::move(entry.schema)),
+        py::cast(NativeActionHandler(std::move(entry.handler)))));
+  }
+  return result;
+}
+
+void RegisterHttpActionsPy(
+    const std::shared_ptr<a11::actions::ActionRegistry>& registry) {
+  if (registry == nullptr) {
+    ThrowStatus(absl::InvalidArgumentError("registry must not be None"));
+  }
+  for (HttpActionEntry& entry : HttpActionEntries()) {
+    if (const absl::Status status =
+            registry->Register(std::string(entry.name), std::move(entry.schema),
+                               std::move(entry.handler));
+        !status.ok()) {
+      ThrowStatus(status);
+    }
+  }
+}
 
 /**
  * Wraps a Python progress callable for a fetch or download.
@@ -427,6 +532,12 @@ void BindHttp(py::module_& module) {
                      "Serve/accept cleartext prior-knowledge HTTP/2.")
       .def_readwrite("enable_http1", &net::Http2Options::enable_http1,
                      "Serve/accept HTTP/1.1 (ALPN and/or cleartext).")
+      .def_readwrite("enable_push", &net::Http2Options::enable_push,
+                     "Client: accept HTTP/2 server pushes. Off by default, and "
+                     "advertised as off, so a peer cannot spend this side's "
+                     "streams on responses nobody asked for. A client that "
+                     "enables it must read Http2ResponseStream.next_push and "
+                     "either consume or cancel each pushed response.")
       .def_readwrite("client_preference", &net::Http2Options::client_preference,
                      "Client protocol preference and cleartext attempt order.")
       .def_readwrite("client_allow_downgrade",
@@ -450,7 +561,16 @@ void BindHttp(py::module_& module) {
           },
           "Validate the options, raising on error.");
 
-  py::classh<net::Http2ResponseStream>(module, "Http2ResponseStream")
+  // Declared before either gains members because each names the other: a
+  // response stream hands back pushed responses, and a pushed response *is* a
+  // response stream. pybind11 renders a signature when def() runs, so both types
+  // have to be registered by then or one of them has no name to render.
+  py::class_<net::HttpPushedResponse> pushed_response(module,
+                                                     "HttpPushedResponse");
+  py::classh<net::Http2ResponseStream> response_stream(module,
+                                                       "Http2ResponseStream");
+
+  response_stream
       .def(
           "headers",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
@@ -471,6 +591,35 @@ void BindHttp(py::module_& module) {
           },
           "Await the next chunk of response body data, or None at end of "
           "stream.")
+      .def(
+          "trailers",
+          [](const std::shared_ptr<net::Http2ResponseStream>& self) {
+            return FutureToPythonAs<
+                py::typing::List<py::typing::Tuple<py::str, py::str>>>(
+                self->Trailers(), [](const net::HttpHeaders& fields) {
+                  return HttpHeadersToPython(fields);
+                });
+          },
+          "Await the trailer fields that followed the body. Resolves to an "
+          "empty list when the peer sent no trailer section, so this can be "
+          "awaited without knowing whether one was coming.")
+      .def(
+          "next_push",
+          [](const std::shared_ptr<net::Http2ResponseStream>& self) {
+            return FutureToPythonAs<
+                py::typing::Optional<net::HttpPushedResponse>>(
+                self->NextPush(),
+                [](const std::optional<net::HttpPushedResponse>& value)
+                    -> py::object {
+                  if (!value.has_value()) {
+                    return py::none();
+                  }
+                  return py::cast(*value);
+                });
+          },
+          "Await the next response the server pushed alongside this one, or "
+          "None once this response has ended (after which no push can arrive). "
+          "Requires Http2Options.enable_push.")
       .def(
           "wait_done",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
@@ -500,6 +649,29 @@ void BindHttp(py::module_& module) {
           py::arg("status") = py::none())
       .def_property_readonly("stream_id", &net::Http2ResponseStream::stream_id,
                              "The HTTP/2 stream identifier.");
+
+  pushed_response
+      .def_readonly("method", &net::HttpPushedResponse::method,
+                    "Method of the request the server promised.")
+      .def_readonly("scheme", &net::HttpPushedResponse::scheme,
+                    "Scheme of the promised request.")
+      .def_readonly("authority", &net::HttpPushedResponse::authority,
+                    "Authority of the promised request.")
+      .def_readonly("path", &net::HttpPushedResponse::path,
+                    "Path and query of the promised request.")
+      .def_property_readonly(
+          "headers",
+          [](const net::HttpPushedResponse& push) {
+            return HttpHeadersToPython(push.headers);
+          },
+          "Header fields of the promised request, as (name, value) pairs.")
+      .def_readonly("response", &net::HttpPushedResponse::response,
+                    "The pushed response: its own head, body and trailers. "
+                    "Cancel it to refuse the push.")
+      .def("__repr__", [](const net::HttpPushedResponse& push) {
+        return absl::StrCat("HttpPushedResponse('", push.method, " ", push.path,
+                            "')");
+      });
 
   py::classh<net::Http2DuplexStream>(module, "Http2DuplexStream")
       .def(
@@ -564,6 +736,10 @@ void BindHttp(py::module_& module) {
             return FutureToPython(self->Done());
           },
           "Future that completes when the duplex stream is done.")
+      .def_property_readonly(
+          "response", &net::Http2DuplexStream::response,
+          "The read half, for the parts of a response this facade does not "
+          "forward: its trailers, and any pushed responses.")
       .def_property_readonly("stream_id", &net::Http2DuplexStream::stream_id,
                              "The HTTP/2 stream identifier.");
 
@@ -597,6 +773,40 @@ void BindHttp(py::module_& module) {
             CallWithoutGil([&self] { return self.Finish(); });
           },
           "Signal the end of the response body.")
+      .def(
+          "finish_with_trailers",
+          [](net::Http2ResponseWriter& self,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& trailers) {
+            net::HttpHeaders converted =
+                ValueOrThrow(HttpHeadersFromPython(trailers));
+            CallWithoutGil([&self, converted = std::move(converted)]() mutable {
+              return self.FinishWithTrailers(std::move(converted));
+            });
+          },
+          "End the response body with a trailer section -- the only place a "
+          "value computed while streaming (a checksum, a row count) can be "
+          "reported from. Equivalent to finish() when empty.",
+          py::arg("trailers") = py::none())
+      .def(
+          "push_promise",
+          [](net::Http2ResponseWriter& self, std::string method,
+             std::string path,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers) {
+            net::HttpHeaders converted =
+                ValueOrThrow(HttpHeadersFromPython(headers));
+            return ValueWithoutGil(
+                [&self, method = std::move(method), path = std::move(path),
+                 headers = std::move(converted)]() mutable {
+                  return self.PushPromise(std::move(method), std::move(path),
+                                          std::move(headers));
+                });
+          },
+          "Promise a response the client did not ask for, returning the writer "
+          "for it. Must be called before this response is finished, and fails "
+          "when the client did not enable push.",
+          py::arg("method"), py::arg("path"), py::arg("headers") = py::none())
       .def(
           "send_response",
           [](net::Http2ResponseWriter& self, int status,
@@ -757,6 +967,26 @@ void BindHttp(py::module_& module) {
           py::arg("protocol"), py::arg("path"), py::arg("headers") = py::none(),
           py::arg("scheme") = "")
       .def(
+          "request_streaming_body",
+          [](net::Http2Client& self, std::string method, std::string path,
+             const py::typing::Optional<py::typing::Iterable<
+                 py::typing::Tuple<py::str, py::str>>>& headers,
+             std::string scheme) {
+            auto native_headers = ValueOrThrow(HttpHeadersFromPython(headers));
+            return ValueWithoutGil([&] {
+              return self.RequestStreamingBody(std::move(method),
+                                               std::move(path),
+                                               std::move(native_headers),
+                                               std::move(scheme));
+            });
+          },
+          "Open a request whose body is written incrementally afterwards, for "
+          "an upload of unknown or unbounded length. Returns a duplex stream: "
+          "write() sends more of the body, finish() ends it, and the response "
+          "is read from the same handle. Do not set content-length.",
+          py::arg("method"), py::arg("path"), py::arg("headers") = py::none(),
+          py::arg("scheme") = "")
+      .def(
           "close",
           [](net::Http2Client& self) {
             CallWithoutGil([&self] { return self.Close(); });
@@ -770,6 +1000,11 @@ void BindHttp(py::module_& module) {
                              "Whether the client is currently connected.")
       .def_property_readonly("secure", &net::Http2Client::secure,
                              "Whether the connection is using TLS.")
+      .def_property_readonly(
+          "multiplexed", &net::Http2Client::multiplexed,
+          "Whether this connection can carry several exchanges at once: true "
+          "for HTTP/2, false for HTTP/1.1, which A11 limits to one request per "
+          "connection.")
       .def(
           "get_impl",
           [](const net::Http2Client& self) {
@@ -1149,6 +1384,16 @@ Returns the destination path. A destination that already exists and matches
       },
       "Validate a collection of HTTP headers, raising on error.",
       py::arg("headers"));
+  module.def("http_actions", &HttpActionsPy,
+             "Return the HTTP Actions as (name, schema, handler) triples: "
+             "make_http_request and web-fetch, in that order.");
+  module.def("register_http_actions", &RegisterHttpActionsPy,
+             py::arg("registry"),
+             "Register make_http_request and web-fetch on `registry`.");
+  module.attr("MAKE_HTTP_REQUEST_ACTION") =
+      std::string(sdk::http::kMakeHttpRequestAction);
+  module.attr("WEB_FETCH_ACTION") = std::string(sdk::http::kWebFetchAction);
+
   module.attr("SSE_STREAM_ID_HEADER") = std::string(net::kSseStreamIdHeader);
   module.attr("SSE_HTTP_HEADER_PREFIX") =
       std::string(net::kSseHttpHeaderPrefix);

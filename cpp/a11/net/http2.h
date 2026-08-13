@@ -96,6 +96,28 @@ struct HttpResponse {
   std::string body;       ///< Complete response body.
 };
 
+class Http2ResponseStream;
+
+/**
+ * @brief A response the server sent without being asked (HTTP/2 server push).
+ *
+ * The PUSH_PROMISE names a request the client never made -- that is what the
+ * pseudo-header fields below are -- and @c response carries the response to it,
+ * read exactly like any other. A client that does not want it calls Cancel() on
+ * @c response, which resets the pushed stream and stops the transfer.
+ *
+ * Reachable only when Http2Options::enable_push was set on the connection.
+ */
+struct HttpPushedResponse {
+  std::string method;     ///< Method of the promised request.
+  std::string scheme;     ///< Scheme of the promised request.
+  std::string authority;  ///< Authority of the promised request.
+  std::string path;       ///< Path and query of the promised request.
+  HttpHeaders headers;    ///< Header fields of the promised request.
+  /// The pushed response: its own head, body, and trailers.
+  std::shared_ptr<Http2ResponseStream> response;
+};
+
 /** @brief TLS settings for an HTTP/2 client or server (certificates, peer
  * verification). */
 struct Http2TlsOptions {
@@ -132,6 +154,15 @@ struct Http2Options {
   bool enable_h2 = true;     ///< Serve/accept HTTP/2 over TLS (ALPN "h2").
   bool enable_h2c = true;    ///< Serve/accept cleartext prior-knowledge HTTP/2.
   bool enable_http1 = true;  ///< Serve/accept HTTP/1.1 (ALPN and/or cleartext).
+  /**
+   * Client: accept HTTP/2 server pushes (SETTINGS_ENABLE_PUSH).
+   *
+   * Off by default, and advertised as off, so a peer cannot spend this side's
+   * streams and flow-control window on responses nobody asked for. A client
+   * that sets it must read Http2ResponseStream::NextPush() and either consume
+   * or Cancel() each pushed response, or those streams stay open.
+   */
+  bool enable_push = false;
   /// Client protocol preference; also governs cleartext attempt order.
   ProtocolPreference client_preference = ProtocolPreference::kAuto;
   /// Whether a cleartext client may reconnect with the other protocol when its
@@ -191,6 +222,29 @@ class Http2ResponseStream
   /** @return An awaitable resolving to the next body chunk, or nullopt at end
    * of stream. */
   a11::Future<std::optional<std::string>> Read();
+  /**
+   * @brief The trailer fields that followed the body.
+   *
+   * Resolves once the response has ended -- with an empty list when the peer
+   * sent no trailer section, so awaiting this never depends on having guessed
+   * whether one was coming. A stream that failed fails here with the same
+   * status rather than reporting an empty section.
+   *
+   * @return An awaitable resolving to the trailer fields.
+   */
+  a11::Future<HttpHeaders> Trailers() const;
+  /**
+   * @brief The next response the server pushed alongside this one.
+   *
+   * Resolves to nullopt once this response has ended, because HTTP/2 forbids a
+   * PUSH_PROMISE after the stream it is associated with completes -- so at that
+   * point no further push can arrive and a reader can stop asking. Requires
+   * Http2Options::enable_push; without it the first call resolves to nullopt as
+   * soon as the response ends and no push is ever delivered.
+   *
+   * @return An awaitable resolving to the next pushed response, or nullopt.
+   */
+  a11::Future<std::optional<HttpPushedResponse>> NextPush();
   /** @return An awaitable that resolves when the response is done. */
   a11::Task Done() const;
   /** Cancels the response stream with the given status. */
@@ -236,6 +290,18 @@ class Http2DuplexStream
                          "HTTP/2 duplex stream cancelled"));
   /** @return An awaitable that resolves when the duplex stream is done. */
   a11::Task Done() const;
+  /**
+   * @brief The read half, for the parts of a response this facade does not
+   *        forward.
+   *
+   * Headers() and Read() here are that stream's; its trailers and any pushed
+   * responses are reached through this. Handing it out rather than mirroring
+   * every method keeps one definition of what a response is, whether the request
+   * that produced it was buffered or streamed.
+   */
+  [[nodiscard]] const std::shared_ptr<Http2ResponseStream>& response() const {
+    return response_;
+  }
   /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const;
 
@@ -268,9 +334,33 @@ class Http2ResponseWriter
   absl::Status Write(std::string data);
   /** Signals the end of the response body. */
   absl::Status Finish();
+  /**
+   * @brief Ends the response body with a trailer section.
+   *
+   * @param trailers Fields to send after the body; an empty list makes this
+   *        Finish(). Pseudo-headers are not permitted in a trailer section.
+   */
+  absl::Status FinishWithTrailers(HttpHeaders trailers);
   /** Sends a complete response (status, headers, and body) in one call. */
   absl::Status SendResponse(int status, HttpHeaders headers = {},
                             std::string body = {});
+  /**
+   * @brief Promises a response the client did not ask for (server push).
+   *
+   * Sends a PUSH_PROMISE naming the request @p method and @p path, and returns
+   * the writer for its response -- driven exactly like this one. Must be called
+   * before this response is finished: HTTP/2 does not allow a promise on a
+   * stream that has already closed.
+   *
+   * @param method Method of the promised request; must be safe and cacheable.
+   * @param path Absolute path, including any query.
+   * @param headers Header fields of the promised request.
+   * @return The pushed response's writer, or an error -- FailedPrecondition
+   *         when the client did not enable push, or when this response has
+   *         already finished.
+   */
+  absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> PushPromise(
+      std::string method, std::string path, HttpHeaders headers = {});
   /** Aborts the response with the given status. */
   absl::Status Abort(absl::Status status);
   /** @return An awaitable that resolves when the response is done. */
@@ -380,6 +470,26 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> ExtendedConnect(
       std::string protocol, std::string path, HttpHeaders headers = {},
       std::string scheme = {});
+  /**
+   * @brief Opens a request whose body is written incrementally.
+   *
+   * Where RequestStream() wants the whole body up front, this returns while the
+   * request side is still open: Http2DuplexStream::Write() sends more of it and
+   * Finish() ends it, with the response read from the same handle throughout.
+   * That is what an upload of unknown or unbounded length needs -- HTTP/2 sends
+   * the body as DATA frames, HTTP/1.1 as a chunked body, and neither needs a
+   * `content-length`.
+   *
+   * @param method Request method.
+   * @param path Absolute request path, including any query.
+   * @param headers Request headers. Do not set `content-length`: the body's
+   *        length is not known when the headers are sent.
+   * @param scheme Request scheme; defaults to the connection's.
+   * @return The duplex stream, or an error.
+   */
+  absl::StatusOr<std::shared_ptr<Http2DuplexStream>> RequestStreamingBody(
+      std::string method, std::string path, HttpHeaders headers = {},
+      std::string scheme = {});
   /** @return An awaitable resolving to the fully buffered response. */
   a11::Future<HttpResponse> Request(std::string method, std::string path,
                                     HttpHeaders headers = {},
@@ -396,6 +506,14 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
   [[nodiscard]] bool connected() const;
   /** @return Whether the connection is using TLS. */
   [[nodiscard]] bool secure() const;
+  /**
+   * @brief Whether this connection can carry several exchanges at once.
+   *
+   * True for HTTP/2 (h2 or h2c), false for HTTP/1.1 -- which A11 restricts to
+   * one request per connection rather than pipelining. A caller sharing a
+   * connection between requests has to know which it got.
+   */
+  [[nodiscard]] bool multiplexed() const;
   /** @return An opaque native handle for advanced interop, or nullptr. */
   [[nodiscard]] void* absl_nullable GetImpl() const;
 

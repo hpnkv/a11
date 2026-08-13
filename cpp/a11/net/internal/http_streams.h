@@ -108,6 +108,8 @@ struct Http2ResponseStream::State {
       : max_buffered_bytes(maximum_buffered_bytes),
         headers_promise(std::make_shared<a11::Promise<HttpResponseHead>>()),
         headers_future(headers_promise->future()),
+        trailers_promise(std::make_shared<a11::Promise<HttpHeaders>>()),
+        trailers_future(trailers_promise->future()),
         done_promise(std::make_shared<a11::Promise<a11::Unit>>()),
         done_future(done_promise->future()) {}
 
@@ -121,9 +123,31 @@ struct Http2ResponseStream::State {
   absl::Status status ABSL_GUARDED_BY(mu);
   const std::shared_ptr<a11::Promise<HttpResponseHead>> headers_promise;
   const a11::Future<HttpResponseHead> headers_future;
+  /**
+   * The trailer fields, collected before Finish() publishes them.
+   *
+   * A trailer section is optional and arrives after the last body byte, so a
+   * reader cannot be told to expect one: Finish() resolves the promise either
+   * way, with an empty list when the peer sent none. That keeps Trailers() a
+   * single await rather than a conditional one.
+   */
+  HttpHeaders trailers ABSL_GUARDED_BY(mu);
+  const std::shared_ptr<a11::Promise<HttpHeaders>> trailers_promise;
+  const a11::Future<HttpHeaders> trailers_future;
   const std::shared_ptr<a11::Promise<a11::Unit>> done_promise;
   const a11::Task done_future;
   std::shared_ptr<a11::Promise<std::optional<std::string>>> pending_read
+      ABSL_GUARDED_BY(mu);
+  /**
+   * Responses the peer pushed alongside this one, and a reader waiting for one.
+   *
+   * Queued rather than delivered through a callback because a push arrives on
+   * the loop thread and its consumer is a fiber: the same bounded handoff the
+   * body uses. Unbounded only in the sense that the peer's own
+   * SETTINGS_MAX_CONCURRENT_STREAMS bounds how many can be outstanding.
+   */
+  std::deque<HttpPushedResponse> pushes ABSL_GUARDED_BY(mu);
+  std::shared_ptr<a11::Promise<std::optional<HttpPushedResponse>>> pending_push
       ABSL_GUARDED_BY(mu);
   std::function<absl::Status(absl::Status)> cancel ABSL_GUARDED_BY(mu);
   /**
@@ -149,6 +173,36 @@ struct Http2ResponseStream::State {
     if (publish) {
       (void)headers_promise->SetValue(std::move(head));
     }
+  }
+
+  /**
+   * Records the trailer section. Held rather than published: the fields are
+   * only meaningful once the body they follow has ended, which is Finish().
+   */
+  void SetTrailers(HttpHeaders fields) {
+    thread::MutexLock lock(&mu);
+    if (!done) {
+      trailers = std::move(fields);
+    }
+  }
+
+  /** Delivers a pushed response to a waiting reader, or queues it. */
+  void PushPromised(HttpPushedResponse promised) {
+    std::shared_ptr<a11::Promise<std::optional<HttpPushedResponse>>> reader;
+    {
+      thread::MutexLock lock(&mu);
+      if (done) {
+        return;  // Too late to be read; the caller resets the pushed stream.
+      }
+      if (pending_push != nullptr) {
+        reader = std::move(pending_push);
+      } else {
+        pushes.push_back(std::move(promised));
+        return;
+      }
+    }
+    (void)reader->SetValue(
+        std::optional<HttpPushedResponse>(std::move(promised)));
   }
 
   absl::Status Push(std::string data) {
@@ -186,7 +240,10 @@ struct Http2ResponseStream::State {
 
   void Finish(absl::Status completion) {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
+    std::shared_ptr<a11::Promise<std::optional<HttpPushedResponse>>>
+        push_reader;
     bool publish_headers_error = false;
+    HttpHeaders published_trailers;
     {
       thread::MutexLock lock(&mu);
       if (done) {
@@ -195,9 +252,21 @@ struct Http2ResponseStream::State {
       done = true;
       status = completion;
       reader = std::move(pending_read);
+      push_reader = std::move(pending_push);
+      published_trailers = std::move(trailers);
       if (!headers_ready) {
         headers_ready = true;
         publish_headers_error = true;
+      }
+    }
+    // No PUSH_PROMISE may follow the stream it is associated with, so the end of
+    // this response is the end of its pushes. A reader waiting on one is told
+    // there are no more rather than left waiting for the connection to close.
+    if (push_reader != nullptr) {
+      if (completion.ok()) {
+        (void)push_reader->SetValue(std::nullopt);
+      } else {
+        (void)push_reader->SetStatus(completion);
       }
     }
     if (publish_headers_error) {
@@ -206,6 +275,13 @@ struct Http2ResponseStream::State {
               ? absl::DataLossError("HTTP stream ended before response headers")
               : completion;
       (void)headers_promise->SetStatus(error);
+    }
+    // A failed stream fails its trailers too: a reader awaiting them would
+    // otherwise see an empty section and read it as "the peer sent none".
+    if (completion.ok()) {
+      (void)trailers_promise->SetValue(std::move(published_trailers));
+    } else {
+      (void)trailers_promise->SetStatus(completion);
     }
     if (reader != nullptr) {
       if (completion.ok()) {

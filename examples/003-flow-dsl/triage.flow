@@ -5,7 +5,7 @@ flow triage {
   describe "Run a triage step until it is confident enough, then report."
 
   in  report:  string required "What to triage."
-  out passes:  object stream         "Every pass, as it happened."
+  out passes:  object stream   "Every pass, as it happened."
   out verdict: string          "What the last pass concluded."
   out notes:   string          "The trail it left."
 

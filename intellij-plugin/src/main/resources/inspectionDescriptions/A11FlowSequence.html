@@ -1,0 +1,22 @@
+<html>
+<body>
+Reports sequences of pipeline stages that cannot do what they look like they do.
+<p>
+<code>collect</code>, <code>count</code> and <code>join</code> each read a whole
+stream and yield exactly one value, so every stage after one of them is applied to
+a single value however long the stream was. That makes
+<code>| count | drop 2</code> empty, <code>| collect | count</code> the number 1
+whatever was collected, and <code>| join "" | last 3</code> a stage with nothing to
+choose between. Also reported: <code>| first 0</code>, which never produces a
+value; the same reshaping twice in a row; and a counted
+<code>skip&nbsp;n</code> applied to something that is not a port or a node -- a
+status, a loop's value -- when what it drops is dropped for every reader of a
+stream and those have no such front. <code>| drop n</code> is the one that drops
+values from a pipeline of one reader's own.
+<p>
+The stages that reshape each value -- <code>map</code>, <code>where</code>,
+<code>truncate</code>, <code>text</code>, <code>json</code>, <code>packb</code> --
+are not reported after a reducing stage: mapping the one value a
+<code>collect</code> produced is how a flow builds a prompt out of many pages.
+</body>
+</html>

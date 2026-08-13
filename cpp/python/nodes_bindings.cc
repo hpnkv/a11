@@ -159,6 +159,10 @@ void BindNodes(py::module_& module) {
       .def("__contains__", &nodes::NodeMap::Contains,
            "Returns whether a node with the given id exists.",
            py::arg("node_id"))
+      .def("ids", &nodes::NodeMap::Ids,
+           "The id of every node the map holds, sorted.\n\nA snapshot: nodes "
+           "are created on demand, so this is what was there when it was asked "
+           "for.")
       .def("size", &nodes::NodeMap::Size, "Number of nodes in the map.")
       .def("__len__", &nodes::NodeMap::Size, "Number of nodes in the map.");
 

@@ -43,13 +43,31 @@ fragment = "shout.upper | first 1 -> loudest"
 and `@Language("A11Flow")` does the same for a Java or Kotlin host. Alt+Enter →
 *Inject language or reference* → **A11 Flow** works too.
 
-## Keeping them honest
+## Neither of these knows the language
 
-A highlighter is a second copy of the language's vocabulary, and a second copy
-drifts. [`a11/flow/tests/test_editor_support.py`](../a11/flow/tests/test_editor_support.py)
-reads the word lists back out of both definitions and checks them against the
-parser's own tables, so adding a stage or a status code fails the Python test
-suite until every editor has been told about it. The IntelliJ lexer has its own
-tests in
-[`FlowLexerTest.kt`](../intellij-plugin/src/test/kotlin/dev/curiositystack/a11/clion/flow/FlowLexerTest.kt),
-which check it against the rules in `a11/flow/lexer.py`.
+A highlighter used to be a second copy of the language's vocabulary, and a second
+copy drifts. Neither of these is a copy any more.
+
+The **Sublime** grammar is **generated**. It is a static file that a highlighter
+loads and cannot call out of, so `cpp/a11/flow/generate.cc` writes it from the
+language's own word tables:
+
+```sh
+a11 flow syntax --target sublime --generate   # write it
+a11 flow syntax                              # is it current? (CI gates on this)
+```
+
+Editing it by hand is pointless: the next generation overwrites it, and the check
+fails until somebody notices.
+
+The **IntelliJ** plugin *asks*. It runs one `a11-flow serve --protocol json` per IDE
+and the answers are its lexer, its inspections, its formatter and its completion —
+so a stage added to the grammar is a stage it colours, offers and checks with no
+plugin change. Its Kotlin side is platform wiring and nothing else; with no binary
+for the platform it colours what it can and says so once.
+
+That is the whole reason for the `a11-flow` binary: an editor that can start a
+process needs no language knowledge, and one that cannot gets a generated file.
+[`a11/flow/tests/test_editor_support.py`](../a11/flow/tests/test_editor_support.py)
+holds both properties in place — that the generated file is current, and that no
+word list has crept back into the plugin.

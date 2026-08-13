@@ -51,6 +51,29 @@
                 implementation="dev.curiositystack.a11.clion.flow.FlowColorSettingsPage"/>
         <multiHostInjector
                 implementation="dev.curiositystack.a11.clion.flow.FlowInjector"/>
+        <completion.contributor
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowCompletionContributor"/>
+
+        <!-- Everything that needs to know what a flow *means* asks the
+             language: one `a11-flow serve` process per IDE (see FlowEngine).
+             Diagnostics arrive as one external annotator rather than as
+             inspections over a Kotlin resolver, because the checks, their
+             messages, their severities and their fixes are all the language's,
+             and an annotator is the platform's hook for asking something outside
+             the IDE. Without the tool, the editor still colours what it can. -->
+        <applicationService
+                serviceImplementation="dev.curiositystack.a11.clion.flow.FlowEngine"/>
+        <!-- One balloon, at most once: "there is no tool for this platform, so
+             flows are coloured but not checked". A missing binary is a degraded
+             editor rather than an error, and saying so twice is worse than
+             once. -->
+        <notificationGroup id="A11" displayType="BALLOON"/>
+        <externalAnnotator
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowAnnotator"/>
+        <formattingService
+                implementation="dev.curiositystack.a11.clion.flow.FlowFormattingService"/>
 
         <applicationService serviceImplementation="dev.curiositystack.a11.clion.settings.A11Settings"/>
         <applicationConfigurable

@@ -78,6 +78,9 @@ PYBIND11_MODULE(_native, module) {
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);
   a11::python::BindData(module);
+  // The Flow language. Nothing else in the extension depends on it, and it
+  // depends on nothing else here: the language is a component, not a layer.
+  a11::python::BindFlow(module);
 #ifdef A11_BUILD_REDIS
   a11::python::BindRedis(module);
 #endif

@@ -46,10 +46,10 @@ flow ask-the-pages {
   pages
     | collect
     | map join([
-        "Answer from the pages below. Say so if they do not answer it.",
-        join(["Question:", question], " "),
-        join(it, "\n\n---\n\n")
-      ], "\n\n")
+      "Answer from the pages below. Say so if they do not answer it.",
+      join(["Question:", question], " "),
+      join(it, "\n\n---\n\n")
+    ], "\n\n")
     -> asked
 
   asked -> prompt

@@ -49,22 +49,24 @@ flow explain-a-command {
   # "return" in a language with no control flow to return from -- what `fail`
   # does is end the flow, which from the caller's side is the same thing, and
   # leaves the interesting half of the file at one level of indentation.
-  if not outcome.ok { fail unavailable outcome.message }
+  if not outcome.ok {
+    fail unavailable outcome.message
+  }
 
   llm = call interact_with_llm(
     interactions: cmd.output_lines
       | collect
       | map a11.sdk.Interaction{
+        role: "user",
+        content: [to_chunk({
           role: "user",
-          content: [to_chunk({
-            role: "user",
-            content: [{type: "text", text: join([
-              "In two sentences: what did this command do, and is anything in its output worth attention?",
-              join(["$", command], " "),
-              join(it, "\n")
-            ], "\n\n")}]
-          })]
-        },
+          content: [{type: "text", text: join([
+            "In two sentences: what did this command do, and is anything in its output worth attention?",
+            join(["$", command], " "),
+            join(it, "\n")
+          ], "\n\n")}]
+        })]
+      },
     config: {}
   )
       with "x-a11-llm-api-key": api_key

@@ -127,6 +127,15 @@ class _BridgedTool:
     consumer of a tool run looks for its narration. A descriptor with several
     flagged ports is unusual; the extras are dropped from the local schema and
     merely drained, since an unread port stalls the peer writing it.
+
+    That rename is only safe for a caller that goes *through* this bridge, which
+    is what a model's tool call does. A **flow** does not: a ``call`` step
+    dispatches the ports of the schema in the registry -- the local one -- to the
+    peer directly, so a client whose user-facing port is called anything other
+    than ``user_facing_log`` gets a dispatch naming a port it does not have, and
+    the composition fails there. Announce that port under its canonical name and
+    the two schemas are identical, which is what the IntelliJ plugin does
+    (`IdeTools.USER_FACING_LOG_PORT`).
     """
 
     def __init__(self, descriptor: dict[str, Any]) -> None:

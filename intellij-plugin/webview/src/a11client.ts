@@ -48,7 +48,8 @@ import {
 } from '@curiositystack/a11';
 
 import {applyPortSchemas, buildIdeToolRegistry, type ToolRunSink} from './ideTools.js';
-import {getConfig, listActions, type A11Config, type ActionDescriptor} from './bridge.js';
+import {getConfig, listActions, readFlow, type A11Config, type ActionDescriptor} from './bridge.js';
+import {runFlow} from './runFlow.js';
 import {
     fetchConversation,
     fetchConversations,
@@ -300,6 +301,50 @@ export class A11ChatSession {
         const interactions = await fetchConversation(this.session!, this.stream!, id);
         this.history = interactions;
         return interactions;
+    }
+
+    /**
+     * Run a flow the plugin ships, on the gateway, streaming its outputs.
+     *
+     * The gateway compiles the source and runs the composition; the flow's `call`
+     * steps come back down this same stream to the IDE tools, and its `run` steps
+     * are the gateway's own. So one call reaches both ends, and the values between
+     * the steps never pass through here at all.
+     *
+     * `outputs` names the flow's output ports to read as they fill; what comes
+     * back is the same values collected, for a caller that wants them at the end.
+     *
+     * Connecting first is not only about the socket: a flow saying
+     * `call get_active_file` is compiled against the schemas this side announced
+     * with `__register_tools__`, which is where the port names on both sides of a
+     * pipe come from. Without that handshake the gateway refuses the flow with
+     * `NOT_FOUND` rather than dispatching anything.
+     */
+    async runFlow(
+        name: string,
+        outputs: Record<string, (value: unknown) => void>,
+        onLog?: (log: string) => void,
+    ): Promise<Record<string, unknown>> {
+        await this.ensureConnected();
+        return runFlow(this.session!, this.stream!, {
+            source: await readFlow(name),
+            headers: {
+                [LlmHeaders.PROVIDER]: this.config.provider,
+                [LlmHeaders.MODEL]: this.config.model,
+                [LlmHeaders.API_KEY]: this.config.apiKey,
+                [LlmHeaders.BASE_URL]: this.config.baseUrl,
+                // Every action the flow names is checked against this before any
+                // of them runs -- `run` steps as much as `call` ones. So a flow
+                // that asks a model needs `interact_with_llm` here, on top of the
+                // IDE's own tools that a chat turn allows.
+                [LlmHeaders.ALLOWED_LLM_ACTIONS]: [
+                    ...this.allowedTools(),
+                    INTERACT_WITH_LLM_SCHEMA.name,
+                ].join(','),
+            },
+            outputs,
+            onLog,
+        });
     }
 
     /**

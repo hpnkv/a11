@@ -100,6 +100,7 @@ class FlowSyntaxHighlighter : SyntaxHighlighterBase() {
             FlowTokens.PIPE to FlowColors.ARROW,
             FlowTokens.ASSIGN to FlowColors.OPERATOR,
             FlowTokens.COMPARISON to FlowColors.OPERATOR,
+            FlowTokens.ARITHMETIC to FlowColors.OPERATOR,
             FlowTokens.DOT to FlowColors.PUNCTUATION,
             FlowTokens.COLON to FlowColors.PUNCTUATION,
             FlowTokens.COMMA to FlowColors.PUNCTUATION,

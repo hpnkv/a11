@@ -16,8 +16,11 @@ flow interact-on-full-sentence {
 
   nodes scratch  # local nodes that are never sent to the client
 
-  transcribe = try run transcribe_audio(
-      asr_options: asr, audio: mic.audio | packb
+  # Not `try`: nothing here reads a transcription failure, and a `try` whose
+  # status nobody looks at turns a loud failure into a silent one -- the flow
+  # would go on with no sentences and no reason given.
+  transcribe = run transcribe_audio(
+    asr_options: asr, audio: mic.audio | packb
   ) via scratch  # <- never send transcription outputs to the client directly
   skip transcribe.events
 

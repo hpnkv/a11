@@ -40,8 +40,8 @@ flow resilient-read {
 flow annotated-read {
   describe "Read one page, keeping the notes the reader made on the way."
 
-  in  url:     string required
-  out summary: string
+  in  url:      string required
+  out summary:  string
   out progress: string stream
 
   # The reader is told which node to report progress into, so its notes arrive

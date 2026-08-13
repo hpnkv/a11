@@ -104,7 +104,7 @@ async def registry(toy_actions):
     async def fake_shell(action: Action) -> None:
         seen["command"] = await action["command"].consume(str, allow_none=True)
         await action["parameters"].consume(dict, allow_none=True)
-        for line in (" M a11/flow/parser.py", "?? scripts/", ""):
+        for line in (" M cpp/a11/flow/parser.cc", "?? scripts/", ""):
             await (await action["output_lines"].put(line))
         for port in ("output_lines", "user_facing_log"):
             await action[port].drain_and_close()
@@ -266,7 +266,7 @@ async def test_count_changes_reads_one_output_twice(registry):
     assert registry.seen["command"] == "git status --porcelain"
     # The blank line the command printed is not a changed file.
     assert result["changed"] == 2
-    assert result["files"] == [" M a11/flow/parser.py", "?? scripts/"]
+    assert result["files"] == [" M cpp/a11/flow/parser.cc", "?? scripts/"]
 
 
 @pytest.mark.asyncio
@@ -282,7 +282,7 @@ async def test_explain_a_command_sends_the_output_to_the_model(registry):
     assert result["verdict"] == "as far as I can tell."
     prompt = registry.seen["prompts"][0]
     assert "$ git status --porcelain" in prompt
-    assert " M a11/flow/parser.py" in prompt
+    assert " M cpp/a11/flow/parser.cc" in prompt
     assert registry.seen["model"] == "a-model"
 
 

@@ -6,7 +6,7 @@ flow research {
 
   in  question: string required "What to find out."
   out answer:   string          "The model's answer."
-  out sources:  string stream         "The pages it was based on."
+  out sources:  string stream   "The pages it was based on."
   out read:     number          "Characters the model was actually given."
 
   header "x-a11-deadline" as deadline
@@ -36,7 +36,7 @@ flow research {
     }
   }
 
-  brief.summary    -> answer
+  brief.summary -> answer
   brief.characters -> read
 
   skip search.debug

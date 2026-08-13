@@ -24,28 +24,48 @@ def _load_optional_public_protocols() -> None:
     """Attach facades that are not imported by the root ``a11`` package."""
     if hasattr(native, "AudioInput"):
         importlib.import_module("a11.sdk.audio.client")
+    if hasattr(native, "flow"):
+        # `a11.flow.plan` is what attaches the mapping, registration and
+        # `invoke` conveniences onto the native `FlowPlan` and `Program`.
+        importlib.import_module("a11.flow")
+
+
+def _native_namespaces() -> list[types.ModuleType]:
+    """``a11._native`` and every submodule it exports, such as ``flow``."""
+    prefix = f"{native.__name__}."
+    return [native] + [
+        value
+        for value in vars(native).values()
+        if isinstance(value, types.ModuleType)
+        and value.__name__.startswith(prefix)
+    ]
 
 
 def _python_protocol_methods() -> dict[str, dict[str, bool]]:
     """Return Python methods attached directly to bound native classes."""
 
     result: dict[str, dict[str, bool]] = {}
-    for value in vars(native).values():
-        if not isinstance(value, type):
-            continue
-        methods = result.setdefault(value.__name__, {})
-        for name, member in vars(value).items():
-            if isinstance(member, types.FunctionType):
-                methods[name] = inspect.iscoroutinefunction(member)
+    for module in _native_namespaces():
+        for value in vars(module).values():
+            if not isinstance(value, type):
+                continue
+            methods = result.setdefault(value.__name__, {})
+            for name, member in vars(value).items():
+                if isinstance(member, types.FunctionType):
+                    methods[name] = inspect.iscoroutinefunction(member)
     return result
 
 
 def _expose_bound_classes_in_native_module() -> None:
     """Keep public aliases from turning generated classes into imports."""
 
-    for value in vars(native).values():
-        if isinstance(value, type) and value.__module__.startswith("a11"):
-            value.__module__ = native.__name__
+    for module in _native_namespaces():
+        for value in vars(module).values():
+            if isinstance(value, type) and value.__module__.startswith("a11"):
+                # A protocol attached from `a11.flow.plan` renames the class it
+                # was attached to; stubgen would then emit an import of that
+                # module instead of the class it is generating.
+                value.__module__ = module.__name__
 
 
 def _replace_first_argument(signature: str) -> str:
@@ -70,24 +90,27 @@ def _normalise_protocol_methods(
     """Correct stubgen's treatment of dynamically attached Python methods."""
 
     output: list[str] = []
-    current_class: str | None = None
+    # (indent, name) per enclosing class. A submodule spliced into the one stub
+    # file nests its classes one level in, so the depth cannot be assumed.
+    enclosing: list[tuple[int, str]] = []
     for line in stub.splitlines():
-        if line.startswith("class "):
-            current_class = line.removeprefix("class ").split("(", 1)[0]
-            current_class = current_class.removesuffix(":")
-        elif line and not line[0].isspace():
-            current_class = None
-
-        prefix = "    def "
-        if current_class is not None and line.startswith(prefix):
-            method_name = line[len(prefix) :].split("(", 1)[0]
-            class_methods = methods.get(current_class, {})
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if stripped:
+            while enclosing and indent <= enclosing[-1][0]:
+                enclosing.pop()
+        if stripped.startswith("class "):
+            name = stripped.removeprefix("class ").split("(", 1)[0]
+            enclosing.append((indent, name.removesuffix(":")))
+        elif enclosing and stripped.startswith("def "):
+            method_name = stripped.removeprefix("def ").split("(", 1)[0]
+            class_methods = methods.get(enclosing[-1][1], {})
             if method_name in class_methods:
-                if output and output[-1] == "    @staticmethod":
+                if output and output[-1].strip() == "@staticmethod":
                     output.pop()
                 line = _replace_first_argument(line)
                 if class_methods[method_name]:
-                    line = line.replace(prefix, "    async def ", 1)
+                    line = f"{' ' * indent}async {line.lstrip()}"
         output.append(line)
     return "\n".join(output) + "\n"
 
@@ -139,6 +162,45 @@ def _take_docstring(lines: list[str], index: int) -> tuple[list[str], int]:
         block.append(lines[index])
         index += 1
     return block, index
+
+
+def _dedent_docstrings(stub: str) -> str:
+    """Align a docstring's body with its own first line.
+
+    A docstring that came from an *attached* Python member -- a protocol method,
+    or a property, which is what `attach_protocol` copies onto the native class
+    -- reaches stubgen as a raw ``__doc__``: the summary dedented, every line
+    after it still carrying the indentation of the class body it was written in.
+    Markdown then reads the whole body as a code block, so the prose renders
+    preformatted in the API reference. This puts the body back on the summary's
+    indentation, keeping the *relative* indentation inside it (a nested list, an
+    example fence) intact.
+    """
+    lines = stub.splitlines()
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() != '"""':
+            output.append(line)
+            index += 1
+            continue
+        block, index = _take_docstring(lines, index)
+        indent = len(block[0]) - len(block[0].lstrip())
+        body = block[1:-1]
+        # The summary is the first body line and is already aligned; whatever
+        # follows it is what may be over-indented, uniformly.
+        rest = [entry for entry in body[1:] if entry.strip()]
+        extra = min((len(e) - len(e.lstrip()) for e in rest), default=indent)
+        if extra > indent:
+            body = body[:1] + [
+                entry[extra - indent :] if entry.strip() else entry
+                for entry in body[1:]
+            ]
+        while body and not body[-1].strip():
+            body.pop()
+        output += [block[0], *body, block[-1]]
+    return "\n".join(output) + "\n"
 
 
 def _split_on_allow_none(stub: str) -> str:
@@ -404,6 +466,7 @@ def _normalise_annotations(stub: str) -> str:
 def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
     stub = path.read_text()
     stub = _normalise_protocol_methods(stub, methods)
+    stub = _dedent_docstrings(stub)
     stub = _normalise_annotations(stub)
     stub = _narrow_obj_type_readers(stub)
     stub = _split_on_allow_none(stub)
@@ -434,6 +497,53 @@ def _normalise_stub(path: Path, methods: dict[str, dict[str, bool]]) -> None:
     path.write_text(stub)
 
 
+def _submodule_class(name: str, stub: str) -> str:
+    """One generated submodule stub as a class the single stub file can hold.
+
+    ``a11._native`` is one compiled module with a submodule (``flow``), and
+    pybind11-stubgen writes that as a stub *package* -- ``_native/__init__.pyi``
+    plus ``_native/flow.pyi``. A directory called ``a11/_native/`` next to
+    ``_native.cpython-*.so`` is not something worth having in the source tree, so
+    the submodule is spliced into the one stub instead: its functions become
+    static methods of a private class, and the module attribute is annotated with
+    it. ``from a11._native import flow`` and ``flow.parse(...)`` both type-check
+    against that, with the real signatures rather than ``ModuleType``.
+    """
+    lines = stub.splitlines()
+    body: list[str] = []
+    index = 0
+    # The module docstring becomes the class docstring; imports and `__all__`
+    # belong to the file, not to the class.
+    docstring, index = _take_docstring(lines, 0)
+    for line in lines[index:]:
+        if line.startswith(("from __future__", "import ", "from ", "__all__")):
+            continue
+        if line.startswith("def "):
+            body.append("    @staticmethod")
+        body.append(f"    {line}" if line.strip() else "")
+    class_name = f"_{name.capitalize()}Module"
+    header = [f"class {class_name}:"]
+    header += [f"    {line}" for line in docstring] if docstring else []
+    return "\n".join([*header, *body, "", f"{name}: {class_name}", ""])
+
+
+def _inline_submodules(package: Path) -> str:
+    """The package stub as one file, with every submodule spliced in."""
+    stub = (package / "__init__.pyi").read_text()
+    for path in sorted(package.glob("*.pyi")):
+        if path.name == "__init__.pyi":
+            continue
+        name = path.stem
+        spliced = _submodule_class(name, path.read_text())
+        # The generated `from . import flow` is the line the class replaces, so
+        # the attribute keeps the place in the file it already had.
+        if f"from . import {name}\n" in stub:
+            stub = stub.replace(f"from . import {name}\n", spliced, 1)
+        else:
+            stub = f"{stub}\n{spliced}"
+    return stub
+
+
 def _generate(output_dir: Path) -> Path:
     _load_optional_public_protocols()
     protocol_methods = _python_protocol_methods()
@@ -451,6 +561,14 @@ def _generate(output_dir: Path) -> Path:
         ]
     )
     generated = output_dir / "a11" / "_native.pyi"
+    package = output_dir / "a11" / "_native"
+    if package.is_dir():
+        # A module with submodules comes out as a stub package; one file is what
+        # is checked in. See [_inline_submodules].
+        generated.write_text(_inline_submodules(package))
+        for path in sorted(package.glob("*.pyi")):
+            path.unlink()
+        package.rmdir()
     _normalise_stub(generated, protocol_methods)
     return generated
 

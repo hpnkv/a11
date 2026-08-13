@@ -8,7 +8,8 @@ import pytest_asyncio
 
 from a11 import flow, timing
 from a11.actions import Action, ActionRegistry, ActionSchema
-from a11.flow.lexer import FlowSyntaxError
+from a11.flow import runtime
+from a11.flow.diagnostics import FlowSyntaxError
 from a11.net.wire_stream import OnDone, OnMessage, WireStream
 from a11.nodes.async_node import NodeMap
 from a11.status import Status, StatusCode, StatusException
@@ -393,7 +394,7 @@ def test_a_pipeline_may_wrap_across_lines():
             -> out
         }
         """)
-    assert len(program["wrapped"].root.steps) == 1
+    assert len(program["wrapped"].describe()["steps"]) == 1
 
 
 # --- Running -----------------------------------------------------------------
@@ -1452,7 +1453,7 @@ async def test_a_nodes_block_keeps_a_steps_nodes_out_of_the_session(registry):
         words=["a", "b"],
     )
     assert outputs["summary"] == "A,B"
-    assert not [name for name in _node_names(node_map) if "upper" in name]
+    assert not [name for name in _node_names(node_map) if "#upper" in name]
 
 
 @pytest.mark.asyncio
@@ -1470,38 +1471,17 @@ async def test_without_a_nodes_block_a_steps_nodes_are_in_the_session(registry):
         words=["a", "b"],
     )
     assert outputs["summary"] == "A,B"
-    assert [name for name in _node_names(node_map) if "upper" in name]
+    assert [name for name in _node_names(node_map) if "#upper" in name]
 
 
 def _node_names(node_map: NodeMap) -> list[str]:
-    # NodeMap has no iteration protocol; the flow's nodes are named after the
-    # nested action and its port, so probing the ids the test cares about is
-    # enough to tell whether the step's nodes landed in the session's map.
-    found = []
-    for suffix in ("upper", "text", "summary"):
-        for prefix in _seen_action_ids:
-            candidate = Action.make_node_id(prefix, suffix)
-            if candidate in node_map:
-                found.append(candidate)
-    return found
+    """Every node the map holds, by id.
 
-
-_seen_action_ids: list[str] = []
-
-
-@pytest.fixture(autouse=True)
-def _remember_action_ids(monkeypatch):
-    """Remember the ids A11 hands out, so node-map probes can find them."""
-    original = Action.make_nested
-
-    def make_nested(self, *args, **kwargs):
-        nested = original(self, *args, **kwargs)
-        _seen_action_ids.append(nested.id)
-        return nested
-
-    monkeypatch.setattr(Action, "make_nested", make_nested)
-    _seen_action_ids.clear()
-    yield
+    A step's port nodes are named ``<nested action id>#<port>``, and the action
+    ids are generated, so what the tests below ask is whether *any* node of that
+    port name reached the session's map -- which is exactly what the ids say.
+    """
+    return list(node_map.ids())
 
 
 # --- Casing ------------------------------------------------------------------
@@ -1563,6 +1543,68 @@ def test_mixed_case_is_a_name_and_not_a_keyword():
     with pytest.raises(FlowSyntaxError) as raised:
         flow.loads("flow f { out a: bool\n True -> a }", "mixed.flow")
     assert "Unknown name 'True'" in str(raised.value)
+
+
+def test_a_description_may_be_long_and_may_sit_under_what_it_describes():
+    """Prose is prose: it wraps, and it does not fit on the declaration's line.
+
+    Two spellings, and they compose: a triple-quoted string holds line breaks and
+    gives back the indentation the source put in front of it, and a description
+    alone on the line below a declaration belongs to that declaration. What keeps
+    the second unambiguous is that the string has to be *alone*: a line with
+    anything after the string is a statement, as it always was.
+    """
+    schema = flow.loads('''
+        flow documented {
+          describe """
+            What this flow is for, at the length that actually takes.
+
+              An indented line, still indented.
+            """
+
+          in  question: string required
+            """
+            What to find out.
+            """
+          out answer: string
+"a description needs no indentation of its own"
+
+          header "x-a11-budget" as budget default 3
+            "How many pages to read."
+
+          question -> answer
+        }
+        ''')
+    described = schema.describe()["flows"][0]
+    assert described["description"] == (
+        "What this flow is for, at the length that actually takes.\n"
+        "\n"
+        "  An indented line, still indented."
+    )
+    assert described["inputs"]["question"]["description"] == "What to find out."
+    assert (
+        described["outputs"]["answer"]["description"]
+        == "a description needs no indentation of its own"
+    )
+
+
+def test_a_multiline_string_is_a_value_like_any_other():
+    schema = flow.loads('''
+        flow prompts {
+          out prompt: string
+          """
+          Line one.
+          Line two.
+          """ -> prompt
+        }
+        ''')
+    assert [one["flow"] for one in schema.describe()["flows"]] == ["prompts"]
+
+
+def test_an_unterminated_multiline_string_says_so():
+    with pytest.raises(FlowSyntaxError) as raised:
+        flow.loads('flow f { out a: string\n """never closed -> a }')
+    assert 'Unterminated """ string' in str(raised.value)
 
 
 def test_a_port_carries_one_value_unless_it_says_stream():
@@ -1878,7 +1920,7 @@ def test_strformat_does_not_let_a_template_walk_into_a_value():
     nowhere to walk to, and a conversion with no value behind it is left as
     written rather than raising.
     """
-    from a11.flow.values import strformat
+    from a11._native.flow import strformat
 
     assert strformat("{0.__class__}", ["x"]) == "{0.__class__}"
     assert strformat("%3$s missing", ["a"]) == "%3$s missing"
@@ -2423,3 +2465,165 @@ def test_a_node_needs_a_node_map_that_exists():
             }
             """)
     assert "Unknown node map 'nowhere'" in str(raised.value)
+
+
+# --- Ports left open for somebody else to fill -------------------------------
+#
+# `invoke` writes every input and closes it, which is what a collected result
+# needs. `start(open_inputs=...)` is the other half: a port handed back live, for
+# a caller that has values while the flow is already running -- a peer writing it
+# by id, most of all. One value or many is the same mechanism; a `one` port is a
+# stream that carries one.
+
+
+ECHO_EACH = """
+flow echo-each {
+  in  words: string stream required
+  in  once:  string
+  out said:  string stream
+  up = run text-upper(text: words)
+  up.upper -> said
+  once -> said
+}
+"""
+
+
+async def _started(source: str, registry: ActionRegistry, **kwargs):
+    program = flow.loads(source, "open.flow")
+    program.register_all(registry)
+    return await runtime.start(program.main, registry=registry, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_flow_reads_a_value_written_after_it_started(registry):
+    """The point of an open port: the answer comes back before the port ends."""
+    running = await _started(
+        ECHO_EACH, registry, open_inputs=("words", "once")
+    )
+    assert sorted(running.inputs) == ["once", "words"]
+
+    await (await running.inputs["words"].put("one"))
+    # Read while the port is still open and the second value does not exist yet,
+    # so this cannot be a collected result arriving early.
+    first = await asyncio.wait_for(running["said"].next_object(), timeout=10)
+    assert first == "ONE"
+
+    await (await running.inputs["words"].put("two"))
+    assert (
+        await asyncio.wait_for(running["said"].next_object(), timeout=10)
+    ) == "TWO"
+
+    for name in ("words", "once"):
+        node = running.inputs[name]
+        if name == "once":
+            await (await node.put("solo"))
+        await (await node.put_null_final())
+        await node.drain_and_close()
+    assert await asyncio.wait_for(running.collect(), timeout=10) == {
+        "said": ["solo"]
+    }
+    await asyncio.wait_for(running.wait(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_an_open_port_is_the_callers_to_close(registry):
+    """Nothing else closes it, so a flow reading one waits until it happens."""
+    running = await _started(ECHO_EACH, registry, open_inputs=("words", "once"))
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(running.wait(), timeout=0.5)
+
+    for node in running.inputs.values():
+        await (await node.put_null_final())
+        await node.drain_and_close()
+    assert await asyncio.wait_for(running.collect(), timeout=10) == {"said": []}
+
+
+@pytest.mark.asyncio
+async def test_a_value_written_to_an_open_port_keeps_its_own_mimetype(
+    registry,
+):
+    """What an object of values cannot do: hand a port a value as it was sent."""
+    running = await _started(
+        """
+        flow how-it-arrived {
+          in  values: string stream required
+          out seen:   string stream
+          shown = run show-mimetypes(values: values)
+          shown.mimetypes -> seen
+        }
+        """,
+        registry,
+        open_inputs=("values",),
+    )
+    await (
+        await running.inputs["values"].put(
+            "hi", mimetype="application/x-msgpack"
+        )
+    )
+    await (await running.inputs["values"].put_null_final())
+    await running.inputs["values"].drain_and_close()
+    # The caller's encoding, not one this end chose: a port written as a node
+    # carries the chunk it was given.
+    assert await asyncio.wait_for(running.collect(), timeout=10) == {
+        "seen": ["application/x-msgpack"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_open_port_must_be_one_the_flow_declares(registry):
+    with pytest.raises(StatusException) as raised:
+        await _started(ECHO_EACH, registry, open_inputs=("nope",))
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert "no input port 'nope'" in raised.value.status.message
+    assert "once, words" in raised.value.status.message
+
+
+@pytest.mark.asyncio
+async def test_a_port_cannot_be_given_a_value_and_left_open(registry):
+    """One way in per port: a value here, or the node handed back."""
+    program = flow.loads(ECHO_EACH, "open.flow")
+    program.register_all(registry)
+    with pytest.raises(StatusException) as raised:
+        await runtime.start(
+            program.main,
+            {"words": ["one"]},
+            registry=registry,
+            open_inputs=("words",),
+        )
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert "'words' was given a value and left open" in (
+        raised.value.status.message
+    )
+
+
+@pytest.mark.asyncio
+async def test_publishing_before_the_flow_starts_loses_nothing(registry):
+    """Attaching a stream does not replay, so the order of the two matters.
+
+    A flow whose output is written the moment it runs is the case that tells the
+    two apart: `publish_to` has the stream before there is anything to send,
+    while a `publish` after `start` returns would already have missed it.
+    """
+    program = flow.loads(
+        """
+        flow at_once {
+          out said: string
+          "immediately" -> said
+        }
+        """,
+        "publish.flow",
+    )
+    program.register_all(registry)
+    node_map = NodeMap()
+    stream = _RecordingStream()
+    running = await runtime.start(
+        program.main,
+        registry=registry,
+        node_map=node_map,
+        publish_to=stream,
+        action_id="published-early",
+    )
+    assert await asyncio.wait_for(running.collect(), timeout=10) == {
+        "said": "immediately"
+    }
+    assert "published-early#said" in stream.node_ids()

@@ -2,11 +2,13 @@
 
 #include "a11/nodes/node_map.h"
 
+#include <algorithm>
 #include <exception>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
@@ -111,6 +113,17 @@ bool NodeMap::Contains(std::string_view node_id) const {
 size_t NodeMap::Size() const {
   thread::MutexLock lock(&mu_);
   return nodes_.size();
+}
+
+std::vector<std::string> NodeMap::Ids() const {
+  std::vector<std::string> ids;
+  {
+    thread::MutexLock lock(&mu_);
+    ids.reserve(nodes_.size());
+    for (const auto& [id, node] : nodes_) ids.push_back(id);
+  }
+  std::sort(ids.begin(), ids.end());
+  return ids;
 }
 
 }  // namespace a11::nodes

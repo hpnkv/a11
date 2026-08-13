@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports forms the A11 Flow language does not have, or does not have in that
+position: an unknown pipeline stage or built-in function, a stage without the
+argument it takes, a port type that is neither built in nor written as a registry
+tag, an unknown status code after <code>fail</code>, <code>stream</code> or
+<code>required</code> written in front of a port's type, <code>node</code> without
+its parentheses, <code>headers</code> without the <code>forward</code> that owns
+it, a port or a flow declared twice, and a count that is not a number of anything
+(<code>parallel 0</code>, <code>skip -1</code>).
+<p>
+These are the problems the compiler refuses to read, so a flow reported here does
+not run. A flow written inside a string literal is only reported for a grammatical
+problem when the string holds a whole <code>flow</code> declaration -- a fragment
+is a few statements out of one, and half a statement is not a mistake.
+</body>
+</html>

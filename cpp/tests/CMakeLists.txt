@@ -33,6 +33,33 @@ target_link_libraries(
                         GTest::gtest_main)
 add_test(NAME a11_core_test COMMAND a11_core_test)
 
+# The Flow language. Its own executable because a11::flow_lang links nothing but
+# Abseil and nlohmann, and a test binary that proves it stays that way is worth
+# more than one more file in a11_core_test.
+add_executable(a11_flow_test
+  flow_complete_test.cc
+  flow_diagnostic_test.cc
+  flow_emit_json_test.cc
+  flow_highlight_test.cc
+  flow_inspect_test.cc
+  flow_format_test.cc
+  flow_lexer_test.cc
+  flow_offsets_test.cc
+  flow_parser_test.cc
+  flow_resolve_test.cc)
+target_link_libraries(a11_flow_test PRIVATE a11::flow_lang GTest::gtest_main)
+add_test(NAME a11_flow_test COMMAND a11_flow_test)
+
+# The executing half, which does link the node and action layers. Kept out of
+# a11_flow_test on purpose: that binary's link line is the proof the language
+# needs nothing but Abseil and nlohmann.
+add_executable(a11_flow_runtime_test
+  flow_runtime_test.cc
+  flow_values_test.cc)
+target_link_libraries(
+  a11_flow_runtime_test PRIVATE a11::flow_runtime GTest::gtest_main)
+add_test(NAME a11_flow_runtime_test COMMAND a11_flow_runtime_test)
+
 if (A11_BUILD_REDIS)
   add_executable(a11_redis_test
     redis_client_test.cc

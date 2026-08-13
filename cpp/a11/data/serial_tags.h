@@ -25,8 +25,8 @@
  * or renamed in one language and forgotten in another fails a test.
  *
  * Conventions:
- *   - @c a11.<Class> for the runtime's own data and status types.
- *   - @c a11.sdk.<Class> for the SDKs, with subpackages omitted and names
+ *   - @c a11.\<Class\> for the runtime's own data and status types.
+ *   - @c a11.sdk.\<Class\> for the SDKs, with subpackages omitted and names
  *     chosen for what the type *is* rather than where it lives.
  *   - JSON-native values keep their language-neutral tags (@c object,
  *     @c array, @c string, ...); they are not listed here.

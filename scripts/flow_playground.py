@@ -61,9 +61,12 @@ DEFAULT_BASE_URL: dict[str, str] = {"ollama": "http://localhost:11434"}
 
 # --- The flow -----------------------------------------------------------------
 
-# The composition itself, beside this script so an editor highlights it and
-# `flow_check` can be pointed straight at the file.
-FLOW_PATH = pathlib.Path(__file__).with_name("interact-on-full-sentence.flow")
+# The composition itself, kept with the other flows the IDE plugin bundles so
+# there is one copy on disk that both this script and the plugin read.
+FLOW_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "intellij-plugin/src/main/resources/flows/interact-on-full-sentence.flow"
+)
 FLOW_SOURCE = FLOW_PATH.read_text(encoding="utf-8")
 
 
@@ -232,14 +235,21 @@ async def run_one_turn(
 
     outputs = {port: published(port) for port in described["outputs"]}
 
+    # Every input port, including the ones this call has nothing for: an input
+    # nobody writes and nobody closes is one the handler waits on, and with no
+    # deadline on the call it waits for good.
     async with (
         called["source"] as source,
         called["inputs"] as inputs,
         called["flow"] as which,
+        called["input_streams"] as streamed,
     ):
         await source.put_final(FLOW_SOURCE)
         await inputs.put_final(inputs_value)
         await which.put_null_final()
+        # This flow's history arrives on a node of its own (see `write_history`),
+        # named inside `inputs` rather than as a port left open here.
+        await streamed.put_null_final()
 
     remembered: list[Any] = []
 

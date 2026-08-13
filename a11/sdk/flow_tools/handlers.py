@@ -31,8 +31,8 @@ from absl import logging
 
 import a11
 from a11.flow import loads as compile_flows
-from a11.flow.lexer import FlowSyntaxError
-from a11.flow.plan import Body, CallStep, Program
+from a11.flow.diagnostics import FlowSyntaxError
+from a11.flow.plan import Program
 from a11.flow.runtime import invoke as invoke_flow
 from a11.flow.runtime import start as start_flow
 from a11.sdk.flow_tools.schemas import FLOW_TOOL_NAMES
@@ -79,7 +79,7 @@ def _fenced(source: str) -> str:
 def _compile(source: str) -> Program:
     """Compile submitted source, reporting a syntax error as a status.
 
-    A [FlowSyntaxError][a11.flow.lexer.FlowSyntaxError] already carries the
+    A [FlowSyntaxError][a11.flow.diagnostics.FlowSyntaxError] already carries the
     line and column and converts to the ``INVALID_ARGUMENT`` a caller should be
     told about, which is exactly what a model needs to fix its own flow.
     """
@@ -97,12 +97,19 @@ def _called_actions(program: Program) -> list[str]:
     that depends on which declaration is reachable from which.
     """
     found: list[str] = []
+
+    def walk(steps: list[dict]) -> None:
+        for step in steps:
+            action = step.get("action")
+            if action is not None and action not in found:
+                found.append(action)
+            for key in ("body", "then", "else"):
+                nested = step.get(key)
+                if nested:
+                    walk(nested)
+
     for plan in program:
-        bodies: list[Body] = [plan.root, *plan.root.nested_bodies()]
-        for body in bodies:
-            for step in body.steps:
-                if isinstance(step, CallStep) and step.action not in found:
-                    found.append(step.action)
+        walk(plan.describe()["steps"])
     return found
 
 
@@ -245,20 +252,21 @@ async def flow_check(action: a11.Action) -> None:
     )
 
 
-#: What `flow_run` names the action it runs the composition as, relative to
-#: its own id. Public because it is half of the contract in
-#: [flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id].
+#: What these handlers name the action they run the composition as, relative to
+#: their own id. Public because it is half of the contract in
+#: [flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id] and
+#: [flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id].
 FLOW_ACTION_SUFFIX = "-flow"
 
 
 def flow_output_node_id(call_id: str, port: str) -> str:
-    """Where a `flow_run` call publishes one of its flow's output ports.
+    """Where a flow's output port lands, for the caller that dispatched it.
 
     A flow's outputs are nodes, and `flow_run` mirrors them onto the stream the
-    call arrived on, so a caller does not have to wait for the whole
-    composition to finish to see what it is producing. The id is worked out
-    from the call's own id, which the caller chose, so both ends know it
-    without anything being announced:
+    call arrived on, so a caller does not have to wait for the whole composition
+    to see what it is producing. The id is worked out from the call's own id,
+    which the caller chose, so both ends know it without anything being
+    announced:
 
     ```python
     call = a11.Action(FLOW_RUN_SCHEMA)...
@@ -274,8 +282,49 @@ def flow_output_node_id(call_id: str, port: str) -> str:
     return a11.Action.make_node_id(call_id + FLOW_ACTION_SUFFIX, port)
 
 
+def flow_input_node_id(call_id: str, port: str) -> str:
+    """Where a caller writes an input port it named on ``input_streams``.
+
+    The mirror image of
+    [flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id], and
+    the same derivation -- a port's node id does not depend on its direction, so
+    the two functions agree by construction and exist separately to say which one
+    a caller means. (Which is also why a flow cannot declare an input and an
+    output of the same name: they would be one node.) A flow's input ports are in
+    the session's node map like its outputs, so the caller fills one by writing
+    to its id -- and keeps writing, for as long as it has values.
+
+    ```python
+    call = a11.Action(FLOW_RUN_SCHEMA)...
+    await call.call()
+    await call["input_streams"].put_final(["words"])   # this port is mine
+    words = session.node_map.get(flow_input_node_id(call.get_id(), "words"))
+    words.attach_stream(stream)
+    await (await words.put("one"))        # the flow reads it now, not later
+    await (await words.put_null_final())  # and this is what ends the port
+    await words.drain_and_close()
+    ```
+
+    Arity is not a second mechanism: a port declared `stream` takes as many
+    values as the caller has, an ordinary port takes the one it carries, and an
+    empty port is a port that carried none. **The caller owns the close** --
+    nothing else will do it, and a flow reading a port nobody closes waits,
+    bounded only by the call's own `x-a11-deadline` (with no such header, not at
+    all).
+    """
+    return a11.Action.make_node_id(call_id + FLOW_ACTION_SUFFIX, port)
+
+
 async def flow_run(action: a11.Action) -> None:
-    """Compile a flow, check what it calls, run it, and return its outputs."""
+    """Compile a flow, check what it calls, run it, and return its outputs.
+
+    A port is filled one of two ways, and which one is the caller's to choose. A
+    value in ``inputs`` is written and the port closed, which is all a model can
+    express. A port named on ``input_streams`` is left open for the caller to
+    write as a node while the flow runs -- which is how a value reaches a flow
+    that has already started, and how a port carrying a real type is fed at all.
+    Neither way looks at how many values the port carries.
+    """
     deadline = a11.get_deadline(action)
 
     def remaining() -> a11.Duration:
@@ -286,6 +335,11 @@ async def flow_run(action: a11.Action) -> None:
     source = await _required_source(action, deadline)
     inputs = await action["inputs"].consume(
         dict, timeout=remaining(), allow_none=True
+    )
+    open_inputs = _open_input_ports(
+        await action["input_streams"].consume(
+            list, timeout=remaining(), allow_none=True
+        )
     )
     wanted = await action["flow"].consume(
         str, timeout=remaining(), allow_none=True
@@ -300,11 +354,13 @@ async def flow_run(action: a11.Action) -> None:
         inputs or {},
         registry=action.get_registry(),
         session=action.get_session(),
-        # No node map is passed on purpose: the composition gets one of its
-        # own, so the values it moves between steps are not replicated to the
-        # peer that dispatched this call. Keeping them here is the reason to
-        # write a flow rather than call the actions one at a time.
-        #
+        # The map this call already uses, which is the session's. Saying so is
+        # what lets a caller reach the flow's ports by id -- to read an output
+        # as it fills, or to write an input while the flow runs. What keeps a
+        # composition's *intermediate* values off the wire is not the map: it is
+        # that the flow's action holds no stream and its `run` steps bind none,
+        # so nothing between two steps is ever mirrored.
+        node_map=action.get_node_map(),
         # Its `call` steps are the exception, and that is what this is: a
         # `call` goes back out on the stream the flow arrived on, so a
         # composition running here can dispatch to the peer that sent it --
@@ -313,30 +369,37 @@ async def flow_run(action: a11.Action) -> None:
         # `run` steps are unaffected; they never touch a stream.
         dispatch_stream=action.get_stream(),
         timeout=remaining(),
-        # Fixes the output node ids at what `flow_output_node_id` computes, so
-        # the caller can subscribe without being told.
+        # Fixes every port's node id at what `flow_output_node_id` and
+        # `flow_input_node_id` compute, so the caller needs nothing announced.
         action_id=action.get_id() + FLOW_ACTION_SUFFIX,
         # The caller's headers are the composition's: a flow declaring
         # `header "x-a11-llm-model" as model` is reading what was sent with
         # this call, and its steps forward them on with `with`. Without this a
         # submitted flow could never be told which model to answer with.
         headers=dict(action.headers),
+        # Left for the caller to fill and to close. Which of them carry one
+        # value and which carry many is the flow's business, not this
+        # contract's: a port is a port.
+        open_inputs=open_inputs,
+        # A flow's outputs are nodes, so mirror them to the caller rather than
+        # making it wait for the whole composition: a model's answer should
+        # arrive as it is written. Attached here, before the flow starts,
+        # because attaching a stream does not replay what a writer has already
+        # flushed -- a value produced in between would reach `result` and
+        # nothing else. `result` is the same values, collected, for callers that
+        # only want the lot.
+        publish_to=action.get_stream(),
     )
-    # A flow's outputs are nodes, so mirror them to the caller now rather than
-    # making it wait for the whole composition: a model's answer should arrive
-    # as it is written. `result` below is the same values, collected, for
-    # callers that only want the lot.
-    stream = action.get_stream()
-    if stream is not None:
-        running.publish(stream)
 
     outputs = await running.collect()
     await action["result"].put(outputs, final=True)
     await action["result"].drain_and_close()
     ports = ", ".join(sorted(outputs)) or "no outputs"
+    filled = ", ".join(sorted(running.inputs))
+    fed = f" The caller filled {filled}." if filled else ""
     await _write_log(
         action,
-        f"Ran the flow `{plan.name}` ({ports}).\n\n{_fenced(source)}",
+        f"Ran the flow `{plan.name}` ({ports}).{fed}\n\n{_fenced(source)}",
     )
 
 
@@ -353,6 +416,34 @@ async def _required_source(action: a11.Action, deadline: a11.Time) -> str:
             message="The 'source' input is required: pass the flow's text.",
         ).to_exception()
     return source
+
+
+def _open_input_ports(named: list | None) -> tuple[str, ...]:
+    """The ports the caller says it will fill itself, checked for shape.
+
+    Only the shape is checked here, because it is all this end knows: whether
+    the flow declares such a port, and whether it was also given a value, are
+    the runtime's to answer, and it answers them for every caller of
+    [start][a11.flow.runtime.start] rather than only for this one.
+    """
+    if not named:
+        return ()
+    for value in named:
+        if not isinstance(value, str) or not value.strip():
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "'input_streams' is a list of the flow's input port names;"
+                    f" got {value!r}."
+                ),
+            ).to_exception()
+    ports = tuple(name.strip() for name in named)
+    if len(set(ports)) != len(ports):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="'input_streams' names the same port twice.",
+        ).to_exception()
+    return ports
 
 
 def _chosen_flow(program: Program, wanted: str | None):

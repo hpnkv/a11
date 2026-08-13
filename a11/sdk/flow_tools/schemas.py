@@ -13,6 +13,14 @@ them:
 Each returns its whole result as one JSON value
 ([WHOLE_JSON_OUTPUT][a11.sdk.llm_tools.adapter.WHOLE_JSON_OUTPUT]), because
 what a model wants back is the object, not an envelope around it.
+
+``flow_run`` serves a second kind of caller as well, and the difference is only
+in how a port is filled. A model sends an object of values and reads the
+collected ``result``; a client with a session of its own names its ports on
+``input_streams`` and writes them as nodes while the flow runs, reading the
+outputs the same way (see
+[flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id]). Neither
+mechanism cares how many values a port carries.
 """
 
 from __future__ import annotations
@@ -130,11 +138,34 @@ FLOW_RUN_SCHEMA = a11.ActionSchema(
             "inputs",
             "application/json",
             description=(
-                "Values for the flow's input ports, keyed by port name. Give a"
-                " list for a port declared `stream`, a single value for any"
-                " other. A port left out is closed empty."
+                "Values for the flow's input ports, keyed by port name: the list"
+                " of values to write to that port, or a bare value as shorthand"
+                " for a list of one. How many a port takes is the flow's"
+                " business, not this port's -- a port declared `stream` reads"
+                " every value, an ordinary one reads the first, and a port left"
+                " out here carries none."
             ),
             typeinfo=dict,
+            unary=True,
+            required=False,
+        ),
+        "input_streams": a11.ActionPortSchema(
+            "input_streams",
+            "application/json",
+            description=(
+                "Input ports you will fill yourself, as nodes, while the flow"
+                " runs -- named here because otherwise a port you do not send a"
+                " value for is closed empty. Write each one at"
+                " `<this call's id>-flow#<port name>` in the session's node map"
+                " (`flow_input_node_id` computes it) and close it when you are"
+                " done: nothing else will, and a flow reading a port nobody"
+                " closes waits. This is how a value reaches a running flow"
+                " rather than being decided before it starts, and how a port"
+                " that carries a real type is fed at all, since a value in"
+                " `inputs` arrives as plain JSON. A caller with no node map of"
+                " its own -- a model calling this as a tool -- wants `inputs`."
+            ),
+            typeinfo=list,
             unary=True,
             required=False,
         ),

@@ -68,6 +68,15 @@ object FlowTokens {
     val PIPE = FlowTokenType("PIPE")
     val ASSIGN = FlowTokenType("ASSIGN")
     val COMPARISON = FlowTokenType("COMPARISON")
+
+    /**
+     * `+` and `-` between two values.
+     *
+     * The only arithmetic the language has, and it is there for durations -- see
+     * `Parser.parse_additive`. A `-` reaches here only when no digit follows it,
+     * because `-3` is one number.
+     */
+    val ARITHMETIC = FlowTokenType("ARITHMETIC")
     val DOT = FlowTokenType("DOT")
     val COLON = FlowTokenType("COLON")
     val COMMA = FlowTokenType("COMMA")

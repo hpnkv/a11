@@ -88,6 +88,9 @@ plugins:
             # Path-relative: build.sh always runs mkdocs from doc/.
             extensions:
               - griffe_overloads.py:PromoteOverloads
+              # `a11._native.flow` is spliced into the one stub file as a class;
+              # this gives it back the module shape alias resolution needs.
+              - griffe_native_submodules.py:NativeSubmodules
             docstring_style: google
             show_source: false
             show_root_heading: true
@@ -118,6 +121,7 @@ nav:
   - Examples:
       - All examples: examples.md
       - Compose actions without deploying code: guides/flow.md
+      - Checking flows from a toolchain: guides/flow-tooling.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md

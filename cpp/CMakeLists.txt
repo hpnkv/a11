@@ -22,6 +22,16 @@ include(FetchContent)
 include(GNUInstallDirs)
 
 option(A11_BUILD_PYTHON "Build the pybind11 extension" ON)
+# The standalone language tool is not part of a wheel: the wheel installs only the
+# `python` component, so building it there would be work thrown away. Everywhere
+# else it is on, because it costs seconds and is what editors and CI run.
+if (DEFINED SKBUILD)
+    set(A11_FLOW_TOOL_DEFAULT OFF)
+else ()
+    set(A11_FLOW_TOOL_DEFAULT ON)
+endif ()
+option(A11_BUILD_FLOW_TOOL "Build the standalone a11-flow language tool"
+        ${A11_FLOW_TOOL_DEFAULT})
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
 option(A11_BUILD_WEBRTC "Build WebRTC wire streams and signalling" ON)
 option(A11_BUILD_REDIS "Build the Redis client and Redis ChunkStore" ON)
@@ -581,6 +591,7 @@ add_subdirectory(a11)
 add_subdirectory(a11/actions)
 add_subdirectory(a11/concurrency)
 add_subdirectory(a11/data)
+add_subdirectory(a11/flow)
 add_subdirectory(a11/net)
 add_subdirectory(a11/obs)
 add_subdirectory(a11/nodes)
@@ -643,6 +654,46 @@ target_include_directories(
 # appears in a11_obs's public headers (they use a fast pImpl), so it is fully
 # absorbed into the static archive and does not leak into the exported package
 # interface.
+# The Flow language: text to tokens to a syntax tree to a resolved plan, plus
+# the diagnostics, highlighting, formatting and completion every editor and CI
+# job needs. Nothing here touches a socket or a node, and nothing here links
+# anything but Abseil and nlohmann -- see cpp/a11/flow/CMakeLists.txt for why
+# that boundary is worth keeping.
+add_library(a11_flow_lang STATIC ${A11_FLOW_LANG_SOURCES})
+add_library(a11::flow_lang ALIAS a11_flow_lang)
+set_target_properties(a11_flow_lang PROPERTIES EXPORT_NAME flow_lang)
+target_include_directories(
+        a11_flow_lang PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+        a11_flow_lang
+        PUBLIC $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+        $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+        $<BUILD_INTERFACE:absl::span> $<INSTALL_INTERFACE:absl::span>
+        $<BUILD_INTERFACE:absl::flat_hash_map> $<INSTALL_INTERFACE:absl::flat_hash_map>
+        $<BUILD_INTERFACE:absl::flat_hash_set> $<INSTALL_INTERFACE:absl::flat_hash_set>
+        # A duration token carries an absl::Duration, in a public header.
+        $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+        nlohmann_json::nlohmann_json
+        PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+        $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
+        a11::warnings)
+
+# The standalone language tool. Off where only the library is wanted (a wheel
+# build), on by default: an editor that cannot embed Python runs this, and the
+# IntelliJ plugin bundles it per platform instead of carrying language knowledge.
+if (A11_BUILD_FLOW_TOOL)
+    add_executable(a11_flow_tool ${A11_FLOW_TOOL_SOURCES})
+    add_executable(a11::flow_tool ALIAS a11_flow_tool)
+    set_target_properties(
+            a11_flow_tool PROPERTIES OUTPUT_NAME a11-flow EXPORT_NAME flow_tool)
+    target_link_libraries(
+            a11_flow_tool
+            PRIVATE a11::flow_lang nlohmann_json::nlohmann_json
+            absl::strings absl::str_format absl::flat_hash_map a11::warnings)
+endif ()
+
 add_library(a11_obs STATIC ${A11_OBS_SOURCES})
 add_library(a11::obs ALIAS a11_obs)
 set_target_properties(a11_obs PROPERTIES EXPORT_NAME obs)
@@ -839,6 +890,27 @@ target_link_libraries(
 # both public components through their transitive target metadata.
 target_link_libraries(a11_actions PUBLIC a11::service)
 
+# The executing half of Flow: the value model and the runtime driving nodes and
+# actions with it. Defined here rather than beside a11_flow_lang because this is
+# the first point at which the layers it stands on exist.
+add_library(a11_flow_runtime STATIC ${A11_FLOW_RUNTIME_SOURCES})
+add_library(a11::flow_runtime ALIAS a11_flow_runtime)
+set_target_properties(a11_flow_runtime PROPERTIES EXPORT_NAME flow_runtime)
+target_include_directories(
+        a11_flow_runtime PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+        a11_flow_runtime
+        PUBLIC a11::actions a11::core a11::data a11::flow_lang a11::nodes
+        $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+        $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+        $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+        nlohmann_json::nlohmann_json
+        PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+        $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
+        a11::warnings)
+
 if (A11_BUILD_AUDIO)
     # The Action-based audio interface: schemas, streaming handlers and the
     # serialization of the audio value types. Sits above both the raw audio SDK
@@ -1022,7 +1094,8 @@ if (A11_BUILD_PYTHON)
             a11_python SYSTEM BEFORE PRIVATE ${abseil-cpp_SOURCE_DIR})
     target_link_libraries(
             a11_python
-            PRIVATE a11::actions a11::concurrency a11::core a11::data a11::net
+            PRIVATE a11::actions a11::concurrency a11::core a11::data
+            a11::flow_lang a11::flow_runtime a11::net
             a11::nodes a11::obs a11::service a11::stores
             pybind11_abseil::status_casters a11::warnings
             absl::failure_signal_handler absl::symbolize)
@@ -1072,8 +1145,8 @@ if (A11_BUILD_PYTHON)
 endif ()
 
 set(A11_INSTALL_TARGETS
-        a11_warnings a11_core a11_data a11_concurrency a11_stores a11_net
-        a11_nodes a11_actions a11_service Thread)
+        a11_warnings a11_core a11_data a11_concurrency a11_flow_lang a11_stores
+        a11_net a11_nodes a11_actions a11_service Thread)
 if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)
 endif ()
@@ -1084,6 +1157,9 @@ if (A11_BUILD_SQLITE)
 endif ()
 if (A11_BUILD_AUDIO)
     list(APPEND A11_INSTALL_TARGETS a11_audio a11_audio_actions)
+endif ()
+if (A11_BUILD_FLOW_TOOL)
+    list(APPEND A11_INSTALL_TARGETS a11_flow_tool)
 endif ()
 install(
         TARGETS ${A11_INSTALL_TARGETS}

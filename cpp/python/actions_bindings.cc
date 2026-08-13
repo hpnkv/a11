@@ -45,11 +45,6 @@ namespace a11::python {
  * Python coroutine function it was registered with, an opaque handle to a C++
  * implementation, or nothing at all.
  */
-class PyActionHandler : public py::object {
-  PYBIND11_OBJECT_DEFAULT(PyActionHandler, object, PyObject_Type)
-  using object::object;
-};
-
 namespace {
 
 template <typename T>
@@ -1412,14 +1407,6 @@ Examples:
 
 PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 PYBIND11_NAMESPACE_BEGIN(detail)
-
-// ActionHandler is spelled out by the stub generator; NativeActionHandler is
-// the bound class in this module.
-template <>
-struct handle_type_name<a11::python::PyActionHandler> {
-  static constexpr auto name =
-      const_name("ActionHandler | NativeActionHandler | None");
-};
 
 PYBIND11_NAMESPACE_END(detail)
 PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)

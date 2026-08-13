@@ -80,6 +80,39 @@ imported. A container says what it holds in brackets: `list[string]`,
 `list[a11.NodeFragment]`. A quoted type is a mimetype, for a port described by
 its representation rather than by a type at all.
 
+## Descriptions, at the length they need
+
+A description is what a caller — often a model — reads to decide whether to use a
+flow, so it is worth writing properly. Two spellings keep it from being squeezed
+onto the end of a declaration:
+
+```
+flow research {
+  describe """
+    Search the web, read the best hits, and answer from them.
+
+      Costs one search and up to `budget` fetches.
+    """
+
+  in  question: string required
+    "What to find out -- as long as this needs to be, on its own line."
+}
+```
+
+A `"""` string may hold line breaks, and its value is **dedented**: a blank first
+line goes, a whitespace-only last line goes with the break above it, and the
+indentation every remaining line shares comes off. So the text sits at the
+indentation of the flow it belongs to and still reads as prose, with whatever one
+line has *extra* kept. Escapes work as they do in an ordinary string.
+
+A description may also stand **alone on the line below** what it describes, at any
+indentation or none — for a port, a header, or a `describe`. That is unambiguous
+because the string has to be alone on its line: `"a literal" -> out` is a
+statement, since something follows the string.
+
+`a11 flow fmt` indents a description under its declaration and lines up the
+columns of a run of declarations around it.
+
 ## Making a value of a type
 
 A port often wants a real type — an `Interaction`, an `AudioBuffer` — and what a
@@ -429,8 +462,8 @@ tests: it feeds the inputs, collects every output port, and hands back a value
 for each ordinary port and a list for each `stream` one.
 
 A flow that will not compile raises
-[`FlowSyntaxError`][a11.flow.lexer.FlowSyntaxError] with the line and column, and
-[`to_status`][a11.flow.lexer.FlowSyntaxError.to_status] turns that into the
+[`FlowSyntaxError`][a11.flow.diagnostics.FlowSyntaxError] with the line and column, and
+[`to_status`][a11.flow.diagnostics.FlowSyntaxError.to_status] turns that into the
 `INVALID_ARGUMENT` a caller should be told about.
 
 ## What a flow deliberately cannot do

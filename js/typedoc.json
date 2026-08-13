@@ -13,7 +13,9 @@
     "HeaderCollection",
     "PortCollection",
     "StringCollection",
-    "WebSocketEventLike"
+    "WebSocketEventLike",
+    "interactionSchema",
+    "JsonValue"
   ],
   "cleanOutputDir": true,
   "navigationLinks": {

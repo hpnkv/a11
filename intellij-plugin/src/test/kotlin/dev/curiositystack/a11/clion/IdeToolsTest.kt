@@ -78,7 +78,7 @@ class IdeToolsTest : BasePlatformTestCase() {
     fun testEveryToolReportsAUserFacingRunLog() {
         for (name in IdeTools(project).listDescriptors().map { it["name"] as String }) {
             val log = outputPorts(name).filter { it["user_facing"] == true }.single()
-            assertEquals("user_log_for_run", log["name"])
+            assertEquals("user_facing_log", log["name"])
             assertEquals("text/plain", log["type"])
             // One value or none, and never part of what the model is promised.
             assertEquals(true, log["unary"])
@@ -94,13 +94,13 @@ class IdeToolsTest : BasePlatformTestCase() {
             "rename_symbol",
             mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")),
         )
-        val log = renamed["user_log_for_run"] as String
+        val log = renamed["user_facing_log"] as String
         // First line stands alone: it is all the folded box shows.
         assertEquals("Renamed bean → widget", log.lineSequence().first())
         assertTrue(log, log.contains("beans.xml") && log.contains("line 2"))
 
         val symbols = tools.runByName("get_file_symbols", emptyMap())
-        val symbolLog = symbols["user_log_for_run"] as String
+        val symbolLog = symbols["user_facing_log"] as String
         assertTrue(symbolLog, symbolLog.lineSequence().first().startsWith("Found "))
         assertTrue(symbolLog, symbolLog.contains("- `root"))
     }
@@ -235,6 +235,32 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals((1..5).map { "line $it" }, bare["lines"])
     }
 
+    fun testActiveFileCanNumberItsLinesLikeReadFileDoes() {
+        myFixture.configureByText("numbered.cpp", (1..5).joinToString("\n") { "line $it" })
+        val tools = IdeTools(project)
+
+        val numbered = tools.runByName(
+            "get_active_file",
+            mapOf("request" to mapOf("include_line_numbers" to true)),
+        )
+        // 0-based, tab-separated: the same spelling `read_file` uses, so a numbered
+        // line means one thing whichever tool produced it.
+        assertEquals((1..5).map { "${it - 1}\tline $it" }, numbered["lines"])
+
+        // The file's own numbers, not the slice's. A caller that paged in from line
+        // 3 and got them renumbered from 0 would locate nothing with them.
+        val page = tools.runByName(
+            "get_active_file",
+            mapOf("request" to mapOf("line_offset" to 3, "include_line_numbers" to true)),
+        )
+        assertEquals(listOf("3\tline 4", "4\tline 5"), page["lines"])
+
+        // Off unless asked for: the numbers are not part of the file, and text that
+        // will be quoted back into a patch has to come without them.
+        val plain = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
+        assertEquals(listOf("line 4", "line 5"), plain["lines"])
+    }
+
     fun testSelectionReturnsWhatTheUserHighlighted() {
         myFixture.configureByText("pick.txt", "alpha\n<selection>beta\ngamm</selection>a\ndelta")
         val tools = IdeTools(project)
@@ -281,9 +307,9 @@ class IdeToolsTest : BasePlatformTestCase() {
         )
         val tools = IdeTools(project)
 
-        fun namesWith(filters: Map<String, Any?>): List<String> {
+        fun namesWith(request: Map<String, Any?>): List<String> {
             @Suppress("UNCHECKED_CAST")
-            val symbols = tools.runByName("get_file_symbols", filters)["symbols"] as List<Map<String, Any?>>
+            val symbols = tools.runByName("get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
             return symbols.map { it["name"] as String }
         }
 
@@ -292,41 +318,401 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertTrue("$everything", everything.containsAll(listOf("root", "bean", "widget", "beanFactory")))
 
         // A name pattern matches anywhere in the name, case-insensitively.
-        assertEquals(listOf("bean", "beanFactory"), namesWith(mapOf("filters" to mapOf("name_pattern" to "^BEAN"))))
-        assertEquals(listOf("beanFactory"), namesWith(mapOf("filters" to mapOf("name_pattern" to "factory"))))
+        assertEquals(listOf("bean", "beanFactory"), namesWith(mapOf("request" to mapOf("name_pattern" to "^BEAN"))))
+        assertEquals(listOf("beanFactory"), namesWith(mapOf("request" to mapOf("name_pattern" to "factory"))))
 
         // A line window, given as a 0-based offset and a count of lines.
         assertEquals(
             listOf("widget"),
-            namesWith(mapOf("filters" to mapOf("line_offset" to 2, "line_limit" to 1))),
+            namesWith(mapOf("request" to mapOf("line_offset" to 2, "line_limit" to 1))),
         )
 
         // Kinds match the parser's own names by substring, so "attribute" is enough.
-        val attributes = namesWith(mapOf("filters" to mapOf("kinds" to listOf("attribute"))))
+        val attributes = namesWith(mapOf("request" to mapOf("kinds" to listOf("attribute"))))
         assertEquals("$attributes", listOf("id"), attributes)
-        assertTrue(namesWith(mapOf("filters" to mapOf("kinds" to listOf("nothing_like_this")))).isEmpty())
+        assertTrue(namesWith(mapOf("request" to mapOf("kinds" to listOf("nothing_like_this")))).isEmpty())
 
         // Filters compose.
         assertEquals(
             listOf("beanFactory"),
-            namesWith(mapOf("filters" to mapOf("name_pattern" to "bean", "line_offset" to 3))),
+            namesWith(mapOf("request" to mapOf("name_pattern" to "bean", "line_offset" to 3))),
         )
 
-        assertRejected { tools.runByName("get_file_symbols", mapOf("filters" to mapOf("name_pattern" to "[unclosed"))) }
-        assertRejected { tools.runByName("get_file_symbols", mapOf("filters" to mapOf("line_offset" to -1))) }
-        assertRejected { tools.runByName("get_file_symbols", mapOf("filters" to mapOf("kinds" to listOf("")))) }
+        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("name_pattern" to "[unclosed"))) }
+        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("line_offset" to -1))) }
+        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("kinds" to listOf("")))) }
     }
 
     fun testFileSymbolFiltersAreDeclaredAsAnOptionalInput() {
         val port = inputPorts("get_file_symbols").single()
-        assertEquals("filters", port["name"])
+        assertEquals("request", port["name"])
         assertEquals(false, port["required"])
         assertEquals(true, port["unary"])
         val fields = propertiesOf(schemaOf(port))
-        assertEquals(setOf("name_pattern", "line_offset", "line_limit", "kinds"), fields.keys)
+        assertEquals(setOf("path", "name_pattern", "line_offset", "line_limit", "kinds"), fields.keys)
         // Nothing is required inside: each field narrows one dimension on its own.
         assertEquals(emptyList<String>(), schemaOf(port)["required"])
         assertEquals("array", (fields["kinds"] as Map<*, *>)["type"])
+    }
+
+    fun testFileSymbolsCanBeAskedAboutAFileThatIsNotOpen() {
+        // Added, not opened: `path` is what makes a file with no editor readable.
+        val other = myFixture.addFileToProject("other.xml", "<other>\n  <thing/>\n</other>")
+        myFixture.configureByText("beans.xml", "<root>\n  <bean/>\n</root>")
+        val tools = IdeTools(project)
+
+        fun namesIn(request: Map<String, Any?>): List<String> {
+            @Suppress("UNCHECKED_CAST")
+            val symbols = tools.runByName("get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
+            return symbols.map { it["name"] as String }
+        }
+
+        // No path: the active editor, as before.
+        assertTrue(namesIn(emptyMap()).contains("root"))
+        // A path: that file, wherever it is and whether or not anyone opened it.
+        val named = namesIn(mapOf("request" to mapOf("path" to other.virtualFile.path)))
+        assertTrue("$named", named.containsAll(listOf("other", "thing")))
+        assertFalse("$named", named.contains("root"))
+        // Project-relative works too, and the reported path is the file's own.
+        val relative = tools.runByName("get_file_symbols", mapOf("request" to mapOf("path" to "other.xml")))
+        assertEquals(other.virtualFile.path, relative["path"])
+        // The rest of the request still narrows, on that file.
+        assertEquals(
+            listOf("thing"),
+            namesIn(mapOf("request" to mapOf("path" to "other.xml", "name_pattern" to "thing"))),
+        )
+        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("path" to "nowhere.xml"))) }
+    }
+
+    fun testReadFileReturnsTheRequestedLines() {
+        val file = myFixture.addFileToProject("sliced.txt", (0..5).joinToString("\n") { "line $it" })
+        val tools = IdeTools(project)
+        val path = file.virtualFile.path
+
+        fun readWith(request: Map<String, Any?>): Map<String, Any?> =
+            tools.runByName("read_file", mapOf("request" to (mapOf("path" to path) + request)))
+
+        // 0-based, end_line inclusive — the coordinates get_error_highlights uses.
+        assertEquals(listOf("line 1", "line 2"), readWith(mapOf("start_line" to 1, "end_line" to 2))["lines"])
+        // Omitting either end means "to the edge of the file".
+        assertEquals((0..5).map { "line $it" }, readWith(emptyMap())["lines"])
+        assertEquals(listOf("line 4", "line 5"), readWith(mapOf("start_line" to 4))["lines"])
+        // A range past the end is not an error; it just yields nothing.
+        assertEquals(emptyList<String>(), readWith(mapOf("start_line" to 99))["lines"])
+        // An end past the end stops at the end.
+        assertEquals(listOf("line 5"), readWith(mapOf("start_line" to 5, "end_line" to 99))["lines"])
+        assertEquals(path, readWith(emptyMap())["path"])
+
+        // Numbers when asked for, and they are the same 0-based ones.
+        assertEquals(
+            listOf("1\tline 1", "2\tline 2"),
+            readWith(mapOf("start_line" to 1, "end_line" to 2, "include_line_numbers" to true))["lines"],
+        )
+
+        assertRejected { tools.runByName("read_file", emptyMap()) }
+        assertRejected { tools.runByName("read_file", mapOf("request" to mapOf("start_line" to 1))) }
+        assertRejected { readWith(mapOf("start_line" to 3, "end_line" to 1)) }
+        assertRejected { readWith(mapOf("include_line_numbers" to "yes")) }
+        assertRejected { tools.runByName("read_file", mapOf("request" to mapOf("path" to "nowhere.txt"))) }
+    }
+
+    fun testReadFileSeesWhatTheEditorHoldsRatherThanTheDisk() {
+        myFixture.configureByText("live.txt", "first\nsecond")
+        val path = myFixture.file.virtualFile.path
+        // An edit nobody has saved: the tool reads the document, so it is there.
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            myFixture.editor.document.setText("first\nedited")
+        }
+        val read = IdeTools(project).runByName("read_file", mapOf("request" to mapOf("path" to path)))
+        assertEquals(listOf("first", "edited"), read["lines"])
+    }
+
+    fun testApplyPatchTakesTwoTextInputs() {
+        val ports = inputPorts("apply_patch").associateBy { it["name"] as String }
+        assertEquals(setOf("path", "patch"), ports.keys)
+        for (port in ports.values) {
+            assertEquals("text/plain", port["type"])
+            assertEquals(true, port["unary"])
+            // Neither is optional: there is nothing to do without both.
+            assertEquals(true, port["required"])
+        }
+        val metadata = modelOutputs("apply_patch").single()
+        assertEquals("metadata", metadata["name"])
+        assertEquals(
+            setOf("path", "hunks", "first_line", "added", "removed"),
+            propertiesOf(schemaOf(metadata)).keys,
+        )
+    }
+
+    fun testApplyPatchEditsTheFileAndCanBeUndone() {
+        myFixture.configureByText("patched.txt", "alpha\nbeta\ngamma\n")
+        val path = myFixture.file.virtualFile.path
+        val document = myFixture.editor.document
+        val tools = IdeTools(project)
+
+        val done = tools.runByName(
+            "apply_patch",
+            mapOf(
+                "path" to path,
+                "patch" to "@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n",
+            ),
+        )
+        assertEquals("alpha\nBETA\ngamma\n", document.text)
+        @Suppress("UNCHECKED_CAST")
+        val metadata = done["metadata"] as Map<String, Any?>
+        assertEquals(path, metadata["path"])
+        assertEquals(1, metadata["hunks"])
+        assertEquals(0, metadata["first_line"])
+        assertEquals(3, metadata["added"])
+        assertEquals(3, metadata["removed"])
+        val log = done["user_facing_log"] as String
+        assertTrue(log, log.lineSequence().first().startsWith("Patched patched.txt (1 hunk"))
+        assertTrue(log, log.contains("```diff"))
+
+        // One command, so one Undo takes the whole patch back — the same
+        // reversibility a rename has.
+        val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
+        val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+            .getSelectedEditor(myFixture.file.virtualFile)
+        assertTrue("the patch should be undoable", undo.isUndoAvailable(editor))
+        undo.undo(editor)
+        assertEquals("alpha\nbeta\ngamma\n", document.text)
+    }
+
+    fun testApplyPatchFindsAHunkThatMovedAndRefusesOneThatDoesNotFit() {
+        myFixture.configureByText("moved.txt", "one\ntwo\nthree\nfour\nfive\n")
+        val path = myFixture.file.virtualFile.path
+        val tools = IdeTools(project)
+
+        // The header says line 1; the context is at line 3. Context wins.
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -1,2 +1,2 @@\n-three\n+THREE\n four\n"),
+        )
+        assertEquals("one\ntwo\nTHREE\nfour\nfive\n", myFixture.editor.document.text)
+
+        // Several hunks, in file order, applied as one edit.
+        tools.runByName(
+            "apply_patch",
+            mapOf(
+                "path" to path,
+                "patch" to "@@ -1,1 +1,1 @@\n-one\n+ONE\n@@ -5,1 +5,1 @@\n-five\n+FIVE\n",
+            ),
+        )
+        assertEquals("ONE\ntwo\nTHREE\nfour\nFIVE\n", myFixture.editor.document.text)
+
+        // A hunk whose context is not in the file at all: refused, and nothing
+        // else in the patch is applied either.
+        val before = myFixture.editor.document.text
+        val refused = try {
+            tools.runByName(
+                "apply_patch",
+                mapOf(
+                    "path" to path,
+                    "patch" to "@@ -1,1 +1,1 @@\n-two\n+TWO\n@@ -9,1 +9,1 @@\n-nothing like this\n+x\n",
+                ),
+            )
+            fail("expected the unmatched hunk to be refused")
+            return
+        } catch (expected: IllegalArgumentException) {
+            expected.message ?: ""
+        }
+        assertTrue(refused, refused.contains("does not match the file"))
+        assertTrue(refused, refused.contains("nothing like this"))
+        assertEquals("nothing should have been applied", before, myFixture.editor.document.text)
+
+        // Not a patch at all.
+        assertRejected { tools.runByName("apply_patch", mapOf("path" to path, "patch" to "just some prose")) }
+        assertRejected { tools.runByName("apply_patch", mapOf("path" to path)) }
+    }
+
+    fun testApplyPatchAddsAndRemovesLines() {
+        myFixture.configureByText("grow.txt", "keep\nremove me\nkeep too\n")
+        val path = myFixture.file.virtualFile.path
+        val tools = IdeTools(project)
+
+        // A hunk that only adds, placed by its header.
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -1,0 +1,1 @@\n+added first\n"),
+        )
+        assertEquals("added first\nkeep\nremove me\nkeep too\n", myFixture.editor.document.text)
+
+        // And one that only removes.
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -3,1 +3,0 @@\n-remove me\n"),
+        )
+        assertEquals("added first\nkeep\nkeep too\n", myFixture.editor.document.text)
+
+        // `---`/`+++` headers are allowed and ignored: the path is a separate input.
+        tools.runByName(
+            "apply_patch",
+            mapOf(
+                "path" to path,
+                "patch" to "--- a/somewhere/else.txt\n+++ b/somewhere/else.txt\n@@ -2,1 +2,1 @@\n-keep\n+KEPT\n",
+            ),
+        )
+        assertEquals("added first\nKEPT\nkeep too\n", myFixture.editor.document.text)
+    }
+
+    fun testApplyPatchTakesWhatAModelActuallyWrites() {
+        // Verbatim from a local model asked to fix an undeclared variable: one
+        // added line, one context line, and a header whose numbers do not agree
+        // with each other or with the file. The context is what places it.
+        myFixture.configureByText("model.cpp", "#include <memory>\n\nint main() {\n  int x = y;\n  return 0\n}\n")
+        val tools = IdeTools(project)
+        val path = myFixture.file.virtualFile.path
+
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -4,1 +5,2 @@\n+  int y;\n  int x = y;"),
+        )
+        assertEquals(
+            "#include <memory>\n\nint main() {\n  int y;\n  int x = y;\n  return 0\n}\n",
+            myFixture.editor.document.text,
+        )
+
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -5,1 +5,1 @@\n-  return 0\n+  return 0;"),
+        )
+        assertEquals(
+            "#include <memory>\n\nint main() {\n  int y;\n  int x = y;\n  return 0;\n}\n",
+            myFixture.editor.document.text,
+        )
+
+        // Also from a model: the markers indented, and a header whose numbers are
+        // punctuated wrongly. Both are read for what they are, because the file is
+        // what settles which line is which.
+        tools.runByName(
+            "apply_patch",
+            mapOf("path" to path, "patch" to "@@ -4,1,4,1 @@\n -  int y;\n +  int y = 0;"),
+        )
+        assertEquals(
+            "#include <memory>\n\nint main() {\n  int y = 0;\n  int x = y;\n  return 0;\n}\n",
+            myFixture.editor.document.text,
+        )
+
+        // But indentation that is simply wrong is refused: a patch claiming a tab
+        // where the file has spaces is not this file's text.
+        assertRejected {
+            tools.runByName(
+                "apply_patch",
+                mapOf("path" to path, "patch" to "@@ -5,1 +5,2 @@\n+\tint z = 1;\n \tint x = y;"),
+            )
+        }
+    }
+
+    fun testErrorHighlightsDeclaresARangeRequestAndAStreamOfHighlights() {
+        val port = inputPorts("get_error_highlights").single()
+        assertEquals("request", port["name"])
+        assertEquals(true, port["required"])
+        val fields = propertiesOf(schemaOf(port))
+        assertEquals(setOf("path", "start_line", "end_line"), fields.keys)
+        // The file is the only thing a caller must give; the range defaults to all of it.
+        assertEquals(listOf("path"), schemaOf(port)["required"])
+        assertEquals(0, (fields["start_line"] as Map<*, *>)["minimum"])
+        assertEquals(0, (fields["end_line"] as Map<*, *>)["minimum"])
+
+        val outputs = modelOutputs("get_error_highlights").associateBy { it["name"] as String }
+        assertEquals(setOf("highlights", "path"), outputs.keys)
+        // One value per highlight, streamed as they are found.
+        val highlights = outputs.getValue("highlights")
+        assertEquals("application/json", highlights["type"])
+        assertEquals(false, highlights["unary"])
+        assertEquals(
+            setOf(
+                "severity", "start_line", "end_line", "start_column", "end_column", "text", "message", "tooltip",
+            ),
+            propertiesOf(schemaOf(highlights)).keys,
+        )
+        // Everything but the tooltip is always there: a highlight need not have one.
+        assertEquals(
+            listOf("severity", "start_line", "end_line", "start_column", "end_column", "text", "message"),
+            schemaOf(highlights)["required"],
+        )
+    }
+
+    fun testErrorHighlightsReportsWhatTheEditorUnderlines() {
+        // An unclosed XML tag: the platform's own annotator flags it, so this needs
+        // no language plugin. `doHighlighting` runs the daemon for the fixture's
+        // file, which is what leaves the markup this tool reads for an open file —
+        // the only path available on the EDT the fixture holds.
+        val file = myFixture.configureByText("broken.xml", "<root>\n  <bean>\n</root>\n")
+        myFixture.doHighlighting()
+        val path = file.virtualFile.path
+
+        val all = IdeTools(project).runByName("get_error_highlights", mapOf("request" to mapOf("path" to path)))
+        assertEquals(path, all["path"])
+        @Suppress("UNCHECKED_CAST")
+        val highlights = all["highlights"] as List<Map<String, Any?>>
+        assertFalse("expected the unclosed tag to be flagged", highlights.isEmpty())
+
+        val first = highlights.first()
+        assertEquals("ERROR", first["severity"])
+        // Positions are 0-based, so they can be fed straight back as a range bound.
+        assertTrue("$first", (first["start_line"] as Int) >= 0)
+        assertTrue("$first", (first["end_column"] as Int) >= (first["start_column"] as Int))
+        assertTrue("$first", (first["message"] as String).isNotEmpty())
+        // The tooltip is plain text: the platform writes it as escaped HTML.
+        val tooltip = first["tooltip"] as? String
+        if (tooltip != null) assertFalse(tooltip, tooltip.contains("<html") || tooltip.contains("&lt;"))
+
+        // Sorted by position, and every entry carries the text it underlines.
+        val lines = highlights.map { it["start_line"] as Int }
+        assertEquals(lines.sorted(), lines)
+        for (highlight in highlights) assertNotNull(highlight["text"])
+
+        val log = all["user_facing_log"] as String
+        assertTrue(log, log.lineSequence().first().startsWith("Found "))
+        assertTrue(log, log.contains("broken.xml"))
+    }
+
+    fun testErrorHighlightsNarrowsToTheRequestedLines() {
+        val file = myFixture.configureByText("broken.xml", "<root>\n  <bean>\n</root>\n")
+        myFixture.doHighlighting()
+        val path = file.virtualFile.path
+        val tools = IdeTools(project)
+
+        fun highlightsIn(range: Map<String, Any?>): List<Map<String, Any?>> {
+            val request = mapOf("request" to (mapOf("path" to path) + range))
+            @Suppress("UNCHECKED_CAST")
+            return tools.runByName("get_error_highlights", request)["highlights"] as List<Map<String, Any?>>
+        }
+
+        val everything = highlightsIn(emptyMap())
+        assertFalse(everything.isEmpty())
+        // An omitted start_line is the top of the file, an omitted end_line its end.
+        assertEquals(everything.size, highlightsIn(mapOf("start_line" to 0)).size)
+        // A range above every highlight reports nothing.
+        assertEquals(emptyList<Any?>(), highlightsIn(mapOf("start_line" to 99)))
+
+        // A single-line range reports the highlights overlapping that line, and only
+        // those — which is every highlight whose own span covers it.
+        val line = everything.first()["start_line"] as Int
+        val onThatLine = highlightsIn(mapOf("start_line" to line, "end_line" to line))
+        assertEquals(
+            everything.filter { (it["start_line"] as Int) <= line && (it["end_line"] as Int) >= line },
+            onThatLine,
+        )
+        assertTrue("$onThatLine", onThatLine.isNotEmpty())
+
+        // Malformed requests are rejected rather than guessed at.
+        assertRejected { tools.runByName("get_error_highlights", emptyMap()) }
+        assertRejected { tools.runByName("get_error_highlights", mapOf("request" to mapOf("start_line" to 1))) }
+        assertRejected {
+            tools.runByName("get_error_highlights", mapOf("request" to mapOf("path" to path, "start_line" to -1)))
+        }
+        assertRejected {
+            tools.runByName(
+                "get_error_highlights",
+                mapOf("request" to mapOf("path" to path, "start_line" to 3, "end_line" to 1)),
+            )
+        }
+        assertRejected {
+            tools.runByName("get_error_highlights", mapOf("request" to mapOf("path" to "/nowhere/at/all.xml")))
+        }
     }
 
     fun testRenameSymbolRewritesTheFile() {

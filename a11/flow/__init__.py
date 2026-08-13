@@ -1,4 +1,4 @@
-r"""Flow: a small language for composing A11 actions.
+r'''Flow: a small language for composing A11 actions.
 
 A *flow* is a composition of existing actions that is itself an action. It
 declares ports and headers, calls other actions, pipes their streaming ports
@@ -161,9 +161,9 @@ flow ask-twice {                  # and a composition of it
 ```
 program    := flow+
 flow       := "flow" name "{" item* "}"
-item       := "describe" string
-            | ("in"|"out") name ":" type ["stream"] ["required"] [string]
-            | "header" string ["as" name] ["default" literal] [string]
+item       := "describe" description
+            | ("in"|"out") name ":" type ["stream"] ["required"] [description]
+            | "header" string ["as" name] ["default" literal] [description]
             | statement
 statement  := [name "="] call
             | name "=" "node" "(" [expr] ")" ["in" name]
@@ -192,6 +192,8 @@ stage      := "first" n | "drop" n | "truncate" n | "batch" n | "group" expr
             | "strformat" string | "mime" string | "collect" | "count"
             | "distinct" | "text" | "json" | "packb"
 type       := name ("." name)* ["[" type ("," type)* "]"] | string
+description := string | newline string   # alone on its line, at any indent
+string     := '"' ... '"' | '"""' ... '"""'   # the second may hold line breaks
 expr        := literal | name | expr "." name | expr "[" expr "]"
             | builtin "(" expr* ")" | "(" pipeline ")" | "it"
             | "status" reference | name ".id"
@@ -215,6 +217,36 @@ by name (`not_found`,
 an expression can read values, compare them, do that arithmetic, take them apart
 and build new ones, and that is all -- which is what makes a flow safe to accept
 and run.
+
+## Prose
+
+A description is prose, and prose does not fit on the line of the declaration it
+belongs to. Two spellings deal with that, and they compose:
+
+```
+flow documented {
+  describe """
+    What this flow is for, at the length that actually takes.
+
+      An indented line stays indented, relative to the rest.
+    """
+
+  in  question: string required
+    "What to find out -- as long as it needs to be, on its own line."
+}
+```
+
+A `"""` string may hold line breaks, and its value is *dedented*: a blank first
+line goes away, a whitespace-only last line goes away with the break above it,
+and the indentation every remaining line shares comes off. So a long description
+sits at the indentation of the flow it describes and still reads as prose.
+Escapes work as they do in a single-quoted string, and are resolved after the
+dedent, so a hand-written `\\n` is a line break and never an indented line.
+
+A description may also stand **alone on the line below** what it describes, at
+any indentation or none. That is unambiguous because the string has to be alone:
+`"a literal" -> out` is a statement, since something follows the string, and a
+line holding nothing but a string is not a statement in this language.
 
 A type is also something a value can be *made into*, which is how a flow feeds a
 port that wants a real type rather than a bag of keys:
@@ -253,28 +285,34 @@ the flows and let the session dispatch them like anything else.
 See also [a11.flow.plan][] for the compiled graph, [a11.flow.runtime][] for how
 it executes, and the `REFERENCE` constant in this module for a cheat sheet
 compact enough to put in a prompt.
-"""
+'''
 
 from __future__ import annotations
 
 import os
 from typing import Any
 
-from a11.flow.lexer import FlowSyntaxError
-from a11.flow.parser import BUILTINS, STAGES
-from a11.flow.plan import (
-    FAIL_CODES,
-    TYPE_NAMES,
-    FlowPlan,
-    Program,
-    compile_source,
-)
+from a11._native import flow as _flow
+from a11.flow.diagnostics import FlowSyntaxError
+from a11.flow.plan import TYPE_NAMES, FlowPlan, Program, compile_source
 from a11.flow.runtime import invoke
+
+#: Every function an expression may call, read from the language's own table.
+BUILTINS: frozenset[str] = frozenset(_flow.vocabulary()["builtins"])
+
+#: Every pipeline stage, and what each one takes after its name: ``"none"``,
+#: ``"number"``, ``"expr"``, ``"string"``, ``"string?"`` or ``"stream"``.
+STAGES: dict[str, str] = _flow.stages()
+
+#: The names `fail` accepts, in the case they are canonically spelled in.
+FAIL_CODES: tuple[str, ...] = tuple(
+    sorted(code.upper() for code in _flow.vocabulary()["status_codes"])
+)
 
 #: A compact description of the language, for putting in front of a model that
 #: has to write one. Short on purpose: a flow is meant to be writable from the
 #: shape of the actions available, not from a manual.
-REFERENCE = """\
+REFERENCE = '''\
 A11 Flow -- a composition of actions that is itself an action.
 Every keyword may be written in lower case or UPPER CASE, but not Mixed.
 
@@ -299,6 +337,11 @@ flow NAME {
   repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
   if EXPR { ... } else { ... }
 }
+
+A description may be a "..." string, a """...""" one that holds line breaks and
+gives back the indentation the source put in front of it, or either of those
+alone on the line below what it describes, at any indentation. A string with
+anything after it on its line is a value, as it always was.
 
 SOURCE is a port (in-port, X.out-port), a node, a loop variable, a header alias,
 a literal, `status SUBJECT`, `N.id`, or any of those with `.field` / `[i]`.
@@ -373,7 +416,7 @@ Steps run concurrently; order comes from the data. Every output of a step is
 read, whether the flow uses it or not. Stages that shrink a stream (first,
 truncate, where) do so before the next step ever sees it, `skip N PORT` does it
 for every reader at once, and `nodes` blocks keep a step's traffic off the wire.
-"""
+'''
 
 #: The conventional extension for a file of flows.
 EXTENSION = ".flow"

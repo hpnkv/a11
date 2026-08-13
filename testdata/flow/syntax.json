@@ -1,0 +1,858 @@
+{
+  "diagnostics": [],
+  "flows": [
+    {
+      "at": {
+        "column": 1,
+        "end": 241,
+        "line": 4,
+        "start": 237
+      },
+      "body": [
+        {
+          "at": {
+            "column": 3,
+            "end": 551,
+            "line": 14,
+            "start": 545
+          },
+          "kind": "bind",
+          "name": "search",
+          "value": {
+            "action": "web-search",
+            "args": [
+              [
+                "query",
+                {
+                  "at": {
+                    "column": 34,
+                    "end": 584,
+                    "line": 14,
+                    "start": 576
+                  },
+                  "kind": "pipeline",
+                  "source": {
+                    "at": {
+                      "column": 34,
+                      "end": 584,
+                      "line": 14,
+                      "start": 576
+                    },
+                    "kind": "name",
+                    "name": "question"
+                  },
+                  "stages": []
+                }
+              ],
+              [
+                "limit",
+                {
+                  "at": {
+                    "column": 51,
+                    "end": 599,
+                    "line": 14,
+                    "start": 593
+                  },
+                  "kind": "pipeline",
+                  "source": {
+                    "at": {
+                      "column": 51,
+                      "end": 599,
+                      "line": 14,
+                      "start": 593
+                    },
+                    "kind": "name",
+                    "name": "budget"
+                  },
+                  "stages": []
+                }
+              ]
+            ],
+            "at": {
+              "column": 12,
+              "end": 557,
+              "line": 14,
+              "start": 554
+            },
+            "kind": "call",
+            "mode": "run",
+            "modifiers": {
+              "action_id": null,
+              "after": [],
+              "at": {
+                "column": 58,
+                "end": 601,
+                "line": 14,
+                "start": 600
+              },
+              "forward": [],
+              "headers": [],
+              "kind": "call-modifiers",
+              "node_map": null,
+              "tee": false,
+              "timeout": null
+            },
+            "tolerant": false
+          }
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 709,
+            "line": 18,
+            "start": 704
+          },
+          "kind": "bind",
+          "name": "pages",
+          "value": {
+            "at": {
+              "column": 11,
+              "end": 716,
+              "line": 18,
+              "start": 712
+            },
+            "id": null,
+            "kind": "node",
+            "node_map": null
+          }
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 727,
+            "line": 20,
+            "start": 722
+          },
+          "body": [
+            {
+              "at": {
+                "column": 5,
+                "end": 745,
+                "line": 21,
+                "start": 742
+              },
+              "body": [
+                {
+                  "at": {
+                    "column": 7,
+                    "end": 788,
+                    "line": 22,
+                    "start": 784
+                  },
+                  "kind": "bind",
+                  "name": "page",
+                  "value": {
+                    "action": "web-fetch",
+                    "args": [
+                      [
+                        "url",
+                        {
+                          "at": {
+                            "column": 38,
+                            "end": 818,
+                            "line": 22,
+                            "start": 815
+                          },
+                          "kind": "pipeline",
+                          "source": {
+                            "at": {
+                              "column": 41,
+                              "end": 819,
+                              "line": 22,
+                              "start": 818
+                            },
+                            "base": {
+                              "at": {
+                                "column": 38,
+                                "end": 818,
+                                "line": 22,
+                                "start": 815
+                              },
+                              "kind": "name",
+                              "name": "hit"
+                            },
+                            "kind": "attr",
+                            "name": "url"
+                          },
+                          "stages": []
+                        }
+                      ]
+                    ],
+                    "at": {
+                      "column": 14,
+                      "end": 794,
+                      "line": 22,
+                      "start": 791
+                    },
+                    "kind": "call",
+                    "mode": "call",
+                    "modifiers": {
+                      "action_id": null,
+                      "after": [],
+                      "at": {
+                        "column": 46,
+                        "end": 824,
+                        "line": 22,
+                        "start": 823
+                      },
+                      "forward": [
+                        "authorization"
+                      ],
+                      "headers": [
+                        [
+                          "accept",
+                          {
+                            "at": {
+                              "column": 26,
+                              "end": 882,
+                              "line": 24,
+                              "start": 871
+                            },
+                            "kind": "literal",
+                            "value": "text/html"
+                          }
+                        ]
+                      ],
+                      "kind": "call-modifiers",
+                      "node_map": null,
+                      "tee": false,
+                      "timeout": {
+                        "$duration": 20.0
+                      }
+                    },
+                    "tolerant": true
+                  }
+                },
+                {
+                  "after": [],
+                  "at": {
+                    "column": 7,
+                    "end": 1094,
+                    "line": 29,
+                    "start": 1090
+                  },
+                  "kind": "wait",
+                  "subject": {
+                    "at": {
+                      "column": 12,
+                      "end": 1099,
+                      "line": 29,
+                      "start": 1095
+                    },
+                    "kind": "name",
+                    "name": "page"
+                  },
+                  "timeout": null
+                },
+                {
+                  "after": [],
+                  "at": {
+                    "column": 7,
+                    "end": 1110,
+                    "line": 31,
+                    "start": 1107
+                  },
+                  "kind": "pipe",
+                  "pipeline": {
+                    "at": {
+                      "column": 7,
+                      "end": 1110,
+                      "line": 31,
+                      "start": 1107
+                    },
+                    "kind": "pipeline",
+                    "source": {
+                      "at": {
+                        "column": 10,
+                        "end": 1111,
+                        "line": 31,
+                        "start": 1110
+                      },
+                      "base": {
+                        "at": {
+                          "column": 7,
+                          "end": 1110,
+                          "line": 31,
+                          "start": 1107
+                        },
+                        "kind": "name",
+                        "name": "hit"
+                      },
+                      "kind": "attr",
+                      "name": "url"
+                    },
+                    "stages": []
+                  },
+                  "targets": [
+                    {
+                      "at": {
+                        "column": 18,
+                        "end": 1125,
+                        "line": 31,
+                        "start": 1118
+                      },
+                      "kind": "name",
+                      "name": "sources"
+                    }
+                  ]
+                },
+                {
+                  "after": [],
+                  "at": {
+                    "column": 7,
+                    "end": 1136,
+                    "line": 32,
+                    "start": 1132
+                  },
+                  "kind": "pipe",
+                  "pipeline": {
+                    "at": {
+                      "column": 7,
+                      "end": 1136,
+                      "line": 32,
+                      "start": 1132
+                    },
+                    "kind": "pipeline",
+                    "source": {
+                      "at": {
+                        "column": 11,
+                        "end": 1137,
+                        "line": 32,
+                        "start": 1136
+                      },
+                      "base": {
+                        "at": {
+                          "column": 7,
+                          "end": 1136,
+                          "line": 32,
+                          "start": 1132
+                        },
+                        "kind": "name",
+                        "name": "page"
+                      },
+                      "kind": "attr",
+                      "name": "text"
+                    },
+                    "stages": [
+                      {
+                        "arg": 200,
+                        "at": {
+                          "column": 19,
+                          "end": 1152,
+                          "line": 32,
+                          "start": 1144
+                        },
+                        "kind": "stage",
+                        "name": "truncate",
+                        "takes": "number"
+                      },
+                      {
+                        "arg": {
+                          "at": {
+                            "column": 43,
+                            "end": 1170,
+                            "line": 32,
+                            "start": 1168
+                          },
+                          "kind": "binary",
+                          "left": {
+                            "at": {
+                              "column": 40,
+                              "end": 1167,
+                              "line": 32,
+                              "start": 1165
+                            },
+                            "kind": "it"
+                          },
+                          "op": "!=",
+                          "right": {
+                            "at": {
+                              "column": 46,
+                              "end": 1173,
+                              "line": 32,
+                              "start": 1171
+                            },
+                            "kind": "literal",
+                            "value": ""
+                          }
+                        },
+                        "at": {
+                          "column": 34,
+                          "end": 1164,
+                          "line": 32,
+                          "start": 1159
+                        },
+                        "kind": "stage",
+                        "name": "where",
+                        "takes": "expr"
+                      }
+                    ]
+                  },
+                  "targets": [
+                    {
+                      "at": {
+                        "column": 52,
+                        "end": 1182,
+                        "line": 32,
+                        "start": 1177
+                      },
+                      "kind": "name",
+                      "name": "pages"
+                    }
+                  ]
+                }
+              ],
+              "kind": "for-each",
+              "parallel": 2,
+              "pipeline": {
+                "at": {
+                  "column": 16,
+                  "end": 759,
+                  "line": 21,
+                  "start": 753
+                },
+                "kind": "pipeline",
+                "source": {
+                  "at": {
+                    "column": 22,
+                    "end": 760,
+                    "line": 21,
+                    "start": 759
+                  },
+                  "base": {
+                    "at": {
+                      "column": 16,
+                      "end": 759,
+                      "line": 21,
+                      "start": 753
+                    },
+                    "kind": "name",
+                    "name": "search"
+                  },
+                  "kind": "attr",
+                  "name": "hits"
+                },
+                "stages": []
+              },
+              "variable": "hit"
+            }
+          ],
+          "kind": "nodes",
+          "name": "fetched"
+        },
+        {
+          "after": [
+            "search"
+          ],
+          "at": {
+            "column": 3,
+            "end": 1201,
+            "line": 36,
+            "start": 1196
+          },
+          "kind": "drain",
+          "target": {
+            "at": {
+              "column": 9,
+              "end": 1207,
+              "line": 36,
+              "start": 1202
+            },
+            "kind": "name",
+            "name": "pages"
+          }
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 1229,
+            "line": 38,
+            "start": 1224
+          },
+          "kind": "bind",
+          "name": "brief",
+          "value": {
+            "action": "llm-summarize",
+            "args": [
+              [
+                "question",
+                {
+                  "at": {
+                    "column": 39,
+                    "end": 1268,
+                    "line": 38,
+                    "start": 1260
+                  },
+                  "kind": "pipeline",
+                  "source": {
+                    "at": {
+                      "column": 39,
+                      "end": 1268,
+                      "line": 38,
+                      "start": 1260
+                    },
+                    "kind": "name",
+                    "name": "question"
+                  },
+                  "stages": []
+                }
+              ],
+              [
+                "pages",
+                {
+                  "at": {
+                    "column": 56,
+                    "end": 1282,
+                    "line": 38,
+                    "start": 1277
+                  },
+                  "kind": "pipeline",
+                  "source": {
+                    "at": {
+                      "column": 56,
+                      "end": 1282,
+                      "line": 38,
+                      "start": 1277
+                    },
+                    "kind": "name",
+                    "name": "pages"
+                  },
+                  "stages": []
+                }
+              ]
+            ],
+            "at": {
+              "column": 11,
+              "end": 1235,
+              "line": 38,
+              "start": 1232
+            },
+            "kind": "call",
+            "mode": "run",
+            "modifiers": {
+              "action_id": null,
+              "after": [],
+              "at": {
+                "column": 62,
+                "end": 1284,
+                "line": 38,
+                "start": 1283
+              },
+              "forward": [],
+              "headers": [
+                [
+                  "x-a11-deadline",
+                  {
+                    "at": {
+                      "column": 30,
+                      "end": 1321,
+                      "line": 39,
+                      "start": 1313
+                    },
+                    "kind": "name",
+                    "name": "deadline"
+                  }
+                ]
+              ],
+              "kind": "call-modifiers",
+              "node_map": null,
+              "tee": false,
+              "timeout": null
+            },
+            "tolerant": false
+          }
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 1327,
+            "line": 41,
+            "start": 1325
+          },
+          "condition": {
+            "at": {
+              "column": 22,
+              "end": 1345,
+              "line": 41,
+              "start": 1344
+            },
+            "kind": "binary",
+            "left": {
+              "at": {
+                "column": 6,
+                "end": 1329,
+                "line": 41,
+                "start": 1328
+              },
+              "kind": "pipeline-value",
+              "pipeline": {
+                "at": {
+                  "column": 6,
+                  "end": 1329,
+                  "line": 41,
+                  "start": 1328
+                },
+                "kind": "pipeline",
+                "source": {
+                  "at": {
+                    "column": 7,
+                    "end": 1334,
+                    "line": 41,
+                    "start": 1329
+                  },
+                  "kind": "name",
+                  "name": "pages"
+                },
+                "stages": [
+                  {
+                    "arg": null,
+                    "at": {
+                      "column": 15,
+                      "end": 1342,
+                      "line": 41,
+                      "start": 1337
+                    },
+                    "kind": "stage",
+                    "name": "count",
+                    "takes": "none"
+                  }
+                ]
+              }
+            },
+            "op": ">",
+            "right": {
+              "at": {
+                "column": 24,
+                "end": 1347,
+                "line": 41,
+                "start": 1346
+              },
+              "kind": "literal",
+              "value": 0
+            }
+          },
+          "else_body": [
+            {
+              "after": [],
+              "at": {
+                "column": 5,
+                "end": 1397,
+                "line": 44,
+                "start": 1393
+              },
+              "code": {
+                "at": {
+                  "column": 10,
+                  "end": 1407,
+                  "line": 44,
+                  "start": 1398
+                },
+                "kind": "name",
+                "name": "not_found"
+              },
+              "kind": "fail",
+              "message": {
+                "at": {
+                  "column": 20,
+                  "end": 1431,
+                  "line": 44,
+                  "start": 1408
+                },
+                "kind": "literal",
+                "value": "nothing worth reading"
+              }
+            }
+          ],
+          "kind": "if",
+          "then_body": [
+            {
+              "after": [],
+              "at": {
+                "column": 5,
+                "end": 1359,
+                "line": 42,
+                "start": 1354
+              },
+              "kind": "pipe",
+              "pipeline": {
+                "at": {
+                  "column": 5,
+                  "end": 1359,
+                  "line": 42,
+                  "start": 1354
+                },
+                "kind": "pipeline",
+                "source": {
+                  "at": {
+                    "column": 10,
+                    "end": 1360,
+                    "line": 42,
+                    "start": 1359
+                  },
+                  "base": {
+                    "at": {
+                      "column": 5,
+                      "end": 1359,
+                      "line": 42,
+                      "start": 1354
+                    },
+                    "kind": "name",
+                    "name": "brief"
+                  },
+                  "kind": "attr",
+                  "name": "summary"
+                },
+                "stages": []
+              },
+              "targets": [
+                {
+                  "at": {
+                    "column": 22,
+                    "end": 1377,
+                    "line": 42,
+                    "start": 1371
+                  },
+                  "kind": "name",
+                  "name": "answer"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "after": [],
+          "at": {
+            "column": 3,
+            "end": 1443,
+            "line": 47,
+            "start": 1439
+          },
+          "count": null,
+          "kind": "skip",
+          "pipeline": {
+            "at": {
+              "column": 8,
+              "end": 1450,
+              "line": 47,
+              "start": 1444
+            },
+            "kind": "pipeline",
+            "source": {
+              "at": {
+                "column": 14,
+                "end": 1451,
+                "line": 47,
+                "start": 1450
+              },
+              "base": {
+                "at": {
+                  "column": 8,
+                  "end": 1450,
+                  "line": 47,
+                  "start": 1444
+                },
+                "kind": "name",
+                "name": "search"
+              },
+              "kind": "attr",
+              "name": "debug"
+            },
+            "stages": []
+          }
+        }
+      ],
+      "description": "Read a few pages and answer from them.",
+      "headers": [
+        {
+          "alias": "deadline",
+          "at": {
+            "column": 3,
+            "end": 466,
+            "line": 11,
+            "start": 460
+          },
+          "default": null,
+          "description": "",
+          "kind": "header",
+          "name": "x-a11-deadline"
+        },
+        {
+          "alias": "budget",
+          "at": {
+            "column": 3,
+            "end": 504,
+            "line": 12,
+            "start": 498
+          },
+          "default": 3,
+          "description": "",
+          "kind": "header",
+          "name": "x-a11-budget"
+        }
+      ],
+      "kind": "flow",
+      "name": "example",
+      "ports": [
+        {
+          "at": {
+            "column": 3,
+            "end": 309,
+            "line": 7,
+            "start": 307
+          },
+          "description": "What to find out.",
+          "direction": "inputs",
+          "kind": "port",
+          "name": "question",
+          "required": true,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false
+          },
+          "unary": true
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 362,
+            "line": 8,
+            "start": 359
+          },
+          "description": "The answer.",
+          "direction": "outputs",
+          "kind": "port",
+          "name": "answer",
+          "required": false,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false
+          },
+          "unary": true
+        },
+        {
+          "at": {
+            "column": 3,
+            "end": 408,
+            "line": 9,
+            "start": 405
+          },
+          "description": "Where it came from.",
+          "direction": "outputs",
+          "kind": "port",
+          "name": "sources",
+          "required": false,
+          "type": {
+            "name": "string",
+            "parameters": [],
+            "quoted": false
+          },
+          "unary": false
+        }
+      ]
+    }
+  ],
+  "format": "flow.syntax/v1",
+  "source": "testdata/flow/example.flow"
+}

@@ -73,6 +73,11 @@ flow NAME {
   if EXPR { ... } else { ... }
 }
 
+A description may be a "..." string, a """...""" one that holds line breaks and
+gives back the indentation the source put in front of it, or either of those
+alone on the line below what it describes, at any indentation. A string with
+anything after it on its line is a value, as it always was.
+
 SOURCE is a port (in-port, X.out-port), a node, a loop variable, a header alias,
 a literal, `status SUBJECT`, `N.id`, or any of those with `.field` / `[i]`.
 DEST is an out-port, X.in-port, or a node.

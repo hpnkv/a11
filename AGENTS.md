@@ -20,10 +20,56 @@
   binary and schema values; they must not introduce a second public data model.
   Python serializers and deserializers continue to operate on those native
   values.
-- `a11/flow/` is the Flow language: a textual DSL whose programs are
-  compositions of actions that are themselves actions. It is deliberately
-  Python-only for now — lexer, parser, resolved plan, and a runtime that builds
-  nested actions and pipes their nodes — and it must stay a layer *on* the public
+- Flow is the language whose programs are compositions of actions that are
+  themselves actions. **The language lives in `cpp/a11/flow/`**: the lexer, the
+  highlighter, the parser, the resolver, the inspector, the formatter, the
+  completion **and the runtime** are native, and every surface is a frontend over
+  them — the `a11 flow` CLI, the `a11._native.flow` bindings, the standalone
+  `a11-flow` binary, and the IntelliJ plugin. Nothing about the language is
+  implemented in Python: `a11/flow/plan.py` and `a11/flow/runtime.py` are glue over
+  `a11._native.flow`, and `flow.loads` is the strict door onto it.
+  - The point of the move is that there is **one** implementation of each language
+    judgement. There is no lexer, parser, resolver, inspector or word list in
+    Kotlin, Python or a grammar file any more, and there must not be one again: a
+    second copy is a copy that falls behind, and the fix is to delete it rather
+    than test it. `a11/flow/tests/test_editor_support.py` now holds the *absence*
+    of those copies.
+  - The language tooling is `a11::flow_lang`, and it links **nothing but Abseil and
+    nlohmann**. No sockets, no nodes, no OpenSSL. That is what lets it ship as
+    `a11-flow` (a few megabytes, `A11_BUILD_FLOW_TOOL`) on platforms where the full
+    runtime is not built, so keep it that way. The executing half is the separate
+    `a11::flow_runtime` (`values.cc`, `runtime.cc`), which does link the node and
+    action layers — and `a11_flow_test`'s link line is the proof the language does
+    not.
+  - The runtime is **fibres over one monitor**: `thread::` primitives only (never
+    `std::mutex`), one lock and one condition variable per run, and blocking work
+    done with the lock released. That is what makes giving up on a run possible at
+    all — a pump waiting for a reader that will never come has to be woken. Every
+    fibre gets a stack an interpreter frame chain fits in, because any of them can
+    reach the `HostBridge`.
+  - `HostBridge` is the three questions only the host can answer: coerce a value
+    into a registered type, read one out of a chunk, write one into a chunk. The
+    Python bindings answer them against the Python registry -- which is where a
+    pydantic model actually lives -- and the standalone tool answers them with the
+    C++ registry. A `Value` the language cannot take apart is carried as an opaque
+    host object; the language only ever renders, indexes, compares or truth-tests
+    one.
+  - `cpp/a11/flow/service.cc` is the one service: a method name, a document, and an
+    envelope back. `a11-flow serve --protocol json|lsp`, `a11 flow serve` and
+    `a11._native.flow.request` are adapters over it, so a capability added there
+    reaches all of them. Add a method there rather than a special case in one
+    frontend.
+  - Problems are **diagnostics, not exceptions**: the parser and resolver collect
+    and recover, because an editor is looking at a file somebody is in the middle
+    of typing. A strict entry point turns the first error into the
+    `FlowSyntaxError` Python has always raised, with the same line, column and
+    message. Every code is published in `testdata/flow/codes.json`, generated from
+    the C++ table; the envelopes (`flow.diagnostics/v1` and friends, documented in
+    `doc/docs/guides/flow-tooling.md`) are additive — adding a field is not a
+    version change, and a reader must ignore what it does not know.
+  - A fix travels **with** the diagnostic, as edits. A frontend applies them blind;
+    nothing downstream re-derives what a repair should be.
+- Flow must stay a layer *on* the public
   A11 surface, adding no runtime behaviour A11 does not already expose. A flow's
   semantics are the language's contract: steps run concurrently, every called
   output is drained, a local call's nodes stay off the wire, a stream read inside
@@ -32,13 +78,11 @@
   Status codes are Abseil's canonical ones; every significant word is accepted in
   lower or upper case but never mixed. Changing any of that is a language change,
   so keep `a11/flow/tests/`, the grammar and `REFERENCE` in
-  `a11/flow/__init__.py`, and both editor definitions — `editors/sublime-text/`
-  and the `flow` package of `intellij-plugin/` — in step with it.
-  `a11/flow/tests/test_editor_support.py` checks the editors' word lists against
-  the parser's own tables, and the plugin's `FlowLexerTest` checks its lexer
-  against `a11/flow/lexer.py`; a word the language gains and an editor does not
-  fails the Python suite. Before porting any of it to C++, the Python
-  implementation is the reference.
+  `a11/flow/__init__.py`, and `cpp/a11/flow/vocabulary.cc` in step with it.
+  An editor that can run a process asks the language (`a11-flow serve`); one that
+  cannot — a static grammar file — is **generated** from the vocabulary by
+  `a11 flow syntax --target sublime --generate`, and `a11 flow syntax` fails when
+  the checked-in file is not what the generator would write.
 - A chunk's metadata is the only thing that says how to read its bytes. The
   media type is the representation; a `type` parameter names the value when the
   format does not already describe it. The seven JSON-native shapes (`object`,
@@ -174,6 +218,12 @@
   guides, Doxygen + doxygen-awesome-css for the C++ internals. The Python site
   is static — `griffe` reads `a11/` and `a11/_native.pyi`, so no native build is
   needed to generate it. CI builds and deploys it (`.github/workflows/docs.yml`).
+- Two griffe extensions in `doc/` make the generated stub documentable:
+  `griffe_overloads.py` keeps overload-only members, and
+  `griffe_native_submodules.py` turns each submodule `scripts/generate_stubs.py`
+  splices into `a11/_native.pyi` as a private class (`flow: _FlowModule`) back
+  into a module, so `from a11._native.flow import X` resolves. A *new* native
+  submodule needs nothing added; a different splice shape does.
 - Python: Google-style docstrings. Write for a developer *building an AI agent* —
   explain the asynchronous, streaming intent and when to reach for a thing, not
   just its mechanics. Maintain extended prose for the core surface (`ChunkStore`,

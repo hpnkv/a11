@@ -1,6 +1,13 @@
 %YAML 1.2
 ---
-# Syntax highlighting for the A11 Flow language (see a11/flow/ in the A11 repo).
+# Syntax highlighting for the A11 Flow language (see cpp/a11/flow/ in the A11
+# repo).
+#
+# GENERATED FILE -- do not edit it by hand. It is written by
+# `a11 flow syntax --target sublime --generate` (or `a11-flow syntax ...`) from
+# the language's own word tables, and `--check` holds it to being up to date. A
+# word added to the language reaches this file by running the generator; edited
+# here, it would be overwritten and the drift would be silent.
 #
 # Install: copy this directory's files into
 #   ~/Library/Application Support/Sublime Text/Packages/A11 Flow/   (macOS)
@@ -68,10 +75,10 @@ contexts:
           scope: punctuation.separator.a11flow
           set:
             - meta_scope: meta.port.a11flow
-            # `stream` and `required` follow the type, and say what the port is
-            # like rather than what it holds.
+            # What a port says about itself after its type: how many values it
+            # carries, and whether it has to be given one.
             - match: '\b(stream|STREAM){{kw_boundary}}'
-              scope: keyword.modifier.arity.a11flow
+              scope: keyword.modifier.stream.a11flow
             - match: '\b(required|REQUIRED){{kw_boundary}}'
               scope: keyword.modifier.required.a11flow
             - include: port-types
@@ -95,13 +102,8 @@ contexts:
       scope: storage.type.tag.a11flow
     - match: |-
         (?x) \b (
-          string|text|number|integer|int|bool|boolean
-          |object|json|list|array|bytes|any
-        ) {{kw_boundary}}
-      scope: storage.type.a11flow
-    - match: |-
-        (?x) \b (
-          STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN
+          string|text|number|integer|int|bool|boolean|object|json|list
+          |array|bytes|any|STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN
           |OBJECT|JSON|LIST|ARRAY|BYTES|ANY
         ) {{kw_boundary}}
       scope: storage.type.a11flow
@@ -110,7 +112,7 @@ contexts:
     - match: '\b(header|HEADER){{kw_boundary}}'
       scope: keyword.declaration.header.a11flow
       push:
-        - match: '\b(as|AS|default|DEFAULT){{kw_boundary}}'
+        - match: '\b(as|default|AS|DEFAULT){{kw_boundary}}'
           scope: keyword.other.a11flow
         - include: strings
         - include: literals
@@ -147,7 +149,7 @@ contexts:
 
   bindings:
     # `x = call ...`, `x = node ...`, `x = wait ...`: the name being bound.
-    - match: '({{name}})\s*(=)(?=\s*(?:run|RUN|call|CALL|try|TRY|node|NODE|wait|WAIT|drain|DRAIN){{kw_boundary}})'
+    - match: '({{name}})\s*(=)(?=\s*(?:run|call|try|node|wait|drain|RUN|CALL|TRY|NODE|WAIT|DRAIN){{kw_boundary}})'
       captures:
         1: entity.name.constant.step.a11flow
         2: keyword.operator.assignment.a11flow
@@ -160,8 +162,8 @@ contexts:
   statement-keywords:
     - match: |-
         (?x) \b (
-          skip|wait|drain|cancel|fail|for|repeat|until|while|if|else
-          |SKIP|WAIT|DRAIN|CANCEL|FAIL|FOR|REPEAT|UNTIL|WHILE|IF|ELSE
+          skip|wait|drain|cancel|fail|if|for|repeat|until|while|else
+          |SKIP|WAIT|DRAIN|CANCEL|FAIL|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
     - match: '\b(parallel|max|PARALLEL|MAX){{kw_boundary}}'
@@ -186,7 +188,7 @@ contexts:
   call:
     - match: '\b(try|TRY){{kw_boundary}}'
       scope: keyword.control.try.a11flow
-    - match: '\b(run|RUN|call|CALL){{kw_boundary}}'
+    - match: '\b(run|call|RUN|CALL){{kw_boundary}}'
       scope: keyword.other.call.a11flow
       push:
         - match: '({{name}})(?:(\.)({{name}}))*'
@@ -207,8 +209,8 @@ contexts:
     # `headers` is only ever the second word of `forward headers "x-name"`.
     - match: |-
         (?x) \b (
-          tee|via|timeout|after|with|id|forward|headers
-          |TEE|VIA|TIMEOUT|AFTER|WITH|ID|FORWARD|HEADERS
+          tee|via|timeout|after|with|id|forward|headers|TEE|VIA
+          |TIMEOUT|AFTER|WITH|ID|FORWARD|HEADERS
         ) {{kw_boundary}}
       scope: storage.modifier.a11flow
 
@@ -221,23 +223,22 @@ contexts:
       push:
         - match: |-
             (?x) \b (
-              first|last|drop|truncate|batch|group|then|where|map|join|strformat|mime
-              |collect|count|distinct|text|json|packb
-              |FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|THEN|WHERE|MAP|JOIN|STRFORMAT|MIME
-              |COLLECT|COUNT|DISTINCT|TEXT|JSON|PACKB
+              first|last|drop|truncate|batch|group|where|map|distinct
+              |then|mime|strformat|collect|count|join|text|json|packb
+              |FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|WHERE|MAP|DISTINCT
+              |THEN|MIME|STRFORMAT|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true
         - match: '(?=\S)'
           pop: true
 
-  # `then` and `where` read as words joining two things -- `history then asked`,
-  # `hits where it.ok` -- so the pipe is optional in front of those two, and
-  # they are stages written that way too. Both take an operand, which is what
-  # tells the stage from a port of the same name: a bare `then` at the end of a
-  # statement, or in front of a `->`, is a name.
+  # The stages that may be written without their leading `|` read as words
+  # joining two things -- `history then asked`, `hits where it.ok`. Both take an
+  # operand, which is what tells the stage from a port of the same name: a bare
+  # one at the end of a statement, or in front of a `->`, is a name.
   bare-stages:
-    - match: '\b(then|where|THEN|WHERE){{kw_boundary}}(?=[ \t]+(?:[A-Za-z_$"(\[{]|[0-9]|-[0-9]))'
+    - match: '\b(where|then|WHERE|THEN){{kw_boundary}}(?=[ \t]+(?:[A-Za-z_$"(\[{]|[0-9]|-[0-9]))'
       scope: support.function.stage.a11flow
 
   operators:
@@ -295,26 +296,28 @@ contexts:
   builtins:
     - match: |-
         (?x) \b (
-          len|lower|upper|trim|text|number|bool|keys|values|get|join|split
-          |merge|contains|starts-with|ends-with|replace|slice|default
-          |to_chunk|from_chunk|strformat|now|duration|time|seconds
-          |LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES|GET|JOIN|SPLIT
-          |MERGE|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE|SLICE|DEFAULT
-          |TO_CHUNK|FROM_CHUNK|STRFORMAT|NOW|DURATION|TIME|SECONDS
+          len|lower|upper|trim|text|number|bool|keys|values|get|join
+          |split|merge|contains|starts-with|ends-with|replace|slice
+          |default|to_chunk|from_chunk|strformat|now|duration|time
+          |seconds|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES
+          |GET|JOIN|SPLIT|MERGE|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE
+          |SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT|NOW|DURATION
+          |TIME|SECONDS
         ) {{kw_boundary}} (?=\s*\()
       scope: support.function.builtin.a11flow
 
   status-codes:
     - match: |-
         (?x) \b (
-          ok|cancelled|unknown|invalid_argument|deadline_exceeded|not_found
-          |already_exists|permission_denied|resource_exhausted
-          |failed_precondition|aborted|out_of_range|unimplemented|internal
-          |unavailable|data_loss|unauthenticated
-          |OK|CANCELLED|UNKNOWN|INVALID_ARGUMENT|DEADLINE_EXCEEDED|NOT_FOUND
-          |ALREADY_EXISTS|PERMISSION_DENIED|RESOURCE_EXHAUSTED
-          |FAILED_PRECONDITION|ABORTED|OUT_OF_RANGE|UNIMPLEMENTED|INTERNAL
-          |UNAVAILABLE|DATA_LOSS|UNAUTHENTICATED
+          ok|cancelled|unknown|invalid_argument|deadline_exceeded
+          |not_found|already_exists|permission_denied
+          |resource_exhausted|failed_precondition|aborted|out_of_range
+          |unimplemented|internal|unavailable|data_loss
+          |unauthenticated|OK|CANCELLED|UNKNOWN|INVALID_ARGUMENT
+          |DEADLINE_EXCEEDED|NOT_FOUND|ALREADY_EXISTS
+          |PERMISSION_DENIED|RESOURCE_EXHAUSTED|FAILED_PRECONDITION
+          |ABORTED|OUT_OF_RANGE|UNIMPLEMENTED|INTERNAL|UNAVAILABLE
+          |DATA_LOSS|UNAUTHENTICATED
         ) {{kw_boundary}}
       scope: constant.language.status-code.a11flow
 
@@ -329,6 +332,17 @@ contexts:
       scope: constant.numeric.a11flow
 
   strings:
+    # `"""..."""` first, so three quotes are not read as an empty string and a
+    # quote. A line break inside one is content, which is the whole point of it.
+    - match: '"""'
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.double.block.a11flow
+        - match: '\\(?:[nrt"\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: '"""'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
     - match: '"'
       scope: punctuation.definition.string.begin.a11flow
       push:

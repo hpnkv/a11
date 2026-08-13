@@ -6,12 +6,19 @@ import a11.ActionRegistry
 import a11.ActionSchema
 import a11.Status
 import a11.orElse
+import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerEx
+import com.intellij.codeInsight.daemon.impl.DaemonProgressIndicator
+import com.intellij.codeInsight.daemon.impl.HighlightInfo
+import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.impl.DocumentMarkupModel
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.openapi.util.text.StringUtil
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiNameIdentifierOwner
@@ -29,6 +36,20 @@ private const val DEFAULT_MAX_RESULTS = 20
 
 /** How long a handler waits for an input value the caller already sent. */
 private const val READ_TIMEOUT_MS = 5_000L
+
+/**
+ * The port every tool narrates its run on, for the user's eyes.
+ *
+ * A11's canonical name for it (`a11.sdk.llm.USER_FACING_LOG_PORT`), and using it
+ * is not cosmetic. A tool announced to a gateway has its `user_facing` port
+ * *renamed* to this on the gateway's side, so a tool that calls it anything else
+ * ends up with two names for one port: the gateway's registry has this one and
+ * the IDE has the other. That is invisible to a model — the bridge maps between
+ * them when it runs the tool — and fatal to a flow, whose `call` step dispatches
+ * the ports the gateway's registry declares straight to the IDE, which then does
+ * not recognise them.
+ */
+private const val USER_FACING_LOG_PORT = "user_facing_log"
 
 /**
  * Assemble the JSON Schema of one object — a request DTO or a tool result.
@@ -120,6 +141,13 @@ private fun optionalInt(json: Map<String, Any?>, field: String, minimum: Int): I
     return count
 }
 
+/** Read an optional boolean field; null when absent. */
+private fun optionalBool(json: Map<String, Any?>, field: String): Boolean? {
+    val value = json[field] ?: return null
+    require(value is Boolean) { "'$field' must be true or false." }
+    return value
+}
+
 /** Read an optional non-blank string field; null when absent or blank. */
 private fun optionalString(json: Map<String, Any?>, field: String): String? {
     val value = json[field] ?: return null
@@ -138,12 +166,21 @@ private fun optionalStrings(json: Map<String, Any?>, field: String): List<String
 }
 
 /**
- * Request DTO for `get_active_file`: which slice of the file's text to return.
+ * Request DTO for `get_active_file`: which slice of the file's text to return, and
+ * how to number it.
  *
  * [lineLimit] is how a caller keeps a large file from flooding a model's context;
  * paging through the file means repeating the call with a bumped [lineOffset].
+ *
+ * [includeLineNumbers] is spelled and behaves exactly as [ReadFileRequest]'s: same
+ * field name, same 0-based number, same tab. A caller that has learnt one of these
+ * tools has learnt the other, and a numbered line means one thing in this plugin.
  */
-data class ActiveFileRequest(val lineOffset: Int, val lineLimit: Int?) {
+data class ActiveFileRequest(
+    val lineOffset: Int,
+    val lineLimit: Int?,
+    val includeLineNumbers: Boolean,
+) {
     companion object {
         val JSON_SCHEMA: Map<String, Any?> = objectSchema(
             "Which slice of the active file's text to return; omit it for the whole file.",
@@ -158,6 +195,15 @@ data class ActiveFileRequest(val lineOffset: Int, val lineLimit: Int?) {
                     "Maximum number of lines to return; omit for the rest of the file.",
                     minimum = 1,
                 ),
+                "include_line_numbers" to linkedMapOf(
+                    "type" to "boolean",
+                    "description" to (
+                        "Prefix each line with its own 0-based number and a tab, for reading"
+                            + " positions off the text. Off by default, because the numbers are not"
+                            + " part of the file: text to be quoted back — into a patch, say —"
+                            + " should be read without them."
+                        ),
+                ),
             ),
             emptyList(),
         )
@@ -165,6 +211,7 @@ data class ActiveFileRequest(val lineOffset: Int, val lineLimit: Int?) {
         fun fromJson(json: Map<String, Any?>) = ActiveFileRequest(
             lineOffset = optionalInt(json, "line_offset", minimum = 0) ?: 0,
             lineLimit = optionalInt(json, "line_limit", minimum = 1),
+            includeLineNumbers = optionalBool(json, "include_line_numbers") ?: false,
         )
     }
 }
@@ -256,11 +303,116 @@ data class RenameSymbolRequest(
 }
 
 /**
- * Which symbols `get_file_symbols` should report; every field is optional and an
- * omitted one narrows nothing. Filtering happens in the IDE, so a caller asking
- * about one part of a large file pays for that part only.
+ * Request DTO for `read_file`: which file, which lines, and how to number them.
+ *
+ * The same 0-based, `end_line`-inclusive range as [FileHighlightsRequest], so a
+ * highlight's own coordinates can be handed straight back here to read the lines
+ * it sits on.
  */
-data class FileSymbolFilters(
+data class ReadFileRequest(
+    val path: String,
+    val startLine: Int,
+    val endLine: Int?,
+    val includeLineNumbers: Boolean,
+) {
+    companion object {
+        val JSON_SCHEMA: Map<String, Any?> = objectSchema(
+            "Which file to read, which of its lines, and whether to number them.",
+            linkedMapOf(
+                "path" to property(
+                    "string",
+                    "Path of the file: absolute, or relative to the project root (e.g. \"src/main.cpp\").",
+                ),
+                "start_line" to property(
+                    "integer",
+                    "0-based first line to read; omit for the top of the file.",
+                    minimum = 0,
+                ),
+                "end_line" to property(
+                    "integer",
+                    "0-based last line to read, inclusive; omit for the end of the file.",
+                    minimum = 0,
+                ),
+                "include_line_numbers" to linkedMapOf(
+                    "type" to "boolean",
+                    "description" to (
+                        "Prefix each line with its own 0-based number and a tab, for reading"
+                            + " positions off the text. Off by default, because the numbers are not"
+                            + " part of the file: text to be quoted back — into a patch, say —"
+                            + " should be read without them."
+                        ),
+                ),
+            ),
+            listOf("path"),
+        )
+
+        fun fromJson(json: Map<String, Any?>): ReadFileRequest {
+            val startLine = optionalInt(json, "start_line", minimum = 0) ?: 0
+            val endLine = optionalInt(json, "end_line", minimum = 0)
+            require(endLine == null || endLine >= startLine) {
+                "'end_line' must be at least 'start_line'."
+            }
+            return ReadFileRequest(
+                requiredString(json, "path"),
+                startLine,
+                endLine,
+                optionalBool(json, "include_line_numbers") ?: false,
+            )
+        }
+    }
+}
+
+/**
+ * Request DTO for `get_error_highlights`: which file, and which lines of it.
+ *
+ * Lines are 0-based here and in the results, so a caller can hand a highlight's
+ * `start_line` straight back as a `start_line` bound. [endLine] is inclusive, and
+ * omitting it means "to the end of the file" — the common case of asking about
+ * everything from a point onwards.
+ */
+data class FileHighlightsRequest(val path: String, val startLine: Int, val endLine: Int?) {
+    companion object {
+        val JSON_SCHEMA: Map<String, Any?> = objectSchema(
+            "Which file to analyze, and which of its lines to report highlights for.",
+            linkedMapOf(
+                "path" to property(
+                    "string",
+                    "Path of the file: absolute, or relative to the project root (e.g. \"src/main.cpp\").",
+                ),
+                "start_line" to property(
+                    "integer",
+                    "0-based first line of the range; omit for the top of the file.",
+                    minimum = 0,
+                ),
+                "end_line" to property(
+                    "integer",
+                    "0-based last line of the range, inclusive; omit for the end of the file.",
+                    minimum = 0,
+                ),
+            ),
+            listOf("path"),
+        )
+
+        fun fromJson(json: Map<String, Any?>): FileHighlightsRequest {
+            val startLine = optionalInt(json, "start_line", minimum = 0) ?: 0
+            val endLine = optionalInt(json, "end_line", minimum = 0)
+            require(endLine == null || endLine >= startLine) {
+                "'end_line' must be at least 'start_line'."
+            }
+            return FileHighlightsRequest(requiredString(json, "path"), startLine, endLine)
+        }
+    }
+}
+
+/**
+ * Which file `get_file_symbols` should report, and which of its symbols.
+ *
+ * Every field is optional and an omitted one narrows nothing — including [path],
+ * whose absence means the file in the active editor. Filtering happens in the
+ * IDE, so a caller asking about one part of a large file pays for that part only.
+ */
+data class FileSymbolsRequest(
+    val path: String?,
     val namePattern: Regex?,
     val lineOffset: Int?,
     val lineLimit: Int?,
@@ -281,7 +433,7 @@ data class FileSymbolFilters(
         return kinds.any { kind.contains(it, ignoreCase = true) }
     }
 
-    /** How the filters read in a run log; empty when nothing was narrowed. */
+    /** How the narrowing reads in a run log; empty when nothing was narrowed. */
     fun describe(): String = listOfNotNull(
         namePattern?.let { "name matching `${it.pattern}`" },
         lineOffset?.let { "from line ${it + 1}" },
@@ -291,8 +443,14 @@ data class FileSymbolFilters(
 
     companion object {
         val JSON_SCHEMA: Map<String, Any?> = objectSchema(
-            "Which symbols to report; omit a field to leave that dimension unfiltered.",
+            "Which file's symbols to report, and which of them; omit a field to leave"
+                + " that dimension unfiltered.",
             linkedMapOf(
+                "path" to property(
+                    "string",
+                    "Path of the file: absolute, or relative to the project root. Omit it for"
+                        + " the file in the active editor.",
+                ),
                 "name_pattern" to property(
                     "string",
                     "Case-insensitive regular expression; a symbol is reported when its name matches" +
@@ -317,8 +475,9 @@ data class FileSymbolFilters(
             emptyList(),
         )
 
-        /** The filters a request asked for; all-empty JSON means "no filtering". */
-        fun fromJson(json: Map<String, Any?>) = FileSymbolFilters(
+        /** What a request asked for; all-empty JSON means "the active file, whole". */
+        fun fromJson(json: Map<String, Any?>) = FileSymbolsRequest(
+            path = optionalString(json, "path"),
             namePattern = optionalString(json, "name_pattern")?.let { pattern ->
                 try {
                     Regex(pattern, RegexOption.IGNORE_CASE)
@@ -362,6 +521,67 @@ private val RENAME_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
         "usages" to property("integer", "How many references were updated alongside the declaration.", minimum = 0),
     ),
     listOf("previous_name", "new_name", "line", "column", "usages"),
+)
+
+/**
+ * The lowest severity `get_error_highlights` reports: the yellow underline.
+ *
+ * Everything at or above it is drawn as a warning (yellow) or an error (red)
+ * squiggle; below it sit the grey weak warnings and the purely informational
+ * highlights (semantic coloring, say), which are not problems and would drown
+ * the ones that are.
+ */
+private val MIN_REPORTED_SEVERITY: HighlightSeverity = HighlightSeverity.WARNING
+
+/** How much of a highlighted range's text a result carries before it is clipped. */
+private const val MAX_HIGHLIGHT_TEXT = 500
+
+/** JSON Schema of one entry on the `get_error_highlights` `highlights` output. */
+private val HIGHLIGHT_SCHEMA: Map<String, Any?> = objectSchema(
+    "One warning or error highlight — a yellow or red underline the IDE's analysis draws.",
+    linkedMapOf(
+        "severity" to property(
+            "string",
+            "The analysis' own severity name: \"ERROR\" for a red underline, \"WARNING\" for a yellow one.",
+        ),
+        "start_line" to property("integer", "0-based line the underline starts on.", minimum = 0),
+        "end_line" to property(
+            "integer",
+            "0-based line it ends on; the same as `start_line` unless the underline spans lines.",
+            minimum = 0,
+        ),
+        "start_column" to property("integer", "0-based column it starts at, on `start_line`.", minimum = 0),
+        "end_column" to property("integer", "0-based column it ends at, on `end_line`; exclusive.", minimum = 0),
+        "text" to property(
+            "string",
+            "The underlined source text, clipped to $MAX_HIGHLIGHT_TEXT characters with a trailing \"…\".",
+        ),
+        "message" to property("string", "The one-line message, as the editor shows it in the gutter and status bar."),
+        "tooltip" to property(
+            "string",
+            "The full explanation the tooltip pops up, as plain text; absent when the highlight has none.",
+        ),
+    ),
+    listOf("severity", "start_line", "end_line", "start_column", "end_column", "text", "message"),
+)
+
+/** The analyzed file's path, and the highlights found inside the requested lines. */
+data class FileHighlights(val path: String, val highlights: List<Map<String, Any?>>)
+
+/** A file's path, the lines read from it, and the 0-based line they start at. */
+data class FileLines(val path: String, val lines: List<String>, val firstLine: Int)
+
+/** JSON Schema of the `apply_patch` metadata object. */
+private val PATCH_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
+    "What was patched, and how much of it.",
+    linkedMapOf(
+        "path" to property("string", "Absolute path of the file that was patched."),
+        "hunks" to property("integer", "How many hunks were applied.", minimum = 0),
+        "first_line" to property("integer", "0-based line the first hunk landed on.", minimum = 0),
+        "added" to property("integer", "Lines the patch leaves behind, across every hunk.", minimum = 0),
+        "removed" to property("integer", "Lines it replaced, across every hunk.", minimum = 0),
+    ),
+    listOf("path", "hunks", "first_line", "added", "removed"),
 )
 
 /** The active file's path, and the symbols its PSI tree declares. */
@@ -427,6 +647,30 @@ private fun jsonOutput(
     required = required,
     jsonSchema = jsonSchema,
 )
+
+/**
+ * A unary text input port, for a tool whose argument *is* one string.
+ *
+ * The alternative — one JSON object with one string field — buys nothing here and
+ * costs the caller an envelope. A patch is text, and a path is text; a tool that
+ * takes two of them says so with two ports.
+ */
+private fun textInput(name: String, description: String) = ActionPortSchema(
+    name,
+    "text/plain",
+    description = description,
+    unary = true,
+    required = true,
+)
+
+/** The value of a required text input, or a caller-facing error. */
+private fun requireText(inputs: Map<String, Any?>, port: ActionPortSchema): String {
+    val value = inputs[port.name]
+    require(value is String && value.isNotBlank()) {
+        "'${port.name}' is required and must be a non-empty string."
+    }
+    return value
+}
 
 /**
  * A text output port. Its MIME type already says the values are text, so it needs
@@ -531,6 +775,9 @@ class IdeTools(private val project: Project) {
         openEditorsTool(),
         selectionTool(),
         fileSymbolsTool(),
+        errorHighlightsTool(),
+        readFileTool(),
+        applyPatchTool(),
         renameSymbolTool(),
         findFileTool(),
         searchProjectTool(),
@@ -655,7 +902,12 @@ class IdeTools(private val project: Project) {
         val start = request.lineOffset.coerceAtMost(document.lineCount)
         val end = request.lineLimit?.let { (start + it).coerceAtMost(document.lineCount) } ?: document.lineCount
         val lines = (start until end).map { line ->
-            document.getText(TextRange(document.getLineStartOffset(line), document.getLineEndOffset(line)))
+            val text = document.getText(
+                TextRange(document.getLineStartOffset(line), document.getLineEndOffset(line)),
+            )
+            // The file's own line number, not the slice's: a caller that paged in
+            // from line 200 needs the numbers the file has, or they locate nothing.
+            if (request.includeLineNumbers) "$line\t$text" else text
         }
         ActiveFileSlice(path, lines)
     }
@@ -687,20 +939,92 @@ class IdeTools(private val project: Project) {
     }
 
     /**
-     * Every named symbol the active file's PSI tree declares, in source order.
+     * Every named symbol a file's PSI tree declares, in source order.
      *
      * `PsiNamedElement` is the language-agnostic notion of "something with a name",
      * so this works in any language the IDE can parse without knowing the dialect;
      * `kind` is the parser's own element type, which is as close to a portable
      * classification as the platform offers.
+     *
+     * With no path, the file in the active editor — which is the question "what is
+     * in front of me" and needs no argument. With one, any file of the project,
+     * open or not, because a caller reasoning about a file it found by name should
+     * not have to open it first.
      */
-    private fun getFileSymbols(): FileSymbols = onEdtRead {
+    private fun getFileSymbols(path: String?): FileSymbols = onEdtRead {
+        if (path != null) {
+            val target = resolveFile(path)
+            return@onEdtRead FileSymbols(
+                target.path,
+                namedElements(target.psiFile).map { describeSymbol(it, target.document) },
+            )
+        }
         val manager = FileEditorManager.getInstance(project)
-        val path = manager.selectedFiles.firstOrNull()?.path
-        val document = manager.selectedTextEditor?.document ?: return@onEdtRead FileSymbols(path, emptyList())
+        val active = manager.selectedFiles.firstOrNull()?.path
+        val document = manager.selectedTextEditor?.document ?: return@onEdtRead FileSymbols(active, emptyList())
         val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(document)
-            ?: return@onEdtRead FileSymbols(path, emptyList())
-        FileSymbols(path, namedElements(psiFile).map { describeSymbol(it, document) })
+            ?: return@onEdtRead FileSymbols(active, emptyList())
+        FileSymbols(active, namedElements(psiFile).map { describeSymbol(it, document) })
+    }
+
+    // --- reading a file --------------------------------------------------------
+
+    /**
+     * The requested lines of a file, as text.
+     *
+     * Read from the *document* rather than from disk, so what comes back is what
+     * the editor shows — including edits nobody has saved yet, which is the version
+     * every other tool here reports on too.
+     */
+    private fun readFile(request: ReadFileRequest): FileLines = onEdtRead {
+        val target = resolveFile(request.path)
+        val document = target.document
+        val last = (document.lineCount - 1).coerceAtLeast(0)
+        val from = request.startLine
+        val to = (request.endLine ?: last).coerceAtMost(last)
+        if (document.textLength == 0 || from > to) return@onEdtRead FileLines(target.path, emptyList(), from)
+        val lines = (from..to).map { line ->
+            val text = document.getText(
+                TextRange(document.getLineStartOffset(line), document.getLineEndOffset(line)),
+            )
+            if (request.includeLineNumbers) "$line\t$text" else text
+        }
+        FileLines(target.path, lines, from)
+    }
+
+    // --- patching a file -------------------------------------------------------
+
+    /**
+     * Apply a unified diff to one file, as a single undoable command.
+     *
+     * One command, so one Undo takes it back — the same reversibility a rename
+     * has, and for the same reason: the IDE's own undo stack, not a copy of the
+     * file kept somewhere. The document is saved after, because a patch to a file
+     * nobody has open would otherwise sit in memory looking applied.
+     *
+     * Hunks are located by their context rather than by the line numbers in their
+     * `@@` header (which is advisory here), and each has to match: a patch that
+     * does not fit the file is refused with the text that was there instead. That
+     * is the only safe answer for an edit nobody is watching — a fuzzy match is
+     * how a tool silently rewrites the wrong lines.
+     */
+    private fun applyPatch(path: String, patch: String): Map<String, Any?> = onEdt {
+        val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(path) }
+        val document = target.document
+        require(document.isWritable) { "'${target.path}' is not writable." }
+
+        // Located against the file as it is now, before anything has moved, and
+        // applied only if every hunk fits; see [Patch].
+        val edits = Patch.locate(document, patch)
+        Patch.apply(project, document, edits)
+
+        linkedMapOf<String, Any?>(
+            "path" to target.path,
+            "hunks" to edits.size,
+            "first_line" to (edits.firstOrNull()?.at ?: 0),
+            "added" to Patch.added(edits),
+            "removed" to Patch.removed(edits),
+        )
     }
 
     /** The file's named elements, in source order; the file itself is not a symbol. */
@@ -733,6 +1057,144 @@ class IdeTools(private val project: Project) {
             "column" to offset - document.getLineStartOffset(line) + 1,
         )
     }
+
+    // --- error highlights ----------------------------------------------------
+
+    /**
+     * The warning and error highlights the IDE's code analysis puts on a file,
+     * narrowed to the lines the request asks about.
+     *
+     * A highlight is reported when it *overlaps* the range rather than when it sits
+     * entirely inside it: an underline that starts above `start_line` and runs into
+     * the range is one of the range's problems, and dropping it would hide exactly
+     * the multi-line errors a caller is most likely asking about.
+     */
+    private fun getFileHighlights(request: FileHighlightsRequest): FileHighlights {
+        val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(request.path) }
+        // Outside a read action on purpose: analysis takes its own, and holding one
+        // across it is what `runMainPasses` refuses to run under.
+        val infos = analyze(target)
+        return ReadAction.compute<FileHighlights, RuntimeException> {
+            val document = target.document
+            val lastLine = (document.lineCount - 1).coerceAtLeast(0)
+            val from = request.startLine
+            val to = request.endLine ?: lastLine
+            val found = infos.asSequence()
+                .filter { it.severity >= MIN_REPORTED_SEVERITY }
+                .map { describeHighlight(it, document) }
+                .filter { (it["end_line"] as Int) >= from && (it["start_line"] as Int) <= to }
+                .sortedWith(compareBy({ it["start_line"] as Int }, { it["start_column"] as Int }))
+                .toList()
+            FileHighlights(target.path, found)
+        }
+    }
+
+    /** Resolve a requested path to a file to work on; see [ProjectFiles]. */
+    private fun resolveFile(path: String): TargetFile = ProjectFiles.resolve(project, path)
+
+    /**
+     * Every highlight the analysis has for [target], however it has to be obtained.
+     *
+     * A file open in an editor has already been analyzed, and its markup *is* what
+     * the user sees underlined — so when the daemon has finished with it, that
+     * markup is both the fastest and the most faithful answer. Otherwise the file
+     * has no highlights yet and the analysis has to be run for it, which is what
+     * [runMainPasses] is for.
+     */
+    private fun analyze(target: TargetFile): List<HighlightInfo> =
+        ReadAction.compute<List<HighlightInfo>?, RuntimeException> { existingMarkup(target) } ?: runMainPasses(target)
+
+    /**
+     * The highlights already on the document, or null when there are none to trust.
+     *
+     * Null covers both "nothing has ever analyzed this file" — no markup model
+     * exists for it — and "analysis is still running", where the markup holds
+     * whatever passes happen to have finished and reading it would report a subset
+     * of the file's problems as if it were all of them.
+     */
+    private fun existingMarkup(target: TargetFile): List<HighlightInfo>? {
+        DocumentMarkupModel.forDocument(target.document, project, false) ?: return null
+        if (!DaemonCodeAnalyzerEx.getInstanceEx(project).isErrorAnalyzingFinished(target.psiFile)) return null
+        val infos = ArrayList<HighlightInfo>()
+        DaemonCodeAnalyzerEx.processHighlights(
+            target.document,
+            project,
+            MIN_REPORTED_SEVERITY,
+            0,
+            target.document.textLength,
+        ) { info ->
+            infos.add(info)
+            true
+        }
+        return infos
+    }
+
+    /**
+     * Run the highlighting passes for a file nothing has analyzed yet.
+     *
+     * The platform is particular about how this is called, and all three
+     * requirements come from `runMainPasses` itself: off the EDT and outside a read
+     * action (it takes read actions in smart mode on its own), and under a
+     * [DaemonProgressIndicator] — the passes assert they are running under the
+     * daemon's own kind of indicator, so a plain empty progress will not do.
+     *
+     * Documents are committed first, on the EDT, so the PSI the passes walk matches
+     * the text the results are reported against; an editor with uncommitted typing
+     * in it would otherwise yield offsets for a tree that no longer describes it.
+     */
+    private fun runMainPasses(target: TargetFile): List<HighlightInfo> {
+        require(!ApplicationManager.getApplication().isDispatchThread) {
+            "Analyzing '${target.path}' has to run off the UI thread, and this call is on it. " +
+                "Open the file in an editor to read its existing highlights instead."
+        }
+        ApplicationManager.getApplication().invokeAndWait {
+            PsiDocumentManager.getInstance(project).commitAllDocuments()
+        }
+        val indicator = DaemonProgressIndicator()
+        var infos: List<HighlightInfo> = emptyList()
+        ProgressManager.getInstance().runProcess({
+            infos = DaemonCodeAnalyzerEx.getInstanceEx(project)
+                .runMainPasses(target.psiFile, target.document, indicator)
+        }, indicator)
+        return infos
+    }
+
+    /** One highlight as the `highlights` output describes it; call under a read action. */
+    private fun describeHighlight(info: HighlightInfo, document: Document): Map<String, Any?> {
+        val start = info.startOffset.coerceIn(0, document.textLength)
+        val end = info.endOffset.coerceIn(start, document.textLength)
+        val startLine = document.getLineNumber(start)
+        val endLine = document.getLineNumber(end)
+        val described = linkedMapOf<String, Any?>(
+            "severity" to info.severity.name,
+            "start_line" to startLine,
+            "end_line" to endLine,
+            "start_column" to start - document.getLineStartOffset(startLine),
+            "end_column" to end - document.getLineStartOffset(endLine),
+            "text" to clip(document.getText(TextRange(start, end))),
+            "message" to (info.description ?: ""),
+        )
+        plainTooltip(info)?.let { described["tooltip"] = it }
+        return described
+    }
+
+    /**
+     * The tooltip's text, as text. The platform writes tooltips as HTML — wrapped,
+     * escaped, and with the inspection's name in a trailing element — and a caller
+     * asked what the popup says, not how it is marked up.
+     */
+    private fun plainTooltip(info: HighlightInfo): String? {
+        val tooltip = info.toolTip ?: return null
+        val text = StringUtil.unescapeXmlEntities(StringUtil.stripHtml(tooltip, "\n"))
+            .replace(Regex("[ \\t]*\\n[ \\t]*"), "\n")
+            .replace(Regex("\\n{2,}"), "\n")
+            .trim()
+        return text.ifEmpty { null }
+    }
+
+    /** [text] at most [MAX_HIGHLIGHT_TEXT] long, ellipsized when it had to be cut. */
+    private fun clip(text: String): String =
+        if (text.length <= MAX_HIGHLIGHT_TEXT) text else text.take(MAX_HIGHLIGHT_TEXT) + "…"
 
     /**
      * Rename one symbol in the active file, updating its references with it.
@@ -853,13 +1315,18 @@ class IdeTools(private val project: Project) {
 
     private fun activeFileTool(): Tool {
         val request = jsonInput("request", ActiveFileRequest.JSON_SCHEMA, required = false)
-        val lines = textOutput("lines", "The requested lines of the file, one value per line.", unary = false)
+        val lines = textOutput(
+            "lines",
+            "The requested lines of the file, one value per line; each prefixed with its" +
+                " 0-based number and a tab when the request asked for that.",
+            unary = false,
+        )
         val path = textOutput(
             "path",
             "Absolute path of the file in the active editor; absent when no file is open.",
             unary = true,
         )
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_active_file",
             "Return the path of the file in the active editor and its text. Pass a request to" +
@@ -890,7 +1357,7 @@ class IdeTools(private val project: Project) {
 
     private fun openEditorsTool(): Tool {
         val files = textOutput("files", "Absolute path of each file open in an editor.", unary = false)
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_open_editors",
             "List the paths of all files open in editors.",
@@ -907,7 +1374,7 @@ class IdeTools(private val project: Project) {
     private fun selectionTool(): Tool {
         val metadata = jsonOutput("metadata", SELECTION_METADATA_SCHEMA)
         val lines = textOutput("lines", "The selected lines, one value per line.", unary = false)
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_selection",
             "Return the current editor selection: where it sits, and the lines it covers.",
@@ -933,25 +1400,27 @@ class IdeTools(private val project: Project) {
     }
 
     private fun fileSymbolsTool(): Tool {
-        val filters = jsonInput("filters", FileSymbolFilters.JSON_SCHEMA, required = false)
+        val request = jsonInput("request", FileSymbolsRequest.JSON_SCHEMA, required = false)
         val symbols = jsonOutput("symbols", SYMBOL_SCHEMA, unary = false)
         val path = textOutput(
             "path",
             "Absolute path of the file the symbols come from; absent when no file is open.",
             unary = true,
         )
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_file_symbols",
-            "List the named symbols declared in the active file, with each one's kind and" +
-                " position. Pass filters to narrow by name, by kind, or to a range of lines;" +
-                " with no filters the whole file is reported. Use filters to avoid reading complete files.",
-            inputs = listOf(filters),
+            "List the named symbols declared in a file, with each one's kind and position." +
+                " Give a `path` for any file of the project, or omit it for the one in the" +
+                " active editor. Narrow by name, by kind, or to a range of lines; with nothing" +
+                " to narrow by, the whole file is reported. Narrowing is how a caller avoids" +
+                " reading a complete file.",
+            inputs = listOf(request),
             outputs = listOf(symbols, path),
             userLog = log,
         ) { inputs ->
-            val asked = FileSymbolFilters.fromJson(objectOn(inputs, filters))
-            val found = getFileSymbols()
+            val asked = FileSymbolsRequest.fromJson(objectOn(inputs, request))
+            val found = getFileSymbols(asked.path)
             val kept = found.symbols.filter(asked::keeps)
             val narrowed = asked.describe()
             val summary = when {
@@ -972,10 +1441,123 @@ class IdeTools(private val project: Project) {
         }
     }
 
+    private fun readFileTool(): Tool {
+        val request = jsonInput("request", ReadFileRequest.JSON_SCHEMA)
+        val lines = textOutput("lines", "The requested lines of the file, one value per line.", unary = false)
+        val path = textOutput("path", "Absolute path of the file that was read.", unary = true)
+        val log = userLogOutput(USER_FACING_LOG_PORT)
+        return tool(
+            "read_file",
+            "Read a range of lines from any file of the project, open in an editor or not." +
+                " Lines are 0-based and `end_line` is inclusive, the same coordinates" +
+                " `get_error_highlights` reports, so a range that came from one can be read" +
+                " with the other. What comes back is what the editor holds, unsaved edits" +
+                " included. Ask for the range you need rather than the file: a range is what" +
+                " keeps a large file out of the answer.",
+            inputs = listOf(request),
+            outputs = listOf(lines, path),
+            userLog = log,
+        ) { inputs ->
+            val asked = ReadFileRequest.fromJson(objectOn(inputs, request))
+            val read = readFile(asked)
+            val summary = if (read.lines.isEmpty()) {
+                "Read no lines of ${fileName(read.path)}"
+            } else {
+                "Read ${read.lines.size} lines of ${fileName(read.path)}" +
+                    " (${read.firstLine}–${read.firstLine + read.lines.size - 1})"
+            }
+            mapOf(
+                lines.name to read.lines,
+                path.name to read.path,
+                log.name to runLog(summary, "`${read.path}`"),
+            )
+        }
+    }
+
+    private fun applyPatchTool(): Tool {
+        val path = textInput(
+            "path",
+            "Path of the file to patch: absolute, or relative to the project root.",
+        )
+        val patch = textInput(
+            "patch",
+            "The patch, as a unified diff of that one file: a `@@` header, then a line per" +
+                " line of the file prefixed ' ' to keep it, '-' to remove it or '+' to add it." +
+                " Several hunks are fine, in the order they appear in the file. `---`/`+++`" +
+                " headers are allowed and ignored, since the path is a separate input. A hunk" +
+                " is found by its context, not by the numbers in its header, so the context" +
+                " lines have to be the file's own text -- read the range first and quote it" +
+                " back exactly, indentation included, without line numbers.",
+        )
+        val metadata = jsonOutput("metadata", PATCH_METADATA_SCHEMA)
+        val log = userLogOutput(USER_FACING_LOG_PORT)
+        return tool(
+            "apply_patch",
+            "Apply a unified diff to one file of the project. The edit lands as a single IDE" +
+                " command, so one Undo takes it back and the user can see exactly what" +
+                " changed. Every hunk has to match the file as it is now; one that does not is" +
+                " refused with the text that is there instead, and nothing is applied.",
+            inputs = listOf(path, patch),
+            outputs = listOf(metadata),
+            userLog = log,
+        ) { inputs ->
+            val where = requireText(inputs, path)
+            val diff = requireText(inputs, patch)
+            val done = applyPatch(where, diff)
+            val hunks = done["hunks"] as? Int ?: 0
+            mapOf(
+                metadata.name to done,
+                log.name to runLog(
+                    "Patched ${fileName(done["path"] as? String)}" +
+                        " (${if (hunks == 1) "1 hunk" else "$hunks hunks"}," +
+                        " -${done["removed"]} +${done["added"]})",
+                    "`${done["path"]}`",
+                    "```diff\n${diff.trim()}\n```",
+                ),
+            )
+        }
+    }
+
+    private fun errorHighlightsTool(): Tool {
+        val request = jsonInput("request", FileHighlightsRequest.JSON_SCHEMA)
+        val highlights = jsonOutput("highlights", HIGHLIGHT_SCHEMA, unary = false)
+        val path = textOutput("path", "Absolute path of the file that was analyzed.", unary = true)
+        val log = userLogOutput(USER_FACING_LOG_PORT)
+        return tool(
+            "get_error_highlights",
+            "Report the problems the IDE's code analysis finds in a range of lines of a file:" +
+                " every red (error) and yellow (warning) underline, with its position, the text it" +
+                " underlines, and the explanation its tooltip gives. Lines are 0-based, `end_line`" +
+                " is inclusive, and omitting it reads to the end of the file. A highlight is" +
+                " reported when it overlaps the range, so a problem starting above `start_line`" +
+                " and running into it is not missed. The file does not have to be open.",
+            inputs = listOf(request),
+            outputs = listOf(highlights, path),
+            userLog = log,
+        ) { inputs ->
+            val asked = FileHighlightsRequest.fromJson(objectOn(inputs, request))
+            val found = getFileHighlights(asked)
+            val range = "lines ${asked.startLine}–${asked.endLine?.toString() ?: "end"}"
+            val errors = found.highlights.count { it["severity"] == HighlightSeverity.ERROR.name }
+            val summary = if (found.highlights.isEmpty()) {
+                "No warnings or errors in ${fileName(found.path)} ($range)"
+            } else {
+                "Found ${found.highlights.size} highlight(s) in ${fileName(found.path)}" +
+                    " ($errors error(s), $range)"
+            }
+            val listed = found.highlights.map { "${it["severity"]} line ${it["start_line"]}: ${it["message"]}" }
+            mapOf(
+                highlights.name to found.highlights,
+                path.name to found.path,
+                log.name to runLog(summary, "`${found.path}`", bullets(listed)),
+            )
+        }
+    }
+
     private fun renameSymbolTool(): Tool {
         val request = jsonInput("request", RenameSymbolRequest.JSON_SCHEMA)
         val metadata = jsonOutput("metadata", RENAME_METADATA_SCHEMA)
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "rename_symbol",
             "Rename a symbol in the active file, updating the references to it.",
@@ -1001,7 +1583,7 @@ class IdeTools(private val project: Project) {
     private fun findFileTool(): Tool {
         val request = jsonInput("request", FindFileRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "find_file",
             "Find project files by exact file name.",
@@ -1023,7 +1605,7 @@ class IdeTools(private val project: Project) {
     private fun searchProjectTool(): Tool {
         val request = jsonInput("request", SearchProjectRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
-        val log = userLogOutput("user_log_for_run")
+        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "search_project",
             "Find project files whose name contains a query substring.",

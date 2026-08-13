@@ -1,0 +1,48 @@
+# The flow the syntax format is pinned against. Small on purpose, and still one
+# of nearly every construct the language has: a described flow with ports and a
+# header, a call with modifiers, a loop, a pipeline, a branch and a failure.
+flow example {
+  describe "Read a few pages and answer from them."
+
+  in  question: string required "What to find out."
+  out answer:   string          "The answer."
+  out sources:  string stream   "Where it came from."
+
+  header "x-a11-deadline" as deadline
+  header "x-a11-budget"   as budget default 3
+
+  search = run web-search(query: question, limit: budget)
+
+  # A node of the flow's own: every pass of the loop writes it, and one pipeline
+  # reads it back.
+  pages = node()
+
+  nodes fetched {
+    for hit in search.hits parallel 2 {
+      page = try call web-fetch(url: hit.url)
+          timeout 20s
+          with "accept": "text/html"
+          forward headers "authorization"
+
+      # Reading a status waits for the call, so this is the pass's barrier too --
+      # and a `try` whose status nothing reads is a failure nobody notices.
+      wait page
+
+      hit.url -> sources
+      page.text | truncate 200 | where it != "" -> pages
+    }
+  }
+
+  drain pages after search
+
+  brief = run llm-summarize(question: question, pages: pages)
+      with "x-a11-deadline": deadline
+
+  if (pages | count) > 0 {
+    brief.summary -> answer
+  } else {
+    fail not_found "nothing worth reading"
+  }
+
+  skip search.debug
+}

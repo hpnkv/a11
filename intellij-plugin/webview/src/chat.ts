@@ -12,6 +12,7 @@
  */
 
 import { A11ChatSession } from './a11client.js';
+import { clearSuggestions, suggestOnHighlight } from './bridge.js';
 import {
   interactionText,
   isToolResultCarrier,
@@ -24,6 +25,12 @@ import { Role, type Interaction } from '@curiositystack/a11';
 
 /** How far from the bottom still counts as "following the stream". */
 const NEAR_BOTTOM_PX = 48;
+
+/**
+ * The flow the "Suggest fixes" button runs, by the name the plugin bundles it
+ * under (`src/main/resources/flows/suggest-fixes.flow`).
+ */
+const SUGGEST_FLOW = 'suggest-fixes';
 
 /** Rows the composer opens with, and how tall it may grow while typing. */
 const COMPOSER_ROWS = 3;
@@ -262,6 +269,7 @@ export class ChatView {
   private readonly historyPanel: HTMLDivElement;
   private readonly historyButton: HTMLButtonElement;
   private readonly newChatButton: HTMLButtonElement;
+  private readonly suggestButton: HTMLButtonElement;
   private readonly textarea: HTMLTextAreaElement;
   private readonly sendButton: HTMLButtonElement;
   private readonly root: HTMLElement;
@@ -286,7 +294,13 @@ export class ChatView {
     this.historyButton.type = 'button';
     this.historyButton.className = 'quiet';
     this.historyButton.textContent = 'History';
-    bar.append(this.newChatButton, this.historyButton);
+    this.suggestButton = document.createElement('button');
+    this.suggestButton.type = 'button';
+    this.suggestButton.className = 'quiet';
+    this.suggestButton.textContent = 'Suggest fixes';
+    this.suggestButton.title =
+      "Review the file you're looking at: what the IDE underlines, and what it doesn't";
+    bar.append(this.newChatButton, this.historyButton, this.suggestButton);
 
     this.transcript = document.createElement('div');
     this.transcript.className = 'transcript';
@@ -312,6 +326,7 @@ export class ChatView {
 
     this.newChatButton.addEventListener('click', () => this.startNewChat());
     this.historyButton.addEventListener('click', () => void this.toggleHistory());
+    this.suggestButton.addEventListener('click', () => void this.suggestFixes());
     composer.addEventListener('submit', (event) => {
       event.preventDefault();
       void this.submit();
@@ -358,6 +373,7 @@ export class ChatView {
     this.textarea.disabled = busy;
     this.newChatButton.disabled = busy;
     this.historyButton.disabled = busy;
+    this.suggestButton.disabled = busy;
   }
 
   /** The session, created on first use; also what dials the backend. */
@@ -530,6 +546,127 @@ export class ChatView {
       this.textarea.focus();
     }
   }
+
+  /**
+   * Run the review flow: the file-wide paragraph into the transcript, and every
+   * suggestion onto the range of the file it is about.
+   *
+   * There is no prompt to show, so the turn is one assistant bubble: the flow asks
+   * the IDE what is open and what it underlines, asks the model to review it, and
+   * the answers arrive as they are produced. Only the file-wide one is *about* the
+   * transcript, though. A comment on line 42 read three scrolls away from line 42
+   * is the wrong place for it, and a patch shown as a code block is an edit the
+   * user has to make by hand -- so each suggestion goes back to the IDE, which
+   * marks the range and shows the comment, a diff, and an Apply button in a popup
+   * on the range itself.
+   *
+   * `comments` and `patches` are two ports of one flow and are read the same way,
+   * into the same list. The split is what makes a suggestion appear in the editor
+   * as a sentence first and gain its diff a moment later, rather than appearing
+   * only once both are written; which of the two arrives first is the IDE's problem
+   * and it merges them by `id`.
+   *
+   * What stays here is one line saying how many there are and where to find them,
+   * because a run that annotated the editor and said nothing would look like a run
+   * that did nothing.
+   */
+  private async suggestFixes(): Promise<void> {
+    if (this.busy) return;
+    this.showHistory(false);
+    this.setBusy(true);
+    // Pressing the button is an explicit request to watch what it does.
+    this.following = true;
+
+    const bubble = new AssistantBubble(this.addBubble('assistant'), () => this.follow());
+    // Set so the flow's own IDE tool runs draw their boxes in this bubble.
+    this.active = bubble;
+
+    // This run replaces the last one's marks rather than adding to them: two
+    // models' opinions on one warning, one of them about a file that has since
+    // changed, is not twice the help.
+    await clearSuggestions().catch(() => undefined);
+
+    // The flow's output sinks are synchronous and the bridge call is not, so each
+    // is collected and awaited before the summary is written -- otherwise the count
+    // would be of the records *sent* rather than of the marks actually in the editor.
+    const attaching: Promise<string | null>[] = [];
+    try {
+      const session = await this.ensureSession();
+      await session.runFlow(SUGGEST_FLOW, {
+        file_comment: (value) => {
+          const text = String(value).trim();
+          if (text) bubble.appendToken(`**What this file needs, taken together**\n\n${text}\n\n`);
+        },
+        comments: (value) => attaching.push(attachNote(value)),
+        patches: (value) => attaching.push(attachNote(value)),
+      });
+      const keys = await Promise.all(attaching);
+      // By suggestion and not by record: a comment and the patch that goes with it
+      // are two values off two ports and one mark in the editor, so counting the
+      // records would tell the user about twice as many places as there are.
+      const marked = new Set(keys.filter((key): key is string => key !== null));
+      bubble.appendToken(summarize(marked.size, keys.filter((key) => key === null).length));
+      bubble.finish();
+    } catch (error) {
+      bubble.fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.active = null;
+      this.setBusy(false);
+      this.follow();
+    }
+  }
+}
+
+/**
+ * Hand one record to the IDE; the suggestion it belongs to when it took it, null
+ * when it did not.
+ *
+ * The return value is what the caller counts, and it is a *suggestion* key rather
+ * than a "yes": a comment and its patch are two records that mark one place, so
+ * they return the same string and collapse in a set. A record the flow gave no id
+ * is a suggestion of its own -- that is how the IDE treats it too -- so it gets a
+ * key nothing else can share.
+ *
+ * A record the IDE refuses -- a path it cannot resolve, a range that is no longer
+ * in the file -- is one mark missing, not a failed run: the other suggestions are
+ * unaffected, and the flow's own work is already done. So it is counted out and
+ * logged where a developer will see it, rather than thrown into the turn.
+ */
+async function attachNote(value: unknown): Promise<string | null> {
+  const note = (value ?? {}) as Record<string, unknown>;
+  const id = String(note.id ?? '').trim();
+  try {
+    await suggestOnHighlight({
+      path: String(note.path ?? ''),
+      id,
+      origin: note.origin === 'found' ? 'found' : 'reported',
+      comment: String(note.comment ?? ''),
+      patch: String(note.patch ?? ''),
+      start_line: Number(note.start_line ?? 0),
+      start_column: Number(note.start_column ?? 0),
+      end_line: Number(note.end_line ?? 0),
+      end_column: Number(note.end_column ?? 0),
+    });
+    return id || `#${unkeyed++}`;
+  } catch (error) {
+    console.warn('A11 could not attach a suggestion', error);
+    return null;
+  }
+}
+
+/** Counter behind the key given to a record the flow left unkeyed. */
+let unkeyed = 0;
+
+/** The one line the transcript keeps: what landed in the editor, and how to see it. */
+function summarize(marked: number, refused: number): string {
+  if (marked === 0 && refused === 0) return '\n_Nothing in the file was worth a suggestion._\n';
+  if (marked === 0) {
+    return `\n_The model made ${refused} suggestion${refused === 1 ? '' : 's'},` +
+      ' but none could be attached to the editor._\n';
+  }
+  const note = refused > 0 ? ` (${refused} could not be attached)` : '';
+  return `\n_Marked ${marked} place${marked === 1 ? '' : 's'} in the editor${note}.` +
+    ' Hover one for the comment and the fix._\n';
 }
 
 /**

@@ -118,6 +118,61 @@ val buildWebview by tasks.registering(Exec::class) {
 tasks {
     processResources {
         dependsOn(buildWebview)
+
+        // The flows the plugin can run live in `src/main/resources/flows`, so
+        // they land on the classpath with everything else and
+        // `A11WebView.readFlow` can read them back by name.
+
+        // The language itself, per platform. `FlowEngine` runs one of these and
+        // asks it what a flow means -- which is why there is no lexer, parser,
+        // resolver, inspector or word list in this plugin any more.
+        //
+        // Whatever is in `bin/<os>-<arch>/a11-flow` is bundled, and a platform
+        // nobody built for simply has no entry: the plugin then colours flows and
+        // does not check them, with one notification saying so. Build one with
+        //
+        //   cmake --preset debug && cmake --build --preset debug --target a11_flow_tool
+        //   mkdir -p intellij-plugin/bin/macos-aarch64
+        //   cp build/debug/cpp/a11-flow intellij-plugin/bin/macos-aarch64/
+        //
+        // and a release fills the other platforms from their CI runners. Nothing
+        // is checked in: a binary in git is a binary that goes stale.
+        from(layout.projectDirectory.dir("bin")) {
+            into("bin")
+        }
+    }
+
+    // The platform fixture hangs in `setUp` without this, and the deadlock reads
+    // like a slow test rather than a broken one.
+    //
+    // `BasePlatformTestCase` creates its project under a modal progress. That
+    // runs as a coroutine, and this Kotlin's stdlib (2.2) writes a debug-metadata
+    // version the platform's bundled kotlinx-coroutines refuses: the moment it
+    // recovers a stack trace it throws `Debug metadata version mismatch. Expected:
+    // 1, got 2`, which is fatal inside the dispatcher. Project init dies, the
+    // modal progress backing it never completes, and the EDT pumps events for a
+    // hierarchy that will never go away while the test thread waits on the EDT.
+    //
+    // Recovery is the only caller of the version check and is a debugging aid, so
+    // turning it off costs nothing but coroutine frames in stack traces.
+    withType<Test>().configureEach {
+        systemProperty("kotlinx.coroutines.stacktrace.recovery", "false")
+
+        // The language, if this checkout has built it. The tests that assert what
+        // a *word means* need it and skip without it (see FlowLexerTest); the ones
+        // that assert the platform's own contract run either way.
+        for (candidate in listOf(
+            "../build/ctests/cpp/a11-flow",
+            "../build/debug/cpp/a11-flow",
+            "../build/release/cpp/a11-flow",
+            "bin/macos-aarch64/a11-flow",
+        )) {
+            val tool = layout.projectDirectory.file(candidate).asFile
+            if (tool.canExecute()) {
+                systemProperty("a11.flow.tool", tool.absolutePath)
+                break
+            }
+        }
     }
 
     // Fast dev loop: `./gradlew runIde` launches a sandbox CLion with the plugin.

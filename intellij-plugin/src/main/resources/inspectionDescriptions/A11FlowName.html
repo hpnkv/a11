@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports names a flow cannot resolve, and names used as something they are not.
+<p>
+A flow reads in order, so a name means nothing above the statement that binds it;
+this reports a name nothing has bound yet, a name already taken in the same scope,
+a node map used before <code>nodes</code> declares it, and <code>it</code> outside
+the <code>where</code>, <code>map</code> or <code>group</code> stage whose value it
+names.
+<p>
+It also reports names used in the wrong role: a call where one of its ports was
+meant (<code>x</code> rather than <code>x.output</code>), a write to an
+<code>in</code> port or to a call's output, a read of an <code>out</code> port, a
+port a called sibling flow does not declare, and a status asked of something that
+has none.
+</body>
+</html>

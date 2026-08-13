@@ -15,6 +15,8 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.intellij.util.ui.UIUtil
+import dev.curiositystack.a11.clion.highlights.HighlightNote
+import dev.curiositystack.a11.clion.highlights.HighlightSuggestions
 import dev.curiositystack.a11.clion.settings.A11Settings
 import dev.curiositystack.a11.clion.tools.IdeTools
 import java.awt.Color
@@ -28,10 +30,10 @@ import javax.swing.UIManager
  * window and the action explorer — selected by [view] (`"chat"` / `"actions"`).
  *
  * The page runs the TypeScript A11 library, which owns the WebSocket to the A11
- * gateway directly. Everything that needs the live IDE (running a tool,
- * fetching connection config) is reached through three [JBCefJSQuery] bridges
- * that call back into Kotlin; [IdeTools] remains the single source of truth for
- * the IDE tools. The Kotlin A11 runtime ([dev.curiositystack.a11.clion.session])
+ * gateway directly. Everything that needs the live IDE (running a tool, fetching
+ * connection config, reading a flow the plugin ships, leaving a comment on a
+ * highlight) is reached through [JBCefJSQuery] bridges that call back into Kotlin;
+ * [IdeTools] remains the single source of truth for the IDE tools. The Kotlin A11 runtime ([dev.curiositystack.a11.clion.session])
  * is untouched and still available for richer, Kotlin-driven experiences.
  */
 class A11WebView(private val project: Project, view: String, parent: Disposable) {
@@ -43,6 +45,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     private val listActionsQuery = JBCefJSQuery.create(browser)
     private val runActionQuery = JBCefJSQuery.create(browser)
     private val getConfigQuery = JBCefJSQuery.create(browser)
+    private val readFlowQuery = JBCefJSQuery.create(browser)
+    private val suggestOnHighlightQuery = JBCefJSQuery.create(browser)
+    private val clearSuggestionsQuery = JBCefJSQuery.create(browser)
 
     /**
      * The frame rate last pushed to the browser, or 0 for "none yet".
@@ -62,10 +67,16 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         Disposer.register(parent, listActionsQuery)
         Disposer.register(parent, runActionQuery)
         Disposer.register(parent, getConfigQuery)
+        Disposer.register(parent, readFlowQuery)
+        Disposer.register(parent, suggestOnHighlightQuery)
+        Disposer.register(parent, clearSuggestionsQuery)
 
         listActionsQuery.addHandler { respond { A11Json.encodeToString(ideTools.listDescriptors()).valueOrThrow() } }
         runActionQuery.addHandler { request -> respond { runAction(request) } }
         getConfigQuery.addHandler { respond { config() } }
+        readFlowQuery.addHandler { name -> respond { readFlow(name) } }
+        suggestOnHighlightQuery.addHandler { note -> respond { suggestOnHighlight(note) } }
+        clearSuggestionsQuery.addHandler { path -> respond { clearSuggestions(path) } }
 
         // Push the rate rather than trusting the one the browser was built with,
         // and push it again whenever the window changes display: AWT fires this
@@ -143,6 +154,65 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     }
 
     /**
+     * Handle `suggestOnHighlight`: one record the review flow produced — a comment or
+     * a patch — attached to the range of the file it is about.
+     *
+     * One suggestion normally arrives as two of these, off the flow's two output
+     * ports, and the second is merged into the first by its `id` rather than marking
+     * the range again; see `HighlightSuggestions.suggest`. So `has_patch` in the reply
+     * is the state of the whole suggestion after this record, not of the record.
+     *
+     * Deliberately *not* one of [IdeTools]' tools, though it is the same kind of
+     * "reach into the IDE" call. Every tool there is announced to the model — the
+     * allowed-tools header in [config] is built from `listDescriptors()` — and this
+     * is a sink for the plugin's own UI, not a capability a chat turn should be
+     * offered. The flow keeps producing readable output ports; the page decides
+     * that the editor is where they go.
+     */
+    private fun suggestOnHighlight(note: String): String {
+        @Suppress("UNCHECKED_CAST")
+        val parsed = A11Json.parse(note).valueOrThrow() as? Map<String, Any?>
+            ?: error("A highlight note must be a JSON object.")
+        val suggestion = HighlightSuggestions.getInstance(project).suggest(HighlightNote.fromJson(parsed))
+        return A11Json.encodeToString(
+            linkedMapOf<String, Any?>("path" to suggestion.path, "has_patch" to suggestion.patch.isNotEmpty()),
+        ).valueOrThrow()
+    }
+
+    /**
+     * Handle `clearSuggestions`: drop what the last run left, for one file or for
+     * all of them (an empty argument means all).
+     *
+     * A run of the flow replaces the previous run's suggestions rather than adding to
+     * them: two models' opinions about the same range, one of them about a version of
+     * the file that no longer exists, is not twice the help.
+     */
+    private fun clearSuggestions(path: String): String {
+        val suggestions = HighlightSuggestions.getInstance(project)
+        if (path.isBlank()) suggestions.clearAll() else suggestions.clear(path)
+        return "{}"
+    }
+
+    /**
+     * Handle `readFlow`: the text of one flow the plugin ships, by bare name.
+     *
+     * The flows are taken from the repo's own `scripts` directory at build time
+     * (see `processResources`), so what runs is the file that is developed and
+     * there is no second copy to drift. The name is checked rather than
+     * sanitized: a bare name is the whole contract, so anything else — a
+     * directory, a `..`, an extension — is a caller's mistake and is refused as
+     * one, which also leaves no way to spell a path out of the flows directory.
+     */
+    private fun readFlow(name: String): String {
+        require(name.isNotEmpty() && name.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
+            "A flow name is letters, digits, '-' and '_'; got '$name'."
+        }
+        val path = "/flows/$name.flow"
+        return javaClass.getResourceAsStream(path)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: error("No flow named '$name' ships with this plugin.")
+    }
+
+    /**
      * Handle `getConfig`: gateway URL + provider/model/apiKey from settings, plus
      * where the model actually is — which IDE, which project, which directory.
      *
@@ -216,6 +286,15 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
               },
               getConfig: function() {
                 return new Promise(function(resolve, reject) { var arg = ""; ${wrap(getConfigQuery)} });
+              },
+              readFlow: function(name) {
+                return new Promise(function(resolve, reject) { var arg = String(name); ${wrap(readFlowQuery)} });
+              },
+              suggestOnHighlight: function(note) {
+                return new Promise(function(resolve, reject) { var arg = JSON.stringify(note); ${wrap(suggestOnHighlightQuery)} });
+              },
+              clearSuggestions: function(path) {
+                return new Promise(function(resolve, reject) { var arg = String(path || ""); ${wrap(clearSuggestionsQuery)} });
               }
             };
         """.trimIndent()

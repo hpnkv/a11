@@ -1,0 +1,22 @@
+<html>
+<body>
+Reports statuses, waits and declarations nothing in the flow uses.
+<p>
+The one worth having: a step written <code>try</code>, whose status nothing reads.
+<code>try</code> says a call may fail without ending the flow, and
+<code>wait</code>&nbsp;/&nbsp;<code>status</code> is how the flow finds out that it
+did -- so a <code>try</code> nobody asks about turns a failure into ports that are
+silently empty. Either ask, or let the call fail.
+<p>
+Alongside it: a barrier bound to a name nothing reads (the flow still waits there,
+so the name is the dead part -- the fix removes it and leaves the
+<code>wait</code>); an <code>out</code> port nothing writes, which a caller reading
+it gets nothing from; a header declared under an alias nothing uses; a
+<code>nodes</code> map nothing is placed in; and a <code>for</code> variable no pass
+of the loop reads.
+<p>
+An <code>in</code> port nothing reads is deliberately <em>not</em> reported: a
+flow's ports are its public interface, and one it accepts and ignores is a choice
+about that interface rather than a mistake.
+</body>
+</html>

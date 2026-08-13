@@ -1,6 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
-"""Flow as a capability you hand to a model.
+"""Flow as a capability you hand to a model, or to a client.
 
 Three Actions -- ``flow_actions``, ``flow_check`` and ``flow_run`` -- let an
 LLM compose the tools it already has into an [A11 Flow][a11.flow] and run the
@@ -29,6 +29,14 @@ call.
 The instructions to put in front of the model come with it, as either
 [get_system_prompt][a11.sdk.flow_tools.prompt.get_system_prompt] text or an
 ``a11.sdk.skill.Skill`` -- the same words, in whichever shape the host prefers.
+
+A client is the other kind of caller, and it wants ``flow_run`` too -- with the
+flow's ports as *nodes* rather than an object of values. Naming a port on
+``input_streams`` leaves it open to write while the flow runs, and every output
+is readable as it fills; the ids are derived from the call's own
+([flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id],
+[flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id]). That is
+the same tool serving a caller that has a session, not a second one.
 """
 
 from a11.actions import ActionHandler, ActionRegistry, ActionSchema
@@ -37,6 +45,7 @@ from a11.sdk.flow_tools.handlers import (
     describe_composable_actions,
     flow_actions,
     flow_check,
+    flow_input_node_id,
     flow_output_node_id,
     flow_run,
     verify_calls,
@@ -82,6 +91,7 @@ __all__ = [
     "describe_composable_actions",
     "flow_actions",
     "flow_check",
+    "flow_input_node_id",
     "flow_output_node_id",
     "flow_run",
     "get_skill",

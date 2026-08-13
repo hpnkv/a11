@@ -78,6 +78,61 @@ there is no list of tags to fall behind, because the position says it is one.
 Colours are all customisable under
 Settings | Editor | Color Scheme | **A11 Flow**.
 
+### Where the language actually is
+
+Nothing in this plugin knows what a flow means. There used to be 4,000 lines of
+Kotlin that did — a lexer, a permissive parser, a resolver, five inspections and
+five word lists, each of which had to be taught every word the compiler learned —
+and all of it is gone. The language is `cpp/a11/flow/`, and the plugin runs it:
+
+```
+FlowEngine ──▶ a11-flow serve --protocol json      (one process per IDE)
+   │
+   ├── FlowLexer            replays the token stream: colour, braces, folding
+   ├── FlowAnnotator        the diagnostics, and Alt+Enter from their own edits
+   ├── FlowFormattingService  Ctrl+Alt+L
+   └── FlowCompletionContributor  what may be written at the caret
+```
+
+So a stage added to the grammar is a stage this plugin colours, offers and checks
+with no change here at all — and what it reports is word for word what
+`a11 flow check` and CI report, because it is the same code.
+
+The binary comes from `bin/<os>-<arch>/a11-flow` in the plugin's resources, or from
+`-Da11.flow.tool=…`/`A11_FLOW_TOOL`, or from the path. Build one with
+
+```sh
+cmake --build --preset debug --target a11_flow_tool
+mkdir -p intellij-plugin/bin/macos-aarch64
+cp build/debug/cpp/a11-flow intellij-plugin/bin/macos-aarch64/
+```
+
+**With no binary for the platform**, the editor degrades on purpose rather than
+breaking: comments, strings, numbers and punctuation are still coloured (the one
+lexing rule left in Kotlin knows the *shape* of a flow and none of its words),
+completion and diagnostics are silent, and one balloon says why.
+
+### What it tells you about a flow
+
+Completion is position-driven, because that is how the language works: stages after
+a `|`, call modifiers after a `)`, types after a port's `:`, status codes after
+`fail`, node maps after `via`, a sibling flow's input ports inside its argument
+list, and after `x.` whatever `x` actually is — a call's ports, a node's `id`, the
+fields of a status. `it` is offered inside `where`/`map`/`group` and nowhere else,
+and a name is never offered above the statement that binds it. All of that is
+decided by `CompleteAt` in the language; the plugin turns the answers into lookup
+elements.
+
+Diagnostics arrive as one external annotator rather than as inspections, because
+the checks, their messages, their severities and their families are the language's:
+a malformed form, an unknown or misused name, an impossible or redundant sequence,
+a barrier or loop tail that cannot hold, and — the one worth having — a `try` whose
+status nothing reads. `a11 flow codes` lists every one of them.
+
+Quick fixes are the edits the diagnostic came with, applied as they are. Nothing
+here works out what a repair should be: a fix that re-derived it would be a second
+implementation of the check, and would corrupt a file the day the two disagreed.
+
 ## Architecture
 
 ```
@@ -219,9 +274,30 @@ streams in. Ask something like *"what file am I looking at?"* to exercise the
 nothing else depends on it.
 
 Open the **A11 Actions** tool window to explore and run the IDE tools directly:
-pick an action, enter its input JSON, hit **Run**, and inspect the result — no
-provider key or gateway needed, since it calls the IDE handlers straight through
-the bridge.
+pick an action, fill in the fields its input schema declares, hit **Run**, and
+inspect the result — no provider key or gateway needed, since it calls the IDE
+handlers straight through the bridge. The view builds itself from
+`IdeTools.listDescriptors()`, so a tool added there shows up here with no UI
+change. `get_error_highlights` is a good one to try: give it a `path` (absolute
+or project-relative) and, optionally, a 0-based `start_line`/`end_line`, and it
+streams one entry per red or yellow underline in that range — position, the text
+underlined, and the explanation the tooltip gives. A file already open in an
+editor is read straight from the analysis the daemon has done for it; any other
+file is analyzed on demand.
+
+`read_file` takes the same 0-based, `end_line`-inclusive range, so a highlight's
+own coordinates read back the lines it sits on; `include_line_numbers` prefixes
+each line with its number, which is for reasoning about positions rather than for
+quoting text back. `get_file_symbols` takes an optional `path` too, so it is not
+limited to the active editor. And `apply_patch` takes two plain-text inputs — a
+`path` and a unified diff — and applies it as **one IDE command**, so a single
+Undo reverses the whole patch, exactly as it does for `rename_symbol`. Hunks are
+placed by their context rather than by the numbers in their `@@` header, and a
+hunk that does not match the file is refused with what is there instead: nothing
+is applied on a near miss, because a fuzzy match is how a tool silently rewrites
+the wrong lines. Two slips a written-by-hand diff makes — a context line missing
+its leading space, or the markers indented — are read for what they are, since
+the file itself settles which line is which.
 
 ### A note on `buildSearchableOptions`
 
@@ -248,18 +324,23 @@ override `traverseUI`.
 - Gateway: `python -m pytest a11/gateway a11/sdk/llm_tools` from the repo root
   covers the tool bridge's schema mapping, and the tool runner's handling of a
   user-facing run log and of the tools a caller's patterns admit.
-- Flow language: `FlowLexerTest` checks the lexer against the rules in
-  `a11/flow/lexer.py` — token coverage, the casing rule, dashes against arrows,
-  duration units, the stages that go without a pipe, and restarting from any
-  token boundary the way incremental
-  relexing does — and `FlowInjectionTest` (`BasePlatformTestCase`) proves a flow
-  inside a string literal is really injected and prose that merely mentions one
-  is not. The word lists are checked against the parser's own tables from the
-  Python side, by `a11/flow/tests/test_editor_support.py`. `FlowLexerTest` needs
-  no platform fixture and runs in seconds; the injection test does, and shares
-  whatever fate `IdeToolsTest` meets — on a machine where the fixture hangs
-  during `CodeInsightTestFixtureImpl.setUp`, both hang, and neither is the
-  plugin's doing.
+- Flow language: what a *word means* is tested in `cpp/tests/` -- one lexer, one
+  set of expectations -- so what is tested here is this plugin's own two jobs.
+  `FlowEngineTest` drives the protocol: a request out, an envelope back, and the
+  same text answered from the last answer rather than a fresh round trip.
+  `FlowLexerTest` covers the platform's contract (every character in exactly one
+  token, tokens that advance, a restart from any boundary the way incremental
+  relexing does) always, and the translation of a meaning into a token type when a
+  built `a11-flow` is on the machine -- it skips those cases rather than passing
+  vacuously without one. Neither needs a platform fixture:
+  `./gradlew test --tests "*Flow*Test*"` runs them in seconds. `FlowInjectionTest`
+  does need one, and proves a flow inside a string literal is really injected and
+  that prose merely mentioning one is not; it shares whatever fate `IdeToolsTest`
+  meets -- on a machine where the fixture hangs during
+  `CodeInsightTestFixtureImpl.setUp`, both hang, and neither is the plugin's doing.
+  The Python suite holds the other half: `a11/flow/tests/test_editor_support.py`
+  checks that the generated Sublime grammar is current and that no word list has
+  crept back into this plugin.
 - Plugin: `IdeToolsTest` (`BasePlatformTestCase`) builds the tool registry,
   drives `get_active_file` through an A11 action, and exercises the direct
   `IdeTools.runByName` / `listDescriptors` path the JCEF bridge uses, plus the

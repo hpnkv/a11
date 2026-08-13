@@ -48,10 +48,45 @@ export interface A11Config {
   projectPath: string | null;
 }
 
+/**
+ * One record about one range of one file, as the review flow produces it — on
+ * `comments` when it carries a comment, on `patches` when it carries a patch.
+ *
+ * The two ports are one suggestion split in half so the sentence need not wait for
+ * the diff, and `id` is what the IDE puts back together. Lines and columns are
+ * 0-based, `end_column` exclusive — `get_error_highlights`' own numbers for a
+ * reported range, the model's for a range it found itself.
+ */
+export interface HighlightNote {
+  path: string;
+  /**
+   * What the flow called the suggestion this record belongs to. A comment and the
+   * patch that fixes the same thing share one; a record with no id stands alone.
+   */
+  id?: string;
+  /**
+   * Whether the IDE reported this range or the model found it itself. The two are
+   * underlined differently in the editor, since a found range has no squiggle of
+   * the IDE's own underneath it.
+   */
+  origin?: 'reported' | 'found';
+  /** Short enough for a popup; may be empty when there is only a patch. */
+  comment?: string;
+  /** A unified diff in the form `apply_patch` takes; may be empty. */
+  patch?: string;
+  start_line: number;
+  start_column: number;
+  end_line: number;
+  end_column: number;
+}
+
 interface RawBridge {
   listActions(): Promise<string>;
   runAction(name: string, inputs: unknown): Promise<string>;
   getConfig(): Promise<string>;
+  readFlow(name: string): Promise<string>;
+  suggestOnHighlight(note: HighlightNote): Promise<string>;
+  clearSuggestions(path: string): Promise<string>;
 }
 
 declare global {
@@ -87,4 +122,38 @@ export async function runAction(
 /** Backend URL and provider config for the chat session. */
 export async function getConfig(): Promise<A11Config> {
   return JSON.parse(await raw().getConfig()) as A11Config;
+}
+
+/**
+ * The text of a flow the plugin ships, by bare name (no directory, no `.flow`).
+ *
+ * Returned as-is rather than as JSON: a flow is source, and the one thing the
+ * page does with it is hand it to `flow_run`. The Kotlin side reads it from the
+ * plugin's resources, so the file on disk in `scripts/` stays the only copy.
+ */
+export async function readFlow(name: string): Promise<string> {
+  return raw().readFlow(name);
+}
+
+/**
+ * Attach one record — a comment, or a patch — to the range of the file it is about,
+ * so the IDE shows it on that range itself. A record whose `id` names a suggestion
+ * already attached is merged into it rather than marking the range twice.
+ *
+ * Not a `runAction` call, because this is not one of the IDE *tools*: those are all
+ * announced to the model, and a "write into the editor's popups" sink is the
+ * plugin's own business. The Kotlin side keeps the suggestion, marks the range, and
+ * renders the popup — see `highlights/HighlightSuggestions.kt`.
+ */
+export async function suggestOnHighlight(note: HighlightNote): Promise<void> {
+  await raw().suggestOnHighlight(note);
+}
+
+/**
+ * Drop the suggestions of a previous run: one file's, or every one of them when
+ * `path` is omitted. A run replaces what the last one left rather than piling on
+ * top of it.
+ */
+export async function clearSuggestions(path?: string): Promise<void> {
+  await raw().clearSuggestions(path ?? '');
 }

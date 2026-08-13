@@ -1,0 +1,281 @@
+{
+  "codes": [
+    {
+      "code": "flow.barrier.after-order",
+      "family": "barrier",
+      "severity": "warning",
+      "summary": "An 'after' names a step written further down the flow, or names the statement it is on."
+    },
+    {
+      "code": "flow.barrier.cancel-after-wait",
+      "family": "barrier",
+      "severity": "warning",
+      "summary": "A call is cancelled after this body already waited for it, so there is nothing left to stop."
+    },
+    {
+      "code": "flow.barrier.carry-outside-repeat",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A '<-' carries a value where there is no 'repeat' to carry it into."
+    },
+    {
+      "code": "flow.barrier.duplicate",
+      "family": "barrier",
+      "severity": "weak-warning",
+      "summary": "A second 'wait' or 'drain' on something this body already holds for."
+    },
+    {
+      "code": "flow.barrier.duplicate-carry",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A repeat carries the same name twice."
+    },
+    {
+      "code": "flow.barrier.duplicate-until",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A repeat is given a second stop condition."
+    },
+    {
+      "code": "flow.barrier.until-outside-repeat",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "An 'until' or 'while' ends a 'repeat', and there is none here."
+    },
+    {
+      "code": "flow.barrier.wrong-carry",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A carry names something other than what its repeat carries."
+    },
+    {
+      "code": "flow.form.bad-number",
+      "family": "form",
+      "severity": "error",
+      "summary": "A number the language cannot read."
+    },
+    {
+      "code": "flow.form.count-not-positive",
+      "family": "form",
+      "severity": "warning",
+      "summary": "A count that is not a number of anything: 'parallel 0', 'skip -1'."
+    },
+    {
+      "code": "flow.form.duplicate-flow",
+      "family": "form",
+      "severity": "error",
+      "summary": "Two flows in one file are declared with the same name."
+    },
+    {
+      "code": "flow.form.duplicate-port",
+      "family": "form",
+      "severity": "error",
+      "summary": "A port is declared twice in one direction."
+    },
+    {
+      "code": "flow.form.duration-unit",
+      "family": "form",
+      "severity": "error",
+      "summary": "A number carrying a suffix that is not one of the duration units."
+    },
+    {
+      "code": "flow.form.forward-headers",
+      "family": "form",
+      "severity": "error",
+      "summary": "'headers' without the 'forward' that owns it."
+    },
+    {
+      "code": "flow.form.node-parentheses",
+      "family": "form",
+      "severity": "error",
+      "summary": "Making a node takes parentheses: 'node()' or 'node(id)'."
+    },
+    {
+      "code": "flow.form.port-modifier-order",
+      "family": "form",
+      "severity": "error",
+      "summary": "'stream' or 'required' is written in front of the port's type instead of after it."
+    },
+    {
+      "code": "flow.form.stage-argument",
+      "family": "form",
+      "severity": "error",
+      "summary": "A stage is missing the argument it takes, or was given one of the wrong kind."
+    },
+    {
+      "code": "flow.form.unknown-builtin",
+      "family": "form",
+      "severity": "error",
+      "summary": "A function call naming something that is not one of the language's fixed functions."
+    },
+    {
+      "code": "flow.form.unknown-stage",
+      "family": "form",
+      "severity": "error",
+      "summary": "A pipeline stage the language does not have."
+    },
+    {
+      "code": "flow.form.unknown-status-code",
+      "family": "form",
+      "severity": "error",
+      "summary": "'fail' names something that is not a canonical status code, a number, or a value the flow read."
+    },
+    {
+      "code": "flow.form.unknown-type",
+      "family": "form",
+      "severity": "error",
+      "summary": "A port type that is neither built in nor written as a registry tag or a quoted mimetype."
+    },
+    {
+      "code": "flow.name.call-as-stream",
+      "family": "name",
+      "severity": "error",
+      "summary": "A call used where one of its ports was meant."
+    },
+    {
+      "code": "flow.name.it-outside-stage",
+      "family": "name",
+      "severity": "error",
+      "summary": "'it' outside the 'where', 'map' or 'group' stage whose value it names."
+    },
+    {
+      "code": "flow.name.no-status",
+      "family": "name",
+      "severity": "error",
+      "summary": "A status asked of something that has none."
+    },
+    {
+      "code": "flow.name.not-a-call",
+      "family": "name",
+      "severity": "error",
+      "summary": "Something that is not a call is asked to stop."
+    },
+    {
+      "code": "flow.name.not-a-stream",
+      "family": "name",
+      "severity": "error",
+      "summary": "Something that cannot be read is used as a pipeline source."
+    },
+    {
+      "code": "flow.name.not-writable",
+      "family": "name",
+      "severity": "error",
+      "summary": "A stream is written somewhere that cannot be written: an 'in' port, a call's output, a barrier."
+    },
+    {
+      "code": "flow.name.taken",
+      "family": "name",
+      "severity": "error",
+      "summary": "A name is bound twice in one scope."
+    },
+    {
+      "code": "flow.name.unknown",
+      "family": "name",
+      "severity": "error",
+      "summary": "A name nothing has bound, including one bound further down: a flow reads in order."
+    },
+    {
+      "code": "flow.name.unknown-node-map",
+      "family": "name",
+      "severity": "error",
+      "summary": "A node map used before 'nodes' declares it."
+    },
+    {
+      "code": "flow.name.unknown-port",
+      "family": "name",
+      "severity": "error",
+      "summary": "A port the action being called does not declare."
+    },
+    {
+      "code": "flow.sequence.impossible",
+      "family": "sequence",
+      "severity": "warning",
+      "summary": "A sequence of stages that cannot produce what it appears to: dropping from one value, counting a reduced stream, 'first 0'."
+    },
+    {
+      "code": "flow.sequence.redundant-stage",
+      "family": "sequence",
+      "severity": "weak-warning",
+      "summary": "A stage with nothing to do: choosing between the single value a reducing stage left, or the same reshaping twice."
+    },
+    {
+      "code": "flow.sequence.skip-count-target",
+      "family": "sequence",
+      "severity": "error",
+      "summary": "A counted 'skip' applied to something that is not a port or a node; '| drop n' is the one that drops from a pipeline."
+    },
+    {
+      "code": "flow.syntax.constant-required",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "An expression where the grammar requires a constant."
+    },
+    {
+      "code": "flow.syntax.statement-end",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "More text after a complete statement; one statement per line."
+    },
+    {
+      "code": "flow.syntax.unclosed",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A flow, block, call, list or object that is never closed."
+    },
+    {
+      "code": "flow.syntax.unexpected",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "Text where the grammar expects something else."
+    },
+    {
+      "code": "flow.syntax.unexpected-character",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A character the language has no meaning for anywhere."
+    },
+    {
+      "code": "flow.syntax.unterminated-string",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A string that is not closed before its line ends."
+    },
+    {
+      "code": "flow.unused.barrier-name",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A barrier bound to a name nothing reads; the flow still waits there, so the name is the dead part."
+    },
+    {
+      "code": "flow.unused.header",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A header declared under an alias nothing uses."
+    },
+    {
+      "code": "flow.unused.loop-variable",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A 'for' variable no pass of the loop reads."
+    },
+    {
+      "code": "flow.unused.node-map",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A node map nothing is placed in."
+    },
+    {
+      "code": "flow.unused.output-port",
+      "family": "unused",
+      "severity": "warning",
+      "summary": "An 'out' port nothing in the flow writes, so a caller reading it gets nothing."
+    },
+    {
+      "code": "flow.unused.try-status",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A 'try' whose status nothing reads: a failure leaves the ports it feeds silently empty."
+    }
+  ],
+  "format": "flow.codes/v1"
+}

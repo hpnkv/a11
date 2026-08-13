@@ -37,7 +37,7 @@
  *
  * RegisterSerializable wraps the ADL functions into the registry's
  * Serializer/Deserializer pairs, using the tag returned by A11SerialTag as the
- * wire type name. The registry appends the @c ;type=<tag> parameter and
+ * wire type name. The registry appends the @c ;type=\<tag\> parameter and
  * matches it on decode.
  */
 

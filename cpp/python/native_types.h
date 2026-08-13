@@ -7,6 +7,7 @@
 
 #include <absl/status/status.h>
 #include <absl/time/time.h>
+#include <pybind11/pybind11.h>
 
 #include "a11/actions/action.h"
 
@@ -73,6 +74,29 @@ class NativeActionHandler {
   actions::ActionHandler value_;
 };
 
+// Whatever an action handler may be, on the Python side: a coroutine function, a
+// native handler handed back opaquely, or nothing. A `py::object` subclass rather
+// than a caster so the generated stub spells the union out (see the
+// `handle_type_name` below) instead of saying `typing.Any`.
+class PyActionHandler : public pybind11::object {
+  PYBIND11_OBJECT_DEFAULT(PyActionHandler, object, PyObject_Type)
+  using object::object;
+};
+
 }  // namespace a11::python
+
+PYBIND11_NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+PYBIND11_NAMESPACE_BEGIN(detail)
+
+// ActionHandler is spelled out by the stub generator; NativeActionHandler is the
+// bound class in this module.
+template <>
+struct handle_type_name<a11::python::PyActionHandler> {
+  static constexpr auto name =
+      const_name("ActionHandler | NativeActionHandler | None");
+};
+
+PYBIND11_NAMESPACE_END(detail)
+PYBIND11_NAMESPACE_END(PYBIND11_NAMESPACE)
 
 #endif  // A11_PYTHON_NATIVE_TYPES_H_

@@ -245,10 +245,13 @@ async def test_the_first_full_sentence_becomes_the_question(
     history.attach_stream(stream)
     await history.put_null_final()
 
+    # Every input port of the call, including the ones it has nothing for: one
+    # that is neither written nor closed is one the handler waits on.
     async with (
         call["source"] as source,
         call["inputs"] as inputs,
         call["flow"] as which,
+        call["input_streams"] as streamed,
     ):
         await source.put_final(playground.FLOW_SOURCE)
         await inputs.put_final(
@@ -259,6 +262,7 @@ async def test_the_first_full_sentence_becomes_the_question(
             }
         )
         await which.put_null_final()
+        await streamed.put_null_final()
 
     # Read off the published nodes rather than out of `result`: this is the
     # client watching the answer being written.

@@ -16,8 +16,8 @@ from a11.actions import ActionRegistry
 from a11.sdk import bash, flow_tools
 
 registry = ActionRegistry()
-bash.register(registry)            # the tools to compose
-flow_tools.register(registry)      # and the ability to compose them
+bash.register(registry)  # the tools to compose
+flow_tools.register(registry)  # and the ability to compose them
 
 system_prompt = "\n\n".join(
     [bash.get_system_prompt(), flow_tools.get_system_prompt()]
@@ -60,11 +60,49 @@ schema)` per action.
 
 ## The three tools
 
-| Tool | What the model does with it |
-| --- | --- |
+| Tool           | What the model does with it                                                                                                                                                         |
+|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `flow_actions` | Asks what it may compose. Returns each action with its **input and output ports** — the part a tool definition cannot carry, and exactly what a pipe needs on both sides of a `->`. |
-| `flow_check` | Compiles a flow and describes what it resolves to, without dispatching anything. A syntax error comes back with its line and column. |
-| `flow_run` | Compiles, checks the call targets, runs the flow, and returns its declared outputs as one object. |
+| `flow_check`   | Compiles a flow and describes what it resolves to, without dispatching anything. A syntax error comes back with its line and column.                                                |
+| `flow_run`     | Compiles, checks the call targets, runs the flow, and returns its declared outputs as one object.                                                                                   |
+
+## The same tool, for a client rather than a model
+
+A model wants the object. A *client* usually wants the values as they happen —
+and often has values of its own to send while the composition is already running.
+That is the same `flow_run`, with the flow's ports reached as nodes:
+
+```python
+call = a11.Action(flow_tools.FLOW_RUN_SCHEMA)...
+await call.call()
+# Both ends work the ids out from the call's own id; nothing is announced.
+said = session.node_map.get(flow_tools.flow_output_node_id(call.get_id(), "said"))
+words = session.node_map.get(flow_tools.flow_input_node_id(call.get_id(), "words"))
+words.attach_stream(stream)
+
+await call["input_streams"].put_final(["words"])  # this port is mine to fill
+await call["source"].put_final(SOURCE)  # and close `inputs`, `flow`
+
+await (await words.put("one"))  # the flow reads it now
+print(await said.next_object())  # and answers before the port ends
+await (await words.put_null_final())  # the caller owns the close
+await words.drain_and_close()
+```
+
+A port is filled one way or the other — a value in `inputs`, or a node you write —
+and neither way looks at how many values the port carries: a port declared
+`stream` takes them one after another, an ordinary port takes the one it carries,
+and a port nobody wrote carried none. That uniformity is also what makes a
+*typed* port reachable at all: each value written as a node keeps its own chunk
+and mimetype, where a value inside `inputs` arrives as plain JSON
+([`a11.sdk.Interaction`](interactions.md) dumps as text for a JSON
+mimetype and the wire validator reads base64, so it does not come back).
+
+The collected `result` still lands at the end, so a caller can stream, collect, or
+both. Two things to know: **close every input port of the call**, including the
+ones you have nothing for — an input nobody writes and nobody closes is one the
+handler waits on, and with no `x-a11-deadline` nothing else ends the wait. The
+same goes for a port you named on `input_streams`: nothing but you will close it.
 
 ## What the model is not allowed to compose
 
@@ -86,8 +124,8 @@ The model needs to be told the capability exists, and it needs the language.
 Both are one text, available in whichever shape the host prefers:
 
 ```python
-flow_tools.get_system_prompt()   # for composing into a larger system prompt
-flow_tools.get_skill()           # the same words as an a11.sdk.skill.Skill
+flow_tools.get_system_prompt()  # for composing into a larger system prompt
+flow_tools.get_skill()  # the same words as an a11.sdk.skill.Skill
 ```
 
 The text embeds `a11.flow.REFERENCE` — [the language's own cheat

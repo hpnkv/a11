@@ -7,7 +7,7 @@
  * (`application/json;type=a11.Chunk`), and this module is what turns that name
  * into an object and an object back into that name.
  *
- * The tag comes from the canonical table in {@link serial_tags}, so a value
+ * The tag comes from the canonical table in `serial_tags.ts`, so a value
  * written by one language is read by another. The runtime's own data types and
  * declared models such as SDK configs share one namespace: what a tag resolves
  * to is what tells them apart.
@@ -93,7 +93,7 @@ export type Fields = Record<string, unknown>;
  * registered value without either side knowing.
  */
 export interface WireValueCodec<T = unknown> {
-  /** Canonical tag from {@link serial_tags}, written as the object's key. */
+  /** Canonical tag from `serial_tags.ts`, written as the object's key. */
   readonly tag: string;
   readonly test: (value: unknown) => boolean;
   readonly dump: (value: T) => StatusOr<Fields>;

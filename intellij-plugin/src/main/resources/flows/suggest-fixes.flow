@@ -1,0 +1,223 @@
+flow suggest-fixes {
+  describe "Review the file the developer is looking at and suggest fixes for it, on the IDE's ranges and on its own."
+
+  out file_comment: string        "What the file needs, taken together."
+  out comments:     object stream "What is wrong with one range, as soon as it is written."
+  out patches:      object stream "The diff that fixes one range, keyed to its comment by id."
+
+  # Local nodes: the file's text, the prompt built out of it and the answer taken
+  # apart again are the composition's own business, and none of them belongs in
+  # the session's map.
+  nodes scratch
+
+  # --- what the client is looking at -----------------------------------------
+
+  # Numbered, which is off by default and asked for here: every suggestion has to
+  # name a range and most carry a patch, and both are line arithmetic the model
+  # would otherwise do by counting. The numbers are 0-based, as the highlights are.
+  active = call get_active_file(request: {include_line_numbers: true})
+  # The IDE's narration of the run, read and dropped: an output nobody reads
+  # stalls the action producing it. `user_facing_log` and not the name the IDE's
+  # own schema uses, because a tool announced to a gateway arrives with its
+  # user-facing port under that canonical name.
+  skip active.user_facing_log
+
+  # The path is wanted more than once -- by the highlights call, by the prompt,
+  # and by every record that comes back -- and a node is where a value waits to
+  # be read that often. The port itself is drained once, here.
+  file_path = node() in scratch
+  active.path -> file_path
+
+  # The file as one string. Bounded on the way in: a prompt is not the place for
+  # an unbounded file, and this is the one value here that has no natural size.
+  file_text = node() in scratch
+  active.lines | join "\n" | truncate 40000 -> file_text
+
+  # --- and what the IDE underlines in it -------------------------------------
+
+  # From line 0 with no end_line: the whole file. Both are 0-based, as the
+  # highlights that come back are. Input to the review, not its subject: the
+  # model answers these and whatever else it finds.
+  found = call get_error_highlights(
+    request: file_path | map {path: it, start_line: 0}
+  )
+  skip found.path  # we asked about a path we already have
+  skip found.user_facing_log
+
+  # --- one turn: a review of the file ----------------------------------------
+
+  # The budget is the whole answer, thinking included, and a model left to
+  # decide for itself thinks for as long as the file is interesting: at the
+  # default 10240 this turn spent every token reasoning and wrote no text at
+  # all, which reads at this end as a run that produced nothing. Room for both,
+  # and a middling effort, because copying a file's lines into a patch exactly
+  # is careful work rather than deep work. Each provider reads the key it knows
+  # and ignores the others.
+  whole = run interact_with_llm(
+    config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}
+  )
+      forward headers "x-a11-llm-*"
+      with "x-a11-allowed-llm-actions": ""
+      via scratch
+  skip whole.event_stream
+  skip whole.thoughts
+  skip whole.new_interactions
+
+  found.highlights
+    | map strformat(
+      "- %s | at {\"start_line\": %d, \"start_column\": %d, \"end_line\": %d, \"end_column\": %d} | message: %s | underlined: %s | tooltip: %s",
+      it.severity, it.start_line, it.start_column, it.end_line, it.end_column,
+      it.message, it.text, default(get(it, "tooltip", ""), "(none)")
+    )
+    | join "\n"
+    | map a11.sdk.Interaction{
+      role: "user",
+      system_instructions: [to_chunk(join([
+        "Review one file in a JetBrains IDE: the file, then what its analysis",
+        "underlines. Lines and columns are 0-based, end_column exclusive.",
+        "",
+        "Each line arrives as its 0-based number, a tab, then the line. Read start_line",
+        "and end_line off them; a hunk header's N is that number plus one. The margin is",
+        "not the file: column 0 follows the tab, patch lines are copied from after it, a",
+        "patch carrying it is refused.",
+        "",
+        "Suggest fixes anywhere, underlined or not, each small, safe and obviously right;",
+        "skip what you cannot explain or fix. Small is a reason to patch, not to skip.",
+        "",
+        "Write two parts and nothing else: no headings, fences, preamble or closing.",
+        "",
+        "Part one: JSON objects, each preceded by a line of exactly `§§§§§§`, the first",
+        "included. One suggestion is two objects sharing an `id`, `id` first:",
+        "",
+        "  §§§§§§",
+        "  {\"id\": \"s1\", \"start_line\": 11, \"start_column\": 4, \"end_line\": 11,",
+        "   \"end_column\": 20, \"origin\": \"reported\", \"comment\": \"...\"}",
+        "",
+        "The patch object repeats all of that after its own separator, with",
+        "\"patch\": \"@@ -12,3 +12,3 @@\\n ...\" instead of \"comment\".",
+        "",
+        "Comment object before patch object, always. Either may stand alone: a patch",
+        "alone suits anything too small for a sentence, and a repeated change -- comment",
+        "the first at most, patch the rest silently. One suggestion per occurrence, never",
+        "a patch spanning the file; a comment alone only when the fix is not small and",
+        "local.",
+        "",
+        "`origin`: \"reported\" if the range is a highlight's, its four numbers copied",
+        "exactly; \"found\" if yours.",
+        "",
+        "`comment`: 30 words at most, saying what the diff cannot. No preamble, markdown,",
+        "restating the IDE's message or narrating the diff; omit if it adds nothing.",
+        "",
+        "`patch`: a unified diff of this file -- \"@@ -N,C +N,C @@\", then one line per",
+        "line, prefixed ' ' to keep, '-' to remove, '+' to add. Kept and removed lines",
+        "are the file's own, character for character including whitespace; one that does",
+        "not match is refused. Change as few lines as you can. It is a JSON string:",
+        "newlines are \\n, quotes are \\\" -- one unescaped quote loses the suggestion.",
+        "",
+        "Part two, last: another `§§§§§§` line, then at most 120 words of prose on what the",
+        "file needs, grouped by cause, each fix named, which first. No headings, no",
+        "restating messages; say in a clause if you went beyond the IDE; if nothing, say",
+        "so. It summarises the objects, never replaces one: anything in it a small edit",
+        "would fix needs a patch object above.",
+        "",
+        "Write the separator exactly, all six; `§` nowhere else."
+      ], "\n"))],
+      content: [to_chunk({
+        role: "user",
+        content: [{
+          type: "text",
+          text: strformat(
+            join([
+              "File: %s",
+              "",
+              "```",
+              "%s",
+              "```",
+              "",
+              "What the IDE reports:",
+              "%s"
+            ], "\n"),
+            file_path, file_text, it
+          )
+        }]
+      })]
+    }
+    -> whole.interactions
+
+  pieces = node() in scratch
+  whole.text_output
+    | text
+    | group contains(it, "§")
+    | map join(it, "")
+    | map replace(it, "```json", "")
+    | map replace(it, "```", "")
+    | map replace(it, "§", "")
+    | map trim(it)
+    | where it != ""
+    -> pieces
+
+  # The paragraph is whatever follows the last separator, read off the answer as
+  # one string and not out of `pieces`. `group` closes on the delta that carries
+  # the separator and keeps that delta, so a delta carrying the separator *and*
+  # the paragraph's first words leaves those words at the end of the previous
+  # piece -- and the paragraph then arrives with its opening cut off. Nothing is
+  # lost by buffering here: this port carries one value, and the paragraph is the
+  # last thing written.
+  whole.text_output
+    | text
+    | join ""
+    | map replace(it, "```json", "")
+    | map replace(it, "```", "")
+    | map get(split(it, "§"), -1, "")
+    # And after the last object, if one is still in front of it. A model that
+    # forgets the separator before the paragraph leaves its final record here,
+    # and a raw JSON blob in the transcript reads as a broken run. Split on a
+    # brace that *ends a line*, not on any brace: prose that happens to mention
+    # a `}` keeps its opening, which the paragraph would otherwise lose.
+    | map get(split(it, "}\n"), -1, "")
+    | map trim(it)
+    -> file_comment
+
+  # Parsed once, into a node, because the two ports below both read it.
+  #
+  # A piece is an object when it has braces, and nothing narrower: keying on a
+  # field name means a model that leaves that field out, or writes the fields in
+  # another order, loses every suggestion at once and says nothing about it. `id`
+  # in particular is ours, not the model's -- a record without one still marks a
+  # range, it just correlates with nothing -- so it must not be what decides
+  # whether a record is seen. Anything that gets past this and is not an object
+  # parses to text, comes out with no comment and no patch, and is dropped by the
+  # two `where`s below, which is the same answer arrived at more cheaply.
+  suggestions = node() in scratch
+  pieces
+    | where contains(it, "{") and contains(it, "}")
+    | map strformat("%s}", join(slice(split(it, "}"), 0, -1), "}"))
+    # Everything after the first `{`, put back together: a patch for almost any
+    # brace language carries `{` of its own, and taking one piece of the split
+    # would cut the object off at the first of them.
+    | map strformat("{%s", join(slice(split(it, "{"), 1), "{"))
+    | json
+    | map {
+      path: file_path,
+      # A model asked for "s1" sometimes writes 1; %s makes either a string.
+      id: trim(strformat("%s", get(it, "id", ""))),
+      # "found" and not "reported" when it is missing: a found range drawn as
+      # reported gets no underline at all, and an invisible suggestion is the
+      # worse of the two mistakes here.
+      origin: default(get(it, "origin", ""), "found"),
+      comment: trim(get(it, "comment", "")),
+      patch: trim(get(it, "patch", "")),
+      start_line: number(get(it, "start_line", 0)),
+      end_line: number(get(it, "end_line", 0)),
+      start_column: number(get(it, "start_column", 0)),
+      end_column: number(get(it, "end_column", 0))
+    }
+    -> suggestions
+
+  # Two ports and not one, so the sentence reaches the editor while the diff for
+  # the same range is still being written. An object carrying both -- which the
+  # instructions do not ask for and a model may still produce -- is read by both
+  # readers, and the two records meet again under their shared id.
+  suggestions | where it.comment != "" -> comments
+  suggestions | where it.patch != "" -> patches
+}

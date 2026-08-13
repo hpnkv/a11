@@ -24,6 +24,42 @@ from a11.service.session import Session
 from a11.status import StatusCode, StatusException
 
 
+async def _send(
+    call: a11.Action,
+    source: str,
+    *,
+    inputs: dict | None = None,
+    input_streams: list[str] | None = None,
+    flow: str | None = None,
+) -> None:
+    """Send a `flow_run` call its source, and close every input port.
+
+    Every one, including the ports this caller has nothing for: an input nobody
+    writes and nobody closes is one the handler waits on, and with no deadline
+    on the call it waits for good. Callers of a remote action own that, the way
+    the LLM tool runner does for a model's.
+    """
+    async with (
+        call["source"] as source_port,
+        call["inputs"] as inputs_port,
+        call["input_streams"] as streams_port,
+        call["flow"] as flow_port,
+    ):
+        await source_port.put_final(source)
+        if inputs is None:
+            await inputs_port.put_null_final()
+        else:
+            await inputs_port.put_final(inputs)
+        if input_streams is None:
+            await streams_port.put_null_final()
+        else:
+            await streams_port.put_final(input_streams)
+        if flow is None:
+            await flow_port.put_null_final()
+        else:
+            await flow_port.put_final(flow)
+
+
 def _registry(
     root: pathlib.Path, **overrides
 ) -> a11.ActionRegistry:
@@ -91,25 +127,20 @@ async def test_a_client_sends_a_flow_and_the_gateway_runs_it(
     call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"__ping")
     await call.call()
 
-    async with (
-        call["source"] as source,
-        call["inputs"] as inputs,
-        call["flow"] as which,
-    ):
-        await source.put_final(
-            """
-            flow echo-twice {
-              in  word: string required
-              out said: string stream
-              first  = run __ping(input: word)
-              second = run __ping(input: first.output)
-              first.output  -> said
-              second.output -> said
-            }
-            """
-        )
-        await inputs.put_final({"word": "hello"})
-        await which.put_null_final()
+    await _send(
+        call,
+        """
+        flow echo-twice {
+          in  word: string required
+          out said: string stream
+          first  = run __ping(input: word)
+          second = run __ping(input: first.output)
+          first.output  -> said
+          second.output -> said
+        }
+        """,
+        inputs={"word": "hello"},
+    )
 
     result = await asyncio.wait_for(
         call["result"].next_object(), timeout=30
@@ -161,27 +192,215 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
     )
     call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"__ping")
     await call.call()
-    async with (
-        call["source"] as source,
-        call["inputs"] as inputs,
-        call["flow"] as which,
-    ):
-        await source.put_final(
-            """
-            flow ask-the-client {
-              in  word: string required
-              out said: string stream
-              theirs = call __ping(input: word)
-              theirs.output -> said
-            }
-            """
-        )
-        await inputs.put_final({"word": "over here"})
-        await which.put_null_final()
+    await _send(
+        call,
+        """
+        flow ask-the-client {
+          in  word: string required
+          out said: string stream
+          theirs = call __ping(input: word)
+          theirs.output -> said
+        }
+        """,
+        inputs={"word": "over here"},
+    )
 
     result = await asyncio.wait_for(call["result"].next_object(), timeout=30)
     await asyncio.wait_for(call.wait(), timeout=30)
     assert result == {"said": ["the client answered 'over here'"]}
+
+    serving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+
+ECHO = a11.ActionSchema.model_validate(
+    {
+        "name": "__echo",
+        "inputs": {"text": {"type": str}},
+        "outputs": {"echoed": {"type": str}},
+    }
+)
+
+
+async def _echo(action: a11.Action) -> None:
+    """Answer each value as it arrives, so a reply proves the input arrived."""
+    async for value in action["text"]:
+        await (await action["echoed"].put(str(value).upper()))
+    await action["echoed"].drain_and_close()
+
+
+#: A flow whose ports are one of each: a stream, and one value.
+STREAMED_BOTH_WAYS = """
+flow echo-each {
+  in  words: string stream required
+  in  once:  string
+  out said:  string stream
+  back = run __echo(text: words)
+  back.echoed -> said
+  once -> said
+}
+"""
+
+
+async def _run_flow_call(client: Session, stream, allowed: bytes = b"__echo"):
+    """A `flow_run` call on the client's session, dispatched and ready."""
+    call = (
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        .bind_node_map(client.node_map)
+        .bind_session(client)
+        .bind_stream(stream)
+    )
+    call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed)
+    await call.call()
+    return call
+
+
+def _port(client: Session, call, stream, port: str, *, write: bool):
+    """One of the flow's own ports, by the id both ends work out."""
+    node_id = (
+        flow_tools.flow_input_node_id(call.get_id(), port)
+        if write
+        else flow_tools.flow_output_node_id(call.get_id(), port)
+    )
+    node = client.node_map.get(node_id)
+    if write:
+        # A port this end writes has to reach the other end.
+        node.attach_stream(stream)
+    return node
+
+
+@pytest.mark.asyncio
+async def test_a_port_named_on_input_streams_takes_values_as_it_runs(
+    tmp_path: pathlib.Path,
+):
+    """The streaming contract, both directions, over a real connection.
+
+    The client writes a value *after* the flow is running and reads the answer
+    back *before* it closes the port. Neither half of that can be expressed by
+    sending an object of values and waiting for another one -- and the collected
+    `result` still lands at the end for callers that want the lot.
+    """
+    registry = _registry(tmp_path)
+    registry.register(ECHO.name, ECHO, _echo)
+    gateway = gateway_app.A11Gateway(
+        conversations.ConversationStore(tmp_path), registry
+    )
+    server_stream, client_stream = net.create_in_process_wire_stream_pair()
+    serving = asyncio.create_task(gateway.handle_stream(server_stream))
+
+    client = Session(action_registry=a11.ActionRegistry())
+    await client.add_stream(client_stream, mode="start")
+    call = await _run_flow_call(client, client_stream)
+
+    # Every port of the flow, at the id derived from this call's own: nothing is
+    # announced, and subscribing before the source is sent misses nothing.
+    said = _port(client, call, client_stream, "said", write=False)
+    words = _port(client, call, client_stream, "words", write=True)
+    once = _port(client, call, client_stream, "once", write=True)
+
+    await _send(call, STREAMED_BOTH_WAYS, input_streams=["words", "once"])
+
+    # One value in, one value back, with the port still open: the flow is
+    # certainly still running, so this cannot be a collected result.
+    await (await words.put("one"))
+    assert (
+        await asyncio.wait_for(said.next_object(), timeout=30)
+    ) == "ONE"
+    await (await words.put("two"))
+    assert (
+        await asyncio.wait_for(said.next_object(), timeout=30)
+    ) == "TWO"
+
+    # A port that carries one value is filled the same way, and closed the same
+    # way. The close is the caller's: nothing else ends either port.
+    await (await once.put("solo"))
+    for node in (words, once):
+        await (await node.put_null_final())
+        await node.drain_and_close()
+
+    result = await asyncio.wait_for(call["result"].next_object(), timeout=30)
+    await asyncio.wait_for(call.wait(), timeout=30)
+    assert result == {"said": ["ONE", "TWO", "solo"]}
+
+    serving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_port_does_not_lose_a_value_written_early(
+    tmp_path: pathlib.Path,
+):
+    """A caller need not wait for anything before writing a port.
+
+    The node holds what it was given from the moment it exists, on either end,
+    so a client that writes its inputs and *then* sends the source is not racing
+    the flow it is about to start.
+    """
+    registry = _registry(tmp_path)
+    registry.register(ECHO.name, ECHO, _echo)
+    gateway = gateway_app.A11Gateway(
+        conversations.ConversationStore(tmp_path), registry
+    )
+    server_stream, client_stream = net.create_in_process_wire_stream_pair()
+    serving = asyncio.create_task(gateway.handle_stream(server_stream))
+
+    client = Session(action_registry=a11.ActionRegistry())
+    await client.add_stream(client_stream, mode="start")
+    call = await _run_flow_call(client, client_stream)
+
+    words = _port(client, call, client_stream, "words", write=True)
+    once = _port(client, call, client_stream, "once", write=True)
+    # Written and closed before the gateway has even been told which flow to run.
+    for node, value in ((words, "early"), (once, "also early")):
+        await (await node.put(value))
+        await (await node.put_null_final())
+        await node.drain_and_close()
+
+    await _send(call, STREAMED_BOTH_WAYS, input_streams=["words", "once"])
+
+    result = await asyncio.wait_for(call["result"].next_object(), timeout=30)
+    await asyncio.wait_for(call.wait(), timeout=30)
+    # Sorted, because `said` has two writers and two writers to one node
+    # interleave by arrival. What is being tested is that neither value was
+    # dropped for having been written too early.
+    assert sorted(result["said"]) == ["EARLY", "also early"]
+
+    serving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_port_the_caller_never_closes_keeps_it_waiting(
+    tmp_path: pathlib.Path,
+):
+    """The other side of "the caller owns the close", stated as a test."""
+    registry = _registry(tmp_path)
+    registry.register(ECHO.name, ECHO, _echo)
+    gateway = gateway_app.A11Gateway(
+        conversations.ConversationStore(tmp_path), registry
+    )
+    server_stream, client_stream = net.create_in_process_wire_stream_pair()
+    serving = asyncio.create_task(gateway.handle_stream(server_stream))
+
+    client = Session(action_registry=a11.ActionRegistry())
+    await client.add_stream(client_stream, mode="start")
+    call = await _run_flow_call(client, client_stream)
+    words = _port(client, call, client_stream, "words", write=True)
+    once = _port(client, call, client_stream, "once", write=True)
+
+    await _send(call, STREAMED_BOTH_WAYS, input_streams=["words", "once"])
+
+    await (await words.put("one"))
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(call.wait(), timeout=0.5)
+
+    for node in (words, once):
+        await (await node.put_null_final())
+        await node.drain_and_close()
+    await asyncio.wait_for(call.wait(), timeout=30)
 
     serving.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -241,23 +460,18 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
         flow_tools.flow_output_node_id(call.get_id(), "said")
     )
 
-    async with (
-        call["source"] as source,
-        call["inputs"] as inputs,
-        call["flow"] as which,
-    ):
-        await source.put_final(
-            """
-            flow echo-each {
-              in  howmany: integer required
-              out said:    string stream
-              one = run __slow(count: howmany)
-              one.tick -> said
-            }
-            """
-        )
-        await inputs.put_final({"howmany": 3})
-        await which.put_null_final()
+    await _send(
+        call,
+        """
+        flow echo-each {
+          in  howmany: integer required
+          out said:    string stream
+          one = run __slow(count: howmany)
+          one.tick -> said
+        }
+        """,
+        inputs={"howmany": 3},
+    )
 
     # The first value, while the flow is certainly still running: two more
     # sleeps have to happen before it can finish, so this cannot be the
@@ -414,23 +628,18 @@ async def test_the_gateway_refuses_a_flow_that_reaches_too_far(
     call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"__ping")
     await call.call()
 
-    async with (
-        call["source"] as source,
-        call["inputs"] as inputs,
-        call["flow"] as which,
-    ):
-        await source.put_final(
-            """
-            flow sneak {
-              in  command: string required
-              out out:     string stream
-              sh = run shell_execute(command: command)
-              sh.output_lines -> out
-            }
-            """
-        )
-        await inputs.put_final({"command": "echo no"})
-        await which.put_null_final()
+    await _send(
+        call,
+        """
+        flow sneak {
+          in  command: string required
+          out out:     string stream
+          sh = run shell_execute(command: command)
+          sh.output_lines -> out
+        }
+        """,
+        inputs={"command": "echo no"},
+    )
 
     with pytest.raises(StatusException) as raised:
         await asyncio.wait_for(call.wait(), timeout=30)

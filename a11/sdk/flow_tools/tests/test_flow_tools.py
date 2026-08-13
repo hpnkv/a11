@@ -207,6 +207,162 @@ async def test_flow_run_narrates_its_run_for_the_person_watching(registry):
     assert "text-upper" in log
 
 
+# --- flow_run, with the ports the caller fills itself -------------------------
+
+
+async def drive_streaming(
+    registry: ActionRegistry,
+    *,
+    source: str,
+    feed: dict[str, list] | None = None,
+    flow_name: str | None = None,
+    allowed: str | None = None,
+) -> Action:
+    """Run `flow_run` with its ports named on `input_streams` and written here.
+
+    Which is the whole difference from [drive][]: there is no object of values to
+    hand over, only ports to write and close -- one value or several, the same
+    way either way.
+    """
+    action = registry.make_action("flow_run")
+    if allowed is not None:
+        action.set_header(
+            LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed.encode()
+        )
+    action.run()
+    await action["source"].put(source, final=True)
+    if flow_name is not None:
+        await action["flow"].put(flow_name, final=True)
+    if feed:
+        await action["input_streams"].put(sorted(feed), final=True)
+    for port in action.get_schema().inputs:
+        await action[port].drain_and_close()
+
+    for port, values in (feed or {}).items():
+        node = action.get_node(
+            flow_tools.flow_input_node_id(action.get_id(), port)
+        )
+        for value in values:
+            await (await node.put(value))
+        # The caller's close, because nothing else will do it.
+        await (await node.put_null_final())
+        await node.drain_and_close()
+
+    await asyncio.wait_for(action.wait(), timeout=30)
+    return action
+
+
+@pytest.mark.asyncio
+async def test_a_port_written_as_a_node_reaches_the_same_flow(registry):
+    """The two ways of filling a port differ in who writes, in nothing else."""
+    action = await drive_streaming(
+        registry, source=COMPOSITION, feed={"words": ["one", "two"]}
+    )
+    assert await result_of(action, "result") == {
+        "loud": ["ONE", "TWO"],
+        "size": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_one_value_port_is_filled_the_same_way_as_a_stream(registry):
+    """A port that carries one value is a stream that carries one."""
+    source = """
+    flow both {
+      in  many: string stream required
+      in  one:  string required
+      out said: string stream
+
+      up = run text-upper(text: many)
+      up.upper -> said
+      one -> said
+    }
+    """
+    action = await drive_streaming(
+        registry, source=source, feed={"many": ["a", "b"], "one": ["solo"]}
+    )
+    said = (await result_of(action, "result"))["said"]
+    # `one` is written by the same put/close as `many`, and lands once.
+    assert sorted(said) == ["A", "B", "solo"]
+
+
+@pytest.mark.asyncio
+async def test_a_value_and_a_node_can_fill_different_ports_of_one_flow(
+    registry,
+):
+    """The two mechanisms are not exclusive; only per port are they."""
+    source = """
+    flow both {
+      in  many: string stream required
+      in  one:  string required
+      out said: string stream
+
+      up = run text-upper(text: many)
+      up.upper -> said
+      one -> said
+    }
+    """
+    action = registry.make_action("flow_run")
+    action.run()
+    await action["source"].put(source, final=True)
+    await action["inputs"].put({"many": ["a", "b"]}, final=True)
+    await action["input_streams"].put(["one"], final=True)
+    for port in action.get_schema().inputs:
+        await action[port].drain_and_close()
+    node = action.get_node(
+        flow_tools.flow_input_node_id(action.get_id(), "one")
+    )
+    await (await node.put("solo"))
+    await (await node.put_null_final())
+    await node.drain_and_close()
+    await asyncio.wait_for(action.wait(), timeout=30)
+    assert sorted((await result_of(action, "result"))["said"]) == [
+        "A",
+        "B",
+        "solo",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_port_cannot_be_given_a_value_and_named_as_a_stream(registry):
+    """One way in per port: the runtime says so, for every caller of it."""
+    with pytest.raises(StatusException) as raised:
+        action = registry.make_action("flow_run")
+        action.run()
+        await action["source"].put(COMPOSITION, final=True)
+        await action["inputs"].put({"words": ["one"]}, final=True)
+        await action["input_streams"].put(["words"], final=True)
+        for port in action.get_schema().inputs:
+            await action[port].drain_and_close()
+        await asyncio.wait_for(action.wait(), timeout=30)
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert "given a value and left open" in raised.value.status.message
+
+
+@pytest.mark.asyncio
+async def test_input_streams_must_be_a_list_of_port_names(registry):
+    for named in ("words", [""], [1], ["words", "words"]):
+        with pytest.raises(StatusException) as raised:
+            action = registry.make_action("flow_run")
+            action.run()
+            await action["source"].put(COMPOSITION, final=True)
+            await action["input_streams"].put(named, final=True)
+            for port in action.get_schema().inputs:
+                await action[port].drain_and_close()
+            await asyncio.wait_for(action.wait(), timeout=30)
+        assert raised.value.status.code == StatusCode.INVALID_ARGUMENT, named
+
+
+@pytest.mark.asyncio
+async def test_the_run_log_says_which_ports_the_caller_filled(registry):
+    action = await drive_streaming(
+        registry, source=COMPOSITION, feed={"words": ["hi"]}
+    )
+    log = await action[USER_FACING_LOG_PORT].next_object(str)
+    assert log.startswith("Ran the flow `shout-and-measure`")
+    assert "The caller filled words." in log
+
+
 # --- what a model is not allowed to compose -----------------------------------
 
 
@@ -250,6 +406,8 @@ async def test_a_flow_may_not_call_the_flow_tools(registry):
         )
     assert raised.value.status.code == StatusCode.PERMISSION_DENIED
     assert "flow_run" in raised.value.status.message
+
+
 
 
 @pytest.mark.asyncio
@@ -349,6 +507,9 @@ def test_the_skill_teaches_the_language_that_is_implemented():
     assert flow.REFERENCE.strip() in text
     for tool in flow_tools.FLOW_TOOL_NAMES:
         assert tool in text
+    # What the skill does *not* teach: filling a port by node id, which needs a
+    # session and a node map the model has no way to reach.
+    assert "input_streams" not in text
 
 
 def test_every_flow_the_skill_shows_compiles():
@@ -392,7 +553,19 @@ async def test_the_tools_are_offered_to_a_model_the_way_any_action_is(
     assert set(by_name) == set(flow_tools.FLOW_TOOL_NAMES)
     run = by_name["flow_run"]["input_schema"]
     assert run["required"] == ["source"]
-    assert set(run["properties"]) == {"source", "inputs", "flow"}
+    assert set(run["properties"]) == {
+        "source",
+        "inputs",
+        "flow",
+        "input_streams",
+    }
+    # A model *can* see the port a client fills by node id, because a schema is
+    # one document and a tool definition carries every input that is not
+    # autofilled. What keeps it away is the skill, which teaches the other three
+    # and never mentions this one -- see the skill test above. The port's own
+    # description says the same thing for anyone reading the schema itself.
+    streamed = flow_tools.FLOW_RUN_SCHEMA.inputs["input_streams"].description
+    assert "model calling this as a tool -- wants `inputs`" in streamed
 
 
 def test_a11_is_importable_without_the_yaml_the_skill_format_needs():

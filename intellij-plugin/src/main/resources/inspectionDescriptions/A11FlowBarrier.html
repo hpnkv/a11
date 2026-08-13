@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports barriers and loop tails that cannot hold what they say.
+<p>
+<code>until</code>, <code>while</code> and a carry (<code>x &lt;- ...</code>) belong
+to a <code>repeat</code>: this reports one written outside any repeat, a second stop
+condition, a carry naming something other than what the repeat carries, and a value
+carried twice.
+<p>
+It also reports orderings that cannot be honoured: an <code>after</code> naming a
+step written further down the flow, or naming the statement it is on; a second
+<code>wait</code> or <code>drain</code> on something already held for in the same
+body, which adds nothing because the first one already finished it; and a
+<code>cancel</code> of a call this body has already waited for, which has nothing
+left to stop.
+</body>
+</html>

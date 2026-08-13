@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
@@ -98,6 +99,16 @@ class NodeMap : public std::enable_shared_from_this<NodeMap> {
    * @return The node count.
    */
   [[nodiscard]] size_t Size() const;
+
+  /**
+   * @brief Return the id of every node the map holds, sorted.
+   *
+   * A snapshot: nodes are created on demand, so the answer is what was there
+   * when it was asked for. Sorted rather than in hash order so a caller
+   * comparing two snapshots -- a test, a diagnostic dump -- sees a stable list.
+   * @return The ids.
+   */
+  [[nodiscard]] std::vector<std::string> Ids() const;
 
  private:
   explicit NodeMap(ChunkStoreFactory factory) : factory_(std::move(factory)) {}

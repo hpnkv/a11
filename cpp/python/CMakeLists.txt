@@ -2,6 +2,7 @@ set(A11_PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/actions_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/core_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/data_bindings.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/flow_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/http_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/interop.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/logging_bindings.cc

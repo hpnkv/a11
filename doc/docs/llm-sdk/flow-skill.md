@@ -140,7 +140,7 @@ code disagree.
 Given `web-search`, `web-fetch` and `summarize`, a model asked a research
 question can send this as one `flow_run` call:
 
-```
+```a11flow
 flow answer-from-the-web {
   in  question: string required
   out answer:   string

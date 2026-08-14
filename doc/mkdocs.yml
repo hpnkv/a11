@@ -66,10 +66,19 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.details
   - pymdownx.snippets:
-      # Lets guides embed the runnable programs under examples/ verbatim.
+      # Lets guides embed files from the checkout verbatim -- the runnable
+      # programs under examples/, the flows under intellij-plugin/. Written
+      # relative to this file; hooks/snippet_paths.py makes it absolute, because
+      # pymdownx resolves it against the shell's cwd and not against the config.
       base_path:
         - ..
       check_paths: true
+
+# Registers the generated Pygments lexer for A11 Flow, so ```a11flow blocks are
+# coloured by the language's own word tables. See hooks/flow_highlighting.py.
+hooks:
+  - hooks/flow_highlighting.py
+  - hooks/snippet_paths.py
 
 plugins:
   - search
@@ -117,8 +126,6 @@ nav:
   - Why A11: principles.md
   - Examples:
       - All examples: examples.md
-      - Compose actions without deploying code: guides/flow.md
-      - Checking flows from a toolchain: guides/flow-tooling.md
       - Stream data through an AsyncNode: guides/streaming.md
       - A WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
@@ -127,6 +134,8 @@ nav:
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
       - Local models on the web: guides/local-models-web.md
+      - Compose actions without deploying code: guides/flow.md
+      - Checking flows from a toolchain: guides/flow-tooling.md
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

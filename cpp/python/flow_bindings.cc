@@ -940,6 +940,9 @@ whole truth would be misled.
 Returns where the file belongs and what should be in it. A static grammar file is a
 copy of the word lists, and a copy falls behind; generating it means a word added to
 the language reaches the editor by running this, and CI notices when nobody has.
+
+``target`` is ``"sublime"`` for the Sublime/TextMate-family grammar or
+``"pygments"`` for the lexer that colours a fenced flow in A11's documentation.
 )doc");
 
   flow.def(

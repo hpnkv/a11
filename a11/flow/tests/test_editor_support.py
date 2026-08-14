@@ -17,6 +17,8 @@ ROOT = pathlib.Path(__file__).parents[3]
 
 SUBLIME = ROOT / "editors" / "sublime-text" / "A11 Flow.sublime-syntax"
 
+PYGMENTS = ROOT / "editors" / "pygments" / "a11flow_lexer.py"
+
 PLUGIN = ROOT / "intellij-plugin"
 
 FLOW_PLUGIN_SOURCE = (
@@ -44,12 +46,67 @@ def test_the_sublime_syntax_is_what_the_language_generates():
     )
 
 
+def test_the_pygments_lexer_is_what_the_language_generates():
+    """The same check for the lexer that colours the documentation.
+
+    A page of prose is the one surface where a word the highlighter has never
+    heard of looks like ordinary text rather than like a mistake, so nothing but
+    this notices when the lexer falls behind.
+    """
+    from a11._native import flow as native_flow
+
+    if not PYGMENTS.is_file():
+        pytest.skip(f"{PYGMENTS.name} is not in this checkout")
+    generated = native_flow.syntax("pygments")
+    assert generated["path"] == "editors/pygments/a11flow_lexer.py"
+    assert PYGMENTS.read_text(encoding="utf-8") == generated["text"], (
+        "the Pygments lexer is out of date -- run"
+        " `a11 flow syntax --target pygments --generate`"
+    )
+
+
+def test_the_pygments_lexer_colours_every_flow_in_the_repository():
+    """It is a static grammar, so this is what says it still reads the language.
+
+    The staleness check above compares it with what the generator writes; this
+    runs it. A rule that stopped matching -- a state that no longer pops, a
+    pattern the language outgrew -- leaves `Error` tokens behind, and every
+    ``.flow`` file in the checkout is the corpus that finds them.
+    """
+    pytest.importorskip("pygments")
+    if not PYGMENTS.is_file():
+        pytest.skip(f"{PYGMENTS.name} is not in this checkout")
+
+    import importlib.util
+
+    from pygments.token import Error
+
+    spec = importlib.util.spec_from_file_location("a11flow_lexer", PYGMENTS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    lexer = module.A11FlowLexer()
+
+    flows = [
+        path
+        for path in ROOT.glob("**/*.flow")
+        if "build" not in path.parts and ".venv" not in path.parts
+    ]
+    assert flows, "no .flow files to read"
+    for path in flows:
+        source = path.read_text(encoding="utf-8")
+        unknown = [
+            text for kind, text in lexer.get_tokens(source) if kind is Error
+        ]
+        assert not unknown, f"{path.name}: the lexer chokes on {unknown[:5]}"
+
+
 def test_the_generated_syntax_says_it_is_generated():
-    """Anybody who opens it has to be told not to edit it."""
-    if not SUBLIME.is_file():
-        pytest.skip(f"{SUBLIME.name} is not in this checkout")
+    """Anybody who opens one has to be told not to edit it."""
+    for generated in (SUBLIME, PYGMENTS):
+        if not generated.is_file():
+            pytest.skip(f"{generated.name} is not in this checkout")
+        assert "GENERATED FILE" in generated.read_text(encoding="utf-8")
     text = SUBLIME.read_text(encoding="utf-8")
-    assert "GENERATED FILE" in text
     # And the extension it claims is the one the examples use.
     assert "file_extensions: [flow]" in text
     assert list((ROOT / "examples" / "003-flow-dsl").glob("*.flow"))

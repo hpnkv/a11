@@ -15,6 +15,10 @@ enum class SyntaxTarget {
   /// `editors/sublime-text/A11 Flow.sublime-syntax`: a Sublime/TextMate-family
   /// YAML grammar, which is also what Zed and a few others read.
   kSublime,
+  /// `editors/pygments/a11flow_lexer.py`: a Pygments lexer, which is what
+  /// colours a fenced flow in A11's own documentation and in anything else built
+  /// on Pygments (MkDocs, Sphinx, `pygmentize`).
+  kPygments,
 };
 
 /// Every target, for a command that offers a choice of them.

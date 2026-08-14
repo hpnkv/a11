@@ -1,551 +1,312 @@
 # Compose actions without deploying code
 
-Some compositions do not deserve a repository. A gateway needs to search, read
-the three best hits, and summarise them; a client needs to run four existing
-actions in a particular shape, once, for one customer. The actions already exist
-and are already deployed. What is missing is a description of how they connect --
-and writing that in Python means a commit, a review, a release, and a restart.
+Say you want this: hold this machine's microphone open, recognise what is said on
+the machine that has the GPU, take the first sentence that ends in a full stop,
+put it to a model along with everything said earlier in the conversation, and
+stream the answer back as it is written.
 
-[Flow](../api/flow.md) is that description, as text. A flow declares ports and
-headers, calls actions, pipes their streaming ports into one another, loops and
-branches, and presents an ordinary
-[`ActionSchema`][a11.actions.action.ActionSchema] to whoever dispatches it. It is
-an action made of actions, and it arrives as a string.
+Every piece of that already exists. `capture_audio`, `transcribe_audio` and
+`interact_with_llm` are deployed, registered and doing their jobs. What is
+missing is forty lines saying how they connect — and written in Python, those
+forty lines are a commit, a review, a release and a restart of whatever they run
+on.
 
-## One flow, read from the top
+[Flow](../api/flow.md) is those forty lines as **text**. It compiles at runtime,
+from a string, wherever it lands: nothing is deployed, and whoever wrote it does
+not have to be a person. This page builds the composition above one statement at a
+time.
 
-```
-flow research {
-  describe "Search, read the best hits, and answer from them."
+Two things about it are worth saying before the first line, because they are the
+reason it is a flow rather than code:
 
-  in  question: string required
-  out answer:   string
-  out sources:  string stream
+* **A tool-calling model could not do this at all.** `capture_audio` produces
+  `a11.sdk.AudioBuffer` values 256 frames at a time — well over a hundred a
+  second at any usual sample rate. There is no version of an LLM tool loop where
+  those pass through the model.
+* **Nothing in the middle is read by anybody.** The buffers go from one step's
+  output port to the next step's input port inside the runtime, and so do the
+  transcript fragments. What crosses the wire is one sentence and one answer.
 
-  header "x-a11-deadline" as deadline
+## The interface
 
-  search = run web-search(query: question, limit: 3)
+A flow is an action, so it starts by saying what an action says: what it is for,
+and what goes in and out.
 
-  brief = run llm-summarize(question: question)
-      with "x-a11-deadline": deadline
+```a11flow
+flow interact-on-full-sentence {
+  describe "Listen; the first full sentence becomes the next turn of a conversation."
 
-  nodes fetched {
-    for hit in search.hits parallel 2 {
-      page = run web-fetch(url: hit.url)
-      hit.url -> sources
-      page.text | truncate 200 -> brief.pages
-      skip page.bytes
-    }
-  }
+  in  asr:     object required "Speech recognition options; model required."
+  in  device:  object required "Which input to open on the client."
+  in  history: string required "Id of the node holding the turns so far."
 
-  brief.summary -> answer
-  skip search.debug
+  out sentence: string                     "The sentence that became the question."
+  out reply:    string stream              "The model's answer, as it is written."
+  out turn:     a11.sdk.Interaction stream "What to remember of this turn."
 }
 ```
-
-`x = run action(port: source)` runs an action here and gives it a name, so its
-ports can be named afterwards; `x = call action(...)` dispatches one on the
-stream the flow is attached to instead. `source -> destination` pipes a stream into a
-node. Everything else is a variation on those two.
-
-Note what is *not* being said. `brief` is dispatched before it has any pages: it
-is streaming, so the loop feeds it while it works, and A11 closes its `pages`
-port when the loop's last writer is done. Nothing declares an order between the
-search and the fetches either — **steps run concurrently, and order comes from
-the data**. When an order really is needed, `after`, `wait` and `drain` say so
-explicitly.
 
 A port says what it holds first and what it is like afterwards: it carries one
-value unless it says `stream`, and is optional unless it says `required`. Every
-significant word may be written in lower case or upper case — `for` or `FOR`,
-`stream` or `STREAM`. Mixed case is a name, not a keyword, which keeps the rule
-easy to see.
+value unless it says `stream`, and is optional unless it says `required`. The
+descriptions are not decoration — this is the [`ActionSchema`][a11.actions.action.ActionSchema]
+whoever dispatches the flow will read, and if that is a model, this is what it
+reads to decide whether the flow is the thing it wants.
 
-## What a port holds
+Note what `history` is: not the conversation, but the **id of a node** holding it.
+The flow is stateless; the turns so far belong to the caller, and the flow will
+attach to that stream rather than have it copied in.
 
-```
-in  question: string required
-in  frames:   list[a11.NodeFragment] stream
-out audio:    a11.sdk.AudioBuffer stream
-out raw:      "application/x-msgpack"
-```
+## Opening the microphone
 
-Besides the built-in names — `string`, `text`, `number`, `integer`, `bool`,
-`object`, `json`, `list`, `bytes`, `any` — a type may be **a tag a
-serialisation registry knows a type by**, written unquoted exactly as it is
-registered: `a11.sdk.AudioBuffer`. A dotted name is read as a tag, which is what
-tells one from a misspelt built-in, and it is carried through as written --
-compiling a flow does not require the module defining the type to have been
-imported. A container says what it holds in brackets: `list[string]`,
-`list[a11.NodeFragment]`. A quoted type is a mimetype, for a port described by
-its representation rather than by a type at all.
-
-## Descriptions, at the length they need
-
-A description is what a caller — often a model — reads to decide whether to use a
-flow, so it is worth writing properly. Two spellings keep it from being squeezed
-onto the end of a declaration:
-
-```
-flow research {
-  describe """
-    Search the web, read the best hits, and answer from them.
-
-      Costs one search and up to `budget` fetches.
-    """
-
-  in  question: string required
-    "What to find out — as long as this needs to be, on its own line."
-}
+```a11flow
+  mic = call capture_audio(options: device) timeout 600s
+  skip mic.events  # <- we never read them, so declare as skipped
 ```
 
-A `"""` string may hold line breaks, and its value is **dedented**: a blank first
-line goes, a whitespace-only last line goes with the break above it, and the
-indentation every remaining line shares comes off. So the text sits at the
-indentation of the flow it belongs to and still reads as prose, with whatever one
-line has *extra* kept. Escapes work as they do in an ordinary string.
+`call`, not `run`. A11 has two verbs for getting an action done and a flow says
+which it means: `run` executes the handler registered where the flow is running,
+`call` puts the action on the stream the flow is attached to and lets the peer do
+it. This composition runs on a gateway, and the microphone is not there — so the
+one step that needs the client is the one written with `call`.
 
-A description may also stand **alone on the line below** what it describes, at any
-indentation or none — for a port, a header, or a `describe`. That is unambiguous
-because the string has to be alone on its line: `"a literal" -> out` is a
-statement, since something follows the string.
+`skip` reads an output port and keeps nothing. It is needed because an output
+nobody drains stalls the action producing it; saying it in the flow is how a
+composition stays explicit about what it is not interested in.
 
-`a11 flow fmt` indents a description under its declaration and lines up the
-columns of a run of declarations around it.
+The `timeout` is the whole flow's patience for a sentence. If it runs out, the
+error propagates and the flow fails, which is the wanted behaviour: nobody said
+anything, and that is worth reporting rather than waiting on.
 
-## Making a value of a type
+## Recognising what was said
 
-A port often wants a real type — an `Interaction`, an `AudioBuffer` — and what a
-flow has is the handful of fields it cared about. `TYPE{...}` bridges the two:
+```a11flow
+  nodes scratch  # local nodes that are never sent to the client
 
-```
-a11.sdk.Interaction{
-  role: "user",
-  content: [to_chunk({"role": "user", "content": [{"type": "text", "text": said}]})]
-}
-```
-
-`EXPR as TYPE` is the same thing written the other way round, and the one to use
-for a generic (`pieces as list[string]`) or when the value came from somewhere
-else. Either way the value is *validated* into the type, so defaults are filled
-in and a field that will not fit is an error rather than a surprise later.
-`to_chunk` and `from_chunk` are the two builtins that make and read a
-[`Chunk`][a11.data.types.Chunk], which is what a content-bearing type is made
-of.
-
-Which types exist is the host's decision, not the flow's: a tag resolves against
-the serialisation registries of the process the flow runs in, and a flow cannot
-import anything. `TYPE{...}` is unavailable where a `{` would open a block
-instead — an `if` condition, a `for`'s source — so `if step.next.done {` keeps
-reading the way it always has; wrap it in brackets if you really need one there.
-
-## The parts that exist because A11 does
-
-A few things A11 can do are awkward from glue code, and each is a piece of
-syntax here.
-
-### Running a step, and calling one
-
-A11 has two verbs for getting an action done, and so does a flow.
-`run some-action(...)` executes the handler registered where the flow is
-running. `call some-action(...)` puts the action on the stream the flow is
-attached to and lets the peer do it. They are not interchangeable, and the flow
-says which it means rather than leaving it to whatever happens to be in a
-registry:
-
-```
-search = run web-search(query: question)      # ours, here
-llm    = call interact_with_llm(...)          # theirs, over there
+  transcribe = run transcribe_audio(
+    asr_options: asr, audio: mic.audio | packb
+  ) via scratch  # <- never send transcription outputs to the client directly
+  skip transcribe.events
 ```
 
-`run` needs a handler and says so if there is none, instead of quietly going to
-the session. `call` needs none — an action registered for its *schema* alone is
-exactly how a composition written against somebody else's deployment learns the
-port names while saying the work is not local — and it goes to the peer even
-when a handler for that name does happen to be registered here.
+This is the line the whole page is about. `mic.audio` is the client's capture
+stream and `audio:` is the recogniser's input port, and putting one into the
+other is the entire instruction. A hundred-odd buffers a second flow from a
+`call` step's output straight into a `run` step's input, and:
 
-Which one an action takes is a property of the deployment, not of the action, so
-[`flow_actions`][a11.sdk.flow_tools] reports it: each entry carries `runnable`,
-and a model writing a flow reads the verb off that rather than guessing.
+* they are never assembled into a value anybody holds;
+* they are never rendered as text, because there is no text to render;
+* they are never seen by a model, and cost nothing in a context window.
 
-`try` goes in front of either: `try run`, `try call`.
+`| packb` says they travel as `application/x-msgpack` rather than JSON. It is a
+no-op when the producer already wrote MessagePack, so it is safe in front of a
+port that wants packed bytes whatever is upstream.
 
-Either verb may also name **another flow of the same file**, with nothing
-registered for it:
+`nodes scratch` and `via scratch` are the other half of "nothing in the middle is
+read by anybody". A `nodes` block gives the steps inside it a
+[`NodeMap`][a11.nodes.async_node.NodeMap] of their own, so their ports are not in
+the session's node map and the peer that dispatched the flow neither sees them nor
+receives their fragments. Transcription fragments are for this flow; the client
+gets the sentence.
 
-```
-flow ask-twice {
-  in  question: string
-  out answers:  string stream
-  first  = run ask(question: question)   # `ask` is declared below
-  second = run ask(question: question)
-  first.answer then second.answer -> answers
-}
+There is deliberately no `try` here. Nothing in this flow reads a transcription
+failure, and a `try` whose status nobody looks at turns a loud failure into a
+silent one — the flow would carry on with no sentences and no reason given.
 
-flow ask {
-  in  question: string
-  out answer:   string stream
-  said = run answer-question(question: question)
-  said.text -> answer
-}
-```
+## The first full sentence
 
-A program is a set of flows, not a sequence, so which one is written first is
-just reading order — and their ports are checked against each other while the
-file is compiled, exactly as they are against a registered action. That is what
-lets a composition be factored: the reusable piece becomes a flow, the caller
-stays readable, and the whole thing is still one text with one entry point,
-which is what `flow_run` and a gateway are handed.
+Recognition arrives as pieces, and a piece is not a sentence.
 
-### Reading a stream you do not want
+```a11flow
+  said = node() in scratch
 
-An output port nobody drains stalls the action producing it. `skip page.bytes`
-reads one and keeps nothing. The runtime also drains any declared output the flow
-never mentions, so forgetting is not a way to deadlock a composition.
+  transcribe.transcription_pieces
+    | group ends-with(trim(it), [".", "?", "!"])
+    | first 1
+    | map trim(join(it, " "))
+    -> said
 
-`skip n port` is a different statement wearing the same word. A Flow stream fans
-out — every reader sees all of it — so `| drop 1` trims only the one reader that
-says it. A count on `skip` takes the values off the node itself, before the
-fan-out, so *every* reader starts after them:
-
-```
-rows = run read-csv(path: path)
-skip 1 rows.lines            # the header line is nobody's
-rows.lines | count -> data-rows
-rows.lines -> passed-through # both readers start at the second line
+  said -> sentence
 ```
 
-Several of them naming one node add up — `skip 1 x` and `skip 2 x` leave three
-values unread, in either order, because the count belongs to the node and is
-summed while the flow is compiled. It takes a port or a node, not a pipeline:
-there is no front to take values off a thing each reader derives for itself.
+`| group EXPR` is `batch` with a question instead of a count: values gather into a
+list, and the list closes when the expression holds of the value just added. So
+fragments accumulate until one of them ends in a full stop, a question mark or an
+exclamation mark — and that list, joined, is a sentence. `| first 1` takes one of
+them and the pipeline is over.
 
-### Putting a stream back together
+`said` is a node of the flow's own because the sentence is wanted **twice** — by
+the client, on `sentence`, and by the model, as the question. A node is how a
+stream gets two readers: reading one stream twice would hand each reader half of
+it, because a node has one cursor. It is `in scratch`, so the only copy that
+crosses the wire is the one on `sentence`.
 
-`| group EXPR` is `batch` with a question instead of a count: values gather into
-a list, and the list closes when the expression holds of the value just added.
-It is how a stream of fragments becomes whole things —
+## Stopping, once there is something to answer
 
-```
-pieces | group ends-with(trim(it), [".", "?", "!"]) | map trim(join(it, " "))
-```
-
-— which turns partial utterances into sentences. Whatever is still gathered when
-the stream ends comes out too, because a partial group is still what was said.
-
-`| then SOURCE` is the other direction: this stream, and then that one.
-
-```
-history then asked -> llm.interactions
+```a11flow
+  # synchronisation point: wait until we have a sentence, then stop audio capture
+  {"command": "stop"} -> mic.control_events after said
 ```
 
-`then` and `where` may drop the pipe, because both read as words joining the
-things they sit between rather than as transformations applied to a stream:
-`history then asked`, `hits where it.ok`. Every other stage keeps its `|`,
-which is what stops a stage name from swallowing a port that shares it — a
-port really called `then` still reads as one.
+This is the only ordering statement in the file. Everything else in a flow's body
+runs at once — **steps run concurrently, and order comes from the data** — so
+`after` exists for the cases where order is the point. Here it is: the microphone
+should close when there is a sentence, and not before.
 
-### Text, times, and how long something took
+## The conversation
 
-`strformat("%s of %s", got, wanted)` is printf, because a format string is
-something people already know how to read: `%s` for text, `%d`, `%f` and `%x`
-for numbers, printf's own flags and precision (`%-8s`, `%06.2f`), `%2$s` to pick
-a value by number, and `%%` for a literal percent. `| strformat "fmt"` is the
-one-value shorthand for `| map strformat("fmt", it)`, which is nearly every use
-of it.
+```a11flow
+  earlier = node(history)
 
-printf rather than a Python template deliberately: `str.format` reads
-attributes, so `{0.__class__.__init__.__globals__}` would be a way out of the
-sandbox, and flow templates can come from a model. A printf conversion has
-nowhere to walk to. A conversion with no value behind it is left as written
-rather than raising, because a visible `%3$s` in a log line is easier to
-diagnose than a flow that died formatting one.
-
-Durations are written the way a timeout is — `500ns`, `250ms`, `30s`, `2m`,
-`1h`, and compounded as `1m30s500ms` — and are ordinary values. `now()` is the
-clock, and the arithmetic is the arithmetic A11's own types allow:
-
-```
-started = node()
-now() -> started
-took = now() - started            # instant - instant is a duration
-if took > 30s { fail deadline_exceeded strformat("gave up after %s", took) }
+  asked = node() in scratch
+  said | map a11.sdk.Interaction{
+    role: "user",
+    content: [to_chunk({
+      role: "user",
+      content: [{type: "text", text: it}]
+    })]
+  } -> asked
 ```
 
-`+` and `-` are the only arithmetic the language has, and they exist for this:
-a composition cannot otherwise say how long it took. A bare number beside a
-duration counts as seconds; `seconds(d)` gives the number back. Subtracting the
-other way round gives a length below zero, and it says so rather than meaning
-"forever" the way a negative timeout does elsewhere in A11. `-` needs its
-spaces, since `text-upper` is one name.
+`node(history)` **attaches** to a node somebody else owns, by the id that came in
+on the `history` port. That is how a flow reads a stream it did not make. Each
+interaction arrives as the type it was written as, and nothing here takes one
+apart, so nothing here can lose a field of one.
 
-Formatting: `%s` renders a duration as `1m30s` and an instant as RFC 3339. A
-unit in the parenthesised spec gives one number — `%(ns)d`, `%(us)d`, `%(ms)d`,
-`%(s)d`, `%(m)d`, `%(h)d` — and `%(%H:%M:%S)s` or `%(epoch)d` formats an
-instant.
+`TYPE{...}` builds a value of a named type — the sentence becomes an
+`a11.sdk.Interaction`, validated into the type, so a field that will not fit is an
+error here rather than a surprise inside the model call. Which types exist is the
+host's decision: a dotted name is a tag the running process's serialisation
+registries resolve, and a flow cannot import anything.
 
-`duration(x)` and `time(x)` are the way back in, and they read exactly what the
-formatting writes:
+`asked` is its own node for the same reason `said` was: both the model and the
+client's history want it.
 
-```
-deadline = time(header-deadline)          # "2026-08-11T09:14:22Z"
-budget   = duration(header-budget)        # "1m30s", or a number of seconds
-if now() + budget > deadline { fail deadline_exceeded "not enough time left" }
-```
+## Asking, and answering
 
-A timestamp or a timeout that arrived as text — from a header, a JSON field, a
-model's answer — is a value again, in one call and without a format string to
-get wrong.
+```a11flow
+  interact = run interact_with_llm(
+    interactions: earlier then asked,
+    config: {}
+  )
+      forward headers "x-a11-llm-*"
+      via scratch
 
-Two statements writing to the same node interleave by arrival, which is fine for
-pages and wrong for a conversation. `then` is how a flow says which comes first,
-and it is what makes a multi-turn chat expressible: the turns so far, then the
-one just made.
+  skip interact.event_stream
+  skip interact.thoughts
 
-### Throwing values away before they cost anything
+  interact.text_output -> reply
 
-`| truncate 200` cuts each page down before it is written to the summariser's
-port. What is dropped is never serialised, never sent to a peer, and — when the
-next step is a model — never charged for. `| first 3`, `| where it.ok`,
-`| mime "text/*"` and `| drop 1` are the same lever at different granularities,
-and they are the reason a model asked to *instrument* a composition can make it
-cheaper without changing what it computes.
-
-### Saying how a value travels
-
-`| packb` writes a value as `application/x-msgpack` instead of JSON. It is a
-no-op when the producer already wrote MessagePack — the chunk is passed on
-untouched, type tag and all — so putting it in front of a port that wants
-packed bytes is safe whatever is upstream, and costs a re-encode only when there
-is really one to pay for.
-
-### Passing on what the flow was told
-
-Headers are how a call is told *about* itself — which model to answer with, who
-is asking, when to give up. A11 already gives a nested action every `x-a11-`
-header of its parent, so a deadline or a model reaches a step with the flow
-saying nothing at all. For the headers outside that prefix, `forward headers`
-says it in one line:
-
-```
-answer = run interact_with_llm(interactions: asked, config: {})
-    forward headers "authorization", "x-tenant-*"
+  asked then interact.new_interactions -> turn
 ```
 
-A name is forwarded as it arrived; a `*` matches a family of them; a header the
-caller did not send is simply not forwarded, so an optional one cannot fail the
-composition. `with "header": expr` remains the other half — for a value the flow
-*computes* rather than passes on — and if both name the same header the `with`
-wins, being the more specific of the two. Before this, moving one header one hop
-took a `header` declaration to give it a name and a `with` on every step that
-needed it.
+`earlier then asked` is one stream and then the other: the turns so far, then the
+question just heard. Two statements writing to the same node would interleave by
+arrival, which is fine for fetched pages and wrong for a conversation — `then` is
+how a flow says which comes first, and it is what makes a multi-turn chat
+expressible at all.
 
-### Keeping a step's traffic off the wire
+`forward headers "x-a11-llm-*"` passes the caller's own headers on to the step
+that needs them, so which provider and which model stay the caller's decision and
+this file never mentions either.
 
-`nodes fetched { ... }` gives the calls inside it a
-[`NodeMap`][a11.nodes.async_node.NodeMap] of their own. Their ports are not in
-the session's node map, so the peer that dispatched the flow neither sees them
-nor receives their fragments: four fetched pages stay here, one answer goes back.
-A `run` step already keeps its nodes off the wire unless it asks for `tee`; a
-`nodes` block is the stronger statement, and it covers `call` steps too.
+`interact.text_output -> reply` is the answer, streamed to the client token by
+token as the model writes it. And `turn` hands back what to remember: the
+question, then the answer and any tool interactions the model made on the way to
+it. The client appends those to the conversation and hands its node back as
+`history` next time round.
 
-### Nodes of the flow's own
+## The whole thing
 
-`x = node()` gives a flow a stream of its own: somewhere several passes of a loop
-can write and one reader can read back, which a unary output port cannot be. The
-parentheses are not decoration — making a node is the one thing in the language
-that *does* something without naming an action, so it is written as the
-construction it is, and `node` stays available as a name for anything else.
-
-```
-best = node()
-
-for url in urls {
-  page = try run web-fetch(url: url)
-  page.text | truncate 120 -> best
-}
-
-best | first 1 -> text
+```a11flow
+--8<-- "intellij-plugin/src/main/resources/flows/interact-on-full-sentence.flow"
 ```
 
-The node lands in the contextually active node map — the enclosing `nodes`
-block's, or the action's — so `nodes scratch` around it keeps it off the wire
-like anything else. `x = node(where-they-said)` attaches to a node *somebody else*
-named instead of making one, and `x.id` hands a node to an action that expects to
-be told where to write:
+Twenty-odd statements, more comment than code, and no deployment. Read as a list
+of what it decided, it is one line per decision: who runs each step, what goes
+where, what is not interesting, what stays local, and the single place order
+matters.
 
-```
-seen = node()
-reader = run take-notes(pages: page.text) with "x-a11-progress-node": seen.id
-seen -> progress
-drain seen after reader          # the flow lent the node; the flow ends it
-```
+## Running it
 
-## Failures a flow expects
-
-A composition that calls four actions will sometimes have one of them fail, and
-often that is not a reason to abandon the other three. `try` says so — on
-either verb — and from there the flow is in charge:
-
-```
-page = try run web-fetch(url: url)
-outcome = wait page
-
-if outcome.ok {
-  page.text | truncate 120 -> text
-} else {
-  fail unavailable outcome.message
-}
-```
-
-`wait` holds until its subject is finished — a call, or a node this flow writes
--- and bound to a name it is also how the flow *reads* that outcome, because
-waiting and finding out are the same moment. `status x` is the same value where an
-expression is expected, and `drain node` is the spelling to use beside the port it
-is about.
-
-A status is data:
-
-```json
-{"ok": false, "code": "NOT_FOUND", "number": 5, "message": "no such page"}
-```
-
-so a flow can branch on it, put it on one of its own outputs, or raise it again.
-[`fail`](../api/flow.md) takes any of Abseil's canonical codes by name in either
-case (`not_found`, `NOT_FOUND`), a number computed at runtime, or a whole status
-record — `fail outcome` re-raises exactly what happened, and
-`fail invalid_argument outcome.message` says it again in the caller's terms.
-
-Waiting on something that finished badly ends the flow with *that* status, unless
-it was a `try`: those are the failures the flow said it would handle.
-
-## Loops, branches, and state
-
-```
-repeat state = {"round": 0} max 6 {
-  step = run triage-step(state: state)
-  state <- step.next
-  until step.next.confidence >= 0.8
-
-  if step.next.done {
-    step.next.verdict -> verdict
-  }
-}
-```
-
-`repeat` carries one value from each pass to the next: `state` starts at the
-literal and becomes whatever `<-` names. `until` (or `while`) ends the loop, and
-`max` bounds it regardless. One of the two is required: there is no default
-bound, so a `repeat` with neither is refused rather than stopping after some
-number of passes and reporting that as success.
-
-`match` pulls named fields out of text, as a stage over a stream and as a
-function over one value: `lines | match "name={name} age={age:int}"` turns
-`name=Alice   age=27` into a record with `name` and `age`. Literal text matches
-itself, a run of spaces or tabs matches any run, and a hole may say what to read
-itself as (`int`, `number`, `bool`, `word`, `line`, `rest`, `duration`, `time`,
-`json`). The pattern searches rather than anchors, so there are no wildcards to
-write, and a hole stays on its line unless it says otherwise. The stage drops a
-value the pattern does not fit and the function answers null. Where the pattern
-is written out, the fields are known: `it.name` is completed and a typo is
-reported.
-
-A `[s =] [try] { ... }` block runs its statements as one step. Everything in a
-flow's body runs at once, which is the point of it; a block is how a flow says
-"these together, and *this* is what came of them". Reading a value blocks where
-it stands, so a condition inside a block holds up only what is in the braces and
-not the rest of the body. Bound to a name it reads as a status, exactly as a call
-does; `try` says a failure inside is the flow's to handle, and without it a
-failure ends the flow the way a call's does.
-
-`for v in stream` runs its block once per value, `parallel n` runs `n` passes at
-a time. A stream read *inside* a loop or branch is materialised: the runtime
-buffers it once and replays it to every pass, which is what lets each pass see
-the same outer value. The buffer grows while it is read, so a pass waits for the
-value it asks for and not for the stream to finish — a loop reading a stream
-that is still open is not held up by it, and neither is anything written after
-the loop.
-
-## Running one
+In process, the source is a string and compiling it is one call:
 
 ```python
 from a11 import flow
 
-program = flow.register(source, registry, "research.flow")   # compile + publish
-result = await program["research"].invoke(
-    question="how do nodes and actions stream", registry=registry
+program = flow.register(source, registry, "interact-on-full-sentence.flow")
+result = await program["interact-on-full-sentence"].invoke(
+    asr=asr_options.model_dump(),
+    device=capture_options.model_dump(),
+    history=node.get_id(),
+    registry=registry,
 )
 ```
 
-[`register`][a11.flow.register] compiles the source and publishes every flow in
-it as an action; after that a [`Session`][a11.service.session.Session] dispatches
-them like anything else, and one flow may call another by name.
-[`invoke`][a11.flow.plan.FlowPlan.invoke] is the convenience path for scripts and
-tests: it feeds the inputs, collects every output port, and hands back a value
-for each ordinary port and a list for each `stream` one.
+[`register`][a11.flow.register] compiles and publishes every flow in the source as
+an action, after which a [`Session`][a11.service.session.Session] dispatches them
+like anything else. [`invoke`][a11.flow.plan.FlowPlan.invoke] is the convenience
+path for scripts and tests. A flow that will not compile raises
+[`FlowSyntaxError`][a11.flow.diagnostics.FlowSyntaxError] with the line and column.
 
-A flow that will not compile raises
-[`FlowSyntaxError`][a11.flow.diagnostics.FlowSyntaxError] with the line and column, and
-[`to_status`][a11.flow.diagnostics.FlowSyntaxError.to_status] turns that into the
-`INVALID_ARGUMENT` a caller should be told about.
+Across a session it is the same source, sent: a gateway serves `flow_check` and
+`flow_run`, so a client hands over the text and reads the outputs off published
+nodes. `scripts/flow_playground.py` is that, runnable — it asks the gateway what
+it can compose, has it check this flow, then listens and answers, turn after turn:
 
-## What a flow deliberately cannot do
+```sh
+a11 gateway run                     # the other end
+python scripts/flow_playground.py   # --check_only compiles without a microphone
+```
 
-Beyond `+` and `-` there is no arithmetic, no way to define a function, and no way to call out to
-code. An expression reads values, compares them, takes them apart with `.field`
-and `[i]`, and builds new ones — with a fixed set of functions (`len`, `lower`,
-`join`, `merge`, `default`, and a handful more). That is the whole of it, which is
-what makes accepting a flow from somewhere else and running it a reasonable thing
-to do: it can only call the actions it names, and it can only move their streams
-around.
+Nothing about the gateway changed to make that work. It was already serving these
+actions; the composition arrived as an argument.
 
-The runnable version of everything above is in
+## …including by a model
+
+A model with three tools and a task that needs all three calls them one at a
+time and reads every intermediate result on the way. It pays for each of them
+twice — once to read it, once to quote it into the next call — and the values it
+copies are only as accurate as its copying.
+
+[`a11.sdk.flow_tools`](../llm-sdk/flow-skill.md) hands it the alternative as
+three more tools: `flow_actions` says what may be composed and what each action's
+ports are called, `flow_check` compiles a flow without running it, and `flow_run`
+runs one. `flow_tools.get_system_prompt()` is the text that teaches it when to
+bother.
+
+The point is not that a model can write Flow. It is what the model then stops
+having to do. Chaining ports programmatically means the intermediate values never
+enter the context: the transcript fragments, the fetched pages, the file listings.
+A model that composes instead of orchestrating spends its turn on the part that
+needed a model — deciding *what* to build — rather than on copying one tool's
+output into the next tool's input, which is work it is expensive at and not
+especially good at.
+
+That is also the honest reason this particular flow exists. Two of the three
+things it does are ones a tool loop cannot reach:
+
+* **impossible**: raw audio buffers are not something a model deals in;
+* **impractical**: they arrive faster than a hundred a second, and a transcript
+  in fragments is not much better;
+* **and cheap anyway**: the model in this composition reads exactly one sentence.
+
+## Where to go from here
+
+The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,
+`try`/`wait`/`fail`, `match`, `strformat`, and what a flow deliberately cannot do
+— is in the [Flow language reference](../api/flow.md), and `a11.flow.REFERENCE` is
+the same thing sized for a prompt.
+
+The runnable examples are in
 [`examples/003-flow-dsl`](https://github.com/hpnkv/a11/tree/main/examples/003-flow-dsl).
 Three of those files need nothing but the toy actions beside them; the other
 three — `assistant.flow`, `ops.flow` and `dictate.flow` — compose what a real
-`a11 gateway run` serves: its shell, its microphone, and the same
-`interact_with_llm` `a11 chat` uses. `ask-the-pages` is the one worth reading
-twice, because its retrieval actions run in the example's own process and its
-model runs on the gateway, and the flow does not distinguish between them.
+`a11 gateway run` serves.
 
-## Writing one
-
-Editor support lives in
-[`editors/`](https://github.com/hpnkv/a11/tree/main/editors): a Sublime Text
-syntax definition, and — in the
+For writing flows: editor support is in
+[`editors/`](https://github.com/hpnkv/a11/tree/main/editors), and the
 [A11 plugin for JetBrains IDEs](https://github.com/hpnkv/a11/tree/main/intellij-plugin)
-— highlighting for `.flow` files *and* for flows written inside a string
-literal, which is where most of them live:
-
-```python
-program = flow.loads("""
-    flow shout {                          # highlighted from here
-      in  words:   string stream
-      out loudest: string
-
-      say = run text-upper(text: words)
-      say.upper | first 1 -> loudest
-    }
-""")
-```
-
-Nothing has to be configured — a string that opens with a flow declaration is
-treated as one — and `# language=A11Flow` covers a fragment that cannot say so
-itself.
-
-To put the language in front of a model that has to write one,
-`a11.flow.REFERENCE` is a cheat sheet sized for a prompt.
-
-## Handing the language to a model
-
-A composition is most useful written by whoever is already holding the problem,
-and increasingly that is a model with a handful of tools.
-[`a11.sdk.flow_tools`](../llm-sdk/flow-skill.md) gives one the ability directly:
-`flow_actions` tells it what it may compose and what each action's ports are
-called, `flow_check` compiles a flow without running it, and `flow_run` runs
-one. `flow_tools.get_system_prompt()` — or `get_skill()`, for a host that loads
-`SKILL.md`-style skills — is the text that teaches it when to bother.
-
-The reason to bother is the same one the language exists for: the values a
-composition moves between steps never pass through the model. Three fetched
-pages become one answer, and the answer is all it reads.
+highlights `.flow` files *and* flows written inside a string literal, which is
+where most of them live. [Checking flows from a toolchain](flow-tooling.md) is the
+same language as a set of machine-readable answers, for CI and for editors of your
+own.

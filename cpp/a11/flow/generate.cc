@@ -610,6 +610,47 @@ std::string One(std::string_view word) {
   return Inline(absl::MakeConstSpan(only.data(), only.size()));
 }
 
+/// `"a", "b", "c"`: the words as Python arguments, wrapped over lines.
+///
+/// Only the lower-case spelling is written. The generated `_keywords` makes the
+/// shouted one, which keeps the file a list of the language's words rather than
+/// a list of each of them twice.
+std::string Quoted(absl::Span<const std::string_view> words,
+                   std::string_view indent, size_t width = 74) {
+  std::string out;
+  std::string line;
+  for (size_t index = 0; index < words.size(); ++index) {
+    const std::string piece = absl::StrCat(
+        "\"", words[index], "\"", index + 1 == words.size() ? "" : ",");
+    if (!line.empty() &&
+        indent.size() + line.size() + 1 + piece.size() > width) {
+      absl::StrAppend(&out, line, "\n", indent);
+      line.clear();
+    }
+    if (!line.empty()) absl::StrAppend(&line, " ");
+    absl::StrAppend(&line, piece);
+  }
+  absl::StrAppend(&out, line);
+  return out;
+}
+
+/// One word, quoted, for a rule that names a single keyword.
+std::string QuotedOne(std::string_view word) {
+  const std::array<std::string_view, 1> only = {word};
+  return Quoted(absl::MakeConstSpan(only.data(), only.size()), "");
+}
+
+/// `_keywords("a", "b")`, on one line where it fits and wrapped where it does
+/// not -- which is what keeps a two-word table from being written out as a
+/// three-line call, and a table that grows past the margin from running off it.
+std::string Call(absl::Span<const std::string_view> words,
+                 std::string_view assigned_to) {
+  const std::string one_line =
+      absl::StrCat("_keywords(", Quoted(words, "", 1000), ")");
+  if (assigned_to.size() + one_line.size() <= 79) return one_line;
+  return absl::StrCat("_keywords(\n    ", Quoted(words, "    "), "\n)");
+}
+
 std::string Sublime() {
   const std::vector<std::string_view> statements = StatementKeywords();
   const std::vector<std::string_view> clauses =
@@ -668,10 +709,434 @@ std::string Sublime() {
       });
 }
 
+/// The Pygments lexer, with `@NAME@` where a list of words goes.
+///
+/// The same split as the Sublime template: the states and what pushes what are a
+/// judgement about the language and are written here, and every word in them
+/// comes from `vocabulary`. What differs is the audience -- this one colours
+/// prose about flows rather than a file being edited, so it stops at what a
+/// reader of a documentation page sees and leaves the error states out.
+constexpr std::string_view kPygmentsTemplate = R"PY(# Copyright 2026 The A11 Authors.
+
+"""Syntax highlighting for the A11 Flow language, as a Pygments lexer.
+
+GENERATED FILE -- do not edit it by hand. It is written by
+``a11 flow syntax --target pygments --generate`` (or ``a11-flow syntax ...``)
+from the language's own word tables, and ``--check`` holds it to being up to
+date. A
+word added to the language reaches this file by running the generator; edited
+here, it would be overwritten and the drift would be silent.
+
+This is what colours the flows in A11's own documentation: MkDocs highlights a
+fenced block with Pygments, and ``doc/hooks/flow_highlighting.py`` registers
+this lexer under the alias ``a11flow``. Nothing about it is specific to that,
+though -- it is an ordinary Pygments lexer, so Sphinx, ``pygmentize`` and a
+static site of
+your own can all read a ``.flow`` file through it.
+
+Every keyword may be written in lower case or UPPER CASE, but not Mixed, which
+is what ``_keywords`` builds the two spellings of: ``For`` highlights as a name
+just as the compiler reads it as one.
+"""
+
+from pygments.lexer import RegexLexer, bygroups, default, include
+from pygments.token import (
+    Comment,
+    Keyword,
+    Name,
+    Number,
+    Operator,
+    Punctuation,
+    String,
+    Text,
+    Whitespace,
+)
+
+__all__ = ["A11FlowLexer"]
+
+#: A name: letters, digits, underscores, and dashes between word characters.
+NAME = r"[A-Za-z_$][A-Za-z0-9_$]*(?:-[A-Za-z0-9_$]+)*"
+
+#: What must follow a keyword for it to be one, rather than the first part of a
+#: longer name: ``in`` is a direction and ``inputs`` is not.
+BOUNDARY = r"(?![A-Za-z0-9_$-])"
+
+#: A dotted name -- a tag a serialisation registry knows a type by, or the type
+#: of a value being built: ``a11.sdk.AudioBuffer``.
+DOTTED = NAME + r"(?:\." + NAME + r")"
+
+
+def _keywords(*names):
+    """``flow|FLOW``: the two spellings of each word, as one alternation.
+
+    A two-word entry keeps its space as ``\\s+``, so ``one of`` matches however
+    it is spaced.
+    """
+    spellings = [*names, *(name.upper() for name in names)]
+    return "|".join(name.replace(" ", r"\s+") for name in spellings)
+
+
+def _group(alternation):
+    """A whole-word group around an alternation: what a rule matches."""
+    return r"\b(" + alternation + r")" + BOUNDARY
+
+
+def _word(*names):
+    """The pattern for the keywords named, in either spelling."""
+    return _group(_keywords(*names))
+
+
+#: The directions a port is declared in.
+DIRECTIONS = @DIRECTIONS@
+
+#: What a port says about itself after its type.
+PORT_MODIFIERS = @PORT_MODIFIERS@
+
+#: What a ``struct`` field says about itself after its type.
+FIELD_MODIFIERS = @FIELD_MODIFIERS@
+
+#: The built-in port type names.
+TYPES = @TYPES@
+
+#: What may follow a ``header``.
+HEADER_WORDS = @HEADER_WORDS@
+
+#: The statements that may follow a ``=``, which is what makes the name before
+#: it a bound step rather than one side of a comparison.
+BINDING_VERBS = @BINDING_VERBS@
+
+#: Words that open a statement.
+STATEMENTS = @STATEMENTS@
+
+#: Words that stand inside a statement without opening one.
+CLAUSES = @CLAUSES@
+
+#: What may follow a call's closing parenthesis.
+MODIFIERS = @MODIFIERS@
+
+#: Every pipeline stage.
+STAGES = @STAGES@
+
+#: The stages that may be written without their leading ``|``.
+BARE_STAGES = @BARE_STAGES@
+
+#: Words that open a pipeline source rather than naming one.
+SOURCE_WORDS = @SOURCE_WORDS@
+
+#: Operators that are words.
+OPERATOR_WORDS = @OPERATOR_WORDS@
+
+#: The language's fixed function set. No user code, ever: a flow stays data.
+BUILTINS = @BUILTINS@
+
+#: The canonical status codes, which is what ``fail`` names.
+STATUS_CODES = @STATUS_CODES@
+
+#: Literals that are words.
+CONSTANTS = @CONSTANTS@
+
+#: Duration suffixes a number may carry, longest spelling first: a pattern that
+#: offered ``m`` before ``ms`` would read ``250ms`` as a number of metres.
+DURATION_UNITS = r"@DURATION_UNITS@"
+
+
+class A11FlowLexer(RegexLexer):
+    """Lexer for the A11 Flow language.
+
+    A word of Flow means what its position says it means -- there are no
+    reserved words -- so the states below are mostly about position: a stage
+    only follows a ``|``, a type only follows a port's ``:``, a function is only
+    a function where it is called, and whatever follows a ``.`` is a member
+    however it is spelled.
+    """
+
+    name = "A11 Flow"
+    url = "https://github.com/hpnkv/a11"
+    aliases = ["a11flow", "a11-flow"]
+    filenames = ["*.flow"]
+    mimetypes = ["text/x-a11flow"]
+
+    tokens = {
+        "root": [
+            (r"[^\S\n]+", Whitespace),
+            (r"\n", Whitespace),
+            include("comment"),
+            include("string"),
+            (_word(@FLOW@), Keyword.Declaration, "flow-name"),
+            (_word(@STRUCT@), Keyword.Declaration, "struct-name"),
+            # A port, told from the `in` of `x in y` by what follows it.
+            (
+                _group(DIRECTIONS) + r"(?=\s+" + NAME + r"\s*:)",
+                Keyword.Declaration,
+                "port",
+            ),
+            (_word(@HEADER@), Keyword.Declaration, "header"),
+            (_word(@DESCRIBE@), Keyword.Declaration),
+            (_word(@NODES@), Keyword.Declaration, "node-map"),
+            # Making a node takes parentheses -- `node()`, `node(id)` -- so the
+            # word is the keyword only where one opens, and a port called `node`
+            # is a name.
+            (_word(@NODE@) + r"(?=\s*\()", Keyword.Declaration),
+            # `x = run ...`: the name before the `=` is the step being bound,
+            # and a step is coloured the way it is coloured where it is used
+            # again -- `mic` and the `mic` of `mic.audio` are the same thing.
+            (
+                r"(" + NAME + r")(\s*)(=)(?=\s*(?:" + BINDING_VERBS + r")"
+                + BOUNDARY + r")",
+                bygroups(Name.Variable, Whitespace, Operator),
+            ),
+            # `state <- source`: what a repeat carries.
+            (
+                r"(" + NAME + r")(\s*)(<-)",
+                bygroups(Name.Variable, Whitespace, Operator),
+            ),
+            (_word(@TRY@), Keyword),
+            (_word(@VERBS@), Keyword, "action-name"),
+            # `via scratch` names a node map, so it is coloured as one -- the
+            # same name the `nodes` that declared it was given.
+            (
+                r"(" + _keywords(@VIA@) + r")" + BOUNDARY + r"([^\S\n]+)("
+                + NAME + r")",
+                bygroups(Keyword.Reserved, Whitespace, Name.Namespace),
+            ),
+            (_group(MODIFIERS), Keyword.Reserved),
+            (_group(STATEMENTS), Keyword),
+            (_group(CLAUSES), Keyword),
+            # A stage, which is what a word after a `|` is. The gap may hold a
+            # line break: a long pipeline is written one stage to a line.
+            (
+                r"(\|)(\s*)(" + STAGES + r")" + BOUNDARY,
+                bygroups(Operator, Whitespace, Name.Builtin.Pseudo),
+            ),
+            # The two stages that may be written without their `|` read as words
+            # joining two things -- `history then asked`, `hits where it.ok`.
+            # Both take an operand, which is what tells the stage from a port of
+            # the same name.
+            (
+                _group(BARE_STAGES)
+                + r"(?=[^\S\n]+(?:[A-Za-z_$\"(\[{]|[0-9]|-[0-9]))",
+                Name.Builtin.Pseudo,
+            ),
+            (_word(@AS@), Keyword, "cast"),
+            # `a11.sdk.Interaction{...}`: a value of a named type.
+            (DOTTED + r"+(?=\s*\{)", Keyword.Type),
+            (_group(SOURCE_WORDS), Keyword),
+            (_word(@IT@), Name.Builtin.Pseudo),
+            (_group(OPERATOR_WORDS), Operator.Word),
+            (_group(BUILTINS) + r"(?=\s*\()", Name.Builtin),
+            (_group(STATUS_CODES), Name.Constant),
+            include("literal"),
+            include("operator"),
+            include("name"),
+            (r".", Text),
+        ],
+        "comment": [
+            (r"#[^\n]*", Comment.Single),
+        ],
+        "string": [
+            # `"""..."""` first, so three quotes are not read as
+            # an empty string and a quote. A line break inside one is content,
+            # which is the whole point of it.
+            (r'"""', String, "block-string"),
+            (r'"', String, "quoted-string"),
+        ],
+        "block-string": [
+            (r'\\.', String.Escape),
+            (r'"""', String, "#pop"),
+            (r'[^\\"]+', String),
+            (r'"', String),
+        ],
+        "quoted-string": [
+            (r'\\.', String.Escape),
+            (r'"', String, "#pop"),
+            (r'[^\\"\n]+', String),
+            (r"\n", Whitespace, "#pop"),
+        ],
+        "flow-name": [
+            (r"[^\S\n]+", Whitespace),
+            (NAME, Name.Function, "#pop"),
+            (r'"', String, ("#pop", "quoted-string")),
+            default("#pop"),
+        ],
+        "struct-name": [
+            (r"[^\S\n]+", Whitespace),
+            (NAME, Name.Class, ("#pop", "struct-body")),
+            default("#pop"),
+        ],
+        # A struct's body is fields and nothing else, which is why it is its own
+        # state rather than a use of `root`.
+        "struct-body": [
+            (r"[^\S\n]+", Whitespace),
+            (r"\n", Whitespace),
+            (r"\{", Punctuation),
+            (r"\}", Punctuation, "#pop"),
+            include("comment"),
+            (_word(@DESCRIBE@), Keyword.Declaration),
+            include("string"),
+            (
+                r"(" + NAME + r")(\s*)(:)",
+                bygroups(Name.Attribute, Whitespace, Punctuation),
+                "field-type",
+            ),
+            (r".", Text),
+        ],
+        "field-type": [
+            (r"[^\S\n]+", Whitespace),
+            (_group(FIELD_MODIFIERS), Keyword.Pseudo),
+            include("type"),
+            include("string"),
+            include("literal"),
+            # `1..200`: the range between two bounds.
+            (r"\.\.", Operator),
+            (r"[\[\],]", Punctuation),
+            (r"\n", Whitespace, "#pop"),
+            (r".", Text),
+        ],
+        "port": [
+            (r"[^\S\n]+", Whitespace),
+            (NAME, Name.Attribute),
+            (r":", Punctuation, ("#pop", "port-type")),
+            default("#pop"),
+        ],
+        "port-type": [
+            (r"[^\S\n]+", Whitespace),
+            (_group(PORT_MODIFIERS), Keyword.Pseudo),
+            include("type"),
+            include("string"),
+            # The brackets a generic type says what it holds in.
+            (r"[\[\],]", Punctuation),
+            (r"\n", Whitespace, "#pop"),
+            (r".", Text),
+        ],
+        "header": [
+            (r"[^\S\n]+", Whitespace),
+            (_group(HEADER_WORDS), Keyword),
+            include("string"),
+            include("literal"),
+            (NAME, Name.Variable),
+            (r"\n", Whitespace, "#pop"),
+            (r".", Text),
+        ],
+        "node-map": [
+            (r"[^\S\n]+", Whitespace),
+            (NAME, Name.Namespace, "#pop"),
+            default("#pop"),
+        ],
+        "action-name": [
+            (r"[^\S\n]+", Whitespace),
+            (NAME + r"(?:\." + NAME + r")*", Name.Function, "#pop"),
+            (r'"', String, ("#pop", "quoted-string")),
+            default("#pop"),
+        ],
+        # `expr as TYPE`, and the type it names -- which may be a registry tag,
+        # so it is read by shape rather than looked up in a list.
+        "cast": [
+            (r"[^\S\n]+", Whitespace),
+            (
+                NAME + r"(?:\." + NAME + r")*(?:\s*\[[^\]\n]*\])?",
+                Keyword.Type,
+                "#pop",
+            ),
+            (r'"', String, ("#pop", "quoted-string")),
+            default("#pop"),
+        ],
+        "type": [
+            # A tag first, so one whose first part happens to be a built-in name
+            # is still read as the whole tag.
+            (DOTTED + r"+", Keyword.Type),
+            (_group(TYPES), Keyword.Type),
+        ],
+        "literal": [
+            (_group(CONSTANTS), Keyword.Constant),
+            (r"-?\d+(?:\.\d+)?(?:" + DURATION_UNITS + r")" + BOUNDARY, Number),
+            (r"-?\d+(?:\.\d+)?", Number),
+        ],
+        "operator": [
+            (r"->|<-", Operator),
+            (r"==|!=|<=|>=", Operator),
+            (r"\.\.", Operator),
+            (r"[<>|=+*/%-]", Operator),
+            (r"[{}()\[\]]", Punctuation),
+            (r"[:,.]", Punctuation),
+        ],
+        "name": [
+            # `x.port` -- a call's port, a node's id, a field of a value.
+            (NAME + r"(?=\s*\.)", Name.Variable),
+            (r"(?<=\.)" + NAME, Name.Attribute),
+            (NAME, Name),
+        ],
+    }
+)PY";
+
+std::string Pygments() {
+  const std::vector<std::string_view> statements = StatementKeywords();
+  const std::vector<std::string_view> clauses =
+      Except(vocabulary::OrderedClauseWords(), absl::MakeConstSpan(&kElse, 1));
+  const std::vector<std::string_view> modifiers =
+      Split(vocabulary::OrderedModifiers());
+  const std::vector<std::string_view> constants =
+      Except(std::vector<std::string_view>{"true", "false", "null", "it"},
+             absl::MakeConstSpan(&kIt, 1));
+  const std::vector<std::string_view> units = DurationUnits();
+  const std::vector<std::string_view> operators = OperatorWords();
+  std::vector<std::string_view> bare;
+  for (const std::string_view stage : vocabulary::Stages()) {
+    if (vocabulary::BareStages().contains(stage)) bare.push_back(stage);
+  }
+  std::vector<std::string_view> sources;
+  for (const std::string_view word : vocabulary::SourceWords()) {
+    sources.push_back(word);
+  }
+  std::sort(sources.begin(), sources.end());
+
+  return absl::StrReplaceAll(
+      kPygmentsTemplate,
+      {
+          {"@FLOW@", QuotedOne("flow")},
+          {"@STRUCT@", QuotedOne("struct")},
+          {"@DIRECTIONS@",
+           Call(std::vector<std::string_view>{"in", "out"}, "DIRECTIONS = ")},
+          {"@PORT_MODIFIERS@", Call(vocabulary::OrderedPortModifiers(),
+                                    "PORT_MODIFIERS = ")},
+          {"@FIELD_MODIFIERS@", Call(vocabulary::OrderedFieldModifiers(),
+                                     "FIELD_MODIFIERS = ")},
+          {"@TYPES@", Call(vocabulary::OrderedTypeNames(), "TYPES = ")},
+          {"@HEADER@", QuotedOne("header")},
+          {"@HEADER_WORDS@",
+           Call(std::vector<std::string_view>{"as", "default"},
+                "HEADER_WORDS = ")},
+          {"@DESCRIBE@", QuotedOne("describe")},
+          {"@BINDING_VERBS@",
+           Call(absl::MakeConstSpan(kBindingVerbs.data(), kBindingVerbs.size()),
+                "BINDING_VERBS = ")},
+          {"@STATEMENTS@", Call(statements, "STATEMENTS = ")},
+          {"@CLAUSES@", Call(clauses, "CLAUSES = ")},
+          {"@NODES@", QuotedOne("nodes")},
+          {"@NODE@", QuotedOne("node")},
+          {"@TRY@", QuotedOne("try")},
+          {"@VERBS@",
+           Quoted(std::vector<std::string_view>{"run", "call"}, "")},
+          {"@VIA@", QuotedOne("via")},
+          {"@MODIFIERS@", Call(modifiers, "MODIFIERS = ")},
+          {"@STAGES@", Call(vocabulary::Stages(), "STAGES = ")},
+          {"@BARE_STAGES@", Call(bare, "BARE_STAGES = ")},
+          {"@AS@", QuotedOne("as")},
+          {"@SOURCE_WORDS@", Call(sources, "SOURCE_WORDS = ")},
+          {"@IT@", QuotedOne("it")},
+          {"@OPERATOR_WORDS@", Call(operators, "OPERATOR_WORDS = ")},
+          {"@BUILTINS@", Call(vocabulary::OrderedBuiltins(), "BUILTINS = ")},
+          {"@STATUS_CODES@",
+           Call(vocabulary::StatusCodes(), "STATUS_CODES = ")},
+          {"@CONSTANTS@", Call(constants, "CONSTANTS = ")},
+          {"@DURATION_UNITS@", absl::StrJoin(units, "|")},
+      });
+}
+
 }  // namespace
 
 absl::Span<const SyntaxTarget> SyntaxTargets() {
-  static constexpr std::array kTargets = {SyntaxTarget::kSublime};
+  static constexpr std::array kTargets = {SyntaxTarget::kSublime,
+                                          SyntaxTarget::kPygments};
   return absl::MakeConstSpan(kTargets.data(), kTargets.size());
 }
 
@@ -679,6 +1144,8 @@ std::string_view SyntaxTargetName(SyntaxTarget target) {
   switch (target) {
     case SyntaxTarget::kSublime:
       return "sublime";
+    case SyntaxTarget::kPygments:
+      return "pygments";
   }
   return "sublime";
 }
@@ -697,6 +1164,8 @@ std::string_view SyntaxTargetPath(SyntaxTarget target) {
   switch (target) {
     case SyntaxTarget::kSublime:
       return "editors/sublime-text/A11 Flow.sublime-syntax";
+    case SyntaxTarget::kPygments:
+      return "editors/pygments/a11flow_lexer.py";
   }
   return "";
 }
@@ -705,6 +1174,8 @@ std::string GenerateSyntax(SyntaxTarget target) {
   switch (target) {
     case SyntaxTarget::kSublime:
       return Sublime();
+    case SyntaxTarget::kPygments:
+      return Pygments();
   }
   return "";
 }

@@ -502,9 +502,12 @@ A definition that *cannot* call out — a static grammar file loaded by a highli
 ```sh
 a11 flow syntax                        # is the checked-in file current?
 a11 flow syntax --generate             # write it
-a11 flow syntax --target sublime       # one of them
+a11 flow syntax --target pygments      # one of them
 ```
 
-`editors/sublime-text/A11 Flow.sublime-syntax` is written from the language's own
-tables, so a word the language gains reaches it by running the generator; the check
-exits 1 when nobody has, which is what CI gates on.
+There are two targets. `editors/sublime-text/A11 Flow.sublime-syntax` is a
+Sublime/TextMate-family grammar, and `editors/pygments/a11flow_lexer.py` is a
+Pygments lexer — the one colouring every flow on these pages, registered by
+`doc/hooks/flow_highlighting.py`. Both are written from the language's own tables,
+so a word the language gains reaches them by running the generator; the check exits
+1 when nobody has, which is what CI gates on.

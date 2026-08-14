@@ -3,6 +3,7 @@
 #include "a11/stores/chunk_store_reader.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -230,6 +231,36 @@ TEST(ChunkStoreReaderTest, ManyReadersShareStacklessPump) {
     reader->Cancel();
   }
   EXPECT_EQ(thread::internal::CreatedFiberCountForTesting(), created);
+}
+
+// A fragment that arrived while the reader was already prefetching the next
+// sequence must still reach the caller that asks for it afterwards. That
+// prefetch waits for a value nobody has written yet, so a reader which only
+// delivered from a completing fetch would hold the answer back forever.
+TEST(ChunkStoreReaderTest, BufferedFragmentReachesALaterReader) {
+  auto store = *LocalChunkStore::Create("reader-prefetch");
+  auto reader = *ChunkStoreReader::Create(store);
+  // Arms the first fetch, which waits on a store that is still empty.
+  reader->EnsureStarted();
+  thread::SleepFor(absl::Milliseconds(20));
+
+  ASSERT_TRUE(store
+                  ->Put(data::NodeFragment{.data = data::Chunk{.data = "one"},
+                                           .seq = 0,
+                                           .continued = true})
+                  .Await()
+                  .ok());
+  // Long enough for the fetch to finish, the fragment to be buffered, and the
+  // prefetch of seq 1 -- which nobody will write -- to be in flight.
+  thread::SleepFor(absl::Milliseconds(50));
+  EXPECT_EQ(reader->buffer_size(), 1);
+
+  const absl::StatusOr<std::optional<data::NodeFragment>> fragment =
+      reader->Next(absl::Seconds(2)).Await();
+  ASSERT_TRUE(fragment.ok()) << fragment.status();
+  ASSERT_TRUE(fragment->has_value());
+  EXPECT_EQ(std::get<data::Chunk>((*fragment)->data).data, "one");
+  reader->Cancel();
 }
 
 }  // namespace

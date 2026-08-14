@@ -30,7 +30,7 @@ install_native_options(
     {
         "ordered": (bool, True),
         "pop_chunks": (bool, False),
-        "num_chunks_to_buffer": (int, 1024),
+        "num_chunks_to_buffer": (int, 32),
         "offset": (int, 0),
         "max_chunks_to_read": (int | None, None),
         "sticky_mimetype": (bool, False),

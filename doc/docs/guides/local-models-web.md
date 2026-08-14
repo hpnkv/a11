@@ -69,7 +69,7 @@ URL of the Gemma model to download and run. `makeTextMessageInteraction`
 builds a portable text turn.
 
 ```ts
-const user = need(makeTextMessageInteraction('Explain WebGPU in one sentence.'));
+const user = need(await makeTextMessageInteraction('Explain WebGPU in one sentence.'));
 
 const interactions = need(await action.getInput('interactions'));
 need(await interactions.put(user, {final: true}));

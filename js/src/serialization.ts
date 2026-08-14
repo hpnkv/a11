@@ -517,6 +517,16 @@ export class SerializationRegistry {
   /** Select a matching serializer and produce a tagged, owned Chunk. */
   async toChunk(value: unknown, mimetype = ''): Promise<StatusOr<Chunk>> {
     try {
+      // A promise is the one value worth naming: the SDK's builders are async
+      // (`makeTextMessageInteraction`, `toChunk`), and a forgotten `await`
+      // otherwise arrives here as an anonymous object no codec claims, which
+      // reads as "nothing can serialize an interaction" rather than "you sent
+      // the promise, not the value".
+      if (typeof (value as { then?: unknown } | null)?.then === 'function') {
+        return invalidArgumentError(
+          'A Promise cannot be serialized: await the value before writing it.',
+        );
+      }
       const selection = mimetype === '' ? null : parseMimetype(mimetype, true);
       if (selection !== null && !isOk(selection)) return selection;
       // A selector picks a representation; the value's own type decides the

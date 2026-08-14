@@ -80,7 +80,7 @@ struct ChunkStoreReader::State
     bool schedule = false;
     {
       thread::MutexLock lock(&mu);
-      if (!queued && operation == Operation::kNone) {
+      if (!queued) {
         queued = true;
         schedule = true;
       }

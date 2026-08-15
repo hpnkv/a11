@@ -485,7 +485,8 @@ void BindService(py::module_& module) {
             if (!converted.ok()) {
               return FutureToPython(a11::FailedTask(converted.status()));
             }
-            return FutureToPython(self->AwaitAllActions(*converted));
+            return FutureToPython(
+                WithoutGil([&] { return self->AwaitAllActions(*converted); }));
           },
           "Return an awaitable that resolves once all in-flight actions have "
           "finished, or the optional timeout elapses. Await this to "
@@ -496,8 +497,8 @@ void BindService(py::module_& module) {
           "dispatch_node_fragment",
           [](const std::shared_ptr<service::Session>& self,
              data::NodeFragment fragment) {
-            return FutureToPython(
-                self->DispatchNodeFragment(std::move(fragment)));
+            return FutureToPython(WithoutGil(
+                [&] { return self->DispatchNodeFragment(std::move(fragment)); }));
           },
           "Dispatch a node fragment into the session's NodeMap and return an "
           "awaitable resolving to the applied revision. Fragments are applied "
@@ -509,8 +510,10 @@ void BindService(py::module_& module) {
           [](const std::shared_ptr<service::Session>& self,
              data::ActionMessage message,
              std::shared_ptr<net::WireStream> origin_stream) {
-            return FutureToPython(self->DispatchActionMessage(
-                std::move(message), std::move(origin_stream)));
+            return FutureToPython(WithoutGil([&] {
+              return self->DispatchActionMessage(std::move(message),
+                                                 std::move(origin_stream));
+            }));
           },
           "Dispatch an action message, resolving it against the action "
           "registry "
@@ -527,8 +530,9 @@ void BindService(py::module_& module) {
               return FutureToPython(a11::FailedTask(absl::InvalidArgumentError(
                   "action must be an Action instance")));
             }
-            return FutureToPython(self->DispatchAction(
-                action.cast<std::shared_ptr<actions::Action>>()));
+            auto dispatched = action.cast<std::shared_ptr<actions::Action>>();
+            return FutureToPython(WithoutGil(
+                [&] { return self->DispatchAction(std::move(dispatched)); }));
           },
           "Dispatch an already-constructed Action to run within the session, "
           "returning an awaitable for its handling.",
@@ -564,14 +568,14 @@ void BindService(py::module_& module) {
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<service::Session>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "An awaitable that resolves when the session has "
           "fully finished all streams and actions.")
       .def(
           "wait_done",
           [](const std::shared_ptr<service::Session>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Return an awaitable that resolves when the session has fully "
           "finished. Await this to block until every stream and action has "
@@ -702,7 +706,7 @@ Examples:
                       -> py::object { return py::none(); });
             }
             return FutureToPythonAs<ReceivedMessage>(
-                self->ReceiveWithStreamId(*converted),
+                WithoutGil([&] { return self->ReceiveWithStreamId(*converted); }),
                 [](const std::optional<service::ReceivedSessionMessage>& value)
                     -> py::object {
                   if (!value.has_value()) {
@@ -727,7 +731,8 @@ Examples:
                   a11::FailedFuture<std::optional<data::WireMessage>>(
                       converted.status()));
             }
-            return FutureToPython(self->Receive(*converted));
+            return FutureToPython(
+                WithoutGil([&] { return self->Receive(*converted); }));
           },
           "Return an awaitable that resolves to the next inbound message, or "
           "None once the session is done. Await this in a loop to consume the "
@@ -845,8 +850,10 @@ Examples:
           "accept",
           [](const std::shared_ptr<service::Service>& self,
              std::shared_ptr<net::WireStream> stream) {
-            return FutureToPython(
-                self->Serve(std::move(stream), service::StreamMode::kAccept));
+            return FutureToPython(WithoutGil([&] {
+              return self->Serve(std::move(stream),
+                                 service::StreamMode::kAccept);
+            }));
           },
           "Serve an accepted stream, awaiting its session's whole lifetime.",
           py::arg("stream"))
@@ -854,8 +861,10 @@ Examples:
           "start",
           [](const std::shared_ptr<service::Service>& self,
              std::shared_ptr<net::WireStream> stream) {
-            return FutureToPython(
-                self->Serve(std::move(stream), service::StreamMode::kStart));
+            return FutureToPython(WithoutGil([&] {
+              return self->Serve(std::move(stream),
+                                 service::StreamMode::kStart);
+            }));
           },
           "Serve a stream this side initiated, awaiting its whole lifetime.",
           py::arg("stream"))
@@ -863,8 +872,10 @@ Examples:
           "serve",
           [](const std::shared_ptr<service::Service>& self,
              std::shared_ptr<net::WireStream> stream, const py::object& mode) {
-            return FutureToPython(self->Serve(
-                std::move(stream), ValueOrThrow(StreamModeFromPython(mode))));
+            const service::StreamMode converted =
+                ValueOrThrow(StreamModeFromPython(mode));
+            return FutureToPython(WithoutGil(
+                [&] { return self->Serve(std::move(stream), converted); }));
           },
           "Serve a stream in the given mode (\"start\" or \"accept\").",
           py::arg("stream"), py::arg("mode") = "accept")
@@ -945,7 +956,8 @@ Examples:
              const py::typing::Optional<NativeDuration>& timeout) {
             const absl::Duration converted =
                 ValueOrThrow(DurationFromPython(timeout, false));
-            return FutureToPython(self->Drain(converted));
+            return FutureToPython(
+                WithoutGil([&] { return self->Drain(converted); }));
           },
           "Await the completion of every live session.",
           py::arg("timeout") = py::none())
@@ -959,7 +971,7 @@ Examples:
       .def(
           "wait_done",
           [](const std::shared_ptr<service::Service>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Await the service being closed and empty.");
 

@@ -21,7 +21,7 @@ from a11._native_options import install_native_options
 from a11._native_protocol import attach_protocol
 from a11.data import types
 from a11.status import Status, StatusCode
-from a11.stores.chunk_store import ChunkStore
+from a11.stores.chunk_store import ChunkStore, native_chunk_store
 
 from a11._native import ChunkStoreReaderOptions
 
@@ -63,7 +63,7 @@ class _ChunkStoreReaderProtocol:
             options = ChunkStoreReaderOptions()
         elif not isinstance(options, ChunkStoreReaderOptions):
             options = ChunkStoreReaderOptions.model_validate(options)
-        _native_init(self, store, options)
+        _native_init(self, native_chunk_store(store), options)
 
     def next(self, timeout: timing.Duration = timing.infinite_duration()):
         """Return an awaitable for the next fragment in this reader's view.

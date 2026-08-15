@@ -243,7 +243,9 @@ void BindRedis(py::module_& module) {
           [](const std::shared_ptr<redis::Subscription>& self,
              std::uint64_t after,
              const py::typing::Optional<NativeTime>& deadline) {
-            return FutureToPython(self->Wait(after, RedisDeadline(deadline)));
+            const absl::Time until = RedisDeadline(deadline);
+            return FutureToPython(
+                WithoutGil([&] { return self->Wait(after, until); }));
           },
           "Await a message newer than generation `after`.", py::arg("after"),
           py::arg("deadline") = py::none());
@@ -269,7 +271,7 @@ void BindRedis(py::module_& module) {
       .def(
           "ready",
           [](const std::shared_ptr<redis::Client>& self) {
-            return FutureToPython(self->Ready());
+            return FutureToPython(WithoutGil([&] { return self->Ready(); }));
           },
           "Await initialization of command and Pub/Sub connections.")
       .def(
@@ -277,9 +279,11 @@ void BindRedis(py::module_& module) {
           [](const std::shared_ptr<redis::Client>& self,
              const py::handle& parts,
              const py::typing::Optional<NativeTime>& deadline) {
-            return FutureToPython(
-                self->Command(RedisParts(parts, "Redis command part"),
-                              RedisDeadline(deadline)));
+            std::vector<std::string> converted =
+                RedisParts(parts, "Redis command part");
+            const absl::Time until = RedisDeadline(deadline);
+            return FutureToPython(WithoutGil(
+                [&] { return self->Command(std::move(converted), until); }));
           },
           "Execute a binary-safe command supplied as name plus arguments.",
           py::arg("parts"), py::arg("deadline") = py::none())
@@ -289,11 +293,16 @@ void BindRedis(py::module_& module) {
              const py::handle& script, const py::handle& keys,
              const py::handle& arguments,
              const py::typing::Optional<NativeTime>& deadline) {
-            return FutureToPython(
-                self->Eval(RedisBytes(script, "Redis script"),
-                           RedisParts(keys, "Redis script key"),
-                           RedisParts(arguments, "Redis script argument"),
-                           RedisDeadline(deadline)));
+            std::string source = RedisBytes(script, "Redis script");
+            std::vector<std::string> key_names =
+                RedisParts(keys, "Redis script key");
+            std::vector<std::string> values =
+                RedisParts(arguments, "Redis script argument");
+            const absl::Time until = RedisDeadline(deadline);
+            return FutureToPython(WithoutGil([&] {
+              return self->Eval(std::move(source), std::move(key_names),
+                                std::move(values), until);
+            }));
           },
           "Execute Lua while explicitly declaring every cluster-sensitive key.",
           py::arg("script"), py::arg("keys"),
@@ -303,8 +312,10 @@ void BindRedis(py::module_& module) {
           [](const std::shared_ptr<redis::Client>& self,
              const py::handle& channel,
              const py::typing::Optional<NativeTime>& deadline) {
-            return FutureToPython(self->Subscribe(
-                RedisBytes(channel, "Redis channel"), RedisDeadline(deadline)));
+            std::string name = RedisBytes(channel, "Redis channel");
+            const absl::Time until = RedisDeadline(deadline);
+            return FutureToPython(WithoutGil(
+                [&] { return self->Subscribe(std::move(name), until); }));
           },
           "Subscribe and await Redis's acknowledgement.", py::arg("channel"),
           py::arg("deadline") = py::none())

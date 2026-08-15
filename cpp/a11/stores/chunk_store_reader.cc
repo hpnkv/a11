@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <absl/base/no_destructor.h>
+#include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
@@ -24,6 +25,7 @@
 #include "a11/concurrency/callback_scheduler.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
+#include "a11/concurrency/inline_pump.h"
 #include "a11/data/types.h"
 #include "a11/stores/chunk_store.h"
 #include "thread/boost_primitives.h"
@@ -137,6 +139,14 @@ struct ChunkStoreReader::State
    * that decides what the end of a stream looks like.
    */
   std::vector<data::NodeFragment> TakeBuffered(size_t limit) {
+    // Fill on the caller's thread before taking, rather than waking the pump
+    // and taking whatever happens to be there. A caller that comes straight
+    // back for more outruns an asynchronous refill -- the buffer fills from
+    // inside Drive(), so a poller that returns the moment its own fragment
+    // lands arrives again mid-fill -- and batches alternate between full and
+    // one. The reads cost the caller nothing it was not going to wait for, and
+    // a store that answers inline answers them in ~0.3us each.
+    Drive();
     std::vector<data::NodeFragment> taken;
     {
       thread::MutexLock lock(&mu);
@@ -196,6 +206,16 @@ struct ChunkStoreReader::State
     }
     Complete(std::move(completions));
 
+    // Then fetch on the caller's thread rather than handing the work to the
+    // pump: Wake() only schedules, so a read the buffer cannot answer would pay
+    // a scheduler hop before the store is even asked, and a caller reading one
+    // fragment at a time never gets ahead of that. Driving here fetches
+    // everything the store can answer without waiting, so this request is
+    // usually resolved by the time it is returned and the buffer is refilled
+    // for the one after it. A store that cannot answer inline leaves its
+    // fetches outstanding.
+    Drive();
+
     // Only a request that is still outstanding needs a timer. Arming one for a
     // read that has already been answered is pure cost, and it is the common
     // case now.
@@ -216,6 +236,11 @@ struct ChunkStoreReader::State
           state->Wake();
         }
       });
+    }
+    if (settled) {
+      // Served from the buffer, which Drive() above has already refilled; a
+      // wake would only re-enter an idle pump.
+      return future;
     }
     Wake();
     return future;
@@ -238,8 +263,10 @@ struct ChunkStoreReader::State
    * them.
    */
   void Drive() {
-    while (DriveOnce()) {
-    }
+    DriveInline(&mu, &pump, "ChunkStoreReader", [this] {
+      while (DriveOnce()) {
+      }
+    });
   }
 
   /**
@@ -681,6 +708,8 @@ struct ChunkStoreReader::State
   std::deque<data::NodeFragment> buffer ABSL_GUARDED_BY(mu);
   std::deque<std::shared_ptr<Request>> pending_reads ABSL_GUARDED_BY(mu);
   bool queued ABSL_GUARDED_BY(mu) = false;
+  // Re-entry bookkeeping for Drive(); read and written only under mu.
+  InlinePumpState pump;
   Operation operation ABSL_GUARDED_BY(mu) = Operation::kNone;
   std::uint64_t operation_generation ABSL_GUARDED_BY(mu) = 0;
   a11::Future<data::NodeFragment> active_operation ABSL_GUARDED_BY(mu);

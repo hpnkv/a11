@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any, TypeVar, cast
 
 from a11 import _native, timing
+from a11._asyncio import _flush_before_awaiting
 from a11._native_protocol import attach_protocol
 from a11.data import types
 from a11.data.serialization import (
@@ -32,7 +33,11 @@ from a11.data.serialization import (
     get_global_serialization_registry,
 )
 from a11.status import Status, StatusCode
-from a11.stores.chunk_store import ChunkStore, ChunkStoreFactory
+from a11.stores.chunk_store import (
+    ChunkStore,
+    ChunkStoreFactory,
+    native_chunk_store,
+)
 from a11.stores.chunk_store_reader import (
     ChunkStoreReader,
     ChunkStoreReaderOptions,
@@ -294,7 +299,7 @@ class _AsyncNodeProtocol:
             ).to_exception()
         _native_node_init(
             self,
-            chunk_store,
+            native_chunk_store(chunk_store),
             None,
             _reader_options(reader_options),
             _writer_options(writer_options),
@@ -457,10 +462,18 @@ class _AsyncNodeProtocol:
         accepted the fragment. Attached stream sends are attempted or queued
         as the writer processes the batch, but do not add a second delivery
         confirmation.
+
+        Awaiting the confirmation flushes the writer on this thread, so a
+        store that accepts the write without waiting resolves it with no
+        event-loop turn at all. A producer that awaits only admission does not
+        flush: its write goes out on the writer's own pump, which is the point
+        of the two being separate.
         """
+        writer = self.writer
         confirmation, admission = _native_writer_enqueue(
-            self.writer, chunk, seq=seq, final=final
+            writer, chunk, seq=seq, final=final
         )
+        _flush_before_awaiting(confirmation, writer.flush)
         if admission is not None:
             try:
                 await admission

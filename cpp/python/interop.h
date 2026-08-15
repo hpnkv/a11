@@ -215,12 +215,22 @@ class PythonReferences {
   py::object loop() const;
   py::object future() const;
   py::object completion() const;
+  /**
+   * Whether the calling thread is the one the loop runs on.
+   *
+   * Native work often finishes *on* the loop thread -- a store read or write
+   * driven inline from a binding -- and a completion that lands there can
+   * resolve its future directly rather than posting to the thread it is already
+   * on, which would cost the awaiting coroutine an event-loop turn.
+   */
+  bool OnLoopThread() const;
   void ClearWithGilHeld();
 
  private:
   PyObject* absl_nullable loop_ = nullptr;
   PyObject* absl_nullable future_ = nullptr;
   PyObject* absl_nullable completion_ = nullptr;
+  unsigned long loop_thread_ = 0;
 };
 
 template <typename T, typename Converter>
@@ -291,9 +301,20 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
       } else {
         exception = StatusException(result.status());
       }
-      references->loop().attr("call_soon_threadsafe")(
-          references->completion(), references->future(), std::move(value),
-          std::move(exception));
+      if (references->OnLoopThread()) {
+        // Resolve directly: the work finished on the loop's own thread, so an
+        // await that follows in the same coroutine step sees a finished future
+        // and never yields. Posting to `call_soon_threadsafe` here would cost
+        // that awaiter a turn to learn what this frame already knows. Setting
+        // a result only schedules the future's callbacks, so this cannot
+        // reenter native code.
+        references->completion()(references->future(), std::move(value),
+                                 std::move(exception));
+      } else {
+        references->loop().attr("call_soon_threadsafe")(
+            references->completion(), references->future(), std::move(value),
+            std::move(exception));
+      }
     } catch (const py::error_already_set&) {
       // The loop may have closed concurrently. There is no live Python waiter
       // to receive another error in that case.

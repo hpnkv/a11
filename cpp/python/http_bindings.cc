@@ -336,7 +336,7 @@ void BindHttp(py::module_& module) {
           "read",
           [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
             return FutureToPythonAs<py::typing::Optional<py::bytes>>(
-                self->Read(),
+                WithoutGil([&] { return self->Read(); }),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
                     return py::none();
@@ -349,13 +349,13 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_done",
           [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Await completion of the request body stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2RequestBodyStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Future that completes when the request body stream is done.")
       .def(
@@ -574,14 +574,14 @@ void BindHttp(py::module_& module) {
       .def(
           "headers",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
-            return FutureToPython(self->Headers());
+            return FutureToPython(WithoutGil([&] { return self->Headers(); }));
           },
           "Await the response head (status and headers).")
       .def(
           "read",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
             return FutureToPythonAs<py::typing::Optional<py::bytes>>(
-                self->Read(),
+                WithoutGil([&] { return self->Read(); }),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
                     return py::none();
@@ -596,7 +596,8 @@ void BindHttp(py::module_& module) {
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
             return FutureToPythonAs<
                 py::typing::List<py::typing::Tuple<py::str, py::str>>>(
-                self->Trailers(), [](const net::HttpHeaders& fields) {
+                WithoutGil([&] { return self->Trailers(); }),
+                [](const net::HttpHeaders& fields) {
                   return HttpHeadersToPython(fields);
                 });
           },
@@ -608,7 +609,7 @@ void BindHttp(py::module_& module) {
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
             return FutureToPythonAs<
                 py::typing::Optional<net::HttpPushedResponse>>(
-                self->NextPush(),
+                WithoutGil([&] { return self->NextPush(); }),
                 [](const std::optional<net::HttpPushedResponse>& value)
                     -> py::object {
                   if (!value.has_value()) {
@@ -623,13 +624,13 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_done",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Await completion of the response stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2ResponseStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Future that completes when the response stream is done.")
       .def(
@@ -677,14 +678,14 @@ void BindHttp(py::module_& module) {
       .def(
           "headers",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
-            return FutureToPython(self->Headers());
+            return FutureToPython(WithoutGil([&] { return self->Headers(); }));
           },
           "Await the response head (status and headers).")
       .def(
           "read",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
             return FutureToPythonAs<py::typing::Optional<py::bytes>>(
-                self->Read(),
+                WithoutGil([&] { return self->Read(); }),
                 [](const std::optional<std::string>& value) -> py::object {
                   if (!value.has_value()) {
                     return py::none();
@@ -727,13 +728,13 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_done",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Await completion of the duplex stream.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2DuplexStream>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Future that completes when the duplex stream is done.")
       .def_property_readonly(
@@ -839,13 +840,13 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_done",
           [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Await completion of the response.")
       .def_property_readonly(
           "done",
           [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
-            return FutureToPython(self->Done());
+            return FutureToPython(WithoutGil([&] { return self->Done(); }));
           },
           "Future that completes when the response is done.")
       .def_property_readonly("headers_sent",
@@ -905,8 +906,9 @@ void BindHttp(py::module_& module) {
       .def_static(
           "connect",
           [](std::string host, std::uint16_t port, net::Http2Options options) {
-            return FutureToPython(
-                net::Http2Client::Connect(std::move(host), port, options));
+            return FutureToPython(WithoutGil([&] {
+              return net::Http2Client::Connect(std::move(host), port, options);
+            }));
           },
           "Asynchronously connect to an HTTP/2 server, returning a future "
           "that resolves to the connected client.",
@@ -939,10 +941,14 @@ void BindHttp(py::module_& module) {
              const py::typing::Optional<py::typing::Iterable<
                  py::typing::Tuple<py::str, py::str>>>& headers,
              const py::object& body, std::string scheme) {
-            return FutureToPython(self.Request(
-                std::move(method), std::move(path),
-                ValueOrThrow(HttpHeadersFromPython(headers)),
-                ValueOrThrow(HttpBodyFromPython(body)), std::move(scheme)));
+            net::HttpHeaders fields =
+                ValueOrThrow(HttpHeadersFromPython(headers));
+            std::string payload = ValueOrThrow(HttpBodyFromPython(body));
+            return FutureToPython(WithoutGil([&] {
+              return self.Request(std::move(method), std::move(path),
+                                  std::move(fields), std::move(payload),
+                                  std::move(scheme));
+            }));
           },
           "Send a request and await the full buffered response.",
           py::arg("method"), py::arg("path"), py::arg("headers") = py::none(),
@@ -1092,7 +1098,8 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_for_http_headers",
           [](const std::shared_ptr<net::HttpSseWireStream>& self) {
-            return FutureToPython(self->WaitForHttpHeaders());
+            return FutureToPython(
+                WithoutGil([&] { return self->WaitForHttpHeaders(); }));
           },
           "Await the exchange of HTTP headers for the SSE connection. "
           "Because SSE wire streams connect asynchronously, await this "
@@ -1144,7 +1151,7 @@ void BindHttp(py::module_& module) {
       .def(
           "accepted",
           [](const std::shared_ptr<net::HttpSseServerWireStream>& self) {
-            return FutureToPython(self->Accepted());
+            return FutureToPython(WithoutGil([&] { return self->Accepted(); }));
           },
           "Await acceptance of this server-side SSE wire stream. This is the "
           "server counterpart delivered to your on_connect handler when a "
@@ -1181,7 +1188,8 @@ void BindHttp(py::module_& module) {
       .def(
           "wait_for_stream",
           [](const std::shared_ptr<net::HttpSseServer>& self) {
-            return FutureToPython(self->WaitForStream());
+            return FutureToPython(
+                WithoutGil([&] { return self->WaitForStream(); }));
           },
           "Await the next incoming SSE wire stream from a connecting client.")
       .def(
@@ -1318,10 +1326,12 @@ void BindHttp(py::module_& module) {
       "fetch",
       [](std::string url, const py::typing::Optional<net::FetchOptions>&
                               options) {
-        return FutureToPython(net::Fetch(
-            std::move(url),
-            options.is_none() ? net::FetchOptions{}
-                              : options.cast<net::FetchOptions>()));
+        net::FetchOptions converted = options.is_none()
+                                          ? net::FetchOptions{}
+                                          : options.cast<net::FetchOptions>();
+        return FutureToPython(WithoutGil([&] {
+          return net::Fetch(std::move(url), std::move(converted));
+        }));
       },
       R"doc(Fetch a URL and buffer the whole response.
 
@@ -1340,7 +1350,8 @@ Examples:
       "download",
       [](std::string url, net::DownloadOptions options) {
         return FutureToPythonAs<py::str>(
-            net::Download(std::move(url), std::move(options)),
+            WithoutGil(
+                [&] { return net::Download(std::move(url), std::move(options)); }),
             [](const std::filesystem::path& path) -> py::object {
               return py::str(path.string());
             });

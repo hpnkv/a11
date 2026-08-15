@@ -1569,6 +1569,12 @@ class AsyncNode:
         accepted the fragment. Attached stream sends are attempted or queued
         as the writer processes the batch, but do not add a second delivery
         confirmation.
+
+        Awaiting the confirmation flushes the writer on this thread, so a
+        store that accepts the write without waiting resolves it with no
+        event-loop turn at all. A producer that awaits only admission does not
+        flush: its write goes out on the writer's own pump, which is the point
+        of the two being separate.
         """
 
     async def put_final(
@@ -2821,6 +2827,11 @@ class ChunkStoreWriter:
         Start the background flush loop if it is not already running. Writing normally starts it lazily; call this to begin flushing before the first chunk is enqueued.
         """
 
+    def flush(self) -> None:
+        """
+        Run the flush loop now, on this thread, if it is idle. A store that accepts the batch without waiting -- an in-memory one does -- has confirmed those writes by the time this returns, so their confirmations resolve without an event-loop turn. A store that cannot leaves the batch in flight and this does nothing, so chunks enqueued behind it still go out together. Awaiting a confirmation calls this for you; call it directly only to push a queue out without awaiting anything.
+        """
+
     def get_abort_status(self) -> Status | None:
         """
         Return the status the writer was aborted with, or None if it was not aborted. Use this to distinguish a clean close from an error-driven abort.
@@ -2869,6 +2880,12 @@ class ChunkStoreWriter:
             stored_seq = await confirmation
             await checkpoints.save(stored_seq)
             ```
+
+        Awaiting the confirmation flushes the writer on this thread, so a
+        store that accepts the write without waiting resolves it without an
+        event-loop turn. Awaiting only this coroutine does not flush: the
+        write goes out on the writer's own pump, which is what lets a producer
+        run ahead of a slow store.
         """
 
     def wait_for_buffer_to_drain(self) -> asyncio.Future[None]:

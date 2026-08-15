@@ -567,7 +567,16 @@ void BindNet(py::module_& module) {
       .def(
           "send",
           [](net::WireStream& self, data::WireMessage message) {
-            CheckStatus(self.Send(std::move(message)));
+            // Without the GIL, because `send` is not always as non-blocking as
+            // it looks. It takes the peer's fibre-aware mutex, and the sender
+            // pump holds that same mutex while parked on the peer's condition
+            // variable waiting for buffer space. With the GIL held that is a
+            // permanent deadlock: the event-loop thread blocks on the mutex,
+            // so the task that would drain the peer never runs, so space never
+            // appears -- and no `asyncio.wait_for` above it can fire, because
+            // the loop it needs is the thing that is blocked. It hung
+            // `wire/one_way_throughput` on both event loops.
+            CheckStatus(WithoutGil([&] { return self.Send(std::move(message)); }));
           },
           R"doc(Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters the ordered outbound queue and the transport applies backpressure.
 
@@ -623,7 +632,10 @@ Examples:
             if (!converted.ok()) {
               ThrowStatus(converted.status());
             }
-            CheckStatus(self->HalfClose(std::move(*converted)));
+            // Without the GIL: half-closing queues a message the same way
+            // `send` does, and takes the same locks.
+            CheckStatus(WithoutGil(
+                [&] { return self->HalfClose(std::move(*converted)); }));
           },
           R"doc(Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
 
@@ -661,7 +673,11 @@ Examples:
       .def(
           "abort",
           [](net::WireStream& self, const PyLike<NativeStatus>& status) {
-            CheckStatus(self.Abort(StatusFromPython(status)));
+            // Convert while the GIL is held, then abort without it: aborting
+            // takes the stream's fibre-aware locks and wakes its pumps.
+            absl::Status requested = StatusFromPython(status);
+            CheckStatus(
+                WithoutGil([&] { return self.Abort(std::move(requested)); }));
           },
           R"doc(Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
 

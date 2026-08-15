@@ -111,6 +111,29 @@ class ChunkStoreWriter {
   void EnsureStarted();
 
   /** @brief
+   *    Run the flush loop now, on the calling thread, if it is idle.
+   *
+   *  Where EnsureStarted() hands the flush to a worker -- a scheduler hop, and
+   *  for a caller who then awaits the confirmation an event-loop turn before
+   *  the store is even asked -- this does the work here. A store that accepts
+   *  the batch inline, as LocalChunkStore does, has confirmed the write by the
+   *  time this returns, so the confirmation is already resolved and its awaiter
+   *  never suspends.
+   *
+   *  Call it when you are about to wait for a write, not when you make one.
+   *  Enqueuing deliberately does not flush: a producer pacing itself against
+   *  the admission buffer is running ahead of its store and should not be made
+   *  to do the store's work. The Python binding flushes from the
+   *  confirmation's first `await` for that reason.
+   *
+   *  A store that cannot answer inline leaves the operation in flight and this
+   *  is a no-op, which is what keeps batching where batching is worth
+   *  something: chunks enqueued while a slow store is busy accumulate and go
+   *  out in one PutMany.
+   */
+  void Flush();
+
+  /** @brief
    *    Enqueue a chunk, exposing backpressure and confirmation separately.
    *
    *  Unlike PutChunk(), this returns both awaitables: `admitted` resolves once

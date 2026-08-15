@@ -368,7 +368,18 @@ class Action : public std::enable_shared_from_this<Action> {
       const;
   void StartFinish(absl::Status status);
   absl::Status FinishRun(absl::Status status);
+  // Whether any input port declares autofills, which are written before the
+  // handler runs and so must not happen on the caller's thread.
+  [[nodiscard]] bool HasInputAutofills() const;
+  // Starts the handler on the calling thread and continues from its task
+  // without a fibre. Only valid when nothing before the handler can block.
+  absl::StatusOr<std::shared_ptr<Action>> RunHandlerWithoutFiber(
+      const std::shared_ptr<Action>& self);
   absl::Status FinishOutputNodes(const absl::Status& status);
+  // Applies an already-finished Action's terminal state to an output node that
+  // is only being materialised now, so a late reader sees the end of the stream.
+  static absl::Status CloseUnwrittenOutput(
+      const std::shared_ptr<nodes::AsyncNode>& node, const absl::Status& status);
   absl::Status CommunicateStatus(const absl::Status& status);
   absl::Status AbortInputs(const absl::Status& status);
   absl::Status SendNodeAbortStatuses(
@@ -422,6 +433,11 @@ class Action : public std::enable_shared_from_this<Action> {
   bool cancel_requested_ ABSL_GUARDED_BY(mu_) = false;
   bool finishing_ ABSL_GUARDED_BY(mu_) = false;
   std::optional<absl::Status> completion_status_ ABSL_GUARDED_BY(mu_);
+  // Set once the Action has closed its output ports, with the status it closed
+  // them under. Read by GetOutput() so a port materialised after that point
+  // carries the same terminal state as one closed in place.
+  bool outputs_finished_ ABSL_GUARDED_BY(mu_) = false;
+  absl::Status outputs_final_status_ ABSL_GUARDED_BY(mu_);
   std::optional<absl::Status> dispatch_status_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<a11::Promise<a11::Unit>> done_promise_ ABSL_GUARDED_BY(mu_);
   a11::Task done_future_ ABSL_GUARDED_BY(mu_);

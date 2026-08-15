@@ -599,10 +599,35 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
       ABSL_ASSIGN_OR_RETURN(absl::Status closed,
                             actions::StatusFromChunk(*chunk));
       const std::uint32_t seq = fragment.seq.value_or(0);
-      // Nothing is lost by dropping a marker for a node that no longer exists,
-      // whereas creating one would resurrect a released node.
+      // Create the node if it is not here yet, rather than dropping the
+      // marker.
+      //
+      // This used to use GetIfExists() on the reasoning that "nothing is lost
+      // by dropping a marker for a node that no longer exists". That conflates
+      // two different cases, and the second one hangs: a node that has been
+      // released, and a node that has *not been created yet*. Ports are
+      // materialised on use, and a marker can arrive before the fragment or
+      // action message that would materialise its node -- the two travel as
+      // separate wire messages and are dispatched by separate fibres.
+      //
+      // For a port closed without ever carrying data the marker is the only
+      // end-of-stream there will ever be. `run_turn` closes `config` empty
+      // exactly this way, so dropping its marker leaves the receiving handler
+      // blocked in `consume()` on an input that never ends -- it then writes
+      // no outputs, and every reader on the caller's side waits forever. That
+      // is a permanent hang with no timeout anywhere in the path, and it was
+      // reproducible on the shipped scheduler about once in twelve runs of
+      // a11/client/tests/test_turn.py.
+      //
+      // Creating here costs an empty node that is immediately drained and
+      // closed. A reader that finds it sees end-of-stream, which is the right
+      // answer for a peer that has closed its write half whether or not the
+      // node was ever used. The alternative -- parking the closure in a
+      // pending-markers table consulted at node creation -- avoids the
+      // allocation for genuinely released nodes and is the better fix if this
+      // ever shows up as a leak.
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> mirror,
-                            self->GetNodeMap()->GetIfExists(fragment.id));
+                            self->GetNodeMap()->Get(fragment.id));
       if (mirror == nullptr) {
         return seq;
       }

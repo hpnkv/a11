@@ -412,6 +412,52 @@ inline Task FailedTask(absl::Status status) {
   return FailedFuture<Unit>(std::move(status));
 }
 
+/**
+ * @brief
+ *   Continue with @p transform once @p future completes, without a fibre.
+ *
+ * `Submit([f]{ return g(f.Await()); })` needs a worker only because Await()
+ * blocks; @p transform does not. This runs it on whichever thread completes
+ * @p future, or immediately on this one when @p future is already complete, so
+ * the continuation costs no handoff to the worker pool -- ~8us, and the
+ * dominant cost of the layers built out of it.
+ *
+ * Two obligations come with that. @p transform must not block: it may run on a
+ * pooled fibre with a small stack or on a transport's own thread, and it runs
+ * before the completing side gets on with its work. And it must not assume a
+ * thread; see a11/concurrency/inline_pump.h for why.
+ *
+ * @param future
+ *   The operation to continue from.
+ * @param transform
+ *   Called with @p future's result, returning the continued result.
+ * @return
+ *   A Future for @p transform's result, cancellable through to @p future.
+ */
+template <typename T, typename Fn>
+auto Then(Future<T> future, Fn transform)
+    -> Future<typename std::invoke_result_t<
+        Fn, const absl::StatusOr<T>&>::value_type> {
+  using Result = std::invoke_result_t<Fn, const absl::StatusOr<T>&>;
+  using U = typename Result::value_type;
+
+  if (future.IsReady()) {
+    return CompletedFuture<U>(transform(future.Await()));
+  }
+
+  Promise<U> promise;
+  Future<U> continued = promise.future();
+  promise
+      .SetCancellationCallback([future]() mutable { (void)future.Cancel(); })
+      .IgnoreError();
+  future.OnReady([promise = std::move(promise),
+                  transform = std::move(transform)](
+                     const absl::StatusOr<T>& result) mutable {
+    promise.SetResult(transform(result)).IgnoreError();
+  });
+  return continued;
+}
+
 }  // namespace a11
 
 #endif  // A11_CONCURRENCY_FUTURE_H_

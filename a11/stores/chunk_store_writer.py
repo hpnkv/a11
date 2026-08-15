@@ -19,11 +19,12 @@ import asyncio
 from typing import Any
 
 from a11 import _native
+from a11._asyncio import _flush_before_awaiting
 from a11._native_options import install_native_options
 from a11._native_protocol import attach_protocol
 from a11.data import types
 from a11.status import Status, StatusCode
-from a11.stores.chunk_store import ChunkStore
+from a11.stores.chunk_store import ChunkStore, native_chunk_store
 
 from a11._native import ChunkStoreWriterOptions
 
@@ -63,7 +64,7 @@ class _ChunkStoreWriterProtocol:
             options = ChunkStoreWriterOptions()
         elif not isinstance(options, ChunkStoreWriterOptions):
             options = ChunkStoreWriterOptions.model_validate(options)
-        _native_init(self, chunk_store, options)
+        _native_init(self, native_chunk_store(chunk_store), options)
 
     async def put(
         self,
@@ -111,10 +112,17 @@ class _ChunkStoreWriterProtocol:
             stored_seq = await confirmation
             await checkpoints.save(stored_seq)
             ```
+
+        Awaiting the confirmation flushes the writer on this thread, so a
+        store that accepts the write without waiting resolves it without an
+        event-loop turn. Awaiting only this coroutine does not flush: the
+        write goes out on the writer's own pump, which is what lets a producer
+        run ahead of a slow store.
         """
         confirmation, admission = _native_enqueue_chunk(
             self, chunk, seq=seq, final=final
         )
+        _flush_before_awaiting(confirmation, self.flush)
         if admission is not None:
             try:
                 await admission

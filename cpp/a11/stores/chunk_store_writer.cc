@@ -15,11 +15,13 @@
 #include <vector>
 
 #include <absl/base/no_destructor.h>
+#include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 
 #include "a11/concurrency/callback_scheduler.h"
 #include "a11/concurrency/future.h"
+#include "a11/concurrency/inline_pump.h"
 #include "a11/data/types.h"
 #include "a11/net/wire_stream.h"
 #include "a11/stores/chunk_store.h"
@@ -137,7 +139,19 @@ struct ChunkStoreWriter::State
     }
   }
 
+  /**
+   * @brief
+   *   Run the state machine until it has nothing left to do without waiting.
+   *
+   * Driven on whichever thread asked -- Flush() from an awaiting caller, the
+   * scheduler from Wake() -- so see a11/concurrency/inline_pump.h for why
+   * re-entry is bounded by a count rather than marked per thread.
+   */
   void Drive() {
+    DriveInline(&mu, &pump, "ChunkStoreWriter", [this] { DriveOnce(); });
+  }
+
+  void DriveOnce() {
     std::vector<Element> rejected;
     std::vector<Element> pending_rejected;
     std::vector<std::shared_ptr<a11::Promise<a11::Unit>>> completed_waiters;
@@ -436,7 +450,22 @@ struct ChunkStoreWriter::State
       CompleteTask(waiter, remaining_status);
     }
     CompleteTask(failed_lifecycle, remaining_status);
-    Wake();
+    // Another pass, for anything queued behind this batch. A completion that
+    // ran inline -- a store confirming in the caller's frame -- hands that pass
+    // to the turn on this stack: a worker posted here would race the caller's
+    // next flush and take the write off it, costing that caller an event-loop
+    // turn for work it was about to do itself.
+    bool running = false;
+    {
+      thread::MutexLock lock(&mu);
+      running = PumpIsDriving(pump);
+      if (running) {
+        pump.again = true;
+      }
+    }
+    if (!running) {
+      Wake();
+    }
   }
 
   // Closing a writer is a lifecycle fact bound peers cannot otherwise observe:
@@ -630,6 +659,8 @@ struct ChunkStoreWriter::State
   std::vector<std::shared_ptr<net::WireStream>> attached_streams
       ABSL_GUARDED_BY(mu);
   bool queued ABSL_GUARDED_BY(mu) = false;
+  // Re-entry bookkeeping for Drive(); read and written only under mu.
+  InlinePumpState pump;
   Operation operation ABSL_GUARDED_BY(mu) = Operation::kNone;
   std::uint64_t operation_generation ABSL_GUARDED_BY(mu) = 0;
   a11::Future<std::vector<std::uint32_t>> active_write ABSL_GUARDED_BY(mu);
@@ -662,6 +693,19 @@ absl::StatusOr<std::shared_ptr<ChunkStoreWriter>> ChunkStoreWriter::Create(
 
 void ChunkStoreWriter::EnsureStarted() {
   state_->Wake();
+}
+
+void ChunkStoreWriter::Flush() {
+  {
+    thread::MutexLock lock(&state_->mu);
+    if (state_->operation != State::Operation::kNone || state_->queue.empty()) {
+      // Nothing queued, or the pump already has it. Answering that here saves
+      // taking `mu` a second time inside the pump to discover the same thing,
+      // and every write in a wide window finds exactly this.
+      return;
+    }
+  }
+  state_->Drive();
 }
 
 ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,

@@ -184,6 +184,52 @@ async def test_writer_batches_available_chunks_and_resolves_each_future():
 
 
 @pytest.mark.asyncio
+async def test_admitting_a_chunk_does_not_write_it():
+    """Admission is a queue slot, not a write.
+
+    The two awaitables are separate so that a producer can pace itself against
+    the writer's buffer while the store catches up behind it. That only holds
+    if enqueuing leaves the store alone: awaiting the confirmation is what
+    flushes, and it flushes on this thread so an in-memory store answers
+    without an event-loop turn.
+    """
+    store = _RecordingStore()
+    writer = ChunkStoreWriter(store)
+
+    confirmations = [
+        await writer.put_chunk(_chunk(index), final=index == 2)
+        for index in range(3)
+    ]
+    assert store.batch_sizes == []
+
+    assert await confirmations[0] == 0
+    assert store.batch_sizes == [3]
+    assert await asyncio.gather(*confirmations) == [0, 1, 2]
+    await writer.drain_and_close()
+
+
+@pytest.mark.asyncio
+async def test_writes_land_without_anybody_awaiting_confirmation():
+    """A producer that drops its confirmations still has its chunks written."""
+    store = _RecordingStore()
+    writer = ChunkStoreWriter(store)
+
+    for index in range(3):
+        await writer.put_chunk(_chunk(index), final=index == 2)
+
+    async def written() -> bool:
+        for _ in range(200):
+            if await store.size() == 3:
+                return True
+            await asyncio.sleep(0.005)
+        return False
+
+    assert await written()
+    assert sum(store.batch_sizes) == 3
+    await writer.drain_and_close()
+
+
+@pytest.mark.asyncio
 async def test_writer_offset_assigns_sequences_starting_at_offset():
     store = LocalChunkStore("offset")
     writer = ChunkStoreWriter(store, ChunkStoreWriterOptions(offset=7))

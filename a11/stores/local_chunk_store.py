@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from a11 import _native, timing
 from a11.data import types
 from a11.status import Status
+from a11.stores.chunk_store import NATIVE_STORE_ATTRIBUTE
 
 
 class LocalChunkStore(_native.ChunkStore):
@@ -12,12 +13,27 @@ class LocalChunkStore(_native.ChunkStore):
 
     The small forwarding layer keeps Python overrides virtual when a subclass is
     passed back into native readers, writers, nodes, or sessions.
+
+    When nothing is overridden the layer is pure cost, and handed to a native
+    reader or writer it is expensive cost: every fragment they fetch or persist
+    would come back through the interpreter and take an event-loop turn. So an
+    instance of exactly this class points native code at the store underneath
+    (see [native_chunk_store][a11.stores.chunk_store.native_chunk_store]),
+    while a subclass keeps the forwarding layer and its overrides.
     """
+
+    # No per-instance dict: a store is a small object held in quantity, one per
+    # node, and the dict is about a third of what an empty one costs. A subclass
+    # that adds attributes and declares no __slots__ of its own still gets a
+    # dict, as usual.
+    __slots__ = ("_impl", "_status", NATIVE_STORE_ATTRIBUTE)
 
     def __init__(self, node_id: types.NameString):
         super().__init__()
         self._impl = _native.LocalChunkStore(node_id)
         self._status: Status | None = None
+        if type(self) is LocalChunkStore:
+            setattr(self, NATIVE_STORE_ATTRIBUTE, self._impl)
 
     async def get(
         self,

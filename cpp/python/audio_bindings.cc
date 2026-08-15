@@ -41,8 +41,8 @@ namespace {
 namespace audio = a11::sdk::audio;
 
 /// A model-download progress callback as Python sees it.
-using OnAudioProgressPython = py::typing::Optional<
-    py::typing::Callable<void(py::int_, py::int_)>>;
+using OnAudioProgressPython =
+    py::typing::Optional<py::typing::Callable<void(py::int_, py::int_)>>;
 
 /**
  * Wraps a Python progress callable for a model download.
@@ -589,54 +589,53 @@ void BindAudio(py::module_& module) {
       module, "SpeechRecognizerOptions",
       "Configuration for whisper.cpp transcription, a cheap energy VAD gate, "
       "and optional whisper.cpp Silero neural VAD.")
-      .def(py::init([](std::string model, std::string language,
-                       bool translate, int inference_threads, bool use_gpu,
-                       bool flash_attention, bool use_context,
-                       std::string initial_prompt,
-                       size_t subscription_buffer_millis, float vad_threshold,
-                       float vad_noise_ratio, size_t vad_window_millis,
-                       size_t min_speech_millis, size_t min_silence_millis,
-                       size_t speech_pad_millis, size_t max_speech_seconds,
-                       std::string vad_model, float silero_threshold) {
-             audio::SpeechRecognizerOptions options{
-                 .model = std::move(model),
-                 .language = std::move(language),
-                 .translate = translate,
-                 .inference_threads = inference_threads,
-                 .use_gpu = use_gpu,
-                 .flash_attention = flash_attention,
-                 .use_context = use_context,
-                 .initial_prompt = std::move(initial_prompt),
-                 .subscription_buffer_millis = subscription_buffer_millis,
-                 .vad_threshold = vad_threshold,
-                 .vad_noise_ratio = vad_noise_ratio,
-                 .vad_window_millis = vad_window_millis,
-                 .min_speech_millis = min_speech_millis,
-                 .min_silence_millis = min_silence_millis,
-                 .speech_pad_millis = speech_pad_millis,
-                 .max_speech_seconds = max_speech_seconds,
-                 .vad_model = std::move(vad_model),
-                 .silero_threshold = silero_threshold,
-             };
-             const absl::Status valid = options.Validate();
-             if (!valid.ok()) {
-               ThrowStatus(valid);
-             }
-             return options;
-           }),
-           "Construct validated speech recognition options.",
-           py::arg("model") = "", py::arg("language") = "auto",
-           py::arg("translate") = false, py::arg("inference_threads") = 0,
-           py::arg("use_gpu") = true, py::arg("flash_attention") = true,
-           py::arg("use_context") = false, py::arg("initial_prompt") = "",
-           py::arg("subscription_buffer_millis") = 100,
-           py::arg("vad_threshold") = 0.01f, py::arg("vad_noise_ratio") = 2.5f,
-           py::arg("vad_window_millis") = 20,
-           py::arg("min_speech_millis") = 250,
-           py::arg("min_silence_millis") = 600,
-           py::arg("speech_pad_millis") = 160,
-           py::arg("max_speech_seconds") = 30, py::arg("vad_model") = "",
-           py::arg("silero_threshold") = 0.5f)
+      .def(
+          py::init([](std::string model, std::string language, bool translate,
+                      int inference_threads, bool use_gpu, bool flash_attention,
+                      bool use_context, std::string initial_prompt,
+                      size_t subscription_buffer_millis, float vad_threshold,
+                      float vad_noise_ratio, size_t vad_window_millis,
+                      size_t min_speech_millis, size_t min_silence_millis,
+                      size_t speech_pad_millis, size_t max_speech_seconds,
+                      std::string vad_model, float silero_threshold) {
+            audio::SpeechRecognizerOptions options{
+                .model = std::move(model),
+                .language = std::move(language),
+                .translate = translate,
+                .inference_threads = inference_threads,
+                .use_gpu = use_gpu,
+                .flash_attention = flash_attention,
+                .use_context = use_context,
+                .initial_prompt = std::move(initial_prompt),
+                .subscription_buffer_millis = subscription_buffer_millis,
+                .vad_threshold = vad_threshold,
+                .vad_noise_ratio = vad_noise_ratio,
+                .vad_window_millis = vad_window_millis,
+                .min_speech_millis = min_speech_millis,
+                .min_silence_millis = min_silence_millis,
+                .speech_pad_millis = speech_pad_millis,
+                .max_speech_seconds = max_speech_seconds,
+                .vad_model = std::move(vad_model),
+                .silero_threshold = silero_threshold,
+            };
+            const absl::Status valid = options.Validate();
+            if (!valid.ok()) {
+              ThrowStatus(valid);
+            }
+            return options;
+          }),
+          "Construct validated speech recognition options.",
+          py::arg("model") = "", py::arg("language") = "auto",
+          py::arg("translate") = false, py::arg("inference_threads") = 0,
+          py::arg("use_gpu") = true, py::arg("flash_attention") = true,
+          py::arg("use_context") = false, py::arg("initial_prompt") = "",
+          py::arg("subscription_buffer_millis") = 100,
+          py::arg("vad_threshold") = 0.01f, py::arg("vad_noise_ratio") = 2.5f,
+          py::arg("vad_window_millis") = 20, py::arg("min_speech_millis") = 250,
+          py::arg("min_silence_millis") = 600,
+          py::arg("speech_pad_millis") = 160,
+          py::arg("max_speech_seconds") = 30, py::arg("vad_model") = "",
+          py::arg("silero_threshold") = 0.5f)
       .def_readwrite("model", &audio::SpeechRecognizerOptions::model,
                      "Path to the whisper.cpp model; used by the transcription "
                      "action (empty is rejected there).")
@@ -683,8 +682,7 @@ void BindAudio(py::module_& module) {
       .def_readwrite("max_speech_seconds",
                      &audio::SpeechRecognizerOptions::max_speech_seconds,
                      "Maximum utterance duration before splitting.")
-      .def_readwrite("vad_model",
-                     &audio::SpeechRecognizerOptions::vad_model,
+      .def_readwrite("vad_model", &audio::SpeechRecognizerOptions::vad_model,
                      "Path to a Silero VAD model; empty disables Silero VAD.")
       .def_readwrite("silero_threshold",
                      &audio::SpeechRecognizerOptions::silero_threshold,
@@ -913,15 +911,17 @@ void BindAudio(py::module_& module) {
       },
       "Look up a VAD model by shorthand.", py::arg("shorthand"));
   module.def(
-      "audio_model_cache_dir",
-      [] { return audio::ModelCacheDir().string(); },
+      "audio_model_cache_dir", [] { return audio::ModelCacheDir().string(); },
       "The directory shorthand models are cached in.");
   module.def(
       "resolve_asr_model",
       [](std::string spec, const OnAudioProgressPython& on_progress) {
+        audio::OnModelProgress progress = AudioProgressFromPython(on_progress);
         return FutureToPythonAs<py::str>(
-            audio::ResolveAsrModel(std::move(spec),
-                                   AudioProgressFromPython(on_progress)),
+            WithoutGil([&] {
+              return audio::ResolveAsrModel(std::move(spec),
+                                            std::move(progress));
+            }),
             [](const std::string& path) -> py::object {
               return py::str(path);
             });
@@ -932,9 +932,12 @@ void BindAudio(py::module_& module) {
   module.def(
       "resolve_vad_model",
       [](std::string spec, const OnAudioProgressPython& on_progress) {
+        audio::OnModelProgress progress = AudioProgressFromPython(on_progress);
         return FutureToPythonAs<py::str>(
-            audio::ResolveVadModel(std::move(spec),
-                                   AudioProgressFromPython(on_progress)),
+            WithoutGil([&] {
+              return audio::ResolveVadModel(std::move(spec),
+                                            std::move(progress));
+            }),
             [](const std::string& path) -> py::object {
               return py::str(path);
             });

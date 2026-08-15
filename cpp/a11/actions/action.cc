@@ -477,12 +477,38 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetOutput(
   }
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> node,
                         GetNode(node_id));
+  bool finished = false;
+  absl::Status final_status;
   {
     thread::MutexLock lock(&mu_);
     output_nodes_.insert(node);
+    finished = outputs_finished_;
+    final_status = outputs_final_status_;
   }
   ABSL_RETURN_IF_ERROR(AttachStreamIfRequested(node, bind));
+  if (finished) {
+    // The Action has already closed its outputs, so this one will never be
+    // written. Give the caller the terminal state its port had at completion --
+    // an empty closed stream, or the failure -- rather than a node that nothing
+    // will ever close and any read of which would wait forever.
+    ABSL_RETURN_IF_ERROR(CloseUnwrittenOutput(node, final_status));
+  }
   return node;
+}
+
+absl::Status Action::CloseUnwrittenOutput(
+    const std::shared_ptr<nodes::AsyncNode>& node, const absl::Status& status) {
+  const absl::StatusOr<bool> writable = node->IsWritable().Await();
+  if (!writable.ok()) {
+    return writable.status();
+  }
+  if (!*writable) {
+    return absl::OkStatus();
+  }
+  if (status.ok()) {
+    return node->DrainAndClose().Await().status();
+  }
+  return node->AbortWithStatus(status).Await().status();
 }
 
 absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
@@ -711,6 +737,21 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
     limiter = std::move(nested_limiter);
   }
   std::shared_ptr<Action> self = shared_from_this();
+
+  // With no limiter to wait on, nothing before the handler can block, so the
+  // handler is started here and its completion continued with Then(). A fibre
+  // whose only job is to Await() the handler's task is one push onto the worker
+  // pool's queue and one condvar signal per action, and the handler itself
+  // still runs wherever it chooses to: a synchronous one is submitted to a
+  // fibre by MakeAsyncActionHandler, so Run() does not become the place a
+  // caller's handler body executes.
+  //
+  // A limiter means admission has to be waited for, and input autofills write
+  // to nodes before the handler sees them, so both keep the fibre.
+  if (limiter == nullptr && !HasInputAutofills()) {
+    return RunHandlerWithoutFiber(self);
+  }
+
   {
     const a11::Task task =
         a11::SubmitTask([self, limiter]() mutable -> absl::Status {
@@ -724,6 +765,69 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
       task_.Cancel().IgnoreError();
     }
   }
+  return self;
+}
+
+bool Action::HasInputAutofills() const {
+  thread::MutexLock lock(&mu_);
+  for (const auto& port : schema_.inputs | std::views::values) {
+    if (!port.autofills.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
+    const std::shared_ptr<Action>& self) {
+  ActionHandler handler;
+  bool cancelled = false;
+  {
+    thread::MutexLock lock(&mu_);
+    handler = handler_;
+    cancelled = cancel_requested_;
+  }
+  if (cancelled) {
+    StartFinish(CancelledStatus());
+    return self;
+  }
+  if (!handler) {
+    StartFinish(absl::FailedPreconditionError("Action handler has not been set"));
+    return self;
+  }
+
+  a11::Task task;
+  try {
+    task = handler(self);
+  } catch (const std::exception& error) {
+    StartFinish(absl::UnknownError(error.what()));
+    return self;
+  } catch (...) {
+    StartFinish(absl::UnknownError("Action handler raised an exception"));
+    return self;
+  }
+
+  {
+    thread::MutexLock lock(&mu_);
+    // The handler's own task is what Cancel() reaches now, which stops the work
+    // itself rather than a fibre waiting on it.
+    task_ = task;
+    if (cancel_requested_) {
+      task_.Cancel().IgnoreError();
+    }
+  }
+
+  // Finishing blocks -- it drains and closes ports -- so it keeps its fibre;
+  // StartFinish() schedules it.
+  a11::Then(std::move(task),
+            [self](const absl::StatusOr<a11::Unit>& result) -> absl::StatusOr<a11::Unit> {
+              absl::Status status = result.status();
+              if (status.code() == absl::StatusCode::kCancelled) {
+                status = CancelledStatus();
+              }
+              self->StartFinish(std::move(status));
+              return a11::Unit{};
+            });
   return self;
 }
 
@@ -797,32 +901,31 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
   }
 
   std::shared_ptr<Action> self = shared_from_this();
-  return a11::Submit<absl::Status>(
-      [self = std::move(self), dispatched,
-       timeout]() mutable -> absl::StatusOr<absl::Status> {
-        const absl::StatusOr<a11::Unit> ready =
-            dispatched.Await(TimeoutDeadline(timeout));
+
+  // Inline once the dispatch has landed, as in Wait(): a peer that has already
+  // accepted the call needs no fibre to report it.
+  return a11::ThenAfterWaiting(
+      std::move(dispatched), TimeoutDeadline(timeout),
+      [self = std::move(self)](const absl::StatusOr<a11::Unit>& ready)
+          -> absl::StatusOr<absl::Status> {
+        absl::StatusOr<absl::Status> result;
         if (!ready.ok()) {
-          absl::StatusOr<absl::Status> result;
           result.AssignStatus(ready.status());
           return result;
         }
         thread::MutexLock lock(&self->mu_);
         if (!self->dispatch_status_.has_value()) {
-          absl::StatusOr<absl::Status> result;
           result.AssignStatus(
               absl::InternalError("Dispatch completed without a status"));
           return result;
         }
         if (!self->dispatch_status_->ok()) {
-          absl::StatusOr<absl::Status> result;
           result.AssignStatus(*self->dispatch_status_);
           return result;
         }
         return absl::StatusOr<absl::Status>(std::in_place,
                                             *self->dispatch_status_);
-      },
-      {.stack_size = 512});
+      });
 }
 
 a11::Future<std::shared_ptr<Action>> Action::Wait(absl::Duration timeout) {
@@ -840,15 +943,20 @@ a11::Future<std::shared_ptr<Action>> Action::Wait(absl::Duration timeout) {
     done = done_future_;
   }
   std::shared_ptr<Action> self = shared_from_this();
-  return a11::Submit<std::shared_ptr<Action>>(
-      [self = std::move(self), done,
-       timeout]() mutable -> absl::StatusOr<std::shared_ptr<Action>> {
-        ABSL_RETURN_IF_ERROR(done.Await(TimeoutDeadline(timeout)).status());
-        ABSL_RETURN_IF_ERROR(self->GetStatus());
 
+  // Answered on this thread when the Action has already finished, and by a
+  // fibre only when there is really something to wait for. Callers ask after
+  // the fact all the time -- `await action.wait()` at the end of a handler, a
+  // registry sweeping finished work -- and for those a scheduler hop plus an
+  // event-loop turn would report what this frame can already see.
+  return a11::ThenAfterWaiting(
+      std::move(done), TimeoutDeadline(timeout),
+      [self = std::move(self)](const absl::StatusOr<a11::Unit>& finished)
+          -> absl::StatusOr<std::shared_ptr<Action>> {
+        ABSL_RETURN_IF_ERROR(finished.status());
+        ABSL_RETURN_IF_ERROR(self->GetStatus());
         return self;
-      },
-      {.stack_size = 512});
+      });
 }
 
 absl::Status Action::Cancel() {
@@ -1386,9 +1494,20 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   absl::flat_hash_map<std::string, std::shared_ptr<nodes::AsyncNode>> nodes;
   absl::flat_hash_set<std::string> ids;
   std::shared_ptr<nodes::NodeMap> node_map;
+  bool remote = false;
   {
     thread::MutexLock lock(&mu_);
     node_map = node_map_;
+    remote = stream_ != nullptr || !session_.expired();
+    // Publishing the terminal state and snapshotting the nodes to close under
+    // one hold of mu_ is what makes the lazy path safe. GetOutput() inserts
+    // into output_nodes_ and reads this flag under the same lock, so a port
+    // materialised concurrently with finishing is either in the snapshot below
+    // and closed here, or sees the flag and closes itself. A gap between the
+    // two would leave a node nothing ever closes, and a reader of it waiting
+    // forever.
+    outputs_finished_ = true;
+    outputs_final_status_ = status;
     for (const auto& [name, id] : output_ids_) {
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
         ids.insert(id);
@@ -1404,12 +1523,20 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   absl::Status first;
   if (node_map != nullptr) {
     for (const std::string& id : ids) {
+      // An output the handler never touched has no node yet, and creating one
+      // to immediately close it costs a node, its reader and its writer per
+      // unused port -- the dominant cost of a wide schema, where a caller
+      // typically reads one output of eight. With a peer attached the closure
+      // is not local bookkeeping but an end-of-stream marker it is waiting
+      // for, so those are still materialised; otherwise the node is left
+      // uncreated and GetOutput() closes it on the way out if anybody asks
+      // for it later.
       absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
-          node_map->Get(id);
-      if (node.ok()) {
-        nodes.insert_or_assign(id, *node);
-      } else {
+          remote ? node_map->Get(id) : node_map->GetIfExists(id);
+      if (!node.ok()) {
         KeepFirstError(node.status(), &first);
+      } else if (*node != nullptr) {
+        nodes.insert_or_assign(id, *node);
       }
     }
   }

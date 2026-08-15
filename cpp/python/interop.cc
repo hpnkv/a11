@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <Python.h>
+#include <pythread.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <absl/time/time.h>
@@ -356,7 +357,11 @@ PythonReferences::PythonReferences(py::handle loop, py::handle future,
                                    py::handle completion)
     : loop_(loop.inc_ref().ptr()),
       future_(future.inc_ref().ptr()),
-      completion_(completion.inc_ref().ptr()) {}
+      completion_(completion.inc_ref().ptr()),
+      // Recorded here rather than asked of the loop later: this runs on the
+      // thread that is awaiting, which is the loop's thread by construction
+      // (FutureToPythonConverted() got the loop from get_running_loop()).
+      loop_thread_(PyThread_get_thread_ident()) {}
 
 PythonReferences::~PythonReferences() {
   GilForDestructor gil;
@@ -375,6 +380,10 @@ py::object PythonReferences::future() const {
 
 py::object PythonReferences::completion() const {
   return py::reinterpret_borrow<py::object>(completion_);
+}
+
+bool PythonReferences::OnLoopThread() const {
+  return PyThread_get_thread_ident() == loop_thread_;
 }
 
 void PythonReferences::ClearWithGilHeld() {

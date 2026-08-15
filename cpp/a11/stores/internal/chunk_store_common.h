@@ -118,25 +118,20 @@ a11::Future<std::uint32_t> PutOneViaPutMany(PutManyFn&& put_many,
                                             std::string_view backend_name) {
   std::vector<data::NodeFragment> fragments;
   fragments.push_back(std::move(fragment));
-  a11::Future<std::vector<std::uint32_t>> batch =
-      std::forward<PutManyFn>(put_many)(std::move(fragments));
-  a11::Promise<std::uint32_t> promise;
-  a11::Future<std::uint32_t> result = promise.future();
-  batch.OnReady(
-      [promise = std::move(promise), name = std::string(backend_name)](
-          const absl::StatusOr<std::vector<std::uint32_t>>& seqs) mutable {
+  return a11::Then(
+      std::forward<PutManyFn>(put_many)(std::move(fragments)),
+      [name = std::string(backend_name)](
+          const absl::StatusOr<std::vector<std::uint32_t>>& seqs)
+          -> absl::StatusOr<std::uint32_t> {
         if (!seqs.ok()) {
-          promise.SetStatus(seqs.status()).IgnoreError();
-        } else if (seqs->size() != 1) {
-          promise
-              .SetStatus(absl::DataLossError(absl::StrCat(
-                  name, " PutMany did not return exactly one sequence")))
-              .IgnoreError();
-        } else {
-          promise.SetValue(seqs->front()).IgnoreError();
+          return seqs.status();
         }
+        if (seqs->size() != 1) {
+          return absl::DataLossError(absl::StrCat(
+              name, " PutMany did not return exactly one sequence"));
+        }
+        return seqs->front();
       });
-  return result;
 }
 
 /**

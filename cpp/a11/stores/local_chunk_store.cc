@@ -210,9 +210,9 @@ struct LocalChunkStore::State
    *   Append whatever `Next` can return right now, without ever blocking.
    *
    * Split out of Next() so the common case -- the fragments are already here --
-   * can run on the caller's thread. Next() used to wrap this whole loop in a
-   * Submit(), which spawns a fiber even when nothing needs waiting for, and a
-   * fiber spawn costs ~10us against the ~0.3us the read itself takes.
+   * can run on the caller's thread. Wrapping the whole loop in a Submit() would
+   * spawn a fiber even when nothing needs waiting for, and a fiber spawn costs
+   * more than an order of magnitude what the read itself does.
    *
    * @param fragments
    *   Accumulator, appended to. Carries across waits, so a partial batch

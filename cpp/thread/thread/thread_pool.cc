@@ -61,6 +61,7 @@
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
 #include "thread/fiber.h"
+#include "thread/internal/work_queue.h"
 
 #if !defined(BOOST_USE_SEGMENTED_STACKS)
 namespace boost::context {
@@ -391,45 +392,30 @@ void EnsureThreadHasScheduler(Args&&... args) {
 // The worker pool
 // ---------------------------------------------------------------------------
 //
-// Everything below replaces two things Boost gives us that are wrong for this
-// workload, and it is worth saying exactly what they are, because the shape of
-// the code follows from them.
+// `PoolAlgorithm` plus `PoolState` is one Boost.Fiber scheduling algorithm
+// shared by every pool worker. What it has instead of the stock
+// `boost::fibers::algo::shared_work` -- which keeps all ready contexts on one
+// process-global deque behind one process-global mutex, and parks a worker on
+// any momentary gap while a push wakes nobody -- is:
 //
-// 1. `boost::fibers::algo::shared_work` puts *every* ready worker context on
-//    one process-global `std::deque` behind one process-global `std::mutex`:
-//    `awakened()` detaches the context and pushes, `pick_next()` pops and
-//    re-attaches. So two acquisitions of a single global lock per context
-//    switch, contended by every pool worker at once -- for a switch that
-//    otherwise costs about 0.1us. A fibre that becomes ready on the very
-//    worker it is already running on is round-tripped through that lock rather
-//    than simply resumed.
-//
-// 2. `shared_work::notify()` signals only *its own* thread's condition
-//    variable, and `suspend_until()` parks unconditionally on any momentary
-//    gap. Pushing to the shared ready queue therefore wakes nobody, while an
-//    idle worker sleeps at the first opportunity. Measured at full width that
-//    came to roughly one park and one unpark per work item: ~8-10us of thread
-//    wake for a unit of work whose actual switch is ~0.1us, and it got *worse*
-//    with more workers (5.69M callbacks/s at one worker, 0.12M at fourteen).
-//
-// The replacement, `PoolAlgorithm` plus `PoolState`, is one scheduling
-// algorithm shared by all pool workers with:
-//
-//   * a per-worker ready deque instead of a global one, so scheduling from
-//     inside the pool touches only the pushing worker's own uncontended lock;
+//   * a per-worker ready deque, so scheduling from inside the pool touches only
+//     the pushing worker's own uncontended lock, and a fibre made ready by the
+//     worker that will also run it is not round-tripped through a global one;
 //   * stealing between those deques for balance, and so that work pushed by a
 //     worker that then blocks is never stranded;
 //   * a wake economy: a push signals an OS thread only when no worker is
-//     already awake and looking for work. That is the ~9us this is all about,
-//     and under any sustained load it is skipped entirely;
+//     already awake and looking for work. Waking a thread costs several
+//     microseconds against the ~0.1us of the context switch it is there to
+//     perform, so this is the number the whole file is organised around, and
+//     under sustained load it is skipped entirely;
 //   * exactly one place per worker where the OS thread can sleep, reached
 //     through the fibre scheduler rather than around it.
 //
-// That last point is the subtle one, and it is why an idle worker goes to
-// sleep in two steps rather than one. Its main context suspends on a
-// fibre-aware condition variable (`WorkerSlot::idle_cv`), which hands the
-// thread to Boost's dispatcher; the dispatcher takes the earliest of that
-// deadline and everything in its own sleep queue and parks the thread in
+// That last point is the subtle one, and it is why an idle worker goes to sleep
+// in two steps rather than one. Its main context suspends on a fibre-aware
+// condition variable (`WorkerSlot::idle_cv`), which hands the thread to Boost's
+// dispatcher; the dispatcher takes the earliest of that deadline and everything
+// in its own sleep queue and parks the thread in
 // `PoolAlgorithm::suspend_until`, on native primitives.
 //
 // Parking the thread directly from the main context is faster and wrong.
@@ -437,8 +423,9 @@ void EnsureThreadHasScheduler(Args&&... args) {
 // `SelectUntil`, `Future::Await(deadline)`, and so every session and request
 // timeout -- and only the dispatcher can see it. A thread asleep on its own
 // condition variable honours none of them; they come due whenever something
-// unrelated next wakes the thread. Nothing in the C++ suite or the benchmarks
-// catches that, and it makes every timeout in the process a 50ms timeout.
+// unrelated next wakes the thread, which turns every timeout in the process
+// into a `kMaxPark` one. No test observes this, so it has to be kept in mind
+// rather than checked.
 //
 // The primitives underneath the thread park are deliberately native
 // `std::mutex`/`std::condition_variable`: they are what the *dispatcher*
@@ -465,30 +452,43 @@ int& ThisWorkerIndex() {
 // and would leave the two halves of a line shared.
 constexpr size_t kCacheLine = 128;
 
+// How much work a slot holds before it spills into its queue's overflow list.
+//
+// Comfortably more than any steady state the routing policy allows -- work is
+// routed away from a slot at a depth of one -- so what this has to absorb is a
+// burst pushed by one worker into its own slot, which is what starting a
+// fan-out of fibres looks like from in here.
+constexpr size_t kQueueCapacity = 256;
+
 // A pool worker's private work, and its park.
 //
 // `contexts` holds *detached* fibre contexts: both fibres freshly created by
 // Fiber::Start and fibres that became ready again. Detaching on push and
-// attaching on pop is what makes them stealable, and it is the one thing this
-// keeps from shared_work -- the difference is that the queue is per worker
-// rather than global, so the pop is normally the pushing worker's own.
+// attaching on pop is what makes them stealable, and because the queue is per
+// worker rather than global, the pop is normally the pushing worker's own.
 //
 // The three groups below are separated onto their own cache lines. Slots are
 // the one structure every worker touches: an idle worker reads `depth` on all
 // of them before parking, so `depth` must not share a line with a queue its
 // owner is writing, or every probe would steal the line back off the owner.
 struct alignas(kCacheLine) WorkerSlot {
-  // contexts.size() and callbacks.size(). Read without the lock, by every
-  // other worker, so a thief can skip empty slots and an idle worker can
-  // decide whether to park. Read-mostly and written only by whoever pushes or
-  // pops.
+  // How many contexts and callbacks are queued. Read by every other worker, so
+  // that a thief can skip empty slots and an idle worker can decide whether to
+  // park. Read-mostly and written only by whoever pushes or pops.
   //
-  // The two are counted separately because a fibre context and a stackless
-  // callback are runnable by different parts of the worker. The dispatcher can
-  // run a context but not a callback -- only the main context runs those -- so
-  // a dispatcher that treated a pending callback as "work available" would
-  // decline to park and then find nothing to pick, over and over, burning the
-  // core in a tight loop between dispatch() and suspend_until().
+  // Kept separately from the queues rather than asked of them: a queue's own
+  // position counters are written by its ends and would drag those lines into
+  // every scan, and the park protocol needs a single publication point it can
+  // order a producer's push against an idle worker's decision with. See
+  // Published().
+  //
+  // The two kinds are counted separately because a fibre context and a
+  // stackless callback are runnable by different parts of the worker. The
+  // dispatcher can run a context but not a callback -- only the main context
+  // runs those -- so a dispatcher that treated a pending callback as "work
+  // available" would decline to park and then find nothing to pick, over and
+  // over, burning the core in a tight loop between dispatch() and
+  // suspend_until().
   std::atomic<std::uint32_t> context_depth{0};
   std::atomic<std::uint32_t> callback_depth{0};
 
@@ -497,17 +497,34 @@ struct alignas(kCacheLine) WorkerSlot {
   // is the only way to see whether the recruitment policy in PreferredSlot is
   // actually concentrating. A11_POOL_STATS=1 prints the distribution at exit.
   std::atomic<std::uint64_t> served{0};
+  // Kept only under A11_POOL_STATS, and written only by this slot's own worker.
+  // `parks` is how often the worker went all the way to sleep, which is what
+  // the spin window exists to keep small relative to `served`: a park and the
+  // wake that ends it cost some thousands of times a context switch. `steals`
+  // counts work this worker took out of another slot, which is the price of
+  // routing an item to a worker that then did not run it.
+  std::atomic<std::uint64_t> parks{0};
+  std::atomic<std::uint64_t> spin_hits{0};
+  std::atomic<std::uint64_t> spin_misses{0};
+  std::atomic<std::uint64_t> steals{0};
+  // Signals aimed at this worker, by anybody. Unlike the others this one is
+  // written across threads, which is why it too is kept only under
+  // A11_POOL_STATS: what it measures is how often the pool decided it needed an
+  // OS thread, and a signal that turns out to be unnecessary is the most
+  // expensive mistake in this file.
+  std::atomic<std::uint64_t> signals{0};
 
   std::uint32_t depth(std::memory_order order) const {
     return context_depth.load(order) + callback_depth.load(order);
   }
 
-  // Guards `contexts` and `callbacks`. Native, uncontended in the common case
-  // (a worker pushing to and popping from its own slot), and contended only by
-  // a thief or an external submitter.
-  alignas(kCacheLine) std::mutex mu;
-  std::deque<boost::fibers::context*> contexts;
-  std::deque<PoolWork> callbacks;
+  // The work itself. Lock-free in both directions and FIFO, which is what lets
+  // an external submitter push, this worker pop and a thief steal without any
+  // of them serialising against the others; see thread/internal/work_queue.h
+  // for why it is a ring and not the usual work-stealing deque.
+  alignas(kCacheLine)
+      internal::WorkQueue<boost::fibers::context*, kQueueCapacity> contexts;
+  alignas(kCacheLine) internal::WorkQueue<PoolWork, kQueueCapacity> callbacks;
 
   // Where an idle main context waits.
   //
@@ -539,6 +556,12 @@ struct alignas(kCacheLine) WorkerSlot {
   alignas(kCacheLine) std::mutex park_mu;
   std::condition_variable park_cv;
   std::atomic<std::uint64_t> wake_seq{0};
+  // The deadline this worker's park is armed to, and int64 max whenever it is
+  // not parked. Written only by its own worker, and read by PoolState::PostAt
+  // so that it can tell a timer some worker will already wake in time for from
+  // one that would otherwise be slept through.
+  std::atomic<std::int64_t> park_deadline_ns{
+      std::numeric_limits<std::int64_t>::max()};
   // Only ever read or written by this slot's own worker.
   std::uint64_t consumed_seq = 0;
 
@@ -553,19 +576,35 @@ struct alignas(kCacheLine) WorkerSlot {
 // and a count-trailing-zeros rather than a scan.
 constexpr size_t kMaxWorkers = 64;
 
-// How long an idle worker looks for work before parking. The point is to
-// absorb the gaps that come from several workers draining the same stream of
-// items: parking there is what used to cost a wake per item.
+// How long a worker looks for work before parking.
 //
-// The budget is a duration rather than a spin count because what it has to be
-// compared against is a duration: parking and being woken again costs about
-// 8-10us on this machine, so looking for work for a comparable stretch is free
-// whenever it succeeds even once. A11_POOL_SPIN_US overrides it -- the balance
-// depends on the machine and on the offered load, and measuring it needs it
-// settable; see `a11_bench --suite scheduling`.
+// This window is the hysteresis in the pool's answer to "how many threads
+// should be awake", and it is what keeps that answer off a treadmill. Adding a
+// worker (waking it) and removing one (letting it park) cost the same several
+// microseconds, so a policy that triggered both on the same condition -- a
+// queue that is momentarily empty -- would sit on that boundary under any
+// steady load near the capacity of the workers already awake, and the pool
+// would spend its time parking and waking rather than working. It is the same
+// failure a std::vector would have if it grew and shrank at the same length,
+// and it needs the same answer: the two directions must not be the same
+// distance apart.
 //
-// It matters much less than the number of searchers does (see max_spinners_):
-// 30us, 100us and 300us measure the same once the cap is one.
+// So they are triggered by different quantities. A worker is added when work
+// arrives and nobody is awake looking for it, which is an event; a worker is
+// removed only after it has found nothing for this whole window, which is a
+// duration. The window is a few times what the park and the wake it avoids
+// would cost together, so a gap shorter than it -- which is what a stream of
+// small items, several workers draining one queue, or a request/response pair
+// looks like -- is absorbed with no thread state change at all, and the pool
+// can never pay more for the oscillation than a fraction of what the work
+// itself costs.
+//
+// The budget is a duration rather than a spin count for the same reason: what
+// it has to be compared against is a duration. The balance depends on the
+// machine and on the offered load, so A11_POOL_SPIN_US overrides it, and zero
+// disables looking entirely. It matters much less than the number of searchers
+// does -- see max_spinners_, which is what decides how many workers get a
+// window at all.
 absl::Duration SpinBudget() {
   static const absl::Duration budget = [] {
     const char* override_us = std::getenv("A11_POOL_SPIN_US");
@@ -580,6 +619,10 @@ absl::Duration SpinBudget() {
 // Clock reads per spin round would dominate the round; this is how many
 // rounds run between them.
 constexpr int kSpinRoundsPerClockCheck = 32;
+
+// How many spin rounds run between sweeps of the slot depths. See the spin loop
+// in RunWorker for why a spinner should not read them on every round.
+constexpr int kSpinRoundsPerScan = 8;
 
 // A worker parks for at most this long even with no signal pending. Nothing
 // depends on it: it is a safety net that turns any residual lost wakeup into a
@@ -601,72 +644,61 @@ class PoolState {
 
   // Which slot a new piece of work should go to.
   //
-  // From inside the pool: this worker's own, which is the whole point -- its
-  // dispatcher picks the work up at the next suspension point for the price of
-  // a context switch.
+  // From inside the pool: this worker's own. Its dispatcher picks the work up
+  // at the next suspension point for the price of a context switch.
   //
-  // From outside: the narrowest set of workers that is keeping up. The scan
-  // starts at slot 0 every time and stops at the first worker whose queue is
-  // shorter than `recruit_backlog_`, so work concentrates on a few hot workers
-  // and the rest stay parked.
+  // From outside: the cheapest worker to start the item, among those that are
+  // keeping up. Depth is the load signal -- it counts work that has arrived and
+  // not yet been picked up, so a slot at or over `recruit_backlog_` is a worker
+  // that cannot drain as fast as work is arriving, and routing past it is what
+  // recruits another thread. Below that threshold the order of preference is by
+  // what starting the item costs:
   //
-  // **A queue is the signal to widen.** Depth counts work that has arrived and
-  // not yet been picked up, so a slot over the threshold means that worker
-  // cannot drain as fast as work is arriving -- which is exactly, and only,
-  // when a second thread earns the ~9us it costs to wake it. Spreading by
-  // default instead (a plain round robin over all N slots) wakes every worker
-  // in the pool for a burst that one of them could have absorbed: worth
-  // `pool_post_pipelined` 705k -> 837k/s and `submit_round_trip` 4.75us ->
-  // 2.38us, with the latency rows unmoved.
+  //   1. a sleeper, which costs a thread wake but is the only kind of worker
+  //      that is *provably* free -- an awake worker with an empty queue may be
+  //      part way through something that will not yield for a while, and
+  //      queueing a microsecond of work behind that is how it comes to take a
+  //      millisecond;
+  //   2. anyone under the threshold, concentrating on the low slots so that a
+  //      stream of small items stays on a few hot workers.
   //
-  // The converse case is why the threshold cannot simply be enormous. Sixteen
-  // fibres that each want a core for a millisecond pile up on slot 0 the
-  // instant they are submitted, cross the threshold immediately, and recruit
-  // the whole pool -- `parallel_cpu` in the scheduling suite is the row that
-  // checks this still happens, and a pool pinned to the 2-3 workers this
-  // policy settles on for small items measures 4x worse on it.
+  // Handing the item instead to a worker that is awake and *searching* looks
+  // strictly better -- no wake, and no steal either, since a searcher is who
+  // would have stolen it -- and is substantially worse on a chain of round
+  // trips. The searcher is generally whoever last finished something, and it
+  // has the teardown of that fibre still to do; rule 1 rotates away from it,
+  // because a worker leaves the idle mask the moment it is woken.
   size_t PreferredSlot() {
     const int index = ThisWorkerIndex();
     if (index >= 0) {
       return static_cast<size_t>(index);
     }
-    // Zero disables recruitment entirely and spreads over every slot, which is
-    // what this did before the policy existed. Kept as the control for
-    // `a11_bench --suite scheduling`.
-    if (recruit_backlog_ != 0) {
-      // An idle worker first, among those not already backlogged. On a
-      // quiescent pool this is what keeps a strictly serial request/response
-      // from landing on the one worker that is still tearing down the previous
-      // fibre -- concentrating blindly costs `submit_round_trip[from=fiber]`
-      // about 2us, all of it waiting for that teardown. Under a burst nobody
-      // is idle, this finds nothing, and the rule below concentrates.
-      const std::uint64_t idle = idle_mask_.load(std::memory_order_relaxed);
-      if (idle != 0) {
-        for (size_t candidate = 0; candidate < num_workers_; ++candidate) {
-          if ((idle & (std::uint64_t{1} << candidate)) != 0 &&
-              slots_[candidate].depth(std::memory_order_relaxed) <
-                  recruit_backlog_) {
-            return candidate;
-          }
-        }
-      }
-      for (size_t candidate = 0; candidate < num_workers_; ++candidate) {
-        if (slots_[candidate].depth(std::memory_order_relaxed) <
-            recruit_backlog_) {
-          return candidate;
-        }
-      }
+    // Zero disables recruitment entirely and spreads over every slot. Kept as
+    // the control to measure the policy against.
+    if (recruit_backlog_ == 0) {
+      return NextVictim();
+    }
+
+    const std::uint64_t idle = idle_mask_.load(std::memory_order_relaxed);
+
+    // The hot set first, then the rest. Inside a range the first sleeper wins
+    // outright, otherwise the first worker under the threshold.
+    const size_t hot = std::min<size_t>(hot_workers_, num_workers_);
+    if (const size_t candidate = PreferredWithin(0, hot, idle);
+        candidate != num_workers_) {
+      return candidate;
+    }
+    if (const size_t candidate = PreferredWithin(hot, num_workers_, idle);
+        candidate != num_workers_) {
+      return candidate;
     }
     // Everyone is backlogged: nothing to be gained by preferring anybody.
-    return next_victim_.fetch_add(1, std::memory_order_relaxed) % num_workers_;
+    return NextVictim();
   }
 
   void PushContext(boost::fibers::context* absl_nonnull context, size_t index,
                    bool wake) {
-    {
-      std::lock_guard<std::mutex> lock(slots_[index].mu);
-      slots_[index].contexts.push_back(context);
-    }
+    slots_[index].contexts.Push(context);
     Published(slots_[index].context_depth);
     if (wake) {
       WakeSomeone(index);
@@ -674,10 +706,7 @@ class PoolState {
   }
 
   void PushCallback(PoolWork work, size_t index) {
-    {
-      std::lock_guard<std::mutex> lock(slots_[index].mu);
-      slots_[index].callbacks.push_back(std::move(work));
-    }
+    slots_[index].callbacks.Push(std::move(work));
     Published(slots_[index].callback_depth);
     WakeSomeone(index);
   }
@@ -697,6 +726,7 @@ class PoolState {
         continue;
       }
       if (boost::fibers::context* context = TryPopContext(victim)) {
+        Count(slots_[index].steals);
         return context;
       }
     }
@@ -713,6 +743,7 @@ class PoolState {
         continue;
       }
       if (TryPopCallback(victim, out)) {
+        Count(slots_[index].steals);
         return true;
       }
     }
@@ -760,12 +791,12 @@ class PoolState {
   // Wakes an OS thread only if one is actually needed.
   //
   // `spinning_ > 0` means some worker is already awake and sweeping the slots;
-  // it will find this item without a syscall. That test is the whole point of
-  // the exercise -- under load it holds nearly always, and the ~9us handoff
-  // disappears.
+  // it will find this item without a syscall. That test is the point of the
+  // whole arrangement -- under load it holds nearly always, and the several
+  // microseconds of thread handoff disappear.
   void WakeSomeone(size_t preferred) {
     // Diagnostic: A11_POOL_ALWAYS_WAKE=1 disables the economy entirely, so a
-    // push always signals somebody. Used to tell "the economy is dropping a
+    // push always signals somebody. It separates "the economy is dropping a
     // wake" from "a context is being lost".
     if (always_wake_) {
       for (size_t index = 0; index < num_workers_; ++index) {
@@ -809,6 +840,7 @@ class PoolState {
   // context is bound to that worker's scheduler and nobody else can run it.
   void Signal(size_t index) {
     WorkerSlot& target = slots_[index];
+    Count(target.signals);
     {
       // The lock is what orders this against a worker deciding to park; the
       // increment itself is atomic so a spinner can watch it lock-free.
@@ -824,16 +856,39 @@ class PoolState {
     }
   }
 
-  // Wakes only workers that are actually idle. Used to re-arm wait deadlines
-  // when a timer moves the head: signalling every worker unconditionally would
-  // cost a wake per PostAt, which is the cost this whole file is about.
-  void SignalIdle() {
-    std::uint64_t idle = idle_mask_.load(std::memory_order_seq_cst);
-    while (idle != 0) {
-      const int index = std::countr_zero(idle);
-      idle &= idle - 1;
-      WakeWorker(static_cast<size_t>(index));
+  // Makes sure some worker will be awake by `deadline_ns` to run a timer that
+  // just became the earliest one, and wakes nobody at all if one already will
+  // be.
+  //
+  // A parked worker arms its park to the earliest timer it can see, so a timer
+  // registered afterwards can be slept through -- but only by the workers whose
+  // park is armed later than it, and only until one of them wakes for any
+  // reason and re-arms. So one worker is enough: waking it re-arms it to this
+  // deadline, and every other park is then irrelevant. Waking all of them
+  // instead multiplies the cost of registering a deadline by the width of the
+  // pool, and registering a deadline is what every request timeout does.
+  void CoverDeadline(std::int64_t deadline_ns) {
+    // Acquire rather than seq_cst, unlike the wake economy: this decides how
+    // *soon* a worker wakes and not whether one does at all, and every way it
+    // can be wrong is bounded. Reading a stale "not parked" wakes a worker that
+    // did not need it; reading a stale deadline from a worker that has since
+    // woken skips a wake that worker no longer needs, and if it does park again
+    // it re-reads the earliest timer as it goes. kMaxPark remains the backstop.
+    const std::uint64_t idle = idle_mask_.load(std::memory_order_acquire);
+    // Nobody is parked. An awake worker collects due timers on every pass round
+    // its loop, so there is nothing to arrange.
+    if (idle == 0) {
+      return;
     }
+    for (std::uint64_t remaining = idle; remaining != 0;
+         remaining &= remaining - 1) {
+      const int index = std::countr_zero(remaining);
+      if (slots_[index].park_deadline_ns.load(std::memory_order_acquire) <=
+          deadline_ns) {
+        return;
+      }
+    }
+    WakeWorker(static_cast<size_t>(std::countr_zero(idle)));
   }
 
   void PostAt(absl::Time deadline, PoolWork work);
@@ -858,6 +913,15 @@ class PoolState {
 
   bool MaySpin() const {
     return spinning_.load(std::memory_order_relaxed) < max_spinners_;
+  }
+
+  // The diagnostic counters, which are off unless A11_POOL_STATS asked for
+  // them: `stats_` is written once during Start() and only read afterwards, so
+  // this costs a well-predicted branch on a shared line rather than a write.
+  void Count(std::atomic<std::uint64_t>& counter) const {
+    if (stats_) {
+      counter.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   // "This worker has nothing to do and is about to stop looking." Set before
@@ -902,16 +966,34 @@ class PoolState {
     counter.fetch_sub(1, std::memory_order_relaxed);
   }
 
+  size_t NextVictim() {
+    return next_victim_.fetch_add(1, std::memory_order_relaxed) % num_workers_;
+  }
+
+  // The best slot in `[begin, end)`, or num_workers_ if every one of them is at
+  // or over the backlog threshold.
+  size_t PreferredWithin(size_t begin, size_t end, std::uint64_t idle) const {
+    size_t awake = num_workers_;
+    for (size_t candidate = begin; candidate < end; ++candidate) {
+      if (slots_[candidate].depth(std::memory_order_relaxed) >=
+          recruit_backlog_) {
+        continue;
+      }
+      if ((idle & (std::uint64_t{1} << candidate)) != 0) {
+        return candidate;
+      }
+      if (awake == num_workers_) {
+        awake = candidate;
+      }
+    }
+    return awake;
+  }
+
   boost::fibers::context* absl_nullable TryPopContext(size_t index) {
     WorkerSlot& target = slots_[index];
     boost::fibers::context* context = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(target.mu);
-      if (target.contexts.empty()) {
-        return nullptr;
-      }
-      context = target.contexts.front();
-      target.contexts.pop_front();
+    if (!target.contexts.Pop(context)) {
+      return nullptr;
     }
     Consumed(target.context_depth);
     target.served.fetch_add(1, std::memory_order_relaxed);
@@ -920,13 +1002,8 @@ class PoolState {
 
   bool TryPopCallback(size_t index, PoolWork& out) {
     WorkerSlot& target = slots_[index];
-    {
-      std::lock_guard<std::mutex> lock(target.mu);
-      if (target.callbacks.empty()) {
-        return false;
-      }
-      out = std::move(target.callbacks.front());
-      target.callbacks.pop_front();
+    if (!target.callbacks.Pop(out)) {
+      return false;
     }
     Consumed(target.callback_depth);
     target.served.fetch_add(1, std::memory_order_relaxed);
@@ -935,31 +1012,48 @@ class PoolState {
 
   std::unique_ptr<WorkerSlot[]> slots_;
   size_t num_workers_ = 0;
-  // How many workers may look for work at once, and the single most important
-  // number in this file after the wake economy itself.
+  // How many workers may look for work at once.
   //
   // One searcher is already enough for every producer to skip its signal --
   // that is the only thing the count is consulted for -- while each additional
-  // one occupies a core that a runnable fibre could have had. At half the pool
-  // (7 of 14 here) the searchers reproduce the whole bulk-versus-latency trade
-  // this rewrite was supposed to remove: `pool_post_pipelined` 650k -> 1.03M/s
-  // but `submit_round_trip[from=fiber]` 8.8us -> 21.7us. Bulk-dominated
-  // workloads may still want more; A11_POOL_SPINNERS is the dial.
+  // one occupies a core that a runnable fibre could have had. Raising it trades
+  // the latency of a single round trip for the throughput of a bulk stream, and
+  // trades steeply; bulk-dominated workloads may still want more, and
+  // A11_POOL_SPINNERS is the dial.
   std::uint32_t max_spinners_ = 1;
   // Diagnostics only; see the dials read in Start().
   bool always_wake_ = false;
   bool no_steal_ = false;
+  bool stats_ = false;
 
-  // How long a worker's queue has to get before work is routed to the next
-  // worker instead -- the pool's answer to "is another thread worth waking".
-  // Zero disables the policy and spreads over every slot. A11_POOL_RECRUIT
-  // overrides it. See PreferredSlot.
+  // How long a worker's queue has to get before it counts as unable to keep up.
+  // Zero disables the routing policy and spreads over every slot.
+  // A11_POOL_RECRUIT overrides it. See PreferredSlot.
   //
-  // One, measured. Every larger value trades the latency rows for the bulk
-  // one at a rate that is not worth it: 2 buys another 29% of
-  // `pool_post_pipelined` and costs `submit_round_trip[from=fiber]` 8.8us ->
-  // 13.5us, and 4 costs `parallel_cpu` 30%.
+  // One. Larger values trade the latency of a round trip, and eventually the
+  // parallelism of long fibres, for the throughput of a stream of small items.
   std::uint32_t recruit_backlog_ = 1;
+
+  // How many workers external work is offered before the rest of the pool is.
+  //
+  // A stream of small items is fastest on a pool that is barely wider than the
+  // stream needs, and the reason is the wake economy: a narrow pool has one
+  // worker searching and one running almost all the time, so a push finds a
+  // searcher and skips its signal. Offering the same stream every worker in the
+  // machine instead finds a *sleeper* every time -- rule 1 prefers one, on
+  // purpose -- and pays a thread wake to start each item on a cold core.
+  //
+  // So the pool is offered in two tiers. The hot set absorbs anything it can
+  // keep up with; the rest of the machine is reached only when every hot worker
+  // is over the backlog threshold, which is what a burst of long fibres does
+  // immediately and what a stream of small items never does.
+  //
+  // The floor matters as much as the ceiling. At one hot worker this becomes
+  // the narrow pool that measures best on streams and worst on everything else:
+  // a chain of round trips lands each request on the worker still tearing down
+  // the last one. Two is enough for rule 1 to rotate away from that.
+  // A11_POOL_HOT overrides it.
+  std::uint32_t hot_workers_ = 4;
 
   // Written on every park and unpark, read on every wake decision: worth a
   // line of their own, away from the slots.
@@ -979,6 +1073,7 @@ class PoolState {
 
 void PoolState::PostAt(absl::Time deadline, PoolWork work) {
   bool became_head = false;
+  std::int64_t head = 0;
   {
     std::lock_guard<std::mutex> lock(timed_mu_);
     timed_work_.push_back(TimedWork{
@@ -987,7 +1082,7 @@ void PoolState::PostAt(absl::Time deadline, PoolWork work) {
         .work = std::move(work),
     });
     std::push_heap(timed_work_.begin(), timed_work_.end(), LaterDeadline{});
-    const std::int64_t head = absl::ToUnixNanos(timed_work_.front().deadline);
+    head = absl::ToUnixNanos(timed_work_.front().deadline);
     // seq_cst, and paired with the seq_cst read of it on the park path: the
     // new head has to be visible to anyone who parks after this point, or the
     // signal below has to reach them.
@@ -997,7 +1092,7 @@ void PoolState::PostAt(absl::Time deadline, PoolWork work) {
   // Only a timer that moved the head can shorten anybody's park, and only a
   // worker that is actually parked has a deadline to shorten.
   if (became_head) {
-    SignalIdle();
+    CoverDeadline(head);
   }
 }
 
@@ -1034,14 +1129,10 @@ bool PoolState::CollectDueTimers(size_t index) {
     return false;
   }
   // Into this worker's own slot, so the timer runs here unless somebody else
-  // is idle enough to steal it.
-  {
-    std::lock_guard<std::mutex> lock(slots_[index].mu);
-    for (PoolWork& work : due) {
-      slots_[index].callbacks.push_back(std::move(work));
-    }
-  }
-  for (size_t count = 0; count < due.size(); ++count) {
+  // is idle enough to steal it. Due timers keep their deadline order, which the
+  // queue preserves.
+  for (PoolWork& work : due) {
+    slots_[index].callbacks.Push(std::move(work));
     Published(slots_[index].callback_depth);
   }
   return true;
@@ -1065,22 +1156,21 @@ class PoolAlgorithm final : public boost::fibers::algo::algorithm {
       return;
     }
     // Detach here, on the owning thread, so any worker may later attach it.
-    // This is shared_work's invariant, kept; what changes is that the queue it
-    // lands in is this worker's own rather than a process-global one, so the
-    // usual case -- a fibre made ready by the worker that will also run it --
-    // costs one uncontended lock and no wake at all.
+    // The queue it lands in is this worker's own, so the usual case -- a fibre
+    // made ready by the worker that will also run it -- costs one uncontended
+    // lock and no wake at all.
     ctx->detach();
     state_->PushContext(ctx, index_, /*wake=*/false);
   }
 
   boost::fibers::context* absl_nullable pick_next() noexcept override {
     // The main context is what runs stackless callbacks, so preferring ready
-    // fibres unconditionally -- as shared_work does -- lets a steady stream of
-    // fibres starve every posted callback on this worker. Alternating fixes
-    // that, but only matters when there is actually a callback waiting: with
-    // none, giving the main context a turn just sends it round its loop to
-    // find nothing and yield again, and that hop is on the critical path of
-    // every fibre this worker starts.
+    // fibres unconditionally would let a steady stream of fibres starve every
+    // posted callback on this worker. Alternating avoids that, and only matters
+    // when there is actually a callback waiting: with none, giving the main
+    // context a turn just sends it round its loop to find nothing and yield
+    // again, and that hop is on the critical path of every fibre this worker
+    // starts.
     if (!lqueue_.empty() && state_->AnyCallbacks(std::memory_order_relaxed)) {
       prefer_pinned_ = !prefer_pinned_;
       if (prefer_pinned_) {
@@ -1188,37 +1278,67 @@ void PoolState::Start(size_t num_threads) {
     recruit_backlog_ =
         static_cast<std::uint32_t>(std::max(0, std::atoi(override_recruit)));
   }
+  const char* override_hot = std::getenv("A11_POOL_HOT");
+  if (override_hot != nullptr) {
+    hot_workers_ =
+        static_cast<std::uint32_t>(std::max(1, std::atoi(override_hot)));
+  }
 
-  // A11_POOL_STATS=1 prints how the work actually landed. The recruitment
-  // policy is a claim about the shape of that distribution -- narrow for a
-  // stream of small items, wide when the items are big enough to want cores --
-  // and this is what checks the claim rather than inferring it from a rate.
   always_wake_ = std::getenv("A11_POOL_ALWAYS_WAKE") != nullptr;
   no_steal_ = std::getenv("A11_POOL_NO_STEAL") != nullptr;
 
+  // A11_POOL_STATS=1 prints how the work actually landed, which is how the two
+  // policies in this file are checked rather than assumed. The routing policy
+  // is a claim about the shape of the `served` distribution -- narrow for a
+  // stream of small items, wide when the items are big enough to want cores --
+  // and the park and wake policy is a claim that `parks` stays small next to
+  // the number of items, since the pool paying more for parking than for work
+  // is exactly the failure the spin window exists to prevent.
   const char* stats = std::getenv("A11_POOL_STATS");
-  if (stats != nullptr && std::atoi(stats) != 0) {
+  stats_ = stats != nullptr && std::atoi(stats) != 0;
+  if (stats_) {
     static PoolState* reporting = this;
     // stderr rather than LOG: this runs at exit, where the Abseil sink may be
     // bridged into Python logging and touching it would mean taking the GIL
-    // during interpreter teardown. That has aborted this process before.
+    // during interpreter teardown, which can abort the process.
     std::atexit([] {
       std::string line;
       std::uint64_t total = 0;
+      std::uint64_t parks = 0;
+      std::uint64_t hits = 0;
+      std::uint64_t misses = 0;
+      std::uint64_t steals = 0;
+      std::uint64_t signals = 0;
       size_t used = 0;
       for (size_t index = 0; index < reporting->num_workers_; ++index) {
+        const WorkerSlot& slot = reporting->slots_[index];
         const std::uint64_t served =
-            reporting->slots_[index].served.load(std::memory_order_relaxed);
+            slot.served.load(std::memory_order_relaxed);
         total += served;
+        parks += slot.parks.load(std::memory_order_relaxed);
+        hits += slot.spin_hits.load(std::memory_order_relaxed);
+        misses += slot.spin_misses.load(std::memory_order_relaxed);
+        steals += slot.steals.load(std::memory_order_relaxed);
+        signals += slot.signals.load(std::memory_order_relaxed);
         if (served != 0) {
           ++used;
         }
         absl::StrAppend(&line, index == 0 ? "" : " ", served);
       }
       std::fprintf(stderr,
-                   "pool served %llu items across %zu/%zu workers: %s\n",
+                   "pool served %llu items across %zu/%zu workers: %s\n"
+                   "pool parks %llu (%.3f/item) spins %llu hit / %llu miss, "
+                   "steals %llu (%.3f/item), signals %llu (%.3f/item)\n",
                    static_cast<unsigned long long>(total), used,
-                   reporting->num_workers_, line.c_str());
+                   reporting->num_workers_, line.c_str(),
+                   static_cast<unsigned long long>(parks),
+                   total == 0 ? 0.0 : static_cast<double>(parks) / total,
+                   static_cast<unsigned long long>(hits),
+                   static_cast<unsigned long long>(misses),
+                   static_cast<unsigned long long>(steals),
+                   total == 0 ? 0.0 : static_cast<double>(steals) / total,
+                   static_cast<unsigned long long>(signals),
+                   total == 0 ? 0.0 : static_cast<double>(signals) / total);
     });
   }
 }
@@ -1288,7 +1408,8 @@ void WorkerThreadPool::RunWorker(size_t index) {
 
     // Nothing anywhere. Look a little longer before paying for a park: with
     // several workers draining one stream, the gap is usually shorter than the
-    // wake it would cost to sleep through it.
+    // wake it would cost to sleep through it, and looking through it costs
+    // nothing that was not already this worker's.
     if (state_.MaySpin()) {
       // Being counted as spinning is what lets producers skip their wake
       // entirely, so the counter goes up before the first look and comes down
@@ -1301,11 +1422,21 @@ void WorkerThreadPool::RunWorker(size_t index) {
           // `WakePending` is not redundant with the slot scan: it is the only
           // way a spinner learns about a fibre bound to its own scheduler that
           // another thread just made ready. Without it, that fibre waits out
-          // the whole budget -- worth 11.5us -> 25us on
-          // `submit_round_trip[from=fiber]`, which is precisely the shape of
-          // the regression that sank the previous attempt at spinning.
-          if (self.WakePending() || state_.AnyWork(std::memory_order_relaxed) ||
-              state_.shutting_down()) {
+          // the whole budget. It is also this worker's own line, so it costs
+          // nothing to read on every round.
+          //
+          // The slot scan is the opposite: two atomics per worker, on the very
+          // lines every push and pop writes, so a spinner reading them flat out
+          // takes those lines off the workers doing the work. Once per
+          // kSpinRoundsPerScan is often enough -- what it delays is finding an
+          // item a few tens of nanoseconds sooner, against a park it is trying
+          // to avoid that costs a thousand times that.
+          if (self.WakePending() || state_.shutting_down()) {
+            found = true;
+            break;
+          }
+          if (round % kSpinRoundsPerScan == 0 &&
+              state_.AnyWork(std::memory_order_relaxed)) {
             found = true;
             break;
           }
@@ -1316,6 +1447,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
         }
       }
       state_.EndSpinning();
+      state_.Count(found ? self.spin_hits : self.spin_misses);
       if (found) {
         continue;
       }
@@ -1324,17 +1456,16 @@ void WorkerThreadPool::RunWorker(size_t index) {
     // Go idle by suspending the main *fibre*, not the thread.
     //
     // This is the one place where the obvious optimisation is wrong. Parking
-    // the OS thread directly here is cheaper and measures better, and it
-    // silently breaks every fibre-level deadline in the process: `SelectUntil`,
+    // the OS thread directly here is cheaper, and it silently breaks every
+    // fibre-level deadline in the process: `SelectUntil`,
     // `Future::Await(deadline)`, session and request timeouts all park their
     // fibre in Boost's sleep queue, and only Boost's dispatcher knows when the
-    // earliest of them is due. Suspending the main fibre hands the thread to
-    // that dispatcher, which combines this deadline with its sleep queue and
-    // parks the thread once, in suspend_until, on the true minimum.
-    //
-    // The bug this cost: a 1ms session timeout that had not fired 10ms later,
-    // because the worker was asleep on its own condition variable for the full
-    // kMaxPark and nothing had happened to wake it.
+    // earliest of them is due. A worker asleep on its own condition variable
+    // honours none of them -- a 1ms timeout goes off whenever something
+    // unrelated next wakes the thread, up to kMaxPark later. Suspending the
+    // main fibre hands the thread to that dispatcher, which combines this
+    // deadline with its sleep queue and parks the thread once, in
+    // suspend_until, on the true minimum.
     state_.MarkIdle(index);
     {
       thread::MutexLock lock(&self.idle_mu);
@@ -1342,9 +1473,17 @@ void WorkerThreadPool::RunWorker(size_t index) {
       // seq_cst, so a producer that skipped its signal because it saw nobody
       // idle must be visible here.
       if (!self.WakePending() && !state_.AnyWork() && !state_.shutting_down()) {
-        self.idle_cv.WaitWithDeadline(
-            &self.idle_mu,
-            std::min(absl::Now() + kMaxPark, state_.EarliestTimer()));
+        const absl::Time deadline =
+            std::min(absl::Now() + kMaxPark, state_.EarliestTimer());
+        // Published before the wait and withdrawn after it, so that a timer
+        // registered while this worker is parked can tell whether this park
+        // already covers it. See PoolState::CoverDeadline.
+        self.park_deadline_ns.store(absl::ToUnixNanos(deadline),
+                                    std::memory_order_release);
+        state_.Count(self.parks);
+        self.idle_cv.WaitWithDeadline(&self.idle_mu, deadline);
+        self.park_deadline_ns.store(std::numeric_limits<std::int64_t>::max(),
+                                    std::memory_order_release);
       }
     }
     state_.ClearIdle(index);
@@ -1393,9 +1532,8 @@ void WorkerThreadPool::PostAt(absl::Time deadline, PoolWork work) {
 WorkerThreadPool& WorkerThreadPool::Instance() {
   static absl::NoDestructor<WorkerThreadPool> instance;
   static const bool started = [] {
-    // A11_POOL_THREADS pins the worker count. The pool's throughput depends
-    // strongly on its width -- see `a11_bench --suite scheduling` and FINDINGS
-    // -- and measuring that needs the count to be settable.
+    // A11_POOL_THREADS pins the worker count, which the pool's throughput
+    // depends strongly on and which therefore has to be settable.
     const char* override_count = std::getenv("A11_POOL_THREADS");
     if (override_count != nullptr) {
       instance->Start(static_cast<size_t>(std::atoi(override_count)));
@@ -1418,10 +1556,10 @@ void EnsureWorkerThreadPool() {
 
 void Fiber::Start() {
   EnsureWorkerThreadPool();
-  // EnsureThreadHasScheduler runs only once, so from within the worker pool,
-  // threads will keep their shared_work nature. Outside the pool, threads are
-  // initialized with round_robin to avoid participation in the pool, but be
-  // compatible with fibers.
+  // EnsureThreadHasScheduler runs only once per thread, so a pool worker keeps
+  // the PoolAlgorithm it was started with. A thread outside the pool gets a
+  // plain round robin instead: compatible with fibres, but not participating in
+  // the pool's queues.
   EnsureThreadHasScheduler<InstrumentedRoundRobin>();
 
   auto body = [this] {

@@ -7,8 +7,8 @@
  *
  * A11's pumps -- the chunk store reader and writer, and anything else built the
  * same way -- run on whichever thread asks them for something, rather than only
- * on the worker pool. Waking a worker and waiting costs a scheduler hop (~8us)
- * to do work the caller could do in the frame it is already in, and through a
+ * on the worker pool. Waking a worker and waiting costs a scheduler hop to do
+ * work the caller could do in the frame it is already in, and through a
  * language binding an event-loop turn on top of that.
  *
  * The hazard that buys, and what this header exists to contain: completing work

@@ -35,9 +35,9 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
  *
  * The shape every "wait for this, then report it" API has. Already-finished is
  * the common case and costs no worker, no scheduler hop and -- through a
- * language binding -- no event-loop turn: about 0.2us against the 43us of a
- * fibre whose result has to be marshalled back. The unfinished case takes a
- * fibre because it has a deadline to honour.
+ * language binding -- no event-loop turn, which together are two orders of
+ * magnitude of what a fibre whose result has to be marshalled back costs. The
+ * unfinished case takes a fibre because it has a deadline to honour.
  *
  * Prefer Then() when there is no deadline; it never needs a fibre at all.
  *

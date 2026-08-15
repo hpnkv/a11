@@ -548,7 +548,7 @@ void BindService(py::module_& module) {
             // across it deadlocks the process: a store completion on a worker
             // thread needs the GIL to resolve a Python future, while the loop
             // thread that holds the GIL is parked waiting for exactly that
-            // work. See `bench/FINDINGS.md`.
+            // work.
             return FutureToPython(WithoutGil([&] {
               return self->DispatchWireMessage(std::move(message),
                                                std::move(origin_stream));

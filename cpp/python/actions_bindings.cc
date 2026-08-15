@@ -1137,8 +1137,9 @@ Examples:
             }
             // Without the GIL: this starts work and can park in the
             // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. See `bench/FINDINGS.md` on the
-            // GIL/fibre deadlock.
+            // the event-loop thread. Holding the GIL across it deadlocks
+            // the process against a worker that needs the GIL to resolve
+            // a Python future.
             return FutureToPython(WithoutGil(
                 [&] { return self->Call(std::move(*converted)); }));
           },
@@ -1168,8 +1169,9 @@ Examples:
             }
             // Without the GIL: this starts work and can park in the
             // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. See `bench/FINDINGS.md` on the
-            // GIL/fibre deadlock.
+            // the event-loop thread. Holding the GIL across it deadlocks
+            // the process against a worker that needs the GIL to resolve
+            // a Python future.
             return FutureToPython(WithoutGil(
                 [&] { return self->WaitForDispatch(*converted); }));
           },
@@ -1188,8 +1190,9 @@ Examples:
             }
             // Without the GIL: this starts work and can park in the
             // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. See `bench/FINDINGS.md` on the
-            // GIL/fibre deadlock.
+            // the event-loop thread. Holding the GIL across it deadlocks
+            // the process against a worker that needs the GIL to resolve
+            // a Python future.
             return FutureToPython(
                 WithoutGil([&] { return self->Wait(*converted); }));
           },

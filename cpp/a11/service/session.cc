@@ -602,22 +602,21 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
       // Create the node if it is not here yet, rather than dropping the
       // marker.
       //
-      // This used to use GetIfExists() on the reasoning that "nothing is lost
-      // by dropping a marker for a node that no longer exists". That conflates
-      // two different cases, and the second one hangs: a node that has been
-      // released, and a node that has *not been created yet*. Ports are
-      // materialised on use, and a marker can arrive before the fragment or
-      // action message that would materialise its node -- the two travel as
-      // separate wire messages and are dispatched by separate fibres.
+      // Looking the node up without creating it (GetIfExists) would be wrong,
+      // however reasonable "nothing is lost by dropping a marker for a node
+      // that no longer exists" sounds: it conflates a node that has been
+      // released with one that has *not been created yet*, and the second case
+      // hangs. Ports are materialised on use, and a marker can arrive before
+      // the fragment or action message that would materialise its node -- the
+      // two travel as separate wire messages and are dispatched by separate
+      // fibres.
       //
       // For a port closed without ever carrying data the marker is the only
       // end-of-stream there will ever be. `run_turn` closes `config` empty
       // exactly this way, so dropping its marker leaves the receiving handler
       // blocked in `consume()` on an input that never ends -- it then writes
-      // no outputs, and every reader on the caller's side waits forever. That
-      // is a permanent hang with no timeout anywhere in the path, and it was
-      // reproducible on the shipped scheduler about once in twelve runs of
-      // a11/client/tests/test_turn.py.
+      // no outputs, and every reader on the caller's side waits forever, with
+      // no timeout anywhere in the path.
       //
       // Creating here costs an empty node that is immediately drained and
       // closed. A reader that finds it sees end-of-stream, which is the right

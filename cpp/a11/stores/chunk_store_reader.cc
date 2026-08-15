@@ -145,7 +145,7 @@ struct ChunkStoreReader::State
     // inside Drive(), so a poller that returns the moment its own fragment
     // lands arrives again mid-fill -- and batches alternate between full and
     // one. The reads cost the caller nothing it was not going to wait for, and
-    // a store that answers inline answers them in ~0.3us each.
+    // a store that answers inline answers them without waiting at all.
     Drive();
     std::vector<data::NodeFragment> taken;
     {
@@ -191,13 +191,15 @@ struct ChunkStoreReader::State
     // Serve from the buffer on the caller's thread when it can be served.
     //
     // Drive() would do exactly this, but only after Wake() has put it through
-    // the scheduler, and that hop costs ~8us against the ~0.3us the read
-    // itself takes -- so a reader draining a node that is already full paid a
-    // scheduler round trip per fragment. CollectAvailableLocked() pops
-    // `pending_reads` from the front, so a request that arrives behind an
-    // earlier waiter still queues behind it; FIFO order is unchanged. The
-    // request is claimed by PopPendingReadLocked(), so the timeout below and
-    // the cancellation callback both find it taken and cannot double-resolve.
+    // the scheduler, and that hop costs more than an order of magnitude what
+    // the read itself does -- which for a reader draining a node that is
+    // already full would be a scheduler round trip per fragment.
+    //
+    // CollectAvailableLocked() pops `pending_reads` from the front, so a request
+    // that arrives behind an earlier waiter still queues behind it; FIFO order is
+    // unchanged. The request is claimed by PopPendingReadLocked(), so the timeout
+    // below and the cancellation callback both find it taken and cannot
+    // double-resolve.
     std::vector<Completion> completions;
     {
       thread::MutexLock lock(&mu);
@@ -250,13 +252,11 @@ struct ChunkStoreReader::State
    * @brief
    *   Pump until there is nothing left to do without waiting.
    *
-   * A store that already holds the fragment resolves Get() inline -- and since
-   * `LocalChunkStore::Next`/`Get` gained their fast paths, that is the normal
-   * case. DriveOnce() used to hand every such fragment back to the scheduler
-   * (FetchDone ended in Wake()), so a reader filling its buffer from a node
-   * that was already complete paid one scheduler hop per fragment, and the
-   * buffer never got more than one fragment ahead. That is why
-   * `NextMany`/`next_fragments` returned batches of one.
+   * A store that already holds the fragment resolves Get() inline, which is the
+   * normal case, so this keeps going for as long as that holds. Handing each
+   * such fragment back to the scheduler instead would cost a scheduler hop per
+   * fragment and leave the buffer no more than one fragment ahead, which is
+   * what would make `NextMany`/`next_fragments` return batches of one.
    *
    * A loop and not recursion, deliberately: A11 runs these callbacks on pooled
    * fibers with small stacks, and recursing once per fragment would overflow
@@ -716,9 +716,8 @@ struct ChunkStoreReader::State
   // Multi-fetch state. `position` is the next fragment to *deliver*;
   // `next_fetch_position` is the next one to *ask for*, and runs ahead of it by
   // however many fetches are outstanding. Results that arrive out of order wait
-  // in `arrived` until they are at the head, which is what preserves the
-  // ordered-delivery guarantee that used to come for free from having one
-  // fetch at a time.
+  // in `arrived` until they are at the head, which is what preserves ordered
+  // delivery across fetches that are in flight together.
   std::uint64_t next_fetch_position ABSL_GUARDED_BY(mu);
   size_t fetches_in_flight ABSL_GUARDED_BY(mu) = 0;
   std::uint64_t fetch_generation ABSL_GUARDED_BY(mu) = 0;

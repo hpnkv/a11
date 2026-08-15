@@ -11,9 +11,157 @@
 #include <gtest/gtest.h>
 
 #include "thread/concurrency.h"
+#include "thread/internal/work_queue.h"
 
 namespace thread {
 namespace {
+
+// Small enough that every test here can fill it and exercise the overflow path.
+using TestQueue = internal::WorkQueue<int, 4>;
+
+TEST(WorkQueueTest, PreservesOrderThroughAndPastTheRing) {
+  TestQueue queue;
+  int value = 0;
+  EXPECT_FALSE(queue.Pop(value));
+
+  // Twice the ring, so the second half arrives while the first is still in it
+  // and has to come out behind it.
+  for (int index = 0; index < 8; ++index) {
+    queue.Push(index);
+  }
+  for (int index = 0; index < 8; ++index) {
+    ASSERT_TRUE(queue.Pop(value)) << index;
+    EXPECT_EQ(value, index);
+  }
+  EXPECT_FALSE(queue.Pop(value));
+
+  // Draining the overflow must leave the ring usable rather than stuck one lap
+  // behind.
+  for (int round = 0; round < 100; ++round) {
+    queue.Push(round);
+    ASSERT_TRUE(queue.Pop(value));
+    EXPECT_EQ(value, round);
+  }
+}
+
+TEST(WorkQueueTest, MovesMoveOnlyPayloadsExactlyOnce) {
+  internal::WorkQueue<std::unique_ptr<int>, 4> queue;
+  for (int index = 0; index < 8; ++index) {
+    queue.Push(std::make_unique<int>(index));
+  }
+  for (int index = 0; index < 8; ++index) {
+    std::unique_ptr<int> taken;
+    ASSERT_TRUE(queue.Pop(taken));
+    ASSERT_NE(taken, nullptr);
+    EXPECT_EQ(*taken, index);
+  }
+}
+
+TEST(WorkQueueTest, LosesNothingUnderConcurrentPushersAndPoppers) {
+  // Deliberately smaller than the traffic, so the ring is full for much of the
+  // run and both paths are exercised together.
+  internal::WorkQueue<int, 64> queue;
+  constexpr int kPushers = 4;
+  constexpr int kPoppers = 3;
+  constexpr int kPerPusher = 20000;
+
+  std::atomic<bool> done{false};
+  std::atomic<std::int64_t> popped_count{0};
+  std::atomic<std::int64_t> popped_sum{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kPushers + kPoppers);
+
+  for (int popper = 0; popper < kPoppers; ++popper) {
+    threads.emplace_back([&] {
+      int value = 0;
+      while (true) {
+        if (queue.Pop(value)) {
+          popped_sum.fetch_add(value, std::memory_order_relaxed);
+          popped_count.fetch_add(1, std::memory_order_relaxed);
+        } else if (done.load(std::memory_order_acquire)) {
+          // One last look: an item may have arrived between the failed pop and
+          // the flag.
+          while (queue.Pop(value)) {
+            popped_sum.fetch_add(value, std::memory_order_relaxed);
+            popped_count.fetch_add(1, std::memory_order_relaxed);
+          }
+          return;
+        }
+      }
+    });
+  }
+  for (int pusher = 0; pusher < kPushers; ++pusher) {
+    threads.emplace_back([&, pusher] {
+      for (int index = 0; index < kPerPusher; ++index) {
+        queue.Push(pusher * kPerPusher + index);
+      }
+    });
+  }
+
+  for (int index = kPoppers; index < kPoppers + kPushers; ++index) {
+    threads[index].join();
+  }
+  done.store(true, std::memory_order_release);
+  for (int index = 0; index < kPoppers; ++index) {
+    threads[index].join();
+  }
+
+  constexpr std::int64_t kTotal = std::int64_t{kPushers} * kPerPusher;
+  EXPECT_EQ(popped_count.load(std::memory_order_relaxed), kTotal);
+  // Every value once and only once: a duplicated or dropped item shows up here
+  // even when the count happens to come out right.
+  EXPECT_EQ(popped_sum.load(std::memory_order_relaxed),
+            kTotal * (kTotal - 1) / 2);
+}
+
+TEST(WorkQueueTest, PreservesEachPushersOrderUnderOneConsumer) {
+  internal::WorkQueue<int, 8> queue;
+  constexpr int kPushers = 3;
+  constexpr int kPerPusher = 5000;
+
+  std::atomic<bool> done{false};
+  std::vector<int> last(kPushers, -1);
+  std::vector<int> seen(kPushers, 0);
+  std::thread consumer([&] {
+    int value = 0;
+    while (true) {
+      if (queue.Pop(value)) {
+        const int pusher = value / kPerPusher;
+        // Within one pusher's stream the queue must not reorder: this is what a
+        // Chase-Lev deque would give up, and what parts of A11 rely on.
+        ASSERT_GT(value, last[pusher]);
+        last[pusher] = value;
+        ++seen[pusher];
+      } else if (done.load(std::memory_order_acquire)) {
+        while (queue.Pop(value)) {
+          const int pusher = value / kPerPusher;
+          ASSERT_GT(value, last[pusher]);
+          last[pusher] = value;
+          ++seen[pusher];
+        }
+        return;
+      }
+    }
+  });
+
+  std::vector<std::thread> pushers;
+  pushers.reserve(kPushers);
+  for (int pusher = 0; pusher < kPushers; ++pusher) {
+    pushers.emplace_back([&, pusher] {
+      for (int index = 0; index < kPerPusher; ++index) {
+        queue.Push(pusher * kPerPusher + index);
+      }
+    });
+  }
+  for (std::thread& pusher : pushers) {
+    pusher.join();
+  }
+  done.store(true, std::memory_order_release);
+  consumer.join();
+  for (int pusher = 0; pusher < kPushers; ++pusher) {
+    EXPECT_EQ(seen[pusher], kPerPusher) << pusher;
+  }
+}
 
 TEST(ThreadMutexTest, ConditionVariableHandsOffBetweenFiberAndThread) {
   thread::Mutex mu;
@@ -300,6 +448,47 @@ TEST(ThreadExecutorTest, StacklessCallbacksAndTimersDoNotAllocateFibers) {
   EXPECT_FALSE(callback_had_fiber.load(std::memory_order_acquire));
   EXPECT_GE(absl::Now() - start, absl::Milliseconds(4));
   EXPECT_EQ(internal::LiveFiberCountForTesting(), baseline);
+}
+
+// Each of these timers is registered while the pool is parked for a later one,
+// so each has to shorten somebody's park to run on time. Note that this cannot
+// distinguish a pool that arranges that deliberately from one that gets away
+// with it: a park is capped even with nothing to wake for, and the waiting in
+// this test wakes workers of its own accord. It is a guard on the deadlines
+// themselves, not on how few threads were woken to meet them.
+TEST(ThreadExecutorTest, TimersRegisteredInDecreasingOrderRunOnTime) {
+  // Let the pool go quiet, so that its workers are parked rather than looking
+  // for work when the timers below are registered.
+  absl::SleepFor(absl::Milliseconds(50));
+
+  // A far deadline first, so that a worker parking afterwards arms for that and
+  // not for anything sooner.
+  PostAfter(absl::Seconds(30), [] {});
+
+  thread::Mutex mu;
+  thread::CondVar cv;
+  // Each entry becomes the earliest timer in turn, so each has to shorten a
+  // park that was armed for the one before it.
+  const std::vector<absl::Duration> delays = {
+      absl::Milliseconds(120), absl::Milliseconds(60), absl::Milliseconds(10)};
+  for (const absl::Duration delay : delays) {
+    const absl::Time due = absl::Now() + delay;
+    absl::Duration lateness;
+    bool fired = false;
+    PostAt(due, [&] {
+      thread::MutexLock lock(&mu);
+      lateness = absl::Now() - due;
+      fired = true;
+      cv.SignalAll();
+    });
+
+    thread::MutexLock lock(&mu);
+    const absl::Time give_up = absl::Now() + absl::Seconds(5);
+    while (!fired) {
+      ASSERT_FALSE(cv.WaitWithDeadline(&mu, give_up));
+    }
+    EXPECT_LT(lateness, absl::Milliseconds(25)) << "delay " << delay;
+  }
 }
 
 TEST(ThreadChannelTest, PreservesFifoAndCloseWakesReader) {

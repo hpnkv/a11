@@ -48,9 +48,7 @@ class _FlushingNativeFuture(_NativeFuture):
     A separate class, switched on per future by `_flush_before_awaiting`,
     rather than an override on `_NativeFuture`: `__await__` in Python replaces
     a C slot on the busiest path in the runtime, and only futures with a hook
-    have anything to do there. The cost of the override sits at the noise floor
-    (1.458us against 1.459us for a native await), so this buys little beyond
-    keeping the hot path exactly as it was.
+    have anything to do there.
 
     It declares no slots of its own, which keeps the layout identical to the
     base and lets `__class__` be reassigned.

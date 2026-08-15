@@ -419,7 +419,7 @@ inline Task FailedTask(absl::Status status) {
  * `Submit([f]{ return g(f.Await()); })` needs a worker only because Await()
  * blocks; @p transform does not. This runs it on whichever thread completes
  * @p future, or immediately on this one when @p future is already complete, so
- * the continuation costs no handoff to the worker pool -- ~8us, and the
+ * the continuation costs no handoff to the worker pool, which is otherwise the
  * dominant cost of the layers built out of it.
  *
  * Two obligations come with that. @p transform must not block: it may run on a

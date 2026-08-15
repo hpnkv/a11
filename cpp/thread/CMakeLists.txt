@@ -21,6 +21,7 @@ target_sources(
         Thread PRIVATE
         thread/cases.h
         thread/boost_primitives.h
+        thread/internal/work_queue.h
         thread/channel.h
         thread/concurrency.h
         thread/executor.h

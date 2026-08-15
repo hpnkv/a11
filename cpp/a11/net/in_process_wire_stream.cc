@@ -88,7 +88,24 @@ struct InProcessWireStream::State {
   // Wired once by CreatePair before either endpoint is published.
   std::weak_ptr<State> peer;
   mutable thread::Mutex mu;
-  thread::CondVar cv;
+  // One condition variable per thing that is waited for, rather than one per
+  // endpoint.
+  //
+  // Each endpoint runs three fibres -- Sender, Receiver, WatchTiming -- and
+  // each waits for something different. Sharing a condition variable between
+  // them means every state change wakes all three, and two of them only to look
+  // and go back to sleep. A wake is a fibre scheduled and, when that fibre's
+  // worker is parked, an OS thread brought back; a message that changes two
+  // states therefore costs several of them for one delivery. Split, each change
+  // reaches only the fibre whose predicate it can make true.
+  //
+  // The waiter for each is named where it waits. Signalling is still SignalAll:
+  // the queues below can have a second waiter under backpressure, and
+  // correctness here should not depend on counting them.
+  thread::CondVar outbound_cv;  // Sender, for something to send.
+  thread::CondVar incoming_cv;  // Receiver, for something to deliver.
+  thread::CondVar room_cv;      // The peer's Sender, for buffer room.
+  thread::CondVar timing_cv;    // WatchTiming, for a deadline that moved in.
   std::deque<Outbound> outbound ABSL_GUARDED_BY(mu);
   std::deque<std::string> incoming ABSL_GUARDED_BY(mu);
   size_t incoming_bytes ABSL_GUARDED_BY(mu) = 0;
@@ -210,7 +227,7 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
       }
       state_->outbound.push_back(
           State::Outbound{.message = std::move(message), .end = end});
-      state_->cv.SignalAll();
+      state_->outbound_cv.SignalAll();
       return absl::OkStatus();
     }
   }
@@ -250,7 +267,6 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
     if (state_->span.IsRecording()) {
       state_->span.SetAttribute("a11.stream.id", state_->id);
     }
-    state_->cv.SignalAll();
   }
   a11::Schedule([state = state_]() { Sender(std::move(state)); });
   a11::Schedule([state = state_]() { Receiver(std::move(state)); });
@@ -279,7 +295,7 @@ absl::Status InProcessWireStream::HalfClose(data::ByteMap trailers) {
           .message = data::MakeHalfCloseMessage(std::move(normalized)),
           .end = End::kHalfClose,
       });
-      state_->cv.SignalAll();
+      state_->outbound_cv.SignalAll();
       return absl::OkStatus();
     }
   }
@@ -324,7 +340,7 @@ absl::Status InProcessWireStream::Abort(absl::Status status) {
                               std::move(encoded));
       state_->outbound.push_back(
           State::Outbound{.message = std::move(message), .end = End::kAbort});
-      state_->cv.SignalAll();
+      state_->outbound_cv.SignalAll();
       return absl::OkStatus();
     }
   }
@@ -339,7 +355,7 @@ absl::Status InProcessWireStream::SetDeadline(absl::Time deadline) {
     thread::MutexLock lock(&state_->mu);
     state_->deadline = deadline;
     expired = deadline <= absl::Now();
-    state_->cv.SignalAll();
+    state_->timing_cv.SignalAll();
   }
   if (expired) {
     ForceAbort(state_,
@@ -402,7 +418,7 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
     {
       thread::MutexLock lock(&state->mu);
       while (state->outbound.empty() && !state->transport_finished) {
-        state->cv.Wait(&state->mu);
+        state->outbound_cv.Wait(&state->mu);
       }
       if (state->transport_finished) {
         return;
@@ -483,14 +499,14 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
               (peer->incoming_bytes != 0 &&
                peer->incoming_bytes + payload->size() >
                    peer->options.max_buffered_incoming_bytes))) {
-        peer->cv.Wait(&peer->mu);
+        peer->room_cv.Wait(&peer->mu);
       }
       if (peer->transport_finished) {
         send_status = absl::UnavailableError("In-process peer has closed");
       } else {
         peer->incoming_bytes += payload->size();
         peer->incoming.push_back(std::move(*payload));
-        peer->cv.SignalAll();
+        peer->incoming_cv.SignalAll();
       }
     }
     if (!send_status.ok()) {
@@ -519,7 +535,7 @@ void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
     {
       thread::MutexLock lock(&state->mu);
       while (state->incoming.empty() && !state->transport_finished) {
-        state->cv.Wait(&state->mu);
+        state->incoming_cv.Wait(&state->mu);
       }
       if (state->transport_finished) {
         return;
@@ -527,7 +543,7 @@ void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
       payload = std::move(state->incoming.front());
       state->incoming.pop_front();
       state->incoming_bytes -= payload.size();
-      state->cv.SignalAll();
+      state->room_cv.SignalAll();
     }
     if (payload.size() > state->options.max_single_message_size) {
       ForceAbort(state, absl::OutOfRangeError(
@@ -627,7 +643,7 @@ void InProcessWireStream::WatchTiming(std::shared_ptr<State> state) {
       wake = std::min(state->deadline, inactivity);
       deadline_is_first = state->deadline <= inactivity;
       if (wake > absl::Now()) {
-        state->cv.WaitWithDeadline(&state->mu, wake);
+        state->timing_cv.WaitWithDeadline(&state->mu, wake);
         continue;
       }
     }
@@ -643,16 +659,25 @@ void InProcessWireStream::WatchTiming(std::shared_ptr<State> state) {
 
 void InProcessWireStream::MarkActivity(const std::shared_ptr<State>& first,
                                        const std::shared_ptr<State>& second) {
+  // Only an endpoint with a message timeout has anybody to tell. Without one,
+  // `last_activity` is never read, and recording it would cost a clock read and
+  // an endpoint's lock -- taken against its own Sender and Receiver -- on every
+  // message, to keep a number nothing would look at.
+  const bool wanted =
+      (first && first->options.message_timeout != absl::InfiniteDuration()) ||
+      (second && second->options.message_timeout != absl::InfiniteDuration());
+  if (!wanted) {
+    return;
+  }
   const absl::Time now = absl::Now();
-  if (first) {
+  if (first && first->options.message_timeout != absl::InfiniteDuration()) {
     thread::MutexLock lock(&first->mu);
     first->last_activity = now;
-    first->cv.SignalAll();
   }
-  if (second && second != first) {
+  if (second && second != first &&
+      second->options.message_timeout != absl::InfiniteDuration()) {
     thread::MutexLock lock(&second->mu);
     second->last_activity = now;
-    second->cv.SignalAll();
   }
 }
 
@@ -687,7 +712,7 @@ bool InProcessWireStream::ForceAbort(const std::shared_ptr<State>& state,
       state->outbound.push_back(
           State::Outbound{.message = std::move(message), .end = End::kAbort});
     }
-    state->cv.SignalAll();
+    state->outbound_cv.SignalAll();
   }
   return true;
 }
@@ -716,7 +741,10 @@ void InProcessWireStream::Finish(const std::shared_ptr<State>& state) {
     }
     state->transport_finished = true;
     state->outbound.clear();
-    state->cv.SignalAll();
+    state->outbound_cv.SignalAll();
+    state->incoming_cv.SignalAll();
+    state->room_cv.SignalAll();
+    state->timing_cv.SignalAll();
     if (!state->done_called && state->on_done) {
       state->done_called = true;
       callback = state->on_done;

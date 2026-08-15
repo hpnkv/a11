@@ -462,12 +462,12 @@ class SerializationRegistry:
         self._tag_to_type: dict[str, type] = {}
         self._known_by_tag: dict[str, type] = {}
         self._next_order = 0
-        # Resolution is pure over (type, mimetype) between mutations, and it is
-        # the whole cost of `to_chunk`: an `isinstance` against every
+        # Resolution is pure over (type, mimetype) between mutations, and it
+        # dominates the cost of `to_chunk`: an `isinstance` against every
         # registration, a sort, then parsing and reformatting the mimetype --
-        # none of which depends on the payload. Measured, that was ~8.8us on
-        # top of a 0.12us MessagePack encode, so the codec was 98% bookkeeping.
-        # Anything that changes what resolution would answer clears this.
+        # none of which depends on the payload, and all of it far dearer than
+        # the MessagePack encode it wraps. Anything that changes what
+        # resolution would answer clears this.
         self._resolution_cache: dict[
             tuple[type, str], tuple[_SerializerRegistration, str]
         ] = {}

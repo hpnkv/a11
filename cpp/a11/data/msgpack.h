@@ -47,6 +47,31 @@ class MsgpackReader {
 
   /// Decode the next field and advance the byte cursor.
   absl::StatusOr<nlohmann::json> Read();
+
+  /**
+   * @brief
+   *   Read the next field as MessagePack binary without copying its payload.
+   *
+   * Read() materialises a @c nlohmann::json, which for a binary field means
+   * allocating a vector and copying the bytes into it; callers then copy a
+   * second time to get a @c Bytes. A11's records nest -- a WireMessage holds
+   * binary fragments, a fragment holds a binary chunk, a chunk holds a binary
+   * payload -- so a single 4 KiB fragment was copied several times on the way
+   * in, and decode ran at a flat ~130 MiB/s against encode's 2+ GiB/s.
+   *
+   * The returned view points into the buffer this reader was constructed over,
+   * which must outlive it.
+   */
+  absl::StatusOr<std::string_view> ReadBinaryView();
+
+  /**
+   * @brief
+   *   Read the next field as a MessagePack array header, returning its length.
+   *
+   * Lets a caller iterate a list of binary records with ReadBinaryView()
+   * instead of materialising the whole array as JSON first.
+   */
+  absl::StatusOr<size_t> ReadArrayLength();
   /// Return an error if unread trailing bytes remain in the record.
   absl::Status EnsureFullyConsumed() const;
 

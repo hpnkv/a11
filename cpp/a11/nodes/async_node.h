@@ -268,6 +268,17 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return An awaitable that resolves to the next fragment, or nullopt at
    *   end of stream.
    */
+  /**
+   * @brief Read up to `limit` fragments in a single await.
+   *
+   * The batched counterpart to NextFragment(), with the same end-of-stream
+   * marker: a trailing empty optional. It returns whatever is already
+   * buffered and waits only when nothing is, so it never trades latency for
+   * throughput on a live stream. See ChunkStoreReader::NextMany().
+   */
+  a11::Future<std::vector<std::optional<data::NodeFragment>>> NextFragments(
+      size_t limit, absl::Duration timeout = absl::InfiniteDuration());
+
   a11::Future<std::optional<data::NodeFragment>> NextFragment(
       absl::Duration timeout = absl::InfiniteDuration());
 

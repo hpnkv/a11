@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -21,6 +22,7 @@
 #include <absl/time/time.h>
 
 #include "a11/concurrency/callback_scheduler.h"
+#include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
 #include "a11/stores/chunk_store.h"
@@ -69,6 +71,7 @@ struct ChunkStoreReader::State
       : store(std::move(chunk_store)),
         options(reader_options),
         position(reader_options.offset),
+        next_fetch_position(reader_options.offset),
         done(done_promise.future()) {}
 
   static a11::internal::CallbackScheduler& Scheduler() {
@@ -93,6 +96,7 @@ struct ChunkStoreReader::State
   void Cancel() {
     std::vector<Completion> completions;
     a11::Future<data::NodeFragment> active;
+    std::vector<a11::Future<data::NodeFragment>> outstanding;
     {
       thread::MutexLock lock(&mu);
       if (!status.has_value()) {
@@ -100,12 +104,56 @@ struct ChunkStoreReader::State
       }
       CollectAvailableLocked(&completions);
       active = active_operation;
+      // Bumping the generation makes every outstanding fetch's completion a
+      // no-op, so a late arrival cannot resurrect a cancelled reader.
+      ++fetch_generation;
+      fetches_in_flight = 0;
+      arrived.clear();
+      outstanding.swap(active_fetches);
     }
     Complete(std::move(completions));
     if (active.valid()) {
       (void)active.Cancel();
     }
+    for (a11::Future<data::NodeFragment>& fetch : outstanding) {
+      if (fetch.valid()) {
+        (void)fetch.Cancel();
+      }
+    }
     MaybeCompleteDone();
+  }
+
+  /**
+   * @brief
+   *   Pop up to `limit` already-prefetched fragments, without ever waiting.
+   *
+   * Only takes anything when nobody is queued ahead: `pending_reads` is served
+   * strictly in order, and a batch read that jumped that queue would reorder
+   * two concurrent readers. Everything it returns is a fragment
+   * CollectAvailableLocked() would have handed out next, in the same order, so
+   * this adds no semantics of its own -- which is the point. Terminal state
+   * (end of stream, error) is deliberately *not* handled here; NextMany falls
+   * back to the single-fragment path for that, so there is exactly one place
+   * that decides what the end of a stream looks like.
+   */
+  std::vector<data::NodeFragment> TakeBuffered(size_t limit) {
+    std::vector<data::NodeFragment> taken;
+    {
+      thread::MutexLock lock(&mu);
+      if (!pending_reads.empty()) {
+        return taken;
+      }
+      taken.reserve(std::min(limit, buffer.size()));
+      while (taken.size() < limit && !buffer.empty()) {
+        taken.push_back(std::move(buffer.front()));
+        buffer.pop_front();
+      }
+    }
+    // The buffer just lost fragments; let the pump refill it.
+    if (!taken.empty()) {
+      Wake();
+    }
+    return taken;
   }
 
   a11::Future<NextResult> Next(absl::Duration timeout) {
@@ -130,12 +178,29 @@ struct ChunkStoreReader::State
         });
     (void)cancellation_callback;
 
+    // Serve from the buffer on the caller's thread when it can be served.
+    //
+    // Drive() would do exactly this, but only after Wake() has put it through
+    // the scheduler, and that hop costs ~8us against the ~0.3us the read
+    // itself takes -- so a reader draining a node that is already full paid a
+    // scheduler round trip per fragment. CollectAvailableLocked() pops
+    // `pending_reads` from the front, so a request that arrives behind an
+    // earlier waiter still queues behind it; FIFO order is unchanged. The
+    // request is claimed by PopPendingReadLocked(), so the timeout below and
+    // the cancellation callback both find it taken and cannot double-resolve.
+    std::vector<Completion> completions;
     {
       thread::MutexLock lock(&mu);
       pending_reads.push_back(request);
+      CollectAvailableLocked(&completions);
     }
+    Complete(std::move(completions));
 
-    if (timeout != absl::InfiniteDuration()) {
+    // Only a request that is still outstanding needs a timer. Arming one for a
+    // read that has already been answered is pure cost, and it is the common
+    // case now.
+    const bool settled = request->completed.load(std::memory_order_acquire);
+    if (!settled && timeout != absl::InfiniteDuration()) {
       thread::PostAt(absl::Now() + timeout, [weak_state, weak_request] {
         const std::shared_ptr<Request> pending = weak_request.lock();
         if (pending == nullptr || !pending->TryClaim()) {
@@ -156,118 +221,177 @@ struct ChunkStoreReader::State
     return future;
   }
 
+  /**
+   * @brief
+   *   Pump until there is nothing left to do without waiting.
+   *
+   * A store that already holds the fragment resolves Get() inline -- and since
+   * `LocalChunkStore::Next`/`Get` gained their fast paths, that is the normal
+   * case. DriveOnce() used to hand every such fragment back to the scheduler
+   * (FetchDone ended in Wake()), so a reader filling its buffer from a node
+   * that was already complete paid one scheduler hop per fragment, and the
+   * buffer never got more than one fragment ahead. That is why
+   * `NextMany`/`next_fragments` returned batches of one.
+   *
+   * A loop and not recursion, deliberately: A11 runs these callbacks on pooled
+   * fibers with small stacks, and recursing once per fragment would overflow
+   * them.
+   */
   void Drive() {
+    while (DriveOnce()) {
+    }
+  }
+
+  /**
+   * @brief How many reads the pump keeps outstanding at once.
+   *
+   * With one, a store whose Get() has any latency delivers at one fragment per
+   * round trip and the prefetch buffer never fills; the reader spends its life
+   * waiting. Beyond about this many the extra concurrency stops buying
+   * anything and starts costing memory in the reorder map.
+   */
+  static constexpr size_t kMaxFetchesInFlight = 16;
+
+  /** @return Whether the caller should drive again without yielding. */
+  bool DriveOnce() {
     std::vector<Completion> completions;
-    bool start_fetch = false;
+    struct Wanted {
+      std::uint64_t position;
+      std::uint64_t generation;
+    };
+    std::vector<Wanted> to_issue;
     bool ordered = true;
-    std::uint64_t requested_position = 0;
-    std::uint64_t generation = 0;
     {
       thread::MutexLock lock(&mu);
       queued = false;
       CollectAvailableLocked(&completions);
+      ordered = options.ordered;
+      // `pop_chunks` clears each fragment after reading it, which is a second
+      // operation per fragment sequenced behind the first. Keep that path on
+      // one-at-a-time; overlapping reads with clears is a different problem
+      // and not one this buys anything on.
+      const size_t ceiling =
+          options.pop_chunks ? 1 : kMaxFetchesInFlight;
       if (status.has_value() || operation != Operation::kNone) {
-        // Terminal requests were collected above; an active operation will
+        // Terminal requests were collected above; a clear in progress will
         // arrange the next wake-up from its completion callback.
       } else if (options.max_chunks_to_read.has_value() &&
                  *options.max_chunks_to_read == 0) {
         status = absl::OkStatus();
         CollectAvailableLocked(&completions);
-      } else if (!HasReadCapacityLocked()) {
-        // Demand and prefetch capacity are both exhausted.
-      } else if (position > std::numeric_limits<std::uint32_t>::max()) {
-        status = absl::OutOfRangeError(
-            "ChunkStoreReader position exceeds the sequence range");
-        CollectAvailableLocked(&completions);
       } else {
-        operation = Operation::kFetch;
-        generation = ++operation_generation;
-        requested_position = position;
-        ordered = options.ordered;
-        start_fetch = true;
+        while (fetches_in_flight + to_issue.size() < ceiling &&
+               HasReadCapacityLocked(to_issue.size())) {
+          if (next_fetch_position >
+              std::numeric_limits<std::uint32_t>::max()) {
+            if (to_issue.empty() && fetches_in_flight == 0) {
+              status = absl::OutOfRangeError(
+                  "ChunkStoreReader position exceeds the sequence range");
+              CollectAvailableLocked(&completions);
+            }
+            break;
+          }
+          // A read this reader has asked for but not yet delivered. Counted
+          // against capacity so the prefetch window is the buffer size, not
+          // the buffer size plus everything in flight.
+          to_issue.push_back(
+              Wanted{.position = next_fetch_position++,
+                     .generation = fetch_generation});
+        }
+        fetches_in_flight += to_issue.size();
       }
     }
     Complete(std::move(completions));
     MaybeCompleteDone();
-    if (!start_fetch) {
-      return;
+    if (to_issue.empty()) {
+      return false;
     }
 
-    a11::Future<data::NodeFragment> pending;
-    try {
-      pending = ordered
-                    ? store->Get(static_cast<std::uint32_t>(requested_position),
-                                 absl::InfiniteFuture())
-                    : store->GetByArrivalOrder(requested_position,
-                                               absl::InfiniteFuture());
-    } catch (const std::exception& error) {
-      pending = a11::FailedFuture<data::NodeFragment>(
-          absl::UnknownError(error.what()));
-    } catch (...) {
-      pending = a11::FailedFuture<data::NodeFragment>(absl::UnknownError(
-          "ChunkStore reader fetch raised a non-standard exception"));
+    bool drive_again = false;
+    for (const Wanted& wanted : to_issue) {
+      a11::Future<data::NodeFragment> pending;
+      try {
+        pending = ordered
+                      ? store->Get(static_cast<std::uint32_t>(wanted.position),
+                                   absl::InfiniteFuture())
+                      : store->GetByArrivalOrder(wanted.position,
+                                                 absl::InfiniteFuture());
+      } catch (const std::exception& error) {
+        pending = a11::FailedFuture<data::NodeFragment>(
+            absl::UnknownError(error.what()));
+      } catch (...) {
+        pending = a11::FailedFuture<data::NodeFragment>(absl::UnknownError(
+            "ChunkStore reader fetch raised a non-standard exception"));
+      }
+      if (pending.IsReady()) {
+        // The store had it. Account for it here rather than paying a whole
+        // scheduler pass to do the same thing.
+        drive_again =
+            FetchArrived(wanted.position, wanted.generation, pending.Await(),
+                         /*inline_drive=*/true) ||
+            drive_again;
+      } else {
+        InstallFetch(std::move(pending), wanted.position, wanted.generation);
+      }
     }
-    InstallFetch(std::move(pending), generation);
+    return drive_again;
   }
 
   void InstallFetch(a11::Future<data::NodeFragment> pending,
-                    std::uint64_t generation) {
+                    std::uint64_t position_wanted, std::uint64_t generation) {
     bool cancel = false;
     {
       thread::MutexLock lock(&mu);
-      if (operation != Operation::kFetch ||
-          operation_generation != generation) {
+      if (generation != fetch_generation) {
         cancel = true;
       } else {
-        active_operation = pending;
+        active_fetches.push_back(pending);
         cancel = status.has_value();
       }
     }
-    pending.OnReady([self = shared_from_this(), generation](
+    pending.OnReady([self = shared_from_this(), position_wanted, generation](
                         const absl::StatusOr<data::NodeFragment>& result) {
-      self->FetchDone(generation, result);
+      (void)self->FetchArrived(position_wanted, generation, result, false);
     });
     if (cancel) {
       (void)pending.Cancel();
     }
   }
 
-  void FetchDone(std::uint64_t generation,
-                 const absl::StatusOr<data::NodeFragment>& result) {
+  /**
+   * @brief Record a completed fetch, in order.
+   *
+   * With several reads outstanding they can land in any order, so a result is
+   * parked in `arrived` until it is the one at `position`. Only then is it
+   * applied -- which is what preserves ordered delivery now that the old
+   * "one fetch at a time" serialisation is gone. Errors wait their turn too: a
+   * NotFound at position+2 is not end-of-stream while position is still
+   * outstanding.
+   *
+   * @param inline_drive
+   *   True when the fetch resolved without waiting and DriveOnce() is still on
+   *   the stack; then this reports back whether to keep driving instead of
+   *   waking the scheduler.
+   * @return Whether the caller should drive again immediately.
+   */
+  bool FetchArrived(std::uint64_t arrived_position, std::uint64_t generation,
+                    const absl::StatusOr<data::NodeFragment>& result,
+                    bool inline_drive = false) {
     std::vector<Completion> completions;
     bool start_clear = false;
     std::uint32_t clear_seq = 0;
     std::uint64_t clear_generation = 0;
     {
       thread::MutexLock lock(&mu);
-      if (operation != Operation::kFetch ||
-          operation_generation != generation) {
-        return;
+      if (generation != fetch_generation) {
+        return false;
       }
-      active_operation = {};
-      operation = Operation::kNone;
-      if (status.has_value()) {
-        CollectAvailableLocked(&completions);
-      } else if (!result.ok()) {
-        if (absl::IsNotFound(result.status()) &&
-            !options.max_chunks_to_read.has_value()) {
-          status = absl::OkStatus();
-        } else {
-          status = result.status();
-        }
-        CollectAvailableLocked(&completions);
-      } else if (!result->seq.has_value()) {
-        status = absl::DataLossError(
-            "ChunkStore returned a fragment without a sequence number");
-        CollectAvailableLocked(&completions);
-      } else if (options.pop_chunks) {
-        operation = Operation::kClear;
-        clear_generation = ++operation_generation;
-        clear_seq = *result->seq;
-        start_clear = true;
-      } else {
-        FinishFragmentLocked(*result, &completions);
+      if (fetches_in_flight > 0) {
+        --fetches_in_flight;
       }
+      arrived.insert_or_assign(arrived_position, result);
+      DrainArrivedLocked(&completions, &start_clear, &clear_seq,
+                         &clear_generation);
     }
     Complete(std::move(completions));
     MaybeCompleteDone();
@@ -284,9 +408,13 @@ struct ChunkStoreReader::State
             "ChunkStore clear raised a non-standard exception"));
       }
       InstallClear(std::move(pending), clear_generation);
-      return;
+      return false;
+    }
+    if (inline_drive) {
+      return true;
     }
     Wake();
+    return false;
   }
 
   void InstallClear(a11::Future<data::NodeFragment> pending,
@@ -347,6 +475,63 @@ struct ChunkStoreReader::State
     }
     if (complete) {
       done_promise.SetValue(a11::Unit{}).IgnoreError();
+    }
+  }
+
+  /**
+   * @brief
+   *   Apply arrived results that are now at the head, in position order.
+   *
+   * The decision for each one is exactly what it was when fetches were
+   * serialised -- end of stream, error, clear-then-buffer, or buffer -- only
+   * now it is taken when the result reaches the front of the queue rather than
+   * when it happens to come back. Stops at the first gap, and stops as soon as
+   * a terminal status is set, leaving anything later in `arrived` to be
+   * discarded.
+   */
+  void DrainArrivedLocked(std::vector<Completion>* completions,
+                          bool* start_clear, std::uint32_t* clear_seq,
+                          std::uint64_t* clear_generation)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    while (!status.has_value()) {
+      const auto head = arrived.find(position);
+      if (head == arrived.end()) {
+        break;
+      }
+      const absl::StatusOr<data::NodeFragment> result = std::move(head->second);
+      arrived.erase(head);
+
+      if (!result.ok()) {
+        if (absl::IsNotFound(result.status()) &&
+            !options.max_chunks_to_read.has_value()) {
+          status = absl::OkStatus();
+        } else {
+          status = result.status();
+        }
+        break;
+      }
+      if (!result->seq.has_value()) {
+        status = absl::DataLossError(
+            "ChunkStore returned a fragment without a sequence number");
+        break;
+      }
+      if (options.pop_chunks) {
+        // One clear at a time, sequenced ahead of any further delivery; the
+        // fetch ceiling is 1 in this mode so there is nothing queued behind.
+        operation = Operation::kClear;
+        *clear_generation = ++operation_generation;
+        *clear_seq = *result->seq;
+        *start_clear = true;
+        return;
+      }
+      // Advances `position`, which is what lets the next arrival be the head.
+      FinishFragmentLocked(*result, completions);
+    }
+    CollectAvailableLocked(completions);
+    if (status.has_value()) {
+      // Nothing after a terminal status can be delivered, and holding it only
+      // keeps fragments alive.
+      arrived.clear();
     }
   }
 
@@ -412,12 +597,18 @@ struct ChunkStoreReader::State
     return count;
   }
 
-  [[nodiscard]] bool HasReadCapacityLocked() const
+  [[nodiscard]] bool HasReadCapacityLocked(size_t about_to_issue = 0) const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
     const size_t pending_count = ActivePendingReadCountLocked();
     const size_t capacity =
         static_cast<size_t>(options.num_chunks_to_buffer) + pending_count;
-    return buffer.size() < capacity;
+    // Reads already in flight, and results parked waiting for their turn, are
+    // fragments this reader has committed to holding. Counting them keeps the
+    // prefetch window equal to the configured buffer size rather than that
+    // plus everything outstanding.
+    const size_t committed = buffer.size() + fetches_in_flight +
+                             arrived.size() + about_to_issue;
+    return committed < capacity;
   }
 
   std::shared_ptr<Request> PopPendingReadLocked()
@@ -493,6 +684,19 @@ struct ChunkStoreReader::State
   Operation operation ABSL_GUARDED_BY(mu) = Operation::kNone;
   std::uint64_t operation_generation ABSL_GUARDED_BY(mu) = 0;
   a11::Future<data::NodeFragment> active_operation ABSL_GUARDED_BY(mu);
+  // Multi-fetch state. `position` is the next fragment to *deliver*;
+  // `next_fetch_position` is the next one to *ask for*, and runs ahead of it by
+  // however many fetches are outstanding. Results that arrive out of order wait
+  // in `arrived` until they are at the head, which is what preserves the
+  // ordered-delivery guarantee that used to come for free from having one
+  // fetch at a time.
+  std::uint64_t next_fetch_position ABSL_GUARDED_BY(mu);
+  size_t fetches_in_flight ABSL_GUARDED_BY(mu) = 0;
+  std::uint64_t fetch_generation ABSL_GUARDED_BY(mu) = 0;
+  std::map<std::uint64_t, absl::StatusOr<data::NodeFragment>> arrived
+      ABSL_GUARDED_BY(mu);
+  std::vector<a11::Future<data::NodeFragment>> active_fetches
+      ABSL_GUARDED_BY(mu);
   a11::Promise<a11::Unit> done_promise;
   const a11::Task done;
   bool done_completed ABSL_GUARDED_BY(mu) = false;
@@ -544,6 +748,50 @@ a11::Future<std::optional<data::NodeFragment>> ChunkStoreReader::Next(
         absl::InvalidArgumentError("timeout must be non-negative or infinite"));
   }
   return state_->Next(timeout);
+}
+
+a11::Future<std::vector<std::optional<data::NodeFragment>>>
+ChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
+  using Batch = std::vector<std::optional<data::NodeFragment>>;
+  if (limit == 0) {
+    return a11::FailedFuture<Batch>(
+        absl::InvalidArgumentError("limit must be positive"));
+  }
+  if (timeout < absl::ZeroDuration() && timeout != absl::InfiniteDuration()) {
+    return a11::FailedFuture<Batch>(
+        absl::InvalidArgumentError("timeout must be non-negative or infinite"));
+  }
+
+  std::vector<data::NodeFragment> buffered = state_->TakeBuffered(limit);
+  if (!buffered.empty()) {
+    Batch batch;
+    batch.reserve(buffered.size());
+    for (data::NodeFragment& fragment : buffered) {
+      batch.emplace_back(std::move(fragment));
+    }
+    return a11::CompletedFuture<Batch>(std::move(batch));
+  }
+
+  // Nothing prefetched. Fall through to exactly one ordinary read, so end of
+  // stream, errors, timeouts and cancellation all behave as they always have,
+  // then sweep up anything that landed while that read was in flight.
+  std::shared_ptr<State> state = state_;
+  return a11::Submit<Batch>(
+      [state = std::move(state), limit, timeout]() -> absl::StatusOr<Batch> {
+        absl::StatusOr<State::NextResult> first = state->Next(timeout).Await();
+        if (!first.ok()) {
+          return first.status();
+        }
+        Batch batch;
+        batch.push_back(std::move(*first));
+        if (!batch.back().has_value()) {
+          return batch;
+        }
+        for (data::NodeFragment& fragment : state->TakeBuffered(limit - 1)) {
+          batch.emplace_back(std::move(fragment));
+        }
+        return batch;
+      });
 }
 
 std::shared_ptr<ChunkStore> ChunkStoreReader::store() const {

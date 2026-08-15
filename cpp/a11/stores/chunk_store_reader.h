@@ -132,6 +132,32 @@ class ChunkStoreReader {
   a11::Future<std::optional<data::NodeFragment>> Next(
       absl::Duration timeout = absl::InfiniteDuration());
 
+  /** @brief
+   *    Get up to `limit` fragments in one await.
+   *
+   *  Greedy but never patient: it returns everything already prefetched, up to
+   *  `limit`, and only waits at all when nothing is buffered -- in which case
+   *  it waits for exactly one fragment and returns that. So a caller draining
+   *  a node that is already full pays one await per batch instead of one per
+   *  fragment, and a caller reading a live stream still sees each value as
+   *  soon as it arrives rather than waiting for a batch to fill.
+   *
+   *  This matters most above the binding: in Python every await costs an
+   *  event-loop turn, so a per-fragment await caps a drain at a few thousand
+   *  values a second no matter how fast the store is.
+   *
+   *  @param limit
+   *    Maximum fragments to return. Must be positive.
+   *  @param timeout
+   *    The maximum duration to wait, and only ever waited when the buffer is
+   *    empty.
+   *  @return
+   *    An awaitable resolving to between one and `limit` entries. A trailing
+   *    empty optional marks end of stream, exactly as Next() does.
+   */
+  a11::Future<std::vector<std::optional<data::NodeFragment>>> NextMany(
+      size_t limit, absl::Duration timeout = absl::InfiniteDuration());
+
   /// @return The store this reader draws fragments from.
   [[nodiscard]] std::shared_ptr<ChunkStore> store() const;
   /// @return The options this reader was created with.

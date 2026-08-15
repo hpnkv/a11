@@ -321,9 +321,10 @@ absl::StatusOr<Chunk> Chunk::FromMsgpack(std::string_view bytes) {
   ABSL_ASSIGN_OR_RETURN(nlohmann::json ref_value,
                         ReadField(&reader, "Chunk.ref"));
   ABSL_ASSIGN_OR_RETURN(std::string ref, JsonString(ref_value, "Chunk.ref"));
-  ABSL_ASSIGN_OR_RETURN(nlohmann::json data_value,
-                        ReadField(&reader, "Chunk.data"));
-  ABSL_ASSIGN_OR_RETURN(std::string data, GetBinary(data_value, "Chunk.data"));
+  // The payload, read straight out of the buffer: this is the one field whose
+  // size is unbounded, so it is the copy worth not making.
+  ABSL_ASSIGN_OR_RETURN(std::string_view data_view, reader.ReadBinaryView());
+  std::string data(data_view);
   ABSL_RETURN_IF_ERROR(reader.EnsureFullyConsumed());
   Chunk result{.metadata = std::move(metadata),
                .ref = std::move(ref),
@@ -505,10 +506,10 @@ absl::StatusOr<NodeFragment> NodeFragment::FromMsgpack(std::string_view bytes) {
     return absl::FailedPreconditionError(
         "Invalid union index; expected 0 for Chunk or 1 for NodeRef");
   }
-  ABSL_ASSIGN_OR_RETURN(nlohmann::json data_value,
-                        ReadField(&reader, "NodeFragment.data"));
-  ABSL_ASSIGN_OR_RETURN(Bytes encoded,
-                        GetBinary(data_value, "NodeFragment.data"));
+  // The nested record is parsed in place. Copying it out first duplicated the
+  // whole chunk -- payload included -- before Chunk::FromMsgpack had even
+  // looked at it.
+  ABSL_ASSIGN_OR_RETURN(std::string_view encoded, reader.ReadBinaryView());
   std::variant<Chunk, NodeRef> data;
   if (union_index == 0) {
     ABSL_ASSIGN_OR_RETURN(Chunk chunk, Chunk::FromMsgpack(encoded));
@@ -813,21 +814,21 @@ absl::StatusOr<WireMessage> WireMessage::FromMsgpack(std::string_view bytes) {
     return absl::InvalidArgumentError(
         absl::StrCat("Invalid serialized WireMessage version: ", version));
   }
+  // Each element is decoded straight out of the source buffer. Materialising
+  // the array as JSON first meant a vector allocation and two copies of every
+  // element's bytes before its own decoder had seen them.
   auto decode_binary_list = [&reader](std::string_view field, auto decode_one) {
     using Result = decltype(decode_one(std::string_view{}));
     using Value = typename Result::value_type;
-    absl::StatusOr<nlohmann::json> values = ReadField(&reader, field);
-    if (!values.ok()) {
-      return absl::StatusOr<std::vector<Value>>(values.status());
-    }
-    if (!values->is_array()) {
+    absl::StatusOr<size_t> count = reader.ReadArrayLength();
+    if (!count.ok()) {
       return absl::StatusOr<std::vector<Value>>(
           absl::InvalidArgumentError(absl::StrCat(field, " must be a list")));
     }
     std::vector<Value> result;
-    result.reserve(values->size());
-    for (const nlohmann::json& value : *values) {
-      absl::StatusOr<Bytes> encoded = GetBinary(value, field);
+    result.reserve(*count);
+    for (size_t index = 0; index < *count; ++index) {
+      absl::StatusOr<std::string_view> encoded = reader.ReadBinaryView();
       if (!encoded.ok()) {
         return absl::StatusOr<std::vector<Value>>(encoded.status());
       }

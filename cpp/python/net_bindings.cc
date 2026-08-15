@@ -639,7 +639,14 @@ Examples:
       .def(
           "drain_outgoing_messages",
           [](const std::shared_ptr<net::WireStream>& self) {
-            return FutureToPython(self->DrainOutgoingMessages());
+            // Without the GIL: this takes the stream's fibre-aware mutex to
+            // read the drain future out, and whoever holds that mutex may need
+            // the GIL to finish. Acquiring it with the GIL held is the same
+            // deadlock a `WithoutGil`-less binding caused elsewhere -- a loop
+            // thread parked in the fibre scheduler while the worker that would
+            // release it waits for the GIL.
+            return FutureToPython(
+                WithoutGil([&] { return self->DrainOutgoingMessages(); }));
           },
           R"doc(Await until every queued outbound message has been handed to the transport. Call `half_close` first so buffered output is not dropped.
 
@@ -808,7 +815,11 @@ Examples:
                   a11::FailedFuture<std::optional<data::WireMessage>>(
                       converted.status()));
             }
-            return FutureToPython(self->Receive(*converted));
+            // Without the GIL, for the same reason as
+            // `drain_outgoing_messages`: starting a receive touches the
+            // stream's fibre-aware state.
+            return FutureToPython(
+                WithoutGil([&] { return self->Receive(*converted); }));
           },
           "Await the next inbound message, or None at end of stream, honoring "
           "the optional timeout.",

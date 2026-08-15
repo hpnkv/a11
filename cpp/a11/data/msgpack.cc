@@ -271,6 +271,65 @@ absl::StatusOr<nlohmann::json> MsgpackReader::Read() {
   }
 }
 
+absl::StatusOr<std::string_view> MsgpackReader::ReadBinaryView() {
+  const size_t begin = position_;
+  ABSL_RETURN_IF_ERROR(Need(position_, 1, bytes_.size()));
+  const auto marker = static_cast<std::uint8_t>(bytes_[position_]);
+  if (marker != 0xc4 && marker != 0xc5 && marker != 0xc6) {
+    position_ = begin;
+    return absl::InvalidArgumentError(
+        "Expected MessagePack binary data at this field");
+  }
+  ++position_;
+  const size_t width = marker == 0xc4 ? 1 : (marker == 0xc5 ? 2 : 4);
+  absl::StatusOr<std::uint64_t> length =
+      ReadUnsigned(bytes_, &position_, width);
+  if (!length.ok()) {
+    position_ = begin;
+    return length.status();
+  }
+  if (*length > std::numeric_limits<size_t>::max()) {
+    position_ = begin;
+    return absl::ResourceExhaustedError("MessagePack binary is too large");
+  }
+  const auto size = static_cast<size_t>(*length);
+  const absl::Status available = Need(position_, size, bytes_.size());
+  if (!available.ok()) {
+    position_ = begin;
+    return available;
+  }
+  const std::string_view view = bytes_.substr(position_, size);
+  position_ += size;
+  return view;
+}
+
+absl::StatusOr<size_t> MsgpackReader::ReadArrayLength() {
+  const size_t begin = position_;
+  ABSL_RETURN_IF_ERROR(Need(position_, 1, bytes_.size()));
+  const auto marker = static_cast<std::uint8_t>(bytes_[position_]);
+  if ((marker & 0xf0U) == 0x90U) {
+    ++position_;
+    return static_cast<size_t>(marker & 0x0fU);
+  }
+  if (marker != 0xdc && marker != 0xdd) {
+    position_ = begin;
+    return absl::InvalidArgumentError(
+        "Expected a MessagePack array at this field");
+  }
+  ++position_;
+  absl::StatusOr<std::uint64_t> count =
+      ReadUnsigned(bytes_, &position_, marker == 0xdc ? 2 : 4);
+  if (!count.ok()) {
+    position_ = begin;
+    return count.status();
+  }
+  if (*count > std::numeric_limits<size_t>::max()) {
+    position_ = begin;
+    return absl::ResourceExhaustedError("MessagePack array is too large");
+  }
+  return static_cast<size_t>(*count);
+}
+
 absl::Status MsgpackReader::EnsureFullyConsumed() const {
   if (position_ != bytes_.size()) {
     return absl::InvalidArgumentError("Extra data after deserialization");

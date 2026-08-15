@@ -215,11 +215,8 @@ async def _deserialize_fragment(
     mimetype_patterns: str | Sequence[str],
     obj_type: type[T] | None,
 ) -> T | Any:
-    return await asyncio.to_thread(
-        _get_serialization_registry(node).from_chunk,
-        fragment.get_chunk(),
-        mimetype_patterns,
-        obj_type,
+    return await _get_serialization_registry(node).from_chunk_async(
+        fragment.get_chunk(), mimetype_patterns, obj_type
     )
 
 
@@ -537,8 +534,8 @@ class _AsyncNodeProtocol:
                 ).to_exception()
             return await self.put_chunk(value, seq=seq, final=final)
 
-        chunk = await asyncio.to_thread(
-            _get_serialization_registry(self).to_chunk, value, mimetype
+        chunk = await _get_serialization_registry(self).to_chunk_async(
+            value, mimetype
         )
         return await self.put_chunk(chunk, seq=seq, final=final)
 
@@ -739,12 +736,23 @@ class _AsyncNodeProtocol:
             self, fragment, mimetype_patterns, obj_type
         )
 
+    #: How many fragments an iteration asks for per await. Every await costs an
+    #: event-loop turn -- tens of microseconds -- so reading one value at a
+    #: time caps a drain at a few thousand a second no matter how fast the
+    #: store is. `next_fragments` returns only what is already buffered, so
+    #: asking for a batch never delays a value that has not arrived yet.
+    ITER_BATCH = 64
+
     async def iter_fragments(
         self, timeout: timing.Duration | None = None
     ) -> AsyncIterator[types.NodeFragment]:
         """Async-iterate raw fragments until the stream ends."""
-        while (fragment := await self.next_fragment(timeout)) is not None:
-            yield fragment
+        while True:
+            batch = await self.next_fragments(self.ITER_BATCH, timeout)
+            for fragment in batch:
+                if fragment is None:
+                    return
+                yield fragment
 
     async def iter_chunks(
         self, timeout: timing.Duration | None = None

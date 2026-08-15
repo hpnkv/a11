@@ -1135,7 +1135,12 @@ Examples:
                   a11::FailedFuture<std::shared_ptr<actions::Action>>(
                       converted.status()));
             }
-            return FutureToPython(self->Call(std::move(*converted)));
+            // Without the GIL: this starts work and can park in the
+            // fibre scheduler before returning a future, and it runs on
+            // the event-loop thread. See `bench/FINDINGS.md` on the
+            // GIL/fibre deadlock.
+            return FutureToPython(WithoutGil(
+                [&] { return self->Call(std::move(*converted)); }));
           },
           R"doc(Dispatch the action remotely and return a future of the action.
 
@@ -1161,7 +1166,12 @@ Examples:
               return FutureToPython(
                   a11::FailedFuture<absl::Status>(converted.status()));
             }
-            return FutureToPython(self->WaitForDispatch(*converted));
+            // Without the GIL: this starts work and can park in the
+            // fibre scheduler before returning a future, and it runs on
+            // the event-loop thread. See `bench/FINDINGS.md` on the
+            // GIL/fibre deadlock.
+            return FutureToPython(WithoutGil(
+                [&] { return self->WaitForDispatch(*converted); }));
           },
           "Return a future that resolves when the action has been dispatched.",
           py::arg("timeout") = py::none())
@@ -1176,7 +1186,12 @@ Examples:
                   a11::FailedFuture<std::shared_ptr<actions::Action>>(
                       converted.status()));
             }
-            return FutureToPython(self->Wait(*converted));
+            // Without the GIL: this starts work and can park in the
+            // fibre scheduler before returning a future, and it runs on
+            // the event-loop thread. See `bench/FINDINGS.md` on the
+            // GIL/fibre deadlock.
+            return FutureToPython(
+                WithoutGil([&] { return self->Wait(*converted); }));
           },
           "Return a future that resolves when the action completes.",
           py::arg("timeout") = py::none())

@@ -538,8 +538,17 @@ void BindService(py::module_& module) {
           [](const std::shared_ptr<service::Session>& self,
              data::WireMessage message,
              std::shared_ptr<net::WireStream> origin_stream) {
-            return FutureToPython(self->DispatchWireMessage(
-                std::move(message), std::move(origin_stream)));
+            // Without the GIL: DispatchWireMessage does real work before it
+            // hands back a future -- it can park in the fibre scheduler -- and
+            // this runs as an ordinary event-loop callback. Holding the GIL
+            // across it deadlocks the process: a store completion on a worker
+            // thread needs the GIL to resolve a Python future, while the loop
+            // thread that holds the GIL is parked waiting for exactly that
+            // work. See `bench/FINDINGS.md`.
+            return FutureToPython(WithoutGil([&] {
+              return self->DispatchWireMessage(std::move(message),
+                                               std::move(origin_stream));
+            }));
           },
           "Route a wire message through the session as though it arrived on a "
           "stream, returning an awaitable for its processing. origin_stream "

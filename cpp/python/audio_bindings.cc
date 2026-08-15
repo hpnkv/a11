@@ -707,7 +707,9 @@ void BindAudio(py::module_& module) {
       .def(
           "read",
           [](const std::shared_ptr<audio::AudioSubscription>& self) {
-            return FutureToPython(self->Read());
+            // Without the GIL: starting a read takes the buffer's
+            // fibre-aware lock, and a producer holding it may need the GIL.
+            return FutureToPython(WithoutGil([&] { return self->Read(); }));
           },
           "Await the next captured buffer for this subscription.")
       .def(

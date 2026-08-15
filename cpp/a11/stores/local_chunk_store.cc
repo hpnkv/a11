@@ -205,6 +205,81 @@ struct LocalChunkStore::State
     }
   }
 
+  /**
+   * @brief
+   *   Append whatever `Next` can return right now, without ever blocking.
+   *
+   * Split out of Next() so the common case -- the fragments are already here --
+   * can run on the caller's thread. Next() used to wrap this whole loop in a
+   * Submit(), which spawns a fiber even when nothing needs waiting for, and a
+   * fiber spawn costs ~10us against the ~0.3us the read itself takes.
+   *
+   * @param fragments
+   *   Accumulator, appended to. Carries across waits, so a partial batch
+   *   collected before a wait is still there after it.
+   * @param limit
+   *   Maximum fragments to accumulate, counting what is already there.
+   * @param changed
+   *   Set to the generation event only when the caller must wait. It is
+   *   snapshotted *inside* the lock, which is what closes the lost-wakeup
+   *   window -- see WaitForChange().
+   * @return
+   *   An engaged status when the call has its answer: OK means `fragments` is
+   *   that answer, and a non-OK status is the terminal one to fail with.
+   *   `std::nullopt` means the caller must wait on `*changed` and try again.
+   */
+  std::optional<absl::Status> CollectNext(
+      std::vector<std::optional<data::NodeFragment>>& fragments, size_t limit,
+      std::shared_ptr<thread::PermanentEvent>* changed)
+      ABSL_LOCKS_EXCLUDED(mu) {
+    thread::MutexLock lock(&mu);
+    while (true) {
+      if (total_chunks_read > std::numeric_limits<std::uint32_t>::max()) {
+        fragments.emplace_back(std::nullopt);
+        return absl::OkStatus();
+      }
+      const auto expected_seq = static_cast<std::uint32_t>(total_chunks_read);
+      const bool final_was_read =
+          final_seq.has_value() && total_chunks_read > *final_seq;
+      if (final_was_read) {
+        if (status.has_value() && !status->ok()) {
+          if (!fragments.empty()) {
+            return absl::OkStatus();
+          }
+          return *status;
+        }
+        fragments.emplace_back(std::nullopt);
+        return absl::OkStatus();
+      }
+
+      const auto found = chunks.find(expected_seq);
+      if (found == chunks.end() && status.has_value()) {
+        if (status->ok()) {
+          fragments.emplace_back(std::nullopt);
+          return absl::OkStatus();
+        }
+        if (!fragments.empty()) {
+          return absl::OkStatus();
+        }
+        return *status;
+      }
+      if (fragments.size() == limit) {
+        return absl::OkStatus();
+      }
+      if (found == chunks.end()) {
+        *changed = this->changed;
+        return std::nullopt;
+      }
+      ++total_chunks_read;
+      fragments.emplace_back(data::NodeFragment{
+          .id = node_id,
+          .data = found->second,
+          .seq = expected_seq,
+          .continued = !final_seq.has_value() || expected_seq < *final_seq,
+      });
+    }
+  }
+
   thread::Mutex mu;
   const std::string node_id;
   absl::flat_hash_map<std::uint32_t, std::uint64_t> seq_to_arrival_order
@@ -245,65 +320,29 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
         absl::InvalidArgumentError("limit must be positive"));
   }
   std::shared_ptr<State> state = state_;
-  return a11::Submit<std::vector<std::optional<data::NodeFragment>>>(
-      [state = std::move(state), deadline, limit]()
-          -> absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> {
-        std::vector<std::optional<data::NodeFragment>> fragments;
-        fragments.reserve(limit + 1);
-        while (true) {
-          std::shared_ptr<thread::PermanentEvent> changed;
-          {
-            thread::MutexLock lock(&state->mu);
-            while (true) {
-              if (state->total_chunks_read >
-                  std::numeric_limits<std::uint32_t>::max()) {
-                fragments.emplace_back(std::nullopt);
-                return fragments;
-              }
-              const std::uint32_t expected_seq =
-                  static_cast<std::uint32_t>(state->total_chunks_read);
-              const bool final_was_read =
-                  state->final_seq.has_value() &&
-                  state->total_chunks_read > *state->final_seq;
-              if (final_was_read) {
-                if (state->status.has_value() && !state->status->ok()) {
-                  if (!fragments.empty()) {
-                    return fragments;
-                  }
-                  return *state->status;
-                }
-                fragments.emplace_back(std::nullopt);
-                return fragments;
-              }
 
-              const auto found = state->chunks.find(expected_seq);
-              if (found == state->chunks.end() && state->status.has_value()) {
-                if (state->status->ok()) {
-                  fragments.emplace_back(std::nullopt);
-                  return fragments;
-                }
-                if (!fragments.empty()) {
-                  return fragments;
-                }
-                return *state->status;
-              }
-              if (fragments.size() == limit) {
-                return fragments;
-              }
-              if (found == state->chunks.end()) {
-                changed = state->changed;
-                break;
-              }
-              ++state->total_chunks_read;
-              fragments.emplace_back(data::NodeFragment{
-                  .id = state->node_id,
-                  .data = found->second,
-                  .seq = expected_seq,
-                  .continued = !state->final_seq.has_value() ||
-                               expected_seq < *state->final_seq,
-              });
-            }
-          }
+  // The overwhelmingly common case is that the fragments are already here, and
+  // it is answered on the caller's thread. Only a call that genuinely has to
+  // wait pays for a fiber.
+  std::vector<std::optional<data::NodeFragment>> fragments;
+  fragments.reserve(limit + 1);
+  std::shared_ptr<thread::PermanentEvent> changed;
+  std::optional<absl::Status> settled =
+      state->CollectNext(fragments, limit, &changed);
+  if (settled.has_value()) {
+    if (!settled->ok()) {
+      return a11::FailedFuture<std::vector<std::optional<data::NodeFragment>>>(
+          *settled);
+    }
+    return a11::CompletedFuture<std::vector<std::optional<data::NodeFragment>>>(
+        std::move(fragments));
+  }
+
+  return a11::Submit<std::vector<std::optional<data::NodeFragment>>>(
+      [state = std::move(state), deadline, limit,
+       fragments = std::move(fragments), changed = std::move(changed)]() mutable
+          -> absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> {
+        while (true) {
           absl::Status wait = WaitForChange(
               changed, deadline,
               absl::StrCat("Expected seq was not available before the "
@@ -313,6 +352,14 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
               return fragments;
             }
             return wait;
+          }
+          std::optional<absl::Status> settled =
+              state->CollectNext(fragments, limit, &changed);
+          if (settled.has_value()) {
+            if (!settled->ok()) {
+              return *settled;
+            }
+            return fragments;
           }
         }
       });

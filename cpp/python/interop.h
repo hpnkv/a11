@@ -228,8 +228,54 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   py::module_ asyncio = py::module_::import("asyncio");
   py::object loop = asyncio.attr("get_running_loop")();
   py::module_ coordination = py::module_::import("a11._asyncio");
+
+  // Hand back a future that is *already* resolved when the native one is.
+  //
+  // Much native work finishes without ever waiting -- a store read whose
+  // fragment is buffered, a writer admitting into free space -- and since
+  // `ChunkStoreReader::Next` and `LocalChunkStore::Next` gained their inline
+  // fast paths that is the normal case, not the exception. Wiring such a future
+  // through OnReady costs two event-loop turns for nothing: one to run the
+  // completion callback, one to resume whoever was awaiting. Awaiting a future
+  // that is already done costs neither -- `Future.__await__` returns the result
+  // without yielding -- so a read that the store could satisfy immediately now
+  // costs about 0.2us instead of ~45us.
+  //
+  // The consequence to be aware of: such an await is no longer a yield point.
+  // A loop draining thousands of buffered values in a row will not give the
+  // event loop a turn, exactly as `StreamReader.read` does not when its buffer
+  // is full. Code that must stay fair should drain in batches
+  // (`next_fragments`) and yield between them rather than rely on a read
+  // suspending.
+  if (future.IsReady()) {
+    absl::StatusOr<T> result = future.Await();
+    py::object resolved = coordination.attr("_create_native_future")(
+        loop, py::cpp_function([]() {}));
+    try {
+      if (result.ok()) {
+        coordination.attr("_complete_future")(resolved, converter(*result),
+                                              py::none());
+      } else {
+        coordination.attr("_complete_future")(resolved, py::none(),
+                                              StatusException(result.status()));
+      }
+    } catch (const py::error_already_set&) {
+      PyErr_Clear();
+    }
+    return resolved;
+  }
+
   py::object py_future = coordination.attr("_create_native_future")(
-      loop, py::cpp_function([future]() mutable { (void)future.Cancel(); }));
+      loop,
+      // Without the GIL: cancelling reaches into the producing operation and
+      // can park in the fibre scheduler, and this runs on the event-loop
+      // thread -- a `wait_for` timeout calls it as an ordinary loop callback.
+      // Holding the GIL across it is the same deadlock as any other blocking
+      // binding: a worker resolving a Python future cannot get the GIL from a
+      // loop thread that is parked waiting for that worker.
+      py::cpp_function([future]() mutable {
+        WithoutGil([&] { return future.Cancel(); });
+      }));
   py::object completion = coordination.attr("_complete_future");
   auto references =
       std::make_shared<PythonReferences>(loop, py_future, completion);

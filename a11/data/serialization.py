@@ -340,6 +340,10 @@ class _SerializerRegistration:
     mimetype: _Mimetype
     serializer: SerializerFn
     order: int
+    #: Whether this is one of the registry's own codecs. A built-in is known to
+    #: be quick and is run on the event loop; anything a caller registered may
+    #: block for as long as it likes and is handed to a worker thread.
+    builtin: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +354,7 @@ class _DeserializerRegistration:
     call_mode: str
     receives_chunk: bool
     order: int
+    builtin: bool = False
 
 
 def _callable_signature(fn: Callable[..., Any]) -> inspect.Signature | None:
@@ -457,8 +462,36 @@ class SerializationRegistry:
         self._tag_to_type: dict[str, type] = {}
         self._known_by_tag: dict[str, type] = {}
         self._next_order = 0
+        # Resolution is pure over (type, mimetype) between mutations, and it is
+        # the whole cost of `to_chunk`: an `isinstance` against every
+        # registration, a sort, then parsing and reformatting the mimetype --
+        # none of which depends on the payload. Measured, that was ~8.8us on
+        # top of a 0.12us MessagePack encode, so the codec was 98% bookkeeping.
+        # Anything that changes what resolution would answer clears this.
+        self._resolution_cache: dict[
+            tuple[type, str], tuple[_SerializerRegistration, str]
+        ] = {}
+        # The same idea for reading. `from_chunk` asked
+        # `_registration_matches` -- an `fnmatch` per call -- once for every
+        # registration, which profiled at 56 regex matches and 60% of the
+        # function for one small MessagePack decode. Which registrations a
+        # selector matches depends only on the selector.
+        self._format_cache: dict[
+            _Mimetype, list[_DeserializerRegistration]
+        ] = {}
+        #: Set only while register_defaults() runs, so the registrations it
+        #: makes can be told apart from a caller's.
+        self._registering_defaults = False
         if register_defaults:
             self.register_defaults()
+
+    def _invalidate_resolution_cache(self) -> None:
+        """Forget memoized lookups.
+
+        Call from anything that changes what a lookup would answer.
+        """
+        self._resolution_cache.clear()
+        self._format_cache.clear()
 
     @_status_boundary
     def set_type_tag(self, obj_type: type, tag: str) -> None:
@@ -478,6 +511,7 @@ class SerializationRegistry:
                 message="tag must be a non-empty string.",
             ).to_exception()
         self._set_type_tag(obj_type, tag, allow_shared=False)
+        self._invalidate_resolution_cache()
 
     @_status_boundary
     def _set_type_tag(
@@ -546,9 +580,11 @@ class SerializationRegistry:
                 mimetype=parsed,
                 serializer=serializer,
                 order=self._take_order(),
+                builtin=self._registering_defaults,
             )
         )
         self._remember_type(obj_type)
+        self._invalidate_resolution_cache()
 
     @_status_boundary
     def register_deserializer(
@@ -608,7 +644,11 @@ class SerializationRegistry:
         deserializer_order = self._take_order()
         self._serializers.append(
             _SerializerRegistration(
-                obj_type, parsed, serializer, serializer_order
+                obj_type,
+                parsed,
+                serializer,
+                serializer_order,
+                builtin=self._registering_defaults,
             )
         )
         self._deserializers.append(
@@ -619,15 +659,152 @@ class SerializationRegistry:
                 call_mode,
                 receives_chunk,
                 deserializer_order,
+                builtin=self._registering_defaults,
             )
         )
         self._remember_type(obj_type)
+        self._invalidate_resolution_cache()
 
     @_status_boundary
     def register_defaults(self) -> None:
         """Install the standard JSON and MessagePack registrations."""
 
-        _register_default_serializers(self)
+        self._registering_defaults = True
+        try:
+            _register_default_serializers(self)
+        finally:
+            self._registering_defaults = False
+        self._invalidate_resolution_cache()
+
+    def _resolve_serializer(
+        self, obj: Any, mimetype: str
+    ) -> tuple[_SerializerRegistration, str]:
+        """Pick the codec and the exact mimetype, without running either.
+
+        Kept separate from `to_chunk` so that "would this block the loop?" can
+        be answered without serializing the value -- asking by serializing runs
+        a caller's codec an extra time, and on the wrong thread.
+        """
+        actual_type = type(obj)
+        cache_key = (actual_type, mimetype)
+        cached = self._resolution_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        selection = (
+            _parse_mimetype(mimetype, allow_patterns=True) if mimetype else None
+        )
+        candidates = [
+            candidate
+            for candidate in self._serializers
+            if isinstance(obj, candidate.obj_type)
+            and (
+                selection is None
+                or _registration_matches(candidate.mimetype, selection)
+            )
+        ]
+        candidates.sort(
+            key=lambda candidate: (
+                _inheritance_distance(actual_type, candidate.obj_type),
+                candidate.order,
+            )
+        )
+        if not candidates:
+            requested = mimetype or "the object's type"
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message=(
+                    f"No serializer is registered for"
+                    f" {actual_type.__name__} and {requested!r}."
+                ),
+            ).to_exception()
+
+        registration = candidates[0]
+        exact_mimetype = _format_exact_mimetype(
+            registration.mimetype, self._type_tag(actual_type)
+        )
+        # Remembering the type is part of resolving it, and like the rest of it
+        # only has to happen once per type.
+        self._remember_type(actual_type)
+        resolved = (registration, exact_mimetype)
+        self._resolution_cache[cache_key] = resolved
+        return resolved
+
+    async def to_chunk_async(self, obj: Any, mimetype: str = "") -> types.Chunk:
+        """`to_chunk`, off the event loop only when it might block it.
+
+        A caller's codec may take as long as it likes, so it goes to a worker
+        thread -- that is a contract, not an optimisation, and
+        `test_object_serialization_and_deserialization_run_in_worker_threads`
+        holds it. The registry's own codecs are a different matter: they are a
+        few microseconds, and `asyncio.to_thread` costs an order of magnitude
+        more than they do, so paying for a thread to run one is pure loss.
+
+        Deciding on the *codec* rather than on the payload's size is what makes
+        this safe. A small value can still have a slow codec -- that is exactly
+        what the test registers -- so size says nothing about whether the loop
+        is about to be blocked.
+        """
+        if self._resolves_to_builtin_serializer(obj, mimetype):
+            return self.to_chunk(obj, mimetype)
+        return await asyncio.to_thread(self.to_chunk, obj, mimetype)
+
+    async def from_chunk_async(
+        self,
+        chunk: types.Chunk,
+        mimetype_patterns: str | Sequence[str] = "",
+        obj_type: type | None = None,
+    ) -> Any:
+        """`from_chunk`, off the event loop only when it might block it.
+
+        The mirror of `to_chunk_async`; see it for why the decision is made on
+        the codec and not the payload.
+        """
+        if self._resolves_to_builtin_deserializer(chunk, mimetype_patterns):
+            return self.from_chunk(chunk, mimetype_patterns, obj_type)
+        return await asyncio.to_thread(
+            self.from_chunk, chunk, mimetype_patterns, obj_type
+        )
+
+    def _resolves_to_builtin_serializer(self, obj: Any, mimetype: str) -> bool:
+        """Whether `to_chunk` would pick one of the registry's own codecs."""
+        if not isinstance(mimetype, str):
+            return False
+        try:
+            registration, _ = self._resolve_serializer(obj, mimetype)
+        except StatusException:
+            # Let the real call report the real error, on its own thread.
+            return False
+        return registration.builtin
+
+    def _resolves_to_builtin_deserializer(
+        self, chunk: types.Chunk, mimetype_patterns: str | Sequence[str]
+    ) -> bool:
+        """Whether every codec `from_chunk` might pick is one of ours.
+
+        Conservative on purpose: if a caller has registered anything that could
+        match this representation, the whole decode goes to a thread.
+        """
+        if mimetype_patterns:
+            return False
+        actual_mimetype = chunk.get_mimetype()
+        if not actual_mimetype:
+            return False
+        try:
+            actual = _parse_mimetype(actual_mimetype, allow_patterns=False)
+        except StatusException:
+            return False
+        matches = self._format_cache.get(actual)
+        if matches is None:
+            matches = [
+                registration
+                for registration in self._deserializers
+                if _registration_matches(registration.mimetype, actual)
+            ]
+            self._format_cache[actual] = matches
+        return bool(matches) and all(
+            registration.builtin for registration in matches
+        )
 
     @_status_boundary
     def to_chunk(self, obj: Any, mimetype: str = "") -> types.Chunk:
@@ -640,47 +817,19 @@ class SerializationRegistry:
         parameter in it is ignored.
         """
 
-        selection = None
-        if mimetype:
-            selection = _parse_mimetype(mimetype, allow_patterns=True)
-        elif not isinstance(mimetype, str):
+        if not isinstance(mimetype, str):
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message="Mimetype must be a string.",
             ).to_exception()
 
         actual_type = type(obj)
-        candidates = [
-            registration
-            for registration in self._serializers
-            if isinstance(obj, registration.obj_type)
-            and (
-                selection is None
-                or _registration_matches(registration.mimetype, selection)
-            )
-        ]
-        candidates.sort(
-            key=lambda registration: (
-                _inheritance_distance(actual_type, registration.obj_type),
-                registration.order,
-            )
-        )
-        if not candidates:
-            requested = mimetype or "the object's type"
-            raise Status(
-                code=StatusCode.NOT_FOUND,
-                message=(
-                    f"No serializer is registered for {actual_type.__name__}"
-                    f" and {requested!r}."
-                ),
-            ).to_exception()
-
-        registration = candidates[0]
+        # Resolution depends on the type and the requested mimetype and on
+        # nothing else, so it is done once per pair. `isinstance` against every
+        # registration, the sort, and re-formatting the exact mimetype are all
+        # on this side of the line; only the encode itself is below it.
+        registration, exact_mimetype = self._resolve_serializer(obj, mimetype)
         serialized = registration.serializer(obj)
-        exact_mimetype = _format_exact_mimetype(
-            registration.mimetype, self._type_tag(actual_type)
-        )
-        self._remember_type(actual_type)
 
         if isinstance(serialized, types.Chunk):
             chunk = serialized.model_copy(deep=True)
@@ -798,11 +947,14 @@ class SerializationRegistry:
         had_matching_format = False
 
         for selection in selectors:
-            format_registrations = [
-                registration
-                for registration in self._deserializers
-                if _registration_matches(registration.mimetype, selection)
-            ]
+            format_registrations = self._format_cache.get(selection)
+            if format_registrations is None:
+                format_registrations = [
+                    registration
+                    for registration in self._deserializers
+                    if _registration_matches(registration.mimetype, selection)
+                ]
+                self._format_cache[selection] = format_registrations
             if not format_registrations:
                 continue
             had_matching_format = True

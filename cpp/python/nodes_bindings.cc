@@ -399,6 +399,27 @@ void BindNodes(py::module_& module) {
           "the future waits for the next fragment.",
           py::arg("timeout") = py::none())
       .def(
+          "next_fragments",
+          [](const std::shared_ptr<nodes::AsyncNode>& self, size_t limit,
+             const py::typing::Optional<NativeDuration>& timeout) {
+            using Batch = std::vector<std::optional<data::NodeFragment>>;
+            absl::StatusOr<absl::Duration> converted =
+                DurationFromPython(timeout);
+            if (!converted.ok()) {
+              return FutureToPython(a11::FailedFuture<Batch>(converted.status()));
+            }
+            return FutureToPython(WithoutGil(
+                [&] { return self->NextFragments(limit, *converted); }));
+          },
+          "Returns a future resolving to a list of up to `limit` fragments, "
+          "with a trailing None at end-of-stream. The batched counterpart to "
+          "next_fragment, and the one to prefer when draining: every await "
+          "costs an event-loop turn, so reading a hundred values one await at "
+          "a time is a hundred turns. It returns whatever is already buffered "
+          "and waits only when nothing is, so a live stream still yields each "
+          "value as soon as it arrives.",
+          py::arg("limit"), py::arg("timeout") = py::none())
+      .def(
           "next_chunk",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
              const py::typing::Optional<NativeDuration>& timeout) {

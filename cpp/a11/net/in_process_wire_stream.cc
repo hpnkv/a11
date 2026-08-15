@@ -385,6 +385,17 @@ void* absl_nullable InProcessWireStream::GetImpl() const {
   return nullptr;
 }
 
+// Merged frames stay small on purpose.
+//
+// The whole gain is in folding together the three-byte status markers an
+// action trails -- a dispatch status, a completion status, a close marker per
+// port. Large data messages get nothing from it: they are already one frame
+// per payload, merging them only builds a bigger frame to split again, and it
+// would erase message boundaries a peer can reasonably expect to see
+// preserved. So accumulate only up to this much and leave anything bigger
+// alone.
+constexpr size_t kMergeCeilingBytes = 64 * 1024;
+
 void InProcessWireStream::Sender(std::shared_ptr<State> state) {
   while (true) {
     State::Outbound outbound;
@@ -400,6 +411,56 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
       state->outbound.pop_front();
       if (state->implementation_aborted && outbound.end != End::kAbort) {
         continue;
+      }
+
+      // Fold in whatever is already waiting behind it.
+      //
+      // An action costs `3 + 2 x ports` wire messages and most carry three
+      // bytes of status -- a dispatch status, a completion status, one
+      // `a11-close` marker per output port. Each was its own message, its own
+      // decode and its own callback on the far side, while `WireMessage` has
+      // always been able to carry a list of fragments.
+      //
+      // This waits for nothing: only messages *already* queued are merged, so
+      // nothing is ever held back to build a bigger one. That is why it
+      // belongs here and not in `ChunkStoreWriter`, where folding a close
+      // marker into the final data batch would mean delaying that batch until
+      // the writer closed -- the last fragment of every stream, to save a
+      // message.
+      //
+      // Only plainly compatible messages merge: no lifecycle marker
+      // (half-close or abort must remain its own boundary), and identical
+      // headers, since a header describes the message rather than the
+      // fragments inside it.
+      // A message already at the ceiling has nothing to gain and is left
+        // exactly as it is.
+        if (outbound.end == End::kNone &&
+            outbound.message.ApproxBytes() < kMergeCeilingBytes) {
+        size_t approximate = outbound.message.ApproxBytes();
+        while (!state->outbound.empty()) {
+          const State::Outbound& next = state->outbound.front();
+          if (next.end != End::kNone ||
+              next.message.headers != outbound.message.headers) {
+            break;
+          }
+          const size_t addition = next.message.ApproxBytes();
+          if (approximate + addition > kMergeCeilingBytes) {
+            break;
+          }
+          approximate += addition;
+          State::Outbound merged = std::move(state->outbound.front());
+          state->outbound.pop_front();
+          auto& fragments = outbound.message.node_fragments;
+          fragments.insert(
+              fragments.end(),
+              std::make_move_iterator(merged.message.node_fragments.begin()),
+              std::make_move_iterator(merged.message.node_fragments.end()));
+          auto& actions = outbound.message.actions;
+          actions.insert(
+              actions.end(),
+              std::make_move_iterator(merged.message.actions.begin()),
+              std::make_move_iterator(merged.message.actions.end()));
+        }
       }
     }
 

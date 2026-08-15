@@ -216,7 +216,9 @@ def compile(source: str, source_name: str = "") -> Program:
     turns that into ``FlowSyntaxError``.
     """
 
-def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
+def complete(
+    source: str, offset: typing.SupportsInt | typing.SupportsIndex
+) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 

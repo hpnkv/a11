@@ -243,6 +243,16 @@ a11::Future<std::uint32_t> AsyncNode::PutNullFinal(
                   seq, true);
 }
 
+a11::Future<std::vector<std::optional<data::NodeFragment>>>
+AsyncNode::NextFragments(size_t limit, absl::Duration timeout) {
+  using Batch = std::vector<std::optional<data::NodeFragment>>;
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> input = reader();
+  if (!input.ok()) {
+    return a11::FailedFuture<Batch>(input.status());
+  }
+  return (*input)->NextMany(limit, timeout);
+}
+
 a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
     absl::Duration timeout) {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> input = reader();

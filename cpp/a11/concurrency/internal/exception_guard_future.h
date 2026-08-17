@@ -19,7 +19,10 @@
 #include <absl/status/status.h>
 
 #include "a11/concurrency/future.h"
-#include "a11/internal/exception_guard_impl.h"
+// The trait alone, not the wrappers: this header only adds a specialisation, and
+// taking the `try`-bearing impl header for it would make this includable only
+// where exceptions are on.
+#include "a11/internal/exception_guard_failure.h"
 
 namespace a11::exception_guard::internal {
 

@@ -1271,6 +1271,14 @@ a11_allow_exceptions(
         # included anywhere else, and naming it here is what says so in the same
         # place as the rest of the policy. If it is ever added to a target's
         # sources -- for an IDE, or a unity build -- the property is already right.
+        #
+        # It now enforces that itself with an #error, because the property here
+        # cannot: a11/exception_guard.cc included it while being compiled
+        # -fno-exceptions, and whether the `try` blocks in an uninstantiated
+        # template are a diagnostic turned out to be compiler-dependent (Apple
+        # clang 21 accepts them, the CI runner's older one and GCC do not). The
+        # trait that file actually wanted lives in exception_guard_failure.h,
+        # which needs no opt-out and is deliberately absent from this list.
         a11/internal/exception_guard_impl.h
         # Wrap a callable a caller handed us, so that whatever it throws becomes a
         # Status in this file's frame rather than unwinding through one of A11's.

@@ -977,9 +977,16 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   EchoSetup setup;
   setup.arrivals = std::make_shared<Arrivals>();
   setup.peer = std::make_shared<std::weak_ptr<net::WireStream>>();
-  const data::WireMessage reply{.node_fragments = {data::NodeFragment{
-                                    .id = "bench",
-                                    .data = data::Chunk{.data = "y"}}}};
+  // Accounting is in fragments, not messages, and that is not a detail.
+  //
+  // Both in-process Sender loops fold whatever is already queued into the
+  // message they are about to deliver, so N messages sent can arrive as fewer,
+  // larger ones -- and they do, as soon as anything delivers in bursts rather
+  // than one at a time (a transport with concurrent outbound requests, say). A
+  // window counted in messages then waits for echoes that will never come
+  // separately and the row reports a stall that is not one. Fragments survive the
+  // fold, so one echo fragment per arriving fragment keeps the credit exact.
+  //
   // Replies on the fibre the transport already delivered on.
   //
   // A SubmitTask here would be a pool round trip (2.2us) plus, when the pool's
@@ -991,7 +998,7 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   // Send on any of these transports.
   const std::shared_ptr<std::weak_ptr<net::WireStream>> peer = setup.peer;
   net::OnMessage on_server =
-      [peer, reply](std::optional<data::WireMessage> message) -> a11::Task {
+      [peer](std::optional<data::WireMessage> message) -> a11::Task {
     if (!message.has_value()) {
       return a11::ReadyTask();
     }
@@ -999,7 +1006,16 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
     if (endpoint == nullptr) {
       return a11::ReadyTask();
     }
-    const absl::Status sent = endpoint->Send(reply);
+    // One echo fragment per arriving fragment, in one message: the credit stays
+    // exact through a fold without paying a second round trip for it.
+    data::WireMessage reply;
+    reply.node_fragments.reserve(message->node_fragments.size());
+    for (size_t index = 0; index < message->node_fragments.size(); ++index) {
+      reply.node_fragments.push_back(
+          data::NodeFragment{.id = absl::StrCat("bench-", index),
+                             .data = data::Chunk{.data = "y"}});
+    }
+    const absl::Status sent = endpoint->Send(std::move(reply));
     return sent.ok() ? a11::ReadyTask() : a11::FailedTask(sent);
   };
 
@@ -1012,10 +1028,14 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   // Counts on the delivery fibre, for the same reason the echo replies there.
   const std::shared_ptr<Arrivals> arrivals = setup.arrivals;
   net::OnMessage on_client =
-      [arrivals](std::optional<data::WireMessage>) -> a11::Task {
+      [arrivals](std::optional<data::WireMessage> message) -> a11::Task {
+    if (!message.has_value()) {
+      return a11::ReadyTask();
+    }
     {
       thread::MutexLock lock(&arrivals->mu);
-      ++arrivals->count;
+      arrivals->count +=
+          static_cast<std::int64_t>(message->node_fragments.size());
     }
     arrivals->cv.SignalAll();
     return a11::ReadyTask();
@@ -1185,8 +1205,13 @@ void MeasureStreamThroughput(Recorder& recorder, double scale,
       Throughput([&](std::int64_t) { pump(messages); }, 1, 0, messages,
                  messages * size);
   if (stalled) {
-    std::fprintf(stderr, "  skip %s throughput at %s: no echo within 5s\n",
-                 transport.c_str(), Human(size).c_str());
+    // The stream's status distinguishes the two things a stall can be: a
+    // transport that failed (and says why) from one that is merely slow.
+    const absl::Status status = pair->client->GetStatus();
+    std::fprintf(stderr, "  skip %s throughput at %s: no echo within 5s (%s)\n",
+                 transport.c_str(), Human(size).c_str(),
+                 status.ok() ? "stream still ok"
+                             : std::string(status.ToString()).c_str());
     pair->close();
     return;
   }
@@ -1307,12 +1332,28 @@ std::optional<BenchPair> WebSocketPair(
                    }};
 }
 
-// Server-Sent Events plus POSTs: the transport a browser can always reach, and
-// the only one where the two directions are different mechanisms -- an SSE
-// response stream inbound, one HTTP POST per message outbound.
-std::optional<BenchPair> HttpSsePair(std::weak_ptr<net::WireStream>* peer_slot,
-                                     net::OnMessage on_server,
-                                     net::OnDone on_done) {
+// Server-Sent Events: the transport a browser can always reach, and the only one
+// whose two directions are different mechanisms -- an SSE response stream
+// inbound, and outbound either one HTTP POST per message or a single streamed
+// request body. Both outbound modes get a row, because they are the two ends of
+// the trade the option exists for: `sse` is what a `fetch()` client can do, and
+// `sse-stream` is what a capable backend can.
+//
+// A11_BENCH_SSE_POSTS sets how many outbound POSTs the `sse` row keeps in flight;
+// 1 restores the strictly serialised delivery this used to have.
+std::optional<BenchPair> HttpSseVariantPair(
+    net::SseOutboundDelivery outbound,
+    std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
+    net::OnDone on_done) {
+  net::HttpSseOptions client_options;
+  client_options.outbound = outbound;
+  if (const char* posts = std::getenv("A11_BENCH_SSE_POSTS");
+      posts != nullptr) {
+    const int parsed = std::atoi(posts);
+    if (parsed > 0) {
+      client_options.max_concurrent_posts = static_cast<size_t>(parsed);
+    }
+  }
   const auto shared_server =
       std::make_shared<net::OnMessage>(std::move(on_server));
   const auto shared_done = std::make_shared<net::OnDone>(std::move(on_done));
@@ -1334,7 +1375,8 @@ std::optional<BenchPair> HttpSsePair(std::weak_ptr<net::WireStream>* peer_slot,
   }
   absl::StatusOr<std::shared_ptr<net::HttpSseClientWireStream>> client =
       net::HttpSseClientWireStream::Create(
-          absl::StrCat("http://127.0.0.1:", (*server)->port()));
+          absl::StrCat("http://127.0.0.1:", (*server)->port()),
+          std::move(client_options));
   if (!client.ok()) {
     std::fprintf(stderr, "  skip sse: %s\n",
                  std::string(client.status().message()).c_str());
@@ -1350,6 +1392,20 @@ std::optional<BenchPair> HttpSsePair(std::weak_ptr<net::WireStream>* peer_slot,
                      listener->Stop().IgnoreError();
                      accepted->reset();
                    }};
+}
+
+std::optional<BenchPair> HttpSsePair(std::weak_ptr<net::WireStream>* peer_slot,
+                                     net::OnMessage on_server,
+                                     net::OnDone on_done) {
+  return HttpSseVariantPair(net::SseOutboundDelivery::kPost, peer_slot,
+                            std::move(on_server), std::move(on_done));
+}
+
+std::optional<BenchPair> HttpSseStreamPair(
+    std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
+    net::OnDone on_done) {
+  return HttpSseVariantPair(net::SseOutboundDelivery::kStream, peer_slot,
+                            std::move(on_server), std::move(on_done));
 }
 
 // WebRTC over an SCTP data channel, negotiated through in-process signalling.
@@ -1731,6 +1787,7 @@ void WireSuite(Recorder& recorder, double scale) {
       {"in-process", InProcessPair},
       {"websocket", WebSocketPair},
       {"sse", HttpSsePair},
+      {"sse-stream", HttpSseStreamPair},
       {"webrtc", WebRtcPair}};
   for (const auto& [name, factory] : transports) {
     for (const std::int64_t size : {64, 4096, 65536}) {

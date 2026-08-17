@@ -28,26 +28,38 @@
 namespace a11::net::internal {
 namespace {
 
-// Fixed 8-byte little-endian frame prefix carrying the aggregate send order.
-constexpr size_t kSequencePrefix = sizeof(std::uint64_t);
+// Fixed 8-byte little-endian frame suffix carrying the aggregate send order.
+//
+// A suffix rather than a prefix, for the reason A11's byte-chunking metadata is
+// one too: a prefix cannot be added to a buffer the caller already owns without
+// moving every byte of it, and a suffix can. On send that is `append` into the
+// spare capacity the packet already has; on receive it is a truncation, where the
+// prefix form had to copy the payload out from behind its header. At A11's 48 KiB
+// WebRTC packet size that was a full copy of every packet in each direction.
+//
+// Both ends must agree, so this is a wire change: `js/src/webrtc_wire_stream.ts`
+// carries the same framing and moved with it. A peer on the older prefix format
+// reads the sequence out of the first eight payload bytes and gets nonsense.
+constexpr size_t kSequenceSuffix = sizeof(std::uint64_t);
 
-std::string EncodeSequence(std::uint64_t sequence, std::string_view payload) {
-  std::string framed;
-  framed.reserve(kSequencePrefix + payload.size());
-  for (size_t index = 0; index < kSequencePrefix; ++index) {
-    framed.push_back(static_cast<char>(sequence & 0xffU));
+// Takes the packet by value and returns it with the sequence appended, so a
+// caller that owns its bytes -- Send does -- pays no copy at all.
+std::string EncodeSequence(std::uint64_t sequence, std::string packet) {
+  for (size_t index = 0; index < kSequenceSuffix; ++index) {
+    packet.push_back(static_cast<char>(sequence & 0xffU));
     sequence >>= 8U;
   }
-  framed.append(payload);
-  return framed;
+  return packet;
 }
 
+// Reads the sequence from the tail. The caller has already checked the size.
 std::uint64_t DecodeSequence(std::string_view framed) {
   std::uint64_t sequence = 0;
-  for (size_t index = 0; index < kSequencePrefix; ++index) {
-    sequence |=
-        static_cast<std::uint64_t>(static_cast<unsigned char>(framed[index]))
-        << (index * 8U);
+  const size_t start = framed.size() - kSequenceSuffix;
+  for (size_t index = 0; index < kSequenceSuffix; ++index) {
+    sequence |= static_cast<std::uint64_t>(
+                    static_cast<unsigned char>(framed[start + index]))
+                << (index * 8U);
   }
   return sequence;
 }
@@ -254,8 +266,8 @@ void MultiplexedBinaryChannel::OnMemberOpen(std::uint64_t id) {
 }
 
 void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
-  if (framed.size() < kSequencePrefix) {
-    // A frame without its sequence prefix breaks aggregate ordering; there is
+  if (framed.size() < kSequenceSuffix) {
+    // A frame without its sequence suffix breaks aggregate ordering; there is
     // no safe way to place it, so fail the whole stream.
     std::function<void(absl::Status)> on_error;
     {
@@ -268,7 +280,9 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
     }
     return;
   }
+  // Read before the truncation below, which is what removes those bytes.
   const std::uint64_t sequence = DecodeSequence(framed);
+  framed.resize(framed.size() - kSequenceSuffix);
   std::function<void(std::string)> on_message;
   std::function<void(absl::Status)> on_error;
   std::vector<std::string> ready;
@@ -282,7 +296,9 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
       if (reorder_.size() >= options_.max_reorder_packets) {
         on_error = callbacks_.on_error;
       } else {
-        reorder_.emplace(sequence, framed.substr(kSequencePrefix));
+        // The payload is the frame with its tail cut off, so this moves no bytes
+        // at all where the prefix form copied the whole payload out.
+        reorder_.emplace(sequence, std::move(framed));
       }
     }
     if (on_error == nullptr && !delivering_) {
@@ -336,7 +352,9 @@ absl::Status MultiplexedBinaryChannel::Send(std::string bytes) {
     if (closed_) {
       return absl::CancelledError("Multiplexed channel is closed");
     }
-    std::string framed = EncodeSequence(next_send_seq_++, bytes);
+    // Moved in, so the sequence is appended to the caller's buffer rather than
+    // copied into a new one. Send owns `bytes`; nothing reads it afterwards.
+    std::string framed = EncodeSequence(next_send_seq_++, std::move(bytes));
     pending_out_bytes_ += framed.size();
     pending_out_.push_back(std::move(framed));
   }
@@ -344,70 +362,98 @@ absl::Status MultiplexedBinaryChannel::Send(std::string bytes) {
   return absl::OkStatus();
 }
 
+void MultiplexedBinaryChannel::AssignPendingLocked() {
+  if (members_.empty()) {
+    return;
+  }
+  while (!pending_out_.empty()) {
+    std::shared_ptr<Member> chosen;
+    const size_t count = members_.size();
+    for (size_t attempt = 0; attempt < count; ++attempt) {
+      std::shared_ptr<Member>& candidate =
+          members_[(round_robin_ + attempt) % count];
+      if (candidate->open) {
+        chosen = candidate;
+        round_robin_ = (round_robin_ + attempt + 1) % count;
+        break;
+      }
+    }
+    if (chosen == nullptr) {
+      return;  // No live channel yet; leave packets queued for a later flush.
+    }
+    const size_t size = pending_out_.front().size();
+    chosen->pending.push_back(std::move(pending_out_.front()));
+    chosen->pending_bytes += size;
+    pending_out_.pop_front();
+    pending_out_bytes_ -= size;
+  }
+}
+
 void MultiplexedBinaryChannel::FlushPending() {
+  std::vector<std::shared_ptr<Member>> claimed;
   {
     thread::MutexLock lock(&mu_);
     if (closed_) {
       return;
     }
-    if (flushing_) {
-      // Another flusher owns the queue; make sure it revisits it before exit.
-      flush_again_ = true;
-      return;
+    AssignPendingLocked();
+    for (const std::shared_ptr<Member>& member : members_) {
+      if (member->open && !member->flushing && !member->pending.empty()) {
+        member->flushing = true;
+        claimed.push_back(member);
+      }
     }
-    flushing_ = true;
   }
-  // Single flusher from here: pending_out_.front() is stable across the
-  // lock-free member send below, so a copy-then-pop-on-success reroutes a
-  // failed packet to another live member with its sequence number intact.
+  if (claimed.empty()) {
+    // Either nothing to send or every member already has an owner handing it
+    // bytes; that owner rechecks its queue before releasing the claim.
+    return;
+  }
+  // Each member is handed its bytes independently, so one channel's send does not
+  // wait behind another's. The caller carries the first -- which is the whole job
+  // when only one channel has work, the common case at small message sizes -- and
+  // the rest get a fiber so the handoffs overlap.
+  for (size_t index = 1; index < claimed.size(); ++index) {
+    std::shared_ptr<MultiplexedBinaryChannel> self = shared_from_this();
+    a11::Schedule([self = std::move(self), member = claimed[index]]() mutable {
+      self->FlushMember(member);
+    });
+  }
+  FlushMember(claimed.front());
+}
+
+void MultiplexedBinaryChannel::FlushMember(
+    const std::shared_ptr<Member>& member) {
   while (true) {
     std::string packet;
-    std::shared_ptr<Member> chosen;
     {
       thread::MutexLock lock(&mu_);
-      if (closed_) {
-        flushing_ = false;
+      if (closed_ || !member->open || member->pending.empty()) {
+        member->flushing = false;
         return;
       }
-      if (pending_out_.empty()) {
-        if (flush_again_) {
-          flush_again_ = false;
-          continue;
-        }
-        flushing_ = false;
-        return;
-      }
-      const size_t count = members_.size();
-      for (size_t attempt = 0; attempt < count; ++attempt) {
-        std::shared_ptr<Member>& candidate =
-            members_[(round_robin_ + attempt) % count];
-        if (candidate->open) {
-          chosen = candidate;
-          round_robin_ = (round_robin_ + attempt + 1) % count;
-          break;
-        }
-      }
-      if (chosen == nullptr) {
-        // No live channel yet; leave packets buffered for a later flush.
-        flushing_ = false;
-        return;
-      }
-      packet = pending_out_.front();
+      packet = std::move(member->pending.front());
+      member->pending.pop_front();
+      member->pending_bytes -= packet.size();
     }
-    absl::Status sent = chosen->channel->Send(packet);
+    // Sent outside the lock, and by copy: a member that fails hands its packet
+    // back for another to carry, and a lost packet is not recoverable -- the
+    // peer's reorder buffer would wait on that sequence number for good. Send
+    // takes ownership, so keeping a retryable copy is the price of that.
+    absl::Status sent = member->channel->Send(packet);
     if (sent.ok()) {
-      thread::MutexLock lock(&mu_);
-      if (!pending_out_.empty()) {
-        pending_out_bytes_ -= pending_out_.front().size();
-        pending_out_.pop_front();
-      }
       continue;
     }
     {
       thread::MutexLock lock(&mu_);
-      chosen->open = false;
+      member->open = false;
+      member->flushing = false;
+      pending_out_bytes_ += packet.size();
+      pending_out_.push_front(std::move(packet));
     }
-    DropMember(chosen->id, "send failed");
+    // Requeues this member's remaining packets too, and re-flushes.
+    DropMember(member->id, "send failed");
+    return;
   }
 }
 
@@ -418,6 +464,9 @@ absl::StatusOr<size_t> MultiplexedBinaryChannel::BufferedAmount() const {
     thread::MutexLock lock(&mu_);
     total = pending_out_bytes_;
     members = members_;
+    for (const std::shared_ptr<Member>& member : members_) {
+      total += member->pending_bytes;
+    }
   }
   for (const std::shared_ptr<Member>& member : members) {
     absl::StatusOr<size_t> amount = member->channel->BufferedAmount();
@@ -443,6 +492,10 @@ absl::Status MultiplexedBinaryChannel::Close() {
     closed_ = true;
     members = members_;
     members_.clear();
+    for (const std::shared_ptr<Member>& member : members) {
+      member->pending.clear();
+      member->pending_bytes = 0;
+    }
     pending_out_.clear();
     pending_out_bytes_ = 0;
     reorder_.clear();
@@ -504,6 +557,16 @@ void MultiplexedBinaryChannel::DropMember(std::uint64_t id,
     if (dropped == nullptr) {
       return;
     }
+    // Whatever was assigned to it and not yet handed over goes back to the front
+    // of the unassigned queue, so the next live member carries it. Dropping it
+    // would leave a hole the peer's reorder buffer never fills.
+    while (!dropped->pending.empty()) {
+      std::string packet = std::move(dropped->pending.back());
+      dropped->pending.pop_back();
+      pending_out_bytes_ += packet.size();
+      pending_out_.push_front(std::move(packet));
+    }
+    dropped->pending_bytes = 0;
     VLOG(1) << "a11 webrtc: lost data channel (" << reason << "); "
             << LiveCountLocked() << " of " << options_.target_channels
             << " remain";

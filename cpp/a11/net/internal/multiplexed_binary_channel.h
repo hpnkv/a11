@@ -100,6 +100,13 @@ class MultiplexedBinaryChannel
     std::uint64_t id = 0;
     std::shared_ptr<BinaryChannel> channel;
     bool open = false;
+    /// Packets assigned to this member and not yet handed to it, and whether a
+    /// caller is currently handing them over. The claim is per member, so a send
+    /// on one channel does not wait behind a send on another -- which is the
+    /// point of striping in the first place.
+    std::deque<std::string> pending;
+    size_t pending_bytes = 0;
+    bool flushing = false;
   };
 
   MultiplexedBinaryChannel(
@@ -120,7 +127,15 @@ class MultiplexedBinaryChannel
   void DropMember(std::uint64_t id, std::string_view reason);
   void OnMemberOpen(std::uint64_t id);
   void OnMemberMessage(std::string framed);
+  // Assigns every packet still in pending_out_ to a live member, round-robin.
+  void AssignPendingLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  // Assigns queued packets, then hands each member's queue to it. Members with
+  // work and no owner are claimed here: the first is flushed on the caller's
+  // thread and the rest on fibers of their own, so several channels take bytes at
+  // once instead of queueing behind one flusher.
   void FlushPending();
+  // Hands one member its queue. The caller must hold member->flushing.
+  void FlushMember(const std::shared_ptr<Member>& member);
   bool WaitMemberOpen(std::uint64_t id);
   // Schedules a replenishment fiber if one is warranted and not already
   // running. The fiber runs Replenish() until the target is met or it gives
@@ -137,10 +152,10 @@ class MultiplexedBinaryChannel
   std::uint64_t round_robin_ ABSL_GUARDED_BY(mu_) = 0;
   std::uint64_t next_send_seq_ ABSL_GUARDED_BY(mu_) = 0;
   std::uint64_t next_deliver_seq_ ABSL_GUARDED_BY(mu_) = 0;
+  /// Packets with a sequence number but no member yet, either because none is
+  /// live or because the member they were on was dropped mid-flight.
   std::deque<std::string> pending_out_ ABSL_GUARDED_BY(mu_);
   size_t pending_out_bytes_ ABSL_GUARDED_BY(mu_) = 0;
-  bool flushing_ ABSL_GUARDED_BY(mu_) = false;
-  bool flush_again_ ABSL_GUARDED_BY(mu_) = false;
   std::map<std::uint64_t, std::string> reorder_ ABSL_GUARDED_BY(mu_);
   bool delivering_ ABSL_GUARDED_BY(mu_) = false;
   bool callbacks_set_ ABSL_GUARDED_BY(mu_) = false;

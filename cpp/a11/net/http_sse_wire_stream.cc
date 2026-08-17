@@ -15,6 +15,7 @@
 #include <utility>
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/log/log.h>
 #include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
@@ -24,6 +25,7 @@
 #include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/str_split.h>
 #include <absl/strings/strip.h>
 #include <absl/time/clock.h>
 
@@ -118,6 +120,75 @@ bool IsAbort(const data::WireMessage& message) {
   return message.headers.find(kAbortStatusHeader) != message.headers.end();
 }
 
+/** Fixed little-endian length prefix in front of every streamed message. */
+constexpr size_t kStreamFramePrefix = sizeof(std::uint32_t);
+
+std::string FrameStreamedMessage(std::string payload) {
+  std::string framed;
+  framed.reserve(kStreamFramePrefix + payload.size());
+  std::uint32_t length = static_cast<std::uint32_t>(payload.size());
+  for (size_t index = 0; index < kStreamFramePrefix; ++index) {
+    framed.push_back(static_cast<char>(length & 0xffU));
+    length >>= 8U;
+  }
+  framed.append(payload);
+  return framed;
+}
+
+std::uint32_t DecodeStreamFrameLength(std::string_view framed) {
+  std::uint32_t length = 0;
+  for (size_t index = 0; index < kStreamFramePrefix; ++index) {
+    length |=
+        static_cast<std::uint32_t>(static_cast<unsigned char>(framed[index]))
+        << (index * 8U);
+  }
+  return length;
+}
+
+/** Whether a comma-separated mode list contains @p token. */
+bool AdvertisesMode(std::string_view list, std::string_view token) {
+  for (std::string_view mode : absl::StrSplit(list, ',')) {
+    if (absl::EqualsIgnoreCase(absl::StripAsciiWhitespace(mode), token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The tunneled form of an outbound request's HTTP headers.
+ *
+ * Framing headers describe the request itself and are not application metadata;
+ * every other field is namespaced under kSseHttpHeaderPrefix exactly once, and
+ * repeats of one name are joined the way HTTP defines. Shared by the POST route
+ * (once per message) and the streamed route (once for the whole stream, which
+ * makes the same headers reach every message on it).
+ */
+absl::StatusOr<absl::flat_hash_map<std::string, std::string>> TunneledHeaders(
+    const HttpHeaders& headers) {
+  absl::flat_hash_map<std::string, std::string> combined;
+  for (const auto& [name, value] : headers) {
+    if (name == "content-type" || name == "content-length" ||
+        name == "transfer-encoding" || name == kSseStreamIdHeader) {
+      continue;
+    }
+    auto [iterator, inserted] = combined.emplace(name, value);
+    if (!inserted) {
+      iterator->second = absl::StrCat(iterator->second, ", ", value);
+    }
+  }
+  absl::flat_hash_map<std::string, std::string> tunneled;
+  tunneled.reserve(combined.size());
+  for (auto& [name, value] : combined) {
+    std::string wire_name = absl::StartsWith(name, kSseHttpHeaderPrefix)
+                                ? name
+                                : absl::StrCat(kSseHttpHeaderPrefix, name);
+    ABSL_RETURN_IF_ERROR(data::ValidateName(wire_name));
+    tunneled.insert_or_assign(std::move(wire_name), std::move(value));
+  }
+  return tunneled;
+}
+
 }  // namespace
 
 struct HttpSseWireStream::State {
@@ -154,6 +225,10 @@ absl::Status HttpSseOptions::Validate() const {
       message_endpoint.find("{id}") == std::string::npos) {
     return absl::InvalidArgumentError(
         "message_endpoint must be an absolute path containing {id}");
+  }
+  if (max_concurrent_posts == 0) {
+    return absl::InvalidArgumentError(
+        "max_concurrent_posts must admit at least one outbound POST");
   }
   for (const auto* value : {&cors_allow_origin, &cors_allow_methods,
                             &cors_allow_headers, &cors_expose_headers}) {
@@ -497,6 +572,19 @@ struct HttpSseClientWireStream::ClientState {
   const std::string message_endpoint;
   std::shared_ptr<Http2Client> client ABSL_GUARDED_BY(mu);
   std::shared_ptr<Http2ResponseStream> response ABSL_GUARDED_BY(mu);
+  /// The delivery method in force, which is the requested one unless a kStream
+  /// request met a server that does not advertise it.
+  SseOutboundDelivery outbound ABSL_GUARDED_BY(mu) =
+      SseOutboundDelivery::kPost;
+  /// The streamed outbound request body, and the connection opened for it when
+  /// the connect connection could not carry a second request (HTTP/1.1).
+  std::shared_ptr<Http2DuplexStream> upload ABSL_GUARDED_BY(mu);
+  std::shared_ptr<Http2Client> upload_client ABSL_GUARDED_BY(mu);
+  bool upload_finished ABSL_GUARDED_BY(mu) = false;
+  /// Outbound POSTs handed over and not yet answered, and the maximum.
+  size_t posts_in_flight ABSL_GUARDED_BY(mu) = 0;
+  size_t max_posts_in_flight ABSL_GUARDED_BY(mu) = 1;
+  thread::CondVar posts_changed;
 };
 
 HttpSseClientWireStream::HttpSseClientWireStream(
@@ -554,6 +642,13 @@ HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
   auto client_state = std::make_shared<ClientState>(
       std::move(parsed), std::move(connect_path), std::move(message_endpoint),
       std::move(client));
+  {
+    thread::MutexLock lock(&client_state->mu);
+    // Delivery starts at POST whatever was asked for: kStream is only in force
+    // once the connect response has advertised it. See OpenOutboundStream.
+    client_state->outbound = SseOutboundDelivery::kPost;
+    client_state->max_posts_in_flight = options.max_concurrent_posts;
+  }
   return std::make_shared<HttpSseClientWireStream>(
       ConstructorToken{}, std::move(url), std::move(options), std::move(pair),
       std::move(state), std::move(client_state));
@@ -630,14 +725,170 @@ a11::Task HttpSseClientWireStream::OpenTransport() {
       self->client_state_->response = response;
     }
     self->SetId(*stream_id);
+    // The outbound stream is opened before the inbound loop starts, so a send
+    // issued the moment Start() resolves already has somewhere to go.
+    if (options.outbound == SseOutboundDelivery::kStream) {
+      ABSL_RETURN_IF_ERROR(self->OpenOutboundStream(head.headers));
+    }
     self->MarkHttpHeadersReady(head.headers);
     a11::Schedule([self]() { ReceiveSseLoop(std::move(self)); });
     return absl::OkStatus();
   });
 }
 
+SseOutboundDelivery HttpSseClientWireStream::outbound_delivery() const {
+  thread::MutexLock lock(&client_state_->mu);
+  return client_state_->outbound;
+}
+
+absl::Status HttpSseClientWireStream::OpenOutboundStream(
+    const HttpHeaders& response_headers) {
+  const std::optional<std::string> modes =
+      GetHttpHeader(response_headers, kSseOutboundModesHeader);
+  if (!modes.has_value() ||
+      !AdvertisesMode(*modes, kSseOutboundStreamToken)) {
+    // An older server, or one configured not to accept a streamed body. POST is
+    // the mode every SSE server has always accepted, so fall back to it rather
+    // than failing a connection that works.
+    VLOG(1) << "a11 sse: server does not advertise streamed outbound delivery; "
+               "falling back to one POST per message";
+    return absl::OkStatus();
+  }
+  const HttpSseOptions stream_options = options();
+  std::shared_ptr<Http2Client> client;
+  ParsedUrl url;
+  std::string endpoint;
+  {
+    thread::MutexLock lock(&client_state_->mu);
+    client = client_state_->client;
+    url = client_state_->url;
+    endpoint = client_state_->message_endpoint;
+  }
+  if (client == nullptr) {
+    return absl::UnavailableError("SSE HTTP client is not connected");
+  }
+  // An HTTP/1.1 connection carries one request, and the connect request is
+  // already on it, so the upload body needs its own. Over HTTP/2 both ride the
+  // same connection as two streams.
+  std::shared_ptr<Http2Client> upload_client;
+  if (!client->multiplexed()) {
+    ABSL_ASSIGN_OR_RETURN(
+        upload_client,
+        Http2Client::Connect(url.host, url.port, stream_options.http2_options)
+            .Await(stream_options.stream_options.deadline));
+    client = upload_client;
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string path,
+                        FormatMessageEndpoint(std::move(endpoint), GetId()));
+  HttpHeaders headers = GetHttpRequestHeaders();
+  SetHttpHeader(&headers, "content-type",
+                std::string(kSseWireStreamContentType));
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<Http2DuplexStream> upload,
+      client->RequestStreamingBody("POST", std::move(path), std::move(headers),
+                                  url.scheme));
+  {
+    thread::MutexLock lock(&client_state_->mu);
+    client_state_->upload = upload;
+    client_state_->upload_client = std::move(upload_client);
+    client_state_->outbound = SseOutboundDelivery::kStream;
+  }
+  // The server answers the upload request's headers as soon as it has adopted
+  // the stream, and keeps the response open until the body ends. Nothing sends
+  // on the strength of that answer -- writes are already flowing -- so it is
+  // watched rather than awaited, and a refusal fails the transport.
+  std::weak_ptr<HttpSseClientWireStream> weak =
+      std::static_pointer_cast<HttpSseClientWireStream>(shared_from_this());
+  const absl::Time deadline = stream_options.stream_options.deadline;
+  a11::Schedule([weak, upload = std::move(upload), deadline]() mutable {
+    absl::StatusOr<HttpResponseHead> head = upload->Headers().Await(deadline);
+    absl::Status status = head.status();
+    if (status.ok() && (head->status < 200 || head->status >= 300)) {
+      status = absl::Status(
+          StatusCodeFromHttp(head->status),
+          absl::StrCat("SSE outbound stream returned HTTP ", head->status));
+    }
+    if (status.ok()) {
+      status = upload->Done().Await(deadline).status();
+    }
+    std::shared_ptr<HttpSseClientWireStream> self = weak.lock();
+    if (self == nullptr) {
+      return;
+    }
+    std::shared_ptr<Http2Client> upload_client;
+    bool finished = false;
+    {
+      thread::MutexLock lock(&self->client_state_->mu);
+      finished = self->client_state_->upload_finished;
+      // Owned only when the upload needed a connection of its own; closing it
+      // here rather than at half-close is what keeps the terminating chunk and
+      // the close in the right order.
+      upload_client = std::move(self->client_state_->upload_client);
+    }
+    // A stream this side already ended is expected to come apart; only a failure
+    // that arrives while messages could still be going out is news.
+    if (!status.ok() && !finished) {
+      self->FailTransport(status);
+    }
+    if (upload_client != nullptr) {
+      (void)upload_client->Close();
+    }
+  });
+  return absl::OkStatus();
+}
+
+/**
+ * Hands one outbound message to the transport.
+ *
+ * Runs on the internal bridge's sender fibre, one message at a time, and is the
+ * only place the two delivery methods differ. Neither method awaits an ordinary
+ * message: A11 WireMessages carry no global order, so a POST is handed to its own
+ * request and the next one overlaps it, and a streamed write is posted to the
+ * loop like every other socket write. Order is imposed only where it is
+ * load-bearing -- see the terminal and abort cases below.
+ */
 absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
+  const bool terminal = IsTerminal(message);
+  const bool abort = IsAbort(message);
   ABSL_ASSIGN_OR_RETURN(std::string payload, data::WireMessageToJson(message));
+  SseOutboundDelivery delivery;
+  {
+    thread::MutexLock lock(&client_state_->mu);
+    delivery = client_state_->outbound;
+  }
+  if (delivery == SseOutboundDelivery::kStream) {
+    return TransmitOnStream(std::move(payload), terminal);
+  }
+  if (abort) {
+    // At the earliest possibility, ahead of whatever is still in flight. The
+    // peer treats an abort as final and discards the rest, so overtaking data
+    // POSTs is the intent rather than a hazard.
+    return TransmitAsPost(std::move(payload));
+  }
+  if (terminal) {
+    // A half-close says "nothing more follows", and the peer enforces it, so
+    // everything handed over already has to land first. HTTP/2 gives no ordering
+    // across streams; this barrier is where that ordering comes from.
+    ABSL_RETURN_IF_ERROR(AwaitPostsDelivered());
+    return TransmitAsPost(std::move(payload));
+  }
+  ABSL_RETURN_IF_ERROR(ClaimPostSlot());
+  std::shared_ptr<HttpSseClientWireStream> self =
+      std::static_pointer_cast<HttpSseClientWireStream>(shared_from_this());
+  a11::Schedule([self = std::move(self), payload = std::move(payload)]() mutable {
+    const absl::Status sent = self->TransmitAsPost(std::move(payload));
+    self->ReleasePostSlot();
+    if (!sent.ok()) {
+      // Nothing is waiting on this POST's return, so a failure reaches the
+      // application the same way a failed socket write does: through the
+      // stream's lifecycle.
+      self->FailTransport(sent);
+    }
+  });
+  return absl::OkStatus();
+}
+
+absl::Status HttpSseClientWireStream::TransmitAsPost(std::string payload) {
   std::shared_ptr<Http2Client> client;
   std::string endpoint;
   std::string scheme;
@@ -661,6 +912,67 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
                     std::move(payload), std::move(scheme))
           .Await(deadline()));
   return HttpStatusError(response, "SSE message request");
+}
+
+absl::Status HttpSseClientWireStream::TransmitOnStream(std::string payload,
+                                                      bool terminal) {
+  std::shared_ptr<Http2DuplexStream> upload;
+  {
+    thread::MutexLock lock(&client_state_->mu);
+    if (client_state_->upload_finished) {
+      return absl::FailedPreconditionError(
+          "The SSE outbound stream has already ended");
+    }
+    upload = client_state_->upload;
+    if (terminal) {
+      client_state_->upload_finished = true;
+    }
+  }
+  if (upload == nullptr) {
+    return absl::UnavailableError("The SSE outbound stream is not open");
+  }
+  ABSL_RETURN_IF_ERROR(upload->Write(FrameStreamedMessage(std::move(payload))));
+  if (terminal) {
+    // Ending the request body is the peer's end-of-stream. It lands behind the
+    // write above because both go through the connection's one FIFO queue.
+    return upload->Finish();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status HttpSseClientWireStream::ClaimPostSlot() {
+  const absl::Time until = deadline();
+  thread::MutexLock lock(&client_state_->mu);
+  while (client_state_->posts_in_flight >= client_state_->max_posts_in_flight) {
+    if (client_state_->posts_changed.WaitWithDeadline(&client_state_->mu,
+                                                      until)) {
+      return absl::DeadlineExceededError(
+          "Outbound SSE POSTs did not drain before the stream deadline");
+    }
+  }
+  ++client_state_->posts_in_flight;
+  return absl::OkStatus();
+}
+
+void HttpSseClientWireStream::ReleasePostSlot() {
+  thread::MutexLock lock(&client_state_->mu);
+  if (client_state_->posts_in_flight > 0) {
+    --client_state_->posts_in_flight;
+  }
+  client_state_->posts_changed.SignalAll();
+}
+
+absl::Status HttpSseClientWireStream::AwaitPostsDelivered() {
+  const absl::Time until = deadline();
+  thread::MutexLock lock(&client_state_->mu);
+  while (client_state_->posts_in_flight > 0) {
+    if (client_state_->posts_changed.WaitWithDeadline(&client_state_->mu,
+                                                      until)) {
+      return absl::DeadlineExceededError(
+          "Outbound SSE POSTs did not drain before the stream deadline");
+    }
+  }
+  return absl::OkStatus();
 }
 
 void HttpSseClientWireStream::ReceiveSseLoop(
@@ -773,6 +1085,23 @@ void HttpSseClientWireStream::ReceiveSseLoop(
   }
 }
 
+void HttpSseClientWireStream::TransportDone() {
+  // A transport that failed before its half-close went out leaves the outbound
+  // body open; end it here so the server's reader sees the stream close rather
+  // than waiting for the connection to.
+  std::shared_ptr<Http2DuplexStream> upload;
+  {
+    thread::MutexLock lock(&client_state_->mu);
+    if (!client_state_->upload_finished) {
+      client_state_->upload_finished = true;
+      upload = client_state_->upload;
+    }
+  }
+  if (upload != nullptr) {
+    (void)upload->Finish();
+  }
+}
+
 void* absl_nullable HttpSseClientWireStream::TransportImpl() const {
   thread::MutexLock lock(&client_state_->mu);
   if (client_state_->response != nullptr) {
@@ -817,6 +1146,11 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
   SetHttpHeader(&headers, std::string(kSseStreamIdHeader), GetId());
   SetHttpHeader(&headers, "content-type", "text/event-stream");
   SetHttpHeader(&headers, "cache-control", "no-cache");
+  // Both outbound modes reach the same endpoint, so what a client may do with it
+  // has to be said here. A client that only knows POST ignores the field.
+  SetHttpHeader(&headers, std::string(kSseOutboundModesHeader),
+                absl::StrCat(kSseOutboundPostToken, ", ",
+                             kSseOutboundStreamToken));
   absl::Status status = response->SendHeaders(200, headers);
   if (!status.ok()) {
     return a11::FailedTask(status);
@@ -960,6 +1294,30 @@ absl::StatusOr<std::shared_ptr<HttpSseServer>> HttpSseServer::Create(
     std::string bind_address, std::uint16_t port, OnHttpSseConnect on_connect,
     HttpSseOptions options) {
   ABSL_RETURN_IF_ERROR(options.Validate());
+  // A POST to the message endpoint that declares the streamed wire format is an
+  // open-ended sequence of messages rather than a document, so the HTTP server
+  // has to hand it over as it arrives instead of buffering it to its end -- which
+  // for this body never comes until the stream does. Composed with whatever the
+  // owner already asked to stream rather than replacing it.
+  auto inherited = std::move(options.http2_options.stream_request_body);
+  options.http2_options.stream_request_body =
+      [pattern = options.message_endpoint, inherited = std::move(inherited)](
+          std::string_view method, std::string_view path,
+          const HttpHeaders& headers) {
+        if (inherited != nullptr && inherited(method, path, headers)) {
+          return true;
+        }
+        if (!absl::EqualsIgnoreCase(method, "POST")) {
+          return false;
+        }
+        const std::optional<std::string> content_type =
+            GetHttpHeader(headers, "content-type");
+        return content_type.has_value() &&
+               absl::StartsWithIgnoreCase(*content_type,
+                                          kSseWireStreamContentType) &&
+               MatchMessagePath(PathWithoutQuery(std::string(path)), pattern)
+                   .ok();
+      };
   auto state =
       std::make_shared<State>(std::move(options), std::move(on_connect));
   std::weak_ptr<State> weak = state;
@@ -1012,8 +1370,14 @@ a11::Task HttpSseServer::HandleRequest(
     absl::StatusOr<std::string> stream_id =
         MatchMessagePath(path, state->options.message_endpoint);
     if (stream_id.ok()) {
-      return HandleMessage(state, std::move(*stream_id), std::move(request),
-                           std::move(response));
+      // A body still open after its headers is the streamed outbound direction;
+      // a complete one is a single posted message. Both reach the same endpoint,
+      // so which it is comes from the request rather than from the route.
+      return request.body_stream != nullptr
+                 ? HandleMessageStream(state, std::move(*stream_id),
+                                       std::move(request), std::move(response))
+                 : HandleMessage(state, std::move(*stream_id),
+                                 std::move(request), std::move(response));
     }
   }
   return SendHttpStatus(response,
@@ -1159,31 +1523,17 @@ a11::Task HttpSseServer::HandleMessage(
           .Await()
           .status();
     }
-    absl::flat_hash_map<std::string, std::string> combined;
-    for (const auto& [name, value] : request.headers) {
-      auto [iterator, inserted] = combined.emplace(name, value);
-      if (!inserted) {
-        iterator->second = absl::StrCat(iterator->second, ", ", value);
-      }
+    absl::StatusOr<absl::flat_hash_map<std::string, std::string>> tunneled =
+        TunneledHeaders(request.headers);
+    if (!tunneled.ok()) {
+      stream->FailTransport(tunneled.status());
+      return SendHttpStatus(response, tunneled.status(),
+                            CorsHeaders(state->options))
+          .Await()
+          .status();
     }
-    for (auto& [name, value] : combined) {
-      // Framing headers describe the POST itself and are not application
-      // metadata. Other HTTP headers are namespaced exactly once.
-      if (name == "content-type" || name == "content-length" ||
-          name == kSseStreamIdHeader) {
-        continue;
-      }
-      std::string wire_name = absl::StartsWith(name, kSseHttpHeaderPrefix)
-                                  ? name
-                                  : absl::StrCat(kSseHttpHeaderPrefix, name);
-      absl::Status valid_name = data::ValidateName(wire_name);
-      if (!valid_name.ok()) {
-        stream->FailTransport(valid_name);
-        return SendHttpStatus(response, valid_name, CorsHeaders(state->options))
-            .Await()
-            .status();
-      }
-      message->headers.insert_or_assign(std::move(wire_name), std::move(value));
+    for (auto& [name, value] : *tunneled) {
+      message->headers.insert_or_assign(name, std::move(value));
     }
     absl::Status received =
         stream->ReceiveTransportMessage(std::move(*message)).Await().status();
@@ -1194,6 +1544,123 @@ a11::Task HttpSseServer::HandleMessage(
           .status();
     }
     return response->SendResponse(204, CorsHeaders(state->options));
+  });
+}
+
+a11::Task HttpSseServer::HandleMessageStream(
+    const std::shared_ptr<State>& state, std::string stream_id,
+    HttpRequest request, std::shared_ptr<Http2ResponseWriter> response) {
+  return a11::SubmitTask([state, stream_id = std::move(stream_id),
+                          request = std::move(request),
+                          response =
+                              std::move(response)]() mutable -> absl::Status {
+    std::shared_ptr<HttpSseServerWireStream> stream;
+    {
+      thread::MutexLock lock(&state->mu);
+      const auto iterator = state->streams.find(stream_id);
+      if (iterator != state->streams.end()) {
+        stream = iterator->second;
+      }
+    }
+    if (stream == nullptr) {
+      return SendHttpStatus(response,
+                            absl::NotFoundError(absl::StrCat(
+                                "No active SSE stream has ID ", stream_id)),
+                            CorsHeaders(state->options))
+          .Await()
+          .status();
+    }
+    // The request's headers describe the whole stream, so they are tunneled once
+    // and attached to every message on it -- which is what a client posting the
+    // same headers per message would have produced.
+    absl::StatusOr<absl::flat_hash_map<std::string, std::string>> tunneled =
+        TunneledHeaders(request.headers);
+    if (!tunneled.ok()) {
+      stream->FailTransport(tunneled.status());
+      return SendHttpStatus(response, tunneled.status(),
+                            CorsHeaders(state->options))
+          .Await()
+          .status();
+    }
+    // Answer the head before reading: the client is already writing, and the
+    // response is how it learns the stream id was good. It stays open until the
+    // body ends, because a finished response would close the stream the body is
+    // still arriving on.
+    ABSL_RETURN_IF_ERROR(
+        response->SendHeaders(200, CorsHeaders(state->options)));
+
+    const size_t message_limit =
+        state->options.stream_options.max_single_message_size;
+    const absl::Time deadline = state->options.stream_options.deadline;
+    const std::shared_ptr<Http2RequestBodyStream>& body = request.body_stream;
+    std::string buffer;
+    size_t consumed = 0;
+    auto fail = [&](const absl::Status& status) {
+      stream->FailTransport(status);
+      (void)body->Cancel(status);
+      (void)response->Abort(status);
+      return status;
+    };
+    while (true) {
+      absl::StatusOr<std::optional<std::string>> chunk =
+          body->Read().Await(deadline);
+      if (!chunk.ok()) {
+        return fail(chunk.status());
+      }
+      if (!chunk->has_value()) {
+        break;
+      }
+      buffer.append(**chunk);
+      while (true) {
+        if (buffer.size() - consumed < kStreamFramePrefix) {
+          break;
+        }
+        const std::uint32_t length = DecodeStreamFrameLength(
+            std::string_view(buffer).substr(consumed, kStreamFramePrefix));
+        if (length > message_limit) {
+          return fail(absl::OutOfRangeError(
+              "Incoming SSE streamed WireMessage is too large"));
+        }
+        if (buffer.size() - consumed - kStreamFramePrefix < length) {
+          // A body chunk is whatever the transport handed over -- an HTTP/2 DATA
+          // frame is typically 16 KiB -- so a large message accumulates over
+          // several of them. The length prefix says how much is coming, so the
+          // buffer can be grown once instead of on every append.
+          buffer.reserve(consumed + kStreamFramePrefix + length);
+          break;  // Await the rest of this frame.
+        }
+        const std::string_view payload =
+            std::string_view(buffer).substr(consumed + kStreamFramePrefix,
+                                            length);
+        absl::StatusOr<data::WireMessage> message =
+            data::WireMessageFromJson(payload);
+        consumed += kStreamFramePrefix + length;
+        if (!message.ok()) {
+          return fail(message.status());
+        }
+        for (const auto& [name, value] : *tunneled) {
+          message->headers.insert_or_assign(name, value);
+        }
+        const absl::Status received =
+            stream->ReceiveTransportMessage(std::move(*message))
+                .Await()
+                .status();
+        if (!received.ok()) {
+          return fail(received);
+        }
+      }
+      // Reclaim what has been delivered rather than growing the buffer for the
+      // life of the stream; a partial frame is all that is ever carried over.
+      if (consumed != 0) {
+        buffer.erase(0, consumed);
+        consumed = 0;
+      }
+    }
+    if (buffer.size() != consumed) {
+      return fail(absl::DataLossError(
+          "SSE outbound stream ended inside a WireMessage frame"));
+    }
+    return response->Finish();
   });
 }
 

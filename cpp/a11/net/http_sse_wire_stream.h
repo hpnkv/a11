@@ -41,6 +41,28 @@ namespace a11::net {
 inline constexpr std::string_view kSseStreamIdHeader = "x-a11-stream-id";
 /** Prefix under which application HTTP headers are tunneled over SSE. */
 inline constexpr std::string_view kSseHttpHeaderPrefix = "x-a11-http-";
+/**
+ * Response header on the connect response listing the outbound delivery modes
+ * the server accepts, comma-separated -- `post`, `stream`. A server that omits
+ * it is understood to accept `post` only, which is what every deployed SSE
+ * server did before streamed delivery existed.
+ */
+inline constexpr std::string_view kSseOutboundModesHeader = "x-a11-outbound";
+/** Token for one-POST-per-message outbound delivery. */
+inline constexpr std::string_view kSseOutboundPostToken = "post";
+/** Token for long-lived-request-body outbound delivery. */
+inline constexpr std::string_view kSseOutboundStreamToken = "stream";
+/**
+ * Content type of a streamed outbound request body.
+ *
+ * The body is a sequence of frames, each a four-byte little-endian payload
+ * length followed by that many bytes of the JSON WireMessage encoding the POST
+ * route carries one of. HTTP/2 sends it as DATA frames and HTTP/1.1 as a chunked
+ * body; neither framing is a message boundary, which is why the length prefix is
+ * there.
+ */
+inline constexpr std::string_view kSseWireStreamContentType =
+    "application/vnd.a11.wire-stream+json";
 /** Default path on which a client opens the SSE event stream. */
 inline constexpr std::string_view kDefaultSseConnectEndpoint = "/connect";
 /** Default message-post path template (`{id}` is the stream id). */
@@ -48,11 +70,45 @@ inline constexpr std::string_view kDefaultSseMessageEndpoint =
     "/streams/{id}/message";
 
 /**
+ * @brief How an SSE client hands its outbound WireMessages to the server.
+ *
+ * The inbound direction is always the SSE event stream. Only the outbound one
+ * has a choice, and it is a reachability/throughput trade rather than a
+ * correctness one -- the server accepts both, on the same endpoint, and a stream
+ * and a series of POSTs deliver the same messages.
+ */
+enum class SseOutboundDelivery {
+  /**
+   * One HTTP POST per message.
+   *
+   * Universally reachable: a browser needs nothing but `fetch()` per message,
+   * which is the whole reason this transport exists. A11 issues these
+   * concurrently up to `max_concurrent_posts` -- WireMessages need no global
+   * order -- and serialises only where order is load-bearing: everything
+   * outstanding is delivered before a half-close, and an abort goes out ahead of
+   * whatever is still in flight.
+   */
+  kPost,
+  /**
+   * One long-lived request body carrying every outbound message.
+   *
+   * HTTP/2 DATA frames or an HTTP/1.1 chunked body, framed as
+   * kSseWireStreamContentType describes. Removes the one-request-per-message
+   * ceiling, and ordering comes from the stream itself. Needs a client that can
+   * write a request body incrementally, which `fetch()` cannot do portably --
+   * so this is for C++, Python and other capable backends. Falls back to kPost
+   * against a server that does not advertise `stream` in
+   * kSseOutboundModesHeader.
+   */
+  kStream,
+};
+
+/**
  * @brief Endpoint paths and transport tuning for an HTTP SSE wire stream.
  *
  * A POST to `connect_endpoint` opens the SSE event stream;
  * `message_endpoint` (a path template containing the stream id) receives
- * posted outbound messages.
+ * outbound messages, either one per POST or as one streamed request body.
  * `http2_options` and `stream_options` tune the underlying transport.
  */
 struct HttpSseOptions {
@@ -61,7 +117,13 @@ struct HttpSseOptions {
   std::string connect_endpoint =
       std::string(kDefaultSseConnectEndpoint);  ///< SSE connect POST path.
   std::string message_endpoint =
-      std::string(kDefaultSseMessageEndpoint);  ///< Outbound POST template.
+      std::string(kDefaultSseMessageEndpoint);  ///< Outbound endpoint template.
+  /// Client-side outbound delivery method; servers accept either.
+  SseOutboundDelivery outbound = SseOutboundDelivery::kPost;
+  /// Outbound POSTs a client keeps in flight at once (kPost only). One restores
+  /// the strictly serialised behaviour; the bound is what stops a fast producer
+  /// from spending every stream on the HTTP/2 connection at once.
+  size_t max_concurrent_posts = 16;
   std::string cors_allow_origin;    ///< Access-Control-Allow-Origin value.
   std::string cors_allow_methods;   ///< Access-Control-Allow-Methods value.
   std::string cors_allow_headers;   ///< Access-Control-Allow-Headers value.
@@ -181,6 +243,15 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
    * streams). */
   [[nodiscard]] std::shared_ptr<Http2Client> client() const;
 
+  /**
+   * @brief The outbound delivery method actually in use.
+   *
+   * Equals the requested HttpSseOptions::outbound once connected, except where a
+   * kStream request fell back to kPost because the server did not advertise it.
+   * Meaningful only after the transport has opened.
+   */
+  [[nodiscard]] SseOutboundDelivery outbound_delivery() const;
+
   HttpSseClientWireStream(ConstructorToken, std::string url,
                           HttpSseOptions options,
                           InProcessWireStream::Pair pair,
@@ -191,10 +262,25 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
   a11::Task OpenTransport() override;
   absl::Status Transmit(data::WireMessage message) override;
   void* absl_nullable TransportImpl() const override;
+  void TransportDone() override;
 
  private:
   static void ReceiveSseLoop(
       const std::shared_ptr<HttpSseClientWireStream>& self);
+
+  /// Opens the streamed outbound request body, or leaves delivery on kPost when
+  /// @p response_headers do not advertise the streamed mode.
+  absl::Status OpenOutboundStream(const HttpHeaders& response_headers);
+  /// Sends one already-encoded message on the streamed outbound body.
+  absl::Status TransmitOnStream(std::string payload, bool terminal);
+  /// Sends one already-encoded message as its own POST, awaiting the response.
+  absl::Status TransmitAsPost(std::string payload);
+  /// Blocks until an outbound POST slot is free, then claims it.
+  absl::Status ClaimPostSlot();
+  /// Releases a slot claimed by ClaimPostSlot and wakes anyone waiting.
+  void ReleasePostSlot();
+  /// Blocks until every outbound POST handed over so far has completed.
+  absl::Status AwaitPostsDelivered();
 
   std::shared_ptr<ClientState> client_state_;
 };
@@ -289,6 +375,10 @@ class HttpSseServer : public std::enable_shared_from_this<HttpSseServer> {
   static a11::Task HandleMessage(const std::shared_ptr<State>& state,
                                  std::string stream_id, HttpRequest request,
                                  std::shared_ptr<Http2ResponseWriter> response);
+  /// Reads a whole outbound direction off one streamed request body.
+  static a11::Task HandleMessageStream(
+      const std::shared_ptr<State>& state, std::string stream_id,
+      HttpRequest request, std::shared_ptr<Http2ResponseWriter> response);
 
   std::shared_ptr<State> state_;
 

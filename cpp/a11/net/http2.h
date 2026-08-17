@@ -71,7 +71,8 @@ absl::Status ValidateHttpHeaders(const HttpHeaders& headers);
 /** @brief A parsed HTTP/2 request: pseudo-headers, fields, and body.
  *
  * `body_stream` is present only for a request that remains open after its
- * headers (an extended CONNECT stream). */
+ * headers: an extended CONNECT stream, or one accepted by
+ * Http2Options::stream_request_body. */
 struct HttpRequest {
   std::string method;     ///< HTTP method pseudo-header.
   std::string protocol;   ///< Extended CONNECT protocol, if present.
@@ -80,7 +81,7 @@ struct HttpRequest {
   std::string path;       ///< Request path and query.
   HttpHeaders headers;    ///< Normal application headers.
   std::string body;       ///< Fully buffered body for an ordinary request.
-  /// Pull stream for an open extended CONNECT request, otherwise null.
+  /// Pull stream for a request still open after its headers, otherwise null.
   std::shared_ptr<Http2RequestBodyStream> body_stream;
 };
 
@@ -169,6 +170,28 @@ struct Http2Options {
   /// first attempt fails (ALPN makes TLS negotiation unambiguous already).
   bool client_allow_downgrade = true;
 
+  /**
+   * Server: decides from a request's head whether its body arrives
+   * incrementally.
+   *
+   * A request this accepts is dispatched to the handler as soon as its headers
+   * land, with HttpRequest::body_stream carrying the body as it arrives and
+   * HttpRequest::body left empty; every other request is buffered whole and
+   * dispatched once complete, which is what an unset predicate means. Reach for
+   * it when a request body is an open-ended stream of application messages
+   * rather than a document -- the HTTP SSE transport's streaming outbound
+   * direction is exactly that. An extended CONNECT stream is delivered this way
+   * regardless.
+   *
+   * Called on the connection's libuv thread, so keep it a cheap inspection of
+   * the head. `max_buffered_request_bytes` bounds what the stream holds while
+   * the handler is not reading, and `max_request_body_size` does not apply --
+   * a stream has no total length to compare against.
+   */
+  std::function<bool(std::string_view method, std::string_view path,
+                     const HttpHeaders& headers)>
+      stream_request_body;
+
   /// Validate size relationships, deadline, TLS, and protocol settings.
   absl::Status Validate() const;
 };
@@ -176,7 +199,7 @@ struct Http2Options {
 class Http2Connection;
 
 /**
- * @brief Pull-oriented request DATA for an extended CONNECT stream.
+ * @brief Pull-oriented request DATA for a request that stays open.
  *
  * Present on HttpRequest::body_stream only when a request remains open after
  * its headers. Read incrementally with Read() until it yields nullopt.

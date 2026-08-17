@@ -199,6 +199,15 @@
   well-typed, as the existing JSON code does.
 - Public headers must compile both ways. `tests/header_canary.cc` compiles every
   installed header with exceptions disabled; add new ones to it.
+- **A header containing a `try` may only be included where exceptions are on, and
+  do not rely on the compiler to tell you.** `a11/internal/exception_guard_impl.h`
+  is the one such header; it carries an `#error` for the no-exceptions case
+  because whether a `try` in an *uninstantiated* template body is a diagnostic is
+  compiler-dependent -- GCC and clang up to ~17 reject it at parse time, Apple
+  clang 21 accepts it. `a11/exception_guard.cc` included it for years of nothing
+  and then broke only on the CI macOS runner. If you need the `Failure` trait
+  without the wrappers, include `a11/internal/exception_guard_failure.h`, which
+  has no `try` and needs no opt-out.
 
 ## Abseil conventions
 

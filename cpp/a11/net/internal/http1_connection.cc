@@ -158,6 +158,8 @@ absl::Status Http1Connection::ServerParse() {
       response_chunked_ = false;
       request_body_.clear();
       request_chunk_decoder_ = ChunkedDecoder();
+      streaming_request_body_ = false;
+      request_body_state_ = nullptr;
 
       // An RFC 6455 WebSocket upgrade: dispatch immediately with a request body
       // stream carrying the post-101 frame bytes, and remember the client key.
@@ -183,6 +185,52 @@ absl::Status Http1Connection::ServerParse() {
       }
       request_body_remaining_ = request_body_plan_.content_length;
       state_ = ParseState::kBody;
+
+      // A body the owner asked to receive incrementally: dispatch now and decode
+      // into the request body stream as bytes arrive, rather than buffering the
+      // whole thing and dispatching at its end.
+      if (options().stream_request_body != nullptr &&
+          options().stream_request_body(request_head_.method,
+                                        request_head_.target,
+                                        request_head_.headers)) {
+        streaming_request_body_ = true;
+        request_body_state_ = std::make_shared<Http2RequestBodyStream::State>(
+            options().max_buffered_request_bytes);
+        ABSL_RETURN_IF_ERROR(DispatchRequest());
+        state_ = ParseState::kStreamingBody;
+        continue;
+      }
+    }
+
+    if (state_ == ParseState::kStreamingBody) {
+      if (inbuf_.empty()) {
+        return absl::OkStatus();  // Await more body bytes.
+      }
+      std::string decoded;
+      bool complete = false;
+      if (request_body_plan_.framing == BodyFraming::kContentLength) {
+        const size_t take = std::min(request_body_remaining_, inbuf_.size());
+        decoded.assign(inbuf_, 0, take);
+        inbuf_.erase(0, take);
+        request_body_remaining_ -= take;
+        complete = request_body_remaining_ == 0;
+      } else {  // Chunked.
+        ABSL_RETURN_IF_ERROR(
+            request_chunk_decoder_.Feed(inbuf_, &decoded, &complete));
+        inbuf_.clear();
+      }
+      if (!decoded.empty() && request_body_state_ != nullptr) {
+        // Push bounds itself by max_buffered_request_bytes, so a handler that
+        // stops reading fails the connection rather than growing without limit.
+        ABSL_RETURN_IF_ERROR(request_body_state_->Push(std::move(decoded)));
+      }
+      if (complete) {
+        if (request_body_state_ != nullptr) {
+          request_body_state_->Finish(absl::OkStatus());
+        }
+        state_ = ParseState::kAwaitingResponse;
+      }
+      return absl::OkStatus();
     }
 
     if (state_ == ParseState::kRaw) {
@@ -260,8 +308,13 @@ absl::Status Http1Connection::DispatchRequest() {
         std::make_shared<MakeRequestBodyEnabler>(request_body_state_);
   } else {
     request.method = request_head_.method;
-    request.body = std::move(request_body_);
-    request_body_.clear();
+    if (streaming_request_body_) {
+      request.body_stream =
+          std::make_shared<MakeRequestBodyEnabler>(request_body_state_);
+    } else {
+      request.body = std::move(request_body_);
+      request_body_.clear();
+    }
   }
 
   auto writer = std::make_shared<MakeWriterEnabler>(
@@ -847,8 +900,10 @@ void Http1Connection::FinishResponseAndAdvance() {
     writer_state_->Finish(absl::OkStatus());
   }
   // A finished WebSocket (or a non-keep-alive response) ends the connection;
-  // an upgraded socket cannot be reused for another HTTP request.
-  if (!keep_alive_ || ws_upgrade_ || state_ == ParseState::kRaw) {
+  // an upgraded socket cannot be reused for another HTTP request. Nor can one
+  // whose request body was streamed -- see streaming_request_body_.
+  if (!keep_alive_ || ws_upgrade_ || streaming_request_body_ ||
+      state_ == ParseState::kRaw) {
     CloseOnLoop(absl::OkStatus());
     return;
   }
@@ -945,9 +1000,12 @@ void Http1Connection::OnClose(const absl::Status& status) {
     writer_state_->Finish(status);
   }
   if (request_body_state_ != nullptr) {
-    // A cleanly-closed WebSocket ends its inbound frame stream without error.
-    request_body_state_->Finish(state_ == ParseState::kRaw ? absl::OkStatus()
-                                                           : status);
+    // A cleanly-closed WebSocket ends its inbound frame stream without error,
+    // and so does a streamed request body the peer already ended.
+    const bool clean_eof = state_ == ParseState::kRaw ||
+                           (streaming_request_body_ &&
+                            state_ == ParseState::kAwaitingResponse);
+    request_body_state_->Finish(clean_eof ? absl::OkStatus() : status);
   }
 }
 

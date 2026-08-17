@@ -104,7 +104,14 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   absl::Status OnAlpnNegotiated(std::string_view protocol) override;
 
  private:
-  enum class ParseState { kHead, kBody, kAwaitingResponse, kRaw, kDone };
+  enum class ParseState {
+    kHead,
+    kBody,
+    kStreamingBody,
+    kAwaitingResponse,
+    kRaw,
+    kDone
+  };
 
   Http1Connection(std::shared_ptr<uvw::tcp_handle> tcp, bool server,
                   Http2RequestHandler handler, Http2Options options,
@@ -160,6 +167,14 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   bool client_ws_ = false;          ///< Client-initiated WebSocket upgrade.
   std::string client_ws_key_;       ///< Key we sent (client side, for accept).
   std::shared_ptr<Http2RequestBodyStream::State> request_body_state_;
+
+  /// Http2Options::stream_request_body accepted this exchange, so its body is
+  /// decoded into request_body_state_ as it arrives and the handler already has
+  /// it. Such an exchange owns the connection for its lifetime: the response may
+  /// legitimately be written while body bytes are still coming, which leaves no
+  /// point at which a following pipelined request could be told apart from the
+  /// remainder of this one. FinishResponseAndAdvance closes instead of reusing.
+  bool streaming_request_body_ = false;
 
   // Client response state.
   std::string client_method_;

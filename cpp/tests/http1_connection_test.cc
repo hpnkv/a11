@@ -7,10 +7,13 @@
 #include <string_view>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/strings/str_cat.h>
+#include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
+#include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/net/http2.h"
 
@@ -308,6 +311,175 @@ TEST(Http1ConnectionTest, CleartextHttp1OnlyServerServesExplicitHttp1Client) {
                       .Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(response.ok()) << response.status();
   EXPECT_EQ(response->body, "http1:hi");
+
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
+// Http2Options::stream_request_body on an ordinary chunked POST: the handler runs
+// while the body is still arriving, which is what an open-ended upload needs and
+// what the SSE transport's streamed outbound direction is built on.
+TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyToTheHandler) {
+  auto first_chunk_seen = std::make_shared<a11::Promise<a11::Unit>>();
+  a11::Task first_chunk_arrived = first_chunk_seen->future();
+
+  Http2Options server_options;
+  server_options.stream_request_body =
+      [](std::string_view method, std::string_view path, const HttpHeaders&) {
+        return method == "POST" && path == "/upload";
+      };
+  auto server = Http2Server::Create(
+      "127.0.0.1", 0,
+      [first_chunk_seen](HttpRequest request,
+                         std::shared_ptr<Http2ResponseWriter> response)
+          -> a11::Task {
+        return a11::SubmitTask(
+            [first_chunk_seen, request = std::move(request),
+             response = std::move(response)]() mutable -> absl::Status {
+              if (request.body_stream == nullptr) {
+                return absl::FailedPreconditionError("body was not streamed");
+              }
+              if (!request.body.empty()) {
+                return absl::FailedPreconditionError(
+                    "a streamed body must not also be buffered");
+              }
+              std::string body;
+              bool first = true;
+              while (true) {
+                ABSL_ASSIGN_OR_RETURN(
+                    std::optional<std::string> chunk,
+                    request.body_stream->Read().Await(absl::Now() +
+                                                      absl::Seconds(5)));
+                if (!chunk.has_value()) {
+                  break;
+                }
+                if (first) {
+                  first = false;
+                  (void)first_chunk_seen->SetValue(a11::Unit{});
+                }
+                body.append(*chunk);
+              }
+              return response->SendResponse(200, {}, absl::StrCat("got:", body));
+            });
+      },
+      server_options);
+  ASSERT_TRUE(server.ok()) << server.status();
+
+  auto client =
+      Http2Client::Connect("127.0.0.1", (*server)->port(), Http1ClientOptions())
+          .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+  auto upload = (*client)->RequestStreamingBody("POST", "/upload");
+  ASSERT_TRUE(upload.ok()) << upload.status();
+
+  ASSERT_TRUE((*upload)->Write("first").ok());
+  // The handler has the first chunk before the body ends: proof it was dispatched
+  // on the headers rather than at END_STREAM.
+  ASSERT_TRUE(first_chunk_arrived.Await(absl::Now() + absl::Seconds(5)).ok());
+  ASSERT_TRUE((*upload)->Write("-second").ok());
+  ASSERT_TRUE((*upload)->Finish().ok());
+
+  auto head = (*upload)->Headers().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(head.ok()) << head.status();
+  EXPECT_EQ(head->status, 200);
+  std::string body;
+  while (true) {
+    auto chunk = (*upload)->Read().Await(absl::Now() + absl::Seconds(5));
+    ASSERT_TRUE(chunk.ok()) << chunk.status();
+    if (!chunk->has_value()) {
+      break;
+    }
+    body.append(**chunk);
+  }
+  EXPECT_EQ(body, "got:first-second");
+
+  EXPECT_TRUE((*client)->Close().ok());
+  EXPECT_TRUE((*server)->Stop().ok());
+}
+
+// The same, over HTTP/2 -- where the body is DATA frames rather than a chunked
+// body, and the decision is made in the frame callback instead of the parser.
+TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyOverHttp2) {
+  auto first_chunk_seen = std::make_shared<a11::Promise<a11::Unit>>();
+  a11::Task first_chunk_arrived = first_chunk_seen->future();
+
+  Http2Options server_options;
+  server_options.enable_http1 = false;
+  server_options.stream_request_body =
+      [](std::string_view, std::string_view path, const HttpHeaders& headers) {
+        return path == "/upload" &&
+               GetHttpHeader(headers, "x-stream-me").has_value();
+      };
+  auto server = Http2Server::Create(
+      "127.0.0.1", 0,
+      [first_chunk_seen](HttpRequest request,
+                         std::shared_ptr<Http2ResponseWriter> response)
+          -> a11::Task {
+        return a11::SubmitTask(
+            [first_chunk_seen, request = std::move(request),
+             response = std::move(response)]() mutable -> absl::Status {
+              if (request.body_stream == nullptr) {
+                return response->SendResponse(
+                    200, {}, absl::StrCat("buffered:", request.body));
+              }
+              std::string body;
+              bool first = true;
+              while (true) {
+                ABSL_ASSIGN_OR_RETURN(
+                    std::optional<std::string> chunk,
+                    request.body_stream->Read().Await(absl::Now() +
+                                                      absl::Seconds(5)));
+                if (!chunk.has_value()) {
+                  break;
+                }
+                if (first) {
+                  first = false;
+                  (void)first_chunk_seen->SetValue(a11::Unit{});
+                }
+                body.append(*chunk);
+              }
+              return response->SendResponse(200, {}, absl::StrCat("got:", body));
+            });
+      },
+      server_options);
+  ASSERT_TRUE(server.ok()) << server.status();
+
+  Http2Options client_options;
+  client_options.client_preference = Http2Options::ProtocolPreference::kHttp2;
+  auto client = Http2Client::Connect("127.0.0.1", (*server)->port(),
+                                     client_options)
+                    .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(client.ok()) << client.status();
+  auto upload = (*client)->RequestStreamingBody("POST", "/upload",
+                                                {{"x-stream-me", "yes"}});
+  ASSERT_TRUE(upload.ok()) << upload.status();
+  ASSERT_TRUE((*upload)->Write("first").ok());
+  ASSERT_TRUE(first_chunk_arrived.Await(absl::Now() + absl::Seconds(5)).ok());
+  ASSERT_TRUE((*upload)->Write("-second").ok());
+  ASSERT_TRUE((*upload)->Finish().ok());
+
+  auto head = (*upload)->Headers().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(head.ok()) << head.status();
+  EXPECT_EQ(head->status, 200);
+  std::string body;
+  while (true) {
+    auto chunk = (*upload)->Read().Await(absl::Now() + absl::Seconds(5));
+    ASSERT_TRUE(chunk.ok()) << chunk.status();
+    if (!chunk->has_value()) {
+      break;
+    }
+    body.append(**chunk);
+  }
+  EXPECT_EQ(body, "got:first-second");
+
+  // A request the predicate declines -- same path, no x-stream-me -- is still
+  // buffered whole and dispatched at its end.
+  auto buffered = (*client)
+                      ->Request("POST", "/upload", {}, "plain")
+                      .Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(buffered.ok()) << buffered.status();
+  EXPECT_EQ(buffered->head.status, 200);
+  EXPECT_EQ(buffered->body, "buffered:plain");
 
   EXPECT_TRUE((*client)->Close().ok());
   EXPECT_TRUE((*server)->Stop().ok());

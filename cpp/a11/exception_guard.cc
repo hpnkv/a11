@@ -9,14 +9,16 @@
 #include <absl/status/status.h>
 #include <absl/strings/str_cat.h>
 
-#include "a11/internal/exception_guard_impl.h"
+#include "a11/internal/exception_guard_failure.h"
 
 namespace a11::exception_guard::internal {
 
 // Compiled without exceptions, like the rest of A11: naming an exception type
 // and reading what() need no more than the type's declaration. Only the frame
 // that *catches* needs them, and that is the wrapper in guard_impl.h, which the
-// boundary translation units instantiate.
+// boundary translation units instantiate -- so this file takes the Failure trait
+// from exception_guard_failure.h and must not include guard_impl.h, whose `try`
+// blocks some compilers reject at parse time even uninstantiated.
 
 absl::Status Raised(const std::exception& error, std::string_view what) {
   return absl::UnknownError(absl::StrCat(what, " raised: ", error.what()));

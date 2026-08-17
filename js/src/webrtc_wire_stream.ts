@@ -424,27 +424,40 @@ function normalizeWebRtcConfigurationUnchecked(
 }
 
 
-/** Fixed 8-byte little-endian frame prefix carrying the aggregate send order. */
-const SEQUENCE_PREFIX = 8;
+/**
+ * Fixed 8-byte little-endian frame suffix carrying the aggregate send order.
+ *
+ * A suffix rather than a prefix so the native side can append it to a packet it
+ * already owns and truncate it off on receive, instead of moving every byte of a
+ * 48 KiB packet twice per direction to make room for a header. Nothing changes
+ * for this implementation's cost — a typed array cannot be grown in place either
+ * way — but the framing has to match `cpp/a11/net/internal/multiplexed_binary_channel.cc`
+ * byte for byte, and it moved.
+ *
+ * This is a wire change: a peer still on the prefix format reads its sequence out
+ * of the first eight payload bytes and gets nonsense.
+ */
+const SEQUENCE_SUFFIX = 8;
 
 function encodeSequence(sequence: number, payload: Uint8Array): Uint8Array {
-  const framed = new Uint8Array(SEQUENCE_PREFIX + payload.byteLength);
+  const framed = new Uint8Array(payload.byteLength + SEQUENCE_SUFFIX);
+  framed.set(payload, 0);
   const view = new DataView(framed.buffer);
   // Split into two little-endian 32-bit halves; sequence stays < 2^53 in
   // practice, and this matches the C++ 8-byte LE uint64 framing byte for byte.
-  view.setUint32(0, sequence >>> 0, true);
-  view.setUint32(4, Math.floor(sequence / 0x100000000), true);
-  framed.set(payload, SEQUENCE_PREFIX);
+  view.setUint32(payload.byteLength, sequence >>> 0, true);
+  view.setUint32(payload.byteLength + 4, Math.floor(sequence / 0x100000000), true);
   return framed;
 }
 
 function decodeSequence(framed: Uint8Array): { sequence: number; payload: Uint8Array } {
   const view = new DataView(framed.buffer, framed.byteOffset, framed.byteLength);
-  const low = view.getUint32(0, true);
-  const high = view.getUint32(4, true);
+  const start = framed.byteLength - SEQUENCE_SUFFIX;
+  const low = view.getUint32(start, true);
+  const high = view.getUint32(start + 4, true);
   return {
     sequence: high * 0x100000000 + low,
-    payload: framed.subarray(SEQUENCE_PREFIX),
+    payload: framed.subarray(0, start),
   };
 }
 
@@ -768,7 +781,7 @@ class MultiplexedRtcChannel implements BinaryChannel {
 
   private onMemberMessage(framed: Uint8Array): void {
     if (this.closed) return;
-    if (framed.byteLength < SEQUENCE_PREFIX) {
+    if (framed.byteLength < SEQUENCE_SUFFIX) {
       this.fail(invalidArgumentError('Multiplexed member packet was malformed.'));
       return;
     }

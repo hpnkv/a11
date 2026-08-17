@@ -7,13 +7,26 @@
  * Include this **only** from a translation unit compiled with exceptions -- one
  * of the `boundary.cc` files named in the exception policy block of
  * cpp/CMakeLists.txt -- and follow it with an explicit instantiation of every
- * signature that library adopts. Including it anywhere else is a compile error
- * on the `try` below, which is the point: the wrapper's body has to live where
- * exceptions exist, or it protects nothing. See a11/exception_guard.h for why.
+ * signature that library adopts. The wrapper's body has to live where exceptions
+ * exist, or it protects nothing. See a11/exception_guard.h for why.
+ *
+ * Including it anywhere else is the `#error` below rather than a diagnostic on
+ * one of the `try` blocks, because whether *that* is an error depends on the
+ * compiler: a `try` in an uninstantiated template body is rejected at parse time
+ * by GCC and by clang up to around 17, and accepted by Apple clang 21. Relying on
+ * it meant a build that passed on one macOS and failed on another, which is
+ * exactly what happened. If you need the `Failure` trait and not the wrappers --
+ * a11/exception_guard.cc does -- include
+ * a11/internal/exception_guard_failure.h, which compiles anywhere.
  */
 
 #ifndef A11_INTERNAL_EXCEPTION_GUARD_IMPL_H_
 #define A11_INTERNAL_EXCEPTION_GUARD_IMPL_H_
+
+#if !defined(__cpp_exceptions) && !defined(__EXCEPTIONS)
+#error \
+    "a11/internal/exception_guard_impl.h needs exceptions. Include it only from a boundary translation unit named in the exception policy block of cpp/CMakeLists.txt; for the Failure trait alone use a11/internal/exception_guard_failure.h."
+#endif
 
 #include <exception>
 #include <string>
@@ -24,39 +37,9 @@
 #include <absl/status/statusor.h>
 
 #include "a11/exception_guard.h"
+#include "a11/internal/exception_guard_failure.h"
 
 namespace a11::exception_guard {
-namespace internal {
-
-/**
- * How a wrapped callable's return type carries a failure.
- *
- * Specialised per return kind rather than assumed, because the kinds differ in
- * what they can even express: a Status returns the error, a Future is failed
- * with it (see a11/concurrency/internal/exception_guard_future.h), and a void
- * callback has nowhere to put it and so is logged. A return type with no
- * specialisation fails to compile, which is the right outcome -- silently
- * dropping an exception is exactly what this file exists to prevent.
- */
-template <typename Result>
-struct Failure;
-
-template <>
-struct Failure<absl::Status> {
-  static absl::Status From(absl::Status status) { return status; }
-};
-
-template <typename T>
-struct Failure<absl::StatusOr<T>> {
-  static absl::StatusOr<T> From(absl::Status status) { return status; }
-};
-
-template <>
-struct Failure<void> {
-  static void From(absl::Status status);
-};
-
-}  // namespace internal
 
 template <typename Result, typename... Args>
 std::function<Result(Args...)> Wrap(std::function<Result(Args...)> callable,

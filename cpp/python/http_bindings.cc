@@ -1018,6 +1018,19 @@ void BindHttp(py::module_& module) {
           },
           "Return an opaque capsule wrapping the native client handle.");
 
+  py::enum_<net::SseOutboundDelivery>(
+      module, "SseOutboundDelivery",
+      "How an SSE client delivers its outbound WireMessages. Servers accept "
+      "either; only the client chooses.")
+      .value("POST", net::SseOutboundDelivery::kPost,
+             "One HTTP POST per message, issued concurrently up to "
+             "max_concurrent_posts. Reachable from anything that can fetch().")
+      .value("STREAM", net::SseOutboundDelivery::kStream,
+             "One long-lived request body carrying every message: HTTP/2 DATA "
+             "frames or an HTTP/1.1 chunked body. Removes the "
+             "one-request-per-message ceiling; falls back to POST against a "
+             "server that does not advertise it.");
+
   py::class_<net::HttpSseOptions>(module, "HttpSseOptions")
       .def(py::init<>(), "Construct default HTTP SSE wire stream options.")
       .def_readwrite("stream_options", &net::HttpSseOptions::stream_options,
@@ -1028,6 +1041,12 @@ void BindHttp(py::module_& module) {
                      "The endpoint path used to open the SSE connection.")
       .def_readwrite("message_endpoint", &net::HttpSseOptions::message_endpoint,
                      "The endpoint path template used to post messages.")
+      .def_readwrite("outbound", &net::HttpSseOptions::outbound,
+                     "Client-side outbound delivery method.")
+      .def_readwrite("max_concurrent_posts",
+                     &net::HttpSseOptions::max_concurrent_posts,
+                     "Outbound POSTs kept in flight at once; 1 restores "
+                     "strictly serialised delivery.")
       .def_readwrite(
           "cors_allow_origin", &net::HttpSseOptions::cors_allow_origin,
           "Value for Access-Control-Allow-Origin; empty disables CORS.")
@@ -1144,7 +1163,12 @@ void BindHttp(py::module_& module) {
           "client", &net::HttpSseClientWireStream::client,
           "The underlying HTTP/2 client backing this SSE wire stream, which "
           "you can reuse to multiplex additional streams from the same "
-          "agent connection.");
+          "agent connection.")
+      .def_property_readonly(
+          "outbound_delivery", &net::HttpSseClientWireStream::outbound_delivery,
+          "The outbound delivery method actually in use. Equals the requested "
+          "one once connected, except where a STREAM request fell back to POST "
+          "because the server did not advertise streamed delivery.");
 
   py::classh<net::HttpSseServerWireStream, net::HttpSseWireStream>(
       module, "HttpSseServerWireStream")

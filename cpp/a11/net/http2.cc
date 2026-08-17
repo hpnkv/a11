@@ -1431,6 +1431,35 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     return method == "CONNECT" && protocol.has_value() && !protocol->empty();
   }
 
+  /**
+   * Whether this request's body should reach the handler as it arrives.
+   *
+   * The predicate sees the head as the handler will: the method and path
+   * pseudo-headers pulled out, and the ordinary fields on their own. Runs on the
+   * loop thread inside nghttp2's frame callback, so a throwing or blocking
+   * predicate is the caller's problem; the option documents that.
+   */
+  bool WantsStreamedRequestBody(const Stream* stream) const {
+    if (stream == nullptr || options_.stream_request_body == nullptr) {
+      return false;
+    }
+    const std::optional<std::string> method =
+        GetHttpHeader(stream->inbound_headers, ":method");
+    const std::optional<std::string> path =
+        GetHttpHeader(stream->inbound_headers, ":path");
+    if (!method.has_value() || !path.has_value()) {
+      return false;  // A malformed head is rejected by DispatchRequest.
+    }
+    HttpHeaders fields;
+    fields.reserve(stream->inbound_headers.size());
+    for (const auto& [name, value] : stream->inbound_headers) {
+      if (!name.empty() && name.front() != ':') {
+        fields.emplace_back(name, value);
+      }
+    }
+    return options_.stream_request_body(*method, *path, fields);
+  }
+
   absl::Status BeginDuplexRequest(Stream* stream) {
     if (stream == nullptr) {
       return absl::InvalidArgumentError("HTTP/2 stream must not be null");
@@ -1631,7 +1660,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
           stream->remote_end = true;
           self->DispatchRequest(stream);
-        } else if (self->IsExtendedConnect(stream)) {
+        } else if (self->IsExtendedConnect(stream) ||
+                   self->WantsStreamedRequestBody(stream)) {
           absl::Status started = self->BeginDuplexRequest(stream);
           if (!started.ok()) {
             self->pending_transport_error_ = std::move(started);

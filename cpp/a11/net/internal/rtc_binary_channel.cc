@@ -1,6 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <memory>
@@ -22,21 +21,19 @@ absl::Status ExternalError(const std::exception& error) {
   return absl::UnknownError(error.what());
 }
 
+// std::byte and char are the same object representation, so both conversions are
+// a range construction over reinterpreted pointers: one memcpy, and no pass to
+// value-initialise a buffer that is about to be overwritten. At A11's 48 KiB
+// WebRTC packet size that is two fewer passes over every packet in each
+// direction, which the elementwise transform this replaced was paying for.
 rtc::binary ToRtcBinary(std::string_view bytes) {
-  rtc::binary result(bytes.size());
-  std::transform(bytes.begin(), bytes.end(), result.begin(), [](char value) {
-    return static_cast<std::byte>(static_cast<unsigned char>(value));
-  });
-  return result;
+  const auto* first = reinterpret_cast<const std::byte*>(bytes.data());
+  return rtc::binary(first, first + bytes.size());
 }
 
 std::string FromRtcBinary(const rtc::binary& bytes) {
-  std::string result(bytes.size(), '\0');
-  std::transform(
-      bytes.begin(), bytes.end(), result.begin(), [](std::byte value) {
-        return static_cast<char>(std::to_integer<unsigned char>(value));
-      });
-  return result;
+  return std::string(reinterpret_cast<const char*>(bytes.data()),
+                     bytes.size());
 }
 
 class RtcBinaryChannel final : public BinaryChannel {

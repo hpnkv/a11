@@ -6,6 +6,7 @@ add_executable(a11_core_test
   http1_codec_test.cc
   http1_connection_test.cc
   http2_test.cc
+  http2_concurrency_test.cc
   http_url_test.cc
   http_fetch_test.cc
   http_connection_pool_test.cc
@@ -13,6 +14,7 @@ add_executable(a11_core_test
   http_sse_wire_stream_test.cc
   signalling_test.cc
   webrtc_wire_stream_test.cc
+  multiplexed_binary_channel_test.cc
   websocket_signalling_test.cc
   chunk_store_reader_test.cc
   chunk_store_writer_test.cc

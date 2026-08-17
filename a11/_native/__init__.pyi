@@ -136,6 +136,7 @@ __all__: list[str] = [
     "SessionOptions",
     "SessionWithRecv",
     "SignallingEndpoint",
+    "SseOutboundDelivery",
     "SignallingMessage",
     "SignallingMessageType",
     "SignallingService",
@@ -3908,6 +3909,12 @@ class HttpSseClientWireStream(HttpSseWireStream):
         The underlying HTTP/2 client backing this SSE wire stream, which you can reuse to multiplex additional streams from the same agent connection.
         """
 
+    @property
+    def outbound_delivery(self) -> SseOutboundDelivery:
+        """
+        The outbound delivery method actually in use. Equals the requested one once connected, except where a STREAM request fell back to POST because the server did not advertise streamed delivery.
+        """
+
 class HttpSseOptions:
     def __init__(self) -> None:
         """
@@ -3968,12 +3975,28 @@ class HttpSseOptions:
     def http2_options(self, arg0: Http2Options) -> None: ...
 
     @property
+    def max_concurrent_posts(self) -> int:
+        """
+        Outbound POSTs kept in flight at once; 1 restores strictly serialised delivery.
+        """
+    @max_concurrent_posts.setter
+    def max_concurrent_posts(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
     def message_endpoint(self) -> str:
         """
         The endpoint path template used to post messages.
         """
     @message_endpoint.setter
     def message_endpoint(self, arg0: str) -> None: ...
+
+    @property
+    def outbound(self) -> SseOutboundDelivery:
+        """
+        Client-side outbound delivery method.
+        """
+    @outbound.setter
+    def outbound(self, arg0: SseOutboundDelivery) -> None: ...
 
     @property
     def stream_options(self) -> WireStreamOptions:
@@ -6745,6 +6768,35 @@ class SpeechRecognizerOptions:
         """
     @vad_window_millis.setter
     def vad_window_millis(self, arg0: typing.SupportsInt) -> None: ...
+
+class SseOutboundDelivery:
+    """
+    How an SSE client delivers its outbound WireMessages. Servers accept either; only the client chooses.
+
+    Members:
+
+      POST : One HTTP POST per message, issued concurrently up to max_concurrent_posts. Reachable from anything that can fetch().
+
+      STREAM : One long-lived request body carrying every message: HTTP/2 DATA frames or an HTTP/1.1 chunked body. Removes the one-request-per-message ceiling; falls back to POST against a server that does not advertise it.
+    """
+
+    POST: typing.ClassVar[SseOutboundDelivery]
+    STREAM: typing.ClassVar[SseOutboundDelivery]
+    __members__: typing.ClassVar[dict[str, SseOutboundDelivery]]
+    def __eq__(self, other: object) -> bool: ...
+    def __getstate__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __int__(self) -> int: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __str__(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def value(self) -> int: ...
 
 class Status:
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]

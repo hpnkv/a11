@@ -57,6 +57,17 @@ export interface HttpSseOptions {
   messageEndpoint?: string;
   /** Maximum UTF-8 bytes accepted in one SSE event. */
   maxEventSize?: number;
+  /**
+   * Outbound message POSTs kept in flight at once; defaults to 16.
+   *
+   * A11 WireMessages carry no global order, so a message does not have to wait
+   * for the one before it to be answered -- and on any real network that wait is
+   * the whole outbound throughput ceiling, one message per round trip. Order is
+   * still imposed where it matters: everything outstanding is delivered before a
+   * half-close, and an abort goes out ahead of whatever is still in flight. Set
+   * to 1 to restore strictly serialised delivery.
+   */
+  maxConcurrentPosts?: number;
   /** Fetch implementation; defaults to `globalThis.fetch`. */
   fetch?: FetchFunction;
   /** Extra Fetch options applied without overriding A11 method/body fields. */
@@ -68,6 +79,7 @@ interface NormalizedHttpSseOptions {
   connectUrl: string;
   messageUrlTemplate: string;
   maxEventSize: number;
+  maxConcurrentPosts: number;
   fetch: FetchFunction;
   requestInit: Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>;
 }
@@ -147,6 +159,10 @@ function normalizeOptions(
     if (!Number.isSafeInteger(maxEventSize) || maxEventSize <= 0) {
       return invalidArgumentError('maxEventSize must be a positive integer.');
     }
+    const maxConcurrentPosts = options.maxConcurrentPosts ?? 16;
+    if (!Number.isSafeInteger(maxConcurrentPosts) || maxConcurrentPosts <= 0) {
+      return invalidArgumentError('maxConcurrentPosts must be a positive integer.');
+    }
     const fetchFunction = options.fetch ?? globalThis.fetch?.bind(globalThis);
     if (typeof fetchFunction !== 'function') {
       return unimplementedError('Fetch is unavailable in this JavaScript runtime.');
@@ -156,6 +172,7 @@ function normalizeOptions(
       connectUrl,
       messageUrlTemplate,
       maxEventSize,
+      maxConcurrentPosts,
       fetch: fetchFunction,
       requestInit: { ...(options.requestInit ?? {}) },
     };
@@ -211,6 +228,13 @@ export class HttpSseClientWireStream implements WireStream {
   private remoteTerminalReceived = false;
   private suppressOutboundTerminal = false;
   private transportFinished = false;
+  /**
+   * Message POSTs handed over and not yet answered, plus the queue of callers
+   * waiting for a slot. Concurrency is bounded rather than unlimited so a fast
+   * producer cannot open an unbounded number of requests at once.
+   */
+  private readonly postsInFlight = new Set<Promise<void>>();
+  private readonly postSlotWaiters: Array<() => void> = [];
 
   private constructor(
     private readonly application: InProcessWireStream,
@@ -422,7 +446,62 @@ export class HttpSseClientWireStream implements WireStream {
     return okStatus();
   }
 
+  /**
+   * Hands one outbound message to the transport.
+   *
+   * Called from the bridge one message at a time. An ordinary message is posted
+   * without waiting for its response, so the next one overlaps it -- WireMessages
+   * carry no global order, and waiting would cap the outbound direction at one
+   * message per round trip. Order is imposed only where it is load-bearing:
+   *
+   *  - a half-close says "nothing more follows" and the peer enforces it, so
+   *    everything already handed over has to land first;
+   *  - an abort goes out at the earliest possibility, ahead of anything still in
+   *    flight, because the peer discards the rest anyway.
+   *
+   * A failure on a POST nobody is waiting for reaches the application the way a
+   * failed socket write does, through the stream's lifecycle.
+   */
   private async transmit(message: WireMessage): Promise<Status> {
+    const terminal = message.isHalfClose;
+    const abort = terminal && message.headers.has(ABORT_STATUS_HEADER);
+    if (terminal && !abort) {
+      const drained = await this.awaitPostsDelivered();
+      if (!isOk(drained)) return drained;
+      return this.postMessage(message);
+    }
+    if (abort) return this.postMessage(message);
+    await this.claimPostSlot();
+    const pending = (async () => {
+      const sent = await this.postMessage(message);
+      if (!isOk(sent)) this.failTransport(sent);
+    })();
+    this.postsInFlight.add(pending);
+    void pending.finally(() => {
+      this.postsInFlight.delete(pending);
+      this.postSlotWaiters.shift()?.();
+    });
+    return okStatus();
+  }
+
+  /** Resolves once a message POST slot is free, having claimed nothing yet. */
+  private async claimPostSlot(): Promise<void> {
+    while (this.postsInFlight.size >= this.options.maxConcurrentPosts) {
+      await new Promise<void>((resolve) => this.postSlotWaiters.push(resolve));
+    }
+  }
+
+  /** Resolves once every message POST handed over so far has been answered. */
+  private async awaitPostsDelivered(): Promise<Status> {
+    while (this.postsInFlight.size > 0) {
+      // Settled, not resolved: a POST that failed has already reported itself
+      // through failTransport, and the half-close still has to go out after it.
+      await Promise.allSettled([...this.postsInFlight]);
+    }
+    return this.transportStatus ?? okStatus();
+  }
+
+  private async postMessage(message: WireMessage): Promise<Status> {
     const payload = message.toJson();
     if (!isOk(payload)) return payload;
     const endpoint = formatMessageEndpoint(this.options.messageUrlTemplate, this.id);

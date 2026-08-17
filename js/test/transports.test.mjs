@@ -172,6 +172,94 @@ test('HTTP SSE client receives events and uses its POST backchannel', async (t) 
   assert.ok(posted.some((body) => body === '{}'));
 });
 
+test('HTTP SSE client overlaps message POSTs and drains them before a half-close', async (t) => {
+  // The server answers a message POST only when released, so the test can hold
+  // several open at once and see that the client did not wait for the first.
+  let eventResponse = null;
+  const open = [];
+  const bodies = [];
+  let peakOpen = 0;
+  let halfCloseSeenAt = -1;
+  const release = () => {
+    while (open.length > 0) {
+      const response = open.shift();
+      response.writeHead(204);
+      response.end();
+    }
+  };
+
+  const server = http.createServer(async (request, response) => {
+    if (request.method === 'POST' && request.url === '/connect') {
+      eventResponse = response;
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'x-a11-stream-id': 'fixture-stream',
+      });
+      // A comment line, purely to flush the head: node holds the response head
+      // until something is written, and the client's fetch does not resolve
+      // until it arrives.
+      response.write(':ready\n\n');
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/streams/fixture-stream/message') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = Buffer.concat(chunks).toString('utf8');
+      const message = WireMessage.fromJson(body);
+      const terminal = isOk(message) && message.isHalfClose;
+      if (terminal) halfCloseSeenAt = bodies.length;
+      bodies.push(body);
+      if (terminal) {
+        response.writeHead(204);
+        response.end();
+        eventResponse?.write('data: {}\n\n');
+        eventResponse?.end();
+        return;
+      }
+      open.push(response);
+      peakOpen = Math.max(peakOpen, open.length);
+      return;  // Held until release().
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    release();
+    eventResponse?.end();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const address = server.address();
+  const stream = HttpSseClientWireStream.create(
+    `http://127.0.0.1:${address.port}`,
+    { maxConcurrentPosts: 4 },
+  );
+  assert.equal(isOk(stream), true);
+  const received = WireStreamWithRecv.create(stream);
+  assert.equal(isOk(received), true);
+  assert.equal(isOk(await received.start()), true);
+
+  for (let index = 0; index < 4; ++index) {
+    assert.equal(isOk(received.send(messageWithByte(`m${index}`, index))), true);
+  }
+  for (let attempt = 0; attempt < 200 && open.length < 4; ++attempt) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  // Serialised delivery could never have more than one POST outstanding.
+  assert.equal(peakOpen, 4, `only ${peakOpen} POSTs were ever open at once`);
+
+  assert.equal(isOk(received.halfClose()), true);
+  const drained = received.drainOutgoingMessages();
+  // The half-close cannot go out while the four data POSTs are unanswered.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(halfCloseSeenAt, -1);
+  release();
+  assert.equal(await received.receive(2000), null);
+  assert.equal(isOk(await drained), true);
+  assert.equal(halfCloseSeenAt, 4, 'the half-close did not arrive last');
+});
+
 test('WebSocket signalling client validates and routes peer messages', async (t) => {
   const server = new WebSocketServer({ port: 0 });
   await new Promise((resolve) => server.once('listening', resolve));
@@ -492,8 +580,23 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
   ));
 
   assert.equal(isOk(stream.send(messageWithByte('rtc', 66))), true);
+  assert.equal(isOk(stream.send(messageWithByte('rtc', 67))), true);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.ok(connection.channel.sent.length > 0);
+  assert.ok(connection.channel.sent.length >= 2);
+
+  // The striping frame layout, which is shared with
+  // cpp/a11/net/internal/multiplexed_binary_channel.cc and pinned there too (see
+  // cpp/tests/multiplexed_binary_channel_test.cc). The 8-byte little-endian
+  // sequence is a *suffix*: the payload occupies the head of the frame, so the
+  // native side can append on send and truncate on receive instead of moving
+  // every byte of a 48 KiB packet to make room for a header. If this ever
+  // disagrees with the C++ literal, the two implementations cannot talk.
+  for (const [index, frame] of connection.channel.sent.slice(0, 2).entries()) {
+    assert.ok(frame.byteLength > 8, 'a frame carries a payload and a sequence');
+    const suffix = Array.from(frame.subarray(frame.byteLength - 8));
+    assert.deepEqual(suffix, [index, 0, 0, 0, 0, 0, 0, 0],
+      `frame ${index} must end with its little-endian sequence`);
+  }
   assert.equal(isOk(stream.abort(unavailableError('fixture complete'))), true);
   assert.equal(isOk(await stream.wait()), false);
   assert.equal(signallingClosed, true);

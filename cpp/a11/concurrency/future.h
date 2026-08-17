@@ -29,6 +29,7 @@
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
+#include "a11/exception_guard.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
 #include "thread/select.h"
@@ -65,12 +66,14 @@ template <typename T>
 void InvokeFutureCallback(
     absl::AnyInvocable<void(const absl::StatusOr<T>&)> callback,
     const absl::StatusOr<T>& result) {
-  try {
-    callback(result);
-  } catch (const std::exception& error) {
-    LOG(ERROR) << "Future completion callback raised: " << error.what();
-  } catch (...) {
-    LOG(ERROR) << "Future completion callback raised a non-standard exception";
+  // A completion callback belongs to whoever called OnReady, and so does this
+  // instantiation: if their callback can throw, their translation unit has
+  // exceptions and Attempt catches there. A11's own callbacks cannot throw and
+  // compile to a plain call. See a11/exception_guard.h.
+  const absl::Status raised = exception_guard::Attempt(
+      [&] { callback(result); }, "Future completion callback");
+  if (!raised.ok()) {
+    LOG(ERROR) << raised.message();
   }
 }
 
@@ -146,15 +149,7 @@ class Future {
           "This Future does not have a cancellation source");
     }
 
-    try {
-      cancel();
-      return absl::OkStatus();
-    } catch (const std::exception& error) {
-      return absl::UnknownError(error.what());
-    } catch (...) {
-      return absl::UnknownError(
-          "Future cancellation raised a non-standard exception");
-    }
+    return exception_guard::Attempt([&] { cancel(); }, "Future cancellation");
   }
 
   /**

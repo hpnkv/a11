@@ -164,6 +164,42 @@
 - Initialise every aggregate field deliberately. Treat use-after-move,
   implicit narrowing, and partially initialised state as correctness bugs.
 
+## Exceptions
+
+- **A11 does not throw.** Every A11 library is compiled `-fno-exceptions`, so a
+  `throw` or a `try` in A11's own code is a compile error. Errors are
+  `absl::Status`; a violated invariant is a `CHECK`. **There is no build option
+  for this** -- it is what A11 is, not how it happens to be configured, and a
+  half nobody compiles is the half that rots. It constrains A11's own translation
+  units only: a consumer compiles its own with exceptions if it likes, links
+  normally, and throws freely in its own frames.
+- Exceptions survive in exactly the translation units that *call* code which can
+  throw, and each one names itself in the exception policy block of
+  `cpp/CMakeLists.txt`: boost fiber's internals, libdatachannel's `rtc::` API,
+  whisper.cpp, nlohmann's two entry points with no non-throwing overload
+  (`a11/json_codec.cc`), and the per-library `boundary.cc` files. Adding to that
+  list needs a throwing callee to point at; wanting to catch something A11 would
+  have raised is not a reason, because A11 raises nothing.
+- A callable a *caller* hands us is the one real boundary. Wrap it with
+  `a11::exception_guard::Wrap` where A11 adopts it -- where `on_message` is
+  stored, where a codec is registered -- never with a `try` at the call. A `try`
+  in one of A11's own frames protects nothing: the exception would have to unwind
+  through a `-fno-exceptions` frame first, which is undefined and skips its
+  destructors.
+  `a11/exception_guard.h` explains this in full, including
+  `exception_guard::Attempt`, which is the form for a template in a header.
+- Implementations of A11's interfaces -- `WireStream`, `ChunkStore` -- report
+  through their `Status` return and must not throw. The Python trampolines
+  already convert (`cpp/python/interop.cc`); a C++ implementation that calls a
+  throwing library is expected to catch in its own translation unit.
+- nlohmann defines `JSON_NOEXCEPTION` under `-fno-exceptions`, which turns its
+  throws into `std::abort()`. Parse untrusted text and dump arbitrary bytes
+  through `a11/json_codec.h`, which returns `Status`; everywhere else, precede a
+  `get<T>()` or a subscript with the `is_*()`/`find()` check that makes it
+  well-typed, as the existing JSON code does.
+- Public headers must compile both ways. `tests/header_canary.cc` compiles every
+  installed header with exceptions disabled; add new ones to it.
+
 ## Abseil conventions
 
 - Abseil `Status`, `StatusOr`, `Time`, and `Duration` are the native error and

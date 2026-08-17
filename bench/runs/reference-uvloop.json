@@ -1,0 +1,2791 @@
+{
+  "environment": {
+    "a11": "unknown",
+    "cpu_count": 14,
+    "event_loop": "asyncio",
+    "machine": "arm64",
+    "platform": "macOS-26.6-arm64-arm-64bit",
+    "python": "3.12.8"
+  },
+  "recorded_at": 1786792888.798856,
+  "results": [
+    {
+      "metrics": {
+        "max_us": 6.25,
+        "mean_us": 0.17847775,
+        "ops_per_s": 5602939.301957807,
+        "p50_us": 0.167,
+        "p90_us": 0.209,
+        "p99_us": 0.25,
+        "stdev_us": 0.08214891241163087
+      },
+      "name": "bare_coroutine",
+      "note": "",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 118.166,
+        "mean_us": 15.227094375,
+        "ops_per_s": 65672.41099141083,
+        "p50_us": 14.667,
+        "p90_us": 16.417,
+        "p99_us": 21.541,
+        "stdev_us": 3.11825143910382
+      },
+      "name": "event_loop_turn",
+      "note": "",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 23.084,
+        "mean_us": 1.437431875,
+        "ops_per_s": 695685.1433394017,
+        "p50_us": 1.375,
+        "p90_us": 1.583,
+        "p99_us": 1.958,
+        "stdev_us": 0.4714021803205154
+      },
+      "name": "native_await",
+      "note": "-13.3us above an event-loop turn -- that excess is A11's per-await marshalling",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 159.458,
+        "mean_us": 32.049564625,
+        "ops_per_s": 31201.671901026642,
+        "p50_us": 30.542,
+        "p90_us": 36.5,
+        "p99_us": 51.0,
+        "stdev_us": 6.736985955699664
+      },
+      "name": "thread_offload",
+      "note": "",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 6.708,
+        "mean_us": 0.34429899999999997,
+        "ops_per_s": 2904452.234830772,
+        "p50_us": 0.333,
+        "p90_us": 0.375,
+        "p99_us": 0.459,
+        "stdev_us": 0.12135218742640838
+      },
+      "name": "await_already_resolved",
+      "note": "no loop turn at all -- this is Python's scheduling cost",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 118.541,
+        "mean_us": 29.961155875,
+        "ops_per_s": 33376.54942860245,
+        "p50_us": 29.458,
+        "p90_us": 32.375,
+        "p99_us": 39.125,
+        "stdev_us": 3.5374957248848276
+      },
+      "name": "call_soon_round_trip",
+      "note": "one full turn, scheduled the way A11's callbacks are",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "max_us": 50.0,
+        "mean_us": 13.767328375,
+        "ops_per_s": 72635.73387382067,
+        "p50_us": 13.667,
+        "p90_us": 15.542,
+        "p99_us": 18.583,
+        "stdev_us": 2.182904469344718
+      },
+      "name": "io_poll_syscall",
+      "note": "the kernel poll a turn ends with; on macOS this is most of the turn, on Linux it is not",
+      "params": {},
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.011355417,
+        "ns_per_op": 1419.427125,
+        "ops_per_s": 704509.5745933417,
+        "window": 1.0
+      },
+      "name": "native_await",
+      "note": "",
+      "params": {
+        "in_flight": 1
+      },
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.068609125,
+        "ns_per_op": 8576.140625,
+        "ops_per_s": 116602.56562082666,
+        "window": 8.0
+      },
+      "name": "native_await",
+      "note": "",
+      "params": {
+        "in_flight": 8
+      },
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.027016667,
+        "ns_per_op": 3377.083375,
+        "ops_per_s": 296113.50652543484,
+        "window": 64.0
+      },
+      "name": "native_await",
+      "note": "",
+      "params": {
+        "in_flight": 64
+      },
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.023705458,
+        "ns_per_op": 2963.18225,
+        "ops_per_s": 337475.02368441905,
+        "window": 512.0
+      },
+      "name": "native_await",
+      "note": "1.0x over one-at-a-time",
+      "params": {
+        "in_flight": 512
+      },
+      "suite": "runtime"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.140422458,
+        "mib_per_s": 17.38615236317826,
+        "ns_per_op": 3510.56145,
+        "ops_per_s": 284854.72031831264
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.151591166,
+        "mib_per_s": 16.105201341349932,
+        "ns_per_op": 3789.77915,
+        "ops_per_s": 263867.6187766773
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.206338375,
+        "mib_per_s": 189.31282171820925,
+        "ns_per_op": 5158.459375,
+        "ops_per_s": 193856.32943944627
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.172320333,
+        "mib_per_s": 226.68537902604913,
+        "ns_per_op": 4308.008325,
+        "ops_per_s": 232125.8281226743
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.43922475,
+        "mib_per_s": 569.1846827848385,
+        "ns_per_op": 109806.1875,
+        "ops_per_s": 9106.954924557416
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.136473208,
+        "mib_per_s": 1831.8613863022842,
+        "ns_per_op": 34118.302,
+        "ops_per_s": 29309.782180836548
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.330102208,
+        "mib_per_s": 605.8729543547918,
+        "ns_per_op": 1650511.04,
+        "ops_per_s": 605.8729543547918
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.093918291,
+        "mib_per_s": 2129.5106402649512,
+        "ns_per_op": 469591.455,
+        "ops_per_s": 2129.5106402649512
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "json",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.111498167,
+        "mib_per_s": 19.501463565820327,
+        "ns_per_op": 2787.454175,
+        "ops_per_s": 358750.2922805897
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.120631125,
+        "mib_per_s": 18.02501171572635,
+        "ns_per_op": 3015.778125,
+        "ops_per_s": 331589.38043560483
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.114985208,
+        "mib_per_s": 337.7270767215771,
+        "ns_per_op": 2874.6302,
+        "ops_per_s": 347870.83222043654
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.128416333,
+        "mib_per_s": 302.4040420470697,
+        "ns_per_op": 3210.408325,
+        "ops_per_s": 311486.8573610493
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.027554417,
+        "mib_per_s": 9072.124872625911,
+        "ns_per_op": 6888.60425,
+        "ops_per_s": 145167.2884242116
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.032227292,
+        "mib_per_s": 7756.689945168408,
+        "ns_per_op": 8056.823,
+        "ops_per_s": 124118.40250182983
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.010023,
+        "mib_per_s": 19954.02943834649,
+        "ns_per_op": 50115.0,
+        "ops_per_s": 19954.105557218398
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.0126845,
+        "mib_per_s": 15767.214873313642,
+        "ns_per_op": 63422.5,
+        "ops_per_s": 15767.27502069455
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "msgpack",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.094452666,
+        "mib_per_s": 36.34865678712023,
+        "ns_per_op": 2361.31665,
+        "ops_per_s": 423492.54599123757
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.188310333,
+        "mib_per_s": 18.231753321059127,
+        "ns_per_op": 4707.758325,
+        "ops_per_s": 212415.32189314326
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.204865708,
+        "mib_per_s": 255.10053902755897,
+        "ns_per_op": 5121.6427,
+        "ops_per_s": 195249.85606668735
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.271994084,
+        "mib_per_s": 192.141504588984,
+        "ns_per_op": 6799.8521,
+        "ops_per_s": 147062.02212839303
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.729309917,
+        "mib_per_s": 457.07747486163174,
+        "ns_per_op": 182327.47925,
+        "ops_per_s": 5484.636787134214
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.529108541,
+        "mib_per_s": 630.0241054961655,
+        "ns_per_op": 132277.13525,
+        "ops_per_s": 7559.8855245090435
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.603567792,
+        "mib_per_s": 441.81873237314045,
+        "ns_per_op": 3017838.96,
+        "ops_per_s": 331.36294323670603
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.374716708,
+        "mib_per_s": 711.6510982016188,
+        "ns_per_op": 1873583.54,
+        "ops_per_s": 533.7365421133023
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-default",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.090094208,
+        "mib_per_s": 27.94519482664746,
+        "ns_per_op": 2252.3552,
+        "ops_per_s": 443979.70622040436
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.161013833,
+        "mib_per_s": 15.636545931507015,
+        "ns_per_op": 4025.345825,
+        "ops_per_s": 248425.8604041803
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.087570333,
+        "mib_per_s": 447.3768635545642,
+        "ns_per_op": 2189.258325,
+        "ops_per_s": 456775.69822647586
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.14624075,
+        "mib_per_s": 267.89346278632155,
+        "ns_per_op": 3656.01875,
+        "ops_per_s": 273521.573159328
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.026740875,
+        "mib_per_s": 9349.696802603808,
+        "ns_per_op": 6685.21875,
+        "ops_per_s": 149583.73650824814
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.0279325,
+        "mib_per_s": 8950.830519514118,
+        "ns_per_op": 6983.125,
+        "ops_per_s": 143202.36283898685
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.009152834,
+        "mib_per_s": 21851.259803719415,
+        "ns_per_op": 45764.17,
+        "ops_per_s": 21851.155609289974
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.005761125,
+        "mib_per_s": 34715.60739860989,
+        "ns_per_op": 28805.625,
+        "ops_per_s": 34715.44186248346
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "bytes-msgpack",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.084114542,
+        "mib_per_s": 29.93180650395148,
+        "ns_per_op": 2102.86355,
+        "ops_per_s": 475542.02934374893
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.14580975,
+        "mib_per_s": 17.267022234881413,
+        "ns_per_op": 3645.24375,
+        "ops_per_s": 274330.0773782275
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.1429565,
+        "mib_per_s": 273.78114283234765,
+        "ns_per_op": 3573.9125,
+        "ops_per_s": 279805.39534753584
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.16780775,
+        "mib_per_s": 233.23591398676461,
+        "ns_per_op": 4195.19375,
+        "ops_per_s": 238368.01339628233
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "1K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.420783458,
+        "mib_per_s": 594.1479510217135,
+        "ns_per_op": 105195.8645,
+        "ops_per_s": 9506.07711389643
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.140005459,
+        "mib_per_s": 1785.6991518775797,
+        "ns_per_op": 35001.36475,
+        "ops_per_s": 28570.31453323545
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "64K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.326799708,
+        "mib_per_s": 611.9968181542149,
+        "ns_per_op": 1633998.54,
+        "ops_per_s": 611.995650865147
+      },
+      "name": "to_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.095380208,
+        "mib_per_s": 2096.875081984793,
+        "ns_per_op": 476901.04,
+        "ops_per_s": 2096.8710825206003
+      },
+      "name": "from_chunk",
+      "note": "",
+      "params": {
+        "repr": "text",
+        "size": "1M"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "dispatch_tax_us": 2.9921520499999996,
+        "elapsed_s": 0.07256075,
+        "encoder_ops_per_s": 1572610.2869628484,
+        "ns_per_op": 3628.0375,
+        "ops_per_s": 275631.1091051292,
+        "p50_us": 3.6280375
+      },
+      "name": "to_chunk_dispatch",
+      "note": "bare encoder 636ns, registry adds 2992ns",
+      "params": {
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "dispatch_tax_us": 2.8341,
+        "elapsed_s": 0.058995958,
+        "encoder_ops_per_s": 8643199.228335172,
+        "ns_per_op": 2949.7979,
+        "ops_per_s": 339006.2756502742,
+        "p50_us": 2.9497979
+      },
+      "name": "to_chunk_dispatch",
+      "note": "bare encoder 116ns, registry adds 2834ns",
+      "params": {
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "dispatch_tax_us": 2.9850208499999997,
+        "elapsed_s": 0.075940958,
+        "encoder_ops_per_s": 1231486.0693372223,
+        "ns_per_op": 3797.0479,
+        "ops_per_s": 263362.4927407421,
+        "p50_us": 3.7970479
+      },
+      "name": "from_chunk_dispatch",
+      "note": "bare encoder 812ns, registry adds 2985ns",
+      "params": {
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "dispatch_tax_us": 2.90533125,
+        "elapsed_s": 0.062013292,
+        "encoder_ops_per_s": 5119453.488101238,
+        "ns_per_op": 3100.6646,
+        "ops_per_s": 322511.5028565166,
+        "p50_us": 3.1006646
+      },
+      "name": "from_chunk_dispatch",
+      "note": "bare encoder 195ns, registry adds 2905ns",
+      "params": {
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.114732875,
+        "inflation": 1.3333511352539062,
+        "mib_per_s": 348.63590753739936,
+        "ns_per_op": 717080.46875,
+        "ops_per_s": 1394.5436301495974,
+        "wire_bytes": 349530.0
+      },
+      "name": "bytes_payload",
+      "note": "application/json;type=bytes -> 1.33x the payload",
+      "params": {
+        "asked_for": "default"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.002591,
+        "inflation": 1.0000190734863281,
+        "mib_per_s": 15438.054805094558,
+        "ns_per_op": 16193.75,
+        "ops_per_s": 61752.21922037823,
+        "wire_bytes": 262149.0
+      },
+      "name": "bytes_payload",
+      "note": "application/x-msgpack;type=bytes -> 1.00x the payload",
+      "params": {
+        "asked_for": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.111710292,
+        "inflation": 1.3333511352539062,
+        "mib_per_s": 358.0690667248457,
+        "ns_per_op": 698189.325,
+        "ops_per_s": 1432.2762668993828,
+        "wire_bytes": 349530.0
+      },
+      "name": "bytes_payload",
+      "note": "application/json;type=bytes -> 1.33x the payload",
+      "params": {
+        "asked_for": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.047590791,
+        "mib_per_s": 9.939369592270488,
+        "ns_per_op": 5948.848875,
+        "ops_per_s": 168099.7485416874
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 4,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.034638875,
+        "mib_per_s": 13.655826320499727,
+        "ns_per_op": 4329.859375,
+        "ops_per_s": 230954.38290071487
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 4,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.040209917,
+        "mib_per_s": 12.522782353977503,
+        "ns_per_op": 5026.239625,
+        "ops_per_s": 198955.89438794416
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 4,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.035997458,
+        "mib_per_s": 13.98821103041498,
+        "ns_per_op": 4499.68225,
+        "ops_per_s": 222237.91468830936
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 4,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.034705417,
+        "mib_per_s": 19.56513339923995,
+        "ns_per_op": 17352.7085,
+        "ops_per_s": 57627.891346183795
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 64,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.010750458,
+        "mib_per_s": 63.16159862968164,
+        "ns_per_op": 5375.229,
+        "ops_per_s": 186038.58551886815
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 64,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.028098917,
+        "mib_per_s": 41.27091335050386,
+        "ns_per_op": 14049.4585,
+        "ops_per_s": 71177.1204562795
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 64,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.010789375,
+        "mib_per_s": 107.48240456467589,
+        "ns_per_op": 5394.6875,
+        "ops_per_s": 185367.54909343683
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 64,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.026946833,
+        "mib_per_s": 26.787276834744365,
+        "ns_per_op": 217313.1693548387,
+        "ops_per_s": 4601.653930909061
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 1024,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.003353125,
+        "mib_per_s": 215.2715080382106,
+        "ns_per_op": 27041.33064516129,
+        "ops_per_s": 36980.428704566635
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 1024,
+        "repr": "json"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.01937825,
+        "mib_per_s": 56.4358458419878,
+        "ns_per_op": 156276.20967741936,
+        "ops_per_s": 6398.926631661786
+      },
+      "name": "model_to_chunk",
+      "note": "",
+      "params": {
+        "floats": 1024,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.002432333,
+        "mib_per_s": 449.6209728221835,
+        "ns_per_op": 19615.58870967742,
+        "ops_per_s": 50979.86172123636
+      },
+      "name": "model_from_chunk",
+      "note": "",
+      "params": {
+        "floats": 1024,
+        "repr": "msgpack"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.07820575,
+        "mib_per_s": 78.0443333770215,
+        "ns_per_op": 977.571875,
+        "ops_per_s": 1022942.6864392962
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 1,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.05753,
+        "mib_per_s": 106.09274508951852,
+        "ns_per_op": 719.125,
+        "ops_per_s": 1390578.8284373372
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 1,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.001887292,
+        "mib_per_s": 2599.206834456273,
+        "ns_per_op": 1509.8336,
+        "ops_per_s": 662324.6429275385
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 1,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.000981292,
+        "mib_per_s": 4998.983243534696,
+        "ns_per_op": 785.0336,
+        "ops_per_s": 1273830.8271136421
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 1,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.047733667,
+        "items_per_s": 1675965.938254859,
+        "mib_per_s": 122.27191379213019,
+        "ns_per_op": 4773.3667,
+        "ops_per_s": 209495.74228185738
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 8,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.025586959,
+        "items_per_s": 3126592.7303045276,
+        "mib_per_s": 228.10396563367496,
+        "ns_per_op": 2558.6959,
+        "ops_per_s": 390824.09128806595
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 8,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.001612792,
+        "items_per_s": 773813.3621694552,
+        "mib_per_s": 3034.1469178769253,
+        "ns_per_op": 10338.410256410256,
+        "ops_per_s": 96726.6702711819
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 8,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.000552417,
+        "items_per_s": 2259162.914971842,
+        "mib_per_s": 8858.249974161841,
+        "ns_per_op": 3541.1346153846152,
+        "ops_per_s": 282395.36437148025
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 8,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.041526375,
+        "items_per_s": 1926486.4799780864,
+        "mib_per_s": 139.80253275473834,
+        "ns_per_op": 33221.1,
+        "ops_per_s": 30101.3512496576
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 64,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.020727083,
+        "items_per_s": 3859684.45246251,
+        "mib_per_s": 280.0921094937984,
+        "ns_per_op": 16581.6664,
+        "ops_per_s": 60307.56956972672
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 64,
+        "size": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.005929667,
+        "items_per_s": 863454.8955278603,
+        "mib_per_s": 3385.2997058977976,
+        "ns_per_op": 74120.8375,
+        "ops_per_s": 13491.482742622817
+      },
+      "name": "wire_to_msgpack",
+      "note": "",
+      "params": {
+        "frags": 64,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.002058459,
+        "items_per_s": 2487297.5366524183,
+        "mib_per_s": 9751.809460947183,
+        "ns_per_op": 25730.7375,
+        "ops_per_s": 38864.024010194036
+      },
+      "name": "wire_from_msgpack",
+      "note": "",
+      "params": {
+        "frags": 64,
+        "size": "4K"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "bytes_each": 339.31264
+      },
+      "name": "chunk_resident",
+      "note": "64 payload bytes; the rest is the value's own. 5-point fit over 20000:88960K 40000:95536K 60000:102288K 80000:108896K 100000:115472K 120000:122080K",
+      "params": {
+        "payload": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "bytes_each": 402.96448
+      },
+      "name": "fragment_resident",
+      "note": "5-point fit over 20000:117248K 40000:125104K 60000:132976K 80000:140848K 100000:148704K 120000:156592K",
+      "params": {
+        "payload": "64B"
+      },
+      "suite": "data"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.024317417,
+        "ns_per_op": 3039.677125,
+        "ops_per_s": 328982.30926417885
+      },
+      "name": "node_create",
+      "note": "",
+      "params": {},
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "bytes_each": 1503.232
+      },
+      "name": "node_resident",
+      "note": "idle node, in-memory store. 5-point fit over 800:67232K 1600:68416K 2400:69632K 3200:70784K 4000:71968K 4800:73120K",
+      "params": {},
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 42.25,
+        "mean_us": 7.528431666666666,
+        "ops_per_s": 132829.7903569557,
+        "p50_us": 7.167,
+        "p90_us": 8.584,
+        "p99_us": 15.959,
+        "stdev_us": 1.6922735348522087
+      },
+      "name": "put",
+      "note": "",
+      "params": {
+        "path": "object",
+        "stage": "admitted"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 63.708,
+        "mean_us": 9.281925833333332,
+        "ops_per_s": 107736.26270625771,
+        "p50_us": 8.708,
+        "p90_us": 9.958,
+        "p99_us": 16.125,
+        "stdev_us": 2.6123884655448415
+      },
+      "name": "put",
+      "note": "",
+      "params": {
+        "path": "object",
+        "stage": "confirmed"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.028999708,
+        "ns_per_op": 24166.423333333332,
+        "ops_per_s": 41379.726995871824,
+        "window": 256.0
+      },
+      "name": "put_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 256,
+        "path": "object"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 21.125,
+        "mean_us": 2.8092558333333333,
+        "ops_per_s": 355966.15592444857,
+        "p50_us": 2.666,
+        "p90_us": 2.958,
+        "p99_us": 3.708,
+        "stdev_us": 1.154782348443291
+      },
+      "name": "put",
+      "note": "",
+      "params": {
+        "path": "chunk",
+        "stage": "admitted"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 29.125,
+        "mean_us": 4.3592275,
+        "ops_per_s": 229398.44272867154,
+        "p50_us": 4.167,
+        "p90_us": 4.584,
+        "p99_us": 5.167,
+        "stdev_us": 1.2722110739145878
+      },
+      "name": "put",
+      "note": "",
+      "params": {
+        "path": "chunk",
+        "stage": "confirmed"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.013805667,
+        "ns_per_op": 11504.7225,
+        "ops_per_s": 86920.82751235417,
+        "window": 256.0
+      },
+      "name": "put_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 256,
+        "path": "chunk"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.085872209,
+        "items_per_s": 93161.6886669353,
+        "mib_per_s": 2.3099936536219765,
+        "ops_per_s": 93161.6886669353
+      },
+      "name": "drain",
+      "note": "8000 values",
+      "params": {
+        "path": "object"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.006946708,
+        "items_per_s": 1151624.62565002,
+        "mib_per_s": 28.555145518208047,
+        "ops_per_s": 1151624.62565002
+      },
+      "name": "drain",
+      "note": "8000 values",
+      "params": {
+        "path": "chunk"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.024617375,
+        "items_per_s": 324973.7228278807,
+        "ops_per_s": 324973.7228278807,
+        "p50_us": 3.077171875
+      },
+      "name": "read_one_at_a_time",
+      "note": "",
+      "params": {
+        "via": "AsyncNode.next_fragment"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.014638542,
+        "items_per_s": 546502.5137066246,
+        "ops_per_s": 546502.5137066246,
+        "p50_us": 1.82981775
+      },
+      "name": "read_one_at_a_time",
+      "note": "",
+      "params": {
+        "via": "ChunkStore.next(limit=1)"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.002495292,
+        "items_per_s": 3206037.6100272033,
+        "ops_per_s": 3206037.6100272033,
+        "p50_us": 0.3119115
+      },
+      "name": "read_batched",
+      "note": "10x the node's one-at-a-time read, on the same data",
+      "params": {
+        "via": "ChunkStore.next(limit=64)"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 242.583,
+        "mean_us": 84.83652624999999,
+        "ops_per_s": 11787.375605799278,
+        "p50_us": 82.5,
+        "p90_us": 92.875,
+        "p99_us": 123.084,
+        "stdev_us": 11.149652033130263
+      },
+      "name": "put_then_read",
+      "note": "",
+      "params": {
+        "pacing": "sequential"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.023205167,
+        "items_per_s": 34475.08048530744,
+        "ops_per_s": 34475.08048530744
+      },
+      "name": "producer_consumer",
+      "note": "800 values through one node, writer and reader in flight",
+      "params": {
+        "pacing": "concurrent"
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.001908209,
+        "items_per_s": 1048103.2213976561,
+        "ops_per_s": 1048103.2213976561
+      },
+      "name": "replicated_read",
+      "note": "2000 reads total",
+      "params": {
+        "readers": 1
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.001875875,
+        "items_per_s": 1066169.121076831,
+        "ops_per_s": 1066169.121076831
+      },
+      "name": "replicated_read",
+      "note": "2000 reads total",
+      "params": {
+        "readers": 4
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.00235025,
+        "items_per_s": 850973.3007126902,
+        "ops_per_s": 850973.3007126902
+      },
+      "name": "replicated_read",
+      "note": "2000 reads total",
+      "params": {
+        "readers": 16
+      },
+      "suite": "nodes"
+    },
+    {
+      "metrics": {
+        "max_us": 314.0,
+        "mean_us": 168.64826875,
+        "mib_per_s": 0.3619079917178219,
+        "ops_per_s": 5929.500536304794,
+        "p50_us": 160.292,
+        "p90_us": 212.875,
+        "p99_us": 261.166,
+        "stdev_us": 32.23279030582574
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64B",
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 313.0,
+        "mean_us": 164.95284062500002,
+        "mib_per_s": 23.681010797991526,
+        "ops_per_s": 6062.338764285831,
+        "p50_us": 157.916,
+        "p90_us": 196.625,
+        "p99_us": 268.75,
+        "stdev_us": 29.858152866379307
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "4K",
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 300.5,
+        "mean_us": 173.44660000000002,
+        "mib_per_s": 360.341453796154,
+        "ops_per_s": 5765.463260738464,
+        "p50_us": 168.083,
+        "p90_us": 198.667,
+        "p99_us": 271.25,
+        "stdev_us": 26.480759071079596
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64K",
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 272.541,
+        "mean_us": 214.55895833333335,
+        "mib_per_s": 0.2844679929661913,
+        "ops_per_s": 4660.723596758078,
+        "p50_us": 209.541,
+        "p90_us": 241.708,
+        "p99_us": 270.25,
+        "stdev_us": 18.564861642042075
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64B",
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 239.0,
+        "mean_us": 184.925375,
+        "mib_per_s": 21.123385581886748,
+        "ops_per_s": 5407.586708963007,
+        "p50_us": 183.125,
+        "p90_us": 193.167,
+        "p99_us": 212.125,
+        "stdev_us": 9.17055823201427
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "4K",
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 368.458,
+        "mean_us": 301.73292499999997,
+        "mib_per_s": 207.13682472670158,
+        "ops_per_s": 3314.189195627225,
+        "p50_us": 300.584,
+        "p90_us": 318.875,
+        "p99_us": 356.792,
+        "stdev_us": 16.07869359902945
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64K",
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 464.292,
+        "mean_us": 295.053125,
+        "mib_per_s": 0.20686158213033673,
+        "ops_per_s": 3389.220161623437,
+        "p50_us": 287.625,
+        "p90_us": 346.542,
+        "p99_us": 446.416,
+        "stdev_us": 41.647195573477745
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64B",
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 511.708,
+        "mean_us": 314.82498333333336,
+        "mib_per_s": 12.407687466988934,
+        "ops_per_s": 3176.367991549167,
+        "p50_us": 303.709,
+        "p90_us": 371.0,
+        "p99_us": 479.458,
+        "stdev_us": 45.20385875177185
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "4K",
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 748.125,
+        "mean_us": 650.3270500000001,
+        "mib_per_s": 96.1054903067618,
+        "ops_per_s": 1537.6878449081887,
+        "p50_us": 648.458,
+        "p90_us": 686.458,
+        "p99_us": 731.917,
+        "stdev_us": 28.795805089522702
+      },
+      "name": "message_round_trip",
+      "note": "",
+      "params": {
+        "size": "64K",
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 512000.0,
+        "ops_per_s": 8000.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "8000 unread messages (0.5 MiB) -> survived the probe's ceiling",
+      "params": {
+        "size": "64B",
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 67108864.0,
+        "ops_per_s": 1024.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "1024 unread messages (64.0 MiB) -> survived the probe's ceiling",
+      "params": {
+        "size": "64K",
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 512000.0,
+        "ops_per_s": 8000.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "8000 unread messages (0.5 MiB) -> survived the probe's ceiling",
+      "params": {
+        "size": "64B",
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 67108864.0,
+        "ops_per_s": 1024.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "1024 unread messages (64.0 MiB) -> aborted RESOURCE_EXHAUSTED",
+      "params": {
+        "size": "64K",
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 512000.0,
+        "ops_per_s": 8000.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "8000 unread messages (0.5 MiB) -> survived the probe's ceiling",
+      "params": {
+        "size": "64B",
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 67108864.0,
+        "ops_per_s": 1024.0
+      },
+      "name": "unread_messages_before_abort",
+      "note": "1024 unread messages (64.0 MiB) -> survived the probe's ceiling",
+      "params": {
+        "size": "64K",
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 108277.76,
+        "elapsed_s": 0.08380475,
+        "ops_per_s": 5727.598972611934
+      },
+      "name": "live_stream",
+      "note": "480 live connections, both endpoints in this process -- halve for a server's own share. ops/s is the open rate. 5-point fit over 80:405520K 160:413920K 240:422384K 320:430832K 400:439296K 480:447760K",
+      "params": {
+        "transport": "in-process"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 159825.92,
+        "elapsed_s": 0.095393916,
+        "ops_per_s": 2515.8837173641136
+      },
+      "name": "live_stream",
+      "note": "240 live connections, both endpoints in this process -- halve for a server's own share. ops/s is the open rate. 5-point fit over 40:454592K 80:456512K 120:458496K 160:465808K 200:473120K 240:480416K",
+      "params": {
+        "transport": "websocket"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "bytes_each": 257843.2,
+        "elapsed_s": 0.126466292,
+        "ops_per_s": 1897.7388852359172
+      },
+      "name": "live_stream",
+      "note": "240 live connections, both endpoints in this process -- halve for a server's own share. ops/s is the open rate. 5-point fit over 40:507392K 80:511312K 120:515696K 160:523728K 200:537376K 240:550832K",
+      "params": {
+        "transport": "sse"
+      },
+      "suite": "wire"
+    },
+    {
+      "metrics": {
+        "max_us": 556.458,
+        "mean_us": 321.9904833333333,
+        "ops_per_s": 3105.6818501209327,
+        "p50_us": 315.917,
+        "p90_us": 348.917,
+        "p99_us": 461.75,
+        "ports_per_s": 6211.363700241865,
+        "stdev_us": 32.00714379228967
+      },
+      "name": "local_action",
+      "note": "",
+      "params": {
+        "ports": "1in/1out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "max_us": 1264.208,
+        "mean_us": 783.2963625000001,
+        "ops_per_s": 1276.655998769559,
+        "p50_us": 777.542,
+        "p90_us": 823.542,
+        "p99_us": 960.5,
+        "ports_per_s": 7659.935992617353,
+        "stdev_us": 52.40558763676099
+      },
+      "name": "local_action",
+      "note": "",
+      "params": {
+        "ports": "2in/4out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "max_us": 2315.833,
+        "mean_us": 1931.2930541666667,
+        "ops_per_s": 517.7878094898912,
+        "p50_us": 1920.917,
+        "p90_us": 2046.834,
+        "p99_us": 2265.375,
+        "ports_per_s": 8284.604951838259,
+        "stdev_us": 87.42114811804629
+      },
+      "name": "local_action",
+      "note": "6.1x the 1-in/1-out call; 16 ports means 16 nodes per call",
+      "params": {
+        "ports": "8in/8out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "max_us": 1396.75,
+        "mean_us": 1190.38505,
+        "ops_per_s": 840.064313643724,
+        "p50_us": 1191.625,
+        "p90_us": 1308.875,
+        "p99_us": 1371.083,
+        "stdev_us": 92.87244528052459
+      },
+      "name": "dispatched_action",
+      "note": "in-process transport, so this is the session's own cost",
+      "params": {
+        "ports": "1in/1out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "max_us": 5632.292,
+        "mean_us": 5164.972191666667,
+        "ops_per_s": 193.61188461255074,
+        "p50_us": 5145.625,
+        "p90_us": 5445.167,
+        "p99_us": 5570.75,
+        "stdev_us": 191.73789052172046
+      },
+      "name": "dispatched_action",
+      "note": "in-process transport, so this is the session's own cost",
+      "params": {
+        "ports": "8in/8out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.194886916,
+        "max_us": 1354.208,
+        "mean_us": 1156.519575,
+        "ops_per_s": 820.9889267271283,
+        "p50_us": 1158.5,
+        "p90_us": 1252.667,
+        "p99_us": 1334.75,
+        "stdev_us": 76.73422021460846
+      },
+      "name": "actions_in_flight",
+      "note": "ops/s is aggregate; percentiles are per action, so they grow with the queue",
+      "params": {
+        "in_flight": 1
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.190078,
+        "max_us": 9517.125,
+        "mean_us": 7632.7895875,
+        "ops_per_s": 841.7596986500279,
+        "p50_us": 7710.708,
+        "p90_us": 8900.75,
+        "p99_us": 9470.542,
+        "stdev_us": 1029.3462511314376
+      },
+      "name": "actions_in_flight",
+      "note": "ops/s is aggregate; percentiles are per action, so they grow with the queue",
+      "params": {
+        "in_flight": 8
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.180988542,
+        "max_us": 36344.875,
+        "mean_us": 26459.634587499997,
+        "ops_per_s": 884.0338633149495,
+        "p50_us": 27355.291,
+        "p90_us": 33298.667,
+        "p99_us": 36131.042,
+        "stdev_us": 5997.89318192901
+      },
+      "name": "actions_in_flight",
+      "note": "ops/s is aggregate; percentiles are per action, so they grow with the queue",
+      "params": {
+        "in_flight": 32
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.184604791,
+        "max_us": 142854.958,
+        "mean_us": 89065.7492,
+        "ops_per_s": 866.7164006593957,
+        "p50_us": 104024.542,
+        "p90_us": 135400.583,
+        "p99_us": 142336.666,
+        "stdev_us": 42760.58086847305
+      },
+      "name": "actions_in_flight",
+      "note": "ops/s is aggregate; percentiles are per action, so they grow with the queue. peak 884 actions/s",
+      "params": {
+        "in_flight": 128
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.046073084,
+        "ops_per_s": 2604.557576393193
+      },
+      "name": "local_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 1
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.02918075,
+        "ops_per_s": 4112.300060827772
+      },
+      "name": "local_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 32
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.134734167,
+        "ops_per_s": 890.6426830842396
+      },
+      "name": "sessions_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 32,
+        "sessions": 1
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.108710959,
+        "ops_per_s": 1103.8445535192088
+      },
+      "name": "sessions_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 32,
+        "sessions": 4
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "bytes_each": 2717.0133333333333
+      },
+      "name": "live_action",
+      "note": "5-point fit over 120:143152K 240:143216K 360:143456K 480:143680K 600:144112K 720:144480K",
+      "params": {
+        "ports": "1in/1out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "bytes_each": 27634.346666666668
+      },
+      "name": "live_action",
+      "note": "5-point fit over 120:145712K 240:148560K 360:151744K 480:155024K 600:158272K 720:161488K",
+      "params": {
+        "ports": "8in/8out"
+      },
+      "suite": "actions"
+    },
+    {
+      "metrics": {
+        "bytes_each": 199065.6,
+        "elapsed_s": 0.063053375,
+        "ops_per_s": 3806.2990284025245
+      },
+      "name": "live_session",
+      "note": "240 sessions served at once (service reports 240); ops/s is the accept rate. 5-point fit over 40:74384K 80:82240K 120:89968K 160:97776K 200:105488K 240:113360K",
+      "params": {
+        "transport": "in-process"
+      },
+      "suite": "service"
+    },
+    {
+      "metrics": {
+        "bytes_each": 56456.53333333333,
+        "elapsed_s": 0.079121208,
+        "ops_per_s": 1819.9924348981124
+      },
+      "name": "live_session",
+      "note": "144 sessions served at once (service reports 144); ops/s is the accept rate. 5-point fit over 24:127664K 48:128768K 72:129920K 96:131120K 120:132720K 144:133984K",
+      "params": {
+        "transport": "websocket"
+      },
+      "suite": "service"
+    },
+    {
+      "metrics": {
+        "max_us": 335.416,
+        "mean_us": 16.267178,
+        "ops_per_s": 61473.47745257351,
+        "p50_us": 14.584,
+        "p90_us": 15.375,
+        "p99_us": 61.584,
+        "stdev_us": 17.696801364472137
+      },
+      "name": "loop_turn_under_load",
+      "note": "",
+      "params": {
+        "idle_sessions": 0
+      },
+      "suite": "service"
+    },
+    {
+      "metrics": {
+        "max_us": 21.541,
+        "mean_us": 14.5228285,
+        "ops_per_s": 68857.11003197484,
+        "p50_us": 14.584,
+        "p90_us": 15.292,
+        "p99_us": 16.042,
+        "stdev_us": 0.9543010197552463
+      },
+      "name": "loop_turn_under_load",
+      "note": "",
+      "params": {
+        "idle_sessions": 40
+      },
+      "suite": "service"
+    },
+    {
+      "metrics": {
+        "max_us": 22.709,
+        "mean_us": 14.3882075,
+        "ops_per_s": 69501.36074976678,
+        "p50_us": 14.583,
+        "p90_us": 15.167,
+        "p99_us": 16.0,
+        "stdev_us": 1.2667471024456805
+      },
+      "name": "loop_turn_under_load",
+      "note": "1.00x the empty-process loop turn -- anything near 1.0 means idle sessions are genuinely idle",
+      "params": {
+        "idle_sessions": 160
+      },
+      "suite": "service"
+    },
+    {
+      "metrics": {
+        "max_us": 756.5,
+        "mean_us": 639.30935,
+        "mib_per_s": 6.541218077666792,
+        "ops_per_s": 1564.1879787930523,
+        "p50_us": 639.667,
+        "p90_us": 656.875,
+        "p99_us": 690.209,
+        "stdev_us": 18.694746884734137
+      },
+      "name": "tokens",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 6581.375,
+        "mean_us": 6475.953208333333,
+        "mib_per_s": 6.470629796190051,
+        "ops_per_s": 154.4174220890275,
+        "p50_us": 6474.291,
+        "p90_us": 6541.292,
+        "p99_us": 6581.375,
+        "stdev_us": 56.28224966995573
+      },
+      "name": "tokens",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 36521.0,
+        "mean_us": 34725.151,
+        "mib_per_s": 6.038098481724721,
+        "ops_per_s": 28.797570959446652,
+        "p50_us": 34087.083,
+        "p90_us": 36521.0,
+        "p99_us": 36521.0,
+        "stdev_us": 1300.0115034119615
+      },
+      "name": "tokens",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 525.125,
+        "mean_us": 440.92265000000003,
+        "mib_per_s": 9.48434351794222,
+        "ops_per_s": 2267.971491144762,
+        "p50_us": 440.583,
+        "p90_us": 481.042,
+        "p99_us": 520.667,
+        "stdev_us": 28.50600970780785
+      },
+      "name": "parse",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 4963.0,
+        "mean_us": 4778.701291666667,
+        "mib_per_s": 8.7688041647733,
+        "ops_per_s": 209.26187659895146,
+        "p50_us": 4736.458,
+        "p90_us": 4909.625,
+        "p99_us": 4963.0,
+        "stdev_us": 106.68774619766471
+      },
+      "name": "parse",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 24573.334,
+        "mean_us": 24225.573125,
+        "mib_per_s": 8.655063822386317,
+        "ops_per_s": 41.27869317436427,
+        "p50_us": 24324.209,
+        "p90_us": 24573.334,
+        "p99_us": 24573.334,
+        "stdev_us": 406.0043130148945
+      },
+      "name": "parse",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 67.542,
+        "mean_us": 43.636956250000004,
+        "mib_per_s": 95.83303320889632,
+        "ops_per_s": 22916.35544584987,
+        "p50_us": 43.375,
+        "p90_us": 43.75,
+        "p99_us": 47.541,
+        "stdev_us": 1.9837949539853021
+      },
+      "name": "check",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 499.75,
+        "mean_us": 420.88729166666667,
+        "mib_per_s": 99.55989790673189,
+        "ops_per_s": 2375.932986810107,
+        "p50_us": 413.875,
+        "p90_us": 424.334,
+        "p99_us": 499.75,
+        "stdev_us": 19.766289925855357
+      },
+      "name": "check",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 2119.542,
+        "mean_us": 2025.036625,
+        "mib_per_s": 103.54078486395855,
+        "ops_per_s": 493.8182290900541,
+        "p50_us": 2027.167,
+        "p90_us": 2119.542,
+        "p99_us": 2119.542,
+        "stdev_us": 70.63183618279771
+      },
+      "name": "check",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 62.875,
+        "mean_us": 46.108081250000005,
+        "mib_per_s": 90.69693997386642,
+        "ops_per_s": 21688.172070703982,
+        "p50_us": 44.958,
+        "p90_us": 48.792,
+        "p99_us": 49.875,
+        "stdev_us": 2.7115987114566327
+      },
+      "name": "format",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 456.333,
+        "mean_us": 434.5138333333333,
+        "mib_per_s": 96.43765646565349,
+        "ops_per_s": 2301.42270115681,
+        "p50_us": 432.584,
+        "p90_us": 444.792,
+        "p99_us": 456.333,
+        "stdev_us": 8.481357134361206
+      },
+      "name": "format",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 2315.708,
+        "mean_us": 2203.88,
+        "mib_per_s": 95.13852003319677,
+        "ops_per_s": 453.74521298800295,
+        "p50_us": 2133.584,
+        "p90_us": 2315.708,
+        "p99_us": 2315.708,
+        "stdev_us": 94.96340329681895
+      },
+      "name": "format",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 156.75,
+        "mean_us": 72.072375,
+        "ops_per_s": 13874.941681885744,
+        "p50_us": 53.334,
+        "p90_us": 107.917,
+        "p99_us": 156.75,
+        "stdev_us": 26.241700570750684
+      },
+      "name": "complete",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 517.541,
+        "mean_us": 429.1535625,
+        "ops_per_s": 2330.1682366903337,
+        "p50_us": 415.458,
+        "p90_us": 511.75,
+        "p99_us": 517.541,
+        "stdev_us": 34.33446469650915
+      },
+      "name": "complete",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 2515.792,
+        "mean_us": 2010.114625,
+        "ops_per_s": 497.4840676063436,
+        "p50_us": 1992.208,
+        "p90_us": 2099.917,
+        "p99_us": 2515.792,
+        "stdev_us": 156.40337633136315
+      },
+      "name": "complete",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.004201791,
+        "mib_per_s": 79.62055946983382,
+        "ns_per_op": 52522.3875,
+        "ops_per_s": 19039.500060807404,
+        "p50_us": 52.522387499999994
+      },
+      "name": "compile_source",
+      "note": "",
+      "params": {
+        "bytes": 4385,
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.00629075,
+        "mib_per_s": 79.93354519936265,
+        "ns_per_op": 524229.1666666667,
+        "ops_per_s": 1907.5626912530302,
+        "p50_us": 524.2291666666667
+      },
+      "name": "compile_source",
+      "note": "",
+      "params": {
+        "bytes": 43939,
+        "doc": "10x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.029620459,
+        "mib_per_s": 84.94421299714298,
+        "ns_per_op": 2468371.5833333335,
+        "ops_per_s": 405.1253898530067,
+        "p50_us": 2468.3715833333335
+      },
+      "name": "compile_source",
+      "note": "",
+      "params": {
+        "bytes": 219859,
+        "doc": "50x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "bytes_each": 185384.96
+      },
+      "name": "program_resident",
+      "note": "a compiled 4-flow program held in memory. 5-point fit over 80:132304K 160:146736K 240:161232K 320:175728K 400:190128K 480:204704K",
+      "params": {
+        "doc": "1x"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 473.459,
+        "mean_us": 343.3176625,
+        "ops_per_s": 2912.7543066619824,
+        "p50_us": 336.667,
+        "p90_us": 381.333,
+        "p99_us": 473.459,
+        "stdev_us": 28.592418597670235
+      },
+      "name": "action_direct",
+      "note": "no flow involved -- the baseline the flow is charged against",
+      "params": {
+        "steps": 0
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 884.458,
+        "mean_us": 718.34635,
+        "ops_per_s": 1392.0861434042229,
+        "p50_us": 716.916,
+        "p90_us": 789.25,
+        "p99_us": 884.458,
+        "stdev_us": 56.043463517754,
+        "steps_per_s": 1392.0861434042229
+      },
+      "name": "flow_run",
+      "note": "380us over the bare action -- the whole cost of expressing it as a flow",
+      "params": {
+        "steps": 1
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 1230.5,
+        "mean_us": 1045.3786125000001,
+        "ops_per_s": 956.5912178062664,
+        "p50_us": 1055.667,
+        "p90_us": 1136.291,
+        "p99_us": 1230.5,
+        "stdev_us": 80.49414919731645,
+        "steps_per_s": 1913.1824356125328
+      },
+      "name": "flow_run",
+      "note": "",
+      "params": {
+        "steps": 2
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "max_us": 4586.708,
+        "mean_us": 3592.9139874999996,
+        "ops_per_s": 278.32561633233365,
+        "p50_us": 3555.375,
+        "p90_us": 3845.833,
+        "p99_us": 4586.708,
+        "stdev_us": 249.8246646692458,
+        "steps_per_s": 2226.604930658669
+      },
+      "name": "flow_run",
+      "note": "405us per additional step",
+      "params": {
+        "steps": 8
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.028319917,
+        "items_per_s": 13559.36177355322,
+        "ops_per_s": 847.4601108470763,
+        "p50_us": 1179.9965416666666
+      },
+      "name": "pipe_values",
+      "note": "16 values out per run",
+      "params": {
+        "values": 16
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.359366167,
+        "items_per_s": 17096.768043832017,
+        "ops_per_s": 66.78425017121882,
+        "p50_us": 14973.590291666667
+      },
+      "name": "pipe_values",
+      "note": "256 values out per run",
+      "params": {
+        "values": 256
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 1.853578541,
+        "items_per_s": 17678.23659758262,
+        "ops_per_s": 4.315975731831695,
+        "p50_us": 231697.317625
+      },
+      "name": "pipe_values",
+      "note": "4096 values out per run",
+      "params": {
+        "values": 4096
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.035975916,
+        "ops_per_s": 1334.2259304808251
+      },
+      "name": "flows_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 1
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.024875291,
+        "ops_per_s": 1929.6256674947037
+      },
+      "name": "flows_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 8
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.022675417,
+        "ops_per_s": 2116.829869104502
+      },
+      "name": "flows_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 32
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "items_per_s": 2195.648973913769,
+        "max_us": 540.208,
+        "mean_us": 455.4462083333333,
+        "ops_per_s": 2195.648973913769,
+        "p50_us": 447.75,
+        "p90_us": 533.458,
+        "p99_us": 540.208,
+        "stdev_us": 49.926747531174776
+      },
+      "name": "interact_with_llm",
+      "note": "fixed cost of a turn: 448us",
+      "params": {
+        "tokens": 1
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "items_per_s": 25709.123230522728,
+        "max_us": 1417.917,
+        "mean_us": 1244.6943333333334,
+        "ops_per_s": 803.4101009538352,
+        "p50_us": 1226.875,
+        "p90_us": 1361.667,
+        "p99_us": 1417.917,
+        "stdev_us": 73.74477679700834
+      },
+      "name": "interact_with_llm",
+      "note": "",
+      "params": {
+        "tokens": 32
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "items_per_s": 34710.73660199888,
+        "max_us": 16863.167,
+        "mean_us": 14750.47925,
+        "ops_per_s": 67.79440742577906,
+        "p50_us": 13822.625,
+        "p90_us": 16863.167,
+        "p99_us": 16863.167,
+        "stdev_us": 1463.1060497454184
+      },
+      "name": "interact_with_llm",
+      "note": "26us per streamed token above the fixed cost -- compare against the model's own inter-token time",
+      "params": {
+        "tokens": 512
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.04034,
+        "items_per_s": 30143.777887952405,
+        "ops_per_s": 470.9965294992563
+      },
+      "name": "turns_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 1,
+        "tokens": 64
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.040898709,
+        "items_per_s": 29731.989828823203,
+        "ops_per_s": 464.56234107536255
+      },
+      "name": "turns_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 8,
+        "tokens": 64
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "elapsed_s": 0.03884225,
+        "items_per_s": 31306.116406747806,
+        "ops_per_s": 489.15806885543446
+      },
+      "name": "turns_in_flight",
+      "note": "",
+      "params": {
+        "in_flight": 32,
+        "tokens": 64
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "items_per_s": 479.85598562159527,
+        "max_us": 2794.083,
+        "mean_us": 2083.958583333333,
+        "ops_per_s": 479.85598562159527,
+        "p50_us": 2001.5,
+        "p90_us": 2161.0,
+        "p99_us": 2794.083,
+        "stdev_us": 238.50093391296406
+      },
+      "name": "shell_execute",
+      "note": "",
+      "params": {
+        "lines": 1
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "items_per_s": 8153.9046790196735,
+        "max_us": 3092.167,
+        "mean_us": 2452.8125833333334,
+        "ops_per_s": 407.69523395098366,
+        "p50_us": 2376.375,
+        "p90_us": 2480.416,
+        "p99_us": 3092.167,
+        "stdev_us": 208.85626911628543
+      },
+      "name": "shell_execute",
+      "note": "",
+      "params": {
+        "lines": 20
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "items_per_s": 35017.86234895023,
+        "max_us": 14836.125,
+        "mean_us": 14278.42725,
+        "ops_per_s": 70.03572469790046,
+        "p50_us": 14134.042,
+        "p90_us": 14836.125,
+        "p99_us": 14836.125,
+        "stdev_us": 394.77643757057825
+      },
+      "name": "shell_execute",
+      "note": "24us per output line above the fixed cost",
+      "params": {
+        "lines": 500
+      },
+      "suite": "workload"
+    },
+    {
+      "metrics": {
+        "max_us": 4896.458,
+        "mean_us": 3900.052125,
+        "ops_per_s": 256.406829434363,
+        "p50_us": 3703.75,
+        "p90_us": 4896.458,
+        "p99_us": 4896.458,
+        "stdev_us": 451.22509044170516
+      },
+      "name": "subprocess_floor",
+      "note": "bash -c through subprocess, for scale",
+      "params": {
+        "lines": 20
+      },
+      "suite": "workload"
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -76,6 +77,163 @@ TEST(InProcessWireStreamTest, DeliversMessagesAndOrderedHalfClose) {
   EXPECT_FALSE(received[1].has_value());
   ASSERT_TRUE(second->GetTrailers().has_value());
   EXPECT_EQ(second->GetTrailers()->at("trailer"), "value");
+}
+
+// Order is per endpoint and holds however the message got there.
+//
+// A message may be delivered by the sending endpoint's own fibre, or by whoever
+// called Send, or from the queue after backpressure has cleared -- and the
+// receiver must not be able to tell which. The buffer here is deliberately far
+// smaller than the traffic, so all three paths run in one test.
+TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
+  constexpr int kMessages = 400;
+  WireStreamOptions narrow;
+  narrow.max_buffered_incoming_messages = 4;
+  auto pair = InProcessWireStream::CreatePair(narrow);
+  ASSERT_TRUE(pair.ok()) << pair.status();
+  auto [sender, receiver] = *pair;
+
+  thread::Mutex mu;
+  thread::CondVar cv;
+  std::vector<int> seen;
+  ASSERT_TRUE(
+      sender
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [] { return a11::ReadyTask(); })
+          .Await()
+          .ok());
+  ASSERT_TRUE(receiver
+                  ->Accept(
+                      [&](std::optional<data::WireMessage> message) {
+                        if (message.has_value() &&
+                            !message->node_fragments.empty()) {
+                          thread::MutexLock lock(&mu);
+                          // Every fragment, not every message: the sender folds
+                          // whatever is already queued into one message, so a
+                          // delivery can carry many fragments and the order
+                          // being checked is theirs.
+                          for (const data::NodeFragment& fragment :
+                               message->node_fragments) {
+                            seen.push_back(
+                                static_cast<int>(fragment.seq.value_or(0)));
+                          }
+                          cv.SignalAll();
+                        }
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
+
+  for (int index = 0; index < kMessages; ++index) {
+    data::WireMessage message{
+        .node_fragments = {{
+            .id = "node",
+            .data = data::Chunk{.data = "payload"},
+            .seq = static_cast<std::uint32_t>(index),
+            .continued = true,
+        }}};
+    ASSERT_TRUE(sender->Send(std::move(message)).ok()) << index;
+  }
+
+  {
+    thread::MutexLock lock(&mu);
+    const absl::Time limit = absl::Now() + absl::Seconds(10);
+    while (seen.size() < kMessages && absl::Now() < limit) {
+      cv.WaitWithDeadline(&mu, limit);
+    }
+  }
+  thread::MutexLock lock(&mu);
+  ASSERT_EQ(seen.size(), kMessages);
+  for (int index = 0; index < kMessages; ++index) {
+    ASSERT_EQ(seen[index], index) << "at " << index;
+  }
+}
+
+// Concurrent senders interleave, but each one's own messages stay in order.
+//
+// This is the race the fast path in Send has to get right: two threads reaching
+// it at once, one of them taking the claim and delivering while the other
+// queues behind it, and the queued one having to come out after -- not before
+// -- the one in flight. `seq` carries the sender's index in the high bits so
+// the receiver can separate the streams it should not be reordering.
+TEST(InProcessWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
+  constexpr int kSenders = 4;
+  constexpr int kPerSender = 250;
+  WireStreamOptions narrow;
+  narrow.max_buffered_incoming_messages = 8;
+  auto pair = InProcessWireStream::CreatePair(narrow);
+  ASSERT_TRUE(pair.ok()) << pair.status();
+  auto [sender, receiver] = *pair;
+
+  thread::Mutex mu;
+  thread::CondVar cv;
+  std::vector<std::vector<int>> seen(kSenders);
+  int total = 0;
+  ASSERT_TRUE(
+      sender
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [] { return a11::ReadyTask(); })
+          .Await()
+          .ok());
+  ASSERT_TRUE(receiver
+                  ->Accept(
+                      [&](std::optional<data::WireMessage> message) {
+                        if (!message.has_value()) {
+                          return a11::ReadyTask();
+                        }
+                        thread::MutexLock lock(&mu);
+                        for (const data::NodeFragment& fragment :
+                             message->node_fragments) {
+                          const std::uint32_t tag = fragment.seq.value_or(0);
+                          seen[tag >> 24U].push_back(
+                              static_cast<int>(tag & 0xFFFFFFU));
+                          ++total;
+                        }
+                        cv.SignalAll();
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
+
+  std::vector<std::thread> senders;
+  senders.reserve(kSenders);
+  for (int index = 0; index < kSenders; ++index) {
+    senders.emplace_back([&, index] {
+      for (int count = 0; count < kPerSender; ++count) {
+        data::WireMessage message{
+            .node_fragments = {{
+                .id = "node",
+                .data = data::Chunk{.data = "payload"},
+                .seq = static_cast<std::uint32_t>((index << 24U) | count),
+                .continued = true,
+            }}};
+        ASSERT_TRUE(sender->Send(std::move(message)).ok());
+      }
+    });
+  }
+  for (std::thread& thread : senders) {
+    thread.join();
+  }
+
+  {
+    thread::MutexLock lock(&mu);
+    const absl::Time limit = absl::Now() + absl::Seconds(10);
+    while (total < kSenders * kPerSender && absl::Now() < limit) {
+      cv.WaitWithDeadline(&mu, limit);
+    }
+  }
+  thread::MutexLock lock(&mu);
+  ASSERT_EQ(total, kSenders * kPerSender);
+  for (int index = 0; index < kSenders; ++index) {
+    ASSERT_EQ(seen[index].size(), kPerSender) << index;
+    for (int count = 0; count < kPerSender; ++count) {
+      ASSERT_EQ(seen[index][count], count) << index << " at " << count;
+    }
+  }
 }
 
 TEST(InProcessWireStreamTest, CommunicatesAbortStatus) {

@@ -1,0 +1,6 @@
+# Result files are machine-specific: a number from one laptop is not a
+# baseline for another. Keep them local, and commit one deliberately (with the
+# machine named in the filename) when it is meant to be a shared reference.
+*.json
+*.txt
+!reference-*.json

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -44,6 +45,36 @@ void AppendBigEndian16(std::string* output, std::uint16_t value) {
 void AppendBigEndian64(std::string* output, std::uint64_t value) {
   for (int shift = 56; shift >= 0; shift -= 8) {
     output->push_back(static_cast<char>((value >> shift) & 0xffU));
+  }
+}
+
+/**
+ * XORs `length` bytes at `data` with a repeating 4-byte WebSocket mask.
+ *
+ * A word at a time, because this runs over every byte a client sends and every
+ * byte a server receives: RFC 6455 masking is not optional and not negotiable.
+ * The obvious `data[i] ^= mask[i % 4]` costs a division per byte and defeats
+ * vectorisation, which at 64 KiB per message is a real fraction of the
+ * message's whole cost. Reading the mask as one 32-bit word and XORing
+ * word-wise leaves the compiler free to widen it further.
+ *
+ * Always from the start of the mask, which is all RFC 6455 needs: every frame
+ * carries its own masking key and applies it from its own first payload byte,
+ * so a fragmented message's continuations do not continue the previous frame's
+ * mask.
+ */
+void MaskInPlace(char* data, size_t length, const char (&mask)[4]) {
+  std::uint32_t word = 0;
+  std::memcpy(&word, mask, sizeof(word));
+  size_t index = 0;
+  for (; index + sizeof(word) <= length; index += sizeof(word)) {
+    std::uint32_t chunk = 0;
+    std::memcpy(&chunk, data + index, sizeof(chunk));
+    chunk ^= word;
+    std::memcpy(data + index, &chunk, sizeof(chunk));
+  }
+  for (; index < length; ++index) {
+    data[index] ^= mask[index % 4];
   }
 }
 
@@ -309,7 +340,15 @@ class Http2WebSocketChannel final
         return absl::ResourceExhaustedError(
             "Buffered WebSocket frame exceeds max_message_size");
       }
-      input_.append(data);
+      // Adopt the read outright when nothing is part-parsed. A whole message
+      // usually arrives in one read, so this is the ordinary path, and
+      // appending would copy every byte of it into a buffer that is about to be
+      // handed straight back out again.
+      if (input_.empty()) {
+        input_ = std::move(data);
+      } else {
+        input_.append(data);
+      }
       ABSL_RETURN_IF_ERROR(ParseFrames(&actions));
     }
 
@@ -399,14 +438,35 @@ class Http2WebSocketChannel final
 
       const size_t mask_offset = consumed + header_size;
       const size_t payload_offset = mask_offset + mask_size;
-      std::string payload =
-          input_.substr(payload_offset, static_cast<size_t>(payload_size));
+      // Copied out before the payload is taken, because taking it may move the
+      // buffer the mask lives in.
+      char mask[4] = {0, 0, 0, 0};
       if (masked) {
-        for (size_t index = 0; index < payload.size(); ++index) {
-          payload[index] ^= input_[mask_offset + (index % 4)];
-        }
+        std::memcpy(mask, input_.data() + mask_offset, sizeof(mask));
       }
-      consumed += full_size;
+      std::string payload;
+      bool taken = false;
+      if (consumed == 0 && payload_offset + payload_size == input_.size()) {
+        // The buffer holds exactly this one frame and nothing before it, which
+        // is the common case for a message that arrived in its own TCP read.
+        // Taking the buffer whole and erasing the header off the front is one
+        // memmove of a 2-14 byte header instead of a copy of the payload -- and
+        // at 64 KiB that copy is a measurable share of the message's cost.
+        payload = std::move(input_);
+        input_.clear();
+        payload.erase(0, payload_offset);
+        taken = true;
+      } else {
+        payload =
+            input_.substr(payload_offset, static_cast<size_t>(payload_size));
+      }
+      if (masked) {
+        MaskInPlace(payload.data(), payload.size(), mask);
+      }
+      // Taking the buffer already consumed it: there is nothing left to skip
+      // past and nothing left to erase, and leaving `consumed` set would make
+      // the loop's `input_.size() - consumed` underflow on the next pass.
+      consumed = taken ? 0 : consumed + full_size;
 
       if (opcode == kPing) {
         actions->pongs.push_back(std::move(payload));
@@ -483,11 +543,12 @@ class Http2WebSocketChannel final
           static_cast<char>(key & 0xffU),
       };
       frame.append(mask, sizeof(mask));
-      for (size_t index = 0; index < payload.size(); ++index) {
-        payload[index] ^= mask[index % 4];
-      }
+      const size_t body = frame.size();
+      frame.append(payload);
+      MaskInPlace(frame.data() + body, payload.size(), mask);
+    } else {
+      frame.append(payload);
     }
-    frame.append(payload);
     return WriteTransport(std::move(frame));
   }
 

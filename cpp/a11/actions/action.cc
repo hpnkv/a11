@@ -2,10 +2,11 @@
 
 #include "a11/actions/action.h"
 
+#include "a11/actions/internal/exception_guarded_handlers.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -82,19 +83,13 @@ ActionLimiter::ActionLimiter(size_t maximum)
     : maximum_(maximum), changed_(std::make_shared<thread::PermanentEvent>()) {}
 
 ActionHandler MakeAsyncActionHandler(SyncActionHandler handler) {
-  return
-      [handler = std::move(handler)](std::shared_ptr<Action> action) mutable {
-        return a11::SubmitTask(
-            [handler, action = std::move(action)]() mutable -> absl::Status {
-              try {
-                return handler(std::move(action));
-              } catch (const std::exception& error) {
-                return absl::UnknownError(error.what());
-              } catch (...) {
-                return absl::UnknownError("Action handler raised an exception");
-              }
-            });
-      };
+  return [handler = internal::GuardSyncHandler(std::move(handler))](
+             std::shared_ptr<Action> action) mutable {
+    return a11::SubmitTask(
+        [handler, action = std::move(action)]() mutable -> absl::Status {
+          return handler(std::move(action));
+        });
+  };
 }
 
 absl::StatusOr<std::shared_ptr<ActionLimiter>> ActionLimiter::Create(
@@ -197,7 +192,9 @@ Action::Action(ActionSchema schema, std::string id, ActionHandler handler,
                std::shared_ptr<ActionRegistry> registry,
                std::shared_ptr<ActionLimiter> nested_limiter)
     : schema_(std::move(schema)),
-      handler_(std::move(handler)),
+      // Guarded on the way in; see
+      // actions/internal/exception_guarded_handlers.h.
+      handler_(internal::GuardHandler(std::move(handler))),
       id_(std::move(id)),
       node_map_(std::move(node_map)),
       stream_(std::move(stream)),
@@ -273,7 +270,7 @@ absl::Status Action::BindHandler(ActionHandler handler) {
     return absl::FailedPreconditionError(
         "Cannot change Action handler after it has started");
   }
-  handler_ = std::move(handler);
+  handler_ = internal::GuardHandler(std::move(handler));
   return absl::OkStatus();
 }
 
@@ -796,16 +793,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
     return self;
   }
 
-  a11::Task task;
-  try {
-    task = handler(self);
-  } catch (const std::exception& error) {
-    StartFinish(absl::UnknownError(error.what()));
-    return self;
-  } catch (...) {
-    StartFinish(absl::UnknownError("Action handler raised an exception"));
-    return self;
-  }
+  const a11::Task task = handler(self);
 
   {
     thread::MutexLock lock(&mu_);
@@ -977,14 +965,7 @@ absl::Status Action::Cancel() {
   }
   absl::Status first;
   for (auto& callback : callbacks) {
-    try {
-      KeepFirstError(callback(shared_from_this()), &first);
-    } catch (const std::exception& error) {
-      KeepFirstError(absl::UnknownError(error.what()), &first);
-    } catch (...) {
-      KeepFirstError(absl::UnknownError("cancel callback raised an exception"),
-                     &first);
-    }
+    KeepFirstError(callback(shared_from_this()), &first);
   }
   for (const auto& child : children) {
     KeepFirstError(child->Cancel(), &first);
@@ -1021,7 +1002,7 @@ absl::Status Action::SetOnCancelled(OnActionCancelled callback) {
     return absl::InvalidArgumentError("callback must be callable");
   }
   thread::MutexLock lock(&mu_);
-  cancel_callbacks_.push_back(std::move(callback));
+  cancel_callbacks_.push_back(internal::GuardOnCancelled(std::move(callback)));
   return absl::OkStatus();
 }
 
@@ -1276,20 +1257,14 @@ void Action::RunHandler(std::shared_ptr<ActionLimiter> limiter) {
     } else if (absl::Status autofill = ApplyInputAutofills(); !autofill.ok()) {
       status = std::move(autofill);
     } else {
-      try {
-        const a11::Task handler_task = handler(shared_from_this());
-        status = handler_task.Await().status();
-        if (thread::Cancelled()) {
-          // Await cancellation stops this fiber, but the awaited future may be
-          // backed by an asyncio Task on another thread. Propagate explicitly
-          // so Python handlers run their cancellation/finally cleanup too.
-          handler_task.Cancel().IgnoreError();
-          status = CancelledStatus();
-        }
-      } catch (const std::exception& error) {
-        status = absl::UnknownError(error.what());
-      } catch (...) {
-        status = absl::UnknownError("Action handler raised an exception");
+      const a11::Task handler_task = handler(shared_from_this());
+      status = handler_task.Await().status();
+      if (thread::Cancelled()) {
+        // Await cancellation stops this fiber, but the awaited future may be
+        // backed by an asyncio Task on another thread. Propagate explicitly
+        // so Python handlers run their cancellation/finally cleanup too.
+        handler_task.Cancel().IgnoreError();
+        status = CancelledStatus();
       }
     }
   }

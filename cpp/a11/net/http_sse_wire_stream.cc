@@ -2,11 +2,12 @@
 
 #include "a11/net/http_sse_wire_stream.h"
 
+#include "a11/net/internal/exception_guarded_callbacks.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -874,7 +875,11 @@ void HttpSseServerWireStream::TransportDone() {
 struct HttpSseServer::State {
   State(HttpSseOptions value_options, OnHttpSseConnect connect_callback)
       : options(std::move(value_options)),
-        on_connect(std::move(connect_callback)) {}
+        // Guarded on the way in: it runs on a connection fibre of A11's, so
+        // net/internal/exception_guarded_callbacks.h is where a raised
+        // exception becomes the failed Task the caller below awaits.
+        on_connect(
+            internal::GuardOnHttpSseConnect(std::move(connect_callback))) {}
 
   mutable thread::Mutex mu;
   const HttpSseOptions options;
@@ -1054,36 +1059,37 @@ a11::Task HttpSseServer::HandleConnect(
     std::shared_ptr<a11::Promise<std::shared_ptr<HttpSseServerWireStream>>>
         waiter;
     OnHttpSseConnect on_connect;
+    bool stopped = false;
     {
       thread::MutexLock lock(&state->mu);
-      if (state->stopped) {
-        return SendHttpStatus(response,
-                              absl::UnavailableError("SSE server stopped"),
-                              CorsHeaders(state->options))
-            .Await()
-            .status();
-      }
-      state->streams.emplace(id, stream);
-      on_connect = state->on_connect;
-      if (!on_connect) {
-        if (!state->waiters.empty()) {
-          waiter = std::move(state->waiters.front());
-          state->waiters.pop_front();
-        } else {
-          state->incoming.push_back(stream);
+      stopped = state->stopped;
+      if (!stopped) {
+        state->streams.emplace(id, stream);
+        on_connect = state->on_connect;
+        if (!on_connect) {
+          if (!state->waiters.empty()) {
+            waiter = std::move(state->waiters.front());
+            state->waiters.pop_front();
+          } else {
+            state->incoming.push_back(stream);
+          }
         }
       }
     }
+    // Refused outside the lock. Sending a response crosses to the libuv loop and
+    // waits there, and what it wakes on the way -- a finished response stream,
+    // its writer's done promise -- can reach back into this server. Deciding
+    // under the lock and acting outside it is the shape every other close and
+    // send in this file follows, for the same reason.
+    if (stopped) {
+      return SendHttpStatus(response,
+                            absl::UnavailableError("SSE server stopped"),
+                            CorsHeaders(state->options))
+          .Await()
+          .status();
+    }
     if (on_connect) {
-      absl::Status callback_status;
-      try {
-        callback_status = on_connect(stream).Await().status();
-      } catch (const std::exception& error) {
-        callback_status = absl::UnknownError(error.what());
-      } catch (...) {
-        callback_status = absl::UnknownError(
-            "SSE on_connect callback raised a non-standard exception");
-      }
+      const absl::Status callback_status = on_connect(stream).Await().status();
       if (!callback_status.ok()) {
         stream->FailTransport(callback_status);
         return response->headers_sent()

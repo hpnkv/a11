@@ -111,7 +111,7 @@ class NodeMap : public std::enable_shared_from_this<NodeMap> {
   [[nodiscard]] std::vector<std::string> Ids() const;
 
  private:
-  explicit NodeMap(ChunkStoreFactory factory) : factory_(std::move(factory)) {}
+  explicit NodeMap(ChunkStoreFactory factory);
 
   const ChunkStoreFactory factory_;
   mutable thread::Mutex mu_;

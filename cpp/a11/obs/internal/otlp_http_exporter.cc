@@ -15,6 +15,8 @@
 #include <absl/log/log.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+
+#include "a11/json_codec.h"
 #include <opentelemetry/nostd/span.h>
 #include <opentelemetry/nostd/variant.h>
 #include <opentelemetry/sdk/common/attribute_utils.h>
@@ -187,7 +189,10 @@ std::string BuildPayload(
   json request;
   request["resourceSpans"] = json::array(
       {json{{"resource", resource_obj}, {"scopeSpans", scope_spans}}});
-  return request.dump();
+  // Lossy on purpose: a span attribute is a diagnostic, and losing one byte of
+  // it to U+FFFD beats losing the whole batch because a caller put a raw byte
+  // in an attribute value. See a11/json_codec.h.
+  return DumpJsonLossy(request);
 }
 
 size_t DiscardBody(char* /*ptr*/, size_t size, size_t nmemb, void* /*ud*/) {
@@ -215,13 +220,7 @@ class OtlpHttpJsonExporter final : public otel_sdk::SpanExporter {
       return otel::sdk::common::ExportResult::kSuccess;
     }
 
-    std::string payload;
-    try {
-      payload = BuildPayload(spans);
-    } catch (const std::exception& error) {
-      LOG(ERROR) << "OTLP JSON serialization failed: " << error.what();
-      return otel::sdk::common::ExportResult::kFailure;
-    }
+    const std::string payload = BuildPayload(spans);
 
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {

@@ -99,6 +99,10 @@ class InProcessWireStream final : public WireStream {
  private:
   a11::Task StartEndpoint(OnMessage on_message, OnDone on_done);
   static void Sender(std::shared_ptr<State> state);
+  /// Delivers `message` on the calling thread, or queues it for Sender if the
+  /// peer has no room. Called with the endpoint's send claim held.
+  static void DeliverClaimed(const std::shared_ptr<State>& state,
+                             data::WireMessage message);
   static void Receiver(std::shared_ptr<State> state);
   static void WatchTiming(std::shared_ptr<State> state);
   static void MarkActivity(const std::shared_ptr<State>& first,

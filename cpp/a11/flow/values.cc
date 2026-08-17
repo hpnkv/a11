@@ -2,6 +2,8 @@
 
 #include "a11/flow/values.h"
 
+#include "a11/flow/internal/pattern.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -1594,14 +1596,15 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
   if (field.has_pattern && held.IsTextlike()) {
     // ECMA-262, which is the dialect JSONSchema's `pattern` is in -- so a
     // pattern written here and one written in a schema mean the same thing.
-    std::regex pattern;
-    try {
-      pattern.assign(field.pattern, std::regex::ECMAScript);
-    } catch (const std::regex_error&) {
+    // std::regex reports a bad pattern by throwing and offers no way to ask
+    // first, so this check lives in the flow language's own exception boundary.
+    absl::StatusOr<std::regex> pattern =
+        internal::CompilePattern(field.pattern);
+    if (!pattern.ok()) {
       return FieldError(path, absl::StrCat("the pattern '", field.pattern,
                                           "' is not a regular expression."));
     }
-    if (!std::regex_search(held.text(), pattern)) {
+    if (!std::regex_search(held.text(), *pattern)) {
       return FieldError(path, absl::StrCat("'", held.text(),
                                           "' does not match '", field.pattern,
                                           "'."));

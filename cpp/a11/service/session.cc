@@ -2,11 +2,12 @@
 
 #include "a11/service/session.h"
 
+#include "a11/service/internal/exception_guarded_callbacks.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,10 +89,6 @@ void KeepFirstError(absl::Status candidate, absl::Status* first) {
   }
 }
 
-absl::Status CallbackException(const std::exception& error) {
-  return absl::UnknownError(error.what());
-}
-
 }  // namespace
 
 struct Session::StreamState {
@@ -132,8 +129,11 @@ struct Session::State {
         options(value_options),
         node_map(std::move(nodes)),
         action_registry(std::move(registry)),
-        on_message(std::move(message_callback)),
-        on_done(std::move(done_callback)),
+        // Guarded on the way in, so every invocation below runs on an A11 fibre
+        // without a try of its own. See
+        // service/internal/exception_guarded_callbacks.h.
+        on_message(internal::GuardOnStreamMessage(std::move(message_callback))),
+        on_done(internal::GuardOnStreamDone(std::move(done_callback))),
         root_limiter(std::move(root)),
         nested_limiter(std::move(nested)),
         deadline(value_options.deadline),
@@ -956,13 +956,7 @@ absl::StatusOr<a11::Task> Session::AddStream(
         absl::DeadlineExceededError("The Session deadline has been exceeded"));
   }
   std::string stream_id;
-  try {
-    stream_id = stream->GetId();
-  } catch (const std::exception& error) {
-    return CallbackException(error);
-  } catch (...) {
-    return absl::UnknownError("WireStream.get_id raised an exception");
-  }
+  stream_id = stream->GetId();
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<actions::ActionLimiter> gate,
                         actions::ActionLimiter::Create(1));
   auto stream_state =
@@ -1101,15 +1095,9 @@ a11::Task Session::HandleStreamMessage(
         stream_state->half_close_delivered = true;
         callback = self->state_->on_message;
       }
-      try {
-        return callback(std::nullopt, stream_state->stream, self)
-            .Await()
-            .status();
-      } catch (const std::exception& error) {
-        return CallbackException(error);
-      } catch (...) {
-        return absl::UnknownError("Session message callback raised");
-      }
+      return callback(std::nullopt, stream_state->stream, self)
+          .Await()
+          .status();
     }
 
     ABSL_ASSIGN_OR_RETURN(std::string encoded, message->ToMsgpack());
@@ -1206,20 +1194,14 @@ void Session::ProcessStreamMessages(
       callback = state_->on_message;
     }
     absl::Status callback_status;
-    try {
-      a11::Task callback_task =
-          callback(std::optional<data::WireMessage>(std::move(message)),
-                   stream_state->stream, shared_from_this());
-      callback_status = callback_task.Await().status();
-      if (thread::Cancelled()) {
-        (void)callback_task.Cancel();
-        callback_status =
-            absl::CancelledError("Session message callback was cancelled");
-      }
-    } catch (const std::exception& error) {
-      callback_status = CallbackException(error);
-    } catch (...) {
-      callback_status = absl::UnknownError("Session message callback raised");
+    a11::Task callback_task =
+        callback(std::optional<data::WireMessage>(std::move(message)),
+                 stream_state->stream, shared_from_this());
+    callback_status = callback_task.Await().status();
+    if (thread::Cancelled()) {
+      (void)callback_task.Cancel();
+      callback_status =
+          absl::CancelledError("Session message callback was cancelled");
     }
 
     bool session_aborted = false;
@@ -1311,13 +1293,7 @@ a11::Task Session::HandleStreamDone(
       callback = self->state_->on_done;
     }
     absl::Status callback_status;
-    try {
-      callback_status = callback(stream_state->stream, self).Await().status();
-    } catch (const std::exception& error) {
-      callback_status = CallbackException(error);
-    } catch (...) {
-      callback_status = absl::UnknownError("Session done callback raised");
-    }
+    callback_status = callback(stream_state->stream, self).Await().status();
     self->RemoveStream(stream_state);
     return callback_status;
   });

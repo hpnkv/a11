@@ -2,13 +2,14 @@
 
 #include "a11/status.h"
 
-#include <exception>
 #include <string>
 #include <utility>
 
 #include <absl/strings/cord.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
+
+#include "a11/json_codec.h"
 
 namespace a11 {
 namespace {
@@ -162,12 +163,16 @@ absl::Status MakeStatus(absl::StatusCode code, std::string message,
                         nlohmann::json details) {
   absl::Status status(code, std::move(message));
   if (details.is_array() && !details.empty()) {
-    try {
-      status.SetPayload(kStatusDetailsPayloadUrl, absl::Cord(details.dump()));
-    } catch (const std::exception& error) {
+    // Details reach here from a peer or from an application, so a string in
+    // them may not be valid UTF-8 -- which is a bad payload rather than a bug,
+    // and becomes an error status.
+    absl::StatusOr<std::string> encoded = DumpJson(details, "status details");
+    if (!encoded.ok()) {
       return absl::InternalError(
-          absl::StrCat("Failed to encode status details: ", error.what()));
+          absl::StrCat("Failed to encode status details: ",
+                       encoded.status().message()));
     }
+    status.SetPayload(kStatusDetailsPayloadUrl, absl::Cord(*encoded));
   }
   return status;
 }
@@ -178,25 +183,23 @@ nlohmann::json StatusDetails(const absl::Status& status) {
   if (!payload.has_value()) {
     return nlohmann::json::array();
   }
-  try {
-    absl::Cord mutable_payload = *payload;
-    nlohmann::json details =
-        nlohmann::json::parse(std::string(mutable_payload.Flatten()));
-    return details.is_array() ? std::move(details) : nlohmann::json::array();
-  } catch (const std::exception&) {
+  absl::Cord mutable_payload = *payload;
+  absl::StatusOr<nlohmann::json> details =
+      ParseJson(std::string(mutable_payload.Flatten()), "status details");
+  if (!details.ok() || !details->is_array()) {
     return nlohmann::json::array();
   }
+  return std::move(*details);
 }
 
 absl::StatusOr<nlohmann::json> StatusToJson(const absl::Status& status) {
-  try {
-    return nlohmann::json{{"code", static_cast<int>(status.code())},
-                          {"message", std::string(status.message())},
-                          {"details", StatusDetails(status)}};
-  } catch (const std::exception& error) {
-    return absl::InternalError(
-        absl::StrCat("Failed to create status JSON: ", error.what()));
-  }
+  // Building an object out of an int, a string and an array cannot fail:
+  // nlohmann raises on a type mismatch, and there is none to make here. The
+  // StatusOr stays because it is the published signature, and because
+  // StatusFromJson's failure is real.
+  return nlohmann::json{{"code", static_cast<int>(status.code())},
+                        {"message", std::string(status.message())},
+                        {"details", StatusDetails(status)}};
 }
 
 nlohmann::json StatusToJsonOrEmptyDetails(const absl::Status& status) {
@@ -211,42 +214,40 @@ nlohmann::json StatusToJsonOrEmptyDetails(const absl::Status& status) {
 }
 
 absl::StatusOr<absl::Status> StatusFromJson(const nlohmann::json& value) {
-  try {
-    if (!value.is_object() || value.find("code") == value.end() ||
-        !value["code"].is_number_integer() ||
-        value.find("message") == value.end() || !value["message"].is_string()) {
-      absl::StatusOr<absl::Status> result;
-      result.AssignStatus(
-          absl::InvalidArgumentError("JSON does not contain a valid Status"));
-      return result;
-    }
-    const std::int64_t raw_code = value["code"].get<std::int64_t>();
-    if (!IsCanonicalCode(raw_code)) {
-      absl::StatusOr<absl::Status> result;
-      result.AssignStatus(
-          absl::InvalidArgumentError("Status code is not canonical"));
-      return result;
-    }
-    nlohmann::json details = nlohmann::json::array();
-    if (value.find("details") != value.end()) {
-      details = value["details"];
-      if (!details.is_array()) {
-        absl::StatusOr<absl::Status> result;
-        result.AssignStatus(
-            absl::InvalidArgumentError("Status details must be an array"));
-        return result;
-      }
-    }
-    return absl::StatusOr<absl::Status>(
-        std::in_place,
-        MakeStatus(static_cast<absl::StatusCode>(raw_code),
-                   value["message"].get<std::string>(), std::move(details)));
-  } catch (const std::exception& error) {
+  // Every read below is preceded by the check that makes it well-typed, so
+  // nlohmann has nothing to raise about: `find` before a subscript, and
+  // `is_number_integer`/`is_string`/`is_array` before a `get`. That is the
+  // convention throughout A11's JSON code, and what makes it safe to compile
+  // with exceptions disabled -- see a11/json_codec.h.
+  if (!value.is_object() || value.find("code") == value.end() ||
+      !value["code"].is_number_integer() ||
+      value.find("message") == value.end() || !value["message"].is_string()) {
     absl::StatusOr<absl::Status> result;
-    result.AssignStatus(absl::InvalidArgumentError(
-        absl::StrCat("Failed to decode Status JSON: ", error.what())));
+    result.AssignStatus(
+        absl::InvalidArgumentError("JSON does not contain a valid Status"));
     return result;
   }
+  const std::int64_t raw_code = value["code"].get<std::int64_t>();
+  if (!IsCanonicalCode(raw_code)) {
+    absl::StatusOr<absl::Status> result;
+    result.AssignStatus(
+        absl::InvalidArgumentError("Status code is not canonical"));
+    return result;
+  }
+  nlohmann::json details = nlohmann::json::array();
+  if (value.find("details") != value.end()) {
+    details = value["details"];
+    if (!details.is_array()) {
+      absl::StatusOr<absl::Status> result;
+      result.AssignStatus(
+          absl::InvalidArgumentError("Status details must be an array"));
+      return result;
+    }
+  }
+  return absl::StatusOr<absl::Status>(
+      std::in_place,
+      MakeStatus(static_cast<absl::StatusCode>(raw_code),
+                 value["message"].get<std::string>(), std::move(details)));
 }
 
 }  // namespace a11

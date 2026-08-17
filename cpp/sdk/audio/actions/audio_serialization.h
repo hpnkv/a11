@@ -40,6 +40,7 @@
 
 #include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
+#include "a11/json_codec.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "sdk/audio/actions/audio_events.h"
@@ -141,12 +142,7 @@ absl::StatusOr<a11::data::Chunk> EncodeJsonChunk(const T& value) {
     return json.status();
   }
   a11::data::Chunk chunk;
-  try {
-    chunk.data = json->dump();
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to serialize JSON: ", error.what()));
-  }
+  ABSL_ASSIGN_OR_RETURN(chunk.data, a11::DumpJson(*json, "JSON"));
   chunk.metadata = a11::data::ChunkMetadata{
       .mimetype = absl::StrCat(a11::data::kJsonMimetype, ";type=",
                                A11SerialTag(a11::data::TypeTag<T>{}))};
@@ -158,21 +154,14 @@ absl::StatusOr<a11::data::Chunk> EncodeJsonChunk(const T& value) {
 template <typename T>
   requires a11::data::JsonSerializable<T>
 absl::StatusOr<T> DecodeJsonChunk(const a11::data::Chunk& chunk) {
-  nlohmann::json json;
-  try {
-    if (absl::StartsWith(chunk.GetMimetype(), a11::data::kMsgpackMimetype)) {
-      const auto* first =
-          reinterpret_cast<const std::uint8_t*>(chunk.data.data());
-      json = nlohmann::json::from_msgpack(first, first + chunk.data.size(),
-                                          true, true);
-    } else {
-      json = nlohmann::json::parse(chunk.data);
-    }
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid encoded value: ", error.what()));
+  absl::StatusOr<nlohmann::json> json =
+      absl::StartsWith(chunk.GetMimetype(), a11::data::kMsgpackMimetype)
+          ? a11::UnpackMsgpack(chunk.data, "encoded value")
+          : a11::ParseJson(chunk.data, "encoded value");
+  if (!json.ok()) {
+    return json.status();
   }
-  return A11FromJson(a11::data::TypeTag<T>{}, json);
+  return A11FromJson(a11::data::TypeTag<T>{}, *json);
 }
 
 /// Encode an AudioBuffer into a tagged @c application/x-msgpack chunk.

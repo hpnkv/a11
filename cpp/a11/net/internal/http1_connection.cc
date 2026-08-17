@@ -19,6 +19,7 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/concurrency/executor.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/internal/http1_codec.h"
 #include "a11/net/internal/http_streams.h"
 #include "a11/status.h"
@@ -90,7 +91,10 @@ Http1Connection::Http1Connection(
     : HttpTransport(std::move(tcp), server, std::move(options),
                     std::move(tls_context), std::move(tls_server_name),
                     std::move(on_closed)),
-      handler_(std::move(handler)),
+      // The handler is the server owner's; guarded on the way in for the same
+      // reason as in Http2Connection. See
+      // net/internal/exception_guarded_callbacks.h.
+      handler_(internal::GuardRequestHandler(std::move(handler))),
       prebuffered_(std::move(prebuffered)) {}
 
 std::shared_ptr<Http1Connection> Http1Connection::Self() {
@@ -265,15 +269,11 @@ absl::Status Http1Connection::DispatchRequest() {
   Http2RequestHandler handler = handler_;
   a11::Schedule([handler = std::move(handler), request = std::move(request),
                  writer = std::move(writer)]() mutable {
-    absl::Status status;
-    try {
-      status = handler(std::move(request), writer).Await().status();
-    } catch (const std::exception& error) {
-      status = absl::UnknownError(
-          absl::StrCat("HTTP/1.1 request handler raised: ", error.what()));
-    } catch (...) {
-      status = absl::UnknownError("HTTP/1.1 request handler raised");
-    }
+    // The handler was guarded when the connection adopted it; see the
+    // Http2Connection constructor and
+    // net/internal/exception_guarded_callbacks.h.
+    const absl::Status status =
+        handler(std::move(request), writer).Await().status();
     if (!status.ok()) {
       (void)writer->Abort(status);
     } else if (!writer->headers_sent()) {
@@ -696,7 +696,9 @@ absl::Status Http1Connection::SendHeadersOnLoop(std::int32_t stream_id,
 
 absl::Status Http1Connection::Write(std::int32_t stream_id, std::string data) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv(
+  const size_t bytes = data.size();
+  return PostWrite(
+      bytes,
       [self = std::move(self), stream_id, data = std::move(data)]() mutable {
         return self->WriteOnLoop(stream_id, std::move(data));
       });
@@ -885,7 +887,9 @@ absl::Status Http1Connection::WriteRequest(std::int32_t /*stream_id*/,
     return absl::OkStatus();
   }
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv(
+  const size_t bytes = data.size();
+  return PostWrite(
+      bytes,
       [self = std::move(self), data = std::move(data)]() -> absl::Status {
         if (self->closed()) {
           return absl::UnavailableError("HTTP/1.1 connection is closed");

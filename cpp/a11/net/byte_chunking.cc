@@ -139,7 +139,13 @@ absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
   return packets;
 }
 
-absl::StatusOr<BytePacket> ParseBytePacket(std::string_view packet) {
+namespace {
+
+// Everything about a packet except its payload bytes, plus how many trailing
+// bytes the metadata occupies. Shared by the two parse entry points so that the
+// validation cannot drift between an owning and a borrowing caller.
+absl::StatusOr<size_t> ParseBytePacketMetadata(std::string_view packet,
+                                               BytePacket* parsed) {
   if (packet.size() < kCompleteMetadataSize) {
     return absl::InvalidArgumentError(
         "byte packet is shorter than complete-packet metadata");
@@ -164,26 +170,60 @@ absl::StatusOr<BytePacket> ParseBytePacket(std::string_view packet) {
   }
 
   const size_t transient_offset = packet.size() - kCompleteMetadataSize;
-  BytePacket result{
-      .type = type,
-      .payload = std::string(packet.substr(0, packet.size() - metadata_size)),
-      .transient_id = ReadLittleEndian<std::uint64_t>(packet, transient_offset),
-      .sequence = 0,
-      .packet_count = 0,
-  };
+  parsed->type = type;
+  parsed->transient_id =
+      ReadLittleEndian<std::uint64_t>(packet, transient_offset);
+  parsed->sequence = 0;
+  parsed->packet_count = 0;
   if (type != BytePacketType::kCompleteBytes) {
     const size_t sequence_offset = transient_offset - sizeof(std::uint32_t);
-    result.sequence = ReadLittleEndian<std::uint32_t>(packet, sequence_offset);
+    parsed->sequence = ReadLittleEndian<std::uint32_t>(packet, sequence_offset);
     if (type == BytePacketType::kLengthSuffixedByteChunk) {
       const size_t count_offset = sequence_offset - sizeof(std::uint32_t);
-      result.packet_count =
+      parsed->packet_count =
           ReadLittleEndian<std::uint32_t>(packet, count_offset);
-      if (result.sequence != 0 || result.packet_count == 0) {
+      if (parsed->sequence != 0 || parsed->packet_count == 0) {
         return absl::InvalidArgumentError(
             "first byte chunk must have sequence zero and a positive count");
       }
     }
   }
+  return metadata_size;
+}
+
+}  // namespace
+
+absl::StatusOr<std::vector<std::string>> SplitOwnedBytesIntoPackets(
+    std::string bytes, std::uint64_t transient_id, size_t packet_size) {
+  if (packet_size < kMinimumPacketSize) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("byte packet_size must be at least ", kMinimumPacketSize));
+  }
+  if (bytes.size() > packet_size - kCompleteMetadataSize) {
+    return SplitBytesIntoPackets(bytes, transient_id, packet_size);
+  }
+  AppendLittleEndian(&bytes, transient_id);
+  bytes.push_back(static_cast<char>(BytePacketType::kCompleteBytes));
+  std::vector<std::string> packets;
+  packets.reserve(1);
+  packets.push_back(std::move(bytes));
+  return packets;
+}
+
+absl::StatusOr<BytePacket> ParseBytePacket(std::string_view packet) {
+  BytePacket result;
+  ABSL_ASSIGN_OR_RETURN(const size_t metadata_size,
+                        ParseBytePacketMetadata(packet, &result));
+  result.payload = std::string(packet.substr(0, packet.size() - metadata_size));
+  return result;
+}
+
+absl::StatusOr<BytePacket> ParseOwnedBytePacket(std::string packet) {
+  BytePacket result;
+  ABSL_ASSIGN_OR_RETURN(const size_t metadata_size,
+                        ParseBytePacketMetadata(packet, &result));
+  packet.resize(packet.size() - metadata_size);
+  result.payload = std::move(packet);
   return result;
 }
 
@@ -227,7 +267,8 @@ absl::StatusOr<std::optional<std::string>> ByteReassembler::Feed(
   if (serialized.size() > impl->options.packet_size) {
     return absl::OutOfRangeError("incoming byte packet exceeds packet_size");
   }
-  ABSL_ASSIGN_OR_RETURN(BytePacket packet, ParseBytePacket(serialized));
+  ABSL_ASSIGN_OR_RETURN(BytePacket packet,
+                        ParseOwnedBytePacket(std::move(serialized)));
   if (packet.payload.size() > impl->options.max_message_size) {
     return absl::OutOfRangeError("incoming byte message exceeds its limit");
   }

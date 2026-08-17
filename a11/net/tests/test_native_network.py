@@ -155,10 +155,12 @@ async def test_http2_extended_connect_exposes_duplex_body_streams():
         stream.write(b"one")
         stream.write(b"two")
         stream.finish()
-        assert [chunk async for chunk in stream] == [
-            b"echo:one",
-            b"echo:two",
-        ]
+        # Joined, not compared chunk by chunk: a duplex body is a byte stream, and
+        # HTTP/2 DATA framing is not a message boundary. Two writes issued back to
+        # back may reach the peer as one frame -- which is what happens now that a
+        # write is posted to the loop rather than awaited -- and a proxy could
+        # re-frame them anyway. Order and bytes are the contract; chunking is not.
+        assert b"".join([chunk async for chunk in stream]) == b"echo:oneecho:two"
         await asyncio.wait_for(stream.wait_done(), timeout=5)
     finally:
         if client is not None:

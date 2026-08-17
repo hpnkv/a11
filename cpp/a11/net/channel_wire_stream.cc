@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,6 +25,7 @@
 #include "a11/data/types.h"
 #include "a11/net/byte_chunking.h"
 #include "a11/net/internal/binary_channel.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/wire_stream.h"
 #include "a11/obs/span.h"
 #include "a11/obs/tracer.h"
@@ -39,10 +39,6 @@ namespace a11::net {
 namespace {
 
 enum class End { kNone, kHalfClose, kAbort };
-
-absl::Status ExternalError(const std::exception& error) {
-  return absl::UnknownError(error.what());
-}
 
 }  // namespace
 
@@ -102,6 +98,11 @@ struct ChannelWireStream::State {
   OnDone on_done ABSL_GUARDED_BY(mu);
   bool started ABSL_GUARDED_BY(mu) = false;
   bool open ABSL_GUARDED_BY(mu) = false;
+  // Set while somebody is writing a message that is no longer in `outgoing`:
+  // either Sender, or the thread that called Send and took the fast path. It is
+  // what keeps those two from writing at once, and so what keeps them in order.
+  // See Send and DeliverClaimed.
+  bool sending ABSL_GUARDED_BY(mu) = false;
   bool channel_closed ABSL_GUARDED_BY(mu) = false;
   bool finished ABSL_GUARDED_BY(mu) = false;
   bool done_called ABSL_GUARDED_BY(mu) = false;
@@ -177,6 +178,8 @@ void ChannelWireStream::Notify(const std::shared_ptr<State>& state) {
 
 absl::Status ChannelWireStream::Send(data::WireMessage message) {
   ABSL_RETURN_IF_ERROR(message.Validate());
+  bool claimed = false;
+  std::uint64_t claimed_id = 0;
   End end = End::kNone;
   if (data::IsHalfCloseMessage(message)) {
     ABSL_ASSIGN_OR_RETURN(data::ByteMap headers,
@@ -213,11 +216,37 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
       const std::uint64_t message_id = state_->next_outgoing_message_id++;
-      state_->outgoing.push_back(State::Outbound{.message = std::move(message),
-                                                 .end = end,
-                                                 .message_id = message_id});
-      queued = true;
+      // Write it here rather than waking the Sender fibre to do it.
+      //
+      // The fibre is needed for the things a caller of Send must not be made to
+      // do: wait for the channel to open, and carry the lifecycle of a
+      // half-close or abort through to the transport's drain. An ordinary
+      // message on an open channel with an empty queue needs none of that, and
+      // handing it over costs a scheduling round trip -- plus an OS thread wake
+      // when the fibre's worker is parked -- to move bytes this thread already
+      // holds.
+      //
+      // The claim is what keeps order: while it is held, Sender will not pop
+      // and another Send will not take this path, so nothing can overtake the
+      // message being written. The message id is still allocated here, under
+      // the lock, so ids stay in send order however the message travels.
+      if (end == End::kNone && state_->outgoing.empty() && !state_->sending &&
+          state_->started && state_->open) {
+        state_->sending = true;
+        claimed = true;
+        claimed_id = message_id;
+      } else {
+        state_->outgoing.push_back(
+            State::Outbound{.message = std::move(message),
+                            .end = end,
+                            .message_id = message_id});
+        queued = true;
+      }
     }
+  }
+  if (claimed) {
+    DeliverClaimed(state_, std::move(message), claimed_id);
+    return absl::OkStatus();
   }
   if (queued) {
     Notify(state_);
@@ -256,8 +285,11 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
                  : "This WireStream cannot start as a client"));
     }
     state_->started = true;
-    state_->on_message = std::move(on_message);
-    state_->on_done = std::move(on_done);
+    // Guarded on the way in, so the Receiver and Finish paths below can invoke
+    // them from A11's own fibres without a try of their own. See
+    // net/internal/exception_guarded_callbacks.h.
+    state_->on_message = internal::GuardOnMessage(std::move(on_message));
+    state_->on_done = internal::GuardOnDone(std::move(on_done));
     state_->last_activity = absl::Now();
     state_->span = obs::Tracer::StartRootSpan(
         "a11.wire_stream", obs::SpanKind::kInternal, state_->id);
@@ -290,7 +322,7 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
             }
             absl::Status error;
             bool enqueued = false;
-            try {
+            {
               thread::MutexLock lock(&state->mu);
               if (state->finished) {
                 return;
@@ -317,15 +349,13 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
                 } else {
                   state->incoming_bytes += complete->size();
                   state->incoming.push_back(std::move(*complete));
-                  state->last_activity = absl::Now();
+                  if (state->options.message_timeout !=
+                      absl::InfiniteDuration()) {
+                    state->last_activity = absl::Now();
+                  }
                   enqueued = true;
                 }
               }
-            } catch (const std::exception& exception) {
-              error = ExternalError(exception);
-            } catch (...) {
-              error = absl::UnknownError(
-                  "Receiving channel data raised a non-standard exception");
             }
             if (!error.ok()) {
               ChannelWireStream::ForceAbort(state, std::move(error));
@@ -406,14 +436,10 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
     return state_->startup_future;
   }
   if (state_->open_operation) {
-    absl::Status opened;
-    try {
-      opened = state_->open_operation();
-    } catch (const std::exception& error) {
-      opened = ExternalError(error);
-    } catch (...) {
-      opened = absl::UnknownError("Channel open operation raised an exception");
-    }
+    // The open operation belongs to the transport that built this stream --
+    // websocket_wire_stream.cc, webrtc_wire_stream.cc -- and reports through
+    // its Status like the rest of A11.
+    const absl::Status opened = state_->open_operation();
     if (!opened.ok()) {
       Finish(state_, opened);
       (void)state_->startup_promise->SetStatus(opened);
@@ -530,6 +556,31 @@ void* absl_nullable ChannelWireStream::GetImpl() const {
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
 void ChannelWireStream::Sender(std::shared_ptr<State> state) {
+  // Holds `State::sending` while this Sender writes one message, and wakes it
+  // again on the way out if more arrived meanwhile.
+  class Claim {
+   public:
+    explicit Claim(const std::shared_ptr<State>& state) : state_(state) {}
+
+    Claim(const Claim&) = delete;
+    Claim& operator=(const Claim&) = delete;
+
+    ~Claim() {
+      bool more = false;
+      {
+        thread::MutexLock lock(&state_->mu);
+        state_->sending = false;
+        more = !state_->outgoing.empty();
+      }
+      if (more) {
+        Notify(state_);
+      }
+    }
+
+   private:
+    const std::shared_ptr<State>& state_;
+  };
+
   while (true) {
     std::shared_ptr<thread::PermanentEvent> changed;
     State::Outbound outbound;
@@ -539,9 +590,11 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
       if (state->finished) {
         return;
       }
-      if (state->started && state->open && !state->outgoing.empty()) {
+      if (state->started && state->open && !state->outgoing.empty() &&
+          !state->sending) {
         outbound = std::move(state->outgoing.front());
         state->outgoing.pop_front();
+        state->sending = true;
         has_outbound = true;
         // Fold in whatever is already waiting behind it. Nothing is ever held
         // back to build a bigger frame: only messages already queued merge, so
@@ -589,7 +642,10 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
       }
       continue;
     }
-    try {
+    // Releases the claim however this iteration ends -- written, abandoned on
+    // an encode failure, or returning for good.
+    const Claim claim(state);
+    {
       // An encode failure here aborts the stream, the same way a framing
       // failure below does. Structural problems were already rejected
       // synchronously by Validate() in Send(); anything left is internal.
@@ -598,8 +654,9 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
         Finish(state, encoded.status());
         return;
       }
-      absl::StatusOr<std::vector<std::string>> packets = SplitBytesIntoPackets(
-          *encoded, outbound.message_id, state->framing.split_size);
+      absl::StatusOr<std::vector<std::string>> packets =
+          SplitOwnedBytesIntoPackets(std::move(*encoded), outbound.message_id,
+                                     state->framing.split_size);
       if (!packets.ok()) {
         Finish(state, packets.status());
         return;
@@ -611,12 +668,6 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
           return;
         }
       }
-    } catch (const std::exception& error) {
-      Finish(state, ExternalError(error));
-      return;
-    } catch (...) {
-      Finish(state, absl::UnknownError("Channel send raised an exception"));
-      return;
     }
     MarkActivity(state);
     if (outbound.end != End::kNone) {
@@ -703,14 +754,8 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
                               "Peer sent data after a terminal message"));
         continue;
       }
-      absl::Status callback_status;
-      try {
-        callback_status = callback(std::move(*message)).Await().status();
-      } catch (const std::exception& error) {
-        callback_status = ExternalError(error);
-      } catch (...) {
-        callback_status = absl::UnknownError("on_message raised an exception");
-      }
+      const absl::Status callback_status =
+          callback(std::move(*message)).Await().status();
       if (!callback_status.ok()) {
         ForceAbort(state, callback_status);
       }
@@ -748,14 +793,8 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
       state->trailers = std::move(*headers);
       callback = state->on_message;
     }
-    absl::Status callback_status;
-    try {
-      callback_status = callback(std::nullopt).Await().status();
-    } catch (const std::exception& error) {
-      callback_status = ExternalError(error);
-    } catch (...) {
-      callback_status = absl::UnknownError("on_message raised an exception");
-    }
+    const absl::Status callback_status =
+        callback(std::nullopt).Await().status();
     if (!callback_status.ok()) {
       ForceAbort(state, callback_status);
     } else {
@@ -801,12 +840,75 @@ void ChannelWireStream::WatchTiming(std::shared_ptr<State> state) {
   }
 }
 
+void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
+                                       data::WireMessage message,
+                                       std::uint64_t message_id) {
+  // The same encode, packetise and write the Sender fibre would have done, and
+  // the same treatment of a failure: abort the stream. Send still reports OK
+  // either way, because that is what it reported when this work happened on the
+  // fibre -- a transport failure reaches the caller through the stream's
+  // lifecycle, not through the return of the send that happened to trigger it.
+  absl::Status failure;
+  {
+    absl::StatusOr<std::string> encoded = message.ToMsgpack();
+    if (!encoded.ok()) {
+      failure = encoded.status();
+    } else {
+      absl::StatusOr<std::vector<std::string>> packets =
+          SplitOwnedBytesIntoPackets(std::move(*encoded), message_id,
+                                     state->framing.split_size);
+      if (!packets.ok()) {
+        failure = packets.status();
+      } else {
+        for (std::string& packet : *packets) {
+          absl::Status sent = state->channel->Send(std::move(packet));
+          if (!sent.ok()) {
+            failure = std::move(sent);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  bool more = false;
+  {
+    thread::MutexLock lock(&state->mu);
+    state->sending = false;
+    more = !state->outgoing.empty();
+  }
+  if (more) {
+    Notify(state);
+  }
+  if (!failure.ok()) {
+    // Off this thread, deliberately. Finish runs the stream's on_done callback,
+    // which is user code, and on the fibre path it never ran on a caller of
+    // Send. Keeping it there means the fast path cannot hand a caller somebody
+    // else's callback -- re-entering the binding, say, from inside a send.
+    a11::Schedule([state, failure = std::move(failure)]() mutable {
+      Finish(state, std::move(failure));
+    });
+    return;
+  }
+  MarkActivity(state);
+}
+
 void ChannelWireStream::MarkActivity(const std::shared_ptr<State>& state) {
+  // Only a stream with a message timeout has anybody to tell. Without one,
+  // `last_activity` is never read, and this runs on every message sent and
+  // every message received: a clock read, the endpoint's lock, and a Notify
+  // that wakes all three of its fibres, to keep a number nothing would look at.
+  if (state->options.message_timeout == absl::InfiniteDuration()) {
+    return;
+  }
   {
     thread::MutexLock lock(&state->mu);
     state->last_activity = absl::Now();
   }
-  Notify(state);
+  // No Notify even then. WatchTiming recomputes its deadline from
+  // `last_activity` every time it wakes, so activity needs no prompt -- it will
+  // find the newer timestamp and re-arm. Sender and Receiver are woken by the
+  // things they actually wait for, in Send and in the inbound enqueue.
 }
 
 void ChannelWireStream::ForceAbort(const std::shared_ptr<State>& state,
@@ -911,14 +1013,7 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
     (void)state->channel->Close();
   }
   if (callback) {
-    absl::Status callback_status;
-    try {
-      callback_status = callback().Await().status();
-    } catch (const std::exception& error) {
-      callback_status = ExternalError(error);
-    } catch (...) {
-      callback_status = absl::UnknownError("on_done raised an exception");
-    }
+    const absl::Status callback_status = callback().Await().status();
     if (!callback_status.ok()) {
       thread::MutexLock lock(&state->mu);
       if (state->status.ok()) {

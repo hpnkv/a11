@@ -27,7 +27,6 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
-#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -62,12 +61,6 @@ namespace a11::net::internal {
 inline absl::Status UvError(int code, std::string_view operation) {
   return absl::UnavailableError(
       absl::StrCat(operation, " failed: ", uv_strerror(code)));
-}
-
-inline absl::Status ExceptionStatus(const std::exception& error,
-                                    std::string_view operation) {
-  return absl::UnknownError(
-      absl::StrCat(operation, " raised an exception: ", error.what()));
 }
 
 inline std::string OpenSslErrorMessage(std::string_view operation) {
@@ -336,14 +329,7 @@ class UvExecutor {
       if (!running_) {
         return absl::FailedPreconditionError("The A11 libuv loop is stopped");
       }
-      try {
-        work_.push_back(std::move(work));
-      } catch (const std::exception& error) {
-        return ExceptionStatus(error, "Queueing libuv work");
-      } catch (...) {
-        return absl::UnknownError(
-            "Queueing libuv work raised a non-standard exception");
-      }
+      work_.push_back(std::move(work));
     }
     const int result = async_->send();
     if (result != 0) {
@@ -364,7 +350,7 @@ class UvExecutor {
   friend class absl::NoDestructor<UvExecutor>;
 
   UvExecutor() {
-    try {
+    {
       loop_ = uvw::loop::create();
       async_ = loop_->resource<uvw::async_handle>();
       const int initialized = async_->init();
@@ -384,10 +370,6 @@ class UvExecutor {
         thread::MutexLock lock(&mu_);
         running_ = false;
       });
-    } catch (const std::exception& error) {
-      LOG(FATAL) << "Could not create the A11 libuv executor: " << error.what();
-    } catch (...) {
-      LOG(FATAL) << "Could not create the A11 libuv executor";
     }
     thread::MutexLock lock(&mu_);
     while (!loop_thread_id_.has_value()) {
@@ -402,13 +384,7 @@ class UvExecutor {
       work.swap(work_);
     }
     for (auto& item : work) {
-      try {
-        item();
-      } catch (const std::exception& error) {
-        LOG(ERROR) << "A11 libuv work raised: " << error.what();
-      } catch (...) {
-        LOG(ERROR) << "A11 libuv work raised a non-standard exception";
-      }
+      item();
     }
   }
 
@@ -425,32 +401,31 @@ class UvExecutor {
 template <typename T>
 absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation) {
   if (UvExecutor::Instance().IsLoopThread()) {
-    try {
-      return operation();
-    } catch (const std::exception& error) {
-      return ExceptionStatus(error, "libuv operation");
-    } catch (...) {
-      return absl::UnknownError(
-          "libuv operation raised a non-standard exception");
-    }
+    return operation();
   }
   auto promise = std::make_shared<a11::Promise<T>>();
   a11::Future<T> future = promise->future();
   ABSL_RETURN_IF_ERROR(UvExecutor::Instance().Post(
       [promise, operation = std::move(operation)]() mutable {
-        absl::StatusOr<T> result;
-        try {
-          result = operation();
-        } catch (const std::exception& error) {
-          result = ExceptionStatus(error, "libuv operation");
-        } catch (...) {
-          result = absl::UnknownError(
-              "libuv operation raised a non-standard exception");
-        }
-        (void)promise->SetResult(std::move(result));
+        (void)promise->SetResult(operation());
       }));
   return future.Await();
 }
+
+/**
+ * How many application bytes may be queued for the loop before a writer waits.
+ *
+ * Outbound writes are posted to the loop and not awaited (see
+ * HttpTransport::PostWrite), so nothing but this bounds how far a fast producer
+ * can run ahead of the socket. Crossing it makes the next write take the
+ * awaited path, which does not return until the loop has drained everything
+ * queued before it -- backpressure to the caller, in the one place where the
+ * caller being a fiber makes blocking cheap.
+ *
+ * Sized well above a single large message so that ordinary traffic never pays
+ * the crossing, and well below anything that would matter as memory.
+ */
+constexpr std::size_t kMaxQueuedWriteBytes = 4 * 1024 * 1024;
 
 inline absl::Status RunStatusOnUv(std::function<absl::Status()> operation) {
   absl::StatusOr<a11::Unit> result = RunOnUv<a11::Unit>(
@@ -574,6 +549,61 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     }
   }
 
+  /**
+   * @brief Runs an outbound write on the loop without waiting for it.
+   *
+   * The write path's equivalent of SetReadPaused: what a sender needs from the
+   * loop is that the bytes go out in order, not that they have gone out before
+   * it continues. Awaiting each one -- which is what RunStatusOnUv does -- puts
+   * a full loop crossing (7.4us) plus a fiber park and wake in front of every
+   * message, on both endpoints, and it is pure latency: the caller has nothing
+   * to do with the answer, because a transport write failure reaches the
+   * application through the stream's lifecycle rather than through the return
+   * of the send that happened to trigger it.
+   *
+   * Ordering is preserved because posted and awaited work share one FIFO queue
+   * on the executor, so a later awaited call (a Finish, a header write) still
+   * lands behind writes posted before it.
+   *
+   * Three cases go down the old awaited path instead, where the semantics are
+   * exactly what they were: already on the loop thread (nothing to post),
+   * a connection that is not up (so the caller still gets the real error), and
+   * a queue past kMaxQueuedWriteBytes (so a producer faster than the socket
+   * waits rather than growing the queue).
+   *
+   * @param bytes  Size of the data the operation will write, for the queue
+   * bound. @param write  The work to run on the loop thread.
+   */
+  absl::Status PostWrite(std::size_t bytes,
+                         std::function<absl::Status()> write) {
+    if (!write) {
+      return absl::InvalidArgumentError("write work must be callable");
+    }
+    if (UvExecutor::Instance().IsLoopThread() || !connected_.load() ||
+        queued_write_bytes_.load(std::memory_order_relaxed) >=
+            kMaxQueuedWriteBytes) {
+      return RunStatusOnUv(std::move(write));
+    }
+    std::shared_ptr<HttpTransport> self = shared_from_this();
+    queued_write_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+    const absl::Status posted = UvExecutor::Instance().Post(
+        [self = std::move(self), bytes, write = std::move(write)]() mutable {
+          const absl::Status status = write();
+          self->queued_write_bytes_.fetch_sub(bytes,
+                                              std::memory_order_relaxed);
+          // Nobody is waiting for this status, so the connection carries it:
+          // closing is what tells every stream on it, which is the same thing
+          // that happens when the socket itself fails.
+          if (!status.ok()) {
+            self->CloseOnLoop(std::move(status));
+          }
+        });
+    if (!posted.ok()) {
+      queued_write_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
+    }
+    return posted;
+  }
+
   absl::Status InitializeTransport(std::string prebuffered = {}) {
     std::weak_ptr<HttpTransport> weak = shared_from_this();
     tcp_->on<uvw::data_event>(
@@ -695,13 +725,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     }
     std::function<void(HttpTransport*)> on_closed = std::move(on_closed_);
     if (on_closed) {
-      try {
-        on_closed(this);
-      } catch (const std::exception& error) {
-        LOG(ERROR) << "HTTP close callback raised: " << error.what();
-      } catch (...) {
-        LOG(ERROR) << "HTTP close callback raised a non-standard exception";
-      }
+      // A11's own: the connection registry's removal hook.
+      on_closed(this);
     }
   }
 
@@ -735,6 +760,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   /// Whether SetReadPaused has stopped the socket read; atomic because a reader
   /// asks for it from a fiber while the loop thread acts on it.
   std::atomic<bool> read_paused_ = false;
+  /// Application bytes posted to the loop by PostWrite and not yet written.
+  std::atomic<std::size_t> queued_write_bytes_ = 0;
   /// Decrypted-plaintext scratch, reused across reads; only the loop thread
   /// touches it.
   std::vector<char> plaintext_;
@@ -806,27 +833,53 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
 
   absl::Status WriteTcp(const char* data, size_t length) {
     size_t offset = 0;
-    try {
+    {
+      // Hand it to the socket directly first.
+      //
+      // uv_write is an owning, queued write: it needs a buffer that outlives
+      // the call, so every byte is allocated and copied before the kernel is
+      // even asked whether it had room. On a socket that is not backed up --
+      // which is the normal case, and always the case on loopback --
+      // uv_try_write takes it straight from this buffer and the copy never
+      // happens. Only the remainder of a partial write, or a socket whose send
+      // buffer is full, pays for one.
+      //
+      // Guarded on an empty write queue, and that guard is load-bearing rather
+      // than an optimisation: a try_write while an owning write is still queued
+      // would put these bytes on the wire in front of bytes handed over
+      // earlier, which for a framed protocol is corruption and not merely
+      // reordering.
+      while (offset < length && tcp_->write_queue_size() == 0) {
+        const size_t remaining = length - offset;
+        const unsigned int attempt = static_cast<unsigned int>(std::min(
+            remaining,
+            static_cast<size_t>(std::numeric_limits<unsigned int>::max())));
+        const int accepted = tcp_->try_write(const_cast<char*>(data + offset),
+                                             attempt);
+        if (accepted > 0) {
+          offset += static_cast<size_t>(accepted);
+          continue;
+        }
+        if (accepted != 0 && accepted != UV_EAGAIN && accepted != UV_ENOSYS) {
+          return UvError(accepted, "Writing HTTP TCP data");
+        }
+        break;  // Took nothing: fall through to the queued write.
+      }
       while (offset < length) {
-        const size_t chunk_size = std::min(
+        const size_t remaining = std::min(
             length - offset,
             static_cast<size_t>(std::numeric_limits<unsigned int>::max()));
-        auto output = std::make_unique<char[]>(chunk_size);
-        std::memcpy(output.get(), data + offset, chunk_size);
+        auto output = std::make_unique<char[]>(remaining);
+        std::memcpy(output.get(), data + offset, remaining);
         const int written = tcp_->write(std::move(output),
-                                        static_cast<unsigned int>(chunk_size));
+                                        static_cast<unsigned int>(remaining));
         if (written != 0) {
           return UvError(written, "Writing HTTP TCP data");
         }
-        offset += chunk_size;
+        offset += remaining;
       }
-      return absl::OkStatus();
-    } catch (const std::exception& error) {
-      return ExceptionStatus(error, "Writing HTTP TCP data");
-    } catch (...) {
-      return absl::UnknownError(
-          "Writing HTTP TCP data raised a non-standard exception");
     }
+    return absl::OkStatus();
   }
 
   absl::Status FlushTlsOutput() {

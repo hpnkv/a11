@@ -79,12 +79,13 @@ Future<T> SubmitWithCancellationHook(
         if (thread::Cancelled()) {
           result = absl::CancelledError("Task cancelled before it started");
         } else {
-          try {
-            result = std::move(work)();
-          } catch (const std::exception& error) {
-            result = absl::UnknownError(error.what());
-          } catch (...) {
-            result = absl::UnknownError("task raised a non-standard exception");
+          // The work is the caller's, and so is this instantiation; see
+          // a11/exception_guard.h for why the guard belongs here rather than at
+          // the call.
+          const absl::Status raised = exception_guard::Attempt(
+              [&] { result = std::move(work)(); }, "task");
+          if (!raised.ok()) {
+            result = raised;
           }
         }
         const absl::Status completion = promise.SetResult(std::move(result));

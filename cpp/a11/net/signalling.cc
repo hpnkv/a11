@@ -1,9 +1,10 @@
 // Copyright 2026 The A11 Authors.
 
+#include "a11/json_codec.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/signalling.h"
 
 #include <deque>
-#include <exception>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -53,11 +54,6 @@ absl::StatusOr<SignallingMessageType> ParseMessageType(std::string_view value) {
       absl::StrCat("Unknown signalling message type: ", value));
 }
 
-absl::Status CallbackException(const std::exception& error) {
-  return absl::UnknownError(
-      absl::StrCat("Signalling callback raised: ", error.what()));
-}
-
 }  // namespace
 
 absl::Status SignallingMessage::Validate() const {
@@ -93,7 +89,7 @@ absl::Status SignallingMessage::Validate() const {
 
 absl::StatusOr<std::string> SignallingMessage::ToJson() const {
   ABSL_RETURN_IF_ERROR(Validate());
-  try {
+  {
     nlohmann::json value = {
         {"type", MessageTypeName(type)},
         {"from", sender},
@@ -118,20 +114,17 @@ absl::StatusOr<std::string> SignallingMessage::ToJson() const {
         break;
       }
     }
-    return value.dump();
-  } catch (const std::exception& error) {
-    return absl::InternalError(
-        absl::StrCat("Failed to encode signalling JSON: ", error.what()));
-  } catch (...) {
-    return absl::InternalError(
-        "Failed to encode signalling JSON with a non-standard exception");
+    // Every field above is a string A11 put there, so the strict dump can only
+    // fail on one that is not valid UTF-8 -- which is a bad message, not a bug.
+    return DumpJson(value, "signalling JSON");
   }
 }
 
 absl::StatusOr<SignallingMessage> SignallingMessage::FromJson(
     std::string_view encoded) {
-  try {
-    const nlohmann::json value = nlohmann::json::parse(encoded);
+  {
+    ABSL_ASSIGN_OR_RETURN(const nlohmann::json value,
+                          ParseJson(encoded, "signalling message"));
     if (!value.is_object()) {
       return absl::InvalidArgumentError(
           "A signalling message must be a JSON object");
@@ -190,12 +183,6 @@ absl::StatusOr<SignallingMessage> SignallingMessage::FromJson(
     }
     ABSL_RETURN_IF_ERROR(result.Validate());
     return result;
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to parse signalling JSON: ", error.what()));
-  } catch (...) {
-    return absl::InvalidArgumentError(
-        "Failed to parse signalling JSON with a non-standard exception");
   }
 }
 
@@ -332,15 +319,7 @@ void SignallingService::Pump(
       endpoint->incoming.pop_front();
       callback = endpoint->on_message;
     }
-    absl::Status status;
-    try {
-      status = callback(std::move(message)).Await().status();
-    } catch (const std::exception& error) {
-      status = CallbackException(error);
-    } catch (...) {
-      status = absl::UnknownError(
-          "Signalling callback raised a non-standard exception");
-    }
+    const absl::Status status = callback(std::move(message)).Await().status();
     if (!status.ok()) {
       std::shared_ptr<SignallingService> service = endpoint->service.lock();
       if (service != nullptr) {
@@ -447,7 +426,10 @@ absl::Status SignallingEndpoint::SetOnMessage(OnSignallingMessage on_message) {
   if (!state_->connected) {
     return state_->status;
   }
-  state_->on_message = std::move(on_message);
+  // Guarded on the way in; the fibre that delivers to it is A11's. See
+  // net/internal/exception_guarded_callbacks.h.
+  state_->on_message =
+      internal::GuardOnSignallingMessage(std::move(on_message));
   return absl::OkStatus();
 }
 

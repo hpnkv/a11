@@ -8,6 +8,7 @@
 # built. The executing half of the language lives in A11_FLOW_RUNTIME_SOURCES,
 # which does link the node and action layers.
 set(A11_FLOW_LANG_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/catalogue.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/complete.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostic.cc

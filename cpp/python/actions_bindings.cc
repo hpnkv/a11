@@ -967,17 +967,28 @@ void BindActions(py::module_& module) {
           py::arg("session"), py::keep_alive<1, 2>())
       .def("get_session", &actions::Action::GetSession,
            "Return the action's bound session.")
+      // Every port accessor releases the GIL, because asking for a port is not
+      // the lookup it looks like. A port materialises on use, and a port of an
+      // action that has already finished is closed on the way out:
+      // Action::GetOutput awaits IsWritable and DrainAndClose to hand back the
+      // terminal state its reader expects. Those awaits park on a fibre, and
+      // the work they wait for can need the GIL -- a store writer's completion
+      // resolves a Python future through call_soon_threadsafe. Holding the GIL
+      // here closed that cycle: the waiter never woke, because the thread that
+      // would have woken it could not run Python. See WithoutGil in interop.h.
       .def(
           "get_node",
           [](actions::Action& self, std::string node_id) {
-            return ValueOrThrow(self.GetNode(std::move(node_id)));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetNode(std::move(node_id)); }));
           },
           "Return the async node with the given id.", py::arg("node_id"))
       .def(
           "get_input",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
-            return ValueOrThrow(self.GetInput(std::move(name), bind_stream));
+            return ValueOrThrow(WithoutGil(
+                [&] { return self.GetInput(std::move(name), bind_stream); }));
           },
           "Return the input port node with the given name.", py::arg("name"),
           py::arg("bind_stream") = std::nullopt)
@@ -985,20 +996,23 @@ void BindActions(py::module_& module) {
           "get_output",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
-            return ValueOrThrow(self.GetOutput(std::move(name), bind_stream));
+            return ValueOrThrow(WithoutGil(
+                [&] { return self.GetOutput(std::move(name), bind_stream); }));
           },
           "Return the output port node with the given name.", py::arg("name"),
           py::arg("bind_stream") = std::nullopt)
       .def(
           "get_port",
           [](actions::Action& self, std::string name) {
-            return ValueOrThrow(self.GetPort(std::move(name)));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetPort(std::move(name)); }));
           },
           "Return the port node with the given name.", py::arg("name"))
       .def(
           "__getitem__",
           [](actions::Action& self, std::string name) {
-            return ValueOrThrow(self.GetPort(std::move(name)));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetPort(std::move(name)); }));
           },
           "Return the port node with the given name.", py::arg("name"))
       .def("contains_port", &actions::Action::ContainsPort,

@@ -18,6 +18,8 @@ publishes the terminal state to every reader.
 
 ::: a11.stores.chunk_store.ChunkStoreFactory
 
+::: a11.stores.chunk_store.native_chunk_store
+
 ## LocalChunkStore
 
 ::: a11.stores.local_chunk_store.LocalChunkStore

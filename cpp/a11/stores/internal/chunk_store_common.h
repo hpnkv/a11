@@ -19,7 +19,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +35,7 @@
 
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/exception_guard.h"
 #include "thread/select.h"
 #include "thread/selectables.h"
 
@@ -56,14 +56,16 @@ namespace a11::stores::internal {
  */
 template <typename T, typename F>
 a11::Future<T> CompleteInline(F&& operation) {
-  try {
-    return a11::CompletedFuture<T>(std::forward<F>(operation)());
-  } catch (const std::exception& error) {
-    return a11::FailedFuture<T>(absl::UnknownError(error.what()));
-  } catch (...) {
-    return a11::FailedFuture<T>(
-        absl::UnknownError("Chunk store operation raised an exception"));
+  // Guarded in the translation unit that supplied the operation -- a store
+  // backend's own -- which is where a throwing one would have to be caught. See
+  // a11/exception_guard.h.
+  absl::StatusOr<T> result;
+  const absl::Status raised = exception_guard::Attempt(
+      [&] { result = std::forward<F>(operation)(); }, "Chunk store operation");
+  if (!raised.ok()) {
+    return a11::FailedFuture<T>(raised);
   }
+  return a11::CompletedFuture<T>(std::move(result));
 }
 
 /**

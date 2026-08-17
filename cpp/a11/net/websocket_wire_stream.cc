@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,6 +25,7 @@
 #include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/internal/binary_channel.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/internal/http2_websocket_channel.h"
 #include "a11/net/wire_stream.h"
 #include "thread/boost_primitives.h"
@@ -137,8 +137,12 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
     return absl::InvalidArgumentError("on_stream must be callable");
   }
   ABSL_RETURN_IF_ERROR(options.Validate());
-  auto state =
-      std::make_shared<State>(std::move(on_stream), std::move(options));
+  // on_stream is the caller's, and every invocation happens on a connection
+  // fibre of A11's, so it is guarded once here. See
+  // net/internal/exception_guarded_callbacks.h.
+  auto state = std::make_shared<State>(
+      internal::GuardOnWebSocketStream(std::move(on_stream)),
+      std::move(options));
   std::weak_ptr<State> weak = state;
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<Http2Server> server,
@@ -164,14 +168,9 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
                     active->options.stream_options, active->options.framing);
             if (!stream.ok())
               return a11::FailedTask(stream.status());
-            try {
-              return active->on_stream(std::move(*stream));
-            } catch (const std::exception& error) {
-              return a11::FailedTask(absl::UnknownError(error.what()));
-            } catch (...) {
-              return a11::FailedTask(absl::UnknownError(
-                  "WebSocket on_stream callback raised an exception"));
-            }
+            // Guarded where the server adopted it; see
+            // WebSocketWireServer::Create.
+            return active->on_stream(std::move(*stream));
           },
           state->options.http2_options));
   {

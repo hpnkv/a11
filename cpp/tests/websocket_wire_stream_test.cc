@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -137,8 +138,9 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
   ASSERT_TRUE(client.ok()) << client.status();
   ASSERT_TRUE(
       (*client)
-          ->Start([](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-                  []() { return a11::ReadyTask(); })
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              []() { return a11::ReadyTask(); })
           .Await(absl::Now() + absl::Seconds(5))
           .ok());
   auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
@@ -161,6 +163,111 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
                   .Await(absl::Now() + absl::Seconds(5))
                   .ok());
   EXPECT_TRUE(server->Stop().ok());
+}
+
+// Each sender's messages arrive in the order that sender wrote them, whichever
+// path carried them.
+//
+// A message may go out on the endpoint's own Sender fibre, or on the thread
+// that called Send when nothing was queued ahead of it, or from the queue once
+// the fibre catches up. Several threads sending at once puts all three in play.
+//
+// One small packet per message, and not many of them, deliberately. Chunked
+// ordering has its own test below; and `Send` has no way to say "not yet", so a
+// flood aborts the stream instead of pushing back -- interleaving multi-packet
+// messages from four threads exceeds `max_pending_messages` on the receiving
+// side, and even single packets abort it if there are enough of them. What is
+// under test here is the order of the paths a message can take, not capacity.
+// `seq` carries the sender's index in its high bits.
+TEST(WebSocketWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
+  constexpr int kSenders = 4;
+  constexpr int kPerSender = 12;
+  constexpr int kTotal = kSenders * kPerSender;
+
+  thread::Mutex mu;
+  thread::CondVar cv;
+  std::vector<std::vector<int>> seen(kSenders);
+  int total = 0;
+  // Somebody has to own the accepted stream: the transport does not hold it for
+  // the handler's sake, and letting it go closes the connection.
+  std::shared_ptr<WebSocketWireStream> accepted;
+
+  WebSocketServerOptions server_options;
+  server_options.port = 0;
+  server_options.bind_address = "127.0.0.1";
+  auto server = WebSocketWireServer::Create(
+      [&](std::shared_ptr<WebSocketWireStream> stream) {
+        accepted = stream;
+        return stream->Accept(
+            [&](std::optional<data::WireMessage> message) {
+              if (message.has_value()) {
+                thread::MutexLock lock(&mu);
+                for (const data::NodeFragment& fragment :
+                     message->node_fragments) {
+                  const std::uint32_t tag = fragment.seq.value_or(0);
+                  seen[tag >> 24U].push_back(
+                      static_cast<int>(tag & 0xFFFFFFU));
+                  ++total;
+                }
+                cv.SignalAll();
+              }
+              return a11::ReadyTask();
+            },
+            []() { return a11::ReadyTask(); });
+      },
+      server_options);
+  ASSERT_TRUE(server.ok()) << server.status();
+  auto port = (*server)->port();
+  ASSERT_TRUE(port.ok()) << port.status();
+
+  auto client = WebSocketWireStream::CreateClient(
+      "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
+  ASSERT_TRUE(client.ok()) << client.status();
+  ASSERT_TRUE(
+      (*client)
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              []() { return a11::ReadyTask(); })
+          .Await(absl::Now() + absl::Seconds(10))
+          .ok());
+
+  const std::string payload(256, 'x');
+  std::vector<std::thread> senders;
+  senders.reserve(kSenders);
+  for (int index = 0; index < kSenders; ++index) {
+    senders.emplace_back([&, index] {
+      for (int count = 0; count < kPerSender; ++count) {
+        data::WireMessage message{
+            .node_fragments = {{
+                .id = "node",
+                .data = data::Chunk{.data = payload},
+                .seq = static_cast<std::uint32_t>((index << 24U) | count),
+                .continued = true,
+            }}};
+        const absl::Status sent = (*client)->Send(std::move(message));
+        ASSERT_TRUE(sent.ok()) << sent;
+      }
+    });
+  }
+  for (std::thread& sender : senders) {
+    sender.join();
+  }
+
+  {
+    thread::MutexLock lock(&mu);
+    const absl::Time limit = absl::Now() + absl::Seconds(30);
+    while (total < kTotal && absl::Now() < limit) {
+      cv.WaitWithDeadline(&mu, limit);
+    }
+  }
+  thread::MutexLock lock(&mu);
+  ASSERT_EQ(total, kTotal);
+  for (int index = 0; index < kSenders; ++index) {
+    ASSERT_EQ(seen[index].size(), kPerSender) << index;
+    for (int count = 0; count < kPerSender; ++count) {
+      ASSERT_EQ(seen[index][count], count) << index << " at " << count;
+    }
+  }
 }
 
 TEST(WebSocketWireStreamTest, ReassemblesMultipleLargeChunkedMessagesInOrder) {

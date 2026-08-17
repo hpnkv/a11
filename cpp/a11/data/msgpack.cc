@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -17,6 +16,7 @@
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/json_codec.h"
 #include "a11/status.h"
 
 namespace a11::data {
@@ -240,15 +240,10 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
 }  // namespace
 
 absl::Status MsgpackWriter::Pack(const nlohmann::json& value) {
-  try {
-    const std::vector<std::uint8_t> encoded = nlohmann::json::to_msgpack(value);
-    bytes_.append(reinterpret_cast<const char*>(encoded.data()),
-                  encoded.size());
-    return absl::OkStatus();
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to encode MessagePack: ", error.what()));
-  }
+  ABSL_ASSIGN_OR_RETURN(const std::string encoded,
+                        PackMsgpack(value, "a value"));
+  bytes_.append(encoded);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<nlohmann::json> MsgpackReader::Read() {
@@ -258,17 +253,13 @@ absl::StatusOr<nlohmann::json> MsgpackReader::Read() {
     position_ = begin;
     return status;
   }
-  try {
-    const auto first =
-        reinterpret_cast<const std::uint8_t*>(bytes_.data()) + begin;
-    const auto last =
-        reinterpret_cast<const std::uint8_t*>(bytes_.data()) + position_;
-    return nlohmann::json::from_msgpack(first, last, true, true);
-  } catch (const std::exception& error) {
+  absl::StatusOr<nlohmann::json> value = UnpackMsgpack(
+      std::string_view(bytes_).substr(begin, position_ - begin), "a value");
+  if (!value.ok()) {
     position_ = begin;
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to decode MessagePack: ", error.what()));
+    return value.status();
   }
+  return value;
 }
 
 absl::StatusOr<std::string_view> MsgpackReader::ReadBinaryView() {

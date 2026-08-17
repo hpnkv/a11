@@ -1,4 +1,5 @@
 set(A11_NODES_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/async_node.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/node_map.cc
     PARENT_SCOPE)

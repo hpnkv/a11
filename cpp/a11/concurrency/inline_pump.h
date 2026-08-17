@@ -25,7 +25,9 @@
 #include <utility>
 
 #include <absl/log/log.h>
+#include <absl/strings/str_cat.h>
 
+#include "a11/exception_guard.h"
 #include "thread/boost_primitives.h"
 
 namespace a11 {
@@ -91,12 +93,14 @@ void DriveInline(thread::Mutex* absl_nonnull mu,
     ++state->depth;
   }
   while (true) {
-    try {
-      once();
-    } catch (const std::exception& error) {
-      LOG(ERROR) << name << " pump raised: " << error.what();
-    } catch (...) {
-      LOG(ERROR) << name << " pump raised a non-standard exception";
+    // Every pump body is A11's own -- the store writers and the session pump --
+    // so inside A11 this is a plain call. It stays a guard for the benefit of a
+    // build with exceptions on, where a pump reaching into a caller's code (a
+    // ChunkStore implemented in Python, say) can still raise.
+    const absl::Status raised =
+        exception_guard::Attempt([&] { once(); }, absl::StrCat(name, " pump"));
+    if (!raised.ok()) {
+      LOG(ERROR) << raised.message();
     }
     thread::MutexLock lock(mu);
     if (!state->again) {

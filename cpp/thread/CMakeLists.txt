@@ -54,6 +54,14 @@ target_compile_options(
 )
 target_compile_features(Thread PUBLIC cxx_std_20)
 
+# Boost.Fiber and Boost.Context throw -- fiber_error, and the forced_unwind that
+# tears a fibre down -- and these two translation units are the only ones that
+# include them. Everything else here, including the public headers, is
+# boost-free by design (see the pImpl in boost_primitives.h), so the exception
+# boundary stops at these two files.
+a11_disallow_exceptions(Thread)
+a11_allow_exceptions(thread/boost_primitives.cc thread/thread_pool.cc)
+
 set(THREAD_DEFAULT_FIBER_STACK_SIZE "65536" CACHE STRING
     "Default stack size in bytes for root fibers whose TreeOptions use zero")
 target_compile_definitions(

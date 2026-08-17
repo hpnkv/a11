@@ -42,6 +42,35 @@ TEST(ByteChunkingTest, CompletePacketRoundTrips) {
   EXPECT_EQ(reassembler.pending_byte_count(), 0);
 }
 
+// The owning entry points exist to avoid copying the payload, so what has to
+// hold is that they produce exactly what the borrowing ones do -- for a message
+// that fits one packet, for one that does not, and for a packet that is
+// malformed.
+TEST(ByteChunkingTest, OwningSplitAndParseMatchTheBorrowingOnes) {
+  for (const size_t size : {size_t{0}, size_t{5}, size_t{22}, size_t{200}}) {
+    const std::string message(size, 'q');
+    auto borrowed = SplitBytesIntoPackets(message, 42, 32);
+    auto owned = SplitOwnedBytesIntoPackets(message, 42, 32);
+    ASSERT_TRUE(borrowed.ok()) << borrowed.status();
+    ASSERT_TRUE(owned.ok()) << owned.status();
+    EXPECT_EQ(*owned, *borrowed) << "at size " << size;
+
+    for (const std::string& packet : *borrowed) {
+      auto by_view = ParseBytePacket(packet);
+      auto by_value = ParseOwnedBytePacket(packet);
+      ASSERT_TRUE(by_view.ok()) << by_view.status();
+      ASSERT_TRUE(by_value.ok()) << by_value.status();
+      EXPECT_EQ(by_value->payload, by_view->payload);
+      EXPECT_EQ(by_value->type, by_view->type);
+      EXPECT_EQ(by_value->transient_id, by_view->transient_id);
+      EXPECT_EQ(by_value->sequence, by_view->sequence);
+      EXPECT_EQ(by_value->packet_count, by_view->packet_count);
+    }
+  }
+  EXPECT_FALSE(ParseOwnedBytePacket("short").ok());
+  EXPECT_FALSE(SplitOwnedBytesIntoPackets("x", 1, 4).ok());
+}
+
 TEST(ByteChunkingTest, ReassemblesOutOfOrderAndReleasesState) {
   const std::string message(200, 'x');
   auto packets = SplitBytesIntoPackets(message, 7, 32);

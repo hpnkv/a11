@@ -3,7 +3,6 @@
 #include "a11/net/wire_stream_with_recv.h"
 
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,6 +16,7 @@
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/wire_stream.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
@@ -25,10 +25,6 @@
 
 namespace a11::net {
 namespace {
-
-absl::Status ExceptionStatus(const std::exception& error) {
-  return absl::UnknownError(error.what());
-}
 
 struct ReceiveCancellation {
   // Accessed only while the owning WireStreamWithRecv::State mutex is held.
@@ -54,26 +50,14 @@ absl::StatusOr<std::shared_ptr<WireStreamWithRecv>> WireStreamWithRecv::Create(
     return absl::InvalidArgumentError("stream must not be null");
   }
   std::string id;
-  try {
-    id = stream->GetId();
-  } catch (const std::exception& error) {
-    return ExceptionStatus(error);
-  } catch (...) {
-    return absl::UnknownError("WireStream.get_id raised an exception");
-  }
+  id = stream->GetId();
   return std::make_shared<WireStreamWithRecv>(ConstructorToken{},
                                               std::move(stream), std::move(id),
                                               std::make_shared<State>());
 }
 
 absl::Status WireStreamWithRecv::Send(data::WireMessage message) {
-  try {
-    return stream_->Send(std::move(message));
-  } catch (const std::exception& error) {
-    return ExceptionStatus(error);
-  } catch (...) {
-    return absl::UnknownError("WireStream.send raised an exception");
-  }
+  return stream_->Send(std::move(message));
 }
 
 a11::Task WireStreamWithRecv::Start(OnMessage on_message, OnDone on_done) {
@@ -95,98 +79,56 @@ a11::Task WireStreamWithRecv::Accept() {
 a11::Task WireStreamWithRecv::StartImpl(bool accept, OnMessage on_message,
                                         OnDone on_done) {
   std::shared_ptr<WireStreamWithRecv> self = shared_from_this();
+  // Guarded here rather than at the invocations in HandleMessage/HandleDone,
+  // which run on fibres of A11's own. See
+  // net/internal/exception_guarded_callbacks.h.
   OnMessage internal_message =
-      [self, observer = std::move(on_message)](
+      [self, observer = internal::GuardOnMessage(std::move(on_message))](
           std::optional<data::WireMessage> message) mutable {
         return self->HandleMessage(observer, std::move(message));
       };
-  OnDone internal_done = [self, observer = std::move(on_done)]() mutable {
-    return self->HandleDone(observer);
-  };
-  try {
-    return accept ? stream_->Accept(std::move(internal_message),
-                                    std::move(internal_done))
-                  : stream_->Start(std::move(internal_message),
-                                   std::move(internal_done));
-  } catch (const std::exception& error) {
-    return a11::FailedTask(ExceptionStatus(error));
-  } catch (...) {
-    return a11::FailedTask(
-        absl::UnknownError("WireStream startup raised an exception"));
-  }
+  OnDone internal_done =
+      [self, observer = internal::GuardOnDone(std::move(on_done))]() mutable {
+        return self->HandleDone(observer);
+      };
+  return accept ? stream_->Accept(std::move(internal_message),
+                                  std::move(internal_done))
+                : stream_->Start(std::move(internal_message),
+                                 std::move(internal_done));
 }
 
 absl::Status WireStreamWithRecv::HalfClose(data::ByteMap trailers) {
-  try {
-    return stream_->HalfClose(std::move(trailers));
-  } catch (const std::exception& error) {
-    return ExceptionStatus(error);
-  } catch (...) {
-    return absl::UnknownError("WireStream.half_close raised an exception");
-  }
+  return stream_->HalfClose(std::move(trailers));
 }
 
 a11::Task WireStreamWithRecv::DrainOutgoingMessages() {
-  try {
-    return stream_->DrainOutgoingMessages();
-  } catch (const std::exception& error) {
-    return a11::FailedTask(ExceptionStatus(error));
-  } catch (...) {
-    return a11::FailedTask(absl::UnknownError(
-        "WireStream.drain_outgoing_messages raised an exception"));
-  }
+  return stream_->DrainOutgoingMessages();
 }
 
 absl::Status WireStreamWithRecv::Abort(absl::Status status) {
   absl::Status result;
-  try {
-    result = stream_->Abort(std::move(status));
-  } catch (const std::exception& error) {
-    result = ExceptionStatus(error);
-  } catch (...) {
-    result = absl::UnknownError("WireStream.abort raised an exception");
-  }
+  result = stream_->Abort(std::move(status));
   RecordCurrentStatus();
   return result;
 }
 
 absl::Status WireStreamWithRecv::SetDeadline(absl::Time deadline) {
   absl::Status result;
-  try {
-    result = stream_->SetDeadline(deadline);
-  } catch (const std::exception& error) {
-    result = ExceptionStatus(error);
-  } catch (...) {
-    result = absl::UnknownError("WireStream.set_deadline raised an exception");
-  }
+  result = stream_->SetDeadline(deadline);
   RecordCurrentStatus();
   return result;
 }
 
 absl::Time WireStreamWithRecv::deadline() const {
-  try {
-    return stream_->deadline();
-  } catch (...) {
-    return absl::InfinitePast();
-  }
+  return stream_->deadline();
 }
 
 absl::Status WireStreamWithRecv::GetStatus() const {
-  try {
-    return stream_->GetStatus();
-  } catch (const std::exception& error) {
-    return ExceptionStatus(error);
-  } catch (...) {
-    return absl::UnknownError("WireStream.get_status raised an exception");
-  }
+  return stream_->GetStatus();
 }
 
 std::optional<data::ByteMap> WireStreamWithRecv::GetTrailers() const {
-  try {
-    return stream_->GetTrailers();
-  } catch (...) {
-    return std::nullopt;
-  }
+  return stream_->GetTrailers();
 }
 
 std::string WireStreamWithRecv::GetId() const {
@@ -194,11 +136,7 @@ std::string WireStreamWithRecv::GetId() const {
 }
 
 void* absl_nullable WireStreamWithRecv::GetImpl() const {
-  try {
-    return stream_->GetImpl();
-  } catch (...) {
-    return nullptr;
-  }
+  return stream_->GetImpl();
 }
 
 a11::Future<std::optional<data::WireMessage>> WireStreamWithRecv::Receive(
@@ -325,13 +263,7 @@ a11::Task WireStreamWithRecv::HandleMessage(
         if (!observer) {
           return absl::OkStatus();
         }
-        try {
-          return observer(message).Await().status();
-        } catch (const std::exception& error) {
-          return ExceptionStatus(error);
-        } catch (...) {
-          return absl::UnknownError("on_message raised an exception");
-        }
+        return observer(message).Await().status();
       },
       {.stack_size = 256});
 }
@@ -358,13 +290,7 @@ a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
         if (!observer) {
           return absl::OkStatus();
         }
-        try {
-          return observer().Await().status();
-        } catch (const std::exception& error) {
-          return ExceptionStatus(error);
-        } catch (...) {
-          return absl::UnknownError("on_done raised an exception");
-        }
+        return observer().Await().status();
       },
       {.stack_size = 256});
 }

@@ -59,6 +59,7 @@
 #include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 
 namespace a11::data {
 
@@ -157,21 +158,12 @@ requires JsonSerializable<T> absl::Status RegisterJsonSerializable(
       serializable_internal::SerialTag<T>(), std::string(kJsonMimetype),
       [](const T& value) -> absl::StatusOr<Chunk> {
         ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
-        try {
-          return Chunk{.data = json.dump()};
-        } catch (const std::exception& error) {
-          return absl::InvalidArgumentError(
-              absl::StrCat("Failed to serialize JSON: ", error.what()));
-        }
+        ABSL_ASSIGN_OR_RETURN(std::string encoded, DumpJson(json, "JSON"));
+        return Chunk{.data = std::move(encoded)};
       },
       [](const Chunk& chunk) -> absl::StatusOr<T> {
-        nlohmann::json json;
-        try {
-          json = nlohmann::json::parse(chunk.data);
-        } catch (const std::exception& error) {
-          return absl::InvalidArgumentError(
-              absl::StrCat("Invalid JSON data: ", error.what()));
-        }
+        ABSL_ASSIGN_OR_RETURN(const nlohmann::json json,
+                              ParseJson(chunk.data, "JSON data"));
         return A11FromJson(TypeTag<T>{}, json);
       });
 }
@@ -200,28 +192,13 @@ requires MsgpackSerializable<T> absl::Status RegisterMsgpackSerializable(
         serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
         [](const T& value) -> absl::StatusOr<Chunk> {
           ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
-          try {
-            const std::vector<std::uint8_t> encoded =
-                nlohmann::json::to_msgpack(json);
-            return Chunk{.data = std::string(
-                             reinterpret_cast<const char*>(encoded.data()),
-                             encoded.size())};
-          } catch (const std::exception& error) {
-            return absl::InvalidArgumentError(absl::StrCat(
-                "Failed to serialize MessagePack: ", error.what()));
-          }
+          ABSL_ASSIGN_OR_RETURN(std::string encoded,
+                                PackMsgpack(json, "JSON"));
+          return Chunk{.data = std::move(encoded)};
         },
         [](const Chunk& chunk) -> absl::StatusOr<T> {
-          nlohmann::json json;
-          try {
-            const auto* first =
-                reinterpret_cast<const std::uint8_t*>(chunk.data.data());
-            json = nlohmann::json::from_msgpack(
-                first, first + chunk.data.size(), true, true);
-          } catch (const std::exception& error) {
-            return absl::InvalidArgumentError(
-                absl::StrCat("Invalid MessagePack data: ", error.what()));
-          }
+          ABSL_ASSIGN_OR_RETURN(const nlohmann::json json,
+                                UnpackMsgpack(chunk.data, "JSON"));
           return A11FromJson(TypeTag<T>{}, json);
         });
   }

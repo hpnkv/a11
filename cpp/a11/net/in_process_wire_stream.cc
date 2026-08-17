@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +24,7 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/msgpack.h"
 #include "a11/data/types.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/wire_stream.h"
 #include "a11/obs/span.h"
 #include "a11/obs/tracer.h"
@@ -44,26 +44,16 @@ std::string NewStreamId() {
 
 absl::Status InvokeMessageCallback(const OnMessage& callback,
                                    std::optional<data::WireMessage> message) {
-  try {
-    a11::Task task = callback(std::move(message));
-    absl::StatusOr<a11::Unit> result = task.Await();
-    return result.status();
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("on_message raised a non-standard exception");
-  }
+  // Unguarded on purpose: StartEndpoint adopts both callbacks through
+  // net/internal/exception_guarded_callbacks.h, so by the time either is
+  // invoked a raised exception has already become the failed Task this awaits.
+  a11::Task task = callback(std::move(message));
+  return task.Await().status();
 }
 
 absl::Status InvokeDoneCallback(const OnDone& callback) {
-  try {
-    a11::Task task = callback();
-    return task.Await().status();
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("on_done raised a non-standard exception");
-  }
+  a11::Task task = callback();
+  return task.Await().status();
 }
 
 }  // namespace
@@ -109,6 +99,11 @@ struct InProcessWireStream::State {
   std::deque<Outbound> outbound ABSL_GUARDED_BY(mu);
   std::deque<std::string> incoming ABSL_GUARDED_BY(mu);
   size_t incoming_bytes ABSL_GUARDED_BY(mu) = 0;
+  // Set while somebody is delivering a message that is no longer in `outbound`:
+  // either Sender, or the thread that called Send and took the fast path. It is
+  // what keeps the two from delivering at once, and so what keeps them in order
+  // -- see Send and DeliverClaimed.
+  bool sending ABSL_GUARDED_BY(mu) = false;
 
   bool started ABSL_GUARDED_BY(mu) = false;
   bool transport_finished ABSL_GUARDED_BY(mu) = false;
@@ -176,6 +171,7 @@ absl::StatusOr<InProcessWireStream::Pair> InProcessWireStream::CreatePair(
 
 absl::Status InProcessWireStream::Send(data::WireMessage message) {
   ABSL_RETURN_IF_ERROR(message.Validate());
+  bool claimed = false;
   if (const std::shared_ptr<State> peer = state_->peer.lock()) {
     thread::MutexLock peer_lock(&peer->mu);
     if (peer->local_end == End::kAbort) {
@@ -225,15 +221,80 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
               absl::StrCat(message.node_fragments.size())},
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
-      state_->outbound.push_back(
-          State::Outbound{.message = std::move(message), .end = end});
-      state_->outbound_cv.SignalAll();
-      return absl::OkStatus();
+      // Deliver on this thread when there is nothing to get in the way.
+      //
+      // The Sender fibre exists for the two things a caller of Send must not
+      // do: wait for room in a full peer, and carry the lifecycle of a
+      // half-close or abort. Neither applies to an ordinary message arriving at
+      // an endpoint with an empty queue, and handing that message to a fibre
+      // costs a scheduling round trip -- and an OS thread wake when the fibre's
+      // worker is parked -- to move bytes this thread is already holding.
+      //
+      // The claim is what keeps order: while it is held, Sender will not pop
+      // and another Send will not take this path, so nothing can overtake the
+      // message in flight. Anything this path cannot finish goes back to the
+      // front of the queue for Sender to deal with, which keeps the waiting and
+      // the error handling in one place.
+      if (end == End::kNone && state_->outbound.empty() && !state_->sending) {
+        state_->sending = true;
+        claimed = true;
+      } else {
+        state_->outbound.push_back(
+            State::Outbound{.message = std::move(message), .end = end});
+        state_->outbound_cv.SignalAll();
+        return absl::OkStatus();
+      }
     }
+  }
+  if (claimed) {
+    DeliverClaimed(state_, std::move(message));
+    return absl::OkStatus();
   }
   ForceAbort(state_,
              absl::DeadlineExceededError("WireStream deadline exceeded"));
   return absl::FailedPreconditionError("WireStream deadline exceeded");
+}
+
+void InProcessWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
+                                         data::WireMessage message) {
+  // Everything that can fail or has to wait puts the message back and lets
+  // Sender do it: it is the only place that may block, and the only place that
+  // turns a delivery failure into an abort.
+  bool delivered = false;
+  std::shared_ptr<State> peer;
+  absl::StatusOr<std::string> payload = message.ToMsgpack();
+  if (payload.ok()) {
+    peer = state->peer.lock();
+  }
+  if (peer != nullptr) {
+    thread::MutexLock peer_lock(&peer->mu);
+    if (!peer->transport_finished &&
+        peer->incoming.size() < peer->options.max_buffered_incoming_messages &&
+        (peer->incoming_bytes == 0 ||
+         peer->incoming_bytes + payload->size() <=
+             peer->options.max_buffered_incoming_bytes)) {
+      peer->incoming_bytes += payload->size();
+      peer->incoming.push_back(std::move(*payload));
+      peer->incoming_cv.SignalAll();
+      delivered = true;
+    }
+  }
+  {
+    thread::MutexLock lock(&state->mu);
+    state->sending = false;
+    if (!delivered) {
+      // The front, not the back: this message was ahead of anything queued
+      // while the claim was held.
+      state->outbound.push_front(
+          State::Outbound{.message = std::move(message), .end = End::kNone});
+    }
+    if (!state->outbound.empty()) {
+      state->outbound_cv.SignalAll();
+    }
+  }
+  if (delivered) {
+    MarkActivity(state, peer);
+  }
 }
 
 a11::Task InProcessWireStream::Start(OnMessage on_message, OnDone on_done) {
@@ -258,8 +319,10 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
           absl::FailedPreconditionError("The stream has already been started"));
     }
     state_->started = true;
-    state_->on_message = std::move(on_message);
-    state_->on_done = std::move(on_done);
+    // Guarded on the way in, so the Receiver fibre can invoke them without a
+    // try of its own -- see net/internal/exception_guarded_callbacks.h.
+    state_->on_message = internal::GuardOnMessage(std::move(on_message));
+    state_->on_done = internal::GuardOnDone(std::move(on_done));
     state_->last_activity = absl::Now();
     expired = state_->deadline <= absl::Now();
     state_->span = obs::Tracer::StartRootSpan(
@@ -413,11 +476,36 @@ void* absl_nullable InProcessWireStream::GetImpl() const {
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
 void InProcessWireStream::Sender(std::shared_ptr<State> state) {
+  // Holds `State::sending` while this Sender is delivering one message, and
+  // wakes Sender again on the way out if more arrived meanwhile. Local, because
+  // State is this class's own business.
+  class Claim {
+   public:
+    explicit Claim(const std::shared_ptr<State>& state) : state_(state) {}
+
+    Claim(const Claim&) = delete;
+    Claim& operator=(const Claim&) = delete;
+
+    ~Claim() {
+      thread::MutexLock lock(&state_->mu);
+      state_->sending = false;
+      if (!state_->outbound.empty()) {
+        state_->outbound_cv.SignalAll();
+      }
+    }
+
+   private:
+    const std::shared_ptr<State>& state_;
+  };
+
   while (true) {
     State::Outbound outbound;
     {
       thread::MutexLock lock(&state->mu);
-      while (state->outbound.empty() && !state->transport_finished) {
+      // `sending` means a Send is delivering the message that was at the front,
+      // and popping the next one now would put it on the wire first.
+      while ((state->outbound.empty() || state->sending) &&
+             !state->transport_finished) {
         state->outbound_cv.Wait(&state->mu);
       }
       if (state->transport_finished) {
@@ -478,7 +566,13 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
               std::make_move_iterator(merged.message.actions.end()));
         }
       }
+      // Claimed as the last thing under the lock: from here until the release
+      // below, no Send may deliver ahead of this message. See Send.
+      state->sending = true;
     }
+    // Releases the claim however this iteration ends -- delivered, abandoned on
+    // an encode failure, or returning for good.
+    const Claim claim(state);
 
     absl::StatusOr<std::string> payload = outbound.message.ToMsgpack();
     if (!payload.ok()) {

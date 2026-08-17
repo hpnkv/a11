@@ -37,8 +37,10 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/str_cat.h>
 
 #include "a11/data/types.h"
+#include "a11/exception_guard.h"
 
 namespace a11::data {
 
@@ -99,14 +101,19 @@ class SerializationRegistry {
           if (value == nullptr) {
             return absl::InvalidArgumentError("serializer value is null");
           }
-          try {
-            return serializer(*static_cast<const T*>(value));
-          } catch (const std::exception& error) {
-            return absl::UnknownError(error.what());
-          } catch (...) {
-            return absl::UnknownError(
-                "serializer raised a non-standard exception");
+          // Guarded here, in the translation unit that registered the codec,
+          // because that is the one that owns it: if the codec can throw, this
+          // instantiation was compiled with exceptions and catches it. A11's
+          // own codecs cannot, and compile to a plain call. See
+          // a11/exception_guard.h.
+          absl::StatusOr<Chunk> chunk;
+          const absl::Status raised = exception_guard::Attempt(
+              [&] { chunk = serializer(*static_cast<const T*>(value)); },
+              "serializer");
+          if (!raised.ok()) {
+            return raised;
           }
+          return chunk;
         });
   }
 
@@ -129,15 +136,17 @@ class SerializationRegistry {
         typeid(T), std::move(type_name), std::move(mimetype),
         [deserializer = std::move(deserializer)](
             const Chunk& chunk) -> absl::StatusOr<std::any> {
-          try {
-            ABSL_ASSIGN_OR_RETURN(T result, deserializer(chunk));
-            return std::any(std::move(result));
-          } catch (const std::exception& error) {
-            return absl::UnknownError(error.what());
-          } catch (...) {
-            return absl::UnknownError(
-                "deserializer raised a non-standard exception");
+          // See RegisterSerializer above for why the guard sits here.
+          absl::StatusOr<T> result;
+          const absl::Status raised = exception_guard::Attempt(
+              [&] { result = deserializer(chunk); }, "deserializer");
+          if (!raised.ok()) {
+            return raised;
           }
+          if (!result.ok()) {
+            return result.status();
+          }
+          return std::any(std::move(*result));
         });
   }
 
@@ -201,11 +210,19 @@ class SerializationRegistry {
       const std::vector<std::string>& mimetype_patterns = {}) const {
     ABSL_ASSIGN_OR_RETURN(std::any result,
                           FromChunkErased(chunk, typeid(T), mimetype_patterns));
-    try {
-      return std::any_cast<T>(std::move(result));
-    } catch (const std::bad_any_cast& error) {
-      return absl::InternalError(error.what());
+    // The pointer form, which reports a mismatch by returning null rather than
+    // by raising. Worth knowing why this can miss even for the right T: a
+    // std::any built in one shared object and cast in another compares
+    // type_info by address unless both see the same definition, which is the
+    // failure recorded as `serialization-registry-any-cross-tu`. The message
+    // below is what that looks like from here.
+    T* absl_nullable value = std::any_cast<T>(&result);
+    if (value == nullptr) {
+      return absl::InternalError(absl::StrCat(
+          "A deserializer produced ", result.type().name(),
+          ", which is not the requested ", typeid(T).name()));
     }
+    return std::move(*value);
   }
 
   /** @brief Installs the standard JSON and MessagePack codecs. */

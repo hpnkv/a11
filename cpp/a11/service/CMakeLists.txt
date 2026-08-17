@@ -1,4 +1,5 @@
 set(A11_SERVICE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/service.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/session.cc
     PARENT_SCOPE)

@@ -2,8 +2,9 @@
 
 #include "a11/nodes/node_map.h"
 
+#include "a11/nodes/internal/exception_guarded_factory.h"
+
 #include <algorithm>
-#include <exception>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -21,6 +22,12 @@
 #include "thread/boost_primitives.h"
 
 namespace a11::nodes {
+
+NodeMap::NodeMap(ChunkStoreFactory factory)
+    // A factory may cross a language boundary, so it is guarded once here
+    // rather than at every call. See
+    // nodes/internal/exception_guarded_factory.h.
+    : factory_(internal::GuardFactory(std::move(factory))) {}
 
 absl::StatusOr<std::shared_ptr<NodeMap>> NodeMap::Create(
     ChunkStoreFactory factory) {
@@ -54,14 +61,9 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
 
   // A factory may cross a language boundary. Never invoke it while holding
   // the map mutex: Python callbacks in particular may re-enter this NodeMap.
-  absl::StatusOr<std::shared_ptr<stores::ChunkStore>> store;
-  try {
-    store = factory_(node_id);
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("chunk-store factory raised an exception");
-  }
+  // The factory was guarded when this NodeMap adopted it; see the constructor.
+  const absl::StatusOr<std::shared_ptr<stores::ChunkStore>> store =
+      factory_(node_id);
   if (!store.ok()) {
     return store.status();
   }

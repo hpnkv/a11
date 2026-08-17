@@ -42,14 +42,12 @@ void CallbackScheduler::Run() {
       callback = std::move(callbacks_.front());
       callbacks_.pop_front();
     }
-    try {
-      std::move(callback)();
-    } catch (const std::exception& error) {
-      LOG(ERROR) << "Stackless state-machine callback raised: " << error.what();
-    } catch (...) {
-      LOG(ERROR) << "Stackless state-machine callback raised a non-standard "
-                    "exception";
-    }
+    // Every callback queued here is A11's own state-machine continuation, and
+    // the queue takes them by value from Post() -- so there is nothing to wrap
+    // at adoption and nothing that can throw. A caller's callable reaches a
+    // state machine through Submit or a WireStream callback, both of which are
+    // guarded where they are adopted.
+    std::move(callback)();
     ++completed;
   }
 

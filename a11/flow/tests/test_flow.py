@@ -1309,7 +1309,7 @@ async def test_packb_leaves_a_value_that_is_already_packed_alone(registry):
 async def test_wait_with_a_timeout_gives_up(registry):
     async def slow(action: Action) -> None:
         await action["text"].consume(str, allow_none=True)
-        await asyncio.sleep(30)
+        await asyncio.sleep(3)
 
     registry.register(
         "sleepy", UPPER.model_copy(update={"name": "sleepy"}), slow

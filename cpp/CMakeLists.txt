@@ -58,6 +58,62 @@ set(A11_PYBIND11_ABSEIL_SOURCE_DIR "" CACHE PATH
 set(A11_SANITIZE "" CACHE STRING
         "Sanitizers to enable (e.g. address, undefined, 'address;undefined')")
 
+# A11's own code does not throw, and these two functions say so to the compiler.
+#
+# a11_disallow_exceptions(<targets>) compiles a target's sources with
+# -fno-exceptions; a11_allow_exceptions(<sources>) hands exceptions back to the
+# few translation units that genuinely need them. Exceptions survive only at the
+# boundaries that call code which may throw -- boost fiber's internals,
+# libdatachannel's API, a callable a caller handed us, and pybind11 -- and each of
+# those files names itself in a a11_allow_exceptions() call beside its target.
+# Everywhere else a `throw` is a compile error, which is the point: it keeps the
+# boundary from drifting inward one convenient catch at a time.
+#
+# **There is no option to turn this off.** It is not a build configuration but
+# part of what A11 is: its errors are `absl::Status` and its invariant violations
+# are `CHECK`s, so a build in which A11 could let an exception out would be a
+# build whose error handling nobody has written. A switch would also be a promise
+# that both halves stay correct, and the half nobody compiles is the half that
+# rots -- the `try` that a future edit puts in a hot path would be invisible until
+# somebody flipped the flag back.
+#
+# This constrains A11's build, not its consumers'. -fno-exceptions is a per
+# translation unit flag on A11's own sources; a consumer compiles its own
+# translation units however it likes, links normally against these objects, and
+# may throw freely in its own frames -- A11 simply catches at the boundary where
+# it adopts a callable rather than letting one unwind through its internals. The
+# public headers compile both ways, which a11_header_canary pins in the direction
+# that is easy to break.
+#
+# The opt-out is per source file rather than per target because the split does not
+# follow target boundaries: a11_net holds both the two libdatachannel translation
+# units and the HTTP transport, and splitting the target to express that would put
+# a build-system seam where there is no design seam. Source COMPILE_OPTIONS are
+# emitted after the target's, so the -fexceptions of an opted-out file wins over
+# its target's -fno-exceptions.
+#
+# Both are PRIVATE, so neither reaches the installed export set nor a consumer:
+# how A11 was compiled is A11's business.
+#
+# Source-file properties are directory-scoped, so call a11_allow_exceptions from
+# the directory that defines the target consuming the file -- which for every A11
+# library is this one, and for the bundled thread library is thread/.
+#
+# RTTI is deliberately left alone: pybind11 and OpenTelemetry both need it, and
+# the serialization registry keys on std::type_index.
+function(a11_disallow_exceptions)
+    foreach (a11_target IN LISTS ARGN)
+        target_compile_options(
+                ${a11_target} PRIVATE
+                $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
+    endforeach ()
+endfunction()
+
+function(a11_allow_exceptions)
+    set_property(SOURCE ${ARGN} APPEND PROPERTY COMPILE_OPTIONS
+                 $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fexceptions>)
+endfunction()
+
 function(a11_require_static_target target_name)
     if (NOT A11_REQUIRE_STATIC_DEPS OR NOT TARGET ${target_name})
         return()
@@ -629,6 +685,7 @@ if (A11_WARNINGS_AS_ERRORS)
             $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Werror>)
 endif ()
 
+
 add_library(a11_core STATIC ${A11_CORE_SOURCES})
 add_library(a11::core ALIAS a11_core)
 set_target_properties(a11_core PROPERTIES EXPORT_NAME core)
@@ -1182,6 +1239,61 @@ if (A11_BUILD_PYTHON)
     endif ()
 endif ()
 
+# --- Exception policy -------------------------------------------------------
+#
+# One place that says which of A11 may throw, and it is not configurable: see
+# a11_disallow_exceptions and a11_allow_exceptions near the top of this file for
+# how it is applied, why the opt-out is per file, and why there is no flag. The
+# rule for adding to the opted-out list: the translation unit must *call* code
+# that can throw. Catching an exception that A11 itself would have to raise is not
+# a reason, because A11 does not raise any.
+a11_disallow_exceptions(
+        a11_core a11_data a11_concurrency a11_obs a11_stores a11_net a11_nodes
+        a11_actions a11_service a11_flow_lang a11_flow_runtime)
+if (A11_BUILD_REDIS)
+    a11_disallow_exceptions(a11_redis)
+endif ()
+if (A11_BUILD_AUDIO)
+    a11_disallow_exceptions(a11_audio a11_audio_actions)
+endif ()
+if (A11_BUILD_HTTP)
+    a11_disallow_exceptions(a11_http_actions)
+endif ()
+
+# The boundaries, each with the throwing code it calls.
+a11_allow_exceptions(
+        # Parses text and dumps bytes through nlohmann. Two of its five entry
+        # points have no non-throwing overload to use instead.
+        a11/json_codec.cc
+        # The definition of exception_guard::Wrap, which is the `try` every
+        # boundary below is built out of. Listed even though a header compiles as
+        # part of whatever includes it: this is the file that must never be
+        # included anywhere else, and naming it here is what says so in the same
+        # place as the rest of the policy. If it is ever added to a target's
+        # sources -- for an IDE, or a unity build -- the property is already right.
+        a11/internal/exception_guard_impl.h
+        # Wrap a callable a caller handed us, so that whatever it throws becomes a
+        # Status in this file's frame rather than unwinding through one of A11's.
+        a11/concurrency/boundary.cc a11/net/boundary.cc
+        a11/nodes/boundary.cc
+        a11/service/boundary.cc a11/actions/boundary.cc
+        a11/flow/boundary.cc)
+if (A11_BUILD_AUDIO)
+    # whisper.cpp is C++ behind a C API that promises no noexcept, and this file
+    # is where A11 calls into it.
+    a11_allow_exceptions(sdk/audio/speech_recognizer.cc)
+endif ()
+if (A11_BUILD_WEBRTC)
+    # libdatachannel's rtc:: API throws.
+    a11_allow_exceptions(
+            a11/net/webrtc_wire_stream.cc a11/net/internal/rtc_binary_channel.cc)
+endif ()
+if (A11_BUILD_FLOW_TOOL)
+    # A development tool, not part of the shipped library: dense LSP JSON where
+    # nlohmann's own throw-on-mistyped-field is the error handling.
+    a11_allow_exceptions(a11/flow/tool/main.cc a11/flow/tool/lsp.cc)
+endif ()
+
 set(A11_INSTALL_TARGETS
         a11_warnings a11_core a11_data a11_concurrency a11_flow_lang a11_stores
         a11_net a11_nodes a11_actions a11_service Thread)
@@ -1252,3 +1364,12 @@ install(
 if (BUILD_TESTING)
     add_subdirectory(tests)
 endif ()
+
+# The public headers must compile for a consumer whose build has exceptions
+# disabled, which is also how A11 builds itself. See tests/header_canary.cc.
+add_library(a11_header_canary STATIC tests/header_canary.cc)
+target_link_libraries(
+        a11_header_canary PRIVATE
+        a11::actions a11::concurrency a11::core a11::data a11::net a11::nodes
+        a11::obs a11::service a11::stores a11::warnings)
+a11_disallow_exceptions(a11_header_canary)

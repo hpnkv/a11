@@ -54,19 +54,17 @@ bool IsNameMiddle(char value) {
 
 absl::StatusOr<std::uint64_t> JsonUnsigned(const nlohmann::json& value,
                                            std::string_view field) {
-  try {
-    if (value.is_number_unsigned()) {
-      return value.get<std::uint64_t>();
+  // Safe without a guard: each get is preceded by the check that makes it
+  // well-typed, which is the convention in A11's JSON code -- see
+  // a11/json_codec.h for where that convention's boundary is.
+  if (value.is_number_unsigned()) {
+    return value.get<std::uint64_t>();
+  }
+  if (value.is_number_integer()) {
+    const std::int64_t result = value.get<std::int64_t>();
+    if (result >= 0) {
+      return static_cast<std::uint64_t>(result);
     }
-    if (value.is_number_integer()) {
-      const std::int64_t result = value.get<std::int64_t>();
-      if (result >= 0) {
-        return static_cast<std::uint64_t>(result);
-      }
-    }
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid ", field, ": ", error.what()));
   }
   return absl::InvalidArgumentError(
       absl::StrCat(field, " must be a non-negative integer"));
@@ -77,12 +75,9 @@ absl::StatusOr<std::string> JsonString(const nlohmann::json& value,
   if (!value.is_string()) {
     return absl::InvalidArgumentError(absl::StrCat(field, " must be a string"));
   }
-  try {
-    return value.get<std::string>();
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid ", field, ": ", error.what()));
-  }
+  // Safe without a guard: the is_string() check above is what makes the get
+  // well-typed, and a get that matches the value's type cannot fail.
+  return value.get<std::string>();
 }
 
 nlohmann::json EncodeByteMap(const ByteMap& values) {
@@ -241,15 +236,11 @@ absl::StatusOr<ChunkMetadata> ChunkMetadata::FromMsgpack(
                         ReadField(&reader, "ChunkMetadata.timestamp"));
   std::optional<absl::Time> timestamp;
   if (!timestamp_value.is_null()) {
-    try {
-      if (!timestamp_value.is_number_integer()) {
-        return absl::InvalidArgumentError(
-            "ChunkMetadata.timestamp must be integer microseconds or null");
-      }
-      timestamp = absl::FromUnixMicros(timestamp_value.get<std::int64_t>());
-    } catch (const std::exception& error) {
-      return absl::InvalidArgumentError(error.what());
+    if (!timestamp_value.is_number_integer()) {
+      return absl::InvalidArgumentError(
+          "ChunkMetadata.timestamp must be integer microseconds or null");
     }
+    timestamp = absl::FromUnixMicros(timestamp_value.get<std::int64_t>());
   }
   ABSL_ASSIGN_OR_RETURN(nlohmann::json attributes_value,
                         ReadField(&reader, "ChunkMetadata.attributes"));

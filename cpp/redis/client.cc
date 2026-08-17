@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
-#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -248,14 +247,7 @@ class RedisIoLoop {
       if (!running_) {
         return absl::FailedPreconditionError("The Redis I/O loop is stopped");
       }
-      try {
-        work_.push_back(std::move(work));
-      } catch (const std::exception& error) {
-        return ExceptionStatus(error, "Queueing Redis I/O work");
-      } catch (...) {
-        return absl::UnknownError(
-            "Queueing Redis I/O work raised a non-standard exception");
-      }
+      work_.push_back(std::move(work));
     }
     const int result = async_->send();
     if (result != 0) {
@@ -271,32 +263,25 @@ class RedisIoLoop {
   friend class absl::NoDestructor<RedisIoLoop>;
 
   RedisIoLoop() {
-    try {
-      loop_ = uvw::loop::create();
-      async_ = loop_->resource<uvw::async_handle>();
-      const int initialized = async_->init();
-      if (initialized != 0) {
-        LOG(FATAL) << "Could not initialize the Redis libuv executor: "
-                   << uv_strerror(initialized);
-      }
-      async_->on<uvw::async_event>(
-          [this](const uvw::async_event&, uvw::async_handle&) { Drain(); });
-      thread_ = std::thread([this] {
-        {
-          thread::MutexLock lock(&mu_);
-          started_ = true;
-          cv_.SignalAll();
-        }
-        loop_->run();
-        thread::MutexLock lock(&mu_);
-        running_ = false;
-      });
-    } catch (const std::exception& error) {
-      LOG(FATAL) << "Could not create the Redis libuv executor: "
-                 << error.what();
-    } catch (...) {
-      LOG(FATAL) << "Could not create the Redis libuv executor";
+    loop_ = uvw::loop::create();
+    async_ = loop_->resource<uvw::async_handle>();
+    const int initialized = async_->init();
+    if (initialized != 0) {
+      LOG(FATAL) << "Could not initialize the Redis libuv executor: "
+                 << uv_strerror(initialized);
     }
+    async_->on<uvw::async_event>(
+        [this](const uvw::async_event&, uvw::async_handle&) { Drain(); });
+    thread_ = std::thread([this] {
+      {
+        thread::MutexLock lock(&mu_);
+        started_ = true;
+        cv_.SignalAll();
+      }
+      loop_->run();
+      thread::MutexLock lock(&mu_);
+      running_ = false;
+    });
     thread::MutexLock lock(&mu_);
     while (!started_) {
       cv_.Wait(&mu_);
@@ -310,13 +295,7 @@ class RedisIoLoop {
       work.swap(work_);
     }
     for (auto& item : work) {
-      try {
-        item();
-      } catch (const std::exception& error) {
-        LOG(ERROR) << "Redis I/O work raised: " << error.what();
-      } catch (...) {
-        LOG(ERROR) << "Redis I/O work raised a non-standard exception";
-      }
+      item();
     }
   }
 

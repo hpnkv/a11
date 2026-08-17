@@ -700,7 +700,13 @@ Examples:
             if (!converted.ok()) {
               ThrowStatus(converted.status());
             }
-            CheckStatus(self->SetDeadline(*converted));
+            // Without the GIL: a deadline already in the past aborts the stream
+            // from this call, and aborting ends it -- which awaits the caller's
+            // own on_done. A Python on_done resolves on the asyncio loop, so
+            // waiting for it with the GIL held is the deadlock in
+            // gil-deadlock-on-blocking-port-accessors, one layer down.
+            CheckStatus(
+                WithoutGil([&] { return self->SetDeadline(*converted); }));
           },
           "Set an absolute wall-clock deadline after which the stream is "
           "automatically aborted; pass None to clear it.",
@@ -715,7 +721,10 @@ Examples:
       .def(
           "get_status",
           [](const net::WireStream& self) -> NativeStatus {
-            return NativeStatus(self.GetStatus());
+            // Also without the GIL: reading the status notices an expired
+            // deadline and aborts, which lands in the same await as
+            // set_deadline above.
+            return NativeStatus(WithoutGil([&] { return self.GetStatus(); }));
           },
           "Return the stream's terminal status once it has finished, or OK "
           "while it is still active. Inspect this after the stream completes "

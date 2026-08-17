@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <deque>
 #include <map>
-#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -337,19 +336,11 @@ struct ChunkStoreReader::State
     bool drive_again = false;
     for (const Wanted& wanted : to_issue) {
       a11::Future<data::NodeFragment> pending;
-      try {
-        pending = ordered
-                      ? store->Get(static_cast<std::uint32_t>(wanted.position),
-                                   absl::InfiniteFuture())
-                      : store->GetByArrivalOrder(wanted.position,
-                                                 absl::InfiniteFuture());
-      } catch (const std::exception& error) {
-        pending = a11::FailedFuture<data::NodeFragment>(
-            absl::UnknownError(error.what()));
-      } catch (...) {
-        pending = a11::FailedFuture<data::NodeFragment>(absl::UnknownError(
-            "ChunkStore reader fetch raised a non-standard exception"));
-      }
+      pending = ordered
+                    ? store->Get(static_cast<std::uint32_t>(wanted.position),
+                                 absl::InfiniteFuture())
+                    : store->GetByArrivalOrder(wanted.position,
+                                               absl::InfiniteFuture());
       if (pending.IsReady()) {
         // The store had it. Account for it here rather than paying a whole
         // scheduler pass to do the same thing.
@@ -425,15 +416,7 @@ struct ChunkStoreReader::State
 
     if (start_clear) {
       a11::Future<data::NodeFragment> pending;
-      try {
-        pending = store->ClearData(clear_seq);
-      } catch (const std::exception& error) {
-        pending = a11::FailedFuture<data::NodeFragment>(
-            absl::UnknownError(error.what()));
-      } catch (...) {
-        pending = a11::FailedFuture<data::NodeFragment>(absl::UnknownError(
-            "ChunkStore clear raised a non-standard exception"));
-      }
+      pending = store->ClearData(clear_seq);
       InstallClear(std::move(pending), clear_generation);
       return false;
     }

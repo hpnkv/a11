@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -253,14 +252,7 @@ struct ChunkStoreWriter::State
 
   void StartWrite(std::uint64_t generation) {
     absl::StatusOr<std::string> id;
-    try {
-      id = store->GetId();
-    } catch (const std::exception& error) {
-      id = absl::UnknownError(error.what());
-    } catch (...) {
-      id = absl::UnknownError(
-          "ChunkStore GetId raised a non-standard exception");
-    }
+    id = store->GetId();
     if (!id.ok()) {
       InstallWrite(a11::FailedFuture<std::vector<std::uint32_t>>(id.status()),
                    generation);
@@ -285,16 +277,7 @@ struct ChunkStoreWriter::State
     }
 
     a11::Future<std::vector<std::uint32_t>> pending;
-    try {
-      pending = store->PutMany(std::move(fragments));
-    } catch (const std::exception& error) {
-      pending = a11::FailedFuture<std::vector<std::uint32_t>>(
-          absl::UnknownError(error.what()));
-    } catch (...) {
-      pending =
-          a11::FailedFuture<std::vector<std::uint32_t>>(absl::UnknownError(
-              "ChunkStore PutMany raised a non-standard exception"));
-    }
+    pending = store->PutMany(std::move(fragments));
     InstallWrite(std::move(pending), generation);
   }
 
@@ -363,14 +346,7 @@ struct ChunkStoreWriter::State
       }
       for (const std::shared_ptr<net::WireStream>& stream :
            active_batch.streams) {
-        try {
-          tee_status = stream->Send(message);
-        } catch (const std::exception& error) {
-          tee_status = absl::UnknownError(error.what());
-        } catch (...) {
-          tee_status = absl::UnknownError(
-              "WireStream Send raised a non-standard exception");
-        }
+        tee_status = stream->Send(message);
         if (!tee_status.ok()) {
           break;
         }
@@ -490,14 +466,7 @@ struct ChunkStoreWriter::State
     }
 
     absl::StatusOr<std::string> id;
-    try {
-      id = store->GetId();
-    } catch (const std::exception& error) {
-      id = absl::UnknownError(error.what());
-    } catch (...) {
-      id = absl::UnknownError(
-          "ChunkStore GetId raised a non-standard exception");
-    }
+    id = store->GetId();
     if (!id.ok()) {
       return id.status();
     }
@@ -515,14 +484,7 @@ struct ChunkStoreWriter::State
     });
     for (const std::shared_ptr<net::WireStream>& stream : streams) {
       absl::Status sent;
-      try {
-        sent = stream->Send(message);
-      } catch (const std::exception& error) {
-        sent = absl::UnknownError(error.what());
-      } catch (...) {
-        sent = absl::UnknownError(
-            "WireStream Send raised a non-standard exception");
-      }
+      sent = stream->Send(message);
       if (!sent.ok()) {
         return sent;
       }
@@ -533,15 +495,7 @@ struct ChunkStoreWriter::State
   void StartClose(std::uint64_t generation, absl::Status requested_status) {
     absl::Status tee_status = TeeClose(requested_status);
     a11::Future<absl::Status> pending;
-    try {
-      pending = store->CloseWritesWithStatus(requested_status);
-    } catch (const std::exception& error) {
-      pending =
-          a11::FailedFuture<absl::Status>(absl::UnknownError(error.what()));
-    } catch (...) {
-      pending = a11::FailedFuture<absl::Status>(absl::UnknownError(
-          "ChunkStore close raised a non-standard exception"));
-    }
+    pending = store->CloseWritesWithStatus(requested_status);
     bool cancel = false;
     {
       thread::MutexLock lock(&mu);
@@ -929,13 +883,7 @@ absl::Status ChunkStoreWriter::AttachStream(
   if (stream == nullptr) {
     return absl::InvalidArgumentError("stream must not be null");
   }
-  try {
-    (void)stream->GetId();
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("WireStream GetId raised an exception");
-  }
+  (void)stream->GetId();
   thread::MutexLock lock(&state_->mu);
   for (const auto& attached : state_->attached_streams) {
     if (attached == stream) {

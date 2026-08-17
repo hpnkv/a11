@@ -1,4 +1,6 @@
 set(A11_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/exception_guard.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/json_codec.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/status.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/time.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/uuid.cc

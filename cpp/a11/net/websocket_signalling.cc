@@ -1,12 +1,12 @@
 // Copyright 2026 The A11 Authors.
 
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/websocket_signalling.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -62,11 +62,6 @@ absl::StatusOr<ParsedUrl> ParseWebSocketUrl(std::string_view url) {
         "WebSocket signalling URL must start with ws:// or wss://");
   }
   return parsed;
-}
-
-absl::Status CallbackFailure(const std::exception& error) {
-  return absl::UnknownError(
-      absl::StrCat("WebSocket signalling callback raised: ", error.what()));
 }
 
 }  // namespace
@@ -276,15 +271,7 @@ void WebSocketSignallingClient::Pump(const std::shared_ptr<State>& state) {
       state->incoming.pop_front();
       callback = state->on_message;
     }
-    absl::Status status;
-    try {
-      status = callback(std::move(message)).Await().status();
-    } catch (const std::exception& error) {
-      status = CallbackFailure(error);
-    } catch (...) {
-      status = absl::UnknownError(
-          "WebSocket signalling callback raised an exception");
-    }
+    const absl::Status status = callback(std::move(message)).Await().status();
     if (!status.ok()) {
       Fail(state, std::move(status));
       return;
@@ -351,7 +338,9 @@ absl::Status WebSocketSignallingClient::SetOnMessage(
   if (state_->closed) {
     return state_->status;
   }
-  state_->on_message = std::move(on_message);
+  // Guarded on the way in; see net/internal/exception_guarded_callbacks.h.
+  state_->on_message =
+      internal::GuardOnSignallingMessage(std::move(on_message));
   return absl::OkStatus();
 }
 

@@ -2,8 +2,9 @@
 
 #include "a11/data/json.h"
 
+#include "a11/json_codec.h"
+
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <optional>
 #include <string>
@@ -401,104 +402,76 @@ absl::StatusOr<ActionMessage> DecodeAction(const Json& value) {
 
 absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
   ABSL_RETURN_IF_ERROR(message.Validate());
-  try {
-    Json value = Json::object();
-    if (!message.node_fragments.empty()) {
-      value["node_fragments"] = Json::array();
-      for (const NodeFragment& fragment : message.node_fragments) {
-        value["node_fragments"].push_back(EncodeFragment(fragment));
-      }
+  // Encoding cannot fail: every value put here is built from a typed field, and
+  // nlohmann only raises on a type mismatch. Byte strings are base64-encoded on
+  // the way in (see EncodeChunk), which is what keeps a chunk of arbitrary
+  // bytes out of a JSON string field.
+  Json value = Json::object();
+  if (!message.node_fragments.empty()) {
+    value["node_fragments"] = Json::array();
+    for (const NodeFragment& fragment : message.node_fragments) {
+      value["node_fragments"].push_back(EncodeFragment(fragment));
     }
-    if (!message.actions.empty()) {
-      value["actions"] = Json::array();
-      for (const ActionMessage& action : message.actions) {
-        value["actions"].push_back(EncodeAction(action));
-      }
-    }
-    if (!message.headers.empty()) {
-      value["headers"] = EncodeByteMap(message.headers);
-    }
-    return value;
-  } catch (const std::exception& error) {
-    return absl::InternalError(
-        absl::StrCat("Failed to encode WireMessage JSON: ", error.what()));
-  } catch (...) {
-    return absl::InternalError(
-        "Failed to encode WireMessage JSON with a non-standard exception");
   }
+  if (!message.actions.empty()) {
+    value["actions"] = Json::array();
+    for (const ActionMessage& action : message.actions) {
+      value["actions"].push_back(EncodeAction(action));
+    }
+  }
+  if (!message.headers.empty()) {
+    value["headers"] = EncodeByteMap(message.headers);
+  }
+  return value;
 }
 
 absl::StatusOr<std::string> WireMessageToJson(const WireMessage& message) {
   ABSL_ASSIGN_OR_RETURN(Json value, WireMessageToJsonValue(message));
-  try {
-    return value.dump(-1, ' ', false, Json::error_handler_t::strict);
-  } catch (const std::exception& error) {
-    return absl::InternalError(
-        absl::StrCat("Failed to serialize WireMessage JSON: ", error.what()));
-  } catch (...) {
-    return absl::InternalError(
-        "Failed to serialize WireMessage JSON with a non-standard exception");
-  }
+  return DumpJson(value, "WireMessage JSON");
 }
 
 absl::StatusOr<WireMessage> WireMessageFromJsonValue(const Json& value) {
-  try {
-    if (!value.is_object()) {
-      return absl::InvalidArgumentError(
-          "A WireMessage JSON value must be an object");
-    }
-    WireMessage result;
-    if (const Json* fragments = GetOptional(value, "node_fragments");
-        fragments != nullptr) {
-      if (!fragments->is_array()) {
-        return absl::InvalidArgumentError(
-            "WireMessage.node_fragments must be an array");
-      }
-      result.node_fragments.reserve(fragments->size());
-      for (const Json& item : *fragments) {
-        ABSL_ASSIGN_OR_RETURN(NodeFragment fragment, DecodeFragment(item));
-        result.node_fragments.push_back(std::move(fragment));
-      }
-    }
-    if (const Json* actions = GetOptional(value, "actions");
-        actions != nullptr) {
-      if (!actions->is_array()) {
-        return absl::InvalidArgumentError(
-            "WireMessage.actions must be an array");
-      }
-      result.actions.reserve(actions->size());
-      for (const Json& item : *actions) {
-        ABSL_ASSIGN_OR_RETURN(ActionMessage action, DecodeAction(item));
-        result.actions.push_back(std::move(action));
-      }
-    }
-    ABSL_ASSIGN_OR_RETURN(
-        ByteMap headers,
-        DecodeByteMap(GetOptional(value, "headers"), "WireMessage.headers"));
-    result.headers = std::move(headers);
-    ABSL_RETURN_IF_ERROR(result.Validate());
-    return result;
-  } catch (const std::exception& error) {
+  if (!value.is_object()) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Failed to decode WireMessage JSON: ", error.what()));
-  } catch (...) {
-    return absl::InvalidArgumentError(
-        "Failed to decode WireMessage JSON with a non-standard exception");
+        "A WireMessage JSON value must be an object");
   }
+  WireMessage result;
+  if (const Json* fragments = GetOptional(value, "node_fragments");
+      fragments != nullptr) {
+    if (!fragments->is_array()) {
+      return absl::InvalidArgumentError(
+          "WireMessage.node_fragments must be an array");
+    }
+    result.node_fragments.reserve(fragments->size());
+    for (const Json& item : *fragments) {
+      ABSL_ASSIGN_OR_RETURN(NodeFragment fragment, DecodeFragment(item));
+      result.node_fragments.push_back(std::move(fragment));
+    }
+  }
+  if (const Json* actions = GetOptional(value, "actions");
+      actions != nullptr) {
+    if (!actions->is_array()) {
+      return absl::InvalidArgumentError(
+          "WireMessage.actions must be an array");
+    }
+    result.actions.reserve(actions->size());
+    for (const Json& item : *actions) {
+      ABSL_ASSIGN_OR_RETURN(ActionMessage action, DecodeAction(item));
+      result.actions.push_back(std::move(action));
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      ByteMap headers,
+      DecodeByteMap(GetOptional(value, "headers"), "WireMessage.headers"));
+  result.headers = std::move(headers);
+  ABSL_RETURN_IF_ERROR(result.Validate());
+  return result;
 }
 
 absl::StatusOr<WireMessage> WireMessageFromJson(std::string_view encoded) {
-  try {
-    Json value =
-        Json::parse(encoded.begin(), encoded.end(), nullptr, true, false);
-    return WireMessageFromJsonValue(value);
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to parse WireMessage JSON: ", error.what()));
-  } catch (...) {
-    return absl::InvalidArgumentError(
-        "Failed to parse WireMessage JSON with a non-standard exception");
-  }
+  ABSL_ASSIGN_OR_RETURN(const Json value,
+                        ParseJson(encoded, "WireMessage JSON"));
+  return WireMessageFromJsonValue(value);
 }
 
 }  // namespace a11::data

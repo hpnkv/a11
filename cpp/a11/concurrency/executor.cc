@@ -2,7 +2,6 @@
 
 #include "a11/concurrency/executor.h"
 
-#include <exception>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -10,6 +9,7 @@
 #include <absl/functional/any_invocable.h>
 #include <absl/log/log.h>
 
+#include "a11/exception_guard.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
 
@@ -34,30 +34,26 @@ struct FiberControl {
 
 void Schedule(absl::AnyInvocable<void() &&> work,
               thread::TreeOptions tree_options) {
-  thread::Detach(std::move(tree_options), [work = std::move(work)]() mutable {
-    try {
-      std::move(work)();
-    } catch (const std::exception& error) {
-      LOG(ERROR) << "Unobserved scheduled task exception: " << error.what();
-    } catch (...) {
-      LOG(ERROR) << "Unobserved scheduled task non-standard exception";
-    }
-  });
+  // Wrapped rather than caught here: the fibre that runs this work belongs to
+  // A11 and is compiled without exceptions, so a throw has to be stopped inside
+  // the wrapper's own frame. Nobody is waiting for the result of scheduled
+  // work, so what the wrapper does with a raised exception is log it.
+  thread::Detach(
+      std::move(tree_options),
+      [work = exception_guard::WrapConsuming(
+           std::move(work), "Unobserved scheduled task")]() mutable {
+        std::move(work)();
+      });
 }
 
 std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
                                          thread::TreeOptions tree_options) {
   auto control = std::make_shared<FiberControl>();
   std::unique_ptr<thread::Fiber> fiber = thread::NewTree(
-      std::move(tree_options), [work = std::move(work)]() mutable {
-        try {
-          std::move(work)();
-        } catch (const std::exception& error) {
-          LOG(ERROR) << "Unobserved cancelable task exception: "
-                     << error.what();
-        } catch (...) {
-          LOG(ERROR) << "Unobserved cancelable task non-standard exception";
-        }
+      std::move(tree_options),
+      [work = exception_guard::WrapConsuming(
+           std::move(work), "Unobserved cancelable task")]() mutable {
+        std::move(work)();
       });
   {
     thread::MutexLock lock(&control->mu);

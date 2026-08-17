@@ -6,7 +6,6 @@
 #include <any>
 #include <cctype>
 #include <cstddef>
-#include <exception>
 #include <new>
 #include <string>
 #include <string_view>
@@ -29,6 +28,7 @@
 #include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::data {
@@ -171,45 +171,21 @@ Mimetype WithoutType(Mimetype value) {
 }
 
 absl::StatusOr<Chunk> SerializeJson(const nlohmann::json& value) {
-  try {
-    return Chunk{.data = value.dump()};
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to serialize JSON: ", error.what()));
-  }
+  ABSL_ASSIGN_OR_RETURN(std::string encoded, DumpJson(value, "JSON"));
+  return Chunk{.data = std::move(encoded)};
 }
 
 absl::StatusOr<nlohmann::json> DeserializeJson(const Chunk& chunk) {
-  try {
-    return nlohmann::json::parse(chunk.data);
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid JSON data: ", error.what()));
-  }
+  return ParseJson(chunk.data, "JSON data");
 }
 
 absl::StatusOr<Chunk> SerializeJsonMsgpack(const nlohmann::json& value) {
-  try {
-    const std::vector<std::uint8_t> encoded = nlohmann::json::to_msgpack(value);
-    return Chunk{.data =
-                     std::string(reinterpret_cast<const char*>(encoded.data()),
-                                 encoded.size())};
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to serialize MessagePack: ", error.what()));
-  }
+  ABSL_ASSIGN_OR_RETURN(std::string encoded, PackMsgpack(value, "JSON"));
+  return Chunk{.data = std::move(encoded)};
 }
 
 absl::StatusOr<nlohmann::json> DeserializeJsonMsgpack(const Chunk& chunk) {
-  try {
-    const auto* first =
-        reinterpret_cast<const std::uint8_t*>(chunk.data.data());
-    return nlohmann::json::from_msgpack(first, first + chunk.data.size(), true,
-                                        true);
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid MessagePack data: ", error.what()));
-  }
+  return UnpackMsgpack(chunk.data, "JSON");
 }
 
 // Registers a runtime type's MessagePack representation under the canonical
@@ -393,14 +369,11 @@ absl::StatusOr<Chunk> SerializationRegistry::ToChunkErased(
     exact_mimetype =
         FormatExactMimetype(selected->mimetype, selected->type_name);
   }
-  absl::StatusOr<Chunk> chunk;
-  try {
-    chunk = serializer(value);
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("serializer raised a non-standard exception");
-  }
+  // No guard here: a codec is wrapped where it is registered, in the
+  // translation unit that owns it -- see RegisterSerializer in serialization.h.
+  // The erased signatures are private, so registration through those templates
+  // is the only way one can arrive.
+  absl::StatusOr<Chunk> chunk = serializer(value);
   if (!chunk.ok()) {
     return chunk.status();
   }
@@ -473,13 +446,8 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
   if (deserializer == nullptr) {
     return absl::NotFoundError("No deserializer matched the chunk");
   }
-  try {
-    return deserializer(chunk);
-  } catch (const std::exception& error) {
-    return absl::UnknownError(error.what());
-  } catch (...) {
-    return absl::UnknownError("deserializer raised a non-standard exception");
-  }
+  // Guarded at registration; see ToChunkErased above.
+  return deserializer(chunk);
 }
 
 absl::Status SerializationRegistry::RegisterDefaults() {

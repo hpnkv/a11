@@ -1,4 +1,5 @@
 set(A11_NET_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/byte_chunking.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/channel_wire_stream.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/in_process_wire_stream.cc

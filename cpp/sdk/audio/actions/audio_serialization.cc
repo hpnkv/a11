@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <string_view>
 #include <vector>
 
@@ -43,12 +44,25 @@ absl::StatusOr<T> GetOr(const nlohmann::json& json, std::string_view key,
   if (it == json.end() || it->is_null()) {
     return fallback;
   }
-  try {
-    return it->get<T>();
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid value for '", key, "': ", error.what()));
+  // A wrong-typed field is bad input, so it is checked rather than caught: the
+  // get below matches what the check just established. See a11/json_codec.h.
+  if constexpr (std::is_same_v<T, bool>) {
+    if (!it->is_boolean()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("'", key, "' must be a boolean"));
+    }
+  } else if constexpr (std::is_arithmetic_v<T>) {
+    if (!it->is_number()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("'", key, "' must be a number"));
+    }
+  } else {
+    if (!it->is_string()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("'", key, "' must be a string"));
+    }
   }
+  return it->get<T>();
 }
 
 }  // namespace
@@ -102,26 +116,25 @@ absl::StatusOr<AudioBuffer> A11FromMsgpackBytes(a11::data::TypeTag<AudioBuffer>,
   ABSL_ASSIGN_OR_RETURN(nlohmann::json end_time, reader.Read());
   ABSL_RETURN_IF_ERROR(reader.EnsureFullyConsumed());
 
-  AudioBuffer result;
-  try {
-    result.num_channels = num_channels.get<std::size_t>();
-    result.num_frames = num_frames.get<std::size_t>();
-    result.sample_rate = sample_rate.get<double>();
-  } catch (const std::exception& error) {
+  if (!num_channels.is_number_unsigned() || !num_frames.is_number_unsigned() ||
+      !sample_rate.is_number()) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Invalid AudioBuffer scalar field: ", error.what()));
+        "AudioBuffer scalar fields must be numbers");
   }
+  AudioBuffer result;
+  result.num_channels = num_channels.get<std::size_t>();
+  result.num_frames = num_frames.get<std::size_t>();
+  result.sample_rate = sample_rate.get<double>();
   result.samples.resize(raw.size() / sizeof(float));
   std::memcpy(result.samples.data(), raw.data(), raw.size());
   if (end_time.is_null()) {
     result.end_time = a11::InfinitePast();
   } else {
-    try {
-      result.end_time = absl::FromUnixNanos(end_time.get<std::int64_t>());
-    } catch (const std::exception& error) {
+    if (!end_time.is_number_integer()) {
       return absl::InvalidArgumentError(
-          absl::StrCat("Invalid AudioBuffer.end_time: ", error.what()));
+          "AudioBuffer.end_time must be integer nanoseconds or null");
     }
+    result.end_time = absl::FromUnixNanos(end_time.get<std::int64_t>());
   }
   if (result.samples.size() != result.num_channels * result.num_frames) {
     return absl::InvalidArgumentError(

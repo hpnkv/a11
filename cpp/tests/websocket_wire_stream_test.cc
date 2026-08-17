@@ -99,6 +99,78 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
   EXPECT_TRUE(server->Stop().ok());
 }
 
+// Aborting an already half-closed stream must finish it, not silently succeed.
+//
+// This is the file-descriptor leak in `FINDINGS.md` item 0, reduced to its
+// mechanism. A half-close shuts the write half and leaves the socket held --
+// correctly, because the peer's half is still open -- so abort is the only call
+// a departing client has that returns the descriptor. It used to return OK and
+// do nothing once `local_end` had left kNone, which is unobservable from the
+// caller: measured on Linux against a real Service, `abort()` alone held flat
+// while `half_close()` then `abort()` retained exactly one ESTABLISHED
+// descriptor per connection, released only at process exit.
+//
+// The assertion is on the *client's* completion after the abort, with the peer
+// deliberately never half-closing: that is the case where a graceful finish is
+// impossible, so nothing but the abort can end the stream. Before the fix the
+// wait below times out.
+TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
+  a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
+  auto accepted_future = accepted_promise.future();
+
+  WebSocketServerOptions server_options;
+  server_options.port = 0;
+  server_options.bind_address = "127.0.0.1";
+  auto server = *WebSocketWireServer::Create(
+      [&accepted_promise](std::shared_ptr<WebSocketWireStream> stream) {
+        const absl::Status published = accepted_promise.SetValue(stream);
+        if (!published.ok()) {
+          return a11::FailedTask(published);
+        }
+        // Accepts and then holds the stream open: no half-close from this side,
+        // so the client cannot reach a clean bidirectional finish.
+        return stream->Accept(
+            [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+            []() { return a11::ReadyTask(); });
+      },
+      server_options);
+  auto port = server->port();
+  ASSERT_TRUE(port.ok()) << port.status();
+
+  auto client = *WebSocketWireStream::CreateClient(
+      "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
+  std::atomic<bool> client_done = false;
+  ASSERT_TRUE(
+      client
+          ->Start(
+              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+              [&client_done]() {
+                client_done = true;
+                return a11::ReadyTask();
+              })
+          .Await(absl::Now() + absl::Seconds(5))
+          .ok());
+  auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(accepted.ok()) << accepted.status();
+
+  ASSERT_TRUE(client->HalfClose().ok());
+  ASSERT_TRUE(client->DrainOutgoingMessages()
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
+  // The peer has not half-closed, so the stream is still live here.
+  EXPECT_FALSE(client_done);
+
+  ASSERT_TRUE(client->Abort(absl::CancelledError("client left")).ok());
+  const absl::Time limit = absl::Now() + absl::Seconds(5);
+  while (!client_done && absl::Now() < limit) {
+    thread::SleepFor(absl::Milliseconds(1));
+  }
+  EXPECT_TRUE(client_done) << "abort after half-close did not finish the stream";
+  // And it reports the caller's reason rather than an invented one.
+  EXPECT_EQ(client->GetStatus().code(), absl::StatusCode::kCancelled);
+  EXPECT_TRUE(server->Stop().ok());
+}
+
 TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
   a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
   auto accepted_future = accepted_promise.future();

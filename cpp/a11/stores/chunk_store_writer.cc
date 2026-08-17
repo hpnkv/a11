@@ -737,6 +737,40 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
 
 a11::Future<std::uint32_t> ChunkStoreWriter::PutChunk(
     data::Chunk chunk, std::optional<std::uint32_t> seq, bool final) {
+  // Still wakes the scheduler rather than flushing inline, and now for a
+  // measured reason rather than a suspected one -- FINDINGS.md item 3 asked for
+  // the stack budget to be established first, and it does not fit.
+  //
+  // The concern in that item was the 256-2048 byte pooled fiber stacks. Those
+  // turn out to be the wrong thing to worry about: every explicit small stack in
+  // the tree (a11/concurrency/executor.cc's joiner, the three in
+  // wire_stream_with_recv.cc, audio_input.cc's 512-byte reader) only joins a
+  // fiber or selects on a channel and cannot reach a store write. The smallest
+  // stack that *can* is the 16 KiB session dispatch fiber; everything else is at
+  // or above the 64 KiB default.
+  //
+  // What does not fit is the drive itself. Measured by marking the base of a
+  // drive and recording the deepest frame reached below it, across translation
+  // units, since the depth is not in the pump but in what the pump calls:
+  //
+  //   writer frames alone                        911 B
+  //   + into ChunkStore::PutMany               1,407 B
+  //   + the tee to an attached WireStream     67,695 B
+  //
+  // The tee is on this stack rather than a worker's because an in-memory store
+  // returns an already-ready future and Future::OnReady invokes its callback in
+  // the calling frame -- so WriteDone, the WireMessage build and
+  // WireStream::Send all run under Drive(). Sixty-six kilobytes is more than a
+  // whole default fiber stack and four times the session dispatch fiber's, and
+  // DriveInline permits four nested drives on top of that.
+  //
+  // So the win here (~9x, the same the Python path took) needs the *chain*
+  // shortened or the tee moved off the drive's stack first; an inline flush on
+  // top of it as it stands would overflow into the heap, which is the class of
+  // bug that has already corrupted this process once. The existing Python
+  // flush-on-await is safe only because it runs on the asyncio thread's
+  // megabytes rather than on a fiber -- which is worth knowing before any native
+  // caller invokes Flush() from one.
   return EnqueueChunk(std::move(chunk), seq, final, true).confirmation;
 }
 

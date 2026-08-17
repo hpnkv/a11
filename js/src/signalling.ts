@@ -50,6 +50,16 @@ export interface SignallingMessageOptions {
   mid?: string;
   /** Non-OK A11 status for an error message. */
   error?: Status;
+  /**
+   * Optional capability tokens the sender supports, echoed by a peer that
+   * supports them too.
+   *
+   * Additive and ignored by any peer that does not know a token, which is what
+   * makes a capability safe to introduce: an older peer never echoes, so the
+   * feature simply stays off rather than breaking the connection. Currently only
+   * `a11-pmtud/1` (path MTU probing).
+   */
+  capabilities?: readonly string[];
 }
 
 /**
@@ -76,6 +86,8 @@ export class SignallingMessage {
   mid: string;
   /** Structured status carried by error messages. */
   error: Status;
+  /** Capability tokens the sender supports. @see SignallingMessageOptions */
+  capabilities: readonly string[];
 
   constructor(options: SignallingMessageOptions = {}) {
     this.type = options.type ?? SignallingMessageType.DESCRIPTION;
@@ -86,6 +98,7 @@ export class SignallingMessage {
     this.candidate = options.candidate ?? '';
     this.mid = options.mid ?? '';
     this.error = options.error ?? okStatus();
+    this.capabilities = options.capabilities ?? [];
   }
 
   /** Construct and validate a message before sending it to a peer. */
@@ -160,6 +173,9 @@ export class SignallingMessage {
       result.id = this.recipient;
       result.description = this.description;
       result.description_type = this.descriptionType;
+      if (this.capabilities.length > 0) {
+        result.capabilities = [...this.capabilities];
+      }
     } else if (this.type === SignallingMessageType.CANDIDATE) {
       result.id = this.recipient;
       result.candidate = this.candidate;
@@ -242,6 +258,9 @@ export class SignallingMessage {
           ? object.description_type
           : object.type
       ) as RTCSdpType;
+      result.capabilities = Array.isArray(object.capabilities)
+        ? object.capabilities.filter((token): token is string => typeof token === 'string')
+        : [];
     } else if (type === SignallingMessageType.CANDIDATE) {
       result.candidate = typeof object.candidate === 'string' ? object.candidate : '';
       result.mid = typeof object.mid === 'string' ? object.mid : '';

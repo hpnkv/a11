@@ -592,12 +592,50 @@ if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
     set(NO_TESTS ON CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(USE_SYSTEM_JSON ON CACHE BOOL "" FORCE)
+    # The patch exposes the SCTP path MTU as a settable property of a live
+    # association, which usrsctp supports and libdatachannel does not surface.
+    # A11's path MTU discovery (RFC 8899) cannot work without it: see
+    # scripts/patches/libdatachannel-live-pmtu.patch for the rationale, and the
+    # `wire/stream_throughput[webrtc-live-mtu]` bench row for the measurement
+    # that catches a build where the patch silently did not apply.
+    #
+    # `git apply`, and `--reverse --check ||` first so that re-configuring a tree
+    # whose source directory already carries the patch is a no-op rather than an
+    # error: FetchContent re-runs PATCH_COMMAND against an existing checkout.
+    # Two patches, and both are load-bearing for path MTU discovery:
+    #
+    #   libdatachannel-live-pmtu    exposes the SCTP path MTU as something that
+    #                               can be set on a live association at all
+    #   usrsctp-raise-association-mtu  lets that value go *up*, which usrsctp
+    #                               explicitly refused -- without it the search
+    #                               can only ever reduce, so it cannot
+    #                               binary-search and cannot recover a path that
+    #                               grew (see each patch's header for the
+    #                               measurements)
+    #
+    # The second applies inside libdatachannel's usrsctp submodule, hence the
+    # `git -C deps/usrsctp`. Each is guarded by `--reverse --check ||` so that
+    # re-configuring a tree whose source directory already carries the patch is a
+    # no-op rather than an error: FetchContent re-runs PATCH_COMMAND against an
+    # existing checkout.
+    #
+    # A build where either silently failed to apply looks like one where
+    # discovery runs and achieves nothing, so
+    # `wire/stream_throughput[webrtc-live-mtu,64K]` exists to catch it: it must
+    # match the `webrtc` row for the same MTU, and does not without both patches.
+    set(A11_LIBDATACHANNEL_PATCH
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libdatachannel-live-pmtu.patch")
+    set(A11_USRSCTP_PATCH
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/usrsctp-raise-association-mtu.patch")
     FetchContent_Declare(
             libdatachannel
             GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
             GIT_TAG 443f6934d9007eb7076ab7825ba330f355fcbead
             GIT_SHALLOW TRUE
-            GIT_SUBMODULES_RECURSE TRUE)
+            GIT_SUBMODULES_RECURSE TRUE
+            PATCH_COMMAND
+                    sh -c "git apply --reverse --check '${A11_LIBDATACHANNEL_PATCH}' || git apply '${A11_LIBDATACHANNEL_PATCH}'"
+                    && sh -c "git -C deps/usrsctp apply --reverse --check '${A11_USRSCTP_PATCH}' || git -C deps/usrsctp apply '${A11_USRSCTP_PATCH}'")
     FetchContent_MakeAvailable(libdatachannel)
 elseif (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND)
     message(FATAL_ERROR
@@ -1292,7 +1330,10 @@ if (A11_BUILD_AUDIO)
     a11_allow_exceptions(sdk/audio/speech_recognizer.cc)
 endif ()
 if (A11_BUILD_WEBRTC)
-    # libdatachannel's rtc:: API throws.
+    # libdatachannel's rtc:: API throws. The path MTU search
+    # (a11/net/internal/path_mtu.cc) touches no rtc:: type and stays
+    # -fno-exceptions; only the stream that calls into libdatachannel needs the
+    # opt-out.
     a11_allow_exceptions(
             a11/net/webrtc_wire_stream.cc a11/net/internal/rtc_binary_channel.cc)
 endif ()

@@ -501,7 +501,6 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
     candidates = [];
     listeners = new Map();
     channel = new FakeDataChannel();
-
     createDataChannel() { return this.channel; }
 
     addEventListener(type, listener) {
@@ -597,6 +596,12 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
     assert.deepEqual(suffix, [index, 0, 0, 0, 0, 0, 0, 0],
       `frame ${index} must end with its little-endian sequence`);
   }
+  // No path MTU assertions here any more, and their absence is the result.
+  //
+  // A probe is now a padded SCTP HEARTBEAT emitted by the stack itself, which any
+  // conforming peer answers without knowing anything about A11 -- so there is no
+  // probe channel to open, no frame format to agree on, no capability to advertise
+  // and nothing for a browser to implement. This file used to assert all four.
   assert.equal(isOk(stream.abort(unavailableError('fixture complete'))), true);
   assert.equal(isOk(await stream.wait()), false);
   assert.equal(signallingClosed, true);

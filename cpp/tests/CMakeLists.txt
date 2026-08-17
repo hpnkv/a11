@@ -15,6 +15,7 @@ add_executable(a11_core_test
   signalling_test.cc
   webrtc_wire_stream_test.cc
   multiplexed_binary_channel_test.cc
+  path_mtu_test.cc
   websocket_signalling_test.cc
   chunk_store_reader_test.cc
   chunk_store_writer_test.cc

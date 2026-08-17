@@ -1,0 +1,315 @@
+Expose the SCTP path MTU as a settable property of a live association.
+
+libdatachannel accepts an MTU only through rtc::Configuration, applied once when
+the SctpTransport opens its socket, and offers no way to change it afterwards.
+usrsctp itself has no such restriction: SCTP_PEER_ADDR_PARAMS with
+SPP_PMTUD_DISABLE and a zeroed address is handled by the assoc-wide branch of
+sctp_usrreq.c, which writes net->mtu for every destination and calls
+sctp_pathmtu_adjustment() when the value shrinks.
+
+A11 needs it because usrsctp implements no path MTU discovery (usrsctp#205), so
+libdatachannel falls back to RFC 8261's safe 1280 and every message is
+fragmented to 1172-byte chunks whatever the path can carry -- worth about 3x at
+64 KiB on loopback. Discovering the real value (RFC 8899) requires raising and
+lowering it on an association that is already carrying traffic.
+
+This adds, at each layer:
+
+* setPathMtu       -- the association MTU, which governs message fragmentation
+* setPacketCeiling -- only net->mtu, the ceiling on packet size
+* sendPathMtuProbe / acknowledgedPathMtuProbe -- one padded HEARTBEAT probe and
+                      the id of the last one answered
+
+The split between the first two is what makes probing safe on a live association:
+a probe needs the packet ceiling raised so an oversized packet can be emitted, and
+needs fragmentation left alone so user messages are never split for a size the
+path has not acknowledged. The probe itself needs the companion usrsctp patch,
+which adds SCTP_SEND_PMTU_PROBE.
+
+The header arithmetic is hoisted into a named constant so the call sites cannot
+drift apart.
+
+One unit trap worth naming, because it produced a silent false positive rather
+than an error: sendPathMtuProbe takes *chunk space*, not a network MTU. The caller
+has already subtracted the headers, and taking them off a second time here made
+every probe test about 216 bytes less than the candidate it was meant to measure --
+so a size above the path limit was acknowledged, applied, and stalled the stream.
+
+
+diff --git a/deps/usrsctp b/deps/usrsctp
+--- a/deps/usrsctp
++++ b/deps/usrsctp
+@@ -1 +1 @@
+-Subproject commit fec583d54493f879d2ae44a743423bf8a04371ab
++Subproject commit fec583d54493f879d2ae44a743423bf8a04371ab-dirty
+diff --git a/include/rtc/peerconnection.hpp b/include/rtc/peerconnection.hpp
+index f7a76a1..7e748df 100644
+--- a/include/rtc/peerconnection.hpp
++++ b/include/rtc/peerconnection.hpp
+@@ -91,6 +91,28 @@ public:
+ 	optional<Description> localDescription() const;
+ 	optional<Description> remoteDescription() const;
+ 	size_t remoteMaxMessageSize() const;
++
++	// Sets the network MTU the SCTP association builds packets to, in the same
++	// units as Configuration::mtu, replacing the value given at construction.
++	// Returns false if there is no connected SCTP association yet or if the
++	// value was rejected, so a caller performing path MTU discovery can treat a
++	// refusal as "not now" rather than as a failed path.
++	bool setPathMtu(size_t mtu);
++
++	// Path MTU discovery (RFC 8899), as three primitives rather than a policy: the
++	// caller decides what to try and when, because that is a transport-independent
++	// search and belongs above this library.
++	//
++	// setPacketCeiling raises only the size a packet may reach, leaving message
++	// fragmentation at the confirmed value -- so a probe can be oversized while
++	// user data is never fragmented for a size the path has not acknowledged.
++	// sendPathMtuProbe emits one padded HEARTBEAT of that size; any conforming peer
++	// answers it, so no peer cooperation is needed. acknowledgedPathMtuProbe
++	// reports which probe came back.
++	bool setPacketCeiling(size_t mtu);
++	bool sendPathMtuProbe(size_t chunkSpace, uint32_t probeId);
++	uint32_t acknowledgedPathMtuProbe();
++	uint32_t pathMtuProbeAckCount();
+ 	optional<string> localAddress() const;
+ 	optional<string> remoteAddress() const;
+ 	uint16_t maxDataChannelId() const;
+diff --git a/src/impl/sctptransport.cpp b/src/impl/sctptransport.cpp
+index 552ee94..f9ee95c 100644
+--- a/src/impl/sctptransport.cpp
++++ b/src/impl/sctptransport.cpp
+@@ -48,6 +48,12 @@
+ #endif
+ */
+ 
++// Bytes of SCTP/DTLS/UDP/IPv6 header subtracted from a network MTU to get the
++// space available for chunks in a packet, which is what spp_pathmtu means.
++// Shared by the initial socket setup and by setPathMtu(), so the two cannot
++// drift apart.
++#define SCTP_MTU_HEADER_OVERHEAD (12 + 48 + 8 + 40)
++
+ using namespace std::chrono_literals;
+ using namespace std::chrono;
+ 
+@@ -244,7 +250,7 @@ SctpTransport::SctpTransport(shared_ptr<Transport> lower, const Configuration &c
+ 		spp.spp_flags |= SPP_PMTUD_DISABLE;
+ 		// The MTU value provided specifies the space available for chunks in the
+ 		// packet, so we also subtract the SCTP header size.
+-		size_t pmtu = config.mtu.value_or(DEFAULT_MTU) - 12 - 48 - 8 - 40; // SCTP/DTLS/UDP/IPv6
++		size_t pmtu = config.mtu.value_or(DEFAULT_MTU) - SCTP_MTU_HEADER_OVERHEAD;
+ 		spp.spp_pathmtu = to_uint32(pmtu);
+ 		PLOG_VERBOSE << "Path MTU discovery disabled, SCTP MTU set to " << pmtu;
+ 	}
+@@ -408,6 +414,127 @@ bool SctpTransport::flush() {
+ 	}
+ }
+ 
++bool SctpTransport::setPathMtu(size_t mtu) {
++	if (mtu <= SCTP_MTU_HEADER_OVERHEAD)
++		return false;
++
++	std::lock_guard lock(mSendMutex);
++	if (state() != State::Connected)
++		return false;
++
++	// spp_address must be the *wildcard* for the association's family, which for
++	// usrsctp's userspace transport is AF_CONN with a null sconn_addr. It cannot
++	// simply be zeroed: with a live association usrsctp looks the address up
++	// (sctp_findnet), finds no matching destination, and then requires the
++	// address to be the family's wildcard -- a zeroed sockaddr has sa_family 0
++	// and falls through to EAFNOSUPPORT. The socket setup above gets away with a
++	// zeroed one only because it runs before usrsctp_connect, when there is no
++	// association to look up and the endpoint defaults are set instead.
++	//
++	// The wildcard form is what makes this assoc-wide: usrsctp then applies the
++	// value to every destination rather than to one path.
++	struct sctp_paddrparams spp = {};
++	auto *sconn = reinterpret_cast<struct sockaddr_conn *>(&spp.spp_address);
++	sconn->sconn_family = AF_CONN;
++	sconn->sconn_port = 0;
++	sconn->sconn_addr = NULL; // the wildcard: "every destination"
++#ifdef HAVE_SCONN_LEN
++	sconn->sconn_len = sizeof(struct sockaddr_conn);
++#endif
++	spp.spp_flags = SPP_PMTUD_DISABLE;
++	spp.spp_pathmtu = to_uint32(mtu - SCTP_MTU_HEADER_OVERHEAD);
++
++	if (usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &spp, sizeof(spp))) {
++		PLOG_WARNING << "SCTP set path MTU to " << mtu << " failed, errno=" << errno;
++		return false;
++	}
++
++	PLOG_DEBUG << "SCTP path MTU set to " << spp.spp_pathmtu << " (network MTU " << mtu << ")";
++	return true;
++}
++
++bool SctpTransport::setPacketCeiling(size_t mtu) {
++	if (mtu <= SCTP_MTU_HEADER_OVERHEAD)
++		return false;
++
++	std::lock_guard lock(mSendMutex);
++	if (state() != State::Connected)
++		return false;
++
++	// Same call as setPathMtu, and the difference is entirely on the usrsctp side:
++	// SPP_PMTUD_DISABLE with a path MTU writes net->mtu, and only the association
++	// refresh (patched in alongside this) propagates it to asoc->smallest_mtu.
++	// Reaching net->mtu without that refresh is what a probe wants.
++	struct sctp_paddrparams spp = {};
++	auto *sconn = reinterpret_cast<struct sockaddr_conn *>(&spp.spp_address);
++	sconn->sconn_family = AF_CONN;
++	sconn->sconn_port = 0;
++	sconn->sconn_addr = NULL;
++#ifdef HAVE_SCONN_LEN
++	sconn->sconn_len = sizeof(struct sockaddr_conn);
++#endif
++	spp.spp_flags = SPP_PMTUD_DISABLE | SPP_PACKET_CEILING_ONLY;
++	spp.spp_pathmtu = to_uint32(mtu - SCTP_MTU_HEADER_OVERHEAD);
++
++	if (usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &spp, sizeof(spp))) {
++		PLOG_WARNING << "SCTP set packet ceiling to " << mtu << " failed, errno=" << errno;
++		return false;
++	}
++	return true;
++}
++
++// `chunkSpace` is the SCTP chunk bytes the probe should carry, *not* a network
++// MTU: the caller has already taken the headers off. Subtracting them again here
++// made every probe test about 216 bytes less than the candidate it was meant to
++// measure, which is a false positive machine -- a candidate above the path limit
++// gets acknowledged because what actually went out was under it.
++bool SctpTransport::sendPathMtuProbe(size_t chunkSpace, uint32_t probeId) {
++	if ((chunkSpace == 0) || (probeId == 0))
++		return false;
++
++	std::lock_guard lock(mSendMutex);
++	if (state() != State::Connected)
++		return false;
++
++	struct sctp_pmtu_probe probe = {};
++	probe.spp_assoc_id = 0;
++	probe.spp_chunk_space = to_uint32(chunkSpace);
++	probe.spp_probe_id = probeId;
++	if (usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_SEND_PMTU_PROBE, &probe, sizeof(probe))) {
++		PLOG_DEBUG << "SCTP path MTU probe of " << chunkSpace
++		           << " chunk bytes not sent, errno=" << errno;
++		return false;
++	}
++	return true;
++}
++
++uint32_t SctpTransport::pathMtuProbeAckCount() {
++	std::lock_guard lock(mSendMutex);
++	if (state() != State::Connected)
++		return 0;
++
++	struct sctp_pmtu_probe probe = {};
++	probe.spp_assoc_id = 0;
++	socklen_t len = sizeof(probe);
++	if (usrsctp_getsockopt(mSock, IPPROTO_SCTP, SCTP_PMTU_PROBE_ACKED, &probe, &len))
++		return 0;
++	/* The spare request field carries the count back. */
++	return probe.spp_chunk_space;
++}
++
++uint32_t SctpTransport::acknowledgedPathMtuProbe() {
++	std::lock_guard lock(mSendMutex);
++	if (state() != State::Connected)
++		return 0;
++
++	struct sctp_pmtu_probe probe = {};
++	probe.spp_assoc_id = 0;
++	socklen_t len = sizeof(probe);
++	if (usrsctp_getsockopt(mSock, IPPROTO_SCTP, SCTP_PMTU_PROBE_ACKED, &probe, &len))
++		return 0;
++	return probe.spp_probe_id;
++}
++
+ void SctpTransport::closeStream(unsigned int stream) {
+ 	std::lock_guard lock(mSendMutex);
+ 
+diff --git a/src/impl/sctptransport.hpp b/src/impl/sctptransport.hpp
+index 769b505..7811346 100644
+--- a/src/impl/sctptransport.hpp
++++ b/src/impl/sctptransport.hpp
+@@ -52,6 +52,33 @@ public:
+ 	void closeStream(unsigned int stream);
+ 	void close();
+ 
++	// Sets the network MTU used for this association, in the same units as
++	// Configuration::mtu. Takes effect for packets built from now on; usrsctp
++	// re-fragments already-queued data when the value shrinks. Returns false if
++	// the association is not connected or usrsctp rejected the value.
++	bool setPathMtu(size_t mtu);
++
++	// Raises only the *packet* ceiling, leaving message fragmentation alone.
++	//
++	// net->mtu caps how large a packet may be; asoc->smallest_mtu drives how
++	// messages are fragmented. A path MTU probe needs the first raised so an
++	// oversized probe packet can be emitted, and needs the second left where it is
++	// so user messages are never fragmented to a size nothing has confirmed.
++	bool setPacketCeiling(size_t mtu);
++
++	// Sends one padded HEARTBEAT carrying `chunkSpace` bytes of SCTP chunks as a
++	// path MTU probe (RFC 8899). Chunk space, not a network MTU: the caller has
++	// already subtracted the headers, and taking them off twice would test a
++	// smaller size than the one being considered. `probeId` must be non-zero.
++	bool sendPathMtuProbe(size_t chunkSpace, uint32_t probeId);
++	// Id of the most recently acknowledged probe, or 0, and the monotonic count of
++	// probes acknowledged on this association. A caller confirming a candidate on a
++	// burst needs the count: a single acknowledged probe does not prove a size is
++	// usable, because one IP-fragmented datagram reassembles where a stream of them
++	// does not.
++	uint32_t acknowledgedPathMtuProbe();
++	uint32_t pathMtuProbeAckCount();
++
+ 	unsigned int maxStream() const;
+ 
+ 	// Stats
+diff --git a/src/peerconnection.cpp b/src/peerconnection.cpp
+index 135f458..9ceecb5 100644
+--- a/src/peerconnection.cpp
++++ b/src/peerconnection.cpp
+@@ -75,6 +75,41 @@ optional<Description> PeerConnection::remoteDescription() const {
+ 
+ size_t PeerConnection::remoteMaxMessageSize() const { return impl()->remoteMaxMessageSize(); }
+ 
++bool PeerConnection::setPathMtu(size_t mtu) {
++	auto transport = impl()->getSctpTransport();
++	if (!transport)
++		return false;
++	return transport->setPathMtu(mtu);
++}
++
++bool PeerConnection::setPacketCeiling(size_t mtu) {
++	auto transport = impl()->getSctpTransport();
++	if (!transport)
++		return false;
++	return transport->setPacketCeiling(mtu);
++}
++
++bool PeerConnection::sendPathMtuProbe(size_t chunkSpace, uint32_t probeId) {
++	auto transport = impl()->getSctpTransport();
++	if (!transport)
++		return false;
++	return transport->sendPathMtuProbe(chunkSpace, probeId);
++}
++
++uint32_t PeerConnection::acknowledgedPathMtuProbe() {
++	auto transport = impl()->getSctpTransport();
++	if (!transport)
++		return 0;
++	return transport->acknowledgedPathMtuProbe();
++}
++
++uint32_t PeerConnection::pathMtuProbeAckCount() {
++	auto transport = impl()->getSctpTransport();
++	if (!transport)
++		return 0;
++	return transport->pathMtuProbeAckCount();
++}
++
+ bool PeerConnection::hasMedia() const {
+ 	auto local = localDescription();
+ 	return local && local->hasAudioOrVideo();

@@ -32,6 +32,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -42,17 +43,28 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/str_split.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <boost/fiber/fiber.hpp>
 #include <boost/fiber/operations.hpp>
 #include <nlohmann/json.hpp>
+// The raw-webrtc reference row drives libdatachannel directly, with no A11
+// between it and the data channel; a11/net/webrtc_wire_stream.h only
+// forward-declares these.
+#include <rtc/candidate.hpp>
+#include <rtc/configuration.hpp>
+#include <rtc/datachannel.hpp>
+#include <rtc/global.hpp>
+#include <rtc/description.hpp>
+#include <rtc/peerconnection.hpp>
 
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
@@ -936,6 +948,11 @@ namespace {
 struct BenchPair {
   std::shared_ptr<net::WireStream> client;
   std::function<void()> close;
+  // Run after Start() has resolved on both ends, for anything that needs a live
+  // connection rather than a configured one. The live-MTU row is the only user:
+  // its whole point is that the value is applied to an association that is
+  // already up, which is not something a factory can do.
+  std::function<void()> after_start;
 };
 
 // The slot is where the factory publishes the accepted peer, so the echo can
@@ -1049,6 +1066,9 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
                  std::string(started.message()).c_str());
     pair->close();
     return {};
+  }
+  if (pair->after_start) {
+    pair->after_start();
   }
   setup.pair = std::move(pair);
   return setup;
@@ -1414,9 +1434,10 @@ std::optional<BenchPair> HttpSseStreamPair(
 // rendezvous server, but everything below it is real: ICE, DTLS, SCTP. The
 // accept runs on its own fibre because it does not return until the peer
 // connection is up, and the callback it runs in is on the negotiation path.
-std::optional<BenchPair> WebRtcPair(std::weak_ptr<net::WireStream>* peer_slot,
-                                    net::OnMessage on_server,
-                                    net::OnDone on_done) {
+std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
+                                          std::weak_ptr<net::WireStream>* peer_slot,
+                                          net::OnMessage on_server,
+                                          net::OnDone on_done) {
   const std::shared_ptr<net::SignallingService> signalling =
       net::SignallingService::Create();
   const auto shared_server =
@@ -1431,6 +1452,22 @@ std::optional<BenchPair> WebRtcPair(std::weak_ptr<net::WireStream>* peer_slot,
   if (split != nullptr) {
     configuration.channel_split_size =
         static_cast<size_t>(std::max(1024, std::atoi(split)));
+  }
+  // The SCTP path MTU, which the raw-webrtc rows establish is worth ~3x at
+  // 64 KiB and has a silent cliff above ~4 KiB. Same variable as those rows so
+  // one sweep drives both and the A11 and bare columns stay comparable.
+  const char* mtu = std::getenv("A11_BENCH_RTC_MTU");
+  const size_t requested_mtu =
+      mtu != nullptr && std::atoi(mtu) > 0 ? static_cast<size_t>(std::atoi(mtu))
+                                           : 0;
+  // `webrtc` configures the MTU at construction; `webrtc-live-mtu` leaves the
+  // configuration at the 1280 default and applies the same value *after* both
+  // ends are up. The two rows must agree, and that agreement is the only direct
+  // evidence that the libdatachannel patch does what usrsctp's setsockopt
+  // handler says it does -- a build where the patch silently failed to apply
+  // shows a live row stuck at the 1280 numbers while the configured row moves.
+  if (requested_mtu != 0 && !set_mtu_live) {
+    configuration.mtu = requested_mtu;
   }
   absl::StatusOr<std::shared_ptr<net::WebRtcWireServer>> server =
       net::WebRtcWireServer::Create(
@@ -1463,13 +1500,95 @@ std::optional<BenchPair> WebRtcPair(std::weak_ptr<net::WireStream>* peer_slot,
   }
   const std::shared_ptr<net::WebRtcWireStream> holder = *client;
   const std::shared_ptr<net::WebRtcWireServer> listener = *server;
+  std::function<void()> after_start;
+  if (!set_mtu_live && configuration.path_mtu_discovery && requested_mtu == 0) {
+    // Wait for discovery to settle before measuring. The row has always claimed
+    // to report steady-state throughput, and a search costs a probe timeout per
+    // rejected candidate -- so a row started mid-search would measure the base
+    // MTU and the search would look like it did nothing.
+    after_start = [holder] {
+      // Waits for the value to stop moving, not for it to become non-zero. The
+      // base MTU is confirmed first and every larger candidate after it, so the
+      // first non-zero reading is the *start* of the search rather than its
+      // result -- reading it as the result made a working search look like one
+      // that had settled at 1280.
+      const absl::Time limit = absl::Now() + absl::Seconds(40);
+      size_t settled = 0;
+      absl::Time stable_since = absl::Now();
+      while (absl::Now() < limit) {
+        const size_t now = holder->discovered_path_mtu();
+        if (now != settled) {
+          settled = now;
+          stable_since = absl::Now();
+        } else if (settled != 0 &&
+                   absl::Now() - stable_since > absl::Seconds(3)) {
+          break;
+        }
+        thread::SleepFor(absl::Milliseconds(20));
+      }
+      std::fprintf(stderr, "  webrtc: path MTU discovery settled at %zu\n",
+                   settled);
+    };
+  }
+  if (set_mtu_live && requested_mtu != 0) {
+    after_start = [holder, accepted, requested_mtu] {
+      // Both ends: the MTU bounds what a *sender* emits, and the round-trip row
+      // has the peer echoing the whole payload back, so setting only the client
+      // would leave half the measurement at 1280 and understate the change.
+      //
+      // Retried briefly because SetPathMtu reports FAILED_PRECONDITION until the
+      // association exists, and Start() resolving means the data channel opened,
+      // not that usrsctp has finished its handshake. A discovery loop has the
+      // same race and answers it the same way; here a bounded retry keeps the
+      // row honest instead of silently measuring an unset MTU.
+      const absl::Time limit = absl::Now() + absl::Seconds(5);
+      bool client_set = false;
+      bool peer_set = false;
+      while (absl::Now() < limit && !(client_set && peer_set)) {
+        if (!client_set) {
+          client_set = holder->SetPathMtu(requested_mtu).ok();
+        }
+        if (!peer_set) {
+          const auto peer =
+              std::dynamic_pointer_cast<net::WebRtcWireStream>(*accepted);
+          peer_set = peer != nullptr && peer->SetPathMtu(requested_mtu).ok();
+        }
+        if (!(client_set && peer_set)) {
+          thread::SleepFor(absl::Milliseconds(5));
+        }
+      }
+      if (!client_set || !peer_set) {
+        std::fprintf(stderr,
+                     "  webrtc-live-mtu: could not set %zu live (client=%d "
+                     "peer=%d) -- row measures the configured MTU\n",
+                     requested_mtu, static_cast<int>(client_set),
+                     static_cast<int>(peer_set));
+      }
+    };
+  }
   return BenchPair{.client = holder,
-                   .close = [holder, listener, accepted, signalling] {
-                     holder->HalfClose().IgnoreError();
-                     (void)holder->DrainOutgoingMessages().Await(Deadline());
-                     listener->Stop().IgnoreError();
-                     accepted->reset();
-                   }};
+                   .close =
+                       [holder, listener, accepted, signalling] {
+                         holder->HalfClose().IgnoreError();
+                         (void)holder->DrainOutgoingMessages().Await(Deadline());
+                         listener->Stop().IgnoreError();
+                         accepted->reset();
+                       },
+                   .after_start = std::move(after_start)};
+}
+
+std::optional<BenchPair> WebRtcPair(std::weak_ptr<net::WireStream>* peer_slot,
+                                    net::OnMessage on_server,
+                                    net::OnDone on_done) {
+  return WebRtcVariantPair(/*set_mtu_live=*/false, peer_slot,
+                           std::move(on_server), std::move(on_done));
+}
+
+std::optional<BenchPair> WebRtcLiveMtuPair(
+    std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
+    net::OnDone on_done) {
+  return WebRtcVariantPair(/*set_mtu_live=*/true, peer_slot,
+                           std::move(on_server), std::move(on_done));
 }
 
 }  // namespace
@@ -1780,6 +1899,275 @@ void MeasureLoopbackThroughput(Recorder& recorder, double scale,
   echo.join();
 }
 
+// The reference row the WebRTC diagnosis has been missing: a bare
+// libdatachannel data channel with no A11 in it at all.
+//
+// `raw-tcp` and `in-process` bound every other transport from below and above,
+// but nothing priced libdatachannel on its own, so "WebRTC's cost is all below
+// the channel" was a reasoned claim rather than a measured one -- and the
+// document says as much ("the one number here that has never been profiled").
+// This is the same two rows the A11 `webrtc` transport reports, over two
+// rtc::PeerConnections wired directly to each other: real ICE, real DTLS, real
+// usrsctp, no WireStream, no multiplex, no byte chunking, no msgpack. The gap
+// between this and the `webrtc` row is A11's; everything below it is not.
+void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
+                      bool pipelined, std::int64_t window) {
+  rtc::Configuration configuration;
+  // Loopback only: a STUN round trip would price the internet, not the stack.
+  configuration.maxMessageSize = 4 * 1024 * 1024;
+  // The three knobs that decide how a message becomes packets, swept here
+  // rather than on the A11 row because this row has no A11 in it: whatever they
+  // are worth here is what they are worth at all.
+  //
+  // A11_BENCH_RTC_MTU is the big one. libdatachannel disables path MTU
+  // discovery (usrsctp does not implement it) and falls back to RFC 8261's safe
+  // 1280, so every message is fragmented to 1172-byte chunks whatever the path
+  // can carry -- 57 DTLS records and 57 datagrams for one 64 KiB message.
+  const auto env_size = [](const char* name) -> std::optional<size_t> {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+      return std::nullopt;
+    }
+    const int parsed = std::atoi(value);
+    return parsed > 0 ? std::optional<size_t>(static_cast<size_t>(parsed))
+                      : std::nullopt;
+  };
+  if (const std::optional<size_t> mtu = env_size("A11_BENCH_RTC_MTU")) {
+    configuration.mtu = *mtu;
+  }
+  const std::optional<size_t> burst = env_size("A11_BENCH_RTC_MAXBURST");
+  const std::optional<size_t> cwnd = env_size("A11_BENCH_RTC_CWND");
+  if (burst.has_value() || cwnd.has_value()) {
+    try {
+      rtc::SctpSettings settings;
+      settings.recvBufferSize = 32 * 1024 * 1024;
+      settings.sendBufferSize = 32 * 1024 * 1024;
+      settings.maxBurst = burst;
+      settings.initialCongestionWindow = cwnd;
+      rtc::SetSctpSettings(std::move(settings));
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "  raw-webrtc: sctp settings: %s\n", error.what());
+    }
+  }
+
+  struct Sync {
+    thread::Mutex mu;
+    thread::CondVar cv;
+    std::int64_t arrivals = 0;
+    bool open = false;
+    bool peer_open = false;
+    bool failed = false;
+  };
+  const auto sync = std::make_shared<Sync>();
+  const auto peer_channel = std::make_shared<std::shared_ptr<rtc::DataChannel>>();
+
+  std::shared_ptr<rtc::PeerConnection> client;
+  std::shared_ptr<rtc::PeerConnection> server;
+  std::shared_ptr<rtc::DataChannel> channel;
+  try {
+    client = std::make_shared<rtc::PeerConnection>(configuration);
+    server = std::make_shared<rtc::PeerConnection>(configuration);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "  skip raw-webrtc: %s\n", error.what());
+    return;
+  }
+
+  // Signalling is a direct call in both directions: the point of the row is the
+  // data path, and a rendezvous server would add a term A11's row does not have
+  // either (its `webrtc` rows use in-process signalling for the same reason).
+  std::weak_ptr<rtc::PeerConnection> weak_server = server;
+  std::weak_ptr<rtc::PeerConnection> weak_client = client;
+  client->onLocalDescription([weak_server](rtc::Description description) {
+    if (auto peer = weak_server.lock(); peer != nullptr) {
+      peer->setRemoteDescription(std::move(description));
+    }
+  });
+  client->onLocalCandidate([weak_server](rtc::Candidate candidate) {
+    if (auto peer = weak_server.lock(); peer != nullptr) {
+      peer->addRemoteCandidate(std::move(candidate));
+    }
+  });
+  server->onLocalDescription([weak_client](rtc::Description description) {
+    if (auto peer = weak_client.lock(); peer != nullptr) {
+      peer->setRemoteDescription(std::move(description));
+    }
+  });
+  server->onLocalCandidate([weak_client](rtc::Candidate candidate) {
+    if (auto peer = weak_client.lock(); peer != nullptr) {
+      peer->addRemoteCandidate(std::move(candidate));
+    }
+  });
+
+  // The echo half, on whatever thread libdatachannel delivers on -- the same
+  // place A11's own callback runs, so the comparison keeps that term.
+  server->onDataChannel([sync, peer_channel, pipelined](
+                            std::shared_ptr<rtc::DataChannel> accepted) {
+    *peer_channel = accepted;
+    std::weak_ptr<rtc::DataChannel> weak = accepted;
+    accepted->onMessage(
+        [weak, pipelined](rtc::message_variant message) {
+          std::shared_ptr<rtc::DataChannel> reply = weak.lock();
+          if (reply == nullptr) {
+            return;
+          }
+          try {
+            if (pipelined) {
+              // One byte of credit per arriving message, exactly as the A11
+              // throughput row's peer sends, so the reverse direction does not
+              // distort the rate.
+              (void)reply->send(rtc::binary{std::byte{'y'}});
+            } else if (const rtc::binary* binary =
+                           std::get_if<rtc::binary>(&message);
+                       binary != nullptr) {
+              (void)reply->send(*binary);
+            }
+          } catch (...) {}
+        });
+    thread::MutexLock lock(&sync->mu);
+    sync->peer_open = true;
+    sync->cv.SignalAll();
+  });
+
+  try {
+    channel = client->createDataChannel("raw-bench");
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "  skip raw-webrtc: %s\n", error.what());
+    return;
+  }
+  channel->onOpen([sync] {
+    thread::MutexLock lock(&sync->mu);
+    sync->open = true;
+    sync->cv.SignalAll();
+  });
+  channel->onClosed([sync] {
+    thread::MutexLock lock(&sync->mu);
+    sync->failed = true;
+    sync->cv.SignalAll();
+  });
+  channel->onMessage([sync](rtc::message_variant) {
+    thread::MutexLock lock(&sync->mu);
+    ++sync->arrivals;
+    sync->cv.SignalAll();
+  });
+
+  const auto close = [&] {
+    try {
+      channel->resetCallbacks();
+      if (*peer_channel != nullptr) {
+        (*peer_channel)->resetCallbacks();
+      }
+      client->resetCallbacks();
+      server->resetCallbacks();
+      client->close();
+      server->close();
+    } catch (...) {}
+  };
+
+  {
+    thread::MutexLock lock(&sync->mu);
+    const absl::Time limit = absl::Now() + absl::Seconds(20);
+    while (!sync->open || !sync->peer_open) {
+      if (sync->failed || sync->cv.WaitWithDeadline(&sync->mu, limit)) {
+        std::fprintf(stderr, "  skip raw-webrtc: channel did not open\n");
+        close();
+        return;
+      }
+    }
+  }
+
+  const rtc::binary payload(static_cast<size_t>(size), std::byte{'x'});
+  bool stalled = false;
+  const auto await_arrivals = [&](std::int64_t target) {
+    thread::MutexLock lock(&sync->mu);
+    const absl::Time limit = absl::Now() + absl::Seconds(5);
+    while (sync->arrivals < target) {
+      if (sync->cv.WaitWithDeadline(&sync->mu, limit)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const auto arrival_count = [&] {
+    thread::MutexLock lock(&sync->mu);
+    return sync->arrivals;
+  };
+
+  if (!pipelined) {
+    const std::int64_t iterations = Scaled(20000, scale, 200);
+    auto metrics = Latency(
+        [&](std::int64_t) {
+          if (stalled) {
+            return;
+          }
+          const std::int64_t before = arrival_count();
+          try {
+            (void)channel->send(payload);
+          } catch (...) {
+            stalled = true;
+            return;
+          }
+          if (!await_arrivals(before + 1)) {
+            stalled = true;
+          }
+        },
+        iterations, iterations / 10);
+    if (!stalled) {
+      metrics["mib_per_s"] =
+          metrics["ops_per_s"] * static_cast<double>(size) / 1048576.0;
+      recorder.Add(
+          {.suite = "wire",
+           .name = "message_round_trip",
+           .metrics = metrics,
+           .params = {{"transport", "raw-webrtc"}, {"size", Human(size)}}});
+    } else {
+      std::fprintf(stderr, "  skip raw-webrtc round trip at %s: no echo\n",
+                   Human(size).c_str());
+    }
+    close();
+    return;
+  }
+
+  const std::int64_t messages = Scaled(4000, scale, 200);
+  const std::int64_t warmup = std::min<std::int64_t>(messages / 10, 200);
+  const auto pump = [&](std::int64_t count) {
+    const std::int64_t base = arrival_count();
+    for (std::int64_t sent = 0; sent < count; ++sent) {
+      if (sent - (arrival_count() - base) >= window &&
+          !await_arrivals(base + sent - window + 1)) {
+        stalled = true;
+        return;
+      }
+      try {
+        (void)channel->send(payload);
+      } catch (...) {
+        stalled = true;
+        return;
+      }
+    }
+    if (!await_arrivals(base + count)) {
+      stalled = true;
+    }
+  };
+  if (warmup > 0) {
+    pump(warmup);
+  }
+  auto metrics = Throughput([&](std::int64_t) { pump(messages); }, 1, 0,
+                            messages, messages * size);
+  if (!stalled) {
+    metrics["ops_per_s"] = metrics["items_per_s"];
+    recorder.Add({.suite = "wire",
+                  .name = "stream_throughput",
+                  .metrics = metrics,
+                  .params = {{"transport", "raw-webrtc"},
+                             {"size", Human(size)},
+                             {"window", absl::StrCat(window)}}});
+  } else {
+    std::fprintf(stderr, "  skip raw-webrtc throughput at %s: no credit\n",
+                 Human(size).c_str());
+  }
+  close();
+}
+
 void WireSuite(Recorder& recorder, double scale) {
   using Factory = std::optional<BenchPair> (*)(std::weak_ptr<net::WireStream>*,
                                                net::OnMessage, net::OnDone);
@@ -1788,8 +2176,20 @@ void WireSuite(Recorder& recorder, double scale) {
       {"websocket", WebSocketPair},
       {"sse", HttpSsePair},
       {"sse-stream", HttpSseStreamPair},
-      {"webrtc", WebRtcPair}};
+      {"webrtc", WebRtcPair},
+      {"webrtc-live-mtu", WebRtcLiveMtuPair}};
+  // A11_BENCH_TRANSPORTS restricts the row set to a comma-separated subset.
+  // Iterating on one transport otherwise pays for all five, and the ones that
+  // are not being changed are the slowest.
+  const char* only = std::getenv("A11_BENCH_TRANSPORTS");
+  const std::vector<std::string> selected =
+      only == nullptr ? std::vector<std::string>{}
+                      : absl::StrSplit(only, ',', absl::SkipEmpty());
   for (const auto& [name, factory] : transports) {
+    if (!selected.empty() &&
+        std::find(selected.begin(), selected.end(), name) == selected.end()) {
+      continue;
+    }
     for (const std::int64_t size : {64, 4096, 65536}) {
       MeasureRoundTrip(recorder, scale, name, size, factory);
     }
@@ -1804,6 +2204,15 @@ void WireSuite(Recorder& recorder, double scale) {
   }
   for (const std::int64_t size : {64, 65536}) {
     MeasureLoopbackThroughput(recorder, scale, size, 32);
+  }
+  if (selected.empty() || std::find(selected.begin(), selected.end(),
+                                    "raw-webrtc") != selected.end()) {
+    for (const std::int64_t size : {64, 4096, 65536}) {
+      MeasureRawWebRtc(recorder, scale, size, /*pipelined=*/false, 0);
+    }
+    for (const std::int64_t size : {64, 65536}) {
+      MeasureRawWebRtc(recorder, scale, size, /*pipelined=*/true, 32);
+    }
   }
   MeasureUvCrossing(recorder, scale);
 }
@@ -1830,6 +2239,17 @@ const std::vector<std::pair<std::string, SuiteFn>>& Suites() {
 }  // namespace a11::bench
 
 int main(int argc, char** argv) {
+  // Ignore SIGPIPE, or the whole run dies inside the `wire` suite on Linux.
+  //
+  // The raw-tcp reference rows are bare sockets, and a `write` to one whose
+  // peer has closed raises SIGPIPE, whose default disposition terminates the
+  // process. macOS never showed it and Linux did on the first run, at exit
+  // status 141 (128 + 13) with the `wire` header printed and nothing under it
+  // -- indistinguishable from a suite that produced no rows, which is exactly
+  // the failure the per-suite reporting above exists to contain. A failed write
+  // is reported by `errno` at the call site; the signal adds nothing.
+  std::signal(SIGPIPE, SIG_IGN);
+
   double scale = 1.0;
   std::string json_path;
   std::vector<std::string> chosen;

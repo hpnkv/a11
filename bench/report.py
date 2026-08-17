@@ -3,9 +3,17 @@
 """Turning results into something a person reads, and into a diff.
 
 The column set is fixed rather than derived: a table whose columns change with
-whatever the last benchmark happened to report is unreadable, and the six
-columns here (rate, three percentiles, byte rate, memory) cover every metric
-the suites emit. Anything else lands in the note.
+whatever the last benchmark happened to report is unreadable, and the columns
+here (rate, percentiles, byte rate, memory, and the two server-cost figures)
+cover every metric a reader needs in the table. Anything else lands in the note.
+
+Three of these columns are only ever populated by the two-host suites, and they
+are columns rather than notes on purpose. `p99.9 us` is the figure a server is
+judged on and hiding it in prose invites reading the p50 instead. `cores` and
+`cpu us/op` come from the *server's* own `getrusage`, and without them a
+cross-machine rate comparison is not a comparison: a host with more cores
+delivering more operations per second has said nothing until the per-operation
+CPU is beside it.
 """
 
 from __future__ import annotations
@@ -20,10 +28,13 @@ _COLUMNS: list[tuple[str, str]] = [
     ("items/s", "items_per_s"),
     ("p50 us", "p50_us"),
     ("p99 us", "p99_us"),
+    ("p99.9 us", "p999_us"),
     ("MiB/s", "mib_per_s"),
     ("bytes ea", "bytes_each"),
     ("tax us", "dispatch_tax_us"),
     ("inflate", "inflation"),
+    ("cores", "server_cores_busy"),
+    ("cpu us/op", "server_cpu_us_per_op"),
 ]
 
 
@@ -123,11 +134,7 @@ def compare(
             change = (value - was) / was
             if abs(change) < threshold:
                 continue
-            better = (
-                change > 0
-                if metric in _HIGHER_IS_BETTER
-                else change < 0
-            )
+            better = change > 0 if metric in _HIGHER_IS_BETTER else change < 0
             mark = "better" if better else "WORSE "
             lines.append(
                 f"  {mark}  {result.key} {metric}: "

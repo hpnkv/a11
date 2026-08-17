@@ -244,6 +244,34 @@ async def memory_slope(
 # --------------------------------------------------------------------------
 
 
+def clock_call_ns(iterations: int = 200_000) -> float:
+    """What one `perf_counter_ns()` call costs on this machine.
+
+    Recorded with every run, and it is not a curiosity. `latency` brackets each
+    operation with two of these, so roughly one call's cost lands *inside* every
+    sample it takes -- which is invisible at 42ns and ruinous at 3us.
+
+    A Linux guest whose only available clocksource is `acpi_pm` (no usable TSC
+    exposed by the hypervisor -- check
+    `/sys/devices/system/clocksource/clocksource0/available_clocksource`) reads
+    the clock through a VM exit rather than the vDSO, and it measured **3047ns
+    per call** on exactly such a host: 72x a laptop's 42ns. Every `latency` row
+    on that host is inflated by about 3us, which made a bare Python coroutine
+    look 21x slower than on an Apple laptop whose integer and float throughput
+    is within 3% of it. Nothing about A11 was different; the ruler was.
+
+    `throughput`, `throughput_sync` and `pipelined` read the clock twice for a
+    whole batch and are unaffected, so on a host like that they are the only
+    comparable rows. There is no workaround from inside the guest -- a coarse
+    clock has millisecond resolution and no other source is offered -- so the
+    honest response is to record the number, warn, and read the throughput rows.
+    """
+    started = time.perf_counter_ns()
+    for _ in range(iterations):
+        time.perf_counter_ns()
+    return (time.perf_counter_ns() - started) / iterations
+
+
 def percentiles(samples_ns: Sequence[float]) -> dict[str, float]:
     """p50/p90/p99/max plus mean, in microseconds, from nanosecond samples."""
     if not samples_ns:
@@ -411,17 +439,12 @@ async def pipelined(
             await _drain(operation(issued))
         else:
             await asyncio.gather(
-                *(
-                    _drain(operation(issued + offset))
-                    for offset in range(batch)
-                )
+                *(_drain(operation(issued + offset)) for offset in range(batch))
             )
         issued += batch
         remaining -= batch
     elapsed_ns = time.perf_counter_ns() - started
-    metrics = _rate_metrics(
-        elapsed_ns, iterations, per_op_items, per_op_bytes
-    )
+    metrics = _rate_metrics(elapsed_ns, iterations, per_op_items, per_op_bytes)
     metrics["window"] = float(window)
     return metrics
 
@@ -623,6 +646,22 @@ def _native_extension_build() -> dict[str, Any]:
         return {"path": "unknown"}
 
 
+def _clocksource() -> str:
+    """The kernel's chosen clocksource, on a platform that names one.
+
+    `tsc` is the fast one. `acpi_pm`, `hpet` or `xen` mean the clock is read
+    through something slower than the vDSO, and `clock_call_ns` will say how
+    much slower.
+    """
+    try:
+        with open(
+            "/sys/devices/system/clocksource/clocksource0/current_clocksource"
+        ) as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
 def environment() -> dict[str, Any]:
     """What a number means only in the context of."""
     import a11
@@ -636,6 +675,11 @@ def environment() -> dict[str, Any]:
         "a11": getattr(a11, "__version__", "unknown"),
         "revision": _source_revision(),
         "native": _native_extension_build(),
+        # The ruler, measured. See `clock_call_ns`: a host where this is
+        # microseconds cannot be compared with one where it is nanoseconds on
+        # any `latency` row, and nothing else in the record would have said so.
+        "clock_call_ns": round(clock_call_ns(), 1),
+        "clocksource": _clocksource(),
     }
 
 
@@ -694,9 +738,7 @@ async def run_selected(
         except Exception as failure:  # noqa: BLE001 - one bad bench, not all
             import traceback
 
-            print(
-                f"  FAIL {entry.suite}/{entry.name}: {failure!r}", flush=True
-            )
+            print(f"  FAIL {entry.suite}/{entry.name}: {failure!r}", flush=True)
             traceback.print_exc()
             continue
         for result in produced or ():

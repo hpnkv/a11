@@ -482,11 +482,66 @@ absl::Status ChannelWireStream::Abort(absl::Status status) {
   if (status.ok()) {
     return absl::InvalidArgumentError("Abort status must be non-OK");
   }
+  bool upgrade = false;
   {
     thread::MutexLock lock(&state_->mu);
-    if (state_->local_end != End::kNone || state_->finished) {
+    if (state_->finished || state_->local_end == End::kAbort) {
       return absl::OkStatus();
     }
+    // Aborting an already half-closed stream used to return OK and do nothing,
+    // which cost one file descriptor per connection and could not be observed
+    // from the outside.
+    //
+    // A half-closed connection is still a connection: the write half is shut,
+    // the peer's is open, and the socket is legitimately held until the peer
+    // closes too. So the only way for a client that is going away to release
+    // the socket is to abort -- and this method silently refused to, because
+    // `local_end` was no longer kNone. Measured on Linux, 120 connect/dispatch/
+    // disconnect cycles against a real Service, sampling the server's
+    // /proc/<pid>/fd by kind: abort() alone held flat at 16 descriptors,
+    // half_close() plus drain retained exactly +1.000 per cycle, and
+    // half_close() then abort() retained the same +1.000 -- all of them
+    // ESTABLISHED, none released after twelve seconds of settling. See
+    // `bench/fdprobe.py`, and `FINDINGS.md` item 0, whose "server-side teardown
+    // lags under load" reading this replaces: nothing lagged, the abort was a
+    // no-op, and the growth was 1:1 with half-closed connections rather than
+    // time-dependent.
+    //
+    // Upgrading locally rather than sending, and `can_communicate=false` is the
+    // load-bearing part. The Sender fibre `return`s after it publishes *any*
+    // terminal message (see the `outbound.end != End::kNone` branch), so once a
+    // half-close has gone out there is nobody left to carry an abort frame:
+    // queueing one would leave `local_end_sent` at kHalfClose, MaybeFinish
+    // would never fire, and this fix would silently do nothing -- the same
+    // failure it is fixing, one layer down.
+    //
+    // So the abort is local. ForceAbort promotes `local_end` to kAbort, drops
+    // whatever is still queued (which is what abort has always meant --
+    // "discarding buffered work" -- and a caller that wanted its queue
+    // delivered has DrainOutgoingMessages), and finishes; Finish closes the
+    // channel because the status is non-OK, which is what returns the
+    // descriptor. The peer learns by its connection ending, which is what a
+    // client going away looks like on any transport. It therefore sees a
+    // transport-level end rather than this status, and that is honest: the
+    // status describes why *this* side left, and nothing on the wire could
+    // carry it after the half-close.
+    upgrade = state_->local_end == End::kHalfClose;
+  }
+  if (upgrade) {
+    // On a fibre, not here. ForceAbort with nothing to send finishes the stream
+    // in the same frame, and finishing runs `on_done` -- the session's stream
+    // teardown, and through a binding a callback that needs the interpreter.
+    // The ordinary abort path never did that on the caller's thread: it queues a
+    // message and the *sender* fibre finishes. Running it inline instead
+    // deadlocked a Python caller against its own loop, because the binding
+    // releases the GIL to call this and the done callback then waits to
+    // re-acquire it. Abort has always been "accepted", not "completed", so
+    // handing it to a fibre costs the caller nothing it was promised.
+    std::shared_ptr<State> state = state_;
+    a11::Schedule([state = std::move(state), status = std::move(status)]() {
+      ForceAbort(state, status, /*can_communicate=*/false);
+    });
+    return absl::OkStatus();
   }
   ABSL_ASSIGN_OR_RETURN(std::string packed, data::PackStatus(status));
   data::WireMessage message;
@@ -1010,7 +1065,15 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
   // it; error paths still close immediately. The destructor provides the
   // deterministic RAII close.
   if (close_channel) {
-    (void)state->channel->Close();
+    // `close_channel` is only ever set because the status is non-OK, so this is
+    // the abort path and a graceful close is the wrong operation: over HTTP it
+    // half-closes a connection whose other half the peer still holds, and the
+    // socket survives on both ends (see BinaryChannel::Abort). Measured: the
+    // half-close-then-abort sequence went from +1.000 descriptors per
+    // connection on each side to flat.
+    (void)state->channel->Abort(span_status.ok()
+                                    ? absl::CancelledError("WireStream aborted")
+                                    : span_status);
   }
   if (callback) {
     const absl::Status callback_status = callback().Await().status();

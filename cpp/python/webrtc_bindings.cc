@@ -466,6 +466,17 @@ void BindWebRtc(py::module_& module) {
       .def_readwrite("channel_split_size",
                      &net::WebRtcConfiguration::channel_split_size,
                      "Size at which A11 fragments large logical messages.")
+      .def_readwrite(
+          "mtu", &net::WebRtcConfiguration::mtu,
+          "Network MTU in bytes that SCTP builds packets to; None means 1280. "
+          "The largest performance knob this transport has: path MTU discovery "
+          "is unavailable, so the default fragments every message into "
+          "1172-byte chunks regardless of what the path can carry, and raising "
+          "it to 4096 is worth about 3x at 64 KiB (131 -> 368 MiB/s on Linux "
+          "loopback). Above roughly 4 KiB, messages that need more than one "
+          "chunk silently stop arriving while small ones keep flowing, so set "
+          "it only for a peer whose end-to-end path MTU is known -- leave it "
+          "None for a browser or an internet peer.")
       .def_readwrite("enable_ice_udp_mux",
                      &net::WebRtcConfiguration::enable_ice_udp_mux,
                      "Whether to multiplex ICE traffic over a single UDP port.")

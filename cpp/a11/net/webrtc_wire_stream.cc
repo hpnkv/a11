@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -31,6 +32,7 @@
 #include <rtc/description.hpp>
 #include <rtc/global.hpp>
 #include <rtc/peerconnection.hpp>
+#include <rtc/rtc.h>
 
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
@@ -38,6 +40,7 @@
 #include "a11/net/channel_wire_stream.h"
 #include "a11/net/internal/binary_channel.h"
 #include "a11/net/internal/multiplexed_binary_channel.h"
+#include "a11/net/internal/path_mtu.h"
 #include "a11/net/signalling.h"
 #include "a11/net/wire_stream.h"
 #include "thread/boost_primitives.h"
@@ -66,6 +69,18 @@ absl::Status InitializeSctp() {
       rtc::SctpSettings settings;
       settings.recvBufferSize = 32 * 1024 * 1024;
       settings.sendBufferSize = 32 * 1024 * 1024;
+      // Max burst is how many MTUs SCTP may put on the wire per send
+      // opportunity, and libdatachannel's default of 10 is worth ~10% at
+      // 64 KiB: on the bare data channel, raising it took loopback throughput
+      // from 133 to 146 MiB/s on Linux, monotonically across 10/32/64/128.
+      // Unlike WebRtcConfiguration::mtu this is a property of the sender rather
+      // than of the path, so there is no value at which a peer stops being
+      // reachable and no reason to leave it at the smaller number. (The initial
+      // congestion window, swept over 10/32/100 in the same run, moved nothing
+      // -- these benchmarks are long enough that the window has long since
+      // opened, so it is startup latency rather than throughput and is left
+      // alone.)
+      settings.maxBurst = 128;
       rtc::SetSctpSettings(std::move(settings));
       status = absl::OkStatus();
     } catch (const std::exception& error) {
@@ -95,7 +110,25 @@ struct ClientPeerContext {
   std::shared_ptr<rtc::DataChannel> data_channel ABSL_GUARDED_BY(mu);
   absl::Status status ABSL_GUARDED_BY(mu);
   bool failed ABSL_GUARDED_BY(mu) = false;
+  // Set once the stream exists, so the answer handler can hand it a probe
+  // channel. Weak: the application owns the stream's lifetime, and a context
+  // captured by libdatachannel callbacks must not extend it.
+  std::weak_ptr<WebRtcWireStream> stream ABSL_GUARDED_BY(mu);
+  std::weak_ptr<internal::MultiplexedBinaryChannel> multiplex
+      ABSL_GUARDED_BY(mu);
+  WebRtcConfiguration configuration;
+  bool probe_channel_opened ABSL_GUARDED_BY(mu) = false;
 };
+
+// Opens the probe channel, once, after the peer has said it understands one.
+//
+// Deferred to the answer rather than done at dial time on purpose. A client
+// cannot know at dial time whether the peer supports probing, and a probe channel
+// opened unconditionally would be admitted into an older server's multiplex --
+// which would then send application data over it that this side would silently
+// drop as "not a probe frame". Creating a data channel after the association is
+// up needs no renegotiation (DCEP carries it in band), which is the same
+// mechanism the multiplex's own replenishment already relies on.
 
 void FailClient(const std::shared_ptr<ClientPeerContext>& context,
                 absl::Status status) {
@@ -259,6 +292,20 @@ absl::Status WebRtcConfiguration::Validate() const {
     return absl::InvalidArgumentError(
         "WebRTC channel_split_size exceeds max_message_size");
   }
+  // 576 is the IPv4 minimum reassembly buffer; below it the headers
+  // libdatachannel subtracts (12 + 48 + 8 + 40) leave no room for a chunk.
+  if (path_mtu_discovery && max_discovered_mtu < kWebRtcBaseMtu) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "WebRTC max_discovered_mtu must be at least the base MTU of ",
+        kWebRtcBaseMtu));
+  }
+  if (path_mtu_discovery && probe_timeout <= absl::ZeroDuration()) {
+    return absl::InvalidArgumentError("WebRTC probe_timeout must be positive");
+  }
+  if (mtu.has_value() && *mtu < 576) {
+    return absl::InvalidArgumentError(
+        "WebRTC mtu must be at least 576 or absent");
+  }
   if (preferred_port_range.has_value() &&
       preferred_port_range->first > preferred_port_range->second) {
     return absl::InvalidArgumentError(
@@ -280,6 +327,23 @@ absl::Status WebRtcConfiguration::Validate() const {
   return absl::OkStatus();
 }
 
+internal::PathMtuOptions BuildPathMtuOptions(
+    const WebRtcConfiguration& configuration) {
+  internal::PathMtuOptions options;
+  // The configured MTU is the *floor* once discovery is on: a caller that pinned
+  // a value knows something about the path, and the search should start from that
+  // knowledge rather than throw it away and re-derive 1280.
+  options.base_mtu =
+      std::max(configuration.mtu.value_or(kWebRtcBaseMtu), kWebRtcBaseMtu);
+  options.min_mtu = kWebRtcMinMtu;
+  options.max_mtu =
+      std::max(configuration.max_discovered_mtu, options.base_mtu);
+  options.probe_timeout = configuration.probe_timeout;
+  options.raise_timer = configuration.path_mtu_raise_interval;
+  options.startup_retry = configuration.path_mtu_startup_retry;
+  return options;
+}
+
 absl::StatusOr<rtc::Configuration> BuildLibDataChannelConfiguration(
     const WebRtcConfiguration& configuration) {
   ABSL_RETURN_IF_ERROR(configuration.Validate());
@@ -287,6 +351,7 @@ absl::StatusOr<rtc::Configuration> BuildLibDataChannelConfiguration(
   try {
     rtc::Configuration result;
     result.maxMessageSize = configuration.max_message_size;
+    result.mtu = configuration.mtu;
     result.enableIceUdpMux = configuration.enable_ice_udp_mux;
     result.bindAddress = configuration.bind_address;
     if (configuration.preferred_port_range.has_value()) {
@@ -324,7 +389,7 @@ WebRtcWireStream::BuildMultiplexedStream(
     std::shared_ptr<rtc::PeerConnection> connection,
     std::shared_ptr<SignallingTransport> signalling_endpoint, std::string id,
     ChannelEndpointRole role, WireStreamOptions options,
-    OpenOperation open_operation, size_t split_size) {
+    OpenOperation open_operation, size_t split_size, size_t configured_mtu) {
   if (channel == nullptr) {
     return absl::InvalidArgumentError("WebRTC channel must not be null");
   }
@@ -342,7 +407,7 @@ WebRtcWireStream::BuildMultiplexedStream(
                 ChannelFramingOptions{.split_size = split_size}));
   return std::make_shared<WebRtcWireStream>(
       ConstructorToken{}, std::move(state), std::move(primary_channel),
-      std::move(connection), std::move(signalling_endpoint));
+      std::move(connection), std::move(signalling_endpoint), configured_mtu);
 }
 
 absl::StatusOr<std::shared_ptr<WebRtcWireStream>> WebRtcWireStream::Create(
@@ -433,6 +498,10 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
   }
   auto context = std::make_shared<ClientPeerContext>(
       identity, std::move(peer_identity), signalling, connection);
+  {
+    thread::MutexLock lock(&context->mu);
+    context->configuration = configuration;
+  }
   std::weak_ptr<ClientPeerContext> weak = context;
   absl::Status validation =
       signalling->SetOnMessage([weak](SignallingMessage message) {
@@ -540,6 +609,10 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
         internal::MultiplexedBinaryChannel::Create(
             std::move(members), std::move(factory),
             internal::MultiplexedChannelOptions{.target_channels = desired});
+    // Kept for the probe path, which pauses it around each candidate. The
+    // BuildMultiplexedStream call below moves the owning pointer away.
+    const std::shared_ptr<internal::MultiplexedBinaryChannel>
+        multiplex_for_probing = multiplex;
     OpenOperation open = [context]() {
       return ClientStatus(context);
     };
@@ -547,10 +620,22 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
         BuildMultiplexedStream(
             std::move(multiplex), data_channel, connection, context->endpoint,
             std::move(id), ChannelEndpointRole::kClient, options,
-            std::move(open), configuration.channel_split_size);
+            std::move(open), configuration.channel_split_size,
+            configuration.mtu.value_or(kWebRtcBaseMtu));
     if (!stream.ok()) {
       FailClient(context, stream.status());
       return stream.status();
+    }
+    {
+      thread::MutexLock lock(&context->mu);
+      context->stream = *stream;
+      context->multiplex = multiplex_for_probing;
+    }
+    // Each side discovers its own *send* direction: an MTU bounds what a sender
+    // emits, so both ends search independently and neither needs the other to do
+    // anything but be a conforming SCTP peer.
+    if (configuration.path_mtu_discovery) {
+      (*stream)->StartPathMtuDiscovery(configuration, multiplex_for_probing);
     }
     return stream;
   } catch (const std::exception& error) {
@@ -587,6 +672,172 @@ std::shared_ptr<SignallingTransport> WebRtcWireStream::signalling_endpoint()
   return signalling_endpoint_;
 }
 
+// If libdatachannel's fallback ever stops being the IPv6 minimum, A11's idea of
+// "the size that needs no evidence" has to move with it -- and silently
+// disagreeing would mean probing upward from a base the peer never agreed to.
+static_assert(kWebRtcBaseMtu == RTC_DEFAULT_MTU,
+              "kWebRtcBaseMtu must match libdatachannel's RTC_DEFAULT_MTU");
+
+absl::Status WebRtcWireStream::SetPathMtu(size_t mtu) {
+  if (mtu < kWebRtcMinMtu) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "WebRTC path MTU must be at least ", kWebRtcMinMtu, ", got ", mtu));
+  }
+  if (connection_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "WebRTC stream has no peer connection");
+  }
+  bool applied = false;
+  try {
+    applied = connection_->setPathMtu(mtu);
+  } catch (const std::exception& error) {
+    return ExternalException(error, "Setting the WebRTC path MTU");
+  } catch (...) {
+    return absl::UnknownError(
+        "Setting the WebRTC path MTU raised a non-standard exception");
+  }
+  if (!applied) {
+    // No association yet, or usrsctp refused. Deliberately not an error about
+    // the *path*: a caller searching for a working MTU must be able to tell
+    // "the stack would not take this" from "the path dropped this", and only
+    // the second is evidence about the network.
+    return absl::FailedPreconditionError(
+        absl::StrCat("WebRTC association would not accept a path MTU of ", mtu,
+                     " (not connected yet, or out of range)"));
+  }
+  {
+    thread::MutexLock lock(&path_mtu_mu_);
+    path_mtu_ = mtu;
+  }
+  return absl::OkStatus();
+}
+
+void WebRtcWireStream::StartPathMtuDiscovery(
+    const WebRtcConfiguration& configuration,
+    const std::shared_ptr<internal::MultiplexedBinaryChannel>& stream_data) {
+  if (connection_ == nullptr) {
+    return;
+  }
+  std::shared_ptr<internal::PathMtuDiscovery> discovery;
+  {
+    thread::MutexLock lock(&path_mtu_mu_);
+    if (discovery_ != nullptr) {
+      return;
+    }
+  }
+  const std::shared_ptr<rtc::PeerConnection> connection = connection_;
+  const auto next_probe_id = std::make_shared<std::atomic<std::uint32_t>>(1);
+  internal::PathMtuProber prober{
+      // Only ever called with a size a probe has *confirmed*, so this applies the
+      // association MTU for real -- fragmentation and all. Probing itself changes
+      // nothing: the probe packet carries its own ceiling for the instant it is
+      // emitted (see the usrsctp patch), so application traffic never sees a size
+      // the path has not acknowledged and there is nothing to hold back.
+      .apply = [connection](size_t mtu) -> absl::Status {
+        bool ok = false;
+        try {
+          ok = connection->setPathMtu(mtu);
+        } catch (...) {
+          ok = false;
+        }
+        return ok ? absl::OkStatus()
+                  : absl::FailedPreconditionError(
+                        "WebRTC association would not take a path MTU");
+      },
+      .probe_burst =
+          [connection, next_probe_id](
+              size_t payload, int count,
+              absl::Time deadline) -> std::optional<int> {
+            // `payload` is the chunk space the search wants on the wire. A padded
+            // HEARTBEAT of that size is the probe: any conforming peer answers it,
+            // and the stack needs no MTU change to send one, so nothing about the
+            // stream is disturbed.
+            //
+            // Sent back to back without waiting for each answer, so the burst is in
+            // flight together. That is the point: probes that wait for each other
+            // are each isolated, and a size that survives only in isolation is
+            // exactly the false positive this has to reject.
+            const std::uint32_t before = connection->pathMtuProbeAckCount();
+            std::uint32_t last = 0;
+            int sent = 0;
+            for (int index = 0; index < count; ++index) {
+              const std::uint32_t id =
+                  next_probe_id->fetch_add(1, std::memory_order_relaxed);
+              bool ok = false;
+              try {
+                ok = connection->sendPathMtuProbe(payload, id);
+              } catch (...) {
+                ok = false;
+              }
+              if (!ok) {
+                break;
+              }
+              last = id;
+              ++sent;
+            }
+            if (sent == 0) {
+              return std::nullopt;  // No association yet: no evidence.
+            }
+            // Polled: the acknowledgement is consumed by SCTP itself, so there is
+            // nothing to wait on. Requiring the *last* id as well as the count is
+            // what stops a late answer from an earlier burst standing in for a
+            // probe of this one.
+            while (absl::Now() < deadline) {
+              const std::uint32_t acked = connection->pathMtuProbeAckCount();
+              if ((acked - before >= static_cast<std::uint32_t>(sent)) &&
+                  (connection->acknowledgedPathMtuProbe() == last)) {
+                return sent;
+              }
+              thread::SleepFor(absl::Milliseconds(1));
+            }
+            const std::uint32_t acked = connection->pathMtuProbeAckCount();
+            return static_cast<int>(std::min<std::uint32_t>(
+                acked - before, static_cast<std::uint32_t>(sent)));
+          },
+  };
+  discovery = std::make_shared<internal::PathMtuDiscovery>(
+      BuildPathMtuOptions(configuration), std::move(prober));
+  {
+    thread::MutexLock lock(&path_mtu_mu_);
+    if (discovery_ != nullptr) {
+      return;
+    }
+    discovery_ = discovery;
+  }
+  // The safety net for a size that was confirmed and later stops working -- a path
+  // that changed, or a burst of probes that was luckier than a stream of data. A run
+  // of send failures drops the association back to the base MTU and re-searches;
+  // without this the search has fall-back logic that nothing ever triggers.
+  if (stream_data != nullptr) {
+    std::weak_ptr<internal::PathMtuDiscovery> weak = discovery;
+    stream_data->SetSendOutcomeObserver([weak](bool succeeded) {
+      if (auto search = weak.lock(); search != nullptr) {
+        if (succeeded) {
+          search->ReportSendSuccess();
+        } else {
+          search->ReportSendFailure();
+        }
+      }
+    });
+  }
+  a11::Schedule(
+      [discovery = std::move(discovery)]() mutable { discovery->Run(); });
+}
+
+size_t WebRtcWireStream::discovered_path_mtu() const {
+  std::shared_ptr<internal::PathMtuDiscovery> discovery;
+  {
+    thread::MutexLock lock(&path_mtu_mu_);
+    discovery = discovery_;
+  }
+  return discovery != nullptr ? discovery->confirmed_mtu() : 0;
+}
+
+size_t WebRtcWireStream::current_path_mtu() const {
+  thread::MutexLock lock(&path_mtu_mu_);
+  return path_mtu_;
+}
+
 namespace {
 
 struct ServerPeerContext {
@@ -605,6 +856,7 @@ struct ServerPeerContext {
       ABSL_GUARDED_BY(mu);
   absl::Status status ABSL_GUARDED_BY(mu);
   bool failed ABSL_GUARDED_BY(mu) = false;
+  std::weak_ptr<WebRtcWireStream> stream ABSL_GUARDED_BY(mu);
 };
 
 absl::Status ServerPeerStatus(
@@ -899,13 +1151,25 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
       };
       absl::StatusOr<std::shared_ptr<WebRtcWireStream>> stream =
           WebRtcWireStream::BuildMultiplexedStream(
-              std::move(multiplex), channel, context->connection,
-              std::move(endpoint), std::move(id), ChannelEndpointRole::kServer,
-              options, std::move(open), configuration.channel_split_size);
+              multiplex, channel, context->connection, std::move(endpoint),
+              std::move(id), ChannelEndpointRole::kServer, options,
+              std::move(open), configuration.channel_split_size,
+              configuration.mtu.value_or(kWebRtcBaseMtu));
       if (!stream.ok()) {
         ReportPeerError(state, context->identity, stream.status());
         return;
       }
+      {
+        thread::MutexLock lock(&context->mu);
+        context->stream = *stream;
+      }
+      // Discovery needs nothing from the peer: a probe is a padded SCTP
+      // HEARTBEAT, which any conforming peer answers on its own. No channel, no
+      // capability, no responder.
+      if (configuration.path_mtu_discovery) {
+        (*stream)->StartPathMtuDiscovery(configuration, multiplex);
+      }
+
       a11::Schedule(
           [callback = std::move(callback), stream = std::move(*stream)]() {
             absl::Status status;

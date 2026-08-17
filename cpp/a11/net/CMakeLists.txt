@@ -22,6 +22,7 @@ set(A11_NET_HTTP_SOURCES
 
 set(A11_NET_WEBRTC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/multiplexed_binary_channel.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/path_mtu.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/rtc_binary_channel.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/signalling.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/webrtc_wire_stream.cc

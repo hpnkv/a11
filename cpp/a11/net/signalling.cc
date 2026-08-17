@@ -99,6 +99,9 @@ absl::StatusOr<std::string> SignallingMessage::ToJson() const {
       case SignallingMessageType::kDescription:
         value["description"] = description;
         value["description_type"] = description_type;
+        if (!capabilities.empty()) {
+          value["capabilities"] = capabilities;
+        }
         // Compatibility with ActionEngine's signalling envelope.
         value["type"] = description_type;
         value["id"] = recipient;
@@ -160,6 +163,17 @@ absl::StatusOr<SignallingMessage> SignallingMessage::FromJson(
           description_type != value.end() && description_type->is_string()
               ? description_type->get<std::string>()
               : type_name;
+      // Unknown tokens are kept: this side does not decide what a token means,
+      // and dropping them here would silently break a future capability whose
+      // handler lives elsewhere.
+      if (const auto found = value.find("capabilities");
+          found != value.end() && found->is_array()) {
+        for (const auto& token : *found) {
+          if (token.is_string()) {
+            result.capabilities.push_back(token.get<std::string>());
+          }
+        }
+      }
     } else if (result.type == SignallingMessageType::kCandidate) {
       const auto candidate = value.find("candidate");
       if (candidate != value.end() && candidate->is_string()) {

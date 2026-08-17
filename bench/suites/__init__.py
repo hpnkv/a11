@@ -18,6 +18,11 @@ SUITE_MODULES = (
     "service",
     "flow",
     "workload",
+    # Both need a `bench.peer` agent on another host and skip without one, so
+    # they go last: a default run on one machine ends with two skip lines
+    # rather than starting with them.
+    "link",
+    "server",
 )
 
 

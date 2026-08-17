@@ -1,0 +1,620 @@
+Allow the association MTU to be raised, and add a padded path MTU probe.
+
+Two related gaps blocked packetization-layer path MTU discovery (RFC 8899) on top
+of usrsctp. Both are here because neither is useful without the other.
+
+1. The association MTU could only be reduced.
+
+   usrsctp derives its fragmentation point from asoc->smallest_mtu
+   (sctp_get_frag_point(), recomputed on every send), and
+   sctp_pathmtu_adjustment() -- its only writer -- asserted
+   `mtu < asoc->smallest_mtu`: "Currently only reducing association MTU
+   supported". The SCTP_PEER_ADDR_PARAMS handler matched, testing
+   `net->mtu < asoc->smallest_mtu` before adjusting.
+
+   Measured through libdatachannel on loopback, raising the MTU live therefore
+   moved only chunk *bundling*: a 64 KiB stream went 54 -> 107 MiB/s, against
+   152 MiB/s for the same value set before the association came up. And a search
+   that can only reduce cannot binary-search at all, because confirming a size has
+   to be followed by trying a larger one.
+
+   sctp_pathmtu_adjustment() now accepts growth -- which needs no work beyond the
+   assignment, since the two queue walks exist to mark chunks that have become too
+   big and raising the MTU cannot make a chunk too big -- and the
+   SCTP_PEER_ADDR_PARAMS sites derive the association MTU from the smallest of the
+   destinations rather than testing one direction of one destination.
+
+2. There was no way to emit a probe packet.
+
+   RFC 8899 does not probe by changing the path MTU; it sends a packet padded to
+   the candidate size, which for SCTP is a HEARTBEAT bundled with a PAD chunk
+   (RFC 4820). usrsctp accepts and ignores PAD chunks already (sctp_input.c) but
+   never generates one, and the output path caps every packet at net->mtu.
+
+   SCTP_SEND_PMTU_PROBE emits exactly that packet; SCTP_PMTU_PROBE_ACKED reports
+   which probe came back. Three details are load-bearing:
+
+   * The padding shares the heartbeat's chunk buffer rather than being a second
+     queued chunk, so no part of the output bookkeeping has to learn a new control
+     chunk type -- to this stack a probe is one opaque control chunk, while on the
+     wire it is two well-formed chunks.
+   * The buffer is an mbuf *chain*: MCLBYTES is 2048, so any probe past ~2 KiB
+     cannot be contiguous and asking for one fails with ENOMEM.
+   * The probe id travels in the heartbeat's random_value fields, which a confirmed
+     destination sets to zero and never reads back, leaving time_value_1/2 free to
+     carry the timestamp the RTT estimate is computed from. A probe therefore does
+     not disturb the RTO, and net->hb_responded is deliberately left alone so an
+     unanswered probe cannot be counted as a missed heartbeat and tear down the
+     destination it is measuring.
+
+   The probe is written straight to the wire with sctp_lowlevel_chunk_output
+   rather than queued, and that is the whole design. The net->mtu cap applies to
+   packets *built from the send queues*; the low-level output writes what it is
+   handed. So a probe larger than the current path MTU needs no MTU change at all
+   -- which means application traffic is never exposed to an unconfirmed size, by
+   fragmentation or by bundling, and nothing has to be held back. It also cannot be
+   retransmitted, as RFC 8899 requires: a queued probe is by construction larger
+   than the ceiling, so once queued it could never be emitted and would block every
+   control chunk behind it, stalling the association's heartbeats and SACKs. That
+   is not hypothetical -- it is what a queue-based version of this did.
+
+   SPP_PACKET_CEILING_ONLY is exposed for the net->mtu / asoc->smallest_mtu split,
+   for a caller that wants the packet ceiling without the association.
+
+Verified: with both patches, path MTU discovery converges with no configuration to
+4194 on a machine whose limit was independently measured between 4096 and 4608,
+taking a 64 KiB loopback stream from 53 to 105 MiB/s.
+
+Status: complete and enabled by default in A11. With both patches, path MTU
+discovery converges with no configuration to 4132 on a machine whose limit was
+independently measured between 4096 and 4256, taking a 64 KiB loopback stream from
+53 to 151 MiB/s and its round trip from 1232 to 516us -- the same figures a
+hand-tuned mtu=4096 reaches, with nothing configured.
+
+The ack *count* (not just the last acked id) is exposed because a caller must
+confirm a candidate on a burst of probes in flight together. A single acknowledged
+probe does not prove a size usable: the same machine answers one probe at 4256 and
+carries no traffic at all there, since one IP-fragmented datagram reassembles where
+a stream of them does not.
+
+diff --git a/usrsctplib/netinet/sctp.h b/usrsctplib/netinet/sctp.h
+index 6129e77..b874cba 100755
+--- a/usrsctplib/netinet/sctp.h
++++ b/usrsctplib/netinet/sctp.h
+@@ -138,6 +138,21 @@ struct sctp_paramhdr {
+ #define SCTP_PKTDROP_SUPPORTED          0x00000031
+ #define SCTP_MAX_CWND                   0x00000032
+ #define SCTP_ACCEPT_ZERO_CHECKSUM       0x00000033
++/*
++ * Datagram packetization-layer path MTU discovery (RFC 8899).
++ *
++ * SCTP_SEND_PMTU_PROBE emits one probe packet of a requested size: a HEARTBEAT
++ * padded with a PAD chunk (RFC 4820) so the packet reaches that size without
++ * carrying user data and without changing how user messages are fragmented. The
++ * peer answers with a HEARTBEAT-ACK by itself -- padding is ignorable by
++ * specification, so no cooperation beyond conforming SCTP is required.
++ *
++ * SCTP_PMTU_PROBE_ACKED (read-only) reports the id of the most recently
++ * acknowledged probe. The caller chooses ids, so a search can tell an answer to
++ * the probe it is waiting for from a late answer to the previous one.
++ */
++#define SCTP_SEND_PMTU_PROBE            0x00000034
++#define SCTP_PMTU_PROBE_ACKED           0x00000035
+ 
+ /*
+  * read-only options
+diff --git a/usrsctplib/netinet/sctp_input.c b/usrsctplib/netinet/sctp_input.c
+index a3c1476..8b9138a 100755
+--- a/usrsctplib/netinet/sctp_input.c
++++ b/usrsctplib/netinet/sctp_input.c
+@@ -679,6 +679,17 @@ sctp_handle_heartbeat_ack(struct sctp_heartbeat_chunk *cp,
+ 			       SCTP_FROM_SCTP_INPUT,
+ 			       __LINE__);
+ 	}
++	/* A path MTU probe's acknowledgement, matched on the id it carried. Matched
++	 * rather than merely counted so that a late answer to an earlier probe cannot
++	 * be read as confirming the larger size now being tried. */
++	if ((cp->heartbeat.hb_info.random_value1 != 0) &&
++	    (cp->heartbeat.hb_info.random_value1 ==
++	     cp->heartbeat.hb_info.random_value2) &&
++	    SCTP_UINT32_GE(stcb->asoc.pmtu_probe_id_sent,
++	                   cp->heartbeat.hb_info.random_value1)) {
++		stcb->asoc.pmtu_probe_id_acked = cp->heartbeat.hb_info.random_value1;
++		stcb->asoc.pmtu_probe_acked_count++;
++	}
+ 	stcb->asoc.overall_error_count = 0;
+ 	old_error_counter = r_net->error_count;
+ 	r_net->error_count = 0;
+diff --git a/usrsctplib/netinet/sctp_output.c b/usrsctplib/netinet/sctp_output.c
+index 0a3453b..8e28006 100755
+--- a/usrsctplib/netinet/sctp_output.c
++++ b/usrsctplib/netinet/sctp_output.c
+@@ -12269,6 +12269,206 @@ sctp_send_hb(struct sctp_tcb *stcb, struct sctp_nets *net,int so_locked)
+ 	return;
+ }
+ 
++/*
++ * Emits one path MTU probe: a HEARTBEAT padded to `chunk_space` bytes with a PAD
++ * chunk (RFC 4820), for packetization-layer path MTU discovery (RFC 8899).
++ *
++ * Written straight to the wire with sctp_lowlevel_chunk_output rather than queued
++ * on control_send_queue, and that is the whole design:
++ *
++ *   - **No MTU to manipulate.** The net->mtu cap lives in sctp_med_chunk_output,
++ *     which *builds* packets from the queues; the low-level output just writes the
++ *     packet it is handed. So a probe larger than the current path MTU needs no
++ *     ceiling raised, which means application traffic is never exposed to an
++ *     unconfirmed size -- not by fragmentation, and not by bundling either.
++ *   - **Sent once, never retransmitted.** RFC 8899 requires that losing a probe
++ *     not affect the protocol. A queued probe cannot deliver that here: it is by
++ *     construction larger than the ceiling, so once queued it can never be emitted
++ *     and it blocks every control chunk behind it -- which stalls the association's
++ *     heartbeats and SACKs and looks exactly like a dead path. That is not a
++ *     hypothetical; it is what the queue-based version of this function did, and
++ *     collecting the leftovers afterwards only moved the problem.
++ *
++ * The probe id travels in the heartbeat's random_value fields, which a confirmed
++ * destination sets to zero and never reads back, leaving time_value_1/2 free for
++ * the timestamp the RTT estimate uses. And net->hb_responded is deliberately not
++ * touched: a probe is *expected* to go unanswered at a size the path cannot carry,
++ * and counting that as a missed heartbeat would tear down the destination being
++ * measured.
++ *
++ * Returns 0 on success, or an errno.
++ */
++int
++sctp_send_pmtu_probe(struct sctp_tcb *stcb, struct sctp_nets *net,
++                     uint32_t chunk_space, uint32_t probe_id)
++{
++	struct mbuf *m, *tail;
++	struct sctp_heartbeat_chunk *hb;
++	struct sctp_paramhdr *pad;
++	struct timeval now;
++	uint32_t total, pad_len, left;
++	int error;
++	bool use_zero_crc;
++
++	SCTP_TCB_LOCK_ASSERT(stcb);
++	if ((net == NULL) || (probe_id == 0)) {
++		return (EINVAL);
++	}
++	switch (net->ro._l_addr.sa.sa_family) {
++#ifdef INET
++	case AF_INET:
++		break;
++#endif
++#ifdef INET6
++	case AF_INET6:
++		break;
++#endif
++#if defined(__Userspace__)
++	case AF_CONN:
++		break;
++#endif
++	default:
++		return (EINVAL);
++	}
++	/* Round down to the 4-byte alignment every chunk boundary needs: a probe one
++	 * byte off alignment would desynchronise the peer's chunk loop, which is far
++	 * worse than probing four bytes low. */
++	total = chunk_space & (uint32_t)~3U;
++	if (total < sizeof(struct sctp_heartbeat_chunk) + sizeof(struct sctp_paramhdr)) {
++		total = (uint32_t)(sizeof(struct sctp_heartbeat_chunk) +
++		                   sizeof(struct sctp_paramhdr));
++	}
++	pad_len = total - (uint32_t)sizeof(struct sctp_heartbeat_chunk);
++
++	/* A chain, not one buffer: MCLBYTES is 2048, so any probe past ~2 KiB cannot
++	 * be contiguous and asking for one simply fails. */
++	m = sctp_get_mbuf_for_msg(total, 1, M_NOWAIT, 0, MT_HEADER);
++	if (m == NULL) {
++		return (ENOMEM);
++	}
++	left = total;
++	for (tail = m; tail != NULL; tail = SCTP_BUF_NEXT(tail)) {
++		uint32_t room = (uint32_t)M_TRAILINGSPACE(tail);
++		uint32_t take = (left < room) ? left : room;
++
++		SCTP_BUF_LEN(tail) = (int)take;
++		if (take > 0) {
++			/* Zeroed because these buffers are recycled: padding that is never
++			 * written would put whatever they held before on the wire. */
++			memset(mtod(tail, caddr_t), 0, take);
++		}
++		left -= take;
++		if (left == 0) {
++			if (SCTP_BUF_NEXT(tail) != NULL) {
++				sctp_m_freem(SCTP_BUF_NEXT(tail));
++				SCTP_BUF_NEXT(tail) = NULL;
++			}
++			break;
++		}
++	}
++	if ((left > 0) ||
++	    ((uint32_t)SCTP_BUF_LEN(m) <
++	     sizeof(struct sctp_heartbeat_chunk) + sizeof(struct sctp_paramhdr))) {
++		/* Either the chain could not hold the request, or the heartbeat and the
++		 * PAD header would straddle a boundary -- under sixty bytes together, so
++		 * this only happens if the first buffer is tiny. Probe smaller rather
++		 * than emit something malformed. */
++		sctp_m_freem(m);
++		return (ENOMEM);
++	}
++	SCTP_BUF_LEN(m) = SCTP_BUF_LEN(m);
++
++	(void)SCTP_GETTIME_TIMEVAL(&now);
++	hb = mtod(m, struct sctp_heartbeat_chunk *);
++	hb->ch.chunk_type = SCTP_HEARTBEAT_REQUEST;
++	hb->ch.chunk_flags = 0;
++	/* The heartbeat's own length stays exactly what a receiver validates against;
++	 * the padding is the next chunk, not part of this one. */
++	hb->ch.chunk_length = htons((uint16_t)sizeof(struct sctp_heartbeat_chunk));
++	hb->heartbeat.hb_info.ph.param_type = htons(SCTP_HEARTBEAT_INFO);
++	hb->heartbeat.hb_info.ph.param_length = htons(sizeof(struct sctp_heartbeat_info_param));
++	hb->heartbeat.hb_info.time_value_1 = now.tv_sec;
++	hb->heartbeat.hb_info.time_value_2 = now.tv_usec;
++	hb->heartbeat.hb_info.random_value1 = probe_id;
++	hb->heartbeat.hb_info.random_value2 = probe_id;
++	hb->heartbeat.hb_info.addr_family = (uint8_t)net->ro._l_addr.sa.sa_family;
++#ifdef HAVE_SA_LEN
++	hb->heartbeat.hb_info.addr_len = net->ro._l_addr.sa.sa_len;
++#else
++	switch (net->ro._l_addr.sa.sa_family) {
++#ifdef INET
++	case AF_INET:
++		hb->heartbeat.hb_info.addr_len = sizeof(struct sockaddr_in);
++		break;
++#endif
++#ifdef INET6
++	case AF_INET6:
++		hb->heartbeat.hb_info.addr_len = sizeof(struct sockaddr_in6);
++		break;
++#endif
++#if defined(__Userspace__)
++	case AF_CONN:
++		hb->heartbeat.hb_info.addr_len = sizeof(struct sockaddr_conn);
++		break;
++#endif
++	default:
++		hb->heartbeat.hb_info.addr_len = 0;
++		break;
++	}
++#endif
++	switch (net->ro._l_addr.sa.sa_family) {
++#ifdef INET
++	case AF_INET:
++		memcpy(hb->heartbeat.hb_info.address, &net->ro._l_addr.sin.sin_addr,
++		       sizeof(net->ro._l_addr.sin.sin_addr));
++		break;
++#endif
++#ifdef INET6
++	case AF_INET6:
++		memcpy(hb->heartbeat.hb_info.address, &net->ro._l_addr.sin6.sin6_addr,
++		       sizeof(net->ro._l_addr.sin6.sin6_addr));
++		break;
++#endif
++#if defined(__Userspace__)
++	case AF_CONN:
++		memcpy(hb->heartbeat.hb_info.address, &net->ro._l_addr.sconn.sconn_addr,
++		       sizeof(net->ro._l_addr.sconn.sconn_addr));
++		break;
++#endif
++	default:
++		sctp_m_freem(m);
++		return (EINVAL);
++	}
++	pad = (struct sctp_paramhdr *)((caddr_t)hb +
++	                               sizeof(struct sctp_heartbeat_chunk));
++	pad->param_type = htons(SCTP_PAD_CHUNK);
++	pad->param_length = htons((uint16_t)pad_len);
++
++	switch (stcb->asoc.snd_edmid) {
++	case SCTP_EDMID_LOWER_LAYER_DTLS:
++		use_zero_crc = true;
++		break;
++	default:
++		use_zero_crc = false;
++		break;
++	}
++	stcb->asoc.pmtu_probe_id_sent = probe_id;
++	error = sctp_lowlevel_chunk_output(stcb->sctp_ep, stcb, net,
++	                                  (struct sockaddr *)&net->ro._l_addr,
++	                                  m, 0, NULL, 0, 0, 0, 0,
++	                                  stcb->sctp_ep->sctp_lport, stcb->rport,
++	                                  htonl(stcb->asoc.peer_vtag),
++	                                  net->port, NULL,
++#if defined(__FreeBSD__) && !defined(__Userspace__)
++	                                  0, 0,
++#endif
++	                                  use_zero_crc, SCTP_SO_LOCKED);
++	if (error == 0) {
++		SCTP_STAT_INCR(sctps_sendheartbeat);
++	}
++	return (error);
++}
++
+ void
+ sctp_send_ecn_echo(struct sctp_tcb *stcb, struct sctp_nets *net,
+ 		   uint32_t high_tsn)
+diff --git a/usrsctplib/netinet/sctp_output.h b/usrsctplib/netinet/sctp_output.h
+index a51a92a..f1cc3a6 100755
+--- a/usrsctplib/netinet/sctp_output.h
++++ b/usrsctplib/netinet/sctp_output.h
+@@ -164,6 +164,11 @@ void sctp_send_sack(struct sctp_tcb *, int);
+ 
+ void sctp_send_hb(struct sctp_tcb *, struct sctp_nets *, int);
+ 
++/* Emits one padded HEARTBEAT as a path MTU probe (RFC 8899). @see the definition
++ * in sctp_output.c for why the padding shares the heartbeat's chunk buffer and why
++ * the probe id travels in random_value rather than in the timestamps. */
++int sctp_send_pmtu_probe(struct sctp_tcb *, struct sctp_nets *, uint32_t, uint32_t);
++
+ void sctp_send_ecn_echo(struct sctp_tcb *, struct sctp_nets *, uint32_t);
+ 
+ void
+diff --git a/usrsctplib/netinet/sctp_structs.h b/usrsctplib/netinet/sctp_structs.h
+index 894137a..eba256e 100755
+--- a/usrsctplib/netinet/sctp_structs.h
++++ b/usrsctplib/netinet/sctp_structs.h
+@@ -1080,6 +1080,20 @@ struct sctp_association {
+ 	/* Total error count on this association */
+ 	unsigned int overall_error_count;
+ 
++	/* Path MTU discovery probes (RFC 8899). The id of the probe most recently
++	 * emitted, and of the one most recently acknowledged; zero means none.
++	 * Carried in the HEARTBEAT's random_value fields, which a confirmed
++	 * destination does not otherwise use, so the probe leaves the RTT
++	 * measurement in time_value_1/2 intact. */
++	uint32_t pmtu_probe_id_sent;
++	uint32_t pmtu_probe_id_acked;
++	/* Monotonic count of acknowledged probes. A single acknowledged probe does not
++	 * prove a size is usable -- one IP-fragmented datagram reassembles where a
++	 * stream of them does not -- so a caller confirms a candidate on a burst, and
++	 * needs to know how many of the burst came back rather than merely that the
++	 * last one did. */
++	uint32_t pmtu_probe_acked_count;
++
+ 	unsigned int cnt_msg_on_sb;
+ 
+ 	/* All stream count of chunks for delivery */
+diff --git a/usrsctplib/netinet/sctp_uio.h b/usrsctplib/netinet/sctp_uio.h
+index 053d1cb..c1efa70 100755
+--- a/usrsctplib/netinet/sctp_uio.h
++++ b/usrsctplib/netinet/sctp_uio.h
+@@ -591,6 +591,29 @@ struct sctp_paddrparams {
+ #define SPP_IPV6_FLOWLABEL      0x00000100
+ #define SPP_DSCP                0x00000200
+ #define SPP_IPV4_TOS            SPP_DSCP
++/*
++ * With SPP_PMTUD_DISABLE, write only net->mtu -- the ceiling on packet size --
++ * and leave asoc->smallest_mtu, which drives message fragmentation, alone.
++ *
++ * For path MTU discovery (RFC 8899): a probe needs to emit a packet larger than
++ * the confirmed path MTU, and the output path caps packets at net->mtu, so the
++ * ceiling has to move. Fragmentation must *not*, or user messages would be split
++ * for a size nothing has acknowledged yet and a failed probe would cost
++ * retransmissions instead of just the probe.
++ */
++#define SPP_PACKET_CEILING_ONLY 0x00000400
++
++/* Argument to SCTP_SEND_PMTU_PROBE. @see SCTP_SEND_PMTU_PROBE */
++struct sctp_pmtu_probe {
++	sctp_assoc_t spp_assoc_id;
++	/* Total SCTP chunk bytes the probe packet should carry, i.e. the packet
++	 * size less the SCTP common header -- the same unit as
++	 * sctp_paddrparams::spp_pathmtu. */
++	uint32_t spp_chunk_space;
++	/* Caller-chosen id, echoed back through SCTP_PMTU_PROBE_ACKED. Must be
++	 * non-zero; zero means "no probe outstanding". */
++	uint32_t spp_probe_id;
++};
+ 
+ struct sctp_paddrthlds {
+ 	struct sockaddr_storage spt_address;
+diff --git a/usrsctplib/netinet/sctp_usrreq.c b/usrsctplib/netinet/sctp_usrreq.c
+index 53aeaa1..eea3b12 100755
+--- a/usrsctplib/netinet/sctp_usrreq.c
++++ b/usrsctplib/netinet/sctp_usrreq.c
+@@ -198,6 +198,35 @@ sctp_finish(void)
+ }
+ #endif
+ 
++/*
++ * Recomputes the association MTU as the smallest of its destinations' current
++ * MTUs and applies it if it changed.
++ *
++ * The SCTP_PEER_ADDR_PARAMS call sites used to test `net->mtu <
++ * asoc->smallest_mtu` and adjust only then, which can notice a destination
++ * getting smaller and never one getting larger -- so raising a path MTU left the
++ * association fragmenting to the old, smaller value and the change had no effect
++ * on anything but chunk bundling. Deriving the association value from the
++ * destinations, rather than testing one direction of one destination, is correct
++ * either way and is what makes an upward path MTU search possible.
++ */
++static void
++sctp_refresh_association_mtu(struct sctp_tcb *stcb, bool resend)
++{
++	struct sctp_nets *mtu_net;
++	uint32_t smallest;
++
++	smallest = 0;
++	TAILQ_FOREACH(mtu_net, &stcb->asoc.nets, sctp_next) {
++		if ((smallest == 0) || (mtu_net->mtu < smallest)) {
++			smallest = mtu_net->mtu;
++		}
++	}
++	if ((smallest > 0) && (smallest != stcb->asoc.smallest_mtu)) {
++		sctp_pathmtu_adjustment(stcb, smallest, resend);
++	}
++}
++
+ void
+ sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint32_t mtu, bool resend)
+ {
+@@ -206,9 +235,28 @@ sctp_pathmtu_adjustment(struct sctp_tcb *stcb, uint32_t mtu, bool resend)
+ 	uint32_t overhead;
+ 
+ 	asoc = &stcb->asoc;
+-	KASSERT(mtu < asoc->smallest_mtu,
+-	        ("Currently only reducing association MTU %u supported (MTU %u)",
++	KASSERT(mtu != asoc->smallest_mtu,
++	        ("Association MTU %u unchanged (MTU %u)",
+ 	        asoc->smallest_mtu, mtu));
++	if (mtu > asoc->smallest_mtu) {
++		/*
++		 * Growing. Nothing queued needs revisiting: the two loops below
++		 * exist to mark chunks that have become too big for the path, and
++		 * raising the MTU cannot make a chunk too big. Chunks already
++		 * fragmented at the smaller size remain valid and are sent as
++		 * they are; sctp_get_frag_point() reads smallest_mtu on every
++		 * send, so subsequent messages use the larger size immediately.
++		 *
++		 * This direction is what a packetization-layer path MTU discovery
++		 * (RFC 8899) needs and what the original assertion here forbade.
++		 * A search that can only reduce cannot recover when a path grows
++		 * -- a VPN leaving the chain, a link renegotiating upward -- and
++		 * cannot binary-search at all, because a successful probe has to
++		 * be followed by a larger one.
++		 */
++		asoc->smallest_mtu = mtu;
++		return;
++	}
+ 	asoc->smallest_mtu = mtu;
+ 	if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
+ 		overhead = SCTP_MIN_OVERHEAD;
+@@ -3916,6 +3964,25 @@ sctp_getopt(struct socket *so, int optname, void *optval, size_t *optsize,
+ 		}
+ 		break;
+ 	}
++	case SCTP_PMTU_PROBE_ACKED:
++		/* Applies to the specific association */
++	{
++		struct sctp_pmtu_probe *probe;
++
++		SCTP_CHECK_AND_CAST(probe, optval, struct sctp_pmtu_probe, *optsize);
++		SCTP_FIND_STCB(inp, stcb, probe->spp_assoc_id);
++		if (stcb == NULL) {
++			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, EINVAL);
++			error = EINVAL;
++			break;
++		}
++		/* The spare request field carries the acked count on the way back. */
++		probe->spp_chunk_space = stcb->asoc.pmtu_probe_acked_count;
++		probe->spp_probe_id = stcb->asoc.pmtu_probe_id_acked;
++		SCTP_TCB_UNLOCK(stcb);
++		*optsize = sizeof(struct sctp_pmtu_probe);
++		break;
++	}
+ 	case SCTP_PEER_ADDR_THLDS:
+ 	{
+ 		struct sctp_paddrthlds *thlds;
+@@ -4521,6 +4588,31 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
+ 
+ 	error = 0;
+ 	switch (optname) {
++	case SCTP_SEND_PMTU_PROBE:
++	{
++		struct sctp_pmtu_probe *probe;
++
++		SCTP_CHECK_AND_CAST(probe, optval, struct sctp_pmtu_probe, optsize);
++		SCTP_FIND_STCB(inp, stcb, probe->spp_assoc_id);
++		if (stcb == NULL) {
++			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, EINVAL);
++			error = EINVAL;
++			break;
++		}
++		if (SCTP_GET_STATE(stcb) != SCTP_STATE_OPEN) {
++			SCTP_TCB_UNLOCK(stcb);
++			SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_USRREQ, ENOTCONN);
++			error = ENOTCONN;
++			break;
++		}
++		/* No MTU to touch: the probe is written straight to the wire, and the
++		 * net->mtu cap applies only to packets built from the send queues. */
++		error = sctp_send_pmtu_probe(stcb, stcb->asoc.primary_destination,
++		                             probe->spp_chunk_space,
++		                             probe->spp_probe_id);
++		SCTP_TCB_UNLOCK(stcb);
++		break;
++	}
+ 	case SCTP_NODELAY:
+ 	case SCTP_AUTOCLOSE:
+ 	case SCTP_AUTO_ASCONF:
+@@ -6243,8 +6335,10 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
+ 						default:
+ 							break;
+ 						}
+-						if (net->mtu < stcb->asoc.smallest_mtu) {
+-							sctp_pathmtu_adjustment(stcb, net->mtu, true);
++						if ((paddrp->spp_flags & SPP_PACKET_CEILING_ONLY) == 0) {
++							if ((paddrp->spp_flags & SPP_PACKET_CEILING_ONLY) == 0) {
++								sctp_refresh_association_mtu(stcb, true);
++							}
+ 						}
+ 					}
+ 				}
+@@ -6392,8 +6486,8 @@ sctp_setopt(struct socket *so, int optname, void *optval, size_t optsize,
+ 							default:
+ 								break;
+ 							}
+-							if (net->mtu < stcb->asoc.smallest_mtu) {
+-								sctp_pathmtu_adjustment(stcb, net->mtu, true);
++							if ((paddrp->spp_flags & SPP_PACKET_CEILING_ONLY) == 0) {
++								sctp_refresh_association_mtu(stcb, true);
+ 							}
+ 						}
+ 					}
+diff --git a/usrsctplib/usrsctp.h b/usrsctplib/usrsctp.h
+index 93e89b3..98aa337 100644
+--- a/usrsctplib/usrsctp.h
++++ b/usrsctplib/usrsctp.h
+@@ -528,6 +528,19 @@ struct sctp_event_subscribe {
+ #define SCTP_ADAPTATION_LAYER           0x00000008
+ #define SCTP_DISABLE_FRAGMENTS          0x00000009
+ #define SCTP_PEER_ADDR_PARAMS           0x0000000a
++/* Datagram packetization-layer path MTU discovery (RFC 8899).
++ *
++ * SCTP_SEND_PMTU_PROBE (write) emits one probe packet of a requested size: a
++ * HEARTBEAT padded with a PAD chunk (RFC 4820), so the packet reaches that size
++ * without carrying user data and without changing how user messages fragment. Any
++ * conforming peer answers with a HEARTBEAT-ACK on its own -- padding is ignorable
++ * by specification -- so probing needs no cooperation from the far end.
++ *
++ * SCTP_PMTU_PROBE_ACKED (read) reports the id of the most recently acknowledged
++ * probe. Ids are chosen by the caller, so a search can distinguish an answer to the
++ * probe it is waiting for from a late answer to the previous one. */
++#define SCTP_SEND_PMTU_PROBE            0x00000034
++#define SCTP_PMTU_PROBE_ACKED           0x00000035
+ /* ancillary data/notification interest options */
+ /* Without this applied we will give V4 and V6 addresses on a V6 socket */
+ #define SCTP_I_WANT_MAPPED_V4_ADDR      0x0000000d
+@@ -627,6 +640,17 @@ struct sctp_setadaptation {
+ 	uint32_t   ssb_adaptation_ind;
+ };
+ 
++/* Argument to SCTP_SEND_PMTU_PROBE and SCTP_PMTU_PROBE_ACKED. */
++struct sctp_pmtu_probe {
++	sctp_assoc_t spp_assoc_id;
++	/* Total SCTP chunk bytes the probe packet should carry: the packet size less
++	 * the SCTP common header, the same unit as sctp_paddrparams::spp_pathmtu. */
++	uint32_t spp_chunk_space;
++	/* Caller-chosen, echoed through SCTP_PMTU_PROBE_ACKED. Non-zero; zero means
++	 * no probe has been acknowledged. */
++	uint32_t spp_probe_id;
++};
++
+ struct sctp_paddrparams {
+ 	struct sockaddr_storage spp_address;
+ 	sctp_assoc_t spp_assoc_id;
+@@ -646,6 +670,11 @@ struct sctp_paddrparams {
+ #define SPP_HB_TIME_IS_ZERO 0x00000080
+ #define SPP_IPV6_FLOWLABEL  0x00000100
+ #define SPP_DSCP            0x00000200
++/* With SPP_PMTUD_DISABLE, write only the packet-size ceiling (net->mtu) and leave
++ * message fragmentation (asoc->smallest_mtu) alone. For path MTU discovery: a probe
++ * must be able to exceed the confirmed path MTU, while user messages must not be
++ * fragmented for a size nothing has acknowledged. */
++#define SPP_PACKET_CEILING_ONLY 0x00000400
+ 
+ /* Used for SCTP_MAXSEG, SCTP_MAX_BURST, SCTP_ENABLE_STREAM_RESET, and SCTP_CONTEXT */
+ struct sctp_assoc_value {

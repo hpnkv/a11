@@ -55,6 +55,15 @@ struct SignallingMessage {
   std::string candidate;         ///< ICE candidate text.
   std::string mid;               ///< Media/data-section id for the candidate.
   absl::Status error;            ///< Negotiation failure for kError messages.
+  /**
+   * @brief Capability tokens the sender supports; a peer echoes those it shares.
+   *
+   * Additive, and ignored by a peer that does not know a token -- which is what
+   * makes it safe to introduce one. An older peer never echoes, so the feature
+   * stays off rather than breaking the connection, and no version negotiation is
+   * needed. Currently only `a11-pmtud/1` (path MTU probing).
+   */
+  std::vector<std::string> capabilities;
 
   /** @return OK if the fields are consistent for this message's type. */
   absl::Status Validate() const;

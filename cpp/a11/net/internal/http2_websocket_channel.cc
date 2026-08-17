@@ -215,6 +215,15 @@ class Http2WebSocketChannel final
     return first;
   }
 
+  // Fail() already does exactly what an abortive close is: it aborts the duplex
+  // stream (or cancels the request / aborts the response writer), which drops
+  // the connection rather than half-closing it. Close() cannot, because ending
+  // the request is a graceful HTTP operation by construction.
+  absl::Status Abort(absl::Status status) override {
+    Fail(std::move(status));
+    return absl::OkStatus();
+  }
+
   void* absl_nullable GetImpl() const override {
     thread::MutexLock lock(&mu_);
     if (duplex_ != nullptr) {

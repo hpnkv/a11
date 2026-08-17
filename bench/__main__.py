@@ -118,6 +118,41 @@ def _install_loop(name: str):
     return uvloop.run
 
 
+#: Above this, `latency` rows carry more measurement overhead than a laptop's
+#: entire event-loop turn and stop being comparable with another machine's.
+_SLOW_CLOCK_NS = 200.0
+
+
+def _warn_about_the_clock(environment: dict) -> None:
+    """Say it out loud when the clock is too expensive to measure latency with.
+
+    A field in the JSON is not enough. A run on a VM whose only clocksource is
+    `acpi_pm` reads the clock in ~3us, which puts ~3us inside every `latency`
+    sample and made a bare Python coroutine look 21x slower than on a laptop of
+    equivalent integer throughput. That is the kind of number somebody quotes in
+    a document, so it gets a banner rather than a field.
+    """
+    cost = environment.get("clock_call_ns") or 0.0
+    if cost < _SLOW_CLOCK_NS:
+        return
+    source = environment.get("clocksource") or "unknown"
+    print(
+        f"\n  !! perf_counter_ns() costs {cost:.0f}ns here"
+        f" (clocksource: {source}).\n"
+        "     About that much lands inside every sample `latency` takes, so"
+        " every p50/p99 below\n"
+        "     is inflated by roughly that and is NOT comparable with a machine"
+        " whose clock is\n"
+        "     cheap. `throughput`, `throughput_sync` and `pipelined` rows read"
+        " the clock twice per\n"
+        "     batch and are unaffected -- prefer those. On a VM this usually"
+        " means the hypervisor\n"
+        "     is not exposing a usable TSC; there is no fix from inside the"
+        " guest.\n",
+        flush=True,
+    )
+
+
 def _run_isolated(options, selected) -> list[harness.Result]:
     """One subprocess per suite, results merged.
 
@@ -220,8 +255,10 @@ def main(argv: list[str] | None = None) -> int:
 
     runner = _install_loop(options.loop) if options.in_process else None
     print(f"a11 bench: {len(selected)} benchmark(s), scale={options.scale}")
-    for key, value in harness.environment().items():
+    environment = harness.environment()
+    for key, value in environment.items():
         print(f"  {key}: {value}")
+    _warn_about_the_clock(environment)
 
     if options.in_process:
         results = runner(

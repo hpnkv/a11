@@ -363,7 +363,7 @@ absl::Status MultiplexedBinaryChannel::Send(std::string bytes) {
 }
 
 void MultiplexedBinaryChannel::AssignPendingLocked() {
-  if (members_.empty()) {
+  if (members_.empty() || send_pauses_ > 0) {
     return;
   }
   while (!pending_out_.empty()) {
@@ -441,6 +441,14 @@ void MultiplexedBinaryChannel::FlushMember(
     // peer's reorder buffer would wait on that sequence number for good. Send
     // takes ownership, so keeping a retryable copy is the price of that.
     absl::Status sent = member->channel->Send(packet);
+    std::function<void(bool)> outcome;
+    {
+      thread::MutexLock lock(&mu_);
+      outcome = send_outcome_;
+    }
+    if (outcome) {
+      outcome(sent.ok());
+    }
     if (sent.ok()) {
       continue;
     }
@@ -455,6 +463,32 @@ void MultiplexedBinaryChannel::FlushMember(
     DropMember(member->id, "send failed");
     return;
   }
+}
+
+void MultiplexedBinaryChannel::SetSendOutcomeObserver(
+    std::function<void(bool succeeded)> observer) {
+  thread::MutexLock lock(&mu_);
+  send_outcome_ = std::move(observer);
+}
+
+void MultiplexedBinaryChannel::PauseSends() {
+  thread::MutexLock lock(&mu_);
+  ++send_pauses_;
+}
+
+void MultiplexedBinaryChannel::ResumeSends() {
+  {
+    thread::MutexLock lock(&mu_);
+    if (send_pauses_ == 0) {
+      return;
+    }
+    if (--send_pauses_ > 0) {
+      return;
+    }
+  }
+  // Whatever accumulated while paused goes out now, in sequence order. Flushed
+  // outside the lock because FlushPending hands bytes to members.
+  FlushPending();
 }
 
 absl::StatusOr<size_t> MultiplexedBinaryChannel::BufferedAmount() const {
@@ -504,6 +538,35 @@ absl::Status MultiplexedBinaryChannel::Close() {
   for (const std::shared_ptr<Member>& member : members) {
     (void)member->channel->ResetCallbacks();
     (void)member->channel->Close();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status MultiplexedBinaryChannel::Abort(absl::Status status) {
+  // Same teardown as Close, except each member is aborted rather than closed:
+  // the aggregate has nothing of its own holding a transport, so this is purely
+  // a matter of forwarding the stronger operation to every member.
+  std::vector<std::shared_ptr<Member>> members;
+  {
+    thread::MutexLock lock(&mu_);
+    if (closed_) {
+      return absl::OkStatus();
+    }
+    closed_ = true;
+    members = members_;
+    members_.clear();
+    for (const std::shared_ptr<Member>& member : members) {
+      member->pending.clear();
+      member->pending_bytes = 0;
+    }
+    pending_out_.clear();
+    pending_out_bytes_ = 0;
+    reorder_.clear();
+    NotifyLocked();
+  }
+  for (const std::shared_ptr<Member>& member : members) {
+    (void)member->channel->ResetCallbacks();
+    (void)member->channel->Abort(status);
   }
   return absl::OkStatus();
 }

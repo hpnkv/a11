@@ -82,6 +82,7 @@ class MultiplexedBinaryChannel
   absl::StatusOr<size_t> BufferedAmount() const override;
   absl::StatusOr<bool> IsOpen() const override;
   absl::Status Close() override;
+  absl::Status Abort(absl::Status status) override;
   [[nodiscard]] void* absl_nullable GetImpl() const override;
 
   /**
@@ -94,6 +95,33 @@ class MultiplexedBinaryChannel
 
   /// Number of member channels currently open for sending and receiving.
   [[nodiscard]] size_t LiveCount() const;
+
+  /**
+   * @brief Holds packets in the unassigned queue instead of handing them over.
+   *
+   * For path MTU probing, which raises the association's MTU to a size nothing
+   * has confirmed yet. The association has one MTU, so an application packet
+   * emitted during that window would go out at the unconfirmed size too --
+   * pausing is what makes "no application packet is ever sent above a confirmed
+   * MTU" true rather than merely likely.
+   *
+   * Nesting counts, so overlapping pauses do not release early. Nothing is
+   * dropped or reordered: packets keep their sequence numbers and are assigned in
+   * order when sends resume.
+   */
+  /**
+   * @brief Reports member send outcomes to path MTU discovery.
+   *
+   * The search can confirm a size that later stops working -- a path changes, or a
+   * burst of probes was luckier than a stream of data. Its fall-back-to-base logic
+   * needs a signal, and this is where the transport has one: a member's send
+   * failing, or a member being lost. Without it a bad size is never walked back.
+   */
+  void SetSendOutcomeObserver(std::function<void(bool succeeded)> observer);
+
+  void PauseSends();
+  /// Releases one PauseSends() and flushes if that was the last one.
+  void ResumeSends();
 
  private:
   struct Member {
@@ -161,6 +189,8 @@ class MultiplexedBinaryChannel
   bool callbacks_set_ ABSL_GUARDED_BY(mu_) = false;
   bool any_open_ ABSL_GUARDED_BY(mu_) = false;
   bool closed_ ABSL_GUARDED_BY(mu_) = false;
+  size_t send_pauses_ ABSL_GUARDED_BY(mu_) = 0;
+  std::function<void(bool)> send_outcome_ ABSL_GUARDED_BY(mu_);
   bool replenishing_ ABSL_GUARDED_BY(mu_) = false;
   bool replenish_gave_up_ ABSL_GUARDED_BY(mu_) = false;
   size_t replenish_failures_ ABSL_GUARDED_BY(mu_) = 0;

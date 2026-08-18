@@ -28,6 +28,38 @@ serve both.
     three guides' demos work against the hosted backend this page's field
     defaults to; this one wants a backend with a checkpoint.
 
+## Try it
+
+Point it at a backend that has a checkpoint. The bar moves once per denoising
+step, from the `progress` port; the image appears when `image` closes.
+
+<link rel="stylesheet" href="../assets/web-demos.css">
+<div id="media-demo" class="a11-demo">
+  <div class="a11-toolbar">
+    <input id="media-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <input id="media-steps" type="number" min="1" max="100" aria-label="Steps" value="20">
+    <input id="media-seed" aria-label="Seed" placeholder="seed (optional)">
+  </div>
+  <div id="media-errors" class="a11-errors" role="alert" aria-live="polite"></div>
+  <form id="media-form" class="a11-compose">
+    <input id="media-prompt" aria-label="Prompt" autocomplete="off" placeholder="a lighthouse in a storm, oil painting…">
+    <button type="submit">Draw</button>
+  </form>
+  <div class="a11-media">
+    <progress id="media-progress" max="20" value="0"></progress>
+    <div id="media-status"></div>
+    <img id="media-image" alt="The generated image" hidden>
+  </div>
+</div>
+<script type="module" src="../assets/generative-media.js"></script>
+
+The action is
+[`a11/demos/text_to_image.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/text_to_image.py)
+and the page is
+[`js/demo/generative_media.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/generative_media.ts).
+[HTTP as separate streams](../api/http-actions.md) applies the same
+port-per-concern idea to a protocol rather than to a model.
+
 ## 1. The contract
 
 ```python
@@ -129,34 +161,3 @@ Not out of tidiness: an output port nobody drains stalls the action producing it
 so a page that waited for the image before reading `progress` would eventually
 wedge the very work it is waiting for.
 
-## Try it
-
-Point it at a backend that has a checkpoint. The bar moves once per denoising
-step, from the `progress` port; the image appears when `image` closes.
-
-<link rel="stylesheet" href="../assets/web-demos.css">
-<div id="media-demo" class="a11-demo">
-  <div class="a11-toolbar">
-    <input id="media-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
-    <input id="media-steps" type="number" min="1" max="100" aria-label="Steps" value="20">
-    <input id="media-seed" aria-label="Seed" placeholder="seed (optional)">
-  </div>
-  <div id="media-errors" class="a11-errors" role="alert" aria-live="polite"></div>
-  <form id="media-form" class="a11-compose">
-    <input id="media-prompt" aria-label="Prompt" autocomplete="off" placeholder="a lighthouse in a storm, oil painting…">
-    <button type="submit">Draw</button>
-  </form>
-  <div class="a11-media">
-    <progress id="media-progress" max="20" value="0"></progress>
-    <div id="media-status"></div>
-    <img id="media-image" alt="The generated image" hidden>
-  </div>
-</div>
-<script type="module" src="../assets/generative-media.js"></script>
-
-The action is
-[`a11/demos/text_to_image.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/text_to_image.py)
-and the page is
-[`js/demo/generative_media.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/generative_media.ts).
-[HTTP as separate streams](../api/http-actions.md) applies the same
-port-per-concern idea to a protocol rather than to a model.

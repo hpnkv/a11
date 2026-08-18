@@ -20,6 +20,31 @@ its handler runs a model locally instead of calling an API.
     that MediaPipe can load. The model file is large; serve it from a location
     with permissive CORS. No API key and no server are involved.
 
+## Try it
+
+Paste a hosted Gemma model URL, then chat. The first message downloads and
+compiles the model in your browser (this can take a while); after that,
+generation is local and the reply **streams token by token** into the bubble.
+The download is cached, so reloading the page skips it. A WebGPU-capable
+browser is required.
+
+<link rel="stylesheet" href="../assets/local-models.css">
+<div id="gemma-demo" class="gemma-demo">
+  <div class="gemma-toolbar">
+    <input id="gemma-model" aria-label="Gemma model URL" value="https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm?download=true">
+  </div>
+  <div id="gemma-status" class="gemma-status"></div>
+  <div id="gemma-errors" class="gemma-errors" role="alert" aria-live="polite"></div>
+  <section class="gemma-chat" aria-label="Local Gemma chat">
+    <div id="gemma-messages" class="gemma-messages"></div>
+    <form id="gemma-form" class="gemma-compose">
+      <input id="gemma-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
+      <button type="submit">Send</button>
+    </form>
+  </section>
+</div>
+<script type="module" src="../assets/local-models.js"></script>
+
 ## 1. The action contract
 
 Import the backend and the SDK names you need. `INTERACT_WITH_GEMMA_SCHEMA`
@@ -159,27 +184,3 @@ try {
 }
 ```
 
-## Try it
-
-Paste a hosted Gemma model URL, then chat. The first message downloads and
-compiles the model in your browser (this can take a while); after that,
-generation is local and the reply **streams token by token** into the bubble.
-The download is cached, so reloading the page skips it. A WebGPU-capable
-browser is required.
-
-<link rel="stylesheet" href="../assets/local-models.css">
-<div id="gemma-demo" class="gemma-demo">
-  <div class="gemma-toolbar">
-    <input id="gemma-model" aria-label="Gemma model URL" value="https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm?download=true">
-  </div>
-  <div id="gemma-status" class="gemma-status"></div>
-  <div id="gemma-errors" class="gemma-errors" role="alert" aria-live="polite"></div>
-  <section class="gemma-chat" aria-label="Local Gemma chat">
-    <div id="gemma-messages" class="gemma-messages"></div>
-    <form id="gemma-form" class="gemma-compose">
-      <input id="gemma-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
-      <button type="submit">Send</button>
-    </form>
-  </section>
-</div>
-<script type="module" src="../assets/local-models.js"></script>

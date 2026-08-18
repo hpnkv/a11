@@ -29,6 +29,53 @@ The page dispatches one action, `deep-research`, and reads three of its ports.
     five or six on the defaults, which is why the keyless local model is the one
     to watch it with.
 
+## Try it
+
+Give it a topic. The middle pane is the plan as the planner produces it, the right
+pane is `user_log`, and the report streams into the left pane as it is written.
+Watch the `[investigate]` lines: they overlap, because three investigations are in
+flight, and their intermediate reports never cross the socket.
+
+<link rel="stylesheet" href="../assets/web-demos.css">
+<div id="research-demo" class="a11-demo">
+  <div class="a11-toolbar">
+    <input id="research-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <select id="research-provider" aria-label="Provider">
+      <option value="ollama">Ollama</option>
+      <option value="claude">Claude</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <input id="research-model" aria-label="Model" value="glm-4.7-flash">
+    <input id="research-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
+    <input id="research-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+  </div>
+  <div id="research-errors" class="a11-errors" role="alert" aria-live="polite"></div>
+  <form id="research-form" class="a11-compose">
+    <input id="research-topic" aria-label="Topic" autocomplete="off" placeholder="A topic to research…">
+    <button type="submit">Research</button>
+  </form>
+  <div class="a11-panes">
+    <section class="a11-pane" aria-label="Report">
+      <header>report port</header>
+      <div id="research-report" class="a11-prose"></div>
+    </section>
+    <aside class="a11-pane" aria-label="Plan and activity">
+      <header>plan port</header>
+      <ol id="research-plan" class="a11-plan"></ol>
+      <header>user_log port</header>
+      <div id="research-log" class="a11-log"></div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="../assets/deep-research.js"></script>
+
+The page is
+[`js/demo/deep_research.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/deep_research.ts);
+[
+`examples/004-deep-research/deep-research.flow`](https://github.com/hpnkv/a11/blob/main/examples/004-deep-research/deep-research.flow)
+takes the same subject further into the language — typed sources, `zip`, a flow
+calling a flow.
+
 ## 1. What the composition has to say
 
 The shape is the one the predecessor of this example wrote in about 400 lines of
@@ -189,49 +236,3 @@ would not merely be slower — it would hold the composition up.
 --8<-- "a11/demos/deep_research.flow"
 ```
 
-## Try it
-
-Give it a topic. The middle pane is the plan as the planner produces it, the right
-pane is `user_log`, and the report streams into the left pane as it is written.
-Watch the `[investigate]` lines: they overlap, because three investigations are in
-flight, and their intermediate reports never cross the socket.
-
-<link rel="stylesheet" href="../assets/web-demos.css">
-<div id="research-demo" class="a11-demo">
-  <div class="a11-toolbar">
-    <input id="research-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
-    <select id="research-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="research-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="research-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="research-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
-  </div>
-  <div id="research-errors" class="a11-errors" role="alert" aria-live="polite"></div>
-  <form id="research-form" class="a11-compose">
-    <input id="research-topic" aria-label="Topic" autocomplete="off" placeholder="A topic to research…">
-    <button type="submit">Research</button>
-  </form>
-  <div class="a11-panes">
-    <section class="a11-pane" aria-label="Report">
-      <header>report port</header>
-      <div id="research-report" class="a11-prose"></div>
-    </section>
-    <aside class="a11-pane" aria-label="Plan and activity">
-      <header>plan port</header>
-      <ol id="research-plan" class="a11-plan"></ol>
-      <header>user_log port</header>
-      <div id="research-log" class="a11-log"></div>
-    </aside>
-  </div>
-</div>
-<script type="module" src="../assets/deep-research.js"></script>
-
-The page is
-[`js/demo/deep_research.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/deep_research.ts);
-[
-`examples/004-deep-research/deep-research.flow`](https://github.com/hpnkv/a11/blob/main/examples/004-deep-research/deep-research.flow)
-takes the same subject further into the language — typed sources, `zip`, a flow
-calling a flow.

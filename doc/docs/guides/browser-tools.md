@@ -27,6 +27,52 @@ touches the canvas; and the model sees three ordinary A11 actions.
     A model that follows tool schemas well makes this much less frustrating.
     `glm-4.7-flash` on Ollama, Claude and Gemini all work.
 
+## Try it
+
+Try "make blob 2 red and move it left", "spread them out", or "give them a warm
+palette". The right pane logs every call the page served, including each tool's
+`user_facing_log`; the model's own sentence arrives underneath the canvas.
+
+<link rel="stylesheet" href="../assets/web-demos.css">
+<div id="tools-demo" class="a11-demo">
+  <div class="a11-toolbar">
+    <input id="tools-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <select id="tools-provider" aria-label="Provider">
+      <option value="ollama">Ollama</option>
+      <option value="claude">Claude</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <input id="tools-model" aria-label="Model" value="glm-4.7-flash">
+    <input id="tools-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
+    <input id="tools-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+  </div>
+  <div id="tools-errors" class="a11-errors" role="alert" aria-live="polite"></div>
+  <div class="a11-panes tools">
+    <section class="a11-pane" aria-label="The scene this page serves">
+      <header>the page</header>
+      <div class="a11-canvas-wrap">
+        <canvas id="tools-canvas" width="620" height="300" aria-label="Five coloured blobs"></canvas>
+      </div>
+      <form id="tools-form" class="a11-compose">
+        <input id="tools-input" aria-label="Instruction" autocomplete="off" placeholder="Make blob 2 red and move it left…">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+    <aside class="a11-pane" aria-label="The model, and the calls served by this page">
+      <header>the model</header>
+      <div id="tools-messages" class="a11-messages"></div>
+      <header>served here</header>
+      <div id="tools-log" class="a11-log"></div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="../assets/browser-tools.js"></script>
+
+The page is
+[`js/demo/browser_tools.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/browser_tools.ts).
+The IntelliJ plugin's webview does the same thing with the IDE's editor and index
+instead of a canvas — see `intellij-plugin/webview/src/ideTools.ts`.
+
 ## 1. Ports are the model's arguments
 
 An A11 action's tool definition is derived from its *ports*
@@ -168,48 +214,3 @@ photographing the scene the model reads it — `describe_scene` returns one
 `{id, x, y, radius, color}` per blob — which serves the same purpose (find out
 what is there before changing it) within the contract that exists.
 
-## Try it
-
-Try "make blob 2 red and move it left", "spread them out", or "give them a warm
-palette". The right pane logs every call the page served, including each tool's
-`user_facing_log`; the model's own sentence arrives underneath the canvas.
-
-<link rel="stylesheet" href="../assets/web-demos.css">
-<div id="tools-demo" class="a11-demo">
-  <div class="a11-toolbar">
-    <input id="tools-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
-    <select id="tools-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="tools-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="tools-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="tools-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
-  </div>
-  <div id="tools-errors" class="a11-errors" role="alert" aria-live="polite"></div>
-  <div class="a11-panes tools">
-    <section class="a11-pane" aria-label="The scene this page serves">
-      <header>the page</header>
-      <div class="a11-canvas-wrap">
-        <canvas id="tools-canvas" width="620" height="300" aria-label="Five coloured blobs"></canvas>
-      </div>
-      <form id="tools-form" class="a11-compose">
-        <input id="tools-input" aria-label="Instruction" autocomplete="off" placeholder="Make blob 2 red and move it left…">
-        <button type="submit">Send</button>
-      </form>
-    </section>
-    <aside class="a11-pane" aria-label="The model, and the calls served by this page">
-      <header>the model</header>
-      <div id="tools-messages" class="a11-messages"></div>
-      <header>served here</header>
-      <div id="tools-log" class="a11-log"></div>
-    </aside>
-  </div>
-</div>
-<script type="module" src="../assets/browser-tools.js"></script>
-
-The page is
-[`js/demo/browser_tools.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/browser_tools.ts).
-The IntelliJ plugin's webview does the same thing with the IDE's editor and index
-instead of a canvas — see `intellij-plugin/webview/src/ideTools.ts`.

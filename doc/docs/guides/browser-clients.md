@@ -14,6 +14,38 @@ TypeScript browser use the same `ActionSchema`, `Action`, `AsyncNode`,
     prior knowledge (`h2c`), so local browser testing also requires a trusted
     development certificate.
 
+## Try it
+
+Say something and watch what crosses the wire. The wire
+inspector records both action messages and node fragments; select a row to see
+its action names, node IDs, and encoded byte size. **Half-close** says that the
+client will send no more data while allowing already-sent work to drain.
+**Reconnect** creates a fresh transport and session.
+
+<link rel="stylesheet" href="../assets/browser-clients.css">
+<div id="echo-demo" class="echo-demo">
+  <div class="echo-toolbar">
+    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services:9443/demos/echo">
+    <button id="echo-half-close" type="button">Half-close</button>
+    <button id="echo-reconnect" type="button">Reconnect</button>
+  </div>
+  <div id="echo-errors" class="echo-errors" role="alert" aria-live="polite"></div>
+  <div class="echo-workspace">
+    <section class="echo-chat" aria-label="Echo chat">
+      <div id="echo-messages" class="echo-messages"></div>
+      <form id="echo-form" class="echo-compose">
+        <input id="echo-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+    <aside class="echo-side" aria-label="Wire inspector">
+      <div id="echo-wire-log" class="echo-wire-log"></div>
+      <div id="echo-wire-details" class="echo-wire-details">Select a wire message to inspect it.</div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="../assets/browser-clients.js"></script>
+
 ## 1. Define the action contract
 
 Both peers must agree on this schema. The Python service declares:
@@ -153,34 +185,3 @@ try {
 }
 ```
 
-## Try it
-
-The wire
-inspector records both action messages and node fragments; select a row to see
-its action names, node IDs, and encoded byte size. **Half-close** says that the
-client will send no more data while allowing already-sent work to drain.
-**Reconnect** creates a fresh transport and session.
-
-<link rel="stylesheet" href="../assets/browser-clients.css">
-<div id="echo-demo" class="echo-demo">
-  <div class="echo-toolbar">
-    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services:9443/demos/echo">
-    <button id="echo-half-close" type="button">Half-close</button>
-    <button id="echo-reconnect" type="button">Reconnect</button>
-  </div>
-  <div id="echo-errors" class="echo-errors" role="alert" aria-live="polite"></div>
-  <div class="echo-workspace">
-    <section class="echo-chat" aria-label="Echo chat">
-      <div id="echo-messages" class="echo-messages"></div>
-      <form id="echo-form" class="echo-compose">
-        <input id="echo-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
-        <button type="submit">Send</button>
-      </form>
-    </section>
-    <aside class="echo-side" aria-label="Wire inspector">
-      <div id="echo-wire-log" class="echo-wire-log"></div>
-      <div id="echo-wire-details" class="echo-wire-details">Select a wire message to inspect it.</div>
-    </aside>
-  </div>
-</div>
-<script type="module" src="../assets/browser-clients.js"></script>

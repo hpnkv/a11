@@ -34,6 +34,56 @@ Gemini from a dropdown, and what changes is a header.
     because it speaks HTTP/1.1 as well as HTTP/2, so no bridge is needed. For the
     TypeScript side, `npm install a11@npm:@curiositystack/a11`.
 
+## Try it
+
+Ask something, then reload the page: the conversation is still there, and the
+next answer is given in its context. **New** starts a fresh one without dropping
+the socket; the dropdown reopens any stored conversation. The right-hand pane is
+the `thoughts` port — a model that thinks before it speaks shows its working
+there, on a port of its own, while `text_output` streams the answer.
+
+<link rel="stylesheet" href="../assets/web-demos.css">
+<div id="chat-demo" class="a11-demo">
+  <div class="a11-toolbar">
+    <input id="chat-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <select id="chat-provider" aria-label="Provider">
+      <option value="ollama">Ollama</option>
+      <option value="claude">Claude</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <input id="chat-model" aria-label="Model" value="glm-4.7-flash">
+    <input id="chat-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
+    <input id="chat-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+    <select id="chat-conversations" aria-label="Stored conversations"></select>
+    <button id="chat-new" type="button">New</button>
+  </div>
+  <div id="chat-errors" class="a11-errors" role="alert" aria-live="polite"></div>
+  <div class="a11-panes">
+    <section class="a11-pane" aria-label="Chat">
+      <header>Chat</header>
+      <div id="chat-messages" class="a11-messages"></div>
+      <form id="chat-form" class="a11-compose">
+        <input id="chat-input" aria-label="Message" autocomplete="off" placeholder="Ask something…">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+    <aside class="a11-pane" aria-label="Thoughts">
+      <header>thoughts port</header>
+      <div id="chat-thoughts" class="a11-messages"></div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="../assets/chat-sessions.js"></script>
+
+The page is
+[`js/demo/chat_sessions.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/chat_sessions.ts)
+over
+[`js/demo/demo_support.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/demo_support.ts),
+and the backend is
+[`a11/demos/web_demos_server.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/web_demos_server.py).
+An `a11 gateway run` serves the same three actions, so a page can point at one of
+those instead.
+
 ## 1. One action, every provider
 
 The old way to support two model vendors was two actions: a schema and a handler
@@ -159,52 +209,3 @@ window.history.replaceState(null, '', url);
 
 On load, the page lists the conversations and reopens whatever the URL names.
 
-## Try it
-
-Ask something, then reload the page: the conversation is still there, and the
-next answer is given in its context. **New** starts a fresh one without dropping
-the socket; the dropdown reopens any stored conversation. The right-hand pane is
-the `thoughts` port — a model that thinks before it speaks shows its working
-there, on a port of its own, while `text_output` streams the answer.
-
-<link rel="stylesheet" href="../assets/web-demos.css">
-<div id="chat-demo" class="a11-demo">
-  <div class="a11-toolbar">
-    <input id="chat-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
-    <select id="chat-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="chat-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="chat-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="chat-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
-    <select id="chat-conversations" aria-label="Stored conversations"></select>
-    <button id="chat-new" type="button">New</button>
-  </div>
-  <div id="chat-errors" class="a11-errors" role="alert" aria-live="polite"></div>
-  <div class="a11-panes">
-    <section class="a11-pane" aria-label="Chat">
-      <header>Chat</header>
-      <div id="chat-messages" class="a11-messages"></div>
-      <form id="chat-form" class="a11-compose">
-        <input id="chat-input" aria-label="Message" autocomplete="off" placeholder="Ask something…">
-        <button type="submit">Send</button>
-      </form>
-    </section>
-    <aside class="a11-pane" aria-label="Thoughts">
-      <header>thoughts port</header>
-      <div id="chat-thoughts" class="a11-messages"></div>
-    </aside>
-  </div>
-</div>
-<script type="module" src="../assets/chat-sessions.js"></script>
-
-The page is
-[`js/demo/chat_sessions.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/chat_sessions.ts)
-over
-[`js/demo/demo_support.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/demo_support.ts),
-and the backend is
-[`a11/demos/web_demos_server.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/web_demos_server.py).
-An `a11 gateway run` serves the same three actions, so a page can point at one of
-those instead.

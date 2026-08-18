@@ -62,15 +62,18 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
       control->fiber->Cancel();
     }
   }
-  thread::Detach({.stack_size = 256},
-                 [control, fiber = std::move(fiber)]() mutable {
-                   fiber->Join();
-                   {
-                     thread::MutexLock lock(&control->mu);
-                     control->fiber = nullptr;
-                   }
-                   fiber.reset();
-                 });
+  // Handed to the pool to reap, rather than spending a second fiber to hold it.
+  //
+  // That second fiber did nothing but block in `Join()` so that `Cancel()` -- which
+  // walks the fiber tree and locks each node, and so cannot be handed a fiber that
+  // might delete itself -- always had a live pointer to work with. It was ~15% of
+  // every fiber this process created. `ReapWhenFinished` keeps the same guarantee
+  // by ordering the handle's clearing before the destruction, and the join happens
+  // on whichever pool worker next comes round.
+  thread::ReapWhenFinished(std::move(fiber), [control]() mutable {
+    thread::MutexLock lock(&control->mu);
+    control->fiber = nullptr;
+  });
 
   return [control]() {
     control->Cancel();

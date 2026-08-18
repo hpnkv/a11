@@ -26,25 +26,10 @@
 namespace a11::python {
 namespace {
 
-class GilForDestructor {
- public:
-  GilForDestructor() {
-    if (Py_IsInitialized() != 0) {
-      state_ = PyGILState_Ensure();
-    }
-  }
-
-  ~GilForDestructor() {
-    if (state_.has_value()) {
-      PyGILState_Release(*state_);
-    }
-  }
-
-  [[nodiscard]] bool acquired() const { return state_.has_value(); }
-
- private:
-  std::optional<PyGILState_STATE> state_;
-};
+// (GilForDestructor was here. It acquired the GIL in destructors, guarded on
+// Py_IsInitialized(), and every one of its users has been converted to
+// DeferredPythonRefs: a destructor cannot take the GIL safely, because it may run
+// on a pool worker and no check can close the race against finalization.)
 
 absl::StatusCode CanonicalStatusCode(int value) {
   if (value < static_cast<int>(absl::StatusCode::kOk) ||
@@ -85,11 +70,11 @@ absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Capture() {
 }
 
 PythonLoop::~PythonLoop() {
-  GilForDestructor gil;
-  if (gil.acquired()) {
-    Py_XDECREF(loop_);
-  }
-  loop_ = nullptr;
+  // Deferred, not released here. Every Python callback holds a PythonLoop, so
+  // this destructor runs wherever the last callback died -- typically a pool
+  // worker -- and acquiring the GIL there races finalization. See
+  // DeferredPythonRefs.
+  DeferredPythonRefs::Retire(std::exchange(loop_, nullptr));
 }
 
 absl::StatusOr<std::shared_ptr<PythonLoop::Cancellation>> PythonLoop::Schedule(
@@ -114,10 +99,7 @@ PythonLoop::Cancellation::Cancellation(py::handle callback)
     : callback_(callback.inc_ref().ptr()) {}
 
 PythonLoop::Cancellation::~Cancellation() {
-  GilForDestructor gil;
-  if (gil.acquired()) {
-    Py_CLEAR(callback_);
-  }
+  DeferredPythonRefs::Retire(std::exchange(callback_, nullptr));
 }
 
 void PythonLoop::Cancellation::Cancel() const {
@@ -149,10 +131,7 @@ AsyncPythonCallback::Create(const py::object& callable) {
 }
 
 AsyncPythonCallback::~AsyncPythonCallback() {
-  GilForDestructor gil;
-  if (gil.acquired()) {
-    Py_CLEAR(callable_);
-  }
+  DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
 }
 
 absl::Status StatusFromPython(const py::handle& value) {
@@ -364,10 +343,11 @@ PythonReferences::PythonReferences(py::handle loop, py::handle future,
       loop_thread_(PyThread_get_thread_ident()) {}
 
 PythonReferences::~PythonReferences() {
-  GilForDestructor gil;
-  if (gil.acquired()) {
-    ClearWithGilHeld();
-  }
+  // Deferred; see DeferredPythonRefs. ClearWithGilHeld() remains for the callers
+  // that genuinely hold the GIL and want the references gone now.
+  DeferredPythonRefs::Retire(std::exchange(loop_, nullptr));
+  DeferredPythonRefs::Retire(std::exchange(future_, nullptr));
+  DeferredPythonRefs::Retire(std::exchange(completion_, nullptr));
 }
 
 py::object PythonReferences::loop() const {

@@ -88,6 +88,11 @@ class Fiber {
 
   bool Cancelled() const { return cancellation_.HasBeenNotified(); }
 
+  // Whether Join() would return without suspending, i.e. the fiber has finished
+  // and is waiting only to be reaped. Lets a reaper pick up finished fibers
+  // without blocking on ones that are still running; see ReapFinishedFibers().
+  bool Joinable() const { return joinable_.HasBeenNotified(); }
+
   Case OnCancel() const { return cancellation_.OnEvent(); }
 
   Case OnJoinable() const { return joinable_.OnEvent(); }
@@ -220,6 +225,41 @@ inline void Detach(std::unique_ptr<Fiber> fiber) {
     fiber->InternalJoin();
   }
 }
+
+/**
+ * @brief
+ *   Hand a started fiber to the pool to be joined and destroyed when it finishes.
+ *
+ * For the caller who needs the fiber *pointer* to stay valid -- `Cancel()` walks
+ * the fiber tree and locks each node, so it cannot be given a fiber that might
+ * delete itself -- but has nobody to `Join()` it. `Submit` is exactly that case:
+ * it hands back a Future rather than a joinable handle, so no caller ever joins.
+ *
+ * Before this existed, each such call spent a whole second fiber that did nothing
+ * but block in `Join()` to keep the first one's pointer alive. That was ~15% of all
+ * fibers created by a server workload.
+ *
+ * @param fiber
+ *   A started fiber. Ownership passes here.
+ * @param on_finished
+ *   Run after the join and *before* the fiber is destroyed, under whatever lock
+ *   the caller uses to guard its own copy of the pointer. This is the ordering the
+ *   whole arrangement rests on: it is what makes a `Cancel()` racing the fiber's
+ *   completion either take effect on a finished-but-live fiber, or find the handle
+ *   already cleared. Must not block for long and must not itself join.
+ */
+void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
+                      absl::AnyInvocable<void() &&> on_finished);
+
+/**
+ * @brief
+ *   Join and destroy any fibers handed to ReapWhenFinished() that have finished.
+ *
+ * Called by pool workers as they come round, so reaping costs no fiber of its own.
+ * Only touches fibers whose `Joinable()` is already true, so it never blocks on
+ * work still running.
+ */
+void ReapFinishedFibers();
 
 template <typename F>
 void Detach(TreeOptions tree_options, F&& f) {

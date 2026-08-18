@@ -786,15 +786,26 @@ ChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
   // Nothing prefetched. Fall through to exactly one ordinary read, so end of
   // stream, errors, timeouts and cancellation all behave as they always have,
   // then sweep up anything that landed while that read was in flight.
+  //
+  // `ThenAfterWaiting` and not `Then`, deliberately. The sweep calls
+  // `TakeBuffered`, which *drives the pump* -- real work, not a reshaping -- and
+  // `Then` would run it from `OnReady` on whichever thread completed the read,
+  // which for a transport-fed reader can be the uv loop. `ThenAfterWaiting` keeps
+  // today's two cases exactly: inline on the caller's thread when the read is
+  // already answered, which is the common case for a reader whose pump could serve
+  // it, and on a fibre only when it genuinely has to wait. The fibre disappears
+  // from the common path without moving the pump anywhere it was not already
+  // driven.
   std::shared_ptr<State> state = state_;
-  return a11::Submit<Batch>(
-      [state = std::move(state), limit, timeout]() -> absl::StatusOr<Batch> {
-        absl::StatusOr<State::NextResult> first = state->Next(timeout).Await();
+  return a11::ThenAfterWaiting(
+      state->Next(timeout), absl::InfiniteFuture(),
+      [state, limit](
+          const absl::StatusOr<State::NextResult>& first) -> absl::StatusOr<Batch> {
         if (!first.ok()) {
           return first.status();
         }
         Batch batch;
-        batch.push_back(std::move(*first));
+        batch.push_back(*first);
         if (!batch.back().has_value()) {
           return batch;
         }

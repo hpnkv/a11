@@ -65,6 +65,7 @@ constexpr struct {
     {"ops/s", "ops_per_s"},     {"items/s", "items_per_s"},
     {"p50 us", "p50_us"},       {"p99 us", "p99_us"},
     {"MiB/s", "mib_per_s"},     {"bytes ea", "bytes_each"},
+    {"cores", "cores_busy"},    {"cpu us/op", "cpu_us_per_op"},
 };
 
 std::string RenderCell(double value, const std::string& metric) {
@@ -108,6 +109,29 @@ void Recorder::PrintTable(const std::string& only_suite) const {
         });
     if (any) present.emplace_back(column.label, column.metric);
   }
+  // Then anything recorded that kColumns does not name, rather than dropping it.
+  // A metric a suite went to the trouble of measuring and does not appear is
+  // worse than an ugly column heading: `server` recorded `cores_busy` and
+  // `cpu_us_per_op` for weeks and the table showed neither, so the numbers were
+  // read as if they did not exist. Sorted, so the column order is stable across
+  // runs whatever order the metrics were inserted in.
+  std::vector<std::string> extras;
+  for (const Result& result : results_) {
+    for (const auto& [metric, value] : result.metrics) {
+      const bool known =
+          std::any_of(present.begin(), present.end(),
+                      [&](const auto& entry) { return entry.second == metric; });
+      if (known || std::find(extras.begin(), extras.end(), metric) !=
+                       extras.end()) {
+        continue;
+      }
+      extras.push_back(metric);
+    }
+  }
+  std::sort(extras.begin(), extras.end());
+  for (const std::string& metric : extras) {
+    present.emplace_back(metric, metric);
+  }
 
   size_t width = 30;
   for (const Result& result : results_) {
@@ -128,7 +152,7 @@ void Recorder::PrintTable(const std::string& only_suite) const {
   for (const std::string& suite : suites) {
     std::string header = absl::StrFormat("%-*s", width, "benchmark");
     for (const auto& [label, metric] : present) {
-      absl::StrAppend(&header, absl::StrFormat("%11s", label));
+      absl::StrAppend(&header, absl::StrFormat("%12s", label));
     }
     std::printf("\n[%s]\n%s\n%s\n", suite.c_str(), header.c_str(),
                 std::string(header.size(), '-').c_str());
@@ -139,7 +163,7 @@ void Recorder::PrintTable(const std::string& only_suite) const {
         const auto found = result.metrics.find(metric);
         absl::StrAppend(
             &row, absl::StrFormat(
-                      "%11s", found == result.metrics.end()
+                      "%12s", found == result.metrics.end()
                                   ? "-"
                                   : RenderCell(found->second, metric)));
       }

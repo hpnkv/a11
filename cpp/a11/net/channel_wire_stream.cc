@@ -162,8 +162,28 @@ ChannelWireStream::MakeState(std::shared_ptr<internal::BinaryChannel> channel,
 }
 
 ChannelWireStream::~ChannelWireStream() {
+  // Callbacks first: nothing inbound may run against a half-destroyed stream.
   (void)state_->channel->ResetCallbacks();
-  (void)state_->channel->Close();
+  // Then *abort*, not Close(). This is the last moment anything will speak for
+  // this stream, and `BinaryChannel::Close()` is a graceful close -- over HTTP it
+  // ends the request, so a peer still holding its half keeps the socket alive on
+  // both ends and the descriptor is never returned. Measured before this changed:
+  // dropping the last reference to a stream grew the descriptor count by
+  // +1.000/connection on each side and stranded a Session, on a probe that ran a
+  // 30s reap and a 60s settle window (`bench/fdprobe.py --teardown drop`).
+  //
+  // Being graceful here would also have nobody to be graceful *for*: Finish()
+  // deliberately leaves a cleanly half-closed channel open so that a peer's
+  // in-flight final packets are not cut off by an SCTP stream reset, and it names
+  // this destructor as the deterministic release that ends that grace period. So
+  // the grace period ends here, by construction.
+  //
+  // Nothing else may happen in this frame. `Finish()` is not called and `on_done`
+  // is not run: a done callback invoked from a destructor would run on whichever
+  // thread dropped the last reference, and a Python caller dropping a stream holds
+  // the GIL, which is the deadlock item 0a in FINDINGS.md already paid for once.
+  (void)state_->channel->Abort(
+      absl::CancelledError("WireStream released without an explicit close"));
 }
 
 void ChannelWireStream::Notify(const std::shared_ptr<State>& state) {

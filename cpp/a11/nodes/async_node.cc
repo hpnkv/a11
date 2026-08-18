@@ -197,23 +197,37 @@ std::optional<absl::Status> AsyncNode::GetWriterAbortStatus() const {
 }
 
 a11::Future<bool> AsyncNode::IsWritable() {
-  std::shared_ptr<AsyncNode> self = shared_from_this();
-  return a11::Submit<bool>([self = std::move(self)]() -> absl::StatusOr<bool> {
-    absl::StatusOr<std::optional<std::uint32_t>> final =
-        self->store_->GetFinalSeq().Await();
-    if (!final.ok()) {
-      return final.status();
-    }
-    if (final->has_value()) {
-      return false;
-    }
-    std::shared_ptr<stores::ChunkStoreWriter> writer;
-    {
-      thread::MutexLock lock(&self->mu_);
-      writer = self->writer_;
-    }
-    return writer == nullptr || writer->IsWritable();
-  });
+  // The writer is snapshotted *here*, on the caller's thread, rather than inside
+  // the continuation. That is what makes `Then` safe for this: the continuation
+  // runs on whichever thread completes `GetFinalSeq()` -- for a remote store, one
+  // that may not be a fibre at all -- and taking this node's fibre-aware mutex
+  // there is exactly the class of hazard that has bitten this tree before. With the
+  // snapshot taken up front the continuation is pure, and safe anywhere.
+  //
+  // The snapshot is therefore of the writer as it was before the final-seq lookup
+  // rather than after. For an in-memory store the lookup is already complete and
+  // there is no difference; in general a writer attached or detached during the
+  // lookup is now missed. That is within what this query means -- it answers
+  // "was this writable", and a caller that needs the answer to still hold has to
+  // be holding something that stops it changing.
+  std::shared_ptr<stores::ChunkStoreWriter> writer;
+  {
+    thread::MutexLock lock(&mu_);
+    writer = writer_;
+  }
+  return a11::Then(
+      store_->GetFinalSeq(),
+      [writer = std::move(writer)](
+          const absl::StatusOr<std::optional<std::uint32_t>>& final)
+          -> absl::StatusOr<bool> {
+        if (!final.ok()) {
+          return final.status();
+        }
+        if (final->has_value()) {
+          return false;
+        }
+        return writer == nullptr || writer->IsWritable();
+      });
 }
 
 a11::Future<std::uint32_t> AsyncNode::PutChunk(data::Chunk chunk,
@@ -264,12 +278,18 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
 
 a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
     absl::Duration timeout) {
-  std::shared_ptr<AsyncNode> self = shared_from_this();
-  return a11::Submit<std::optional<data::Chunk>>(
-      [self = std::move(self),
-       timeout]() -> absl::StatusOr<std::optional<data::Chunk>> {
-        absl::StatusOr<std::optional<data::NodeFragment>> fragment =
-            self->NextFragment(timeout).Await();
+  // `Then`, not `Submit`: this only reshapes what NextFragment produces, and a
+  // fibre whose whole life is "await one future, unwrap it" is a fibre spent on
+  // nothing. `Then` runs the reshaping inline when the fragment is already there --
+  // which it is whenever the reader's pump could answer without waiting -- and
+  // otherwise on whichever thread completes it. Either way the waiting is the
+  // reader's, driven by its pump, and no second fibre exists to hold this frame.
+  //
+  // The transform must not block, and does not: it unwraps and copies.
+  return a11::Then(
+      NextFragment(timeout),
+      [](const absl::StatusOr<std::optional<data::NodeFragment>>& fragment)
+          -> absl::StatusOr<std::optional<data::Chunk>> {
         if (!fragment.ok()) {
           return fragment.status();
         }

@@ -221,7 +221,7 @@ class PythonObject : public flow::HostObject {
       : object_(std::move(object)), tag_(std::move(tag)) {}
 
   ~PythonObject() override {
-    if (Py_IsInitialized() == 0) {
+    if (InterpreterIsGoingAway()) {
       // Interpreter gone: releasing the reference would touch freed state, and
       // nothing is left to leak into.
       object_.release();

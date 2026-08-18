@@ -18,6 +18,9 @@ add_executable(a11_core_test
   path_mtu_test.cc
   websocket_signalling_test.cc
   chunk_store_reader_test.cc
+  chunk_store_reader_wedge_test.cc
+  fibre_reaping_test.cc
+  remote_call_wedge_test.cc
   chunk_store_writer_test.cc
   async_node_test.cc
   action_test.cc

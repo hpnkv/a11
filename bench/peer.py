@@ -72,6 +72,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import platform
@@ -176,6 +177,7 @@ class _Counters:
         self.failures = 0
         self.accepts = 0
         self.closes = 0
+        self.compute_rounds = 0
 
     def snapshot(self) -> dict[str, int]:
         return dict(vars(self))
@@ -296,6 +298,48 @@ async def _handle_store(action: a11.Action) -> None:
     _counters.actions += 1
 
 
+COMPUTE = a11.ActionSchema(
+    name="bench-compute",
+    description="Burn CPU on the server, to price a compute-bound handler.",
+    inputs={
+        "request": a11.ActionPortSchema(
+            name="request", type="application/json", unary=True, required=True
+        )
+    },
+    outputs={
+        "report": a11.ActionPortSchema(
+            name="report", type="application/json", unary=True
+        )
+    },
+)
+
+
+async def _handle_compute(action: a11.Action) -> None:
+    """Hash a buffer `rounds` times, holding a core for a measurable while.
+
+    The workload set was entirely I/O- and store-shaped before this: every other
+    handler is waiting on something. A server hosting real work is not, and the
+    interesting question at scale is what happens to a small request's latency
+    when other requests are *computing* rather than waiting -- the pool cannot
+    overlap those away.
+
+    sha256 rather than a spin loop so the cost is real work a profiler will
+    attribute, and so the figure is comparable to the `sha256 of 4 KiB` row in
+    the reference table.
+    """
+    request = await action["request"].consume(dict)
+    rounds = max(1, int(request.get("rounds", 64)))
+    size = max(1, int(request.get("size", 4096)))
+    buffer = b"c" * size
+    digest = b""
+    for _index in range(rounds):
+        digest = hashlib.sha256(buffer + digest).digest()
+    _counters.compute_rounds += rounds
+    _counters.actions += 1
+    async with action["report"] as port:
+        await port.put_final({"rounds": rounds, "digest": digest[:8].hex()})
+
+
 def registry() -> a11.ActionRegistry:
     """The workload registry, identical on both sides of the connection."""
     entries = a11.ActionRegistry()
@@ -303,6 +347,7 @@ def registry() -> a11.ActionRegistry:
     entries.register(SINK.name, SINK, _handle_sink)
     entries.register(SOURCE.name, SOURCE, _handle_source)
     entries.register(STORE.name, STORE, _handle_store)
+    entries.register(COMPUTE.name, COMPUTE, _handle_compute)
     return entries
 
 
@@ -321,6 +366,26 @@ def _rss_bytes() -> int:
             pass
     usage = resource.getrusage(resource.RUSAGE_SELF)
     return usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+
+
+def _open_file_count() -> int:
+    """How many descriptors this process holds, or 0 where it cannot be asked."""
+    try:
+        return len(os.listdir(f"/proc/{os.getpid()}/fd"))
+    except OSError:
+        pass
+    # macOS has no /proc; lsof is the only portable answer and it is slow, so
+    # this is a fallback rather than the path a Linux run takes.
+    try:
+        import subprocess  # noqa: PLC0415 - fallback only
+
+        out = subprocess.run(
+            ["lsof", "-p", str(os.getpid())],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        return max(0, len(out.stdout.splitlines()) - 1)
+    except Exception:  # noqa: BLE001 - accounting must never fail a run
+        return 0
 
 
 def _cpu_seconds() -> float:
@@ -586,6 +651,10 @@ class Agent:
             "sessions": (
                 self.service.session_count if self.service is not None else 0
             ),
+            # Descriptors matter at population scale: 30k sessions is 30k of
+            # these, and running out looks like four different transport errors
+            # rather than like a limit (see FINDINGS.md item 0).
+            "open_files": _open_file_count(),
             "counters": _counters.snapshot(),
             "interfaces": _interface_counters(),
             "sink_bytes": self._sink_bytes,

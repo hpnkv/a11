@@ -58,12 +58,10 @@ class PythonSignallingCallback {
   PythonSignallingCallback& operator=(const PythonSignallingCallback&) = delete;
 
   ~PythonSignallingCallback() {
-    if (Py_IsInitialized() == 0) {
-      return;
-    }
-    const PyGILState_STATE state = PyGILState_Ensure();
-    Py_CLEAR(callable_);
-    PyGILState_Release(state);
+    // Queued rather than released here: a destructor may run on a pool
+    // worker, and taking the GIL there races interpreter finalization.
+    // See DeferredPythonRefs.
+    DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
   }
 
   template <typename... Args>

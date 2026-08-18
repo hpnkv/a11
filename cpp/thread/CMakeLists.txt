@@ -62,7 +62,24 @@ target_compile_features(Thread PUBLIC cxx_std_20)
 a11_disallow_exceptions(Thread)
 a11_allow_exceptions(thread/boost_primitives.cc thread/thread_pool.cc)
 
-set(THREAD_DEFAULT_FIBER_STACK_SIZE "65536" CACHE STRING
+# 512 KiB, not 64 KiB, and the reason is measured rather than cautious.
+#
+# A store write driven inline needs 67,695 B below Drive() once it tees to an
+# attached WireStream (see the table in stores/chunk_store_writer.cc), which is
+# more than a 64 KiB stack holds -- and `DriveInline` permits four nested drives,
+# so the worst case is ~271 KiB. That is what blocked FINDINGS.md item 3: the
+# ~9x available from flushing a confirmed write inline could not be taken because
+# the caller's stack could not hold the work.
+#
+# Raised globally rather than per store or per call site. A per-store stack would
+# mean every *caller* of a store write needed to know it was one, which is exactly
+# the knowledge a pump that drives on the caller's thread does not have.
+#
+# The cost is address space, not resident memory: a fibre stack is mmap'd and only
+# touched pages become resident, so a fibre that uses 2 KiB of its 512 KiB costs
+# 2 KiB of RSS. `memory_slope` and the RSS rows in `python -m bench` are what
+# check that claim, and they are the reason to re-measure if this changes again.
+set(THREAD_DEFAULT_FIBER_STACK_SIZE "524288" CACHE STRING
     "Default stack size in bytes for root fibers whose TreeOptions use zero")
 target_compile_definitions(
   Thread PRIVATE
@@ -77,4 +94,17 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
   add_test(NAME thread_test COMMAND thread_test)
   set_tests_properties(thread_test PROPERTIES TIMEOUT 30)
+
+  # A11_POOL_PIN. Its own executable because it has to set the variable before
+  # anything touches the pool -- which reads its environment when it starts, and
+  # starts on first use -- so it provides its own main and links gtest without
+  # gtest_main.
+  add_executable(thread_affinity_test tests/thread_affinity_test.cc)
+  target_link_libraries(thread_affinity_test PRIVATE Thread GTest::gtest)
+  target_compile_options(
+    thread_affinity_test PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow;-Wno-nullability-extension>
+    $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+  add_test(NAME thread_affinity_test COMMAND thread_affinity_test)
+  set_tests_properties(thread_affinity_test PROPERTIES TIMEOUT 30)
 endif()

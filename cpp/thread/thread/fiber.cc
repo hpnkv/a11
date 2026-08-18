@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include <absl/base/no_destructor.h>
 #include "thread/fiber.h"
 
 #include <memory>
@@ -218,6 +223,99 @@ void Fiber::MarkJoined() {
 void Fiber::InternalJoin() {
   Select({joinable_.OnEvent()});
   MarkJoined();
+}
+
+namespace {
+
+// Fibers handed over by ReapWhenFinished(), waiting to finish.
+//
+// A plain `std::mutex` and not this library's fiber-aware `Mutex`: the queue is
+// touched from `ReapFinishedFibers()`, which pool workers call as they come round,
+// and a fiber mutex there would be one more scheduler interaction per pass on the
+// path this exists to make cheaper. The critical section is a vector push or a
+// swap, so there is nothing to suspend for.
+struct ReapEntry {
+  std::unique_ptr<Fiber> fiber;
+  absl::AnyInvocable<void() &&> on_finished;
+};
+
+std::mutex& ReapMutex() {
+  static absl::NoDestructor<std::mutex> mu;
+  return *mu;
+}
+
+std::vector<ReapEntry>& ReapQueue() {
+  static absl::NoDestructor<std::vector<ReapEntry>> queue;
+  return *queue;
+}
+
+}  // namespace
+
+void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
+                      absl::AnyInvocable<void() &&> on_finished) {
+  if (fiber == nullptr) {
+    return;
+  }
+  const std::lock_guard<std::mutex> lock(ReapMutex());
+  ReapQueue().push_back(
+      ReapEntry{.fiber = std::move(fiber), .on_finished = std::move(on_finished)});
+}
+
+void ReapFinishedFibers() {
+  // Bounded work per call, and never blocking.
+  //
+  // The first version scanned the whole queue under the lock on every worker
+  // round. With a few hundred connections in flight the queue is never empty, so
+  // that was an O(queue) walk behind one global mutex, repeatedly, on all workers
+  // at once -- measured as a 28% throughput loss at 256 clients with the pool
+  // *less* busy than before (3.65 cores against 4.43), which is what contention on
+  // a shared lock looks like from the outside. So: `try_lock`, so a worker with
+  // real work never waits for the reaper, and a rotating cursor over a bounded
+  // window, so the cost per round does not grow with the number of live fibers.
+  constexpr size_t kMaxScanPerPass = 32;
+  static std::atomic<size_t> cursor{0};
+
+  std::vector<ReapEntry> ready;
+  {
+    std::unique_lock<std::mutex> lock(ReapMutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+      return;
+    }
+    std::vector<ReapEntry>& queue = ReapQueue();
+    if (queue.empty()) {
+      return;
+    }
+    const size_t scan = std::min(kMaxScanPerPass, queue.size());
+    size_t at = cursor.fetch_add(scan, std::memory_order_relaxed) % queue.size();
+    for (size_t seen = 0; seen < scan; ++seen) {
+      if (at >= queue.size()) {
+        at = 0;
+      }
+      // `Joinable()` is a notified-event read: asks "has it finished" without ever
+      // suspending on one that has not.
+      if (queue[at].fiber->Joinable()) {
+        ready.push_back(std::move(queue[at]));
+        queue[at] = std::move(queue.back());
+        queue.pop_back();
+        continue;  // The swapped-in entry now sits at `at`, so look at it too.
+      }
+      ++at;
+    }
+  }
+  for (ReapEntry& entry : ready) {
+    // Join first: the fiber has finished, so this returns without suspending and
+    // leaves it safe to destroy.
+    entry.fiber->Join();
+    // Then let the owner clear its pointer, under the owner's own lock, *before*
+    // the fiber is destroyed. A `Cancel()` racing completion therefore either runs
+    // against a finished-but-live fiber, which is harmless, or finds the handle
+    // already cleared. Reversing these two lines is the bug this ordering exists
+    // to prevent.
+    if (entry.on_finished != nullptr) {
+      std::move(entry.on_finished)();
+    }
+    entry.fiber.reset();
+  }
 }
 
 void Fiber::RetireUnstarted() ABSL_NO_THREAD_SAFETY_ANALYSIS {

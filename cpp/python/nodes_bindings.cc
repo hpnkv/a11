@@ -42,15 +42,13 @@ class PythonFactory {
   PythonFactory& operator=(const PythonFactory&) = delete;
 
   ~PythonFactory() {
-    if (Py_IsInitialized() == 0) {
-      return;
-    }
-    PyGILState_STATE state = PyGILState_Ensure();
-    Py_CLEAR(function_);
+    // Queued rather than released here: a destructor may run on a pool worker,
+    // and taking the GIL there races interpreter finalization. See
+    // DeferredPythonRefs.
+    DeferredPythonRefs::Retire(std::exchange(function_, nullptr));
     for (PyObject*& value : values_) {
-      Py_CLEAR(value);
+      DeferredPythonRefs::Retire(std::exchange(value, nullptr));
     }
-    PyGILState_Release(state);
   }
 
   absl::StatusOr<std::shared_ptr<stores::ChunkStore>> Call(

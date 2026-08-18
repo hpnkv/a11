@@ -538,7 +538,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       std::string method, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers, std::string body) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<std::shared_ptr<Http2ResponseStream>>(
+    return RunOnUvForConnection<std::shared_ptr<Http2ResponseStream>>(
         [self = std::move(self), method = std::move(method),
          scheme = std::move(scheme), authority = std::move(authority),
          path = std::move(path), headers = std::move(headers),
@@ -554,7 +554,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       std::string protocol, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+    return RunOnUvForConnection<std::shared_ptr<Http2DuplexStream>>(
         [self = std::move(self), protocol = std::move(protocol),
          scheme = std::move(scheme), authority = std::move(authority),
          path = std::move(path), headers = std::move(headers)]() mutable
@@ -569,7 +569,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       std::string method, std::string scheme, std::string authority,
       std::string path, HttpHeaders headers) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+    return RunOnUvForConnection<std::shared_ptr<Http2DuplexStream>>(
         [self = std::move(self), method = std::move(method),
          scheme = std::move(scheme), authority = std::move(authority),
          path = std::move(path), headers = std::move(headers)]() mutable
@@ -591,7 +591,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
   absl::Status FinishRequest(std::int32_t stream_id) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id]() {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id]() {
       return self->FinishRequestOnLoop(stream_id);
     });
   }
@@ -599,8 +599,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   absl::Status SendHeaders(std::int32_t stream_id, int status,
                            HttpHeaders headers) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id, status,
-                          headers = std::move(headers)]() mutable {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                       status,
+                                       headers = std::move(headers)]() mutable {
       return self->SendHeadersOnLoop(stream_id, status, std::move(headers));
     });
   }
@@ -616,7 +617,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
   absl::Status Finish(std::int32_t stream_id) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id]() {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id]() {
       return self->FinishOnLoop(stream_id);
     });
   }
@@ -624,18 +625,20 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   absl::Status FinishWithTrailers(std::int32_t stream_id,
                                   HttpHeaders trailers) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id,
-                          trailers = std::move(trailers)]() mutable {
-      return self->FinishOnLoop(stream_id, std::move(trailers));
-    });
+    return RunStatusOnUvForConnection(
+        [self = std::move(self), stream_id,
+         trailers = std::move(trailers)]() mutable {
+          return self->FinishOnLoop(stream_id, std::move(trailers));
+        });
   }
 
   absl::Status SendResponse(std::int32_t stream_id, int status,
                             HttpHeaders headers, std::string body) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id, status,
-                          headers = std::move(headers),
-                          body = std::move(body)]() mutable -> absl::Status {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                       status, headers = std::move(headers),
+                                       body = std::move(
+                                           body)]() mutable -> absl::Status {
       ABSL_RETURN_IF_ERROR(
           self->SendHeadersOnLoop(stream_id, status, std::move(headers)));
       if (!body.empty()) {
@@ -649,7 +652,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       std::int32_t stream_id, std::string method, std::string path,
       HttpHeaders headers) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<std::shared_ptr<Http2ResponseWriter>>(
+    return RunOnUvForConnection<std::shared_ptr<Http2ResponseWriter>>(
         [self = std::move(self), stream_id, method = std::move(method),
          path = std::move(path), headers = std::move(headers)]() mutable
             -> absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> {
@@ -665,8 +668,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError("Response abort status must be non-OK");
     }
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id,
-                          status = std::move(status)]() mutable {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                       status = std::move(status)]() mutable {
       Stream* stream = self->FindStream(stream_id);
       if (stream == nullptr) {
         return absl::OkStatus();
@@ -693,8 +696,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError("Request cancel status must be non-OK");
     }
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUv([self = std::move(self), stream_id,
-                          status = std::move(status)]() mutable {
+    return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                       status = std::move(status)]() mutable {
       Stream* stream = self->FindStream(stream_id);
       if (stream == nullptr) {
         return absl::OkStatus();
@@ -714,7 +717,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
   absl::StatusOr<bool> ResponseHeadersSent(std::int32_t stream_id) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<bool>(
+    return RunOnUvForConnection<bool>(
         [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
           Stream* stream = self->FindStream(stream_id);
           if (stream == nullptr) {
@@ -726,7 +729,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
   absl::StatusOr<bool> ResponseFinished(std::int32_t stream_id) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunOnUv<bool>(
+    return RunOnUvForConnection<bool>(
         [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
           Stream* stream = self->FindStream(stream_id);
           if (stream == nullptr) {

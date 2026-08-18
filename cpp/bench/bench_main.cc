@@ -80,6 +80,8 @@
 #include "a11/net/websocket_wire_stream.h"
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/async_node.h"
+#include "a11/service/service.h"
+#include "a11/service/session.h"
 #include "a11/stores/local_chunk_store.h"
 #include "bench/harness.h"
 #include "thread/boost_primitives.h"
@@ -507,9 +509,34 @@ void NodesSuite(Recorder& recorder, double scale) {
   }
 }
 
+// `<sys/resource.h>` explicitly: macOS pulls it in transitively through other
+// headers, GCC on Linux does not, so leaving it out builds here and fails there.
+#include <sys/resource.h>
+
+// How much CPU this process has used, across every thread.
+//
+// `getrusage(RUSAGE_SELF)` and not a per-thread clock: the question a server
+// benchmark asks is how many cores an operation costs, and A11 spreads one
+// operation over the uv loop, the pool workers and the caller.
+double ProcessCpuSeconds() {
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return 0.0;
+  }
+  const auto seconds = [](const timeval& value) {
+    return static_cast<double>(value.tv_sec) +
+           static_cast<double>(value.tv_usec) / 1e6;
+  };
+  return seconds(usage.ru_utime) + seconds(usage.ru_stime);
+}
+
 // ---------------------------------------------------------------------------
 // actions: the unit A11 is counted in
 // ---------------------------------------------------------------------------
+
+// Short enough that a wedged call stage reports promptly rather than consuming
+// the whole run's budget. File scope so the driver lambdas can read it.
+constexpr absl::Duration kStageTimeout = absl::Seconds(5);
 
 actions::ActionSchema EchoSchema() {
   return actions::ActionSchema{
@@ -522,6 +549,12 @@ actions::ActionSchema EchoSchema() {
                        .name = "output", .type = "application/octet-stream"}}},
   };
 }
+
+// Counts handler runs that wrote their reply. A wedge with this equal to the
+// number of outstanding calls means the server replied and the client's wakeup
+// was lost; below it, the server side is where the work stopped.
+std::atomic<std::int64_t> g_echo_handler_replies{0};
+
 
 actions::ActionHandler EchoHandler() {
   return [](std::shared_ptr<actions::Action> action) {
@@ -538,16 +571,45 @@ actions::ActionHandler EchoHandler() {
       auto output = action->GetOutput("output");
       if (!output.ok())
         return output.status();
-      return (*output)
-          ->PutChunk(std::move(**chunk), std::nullopt, true)
-          .Await()
-          .status();
+      const absl::Status written = (*output)
+                                       ->PutChunk(std::move(**chunk),
+                                                  std::nullopt, true)
+                                       .Await()
+                                       .status();
+      if (written.ok()) {
+        g_echo_handler_replies.fetch_add(1, std::memory_order_relaxed);
+      }
+      return written;
     });
   };
 }
 
 actions::ActionSchema PortlessSchema() {
   return actions::ActionSchema{.name = "portless"};
+}
+
+/// A schema with `width` inputs and `width` outputs, none of which the handler
+/// touches.
+///
+/// This is the shape that prices the Action's *teardown*, which is the only place
+/// the width of a schema is paid in full: a handler that writes nothing still
+/// leaves every output to be closed and every input to be finalised, and those
+/// were once one pool handoff each in series. A caller that reads one output of
+/// many is the normal case, not a pathological one -- see the note in
+/// Action::CloseUnwrittenOutputs about not materialising untouched outputs.
+actions::ActionSchema WideSchema(int width) {
+  actions::ActionSchema schema{.name = absl::StrCat("wide-", width)};
+  for (int index = 0; index < width; ++index) {
+    const std::string in = absl::StrCat("in", index);
+    const std::string out = absl::StrCat("out", index);
+    schema.inputs.emplace(
+        in, actions::ActionPortSchema{.name = in,
+                                      .type = "application/octet-stream"});
+    schema.outputs.emplace(
+        out, actions::ActionPortSchema{.name = out,
+                                       .type = "application/octet-stream"});
+  }
+  return schema;
 }
 
 /// A handler that spawns a fibre and finishes, mirroring a Python coroutine
@@ -671,6 +733,51 @@ void ActionsSuite(Recorder& recorder, double scale) {
                     },
                     iterations, iterations / 10),
                 .params = {{"ports", "1in/1out"}}});
+
+  // Width, which is what prices teardown. The handler touches nothing, so the
+  // whole cost is creating the action and finalising 2*width ports -- the path
+  // that used to be one pool handoff per port in series. Two widths, because the
+  // interesting question is whether the row scales with width or with a constant.
+  for (const int width : {8, 32}) {
+    const actions::ActionSchema wide = WideSchema(width);
+    // The handler *opens* every port and closes none. That matters: an output the
+    // handler never touched is deliberately never materialised (see
+    // Action::CloseUnwrittenOutputs), so a handler that ignores its ports leaves
+    // teardown with nothing to do and the row measures only the schema. Opening
+    // them is also the realistic shape -- an action that took its ports and then
+    // failed, or wrote some and exited -- and it is the only way this row prices
+    // finalising 2*width real nodes.
+    const actions::ActionHandler noop =
+        [width](std::shared_ptr<actions::Action> action) -> a11::Task {
+      for (int index = 0; index < width; ++index) {
+        auto in = action->GetInput(absl::StrCat("in", index), false);
+        (void)in;
+        auto out = action->GetOutput(absl::StrCat("out", index), false);
+        (void)out;
+      }
+      return a11::ReadyTask();
+    };
+    const std::int64_t wide_iterations =
+        std::max<std::int64_t>(1, iterations / (width / 4));
+    recorder.Add(
+        {.suite = "actions",
+         .name = "local_action",
+         .metrics = Latency(
+             [&](std::int64_t index) {
+               auto created = actions::Action::Create(
+                   wide, absl::StrCat("wide-", width, "-", index), noop);
+               if (!created.ok())
+                 return;
+               std::shared_ptr<actions::Action> action = *created;
+               if (!action->Run().ok())
+                 return;
+               auto done = action->Wait().Await(Deadline());
+               (void)done;
+             },
+             wide_iterations, wide_iterations / 10),
+         .params = {{"ports", absl::StrCat(width, "in/", width, "out")}},
+         .note = "handler touches no port; the cost is create plus teardown"});
+  }
 
   // The same data movement, with no action around it: two nodes, a write and a
   // read each way. The gap against local_action[1in/1out] is what the action
@@ -2218,6 +2325,330 @@ void WireSuite(Recorder& recorder, double scale) {
 }
 
 // ---------------------------------------------------------------------------
+// server: a native service under a client population
+// ---------------------------------------------------------------------------
+
+// What a C++ server costs per request, and whether it uses more than one core.
+//
+// This exists because the only server figures A11 had came from the *Python*
+// `bench/peer.py` agent, which tops out at ~1,550 echo actions a second while
+// using 1.5 of 12 cores -- a ceiling that does not move when the offered load
+// grows eightfold. Two explanations fit that: the Python asyncio loop is the
+// serial path, or something inside A11 is. A native server distinguishes them,
+// because there is no Python in it at all.
+//
+// Read the `cores_busy` column first. Throughput that plateaus while cores stay
+// near one is a serial path; throughput that plateaus with cores near the machine
+// width is saturation, which is a different problem with different fixes.
+//
+// One caveat the note on every row repeats: client and server share this process,
+// so `cpu_us_per_op` covers both ends. It is still the number that matters --
+// what an operation costs the machine -- but it is not comparable with a figure
+// taken from a server in a process of its own.
+void ServerSuite(Recorder& recorder, double scale) {
+  for (const int clients : {1, 4, 16, 64, 256, 1024}) {
+    const std::int64_t per_client =
+        Scaled(std::max<std::int64_t>(8, 512 / clients), scale, 4);
+
+    auto registry = std::make_shared<actions::ActionRegistry>();
+    if (!registry->Register(EchoSchema().name, EchoSchema(), EchoHandler())
+             .ok()) {
+      continue;
+    }
+    absl::StatusOr<std::shared_ptr<service::Service>> service =
+        service::Service::Create(registry);
+    if (!service.ok()) {
+      std::fprintf(stderr, "  skip server: %s\n",
+                   service.status().ToString().c_str());
+      continue;
+    }
+
+    // Every accepted connection becomes a session on the one service, which is
+    // the shape a real server has: one process, one registry, many peers.
+    std::shared_ptr<service::Service> serving = *service;
+    net::WebSocketServerOptions options;
+    options.path = "/bench";
+    options.bind_address = "127.0.0.1";
+    options.port = 0;
+    options.http2_options.enable_h2 = false;
+    options.http2_options.enable_h2c = false;
+    absl::StatusOr<std::shared_ptr<net::WebSocketWireServer>> server =
+        net::WebSocketWireServer::Create(
+            [serving](std::shared_ptr<net::WebSocketWireStream> stream)
+                -> a11::Task {
+              // Reported, not discarded. Swallowing this is what made the first
+              // version of this suite hang: a failed accept leaves the client
+              // waiting for a peer that never arrived, and every thread in the
+              // process then sits idle in the fibre dispatcher with nothing to
+              // say why.
+              absl::StatusOr<std::shared_ptr<service::Session>> accepted =
+                  serving->StartStreamHandler(std::move(stream));
+              if (!accepted.ok()) {
+                std::fprintf(stderr, "  server: accept failed: %s\n",
+                             accepted.status().ToString().c_str());
+              }
+              return a11::ReadyTask();
+            },
+            options);
+    if (!server.ok()) {
+      std::fprintf(stderr, "  skip server: %s\n",
+                   server.status().ToString().c_str());
+      continue;
+    }
+    const absl::StatusOr<std::uint16_t> port = (*server)->port();
+    if (!port.ok()) {
+      continue;
+    }
+
+    std::fprintf(stderr, "  server[%d clients]: listening on %u\n", clients,
+                 static_cast<unsigned>(*port));
+    std::vector<std::shared_ptr<service::Session>> sessions;
+    std::vector<std::shared_ptr<net::WireStream>> streams;
+    bool ready = true;
+    for (int index = 0; index < clients && ready; ++index) {
+      net::WebSocketClientOptions client_options;
+      client_options.http2_options.enable_h2 = false;
+      client_options.http2_options.enable_h2c = false;
+      absl::StatusOr<std::shared_ptr<net::WebSocketWireStream>> stream =
+          net::WebSocketWireStream::CreateClient(
+              absl::StrCat("ws://127.0.0.1:", *port, "/bench"),
+              net::WireStreamOptions{}, client_options);
+      if (!stream.ok()) {
+        std::fprintf(stderr, "  server: connect %d failed: %s\n", index,
+                     stream.status().ToString().c_str());
+        ready = false;
+        break;
+      }
+      absl::StatusOr<std::shared_ptr<service::Session>> session =
+          service::Session::Create();
+      if (!session.ok()) {
+        ready = false;
+        break;
+      }
+      // AddStream returns a StatusOr<Task>: the accept itself can fail before
+      // there is anything to await.
+      absl::StatusOr<a11::Task> added =
+          (*session)->AddStream(*stream, service::StreamMode::kStart);
+      if (!added.ok()) {
+        std::fprintf(stderr, "  server: add_stream %d rejected: %s\n", index,
+                     added.status().ToString().c_str());
+        ready = false;
+        break;
+      }
+      if (const absl::Status started = added->Await(Deadline()).status();
+          !started.ok()) {
+        std::fprintf(stderr, "  server: add_stream %d did not start: %s\n",
+                     index, started.ToString().c_str());
+        ready = false;
+        break;
+      }
+      std::fprintf(stderr, "  server: client %d connected\n", index);
+      sessions.push_back(*session);
+      streams.push_back(*stream);
+    }
+    if (!ready || sessions.empty()) {
+      std::fprintf(stderr, "  skip server[%d clients]: could not connect\n",
+                   clients);
+      (void)(*server)->Stop();
+      continue;
+    }
+
+    // One fibre per client, each calling echo in a loop: concurrency is what
+    // makes the cores-busy column mean anything.
+    const double cpu_before = ProcessCpuSeconds();
+    const absl::Time started = absl::Now();
+    g_echo_handler_replies.store(0, std::memory_order_relaxed);
+    std::atomic<std::int64_t> completed{0};
+    // When the last successful round-trip landed. Dividing by wall-clock instead
+    // charges this row for the 5s stage timeout that the wedged 1-3% of drivers
+    // sit out, which understates throughput by more than an order of magnitude
+    // at high client counts -- 3986 of 4096 operations completing looked like
+    // 772 ops/s.
+    std::atomic<std::int64_t> last_completion_unix_nanos{0};
+    std::vector<a11::Task> drivers;
+    drivers.reserve(sessions.size());
+    for (size_t index = 0; index < sessions.size(); ++index) {
+      drivers.push_back(a11::SubmitTask(
+          [&sessions, &streams, &completed, &last_completion_unix_nanos, index,
+           per_client]() -> absl::Status {
+            for (std::int64_t round = 0; round < per_client; ++round) {
+              absl::StatusOr<std::shared_ptr<actions::Action>> call =
+                  actions::Action::Create(EchoSchema(), /*action_id=*/"");
+              if (!call.ok()) {
+                return call.status();
+              }
+              // The id must be empty so each call gets a generated one. It is an
+              // *instance* id, not the action name: a literal here makes every
+              // call in the process share one id, so their port nodes collide in
+              // the shared node map and round two's put lands on round one's
+              // node. That presented as a put-input stall, and as a collapse to
+              // 13 ops/s at 64 clients rather than as any kind of error.
+              // The node map matters as much as the session and the stream:
+              // without it the call's ports have nowhere to live, and the first
+              // version of this suite hung here rather than failing, with the
+              // client connected and every thread idle. The Python client binds
+              // all three, which is what this mirrors.
+              if (!(*call)->BindNodeMap(sessions[index]->GetNodeMap()).ok() ||
+                  !(*call)->BindSession(sessions[index]).ok() ||
+                  !(*call)->BindStream(streams[index]).ok()) {
+                return absl::InternalError("could not bind the call");
+              }
+              // Each stage gets a deadline shorter than the driver's own, so
+              // that a wedge is reported as the stage that wedged. With only an
+              // outer deadline every failure reads DEADLINE_EXCEEDED, which
+              // names the harness rather than the problem.
+              const absl::Time stage_deadline = absl::Now() + kStageTimeout;
+              if (const absl::Status dispatched =
+                      (*call)->Call().Await(stage_deadline).status();
+                  !dispatched.ok()) {
+                return absl::Status(dispatched.code(),
+                                    absl::StrCat("stage=call ",
+                                                 dispatched.message()));
+              }
+              absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> input =
+                  (*call)->GetInput("input");
+              if (!input.ok()) {
+                return input.status();
+              }
+              // The mimetype is not decoration here. A chunk crossing a
+              // transport boundary is validated, and an empty mimetype passes
+              // locally -- which is why every local_action row works -- and is
+              // rejected on the wire, where it surfaces as a reply that never
+              // comes rather than as an error at the put.
+              if (!(*input)
+                       ->PutChunk(data::Chunk{.metadata =
+                                                  data::ChunkMetadata{
+                                                      .mimetype =
+                                                          "application/"
+                                                          "octet-stream"},
+                                              .data = "ping"},
+                                  std::nullopt, true)
+                       .Await(absl::Now() + kStageTimeout)
+                       .ok()) {
+                return absl::InternalError("stage=put-input timed out");
+              }
+              // A11_BENCH_READ_DELAY_MS delays the read of the output so the
+              // reply is already delivered before anyone asks for it. That is
+              // the ordering that concurrency produces by accident -- a busier
+              // client reads later -- so forcing it turns a 16-client race into
+              // a one-client experiment.
+              if (const char* delay = std::getenv("A11_BENCH_READ_DELAY_MS");
+                  delay != nullptr) {
+                thread::SleepFor(absl::Milliseconds(std::atoi(delay)));
+              }
+              absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> output =
+                  (*call)->GetOutput("output");
+              if (!output.ok()) {
+                return output.status();
+              }
+              // One read, no retries. `bind_stream` must be false on a
+              // caller's *output*: the session routes inbound fragments to the
+              // node by id, and a bound output node tees what it receives back to
+              // the peer -- an echo of the reply that corrupted the connection for
+              // every later call. Binding it was what made reads here appear to
+              // lose their wake, and the retry loop that used to be here was
+              // hiding the damage rather than measuring it.
+              const absl::StatusOr<std::optional<data::Chunk>> replied =
+                  (*output)->NextChunk().Await(absl::Now() + kStageTimeout);
+              if (!replied.ok() || !replied->has_value()) {
+                return absl::Status(
+                    replied.ok() ? absl::StatusCode::kDataLoss : replied.status().code(),
+                    absl::StrCat("stage=read-output ",
+                                 replied.ok() ? "the reply ended before a chunk"
+                                              : replied.status().message()));
+              }
+              if (const absl::Status finished =
+                      (*call)->Wait().Await(absl::Now() + kStageTimeout).status();
+                  !finished.ok()) {
+                return absl::Status(
+                    finished.code(),
+                    absl::StrCat("stage=wait ", finished.message()));
+              }
+              completed.fetch_add(1, std::memory_order_relaxed);
+              const std::int64_t now_nanos =
+                  absl::ToUnixNanos(absl::Now());
+              std::int64_t seen =
+                  last_completion_unix_nanos.load(std::memory_order_relaxed);
+              while (now_nanos > seen &&
+                     !last_completion_unix_nanos.compare_exchange_weak(
+                         seen, now_nanos, std::memory_order_relaxed)) {
+              }
+            }
+            return absl::OkStatus();
+          },
+          thread::TreeOptions{.stack_size = 512 * 1024}));
+    }
+    // Reported, not discarded -- for the third time in this suite's short life.
+    // A driver that returns an error and is ignored shows up as a row that never
+    // appears, which reads as "the benchmark is broken" rather than "the call
+    // failed and here is why".
+    // Every distinct driver error, not just the first. A driver that times out
+    // keeps running -- Await returning DEADLINE_EXCEEDED does not stop the fibre
+    // -- so the teardown below then aborts a stream it is still using and it
+    // fails FAILED_PRECONDITION. Reporting only the first error in iteration
+    // order surfaces that cascade and hides the timeout that caused it.
+    std::vector<std::string> driver_errors;
+    for (const a11::Task& driver : drivers) {
+      if (const absl::Status result = driver.Await(Deadline()).status();
+          !result.ok()) {
+        std::string text = result.ToString();
+        if (std::find(driver_errors.begin(), driver_errors.end(), text) ==
+            driver_errors.end()) {
+          driver_errors.push_back(std::move(text));
+        }
+      }
+    }
+    for (const std::string& text : driver_errors) {
+      std::fprintf(stderr,
+                   "  server[%d clients]: driver failed: %s"
+                   " (client round-trips=%lld, server replies written=%lld)\n",
+                   clients, text.c_str(),
+                   static_cast<long long>(
+                       completed.load(std::memory_order_relaxed)),
+                   static_cast<long long>(
+                       g_echo_handler_replies.load(std::memory_order_relaxed)));
+    }
+    // Printed so a fibre or scheduling census can be divided by it. Counters like
+    // A11_POOL_STATS are process-wide and include connection setup, so the honest
+    // way to get a per-operation figure is to run two scales and divide the
+    // differences -- which needs the operation count, not just the rate.
+    std::fprintf(stderr, "  server[%d clients]: completed=%lld\n", clients,
+                 static_cast<long long>(
+                     completed.load(std::memory_order_relaxed)));
+    const std::int64_t last_nanos =
+        last_completion_unix_nanos.load(std::memory_order_relaxed);
+    const absl::Duration elapsed =
+        last_nanos > 0 ? absl::FromUnixNanos(last_nanos) - started
+                       : absl::Now() - started;
+    const double cpu = ProcessCpuSeconds() - cpu_before;
+    const std::int64_t done = completed.load(std::memory_order_relaxed);
+
+    for (const auto& stream : streams) {
+      stream->Abort(absl::CancelledError("benchmark over")).IgnoreError();
+    }
+    (void)serving->Abort(absl::CancelledError("benchmark over"));
+    (void)(*server)->Stop();
+
+    const double seconds = absl::ToDoubleSeconds(elapsed);
+    if (done == 0 || seconds <= 0.0) {
+      continue;
+    }
+    recorder.Add(
+        {.suite = "server",
+         .name = "native_echo",
+         .metrics =
+             {
+                 {"ops_per_s", static_cast<double>(done) / seconds},
+                 {"cpu_us_per_op", cpu * 1e6 / static_cast<double>(done)},
+                 {"cores_busy", cpu / seconds},
+             },
+         .params = {{"clients", absl::StrCat(clients)}},
+         .note = "one native service, one connection per client; cpu covers "
+                 "both ends because they share this process"});
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -2231,6 +2662,7 @@ const std::vector<std::pair<std::string, SuiteFn>>& Suites() {
       {"actions", ActionsSuite},
       {"scheduling", SchedulingSuite},
       {"wire", WireSuite},
+      {"server", ServerSuite},
   };
   return *suites;
 }

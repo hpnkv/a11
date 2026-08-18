@@ -136,13 +136,13 @@ __all__: list[str] = [
     "SessionOptions",
     "SessionWithRecv",
     "SignallingEndpoint",
-    "SseOutboundDelivery",
     "SignallingMessage",
     "SignallingMessageType",
     "SignallingService",
     "SignallingTransport",
     "SpeechRecognizer",
     "SpeechRecognizerOptions",
+    "SseOutboundDelivery",
     "Status",
     "StreamMode",
     "TCP",
@@ -181,6 +181,8 @@ __all__: list[str] = [
     "create_in_process_wire_stream_pair",
     "default_audio_input_device",
     "default_redis_client",
+    "deferred_python_refs_high_water",
+    "deferred_python_refs_pending",
     "download",
     "emit_log",
     "fetch",
@@ -205,6 +207,7 @@ __all__: list[str] = [
     "parse_url",
     "register_audio_actions",
     "register_http_actions",
+    "release_deferred_python_refs",
     "reset_default_redis_client",
     "resolve_asr_model",
     "resolve_url_reference",
@@ -7247,6 +7250,14 @@ class WebRtcConfiguration:
     def max_message_size(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
+    def mtu(self) -> int | None:
+        """
+        Network MTU in bytes that SCTP builds packets to; None means 1280. The largest performance knob this transport has: path MTU discovery is unavailable, so the default fragments every message into 1172-byte chunks regardless of what the path can carry, and raising it to 4096 is worth about 3x at 64 KiB (131 -> 368 MiB/s on Linux loopback). Above roughly 4 KiB, messages that need more than one chunk silently stop arriving while small ones keep flowing, so set it only for a peer whose end-to-end path MTU is known -- leave it None for a browser or an internet peer.
+        """
+    @mtu.setter
+    def mtu(self, arg0: typing.SupportsInt | None) -> None: ...
+
+    @property
     def preferred_port_range(self) -> tuple[int, int] | None:
         """
         Optional (min, max) local port range for ICE.
@@ -8808,6 +8819,18 @@ def default_redis_client() -> RedisClient:
     Return the process-global client configured from A11_REDIS_*.
     """
 
+def deferred_python_refs_high_water() -> int:
+    """
+    The most references ever queued at once.
+
+    This is the number that says whether the deferred queue is a small buffer or a leak: every Python invocation drains it, and a destructor running on a thread that already holds the GIL never queues at all, so it should stay small however many sessions churn through the process.
+    """
+
+def deferred_python_refs_pending() -> int:
+    """
+    How many Python references native destructors have queued and not yet released.
+    """
+
 def download(url: str, options: DownloadOptions) -> asyncio.Future[str]:
     """
     Download a URL to a verified file, atomically.
@@ -8956,6 +8979,13 @@ def register_audio_actions(registry: ActionRegistry | None) -> None:
 def register_http_actions(registry: ActionRegistry | None) -> None:
     """
     Register make_http_request and web-fetch on `registry`.
+    """
+
+def release_deferred_python_refs() -> None:
+    """
+    Release Python references that native destructors queued instead of dropping.
+
+    A native destructor may run on a worker thread, where acquiring the GIL races interpreter finalization and gets the thread killed with pthread_exit -- which then unwinds through frames compiled -fno-exceptions and aborts the process. Such references are queued instead. This drains the queue, and is safe only because the caller holds the GIL by virtue of being called from Python. Registered with atexit by a11/__init__.py; calling it by hand is harmless.
     """
 
 def reset_default_redis_client() -> None:

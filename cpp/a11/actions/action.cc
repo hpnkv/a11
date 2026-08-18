@@ -2,8 +2,6 @@
 
 #include "a11/actions/action.h"
 
-#include "a11/actions/internal/exception_guarded_handlers.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -26,10 +24,12 @@
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
+#include "a11/actions/internal/exception_guarded_handlers.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
+#include "a11/concurrency/parallel.h"
 #include "a11/data/types.h"
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/async_node.h"
@@ -1312,46 +1312,70 @@ absl::Status Action::ApplyInputAutofills() {
   // First pass: every autofilled input must be empty and writable before it is
   // filled, so a peer cannot smuggle data into a receiver-autofilled input
   // ahead of (or racing) the ActionMessage that authorizes it.
+  // The writability and emptiness of every autofilled input is asked at once: the
+  // checks are independent, and the first pass used to pay two pool handoffs per
+  // node in series before a single byte was written.
   std::vector<std::shared_ptr<nodes::AsyncNode>> nodes;
   nodes.reserve(work.size());
+  std::vector<a11::Future<bool>> checks;
+  checks.reserve(work.size());
+  std::vector<a11::Future<size_t>> sizes;
+  sizes.reserve(work.size());
   for (const auto& [node_id, autofills] : work) {
     ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> node,
                           node_map->Get(node_id));
-    ABSL_ASSIGN_OR_RETURN(bool writable, node->IsWritable().Await());
-    if (!writable) {
+    checks.push_back(node->IsWritable());
+    sizes.push_back(node->GetChunkStore()->Size());
+    nodes.push_back(std::move(node));
+  }
+  const std::vector<absl::StatusOr<bool>> writable =
+      a11::AwaitAll(std::move(checks));
+  const std::vector<absl::StatusOr<size_t>> sizes_now =
+      a11::AwaitAll(std::move(sizes));
+  for (size_t index = 0; index < work.size(); ++index) {
+    const std::string& node_id = work[index].first;
+    ABSL_RETURN_IF_ERROR(writable[index].status());
+    if (!*writable[index]) {
       return absl::FailedPreconditionError(
           absl::StrCat("Autofilled input '", node_id, "' is not writable"));
     }
-    ABSL_ASSIGN_OR_RETURN(size_t size, node->GetChunkStore()->Size().Await());
-    if (size != 0) {
+    ABSL_RETURN_IF_ERROR(sizes_now[index].status());
+    if (*sizes_now[index] != 0) {
       return absl::FailedPreconditionError(absl::StrCat(
           "Autofilled input '", node_id, "' already contains data"));
     }
-    {
-      thread::MutexLock lock(&mu_);
+  }
+  {
+    thread::MutexLock lock(&mu_);
+    for (const std::shared_ptr<nodes::AsyncNode>& node : nodes) {
       input_nodes_.insert(node);
     }
-    nodes.push_back(std::move(node));
   }
 
-  // Second pass: write and close each autofilled input.
+  // Second pass: write and close each autofilled input. One fibre per node, and
+  // the writes *within* a node stay in this order because their sequence numbers
+  // are assigned by the order they are put -- that is the one thing here that is
+  // not independent, so it is the one thing that stays serial.
+  std::vector<absl::AnyInvocable<absl::Status() &&>> fills;
+  fills.reserve(work.size());
   for (size_t index = 0; index < work.size(); ++index) {
-    const std::shared_ptr<nodes::AsyncNode>& node = nodes[index];
-    const std::string& node_id = work[index].first;
-    for (const std::optional<data::NodeFragment>& autofill :
-         work[index].second) {
-      // A missing fragment is a null final marker, mirroring PutNullFinal.
-      if (!autofill.has_value()) {
-        ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
-        continue;
+    fills.push_back([node = nodes[index],
+                     entry = &work[index]]() -> absl::Status {
+      for (const std::optional<data::NodeFragment>& autofill : entry->second) {
+        // A missing fragment is a null final marker, mirroring PutNullFinal.
+        if (!autofill.has_value()) {
+          ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
+          continue;
+        }
+        data::NodeFragment fragment = *autofill;
+        fragment.id = entry->first;
+        ABSL_RETURN_IF_ERROR(
+            node->PutFragment(std::move(fragment)).Await().status());
       }
-      data::NodeFragment fragment = *autofill;
-      fragment.id = node_id;
-      ABSL_RETURN_IF_ERROR(
-          node->PutFragment(std::move(fragment)).Await().status());
-    }
-    ABSL_RETURN_IF_ERROR(node->DrainAndClose().Await().status());
+      return node->DrainAndClose().Await().status();
+    });
   }
+  ABSL_RETURN_IF_ERROR(a11::RunAllToCompletion(std::move(fills)));
   thread::MutexLock lock(&mu_);
   input_autofills_applied_ = true;
   return absl::OkStatus();
@@ -1414,12 +1438,22 @@ absl::Status Action::FinishRun(absl::Status status) {
       thread::MutexLock lock(&mu_);
       children.assign(children_.begin(), children_.end());
     }
+    // One fibre per child rather than one child at a time: children are separate
+    // Actions with separate nodes, and each AbortInputs is itself now two rounds
+    // of pool work, so a parent with several children used to serialise all of it.
+    std::vector<absl::AnyInvocable<absl::Status() &&>> aborts;
+    aborts.reserve(children.size());
+    const bool cancelled = final_status.code() == absl::StatusCode::kCancelled;
     for (const auto& child : children) {
-      child->AbortInputs(final_status).IgnoreError();
-      if (final_status.code() == absl::StatusCode::kCancelled) {
-        child->Cancel().IgnoreError();
-      }
+      aborts.push_back([child, final_status, cancelled]() -> absl::Status {
+        child->AbortInputs(final_status).IgnoreError();
+        if (cancelled) {
+          child->Cancel().IgnoreError();
+        }
+        return absl::OkStatus();
+      });
     }
+    a11::RunAllToCompletion(std::move(aborts)).IgnoreError();
     if (final_status.code() == absl::StatusCode::kCancelled) {
       AbortInputs(final_status).IgnoreError();
     }
@@ -1518,21 +1552,42 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   if (!status.ok()) {
     KeepFirstError(SendNodeAbortStatuses(ids, status), &first);
   }
+  // Two rounds rather than two handoffs per node. Every output node's writability
+  // is asked at once, then every close or abort the answers call for is started at
+  // once -- the nodes are independent of each other, so a wide schema used to pay
+  // 2N pool handoffs in series where it now pays 2. See a11/concurrency/parallel.h.
+  std::vector<std::shared_ptr<nodes::AsyncNode>> ordered;
+  ordered.reserve(nodes.size());
+  std::vector<a11::Future<bool>> checks;
+  checks.reserve(nodes.size());
   for (const auto& node : nodes | std::views::values) {
-    absl::StatusOr<bool> writable = node->IsWritable().Await();
-    if (!writable.ok()) {
-      KeepFirstError(writable.status(), &first);
+    ordered.push_back(node);
+    checks.push_back(node->IsWritable());
+  }
+  const std::vector<absl::StatusOr<bool>> writable =
+      a11::AwaitAll(std::move(checks));
+
+  std::vector<a11::Task> closes;
+  closes.reserve(ordered.size());
+  for (size_t index = 0; index < ordered.size(); ++index) {
+    if (!writable[index].ok()) {
+      KeepFirstError(writable[index].status(), &first);
       continue;
     }
+    const std::shared_ptr<nodes::AsyncNode>& node = ordered[index];
     const absl::Status writer_status = node->GetWriterStatus();
-    if (status.ok() && *writable) {
-      KeepFirstError(node->DrainAndClose().Await().status(), &first);
-    } else if (!status.ok() && (*writable || !writer_status.ok())) {
+    if (status.ok() && *writable[index]) {
+      closes.push_back(node->DrainAndClose());
+    } else if (!status.ok() && (*writable[index] || !writer_status.ok())) {
       // A graceful close can fail while leaving the backing store open. The
       // failure pass must retry that writer with the Action's terminal status
       // even though it is no longer writable for ordinary puts.
-      KeepFirstError(node->AbortWithStatus(status).Await().status(), &first);
+      closes.push_back(node->AbortWithStatus(status));
     }
+  }
+  for (const absl::StatusOr<a11::Unit>& closed :
+       a11::AwaitAll(std::move(closes))) {
+    KeepFirstError(closed.status(), &first);
   }
   return first;
 }
@@ -1612,13 +1667,30 @@ absl::Status Action::AbortInputs(const absl::Status& status) {
     }
   }
   KeepFirstError(SendNodeAbortStatuses(ids, status), &first);
-  for (const auto& node : nodes) {
-    absl::StatusOr<bool> writable = node->IsWritable().Await();
-    if (!writable.ok()) {
-      KeepFirstError(writable.status(), &first);
-    } else if (*writable) {
-      KeepFirstError(node->AbortWithStatus(status).Await().status(), &first);
+  // Same two rounds as CloseUnwrittenOutputs, and for the same reason: the input
+  // nodes do not depend on each other.
+  std::vector<std::shared_ptr<nodes::AsyncNode>> ordered(nodes.begin(),
+                                                         nodes.end());
+  std::vector<a11::Future<bool>> checks;
+  checks.reserve(ordered.size());
+  for (const auto& node : ordered) {
+    checks.push_back(node->IsWritable());
+  }
+  const std::vector<absl::StatusOr<bool>> writable =
+      a11::AwaitAll(std::move(checks));
+
+  std::vector<a11::Task> aborts;
+  aborts.reserve(ordered.size());
+  for (size_t index = 0; index < ordered.size(); ++index) {
+    if (!writable[index].ok()) {
+      KeepFirstError(writable[index].status(), &first);
+    } else if (*writable[index]) {
+      aborts.push_back(ordered[index]->AbortWithStatus(status));
     }
+  }
+  for (const absl::StatusOr<a11::Unit>& aborted :
+       a11::AwaitAll(std::move(aborts))) {
+    KeepFirstError(aborted.status(), &first);
   }
   return first;
 }
@@ -1770,15 +1842,34 @@ void Action::AbortLocalCallOutputs(absl::Status status) {
   if (node_map == nullptr) {
     return;
   }
+  std::vector<std::shared_ptr<nodes::AsyncNode>> ordered;
+  ordered.reserve(ids.size());
+  std::vector<a11::Future<bool>> checks;
+  checks.reserve(ids.size());
   for (const std::string& id : ids) {
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node = node_map->Get(id);
     if (!node.ok()) {
       continue;
     }
-    absl::StatusOr<bool> writable = (*node)->IsWritable().Await();
-    if (writable.ok() && *writable) {
-      (*node)->AbortWithStatus(std::move(status)).Await().IgnoreError();
+    ordered.push_back(*node);
+    checks.push_back((*node)->IsWritable());
+  }
+  const std::vector<absl::StatusOr<bool>> writable =
+      a11::AwaitAll(std::move(checks));
+
+  std::vector<a11::Task> aborts;
+  aborts.reserve(ordered.size());
+  for (size_t index = 0; index < ordered.size(); ++index) {
+    if (writable[index].ok() && *writable[index]) {
+      // A copy per node, not a move: moving the status into the first abort left
+      // every node after it being aborted with a moved-from (OK) status, which
+      // silently turned an abort into a graceful close for every output but one.
+      aborts.push_back(ordered[index]->AbortWithStatus(status));
     }
+  }
+  for (const absl::StatusOr<a11::Unit>& aborted :
+       a11::AwaitAll(std::move(aborts))) {
+    aborted.status().IgnoreError();
   }
 }
 

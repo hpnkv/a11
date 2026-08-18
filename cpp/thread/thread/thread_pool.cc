@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <execinfo.h>
+#include <absl/container/flat_hash_map.h>
 #include "thread/thread_pool.h"
 
 #include <algorithm>
@@ -42,7 +44,11 @@
 #include <absl/functional/any_invocable.h>
 #include <absl/log/check.h>
 #include <absl/log/log.h>
+#include <absl/strings/ascii.h>
+#include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_split.h>
+#include <absl/strings/string_view.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <boost/context/detail/prefetch.hpp>
@@ -62,6 +68,16 @@
 #include "thread/executor.h"
 #include "thread/fiber.h"
 #include "thread/internal/work_queue.h"
+
+// CPU affinity. Linux is the only platform here that has it: see the affinity
+// block below for what macOS offers instead, which is nothing.
+#if defined(__linux__)
+#include <cerrno>
+#include <cstring>
+
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 #if !defined(BOOST_USE_SEGMENTED_STACKS)
 namespace boost::context {
@@ -84,6 +100,126 @@ class segmented_stack {
 #endif
 
 namespace thread {
+
+
+// An exact census of *where* fibres are created, under A11_FIBRE_CENSUS=1.
+//
+// Sampling cannot answer this: at ~59 fibres per server operation each individual
+// creation site is far below a profiler's noise floor, and `perf -g` on
+// `Fiber::Start` returned nothing usable. Counting is exact and, behind the gate,
+// costs nothing when off.
+//
+// Keyed on a short backtrace rather than the immediate caller, because the
+// immediate caller is always this library's own Submit machinery -- the
+// interesting frame is the A11 code that asked for a fibre, a few levels up.
+constexpr int kCensusFrames = 7;
+
+struct CensusKey {
+  std::array<void*, kCensusFrames> frames{};
+
+  friend bool operator==(const CensusKey& left, const CensusKey& right) {
+    return left.frames == right.frames;
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H hash, const CensusKey& key) {
+    for (void* frame : key.frames) {
+      hash = H::combine(std::move(hash), frame);
+    }
+    return hash;
+  }
+};
+
+bool FibreCensusRequested() {
+  static const bool requested = [] {
+    const char* value = std::getenv("A11_FIBRE_CENSUS");
+    return value != nullptr && *value == '1';
+  }();
+  return requested;
+}
+
+// A plain `std::mutex`, and deliberately not this library's fibre-aware `Mutex`,
+// which everything else here uses. The census is reported from the pool's exit
+// path, by which point the scheduler is gone: locking a fibre mutex there aborts
+// the process outright ("boost fiber: a deadlock is detected"), the same hazard as
+// the placeholder-fibre teardown. A diagnostic that only runs when asked for can
+// afford to block a thread; it cannot afford to need a scheduler.
+std::mutex& CensusMutex() {
+  static absl::NoDestructor<std::mutex> mu;
+  return *mu;
+}
+
+absl::flat_hash_map<CensusKey, std::uint64_t>& CensusCounts() {
+  static absl::NoDestructor<absl::flat_hash_map<CensusKey, std::uint64_t>> counts;
+  return *counts;
+}
+
+void RecordFibreCreation() {
+  void* raw[kCensusFrames + 2];
+  const int depth = backtrace(raw, kCensusFrames + 2);
+  CensusKey key;
+  // Skips this frame and Fiber::Start itself, so frame 0 is the caller.
+  for (int index = 2; index < depth && index - 2 < kCensusFrames; ++index) {
+    key.frames[index - 2] = raw[index];
+  }
+  const std::lock_guard<std::mutex> lock(CensusMutex());
+  ++CensusCounts()[key];
+}
+
+void ReportFibreCensus() {
+  if (!FibreCensusRequested()) {
+    return;
+  }
+  std::vector<std::pair<CensusKey, std::uint64_t>> ordered;
+  {
+    const std::lock_guard<std::mutex> lock(CensusMutex());
+    ordered.assign(CensusCounts().begin(), CensusCounts().end());
+  }
+  std::sort(ordered.begin(), ordered.end(),
+            [](const auto& left, const auto& right) {
+              return left.second > right.second;
+            });
+  std::fprintf(stderr, "\n=== fibre creation census (%zu distinct sites)\n",
+               ordered.size());
+  const size_t show = std::min<size_t>(ordered.size(), 12);
+  for (size_t index = 0; index < show; ++index) {
+    std::fprintf(stderr, "%8llu fibres:\n",
+                 static_cast<unsigned long long>(ordered[index].second));
+    std::array<void*, kCensusFrames> frames = ordered[index].first.frames;
+    int depth = 0;
+    while (depth < kCensusFrames && frames[depth] != nullptr) {
+      ++depth;
+    }
+    char** symbols = backtrace_symbols(frames.data(), depth);
+    for (int frame = 0; frame < depth; ++frame) {
+      std::fprintf(stderr, "         %s\n",
+                   symbols != nullptr ? symbols[frame] : "?");
+    }
+    std::free(symbols);
+  }
+}
+
+bool PoolStatsRequested() {
+  static const bool requested = [] {
+    const char* value = std::getenv("A11_POOL_STATS");
+    return value != nullptr && *value == '1';
+  }();
+  return requested;
+}
+
+// How many fibres this process has created, under A11_POOL_STATS only.
+//
+// The per-worker `served` count says how many times work was picked up; this says
+// how many fibres existed to be picked up. Divided by the operations a benchmark
+// completed, it is the number that sizes "spend fewer fibres per operation":
+// creation and teardown are ~4.7% of a server profile between them
+// (`Fiber::Start` 2.7%, `fiber_exit` 2.0%) before any scheduling they cause.
+std::atomic<std::uint64_t> g_fibre_starts{0};
+
+std::uint64_t FibreStartCount() {
+  return g_fibre_starts.load(std::memory_order_relaxed);
+}
+
 
 struct Fiber::BoostState {
   boost::intrusive_ptr<boost::fibers::context> context;
@@ -141,11 +277,21 @@ constexpr size_t kDefaultStackSize = THREAD_DEFAULT_FIBER_STACK_SIZE;
 constexpr bool kDefaultIsIncluded = IsIncludedPowerOfTwo(kDefaultStackSize);
 
 // Every included power of two gets a 4 MiB pool; whichever size matches
-// THREAD_DEFAULT_FIBER_STACK_SIZE gets 16 MiB instead, since it's the size
-// nearly every fiber requests (TreeOptions default to stack_size 0).
+// THREAD_DEFAULT_FIBER_STACK_SIZE gets a budget scaled to keep the *count* of
+// cached stacks the same, since it's the size nearly every fiber requests
+// (TreeOptions default to stack_size 0).
+//
+// Counting matters more than the byte budget here. This is a free-list cache, not
+// a preallocation -- slots start empty, a stack is created by the backing
+// allocator on first use and retained on release -- so the budget bounds how many
+// stacks are *reused* rather than how much memory is held. A fixed 16 MiB budget
+// meant raising the default stack size from 64 KiB to 512 KiB silently cut reuse
+// from 256 stacks to 32, which would push most fibre creation onto mmap at
+// exactly the moment the default got large enough to make that expensive.
+constexpr size_t kDefaultPoolStacks = 256;
 template <size_t StackSize>
 constexpr size_t kPoolBudgetBytes =
-    StackSize == kDefaultStackSize ? 16 * kMiB : 4 * kMiB;
+    StackSize == kDefaultStackSize ? StackSize * kDefaultPoolStacks : 4 * kMiB;
 
 template <size_t StackSize>
 constexpr size_t kPoolCapacity = kPoolBudgetBytes<StackSize> / StackSize;
@@ -446,6 +592,174 @@ int& ThisWorkerIndex() {
   return index;
 }
 
+// ---------------------------------------------------------------------------
+// CPU affinity
+// ---------------------------------------------------------------------------
+//
+// Every other dial in this file decides *which worker* a piece of work goes to.
+// This one decides which core a worker runs on, and it exists because the rest
+// of the design assumes a worker's queue, its fibre stacks and the data those
+// fibres touch stay in one core's caches. Nothing was making that true: the
+// kernel may migrate a worker thread whenever it likes, and the recruitment
+// policy in PreferredSlot makes the loss sharper rather than softer, since it
+// deliberately concentrates a stream of small items on a few hot workers that
+// are then exactly the threads worth keeping put.
+//
+// It is off by default. Pinning trades the scheduler's knowledge of what else
+// is on the machine for locality, and that trade is only worth making on a host
+// where this process is the tenant that matters; see FINDINGS.md for what it
+// measured.
+//
+// **Per-core pinning does not exist on Apple arm64, and there is no substitute.**
+// `thread_policy_set(THREAD_AFFINITY_POLICY)` is the only affinity API macOS
+// ever had, it was an L2-sharing *hint* rather than pinning even where it worked,
+// and on arm64 it returns KERN_NOT_SUPPORTED (46). QoS classes influence P-core
+// versus E-core placement and nothing else. So this file does not call it: a
+// request to pin on macOS is refused with a warning rather than answered with an
+// API that would report success and place nothing. A dial that silently does
+// nothing is worse than one that is absent.
+//
+// Not to be confused with PoolAlgorithm's `prefer_pinned_`, which is Boost's
+// unrelated notion of a fibre context bound to one scheduler.
+
+// The CPU this worker was pinned to, -1 when unpinned. Diagnostics and tests.
+int& ThisWorkerCpu() {
+  static thread_local int cpu = -1;
+  return cpu;
+}
+
+// True for the spellings that mean "leave the pool alone". Anything else is
+// either "on" or a CPU list, and both go through ParseAffinitySpec.
+bool AffinitySpecIsOff(absl::string_view spec) {
+  const std::string lowered =
+      absl::AsciiStrToLower(absl::StripAsciiWhitespace(spec));
+  return lowered.empty() || lowered == "0" || lowered == "off" ||
+         lowered == "no" || lowered == "false";
+}
+
+bool AffinitySpecIsAll(absl::string_view spec) {
+  const std::string lowered =
+      absl::AsciiStrToLower(absl::StripAsciiWhitespace(spec));
+  return lowered == "1" || lowered == "on" || lowered == "yes" ||
+         lowered == "true" || lowered == "all";
+}
+
+// Pins the calling thread to exactly `cpu`. Called from the worker's own thread,
+// which is the only thread whose affinity a worker has any business setting.
+bool SetThisThreadCpu(int cpu) {
+#if defined(__linux__)
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  CPU_SET(cpu, &set);
+  const int error = pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+  if (error != 0) {
+    LOG(WARNING) << "Worker pool could not pin a thread to CPU " << cpu << ": "
+                 << std::strerror(error) << ". Continuing unpinned.";
+    return false;
+  }
+  return true;
+#else
+  (void)cpu;
+  return false;
+#endif
+}
+
+}  // namespace
+
+namespace internal {
+
+// Read from the *process* mask rather than assumed to be 0..nproc-1, which is
+// what makes this correct under `taskset`, a cgroup cpuset and a container with
+// fewer CPUs than the host: a pool that pinned to a CPU outside its own mask
+// would simply fail to pin, one worker at a time.
+std::vector<int> ProcessAllowedCpus() {
+#if defined(__linux__)
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  if (sched_getaffinity(0, sizeof(set), &set) != 0) {
+    // Happens on a host with more than CPU_SETSIZE (1024) CPUs, where a fixed
+    // cpu_set_t is too small. Reporting nothing is right: the pool then declines
+    // to pin rather than pinning against a mask it could not read.
+    return {};
+  }
+  std::vector<int> cpus;
+  for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+    if (CPU_ISSET(cpu, &set)) {
+      cpus.push_back(cpu);
+    }
+  }
+  return cpus;
+#else
+  return {};
+#endif
+}
+
+// A11_POOL_PIN's grammar, against the CPUs this process may actually use:
+//
+//   unset, "", "0", "off", "no", "false"   -> {} , pinning off
+//   "1", "on", "yes", "true", "all"        -> every allowed CPU, in order
+//   "0,2,4,6" / "0-7" / "0-3,8,10-11"      -> those CPUs, in the order given
+//
+// A bare "1" is "on" and not "CPU 1", because that is what every other dial in
+// this file means by 1 (A11_POOL_STATS, A11_POOL_ALWAYS_WAKE). Write "1-1" for
+// the single CPU.
+//
+// A CPU outside the process mask is dropped rather than being an error, so a
+// spec written for the host still does something sensible inside a cpuset.
+// Anything unparseable, and any spec whose CPUs are all outside the mask,
+// returns empty -- the caller warns and the pool runs unpinned, which is the
+// same outcome as asking on a platform that cannot pin.
+std::vector<int> ParsePoolAffinitySpec(const char* absl_nullable spec,
+                                       const std::vector<int>& allowed) {
+  if (spec == nullptr || AffinitySpecIsOff(spec)) {
+    return {};
+  }
+  if (AffinitySpecIsAll(spec)) {
+    return allowed;
+  }
+
+  std::vector<int> cpus;
+  for (absl::string_view token :
+       absl::StrSplit(absl::string_view(spec), ',', absl::SkipEmpty())) {
+    token = absl::StripAsciiWhitespace(token);
+    int first = 0;
+    int last = 0;
+    const size_t dash = token.find('-', /*pos=*/1);
+    if (dash == absl::string_view::npos) {
+      if (!absl::SimpleAtoi(token, &first)) {
+        return {};
+      }
+      last = first;
+    } else if (!absl::SimpleAtoi(
+                   absl::StripAsciiWhitespace(token.substr(0, dash)), &first) ||
+               !absl::SimpleAtoi(
+                   absl::StripAsciiWhitespace(token.substr(dash + 1)), &last)) {
+      return {};
+    }
+    if (first < 0 || last < first) {
+      return {};
+    }
+    for (int cpu = first; cpu <= last; ++cpu) {
+      const bool permitted =
+          std::find(allowed.begin(), allowed.end(), cpu) != allowed.end();
+      const bool already =
+          std::find(cpus.begin(), cpus.end(), cpu) != cpus.end();
+      if (permitted && !already) {
+        cpus.push_back(cpu);
+      }
+    }
+  }
+  return cpus;
+}
+
+int ThisWorkerAffinityCpu() {
+  return ThisWorkerCpu();
+}
+
+}  // namespace internal
+
+namespace {
+
 // Apple arm64 cores have 128-byte cache lines, and x86-64 prefetches in
 // 128-byte pairs, so that is the separation worth paying for.
 // `std::hardware_destructive_interference_size` reports 64 on this toolchain
@@ -513,6 +827,11 @@ struct alignas(kCacheLine) WorkerSlot {
   // OS thread, and a signal that turns out to be unnecessary is the most
   // expensive mistake in this file.
   std::atomic<std::uint64_t> signals{0};
+  // The CPU this worker actually pinned itself to, -1 when it did not. Written
+  // once by its own worker before it runs anything, read only by the
+  // A11_POOL_STATS report -- which is the only way to see that a requested
+  // placement took, as opposed to being requested.
+  std::atomic<int> cpu{-1};
 
   std::uint32_t depth(std::memory_order order) const {
     return context_depth.load(order) + callback_depth.load(order);
@@ -624,10 +943,38 @@ constexpr int kSpinRoundsPerClockCheck = 32;
 // in RunWorker for why a spinner should not read them on every round.
 constexpr int kSpinRoundsPerScan = 8;
 
-// A worker parks for at most this long even with no signal pending. Nothing
-// depends on it: it is a safety net that turns any residual lost wakeup into a
-// latency blip instead of a hang.
+// A worker's *first* park with nothing to do. Nothing depends on it: it is a
+// safety net that turns any residual lost wakeup into a latency blip instead of
+// a hang.
 constexpr absl::Duration kMaxPark = absl::Milliseconds(50);
+
+// How far that park is allowed to stretch when a worker keeps waking to find
+// nothing, and the factor it stretches by.
+//
+// This is what an idle process costs. Measured on machine B: a pool that only
+// ever parks for kMaxPark burns ~0.07% of a core per worker while completely
+// idle -- 0.27% at two workers, 0.87% at twelve, and A11's default is one worker
+// per core. That is the whole of the ~1.5% an idle A11 process was observed to
+// use, and none of it is doing anything: it is 20 wake-ups a second per worker,
+// each one a park/unpark round trip plus a spin window, finding nothing.
+//
+// Backoff rather than simply a longer kMaxPark, because the two cases want
+// opposite things. A pool that has just gone quiet may be about to be busy
+// again, and should still notice within 50ms; a pool that has found nothing
+// fifty times running is idle and can afford to look once a second. The counter
+// resets the moment anything is found, so the busy case never sees this at all.
+constexpr absl::Duration kMaxIdlePark = absl::Seconds(1);
+constexpr int kParkBackoffFactor = 2;
+
+// One second, and not longer, for a measured reason rather than caution. Five
+// seconds was tried: it buys almost nothing (0.485% against 0.531% of a core at
+// twelve workers) and it made `A11_POOL_STATS` report **253,094 spin hits over
+// ten idle seconds**, against 43 at one second. A spin "hit" means a searcher
+// believed there was work; a quarter of a million of them in an idle process is
+// a false positive looping, not a pool doing anything. The total CPU did not go
+// up, so whatever it is appears to be cheap -- but it is not understood, and a
+// backstop is the wrong place to ship something that is not understood. Whoever
+// raises this should look at that counter first.
 
 class PoolState {
  public:
@@ -641,6 +988,15 @@ class PoolState {
   size_t size() const { return num_workers_; }
 
   WorkerSlot& slot(size_t index) { return slots_[index]; }
+
+  // The CPU worker `index` should pin itself to, or -1 when the pool is not
+  // pinning. See affinity_cpus_.
+  int cpu_for(size_t index) const {
+    if (affinity_cpus_.empty()) {
+      return -1;
+    }
+    return affinity_cpus_[index % affinity_cpus_.size()];
+  }
 
   // Which slot a new piece of work should go to.
   //
@@ -1055,6 +1411,17 @@ class PoolState {
   // A11_POOL_HOT overrides it.
   std::uint32_t hot_workers_ = 4;
 
+  // Which CPU each worker is pinned to, indexed by worker modulo its size.
+  // Empty means the pool does not pin, which is the default and is the only
+  // possibility off Linux. A11_POOL_PIN fills it; see the affinity block above.
+  //
+  // Modulo rather than a hard 1:1 so the mapping stays total when the pool is
+  // wider than the CPUs it may use -- `hardware_concurrency()` reports the host
+  // inside a container with a narrower cpuset, which is the common case rather
+  // than an exotic one -- and so that a short explicit list is a legal way to
+  // confine the whole pool to a few cores.
+  std::vector<int> affinity_cpus_;
+
   // Written on every park and unpark, read on every wake decision: worth a
   // line of their own, away from the slots.
   alignas(kCacheLine) std::atomic<std::uint32_t> spinning_{0};
@@ -1287,6 +1654,30 @@ void PoolState::Start(size_t num_threads) {
   always_wake_ = std::getenv("A11_POOL_ALWAYS_WAKE") != nullptr;
   no_steal_ = std::getenv("A11_POOL_NO_STEAL") != nullptr;
 
+  // A11_POOL_PIN. Refusal is loud, once, because the whole hazard of this dial
+  // is that a caller who asks for locality and does not get it has no way to
+  // tell: nothing else about the pool looks different, and the benchmark that
+  // was supposed to prove the change simply measures the unpinned pool again.
+  if (const char* pin = std::getenv("A11_POOL_PIN");
+      pin != nullptr && !AffinitySpecIsOff(pin)) {
+    const std::vector<int> allowed = internal::ProcessAllowedCpus();
+    affinity_cpus_ = internal::ParsePoolAffinitySpec(pin, allowed);
+    if (affinity_cpus_.empty()) {
+      LOG(WARNING)
+          << "A11_POOL_PIN=" << pin
+          << " asked the worker pool to pin its threads, and it will "
+             "not: "
+          << (allowed.empty()
+                  ? "this platform has no CPU affinity (macOS included "
+                    "-- THREAD_AFFINITY_POLICY is unimplemented on "
+                    "Apple arm64 and is a cache hint rather than "
+                    "pinning where it is implemented)"
+                  : "the spec named no CPU this process is allowed to "
+                    "run on")
+          << ". The pool runs unpinned.";
+    }
+  }
+
   // A11_POOL_STATS=1 prints how the work actually landed, which is how the two
   // policies in this file are checked rather than assumed. The routing policy
   // is a claim about the shape of the `served` distribution -- narrow for a
@@ -1310,6 +1701,7 @@ void PoolState::Start(size_t num_threads) {
       std::uint64_t steals = 0;
       std::uint64_t signals = 0;
       size_t used = 0;
+      std::string cpus;
       for (size_t index = 0; index < reporting->num_workers_; ++index) {
         const WorkerSlot& slot = reporting->slots_[index];
         const std::uint64_t served =
@@ -1324,13 +1716,20 @@ void PoolState::Start(size_t num_threads) {
           ++used;
         }
         absl::StrAppend(&line, index == 0 ? "" : " ", served);
+        const int cpu = slot.cpu.load(std::memory_order_relaxed);
+        absl::StrAppend(&cpus, index == 0 ? "" : " ",
+                        cpu < 0 ? std::string("-") : absl::StrCat(cpu));
       }
       std::fprintf(stderr,
                    "pool served %llu items across %zu/%zu workers: %s\n"
+                   "pool cpus %s\n"
+                   "pool fibres started %llu\n"
                    "pool parks %llu (%.3f/item) spins %llu hit / %llu miss, "
                    "steals %llu (%.3f/item), signals %llu (%.3f/item)\n",
                    static_cast<unsigned long long>(total), used,
-                   reporting->num_workers_, line.c_str(),
+                   reporting->num_workers_, line.c_str(), cpus.c_str(),
+                   static_cast<unsigned long long>(
+                       g_fibre_starts.load(std::memory_order_relaxed)),
                    static_cast<unsigned long long>(parks),
                    total == 0 ? 0.0 : static_cast<double>(parks) / total,
                    static_cast<unsigned long long>(hits),
@@ -1339,6 +1738,7 @@ void PoolState::Start(size_t num_threads) {
                    total == 0 ? 0.0 : static_cast<double>(steals) / total,
                    static_cast<unsigned long long>(signals),
                    total == 0 ? 0.0 : static_cast<double>(signals) / total);
+      ReportFibreCensus();
     });
   }
 }
@@ -1370,15 +1770,39 @@ void WorkerThreadPool::Start(size_t num_threads) {
 }
 
 void WorkerThreadPool::RunWorker(size_t index) {
+  // Before the scheduler, on purpose: this worker's dispatcher context, its
+  // remote-ready queue and the first fibre stacks it takes out of the pooled
+  // allocators are all first touched below, and a page's first touch is what
+  // decides which node it comes from. Single-socket hosts will not show it;
+  // getting the order right costs nothing.
+  if (const int cpu = state_.cpu_for(index); cpu >= 0) {
+    if (SetThisThreadCpu(cpu)) {
+      ThisWorkerCpu() = cpu;
+      state_.slot(index).cpu.store(cpu, std::memory_order_relaxed);
+    }
+  }
+
   ThisWorkerIndex() = static_cast<int>(index);
   EnsureThreadHasScheduler<PoolAlgorithm>(&state_, index);
 
   WorkerSlot& self = state_.slot(index);
 
+  // How long this worker will park next time it finds nothing. Grows while it
+  // keeps finding nothing and snaps back to kMaxPark the moment it does. See
+  // kMaxIdlePark.
+  absl::Duration idle_park = kMaxPark;
+
   while (true) {
     if (state_.shutting_down()) {
       break;
     }
+
+    // Reaping rides along on the workers rather than owning a fiber of its own:
+    // see ReapWhenFinished(). Cheap when there is nothing to reap -- an
+    // empty-vector check under an uncontended std::mutex -- and it runs here
+    // because joining needs a thread that already has a scheduler, and because a
+    // worker is never the fiber it is reaping.
+    ReapFinishedFibers();
 
     bool did_work = state_.CollectDueTimers(index);
 
@@ -1403,6 +1827,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
     // Relaxed: a false negative here only means dropping into the spin, which
     // re-checks properly before anything actually parks.
     if (did_work || state_.AnyWork(std::memory_order_relaxed)) {
+      idle_park = kMaxPark;
       continue;
     }
 
@@ -1449,6 +1874,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
       state_.EndSpinning();
       state_.Count(found ? self.spin_hits : self.spin_misses);
       if (found) {
+        idle_park = kMaxPark;
         continue;
       }
     }
@@ -1473,8 +1899,12 @@ void WorkerThreadPool::RunWorker(size_t index) {
       // seq_cst, so a producer that skipped its signal because it saw nobody
       // idle must be visible here.
       if (!self.WakePending() && !state_.AnyWork() && !state_.shutting_down()) {
+        // Stretched by how many parks in a row have come up empty, and never
+        // past the earliest real timer -- so a deadline in the sleep queue is
+        // honoured to the same precision as before. Only the *idle* backstop
+        // moves.
         const absl::Time deadline =
-            std::min(absl::Now() + kMaxPark, state_.EarliestTimer());
+            std::min(absl::Now() + idle_park, state_.EarliestTimer());
         // Published before the wait and withdrawn after it, so that a timer
         // registered while this worker is parked can tell whether this park
         // already covers it. See PoolState::CoverDeadline.
@@ -1487,6 +1917,14 @@ void WorkerThreadPool::RunWorker(size_t index) {
       }
     }
     state_.ClearIdle(index);
+    // A park that was ended by an actual signal means work arrived, so the next
+    // one starts short again; a park that simply expired means this worker is
+    // still idle and may wait longer next time.
+    if (self.WakePending()) {
+      idle_park = kMaxPark;
+    } else {
+      idle_park = std::min(kMaxIdlePark, idle_park * kParkBackoffFactor);
+    }
     self.consumed_seq = self.wake_seq.load(std::memory_order_acquire);
   }
 
@@ -1556,6 +1994,12 @@ void EnsureWorkerThreadPool() {
 
 void Fiber::Start() {
   EnsureWorkerThreadPool();
+  if (PoolStatsRequested()) {
+    g_fibre_starts.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (FibreCensusRequested()) {
+    RecordFibreCreation();
+  }
   // EnsureThreadHasScheduler runs only once per thread, so a pool worker keeps
   // the PoolAlgorithm it was started with. A thread outside the pool gets a
   // plain round robin instead: compatible with fibres, but not participating in

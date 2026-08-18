@@ -131,12 +131,10 @@ class PythonHttpCallback {
   PythonHttpCallback& operator=(const PythonHttpCallback&) = delete;
 
   ~PythonHttpCallback() {
-    if (Py_IsInitialized() == 0) {
-      return;
-    }
-    const PyGILState_STATE state = PyGILState_Ensure();
-    Py_CLEAR(callable_);
-    PyGILState_Release(state);
+    // Queued rather than released here: a destructor may run on a pool
+    // worker, and taking the GIL there races interpreter finalization.
+    // See DeferredPythonRefs.
+    DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
   }
 
   template <typename... Args>
@@ -206,13 +204,11 @@ using OnProgressPython = py::typing::Optional<
 // GIL-reacquiring release for a Python type held as an ActionPortSchema
 // typeinfo handle. Mirrors the actions binding's own deleter so the referent
 // stays alive for exactly as long as any copy of the schema.
+// Deferred rather than released here: a shared_ptr deleter runs on whichever
+// thread drops the last copy, which may be a pool worker. See
+// DeferredPythonRefs.
 void ReleaseHttpTypeInfo(void* object) {
-  if (object == nullptr || Py_IsInitialized() == 0) {
-    return;
-  }
-  const PyGILState_STATE gil = PyGILState_Ensure();
-  Py_DECREF(static_cast<PyObject*>(object));
-  PyGILState_Release(gil);
+  DeferredPythonRefs::Retire(static_cast<PyObject*>(object));
 }
 
 std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {

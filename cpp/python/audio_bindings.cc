@@ -219,16 +219,16 @@ MakeRecognitionCallbacks(const py::object& on_transcription,
   return std::pair(std::move(native_transcription), std::move(native_done));
 }
 
-// GIL-reacquiring release for a Python type held as an ActionPortSchema
-// typeinfo handle. Mirrors the actions binding's own deleter so the referent
-// stays alive for exactly as long as any copy of the schema.
+// Release for a Python type held as an ActionPortSchema typeinfo handle.
+// Mirrors the actions binding's own deleter so the referent stays alive for
+// exactly as long as any copy of the schema.
+//
+// Deferred rather than releasing here: this is a shared_ptr deleter, so it runs
+// on whichever thread drops the last copy of the schema -- which may be a pool
+// worker, where taking the GIL races interpreter finalization. See
+// DeferredPythonRefs.
 void ReleaseAudioTypeInfo(void* object) {
-  if (object == nullptr || Py_IsInitialized() == 0) {
-    return;
-  }
-  const PyGILState_STATE gil = PyGILState_Ensure();
-  Py_DECREF(static_cast<PyObject*>(object));
-  PyGILState_Release(gil);
+  DeferredPythonRefs::Retire(static_cast<PyObject*>(object));
 }
 
 std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {

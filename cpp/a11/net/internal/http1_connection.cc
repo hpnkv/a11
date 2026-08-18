@@ -343,7 +343,7 @@ Http1Connection::SubmitRequest(std::string method, std::string scheme,
                                std::string authority, std::string path,
                                HttpHeaders headers, std::string body) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunOnUv<std::shared_ptr<Http2ResponseStream>>(
+  return RunOnUvForConnection<std::shared_ptr<Http2ResponseStream>>(
       [self = std::move(self), method = std::move(method),
        authority = std::move(authority), path = std::move(path),
        headers = std::move(headers), body = std::move(body)]() mutable
@@ -416,7 +416,7 @@ Http1Connection::SubmitStreamingRequest(std::string method,
                                         std::string authority, std::string path,
                                         HttpHeaders headers) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+  return RunOnUvForConnection<std::shared_ptr<Http2DuplexStream>>(
       [self = std::move(self), method = std::move(method),
        authority = std::move(authority), path = std::move(path),
        headers = std::move(headers)]() mutable
@@ -483,7 +483,7 @@ Http1Connection::SubmitDuplex(std::string protocol, std::string /*scheme*/,
         "HTTP/1.1 only supports the WebSocket upgrade protocol");
   }
   std::shared_ptr<Http1Connection> self = Self();
-  return RunOnUv<std::shared_ptr<Http2DuplexStream>>(
+  return RunOnUvForConnection<std::shared_ptr<Http2DuplexStream>>(
       [self = std::move(self), authority = std::move(authority),
        path = std::move(path), headers = std::move(headers)]() mutable
           -> absl::StatusOr<std::shared_ptr<Http2DuplexStream>> {
@@ -686,8 +686,8 @@ absl::Status Http1Connection::ClientParse() {
 absl::Status Http1Connection::SendHeaders(std::int32_t stream_id, int status,
                                           HttpHeaders headers) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self), stream_id, status,
-                        headers = std::move(headers)]() mutable {
+  return RunStatusOnUvForConnection([self = std::move(self), stream_id, status,
+                                     headers = std::move(headers)]() mutable {
     return self->SendHeadersOnLoop(stream_id, status, std::move(headers));
   });
 }
@@ -785,7 +785,7 @@ absl::Status Http1Connection::WriteOnLoop(std::int32_t stream_id,
 
 absl::Status Http1Connection::Finish(std::int32_t stream_id) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self), stream_id]() {
+  return RunStatusOnUvForConnection([self = std::move(self), stream_id]() {
     return self->FinishOnLoop(stream_id);
   });
 }
@@ -793,8 +793,8 @@ absl::Status Http1Connection::Finish(std::int32_t stream_id) {
 absl::Status Http1Connection::FinishWithTrailers(std::int32_t stream_id,
                                                  HttpHeaders trailers) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self), stream_id,
-                        trailers = std::move(trailers)]() mutable {
+  return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                     trailers = std::move(trailers)]() mutable {
     return self->FinishOnLoop(stream_id, std::move(trailers));
   });
 }
@@ -827,9 +827,10 @@ absl::Status Http1Connection::SendResponse(std::int32_t stream_id, int status,
                                            HttpHeaders headers,
                                            std::string body) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self), stream_id, status,
-                        headers = std::move(headers),
-                        body = std::move(body)]() mutable -> absl::Status {
+  return RunStatusOnUvForConnection([self = std::move(self), stream_id, status,
+                                     headers = std::move(headers),
+                                     body = std::move(
+                                         body)]() mutable -> absl::Status {
     if (self->server() == false) {
       return absl::FailedPreconditionError(
           "A client HTTP/1.1 connection cannot send a response");
@@ -876,8 +877,9 @@ absl::Status Http1Connection::AbortResponse(std::int32_t stream_id,
     return absl::InvalidArgumentError("Response abort status must be non-OK");
   }
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self), stream_id,
-                        status = std::move(status)]() mutable -> absl::Status {
+  return RunStatusOnUvForConnection([self = std::move(self), stream_id,
+                                     status = std::move(
+                                         status)]() mutable -> absl::Status {
     if (stream_id != self->stream_id_) {
       return absl::OkStatus();
     }
@@ -919,7 +921,7 @@ void Http1Connection::FinishResponseAndAdvance() {
 absl::StatusOr<bool> Http1Connection::ResponseHeadersSent(
     std::int32_t stream_id) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunOnUv<bool>(
+  return RunOnUvForConnection<bool>(
       [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
         return stream_id == self->stream_id_ && self->response_headers_sent_;
       });
@@ -928,7 +930,7 @@ absl::StatusOr<bool> Http1Connection::ResponseHeadersSent(
 absl::StatusOr<bool> Http1Connection::ResponseFinished(
     std::int32_t stream_id) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunOnUv<bool>(
+  return RunOnUvForConnection<bool>(
       [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
         return stream_id != self->stream_id_ || self->response_finished_;
       });
@@ -971,7 +973,7 @@ absl::Status Http1Connection::WriteRequest(std::int32_t /*stream_id*/,
 
 absl::Status Http1Connection::FinishRequest(std::int32_t /*stream_id*/) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUv([self = std::move(self)]() -> absl::Status {
+  return RunStatusOnUvForConnection([self = std::move(self)]() -> absl::Status {
     // A chunked request body ends with the terminating zero-length chunk, which
     // is HTTP/1.1's only request-side half-close. A WebSocket has none: its
     // close frame and the eventual TCP close end the exchange instead.

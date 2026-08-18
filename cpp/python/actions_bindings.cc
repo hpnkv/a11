@@ -341,12 +341,10 @@ class PythonActionCallback {
   }
 
   ~PythonActionCallback() {
-    if (Py_IsInitialized() == 0) {
-      return;
-    }
-    PyGILState_STATE state = PyGILState_Ensure();
-    Py_CLEAR(callable_);
-    PyGILState_Release(state);
+    // Queued rather than released here: a destructor may run on a pool
+    // worker, and taking the GIL there races interpreter finalization.
+    // See DeferredPythonRefs.
+    DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
   }
 
   a11::Task CallAsync(std::shared_ptr<actions::Action> action) const {
@@ -468,15 +466,10 @@ std::shared_ptr<actions::Action> ReturnAction(
 }
 
 void ReleasePortSchemaTypeInfo(void* type_object) {
-  if (type_object == nullptr) {
-    return;
-  }
-  if (Py_IsInitialized() == 0) {
-    return;
-  }
-  const PyGILState_STATE gil = PyGILState_Ensure();
-  Py_DECREF(static_cast<PyObject*>(type_object));
-  PyGILState_Release(gil);
+  // Deferred for the same reason as the callback destructors: this runs from a
+  // shared_ptr deleter, which is to say from whichever thread happened to drop
+  // the last schema. See DeferredPythonRefs.
+  DeferredPythonRefs::Retire(static_cast<PyObject*>(type_object));
 }
 
 // Takes an *owning* reference to the type object so the schema keeps it alive

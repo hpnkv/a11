@@ -112,9 +112,10 @@ TEST(ExceptionBoundaryTest, AThrowingCodecBecomesAnErrorStatus) {
       << encoded.status();
 
   const absl::StatusOr<Thrower> decoded = registry.FromChunk<Thrower>(
-      data::Chunk{.data = "",
-                  .metadata = data::ChunkMetadata{
-                      .mimetype = "application/x-test;type=thrower"}});
+      data::Chunk{.metadata =
+                      data::ChunkMetadata{
+                          .mimetype = "application/x-test;type=thrower"},
+                  .data = ""});
   ASSERT_FALSE(decoded.ok());
   EXPECT_NE(decoded.status().message().find("from deserializer"),
             std::string::npos)

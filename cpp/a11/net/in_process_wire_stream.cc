@@ -2,6 +2,10 @@
 
 #include "a11/net/in_process_wire_stream.h"
 
+#include <execinfo.h>
+#include <cstdlib>
+#include <cstdio>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

@@ -23,6 +23,7 @@ SUITE_MODULES = (
     # rather than starting with them.
     "link",
     "server",
+    "scale",
 )
 
 

@@ -16,6 +16,7 @@
 #include <pybind11/pybind11.h>
 
 #include "python/bindings.h"
+#include "python/interop.h"
 
 namespace a11::python {
 namespace {
@@ -55,7 +56,7 @@ class PythonLogSink final : public absl::LogSink {
     if (entry.log_severity() == absl::LogSeverity::kFatal) {
       return;
     }
-    if (Py_IsInitialized() == 0) {
+    if (InterpreterIsGoingAway()) {
       return;
     }
     const PyGILState_STATE gil = PyGILState_Ensure();
@@ -100,6 +101,33 @@ void SetLogSink(const py::object& callback) {
 }  // namespace
 
 void BindLogging(py::module_& module) {
+  module.def(
+      "release_deferred_python_refs", [] { DeferredPythonRefs::Drain(); },
+      "Release Python references that native destructors queued instead of "
+      "dropping.\n\n"
+      "A native destructor may run on a worker thread, where acquiring the GIL "
+      "races interpreter finalization and gets the thread killed with "
+      "pthread_exit -- which then unwinds through frames compiled "
+      "-fno-exceptions and aborts the process. Such references are queued "
+      "instead. This drains the queue, and is safe only because the caller "
+      "holds the GIL by virtue of being called from Python. Registered with "
+      "atexit by a11/__init__.py; calling it by hand is harmless.");
+
+  module.def(
+      "deferred_python_refs_pending",
+      [] { return DeferredPythonRefs::PendingCount(); },
+      "How many Python references native destructors have queued and not yet "
+      "released.");
+
+  module.def(
+      "deferred_python_refs_high_water",
+      [] { return DeferredPythonRefs::HighWaterCount(); },
+      "The most references ever queued at once.\n\n"
+      "This is the number that says whether the deferred queue is a small "
+      "buffer or a leak: every Python invocation drains it, and a destructor "
+      "running on a thread that already holds the GIL never queues at all, so "
+      "it should stay small however many sessions churn through the process.");
+
   module.def(
       "set_min_log_level",
       [](int severity) { absl::SetMinLogLevel(SeverityAtLeast(severity)); },

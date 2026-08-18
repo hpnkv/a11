@@ -17,8 +17,20 @@ namespace a11::internal {
 // owns the state it operates on.
 class CallbackScheduler {
  public:
-  explicit CallbackScheduler(size_t max_callbacks_per_turn = 64)
-      : max_callbacks_per_turn_(max_callbacks_per_turn) {}
+  /**
+   * @param max_callbacks_per_turn
+   *   How many callbacks one turn drains before handing the next turn back to
+   *   the pool, so a long queue cannot monopolise a worker.
+   * @param max_concurrent_turns
+   *   How many turns may be in flight at once. This must be greater than one:
+   *   see Run() for why a single turn is not enough to keep the queue draining.
+   */
+  explicit CallbackScheduler(size_t max_callbacks_per_turn = 64,
+                             size_t max_concurrent_turns = 64)
+      : max_callbacks_per_turn_(max_callbacks_per_turn),
+        max_concurrent_turns_(max_concurrent_turns < 2 ? 2
+                                                       : max_concurrent_turns) {
+  }
 
   CallbackScheduler(const CallbackScheduler&) = delete;
   CallbackScheduler& operator=(const CallbackScheduler&) = delete;
@@ -29,9 +41,13 @@ class CallbackScheduler {
   void Run();
 
   const size_t max_callbacks_per_turn_;
+  const size_t max_concurrent_turns_;
   thread::Mutex mu_;
   std::deque<absl::AnyInvocable<void() &&>> callbacks_ ABSL_GUARDED_BY(mu_);
-  bool scheduled_ ABSL_GUARDED_BY(mu_) = false;
+  /// Turns in flight. A count rather than a flag: a turn that suspends is still
+  /// in flight but is no longer draining, so one flag cannot express the state
+  /// the queue is actually in.
+  size_t active_turns_ ABSL_GUARDED_BY(mu_) = 0;
 };
 
 }  // namespace a11::internal

@@ -15,6 +15,11 @@
 #ifndef THREAD_FIBER_CHANNEL_H_
 #define THREAD_FIBER_CHANNEL_H_
 
+#include <deque>
+#include <string>
+#include <type_traits>
+#include <utility>
+
 #include "thread/boost_primitives.h"
 #include "thread/cases.h"
 #include "thread/channel/waiter_state.h"

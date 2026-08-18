@@ -223,14 +223,28 @@ def _run_isolated(options, selected) -> list[harness.Result]:
                 harness.Result(**record) for record in payload["results"]
             )
         except (OSError, ValueError, KeyError):
-            print(f"  LOST {suite}: no results written", flush=True)
+            # No final payload: the child was killed, or crashed, before writing
+            # it. Whatever it finished is still in the partial log, and reporting
+            # that is much better than reporting nothing -- a single hung
+            # benchmark used to discard the whole suite.
+            recovered = harness.read_partial(harness.partial_path(path))
+            if recovered:
+                merged.extend(recovered)
+                print(
+                    f"  PARTIAL {suite}: recovered {len(recovered)} result(s)"
+                    " from the killed run",
+                    flush=True,
+                )
+            else:
+                print(f"  LOST {suite}: no results written", flush=True)
         finally:
             with open(os.devnull):
                 pass
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            for leftover in (path, harness.partial_path(path)):
+                try:
+                    os.unlink(leftover)
+                except OSError:
+                    pass
     return merged
 
 
@@ -261,12 +275,17 @@ def main(argv: list[str] | None = None) -> int:
     _warn_about_the_clock(environment)
 
     if options.in_process:
+        def _record(result: harness.Result) -> None:
+            print(f"  ok   {result.key}", flush=True)
+            # Streamed as it finishes, so a suite killed for exceeding its
+            # timeout still reports what it measured.
+            if options.json:
+                harness.append_partial(harness.partial_path(options.json), result)
+
         results = runner(
             harness.run_selected(
                 selected,
-                on_result=lambda result: print(
-                    f"  ok   {result.key}", flush=True
-                ),
+                on_result=_record,
                 scale=options.scale,
                 timeout_s=options.benchmark_timeout,
             )

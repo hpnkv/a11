@@ -759,6 +759,46 @@ def write_json(path: str, results: Sequence[Result]) -> None:
         handle.write("\n")
 
 
+def partial_path(path: str) -> str:
+    """Where results are streamed as they finish, alongside @p path."""
+    return path + ".partial"
+
+
+def append_partial(path: str, result: Result) -> None:
+    """Append one finished result to the partial log, as a JSON line.
+
+    A suite that has to be killed for exceeding its timeout used to take every
+    result it had already produced with it, because the JSON was written once at
+    the end: an hour of measurement could vanish because the last benchmark hung.
+    Each line here is flushed and fsynced as it is produced, so whatever finished
+    survives the kill.
+    """
+    with open(path, "a") as handle:
+        handle.write(json.dumps(result.to_json(), sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def read_partial(path: str) -> list[Result]:
+    """Read a partial log, ignoring a final line truncated by a kill."""
+    results = []
+    try:
+        with open(path) as handle:
+            lines = handle.readlines()
+    except OSError:
+        return results
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            results.append(Result(**json.loads(line)))
+        except (ValueError, TypeError):
+            # Only ever the last line, and only when the process died mid-write.
+            continue
+    return results
+
+
 def read_json(path: str) -> dict[str, Result]:
     with open(path) as handle:
         payload = json.load(handle)

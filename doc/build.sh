@@ -18,9 +18,12 @@ if [[ "${1:-}" == "--strict" ]]; then
 fi
 
 # 1. Compile the browser guide clients. MkDocs copies them as normal assets.
+#    They are type-checked first: the demos are the code the guides show, so a
+#    type error in one is a documentation bug, and esbuild would bundle it
+#    happily.
 echo "==> Building browser guide clients"
-npm --prefix "$HERE/../js" run build:demo
-npm --prefix "$HERE/../js" run build:demo:local
+npm --prefix "$HERE/../js" run typecheck:demos
+npm --prefix "$HERE/../js" run build:demos
 
 # 2. Python site (MkDocs Material + mkdocstrings). This clears doc/site first.
 echo "==> Building Python documentation (mkdocs)"

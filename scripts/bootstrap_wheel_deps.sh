@@ -67,7 +67,12 @@ mkdir -p "${prefix}"
 download_and_extract() {
   local url=$1
   local archive=$2
-  curl --fail --location --retry 5 --output "${work}/${archive}" "${url}"
+  # --retry-all-errors because the failures that actually happen here are HTTP
+  # ones: GitHub's codeload endpoint rate-limits (429) a host that asks for
+  # several archives in a row, and plain --retry ignores a 4xx/5xx response.
+  # Without it one 429 fails the whole wheel or C++ archive build.
+  curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 \
+    --connect-timeout 30 --output "${work}/${archive}" "${url}"
   tar -xf "${work}/${archive}" -C "${work}"
 }
 

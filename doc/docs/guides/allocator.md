@@ -99,7 +99,15 @@ debugging process startup.
 ## Choosing a different allocator when building from source
 
 `-DA11_ALLOCATOR=` takes `auto` (the default), `mimalloc`, `tcmalloc` or
-`system`. `auto` picks per platform, following the measurements in
-`bench/PERF_PLAN.md`: tcmalloc on Linux, mimalloc on macOS. jemalloc, mimalloc
-and tcmalloc all measured within a few percent of each other and all beat glibc
-by 20–30%, so the per-platform default matters much less than not being on glibc.
+`system`. `auto` is a *preference order*, per platform, following the
+measurements in `bench/PERF_PLAN.md`: tcmalloc then mimalloc on Linux, mimalloc
+on macOS. Whichever of them the build can actually reach is used, and the system
+allocator is the last resort — so a deps prefix carrying only mimalloc (which is
+what `scripts/bootstrap_wheel_deps.sh` builds) gets mimalloc on Linux rather than
+a failed configure. Naming one explicitly is a requirement rather than a
+preference: `-DA11_ALLOCATOR=tcmalloc` against a prefix without it is an error,
+which is the point of saying it.
+
+jemalloc, mimalloc and tcmalloc all measured within a few percent of each other
+and all beat glibc by 20–30%, so which one is chosen matters much less than not
+being on glibc.

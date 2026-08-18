@@ -24,11 +24,28 @@ def _output(*command: str) -> str:
     ).stdout
 
 
+def _macho_install_name(binary: Path) -> str | None:
+    """A dylib's own ``LC_ID_DYLIB``, or None for anything that has none.
+
+    ``otool -L`` lists this ahead of the real dependencies, so without it the
+    bundled allocator fails its own audit: ``libmimalloc.2.1.dylib`` is built
+    with an ``@rpath`` install name, which reads exactly like a dependency on
+    itself.
+    """
+    if binary.suffix != ".dylib":
+        return None
+    lines = _output("otool", "-D", str(binary)).splitlines()
+    return lines[1].strip() if len(lines) > 1 else None
+
+
 def _audit_macos(binary: Path) -> None:
+    install_name = _macho_install_name(binary)
     dependencies = _output("otool", "-L", str(binary)).splitlines()[1:]
     for line in dependencies:
         dependency = line.strip().split(" (", 1)[0]
         if dependency.startswith(("/usr/lib/", "/System/Library/")):
+            continue
+        if install_name is not None and dependency == install_name:
             continue
         raise RuntimeError(f"non-system Mach-O dependency: {dependency}")
 

@@ -1,0 +1,18 @@
+// Type-checks the documentation demos under demo/, which the main project does
+// not compile: it emits the published library from src/ alone. The demos are the
+// code the guides show, so a type error in one is a documentation bug -- this is
+// what `npm run typecheck:demos` (and doc/build.sh) run.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "demo/**/*.ts"
+  ]
+}

@@ -1,0 +1,192 @@
+# Deep research: plan a topic, investigate the parts of it at the same time,
+# and write one report out of what came back.
+#
+# Every model call is `ask_model` -- `interact_with_llm` without the recording,
+# because a step of a composition is not a chat turn. Which provider answers is
+# the caller's header rather than anything in this file. Served by
+# `a11.demos.web_demos_server`; the guide is doc/docs/guides/deep-research.md.
+
+flow plan-research {
+  describe """
+    Turn a topic into a handful of briefs that can be investigated separately.
+
+    The last brief is the one about writing the report, and comes back on
+    `synthesis` rather than with the others.
+    """
+
+  in  topic:     string required "What to research."
+  out briefs:    string stream   "One instruction per investigation."
+  out synthesis: string          "How to write the final report."
+  out user_log:  string stream   "What the planner is doing."
+
+  strformat("[plan] planning research on: %s", topic) -> user_log
+
+  llm = run ask_model(
+    interactions: topic | map a11.sdk.Interaction{
+      role: "user",
+      system_instructions: [to_chunk("""
+        You plan research. Given a topic, write a short plan for investigating
+        it: one instruction per line, addressed to yourself, and nothing else --
+        no numbering, no introduction, no blank lines.
+
+        Use at most four lines. Each must be investigable on its own, because a
+        different agent will carry out each one and they cannot see each other.
+
+        The last line is the exception: start it with `FINALLY: ` and make it an
+        instruction for writing the final report out of the others' findings.
+
+        Answer in the language of the topic.
+        """)],
+      content: [to_chunk({
+        role: "user",
+        content: [{type: "text", text: strformat("The research topic is: %s", it)}]
+      })]
+    },
+    config: {}
+  )
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+
+  # The plan arrives as text, and the briefs are its lines. `join ""` puts the
+  # streamed pieces back together, and `split_lines` makes them a stream again
+  # -- one value per line, which is what the fan-out downstream reads.
+  lines = run split_lines(text: llm.text_output | join "")
+
+  lines.lines | where not starts-with(it, "FINALLY:") -> briefs
+  lines.lines | where starts-with(it, "FINALLY:") | first 1 -> synthesis
+  lines.lines
+    | where not starts-with(it, "FINALLY:")
+    | strformat "[plan] brief: %s"
+    -> user_log
+}
+
+flow investigate {
+  describe "Carry out one brief, in the context of the whole topic."
+
+  in  topic:    string required "What the whole research is about."
+  in  brief:    string required "This investigation's instruction."
+  out report:   string          "What it found."
+  out user_log: string stream   "What it is doing."
+
+  strformat("[investigate] %s", brief) -> user_log
+
+  llm = run ask_model(
+    interactions: brief | map a11.sdk.Interaction{
+      role: "user",
+      system_instructions: [to_chunk("""
+        You are one of several research agents working on one topic. Carry out
+        the brief you are given, and only that brief.
+
+        Report what you found as short bullet points. Name the sources you
+        relied on. Begin with one line saying which brief this answers. Answer
+        in the language of the topic.
+        """)],
+      content: [to_chunk({
+        role: "user",
+        content: [{type: "text", text: join([
+          strformat("The research topic is: %s", topic),
+          strformat("Your brief is: %s", it)
+        ], "\n\n")}]
+      })]
+    },
+    config: {}
+  )
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+
+  llm.text_output | join "" -> report
+
+  # `wait` is what makes this the last line about this investigation rather
+  # than a line racing it.
+  done = wait llm
+  strformat("[investigate] finished: %s", brief) -> user_log after done
+}
+
+flow synthesise-findings {
+  describe "Write one report out of what the investigations found."
+
+  in  topic:    string required        "What the research is about."
+  in  brief:    string required        "How the report should be written."
+  in  findings: string stream required "One report per investigation."
+  out report:   string stream          "The report, as it is written."
+  out user_log: string stream          "What the synthesis is doing."
+
+  strformat("[synthesise] writing the report on: %s", topic) -> user_log
+
+  # One prompt out of every finding. `collect` waits for the investigations to
+  # finish, which is the only barrier in the whole composition.
+  asked = node()
+  findings
+    | collect
+    | map join([
+      strformat("The research topic is: %s", topic),
+      strformat("Your instruction is: %s", brief),
+      "Here is what the investigations found:",
+      join(it, "\n\n---\n\n")
+    ], "\n\n")
+    -> asked
+
+  llm = run ask_model(
+    interactions: asked | map a11.sdk.Interaction{
+      role: "user",
+      system_instructions: [to_chunk("""
+        You write the final report of a research project out of the
+        intermediate findings you are given, following the instruction you are
+        given. Keep the sources the findings cite. Answer in the language of
+        the topic.
+        """)],
+      content: [to_chunk({
+        role: "user",
+        content: [{type: "text", text: it}]
+      })]
+    },
+    config: {}
+  )
+  skip llm.thoughts
+  skip llm.event_stream
+  skip llm.new_interactions
+
+  # Not joined: the caller gets the report as the model writes it.
+  llm.text_output -> report
+}
+
+flow deep-research {
+  describe """
+    Research a topic: plan it, investigate the parts of it at the same time,
+    and write one report out of what came back.
+
+    `user_log` narrates the whole run, which is what a client shows while it
+    waits for `report`.
+    """
+
+  in  topic:    string required "What to research."
+  out report:   string stream   "The final report, as it is written."
+  out plan:     string stream   "The briefs the planner came up with."
+  out user_log: string stream   "What the research is doing, as it happens."
+
+  planned = run plan-research(topic: topic)
+  planned.user_log -> user_log
+  planned.briefs -> plan
+
+  # Nothing in here is the caller's: the intermediate reports are written,
+  # read and dropped on this side, and only the final report crosses back.
+  nodes research {
+    findings = node()
+
+    for brief in planned.briefs parallel 3 {
+      one = run investigate(topic: topic, brief: brief)
+      one.report -> findings
+      one.user_log -> user_log
+    }
+
+    written = run synthesise-findings(
+      topic: topic,
+      brief: planned.synthesis,
+      findings: findings,
+    )
+    written.report -> report
+    written.user_log -> user_log
+  }
+}

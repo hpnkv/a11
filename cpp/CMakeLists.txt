@@ -415,31 +415,106 @@ endif ()
 add_library(a11_allocator INTERFACE)
 add_library(a11::allocator ALIAS a11_allocator)
 
+# What "auto" prefers, and what it settles for.
+#
+# tcmalloc on Linux and mimalloc on macOS is how they measured: tcmalloc took
+# 19.65k ops/s against mimalloc's 18.65k at 256 clients on the Linux reference
+# box, while mimalloc is the one with first-class macOS support. Both beat glibc
+# by more than they differ from each other -- which is the reason "auto" is a
+# *preference order* rather than a requirement. Asking for a specific allocator
+# and not getting it is an error; asking for the best available and finding the
+# second best is not, and it must not be, because the deps prefix
+# scripts/bootstrap_wheel_deps.sh builds carries mimalloc on every platform and
+# tcmalloc on none. A hard requirement here failed every Linux configure in CI
+# (wheels, the C++ archive, the stub check) with "needs libtcmalloc_minimal".
 if (A11_ALLOCATOR STREQUAL "auto")
-    # tcmalloc on Linux and mimalloc on macOS, which is how they measured:
-    # tcmalloc took 19.65k ops/s against mimalloc's 18.65k at 256 clients on the
-    # Linux reference box, while mimalloc is the one with first-class macOS
-    # support. Both beat glibc by more than they differ from each other.
     if (APPLE)
-        set(A11_RESOLVED_ALLOCATOR mimalloc)
+        set(A11_ALLOCATOR_CANDIDATES mimalloc)
     elseif (UNIX)
-        set(A11_RESOLVED_ALLOCATOR tcmalloc)
+        set(A11_ALLOCATOR_CANDIDATES tcmalloc mimalloc)
     else ()
-        set(A11_RESOLVED_ALLOCATOR system)
+        set(A11_ALLOCATOR_CANDIDATES system)
     endif ()
 else ()
-    set(A11_RESOLVED_ALLOCATOR "${A11_ALLOCATOR}")
+    set(A11_ALLOCATOR_CANDIDATES "${A11_ALLOCATOR}")
 endif ()
-if (A11_SANITIZE AND NOT A11_RESOLVED_ALLOCATOR STREQUAL "system")
-    message(STATUS
-            "A11_SANITIZE is set: using the system allocator so the sanitizer "
-            "keeps its own")
-    set(A11_RESOLVED_ALLOCATOR system)
-endif ()
-if (NOT A11_RESOLVED_ALLOCATOR MATCHES "^(mimalloc|tcmalloc|system)$")
+if (NOT A11_ALLOCATOR MATCHES "^(auto|mimalloc|tcmalloc|system)$")
     message(FATAL_ERROR
             "A11_ALLOCATOR must be auto, mimalloc, tcmalloc or system "
             "(got ${A11_ALLOCATOR})")
+endif ()
+if (A11_SANITIZE AND NOT A11_ALLOCATOR_CANDIDATES STREQUAL "system")
+    message(STATUS
+            "A11_SANITIZE is set: using the system allocator so the sanitizer "
+            "keeps its own")
+    set(A11_ALLOCATOR_CANDIDATES system)
+endif ()
+
+# Is each candidate actually here? The probes look only in the deps prefix,
+# because A11 links its allocator statically and a system-wide shared one is not
+# what it is asking for, and each runs only when its candidate is in the running,
+# so asking for one allocator never depends on another's package config being
+# loadable. The branches below reuse both results.
+#
+# The tcmalloc archive is named exactly: a bare `tcmalloc_minimal` finds the
+# shared library in a prefix that has both.
+if ("tcmalloc" IN_LIST A11_ALLOCATOR_CANDIDATES)
+    find_library(A11_TCMALLOC_LIBRARY
+            NAMES "${CMAKE_STATIC_LIBRARY_PREFIX}tcmalloc_minimal${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            tcmalloc_minimal
+            PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib
+            NO_DEFAULT_PATH)
+endif ()
+if ("mimalloc" IN_LIST A11_ALLOCATOR_CANDIDATES)
+    find_package(mimalloc 2.1 CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+endif ()
+
+set(A11_RESOLVED_ALLOCATOR "")
+foreach (A11_ALLOCATOR_CANDIDATE IN LISTS A11_ALLOCATOR_CANDIDATES)
+    set(A11_ALLOCATOR_MISSING "")
+    if (A11_ALLOCATOR_CANDIDATE STREQUAL "system")
+        set(A11_RESOLVED_ALLOCATOR system)
+    elseif (A11_ALLOCATOR_CANDIDATE STREQUAL "tcmalloc")
+        if (A11_TCMALLOC_LIBRARY MATCHES "\\.a$")
+            set(A11_RESOLVED_ALLOCATOR tcmalloc)
+        else ()
+            # One string, not three: expanded into the message below, a list
+            # would arrive with semicolons between its parts.
+            string(CONCAT A11_ALLOCATOR_MISSING
+                    "libtcmalloc_minimal.a in the deps prefix; rebuild it with "
+                    "scripts/bootstrap_wheel_deps.sh, or configure with "
+                    "-DA11_ALLOCATOR=mimalloc or system")
+        endif ()
+    elseif (A11_ALLOCATOR_CANDIDATE STREQUAL "mimalloc")
+        if (mimalloc_FOUND OR A11_FETCH_MISSING_DEPS)
+            set(A11_RESOLVED_ALLOCATOR mimalloc)
+        else ()
+            string(CONCAT A11_ALLOCATOR_MISSING
+                    "mimalloc >= 2.1; install it into the deps prefix, enable "
+                    "A11_FETCH_MISSING_DEPS, or configure with "
+                    "-DA11_ALLOCATOR=system")
+        endif ()
+    endif ()
+    if (A11_RESOLVED_ALLOCATOR)
+        break ()
+    endif ()
+    # An explicit choice that cannot be honoured is an error; "auto" moves on.
+    if (NOT A11_ALLOCATOR STREQUAL "auto")
+        message(FATAL_ERROR
+                "A11_ALLOCATOR=${A11_ALLOCATOR_CANDIDATE} needs "
+                "${A11_ALLOCATOR_MISSING}")
+    endif ()
+    message(STATUS
+            "A11 allocator: ${A11_ALLOCATOR_CANDIDATE} is not available here, "
+            "trying the next preference")
+endforeach ()
+if (NOT A11_RESOLVED_ALLOCATOR)
+    string(REPLACE ";" ", " A11_ALLOCATOR_TRIED "${A11_ALLOCATOR_CANDIDATES}")
+    message(STATUS
+            "A11 allocator: none of ${A11_ALLOCATOR_TRIED} is available; "
+            "falling back to the system allocator")
+    set(A11_RESOLVED_ALLOCATOR system)
 endif ()
 message(STATUS "A11 allocator: ${A11_RESOLVED_ALLOCATOR}")
 
@@ -447,8 +522,8 @@ message(STATUS "A11 allocator: ${A11_RESOLVED_ALLOCATOR}")
 set(A11_ALLOCATOR_SHARED_LIBRARY "")
 
 if (A11_RESOLVED_ALLOCATOR STREQUAL "mimalloc")
-    find_package(mimalloc 2.1 CONFIG QUIET
-            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    # `mimalloc_FOUND` is the probe above; installed or fetched are the only two
+    # ways to get here.
     if (mimalloc_FOUND)
         a11_require_static_target(mimalloc-static)
         # Linked as `mimalloc.o` rather than the archive on purpose: an archive
@@ -479,7 +554,10 @@ if (A11_RESOLVED_ALLOCATOR STREQUAL "mimalloc")
                         mimalloc IMPORTED_LOCATION_RELEASE)
             endif ()
         endif ()
-    elseif (A11_FETCH_MISSING_DEPS)
+    else ()
+        # Fetched, because the resolution above only chose mimalloc when it was
+        # either installed or fetchable.
+        #
         # Only the object and shared builds: the archive would be an install rule
         # for a file nothing ever builds (A11 links the object, so the static
         # target has no dependent), which fails `cmake --install` rather than the
@@ -513,11 +591,6 @@ if (A11_RESOLVED_ALLOCATOR STREQUAL "mimalloc")
             add_custom_target(a11_allocator_shared ALL DEPENDS mimalloc)
             set(A11_ALLOCATOR_SHARED_LIBRARY "$<TARGET_FILE:mimalloc>")
         endif ()
-    else ()
-        message(FATAL_ERROR
-                "A11_ALLOCATOR=mimalloc needs mimalloc >= 2.1; install it into "
-                "the deps prefix, enable A11_FETCH_MISSING_DEPS, or configure "
-                "with -DA11_ALLOCATOR=system")
     endif ()
 elseif (A11_RESOLVED_ALLOCATOR STREQUAL "tcmalloc")
     # gperftools' minimal build: tcmalloc without the heap profiler and leak
@@ -526,25 +599,9 @@ elseif (A11_RESOLVED_ALLOCATOR STREQUAL "tcmalloc")
     # member that defines `malloc` also defines `operator new`, which *is* an
     # undefined symbol in any C++ program, so the member is always pulled in.
     # `nm <binary> | grep -c tc_malloc` is still the check.
-    # The archive by its exact file name first: a bare `tcmalloc_minimal` finds
-    # the shared library in a prefix that has both, and A11 links its allocator
-    # statically.
-    find_library(A11_TCMALLOC_LIBRARY
-            NAMES "${CMAKE_STATIC_LIBRARY_PREFIX}tcmalloc_minimal${CMAKE_STATIC_LIBRARY_SUFFIX}"
-            tcmalloc_minimal
-            PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib
-            NO_DEFAULT_PATH)
-    if (NOT A11_TCMALLOC_LIBRARY)
-        message(FATAL_ERROR
-                "A11_ALLOCATOR=tcmalloc needs libtcmalloc_minimal in the deps "
-                "prefix; rebuild it with scripts/bootstrap_wheel_deps.sh, or "
-                "configure with -DA11_ALLOCATOR=mimalloc or system")
-    endif ()
-    if (NOT A11_TCMALLOC_LIBRARY MATCHES "\\.a$")
-        message(FATAL_ERROR
-                "tcmalloc resolved to a shared library "
-                "(${A11_TCMALLOC_LIBRARY}); A11 links its allocator statically")
-    endif ()
+    #
+    # `A11_TCMALLOC_LIBRARY` is the archive the probe above resolved -- it only
+    # resolves to `.a`, since A11 links its allocator statically.
     a11_require_from_prefix(tcmalloc "${A11_TCMALLOC_LIBRARY}")
     target_link_libraries(a11_allocator INTERFACE "${A11_TCMALLOC_LIBRARY}")
     find_library(A11_TCMALLOC_SHARED_LIBRARY
@@ -848,11 +905,15 @@ if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libdatachannel-dtls-buffer.patch")
     set(A11_LIBJUICE_PATCH
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libjuice-recv-buffer.patch")
+    # Git rather than an archive, because the submodules and the `git apply`
+    # patches below both need a repository -- but *not* shallow: this pin is a
+    # SHA, and a shallow fetch can only ask for advertised refs, which is what
+    # made the equivalent pybind11_abseil step flake in CI. A full clone of a
+    # SHA always works.
     FetchContent_Declare(
             libdatachannel
             GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
             GIT_TAG 443f6934d9007eb7076ab7825ba330f355fcbead
-            GIT_SHALLOW TRUE
             GIT_SUBMODULES_RECURSE TRUE
             PATCH_COMMAND
                     sh -c "git apply --reverse --check '${A11_LIBDATACHANNEL_PATCH}' || git apply '${A11_LIBDATACHANNEL_PATCH}'"
@@ -1368,11 +1429,21 @@ if (A11_BUILD_PYTHON)
             FetchContent_Declare(
                     pybind11_abseil SOURCE_DIR "${A11_PYBIND11_ABSEIL_SOURCE_DIR}")
         else ()
+            # A source archive rather than a git checkout, and pinned by content
+            # hash. pybind11_abseil publishes one tag (v202402.0) and the commit
+            # A11 needs is not it, so the pin is a SHA -- and `GIT_SHALLOW TRUE`
+            # with a SHA is the combination that made this step flaky: a shallow
+            # fetch can only ask for advertised refs, so the clone depended on
+            # the server being willing to serve an unadvertised object and fell
+            # over intermittently in CI. Codeload has neither problem, and
+            # URL_HASH turns a changed archive into a loud failure instead of a
+            # silently different dependency.
             FetchContent_Declare(
                     pybind11_abseil
-                    GIT_REPOSITORY https://github.com/pybind/pybind11_abseil.git
-                    GIT_TAG dba6e38b79d93bc718e28b8f8ea2e8b00b60cdec
-                    GIT_SHALLOW TRUE)
+                    URL "https://github.com/pybind/pybind11_abseil/archive/dba6e38b79d93bc718e28b8f8ea2e8b00b60cdec.tar.gz"
+                    URL_HASH
+                    SHA256=c54a260dcb34ad2d83cdb273855f79ac4f98a34130aae1ddbf39da2d771f4090
+                    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
         endif ()
         FetchContent_MakeAvailable(pybind11_abseil)
 

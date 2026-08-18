@@ -133,6 +133,10 @@ nav:
       - A toy agent with a tool: guides/agent-tool.md
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
+      - A chat that survives a reload: guides/chat-sessions.md
+      - Deep research, as a composition: guides/deep-research.md
+      - The model calls back into the page: guides/browser-tools.md
+      - A port per thing the caller cares about: guides/generative-media.md
       - Local models on the web: guides/local-models-web.md
       - Compose actions without deploying code: guides/flow.md
       - Checking flows from a toolchain: guides/flow-tooling.md

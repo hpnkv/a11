@@ -12,3 +12,8 @@ CMakeUserPresets.json
 
 **/.gradle/
 **/.intellijPlatform/
+# tools/vcpkg was recorded as a gitlink with no .gitmodules entry and nothing in
+# the build referencing it, which made every recursive clone (and any CI
+# checkout asking for submodules) fail on "No url found for submodule path".
+# Untracked now; keep a stray local checkout out of git's way.
+tools/vcpkg/

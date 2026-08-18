@@ -53,7 +53,6 @@ class ObservedStream implements WireStream {
 class EchoDemo {
   private session: Session | null = null;
   private stream: ObservedStream | null = null;
-  private selected: WireEvent | null = null;
   private readonly events: WireEvent[] = [];
   private readonly log = document.querySelector<HTMLDivElement>('#echo-wire-log')!;
   private readonly details = document.querySelector<HTMLDivElement>('#echo-wire-details')!;
@@ -123,7 +122,6 @@ class EchoDemo {
     this.log.scrollTop = this.log.scrollHeight;
   }
   private select(event: WireEvent): void {
-    this.selected = event;
     const actions = event.message.actions.map((action) => action.name || action.id).join(', ') || 'none';
     const list = document.createElement('dl');
     const actionsTerm = document.createElement('dt'); actionsTerm.textContent = 'Actions';

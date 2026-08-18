@@ -1052,12 +1052,48 @@ class PoolState {
     return NextVictim();
   }
 
+  // "This push has to wake somebody, whatever the economy thinks."
+  //
+  // True only for a push from outside the pool into a pool that had nothing to
+  // do. Both halves are needed and each excludes a case the other does not:
+  //
+  //  - *from outside*, because a worker that pushes is a second pair of hands --
+  //    its own dispatcher runs the item at the next suspension point, so a
+  //    spinner only has to find it eventually. A thread from outside pushes and
+  //    then blocks on the result, so the pool is the only thing that can make
+  //    progress and "eventually" is measured by whoever is waiting.
+  //  - *into a quiescent pool*, because otherwise a pipelined producer pays a
+  //    signal per item. Measured: forcing the wake on every outside push fixed
+  //    `submit_round_trip` (11.7us -> 4.5us) and cost `pool_post_pipelined` 18%
+  //    (1.28M -> 1.05M items/s), because a batch of 256 posts became 256
+  //    signals. With this test the first post of a batch wakes a worker and the
+  //    other 255 find the pool already busy and skip, which is the behaviour
+  //    the economy was written for.
+  //
+  // `AnyWork` is a scan of the slot depths -- 14 loads of lines other workers are
+  // writing -- so it is not free. Hence the short-circuit ordering: the
+  // thread-local index is checked first, so the scan only runs for an outside
+  // push, and **only for a context push**. Callbacks keep the old economy
+  // untouched, for two measured reasons: `pool_post_pipelined` *is* outside
+  // callback pushes per second and pays the scan on every one of them, and
+  // `pool_post_round_trip` -- an outside callback push plus an await, the exact
+  // shape this fixes for fibres -- was never regressed by the reap and does not
+  // need fixing. A stackless callback is picked up off the same slot by the same
+  // sweep; what made the fibre path different is not established, and until it is
+  // this stays scoped to where the regression was measured.
+  bool MustWake() const {
+    return ThisWorkerIndex() < 0 && !AnyWork(std::memory_order_relaxed);
+  }
+
   void PushContext(boost::fibers::context* absl_nonnull context, size_t index,
                    bool wake) {
+    // Computed *before* the push, or this push's own item makes the pool look
+    // busy to itself and the test can never fire.
+    const bool force = wake && MustWake();
     slots_[index].contexts.Push(context);
     Published(slots_[index].context_depth);
     if (wake) {
-      WakeSomeone(index);
+      WakeSomeone(index, force);
     }
   }
 
@@ -1150,10 +1186,30 @@ class PoolState {
   // it will find this item without a syscall. That test is the point of the
   // whole arrangement -- under load it holds nearly always, and the several
   // microseconds of thread handoff disappear.
-  void WakeSomeone(size_t preferred) {
+  //
+  // **Except when the producer is not itself a pool worker**, which is the case
+  // this economy was not written for. A worker that pushes and then carries on
+  // is a second pair of hands: its own dispatcher will run the item at the next
+  // suspension point, so "a spinner will find it" only has to be true
+  // eventually. A thread from outside pushes and then *blocks on the result*,
+  // so nothing but the pool can make progress, and "eventually" is measured by
+  // whoever is waiting. A spinner's sweep is not instant -- it checks the clock
+  // every kSpinRoundsPerClockCheck rounds and scans slots every
+  // kSpinRoundsPerScan -- and an external awaiter's own spin window is short, so
+  // losing that race costs it a park and a wake.
+  //
+  // Measured: this is what the deferred fibre reap exposed. Halving the items
+  // per operation left workers spinning a larger fraction of the time, so
+  // `spinning_ > 0` held more often at push time, so more outside pushes took
+  // the slow path -- signals fell from 0.906 to 0.648 per item and
+  // `submit_round_trip` went 2.3us to 11.7us. The reap was not the bug; it
+  // changed the offered load enough to find one.
+  void WakeSomeone(size_t preferred, bool force = false) {
     // Diagnostic: A11_POOL_ALWAYS_WAKE=1 disables the economy entirely, so a
-    // push always signals somebody. It separates "the economy is dropping a
-    // wake" from "a context is being lost".
+    // push always signals somebody. Note it wakes *every* worker, so it is a
+    // "is a context being lost" probe and not a usable stand-in for the
+    // targeted wake below -- it costs a thundering herd and measures worse than
+    // either policy.
     if (always_wake_) {
       for (size_t index = 0; index < num_workers_; ++index) {
         WakeWorker(index);
@@ -1163,7 +1219,7 @@ class PoolState {
     // seq_cst: pairs with the registration on the idle path so that a worker
     // about to go idle and a producer about to skip the wake cannot both
     // conclude the other will handle it.
-    if (spinning_.load(std::memory_order_seq_cst) > 0) {
+    if (!force && spinning_.load(std::memory_order_seq_cst) > 0) {
       return;
     }
     std::uint64_t idle = idle_mask_.load(std::memory_order_seq_cst);

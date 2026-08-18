@@ -819,6 +819,16 @@ if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
     #                               binary-search and cannot recover a path that
     #                               grew (see each patch's header for the
     #                               measurements)
+    #   libdatachannel-dtls-buffer  raises the DTLS receive buffer from 4 KiB to
+    #                               16 KiB. That buffer is handed to the TLS
+    #                               implementation as its MTU, so it is a ceiling
+    #                               on the path MTU and not merely a buffer size
+    #   libjuice-recv-buffer        raises libjuice's UDP receive buffers to the
+    #                               same 16 KiB. This is the one that actually
+    #                               moved the cliff: recvfrom() *discards* what
+    #                               does not fit, so with the DTLS patch alone
+    #                               4132 still worked and 4256 still carried
+    #                               nothing. Both are needed; neither suffices
     #
     # The second applies inside libdatachannel's usrsctp submodule, hence the
     # `git -C deps/usrsctp`. Each is guarded by `--reverse --check ||` so that
@@ -834,6 +844,10 @@ if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libdatachannel-live-pmtu.patch")
     set(A11_USRSCTP_PATCH
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/usrsctp-raise-association-mtu.patch")
+    set(A11_LIBDATACHANNEL_DTLS_PATCH
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libdatachannel-dtls-buffer.patch")
+    set(A11_LIBJUICE_PATCH
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patches/libjuice-recv-buffer.patch")
     FetchContent_Declare(
             libdatachannel
             GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
@@ -842,6 +856,8 @@ if (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND AND A11_FETCH_MISSING_DEPS)
             GIT_SUBMODULES_RECURSE TRUE
             PATCH_COMMAND
                     sh -c "git apply --reverse --check '${A11_LIBDATACHANNEL_PATCH}' || git apply '${A11_LIBDATACHANNEL_PATCH}'"
+                    && sh -c "git apply --reverse --check '${A11_LIBDATACHANNEL_DTLS_PATCH}' || git apply '${A11_LIBDATACHANNEL_DTLS_PATCH}'"
+                    && sh -c "git -C deps/libjuice apply --reverse --check '${A11_LIBJUICE_PATCH}' || git -C deps/libjuice apply '${A11_LIBJUICE_PATCH}'"
                     && sh -c "git -C deps/usrsctp apply --reverse --check '${A11_USRSCTP_PATCH}' || git -C deps/usrsctp apply '${A11_USRSCTP_PATCH}'")
     FetchContent_MakeAvailable(libdatachannel)
 elseif (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND)

@@ -1,0 +1,88 @@
+Raise the DTLS receive buffer from 4 KiB to 16 KiB, which is what actually caps
+the usable SCTP path MTU.
+
+`DtlsTransport::doRecv()` declares a fixed stack receive buffer -- separately in
+each of the three TLS branches, all at 4096 -- and then, once the handshake
+finishes, hands *the same number* to the TLS implementation as its MTU:
+
+    const size_t bufferSize = 4096;
+    byte buffer[bufferSize];
+    ...
+    SSL_set_mtu(mSsl, bufferSize + 1);        // DTLS is told its MTU is 4097
+    ...
+    ret = SSL_read(mSsl, buffer, bufferSize); // a record must fit in 4096
+
+So it is not merely a buffer size. An SCTP chunk plus DTLS overhead (~42 bytes of
+header and AEAD tag) has to fit in 4096, which puts the usable ceiling on
+`rtc::Configuration::mtu` at roughly 4150 -- and A11 measured exactly that edge
+before this patch existed: an MTU of 4132 works and 4256 does not.
+
+**The failure above the edge is silent, which is why this is worth patching rather
+than documenting.** A 64-byte message is one small record and keeps flowing at full
+rate, while every message that needs a full-size chunk cannot be read at all. From
+OpenSSL's point of view nothing is wrong, so nothing logs it: the transport
+handshakes, carries small traffic, and stalls on payload.
+
+A11 raises the MTU because usrsctp implements no path MTU discovery, so
+libdatachannel falls back to RFC 8261's safe 1280 and fragments every message to
+1172-byte chunks whatever the path can carry. A11's own RFC 8899 search
+(`WebRtcConfiguration::path_mtu_discovery`, default on) probes for the real limit
+and settled at 4132 on both reference machines -- not because that is the path's
+limit, but because it is the largest value whose records fit this buffer. Its
+`max_discovered_mtu` is already 9216, so the search has headroom the moment the
+buffer does.
+
+16 KiB rather than something larger because these are stack arrays in a function
+running on libdatachannel's own `ThreadPool` threads, and because 16 KiB covers
+every MTU worth having: jumbo frames are 9216, and loopback is 16384 on macOS.
+
+The constant is hoisted to file scope so the three branches cannot drift apart.
+Only the OpenSSL branch is compiled and measured in this tree; the GnuTLS and
+MbedTLS branches carry the identical constant and the identical cliff, so they are
+moved with it.
+
+diff --git a/src/impl/dtlstransport.cpp b/src/impl/dtlstransport.cpp
+index 689eb06..d4b2d9d 100644
+--- a/src/impl/dtlstransport.cpp
++++ b/src/impl/dtlstransport.cpp
+@@ -29,6 +29,13 @@ using namespace std::chrono;
+ 
+ namespace rtc::impl {
+ 
++// The DTLS receive buffer, and with it the largest DTLS record this transport can
++// read. Upstream this is 4096, declared separately in each of the three TLS
++// branches below, and the same value is handed to the TLS implementation as its
++// MTU once the handshake finishes -- so it is not merely a buffer size, it is the
++// ceiling on SCTP's usable path MTU. See scripts/patches/libdatachannel-dtls-buffer.patch.
++constexpr size_t kDtlsRecvBufferSize = 16384;
++
+ void DtlsTransport::enqueueRecv() {
+ 	if (mPendingRecvCount > 0)
+ 		return;
+@@ -191,7 +198,7 @@ void DtlsTransport::doRecv() {
+ 		return;
+ 
+ 	try {
+-		const size_t bufferSize = 4096;
++		const size_t bufferSize = kDtlsRecvBufferSize;
+ 		char buffer[bufferSize];
+ 
+ 		// Handle handshake if connecting
+@@ -530,7 +537,7 @@ void DtlsTransport::doRecv() {
+ 		return;
+ 
+ 	try {
+-		const size_t bufferSize = 4096;
++		const size_t bufferSize = kDtlsRecvBufferSize;
+ 		char buffer[bufferSize];
+ 
+ 		// Handle handshake if connecting
+@@ -928,7 +935,7 @@ void DtlsTransport::doRecv() {
+ 		return;
+ 
+ 	try {
+-		const size_t bufferSize = 4096;
++		const size_t bufferSize = kDtlsRecvBufferSize;
+ 		byte buffer[bufferSize];
+ 
+ 		// Process pending messages

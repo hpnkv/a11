@@ -1,0 +1,98 @@
+Raise libjuice's UDP receive buffers from 4 KiB to 16 KiB. This, not the DTLS
+buffer, is what actually capped the usable SCTP path MTU.
+
+Each of libjuice's three connection backends reads datagrams into a fixed stack
+buffer sized by its own file-local `BUFFER_SIZE`:
+
+    src/conn_poll.c:20     #define BUFFER_SIZE 4096   <- the default backend
+    src/conn_thread.c:19   #define BUFFER_SIZE 4096
+    src/conn_mux.c:20      #define BUFFER_SIZE 4096
+
+`recvfrom()` does not truncate-and-continue for a datagram: whatever does not fit
+the supplied buffer is **discarded**, and the excess is gone. So a datagram larger
+than 4096 does not arrive short, it does not arrive at all -- and nothing logs it,
+because from the socket's point of view a read succeeded.
+
+**Measured, and that measurement is why this patch exists in this form.** The
+companion `libdatachannel-dtls-buffer.patch` raises libdatachannel's own 4096-byte
+DTLS receive buffer to 16 KiB, which A11's findings had identified as the ceiling
+on `rtc::Configuration::mtu`. With *only* that patch applied, on both reference
+machines, an MTU of 4132 still worked and 4256 still carried nothing -- the cliff
+had not moved at all. The DTLS buffer was a real artificial limit and was not the
+binding one; libjuice sits below it and had the same number.
+
+With both patches the cliff is gone and the curve is monotonic to the top of the
+range A11's search will consider. Bare `raw-webrtc`, 64 KiB pipelined, machine A:
+
+    MTU    before        with both patches
+    4132   184 MiB/s     184
+    6144   nothing       238
+    8192   nothing       318
+    9216   nothing       348
+
+and the 64 KiB round trip 747us -> 409us. So both patches are required and neither
+is sufficient. The DTLS one is still correct on its own terms -- it is the value
+handed to the TLS implementation as its MTU -- but it buys nothing until a datagram
+that size can reach it.
+
+16 KiB to match the DTLS buffer, so the two layers cannot disagree about the
+largest record that can cross. These are stack buffers in the receive loop of a
+connection thread, so 16 KiB is unremarkable there.
+
+The send path needs nothing: `conn_poll_send` hands the caller's buffer straight to
+`udp_sendto` with no fixed intermediate.
+
+diff --git a/src/conn_mux.c b/src/conn_mux.c
+index 6af8833..3818a8d 100644
+--- a/src/conn_mux.c
++++ b/src/conn_mux.c
+@@ -17,7 +17,12 @@
+ #include <assert.h>
+ #include <string.h>
+ 
+-#define BUFFER_SIZE 4096
++// Big enough for the largest DTLS record libdatachannel will read (16 KiB, see
++// scripts/patches/libdatachannel-dtls-buffer.patch). recvfrom() discards whatever
++// does not fit, so a datagram larger than this is not truncated at the application
++// layer -- it is silently destroyed, which is what capped the usable SCTP path MTU
++// at ~4150 whatever the DTLS layer was told.
++#define BUFFER_SIZE 16384
+ #define INITIAL_MAP_SIZE 16
+ 
+ typedef enum map_entry_type {
+diff --git a/src/conn_poll.c b/src/conn_poll.c
+index 7d6ed7b..f168647 100644
+--- a/src/conn_poll.c
++++ b/src/conn_poll.c
+@@ -17,7 +17,12 @@
+ #include <assert.h>
+ #include <string.h>
+ 
+-#define BUFFER_SIZE 4096
++// Big enough for the largest DTLS record libdatachannel will read (16 KiB, see
++// scripts/patches/libdatachannel-dtls-buffer.patch). recvfrom() discards whatever
++// does not fit, so a datagram larger than this is not truncated at the application
++// layer -- it is silently destroyed, which is what capped the usable SCTP path MTU
++// at ~4150 whatever the DTLS layer was told.
++#define BUFFER_SIZE 16384
+ 
+ typedef struct registry_impl {
+ 	thread_t thread;
+diff --git a/src/conn_thread.c b/src/conn_thread.c
+index 1b05458..5db3ed2 100644
+--- a/src/conn_thread.c
++++ b/src/conn_thread.c
+@@ -16,7 +16,12 @@
+ #include <assert.h>
+ #include <string.h>
+ 
+-#define BUFFER_SIZE 4096
++// Big enough for the largest DTLS record libdatachannel will read (16 KiB, see
++// scripts/patches/libdatachannel-dtls-buffer.patch). recvfrom() discards whatever
++// does not fit, so a datagram larger than this is not truncated at the application
++// layer -- it is silently destroyed, which is what capped the usable SCTP path MTU
++// at ~4150 whatever the DTLS layer was told.
++#define BUFFER_SIZE 16384
+ 
+ typedef struct conn_impl {
+ 	thread_t thread;

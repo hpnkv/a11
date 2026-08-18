@@ -343,11 +343,31 @@ TEST(ThreadFiberTest, JoinedAndDetachedFibersReleaseCapturedState) {
     capture.reset();
   }
   EXPECT_EQ(Select({finished.OnEvent()}), 0);
+  // Two things have to happen after the work returns and they happen in order:
+  // the closure is destroyed, releasing the capture, and then the Fiber itself
+  // is reaped by whichever pool worker next comes round (see
+  // thread::ReapWhenFinished). So both need the same bounded wait -- waiting for
+  // only the first and then asserting on the second immediately is a race the
+  // pool never promised to win.
+  //
+  // It is not a theoretical race. Running the *unmodified* pool with
+  // `A11_POOL_ALWAYS_WAKE=1` fails the old form of this assertion 40 times out of
+  // 40, against 0/40 without it, because waking an extra worker changes which
+  // worker gets to the reap first. Anything that perturbs the wake economy --
+  // which is a tuning parameter, not a correctness property -- could fail a test
+  // whose subject is reclamation *latency*. 10 ms is the latency this is
+  // entitled to assert, and it is what PendingReapCount()'s throttle is designed
+  // around; the ordering within that window is not.
   for (int attempt = 0; attempt < 100 && !detached_capture.expired();
        ++attempt) {
     thread::SleepFor(absl::Microseconds(100));
   }
   EXPECT_TRUE(detached_capture.expired());
+  for (int attempt = 0;
+       attempt < 100 && internal::LiveFiberCountForTesting() != baseline;
+       ++attempt) {
+    thread::SleepFor(absl::Microseconds(100));
+  }
   EXPECT_EQ(internal::LiveFiberCountForTesting(), baseline);
 }
 

@@ -42,8 +42,21 @@ DeserializerFn = Callable[..., Any]
 
 JSON_MIMETYPE = _native.JSON_MIMETYPE
 MSGPACK_MIMETYPE = _native.MSGPACK_MIMETYPE
+TEXT_MIMETYPE = _native.TEXT_MIMETYPE
+BYTES_MIMETYPE = _native.BYTES_MIMETYPE
 
 _TYPE_PARAMETER = "type"
+
+#: Media types that describe a value completely on their own, so a chunk using
+#: one carries no ``type`` parameter and no framing inside the payload.
+#:
+#: ``text/plain`` is UTF-8 text and ``application/octet-stream`` is bytes; there
+#: is nothing a ``;type=`` could add, and a peer matching on the bare media type
+#: would fail to recognise a decorated one. These are the default
+#: representations for :class:`str` and :class:`bytes`, which is what makes a
+#: string chunk the string itself rather than a JSON-quoted copy of it, and a
+#: bytes chunk the bytes rather than base64 inside a JSON string.
+_SELF_DESCRIBING_MEDIA_TYPES = frozenset({TEXT_MIMETYPE, BYTES_MIMETYPE})
 
 #: Tags a JSON or MessagePack payload already spells out for itself. A chunk
 #: holding one of these carries no ``type`` parameter at all: ``;type=object``
@@ -271,10 +284,14 @@ def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
     """The mimetype a serialized chunk carries.
 
     The ``type`` parameter is added only when the tag says something the format
-    does not: an object, array, string or number is left bare.
+    does not: an object, array, string or number is left bare, and so is
+    anything carried by a media type that already names its own content.
     """
     parameters = list(mimetype.without_parameter(_TYPE_PARAMETER).parameters)
-    if type_identifier not in _GENERIC_TAGS:
+    if (
+        type_identifier not in _GENERIC_TAGS
+        and mimetype.media_type not in _SELF_DESCRIBING_MEDIA_TYPES
+    ):
         parameters.append(
             (
                 _TYPE_PARAMETER,
@@ -1643,6 +1660,62 @@ def _deserialize_json(data: str | bytes, obj_type: type | None) -> Any:
     return _coerce_target(decoded, obj_type, binary=False)
 
 
+def _serialize_text(obj: Any) -> bytes:
+    """A ``str`` as its own UTF-8 bytes, with no framing at all."""
+    if not isinstance(obj, str):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                f"{TEXT_MIMETYPE} carries text; got {type(obj).__name__}."
+                f" Use {BYTES_MIMETYPE} for bytes."
+            ),
+        ).to_exception()
+    return obj.encode("utf-8")
+
+
+def _deserialize_text(data: str | bytes, obj_type: type | None) -> Any:
+    if isinstance(data, str):
+        return data
+    try:
+        return bytes(data).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # Worth a real message: this is what a peer sending bytes under a text
+        # media type looks like from here, and the byte offset says where.
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                f"A {TEXT_MIMETYPE} chunk is not valid UTF-8 at byte"
+                f" {exc.start}: {exc.reason}."
+            ),
+        ).to_exception() from exc
+
+
+def _serialize_bytes(obj: Any) -> bytes:
+    """Bytes as themselves: no base64, no JSON string around them."""
+    if isinstance(obj, bytes):
+        return obj
+    if isinstance(obj, (bytearray, memoryview)):
+        return bytes(obj)
+    raise Status(
+        code=StatusCode.INVALID_ARGUMENT,
+        message=(
+            f"{BYTES_MIMETYPE} carries bytes; got {type(obj).__name__}."
+            f" Use {TEXT_MIMETYPE} for text."
+        ),
+    ).to_exception()
+
+
+def _deserialize_bytes(data: str | bytes, obj_type: type | None) -> Any:
+    raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+    # The chunk says "bytes"; which flavour of bytes is the caller's choice, and
+    # `bytes` is the one to default to when they did not express one.
+    if obj_type is bytearray:
+        return bytearray(raw)
+    if obj_type is memoryview:
+        return memoryview(raw)
+    return raw
+
+
 def _serialize_msgpack(obj: Any) -> bytes:
     try:
         return msgpack.packb(_to_wire(obj, binary=True), use_bin_type=True)
@@ -1721,6 +1794,27 @@ DEFAULT_SERIALIZABLE_TYPES: tuple[type, ...] = (
 
 
 def _register_default_serializers(registry: SerializationRegistry) -> None:
+    # Text and bytes first, because registration order is what picks the
+    # representation when a caller names no mimetype, and for these two types
+    # the self-describing media type is the better default: a string travels as
+    # itself instead of a JSON-quoted copy, and bytes travel as themselves
+    # instead of base64 inside a JSON string, which was costing a third of every
+    # binary payload. JSON and MessagePack stay registered below, so asking for
+    # them explicitly still works and a peer that sends them is still read.
+    registry.register(
+        str,
+        TEXT_MIMETYPE,
+        _serialize_text,
+        _deserialize_text,
+    )
+    for obj_type in (bytes, bytearray):
+        registry.register(
+            obj_type,
+            BYTES_MIMETYPE,
+            _serialize_bytes,
+            _deserialize_bytes,
+        )
+
     for obj_type in DEFAULT_SERIALIZABLE_TYPES:
         registry.register(
             obj_type,

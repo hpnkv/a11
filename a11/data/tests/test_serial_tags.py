@@ -14,7 +14,7 @@ import pathlib
 
 import a11
 import pytest
-from a11.data import serial_tags
+from a11.data import serial_tags, serialization
 from a11.cli.backends import make_user_interaction
 from a11.data.serialization import CORE_TYPE_TAGS, _declared_serial_tag
 from a11.sdk.llm import (
@@ -64,10 +64,42 @@ def _fixture_tags() -> dict[str, str]:
     data = json.loads(_FIXTURE.read_text())
     tags: dict[str, str] = {}
     for section, entries in data.items():
-        if section.startswith("_"):
+        # `media_types` is the other half of the fixture and holds media types,
+        # not tags; see test_media_types_match_the_fixture.
+        if section.startswith("_") or section == "media_types":
             continue
         tags.update(entries)
     return tags
+
+
+def _fixture_media_types() -> dict[str, str]:
+    return json.loads(_FIXTURE.read_text())["media_types"]
+
+
+def test_media_types_match_the_fixture():
+    """The media types are pinned across languages exactly as the tags are.
+
+    `text` and `bytes` are the ones that matter here: they are the defaults for
+    a `str` and for `bytes`, and a chunk using either carries no `type`
+    parameter, so the media type alone is what a peer has to go on.
+    """
+    fixture = _fixture_media_types()
+
+    assert fixture["json"] == serialization.JSON_MIMETYPE
+    assert fixture["msgpack"] == serialization.MSGPACK_MIMETYPE
+    assert fixture["text"] == serialization.TEXT_MIMETYPE
+    assert fixture["bytes"] == serialization.BYTES_MIMETYPE
+
+
+def test_the_defaults_are_the_pinned_media_types():
+    """What a str and bytes actually travel as, not just what is declared."""
+    fixture = _fixture_media_types()
+
+    assert a11.to_chunk("text").get_mimetype() == fixture["text"]
+    assert a11.to_chunk(b"bytes").get_mimetype() == fixture["bytes"]
+    # And the payload is the value, with nothing wrapped around it.
+    assert bytes(a11.to_chunk("text").data) == b"text"
+    assert bytes(a11.to_chunk(b"\x00\xff").data) == b"\x00\xff"
 
 
 def test_every_fixture_tag_has_a_python_constant():
@@ -196,10 +228,13 @@ def test_a_serialized_interaction_carries_no_tags():
     tagged = {key for key in _keys(payload) if key.startswith("!")}
     assert not tagged, f"tags survived in a declared model: {tagged}"
 
-    # Bare, and rebuilt from the annotations alone.
+    # Bare, and rebuilt from the annotations alone. A string travels as
+    # `text/plain` holding the string itself, not as a JSON-quoted copy under
+    # `application/json`. Base64 here only because the enclosing JSON has to
+    # carry the nested chunk's bytes somehow.
     assert payload["content"][0] == {
-        "data": "ImhpIg==",
-        "metadata": {"mimetype": "application/json"},
+        "data": base64.b64encode(b"hi").decode(),
+        "metadata": {"mimetype": serialization.TEXT_MIMETYPE},
     }
     assert payload["status"] == {"code": 0, "message": ""}
     assert payload["action_configs"]["x"]["peer"]["identity"] == "$sender"

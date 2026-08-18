@@ -36,6 +36,8 @@
 
 namespace a11::data {
 
+class MsgpackWriter;
+
 /** @brief Raw byte payload; an alias of @c std::string. */
 using Bytes = std::string;
 /** @brief String-keyed map of byte values (headers, attributes, etc.). */
@@ -73,6 +75,20 @@ struct ChunkMetadata {
 
   /** @brief Encodes this metadata as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a ChunkMetadata. */
   static absl::StatusOr<ChunkMetadata> FromMsgpack(std::string_view bytes);
 
@@ -112,6 +128,20 @@ struct Chunk {
 
   /** @brief Encodes this chunk as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a Chunk. */
   static absl::StatusOr<Chunk> FromMsgpack(std::string_view bytes);
 
@@ -172,6 +202,20 @@ struct NodeRef {
 
   /** @brief Encodes this reference as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a NodeRef. */
   static absl::StatusOr<NodeRef> FromMsgpack(std::string_view bytes);
 
@@ -214,6 +258,20 @@ struct NodeFragment {
 
   /** @brief Encodes this fragment as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a NodeFragment. */
   static absl::StatusOr<NodeFragment> FromMsgpack(std::string_view bytes);
 
@@ -244,6 +302,20 @@ struct Port {
 
   /** @brief Encodes this port as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a Port. */
   static absl::StatusOr<Port> FromMsgpack(std::string_view bytes);
 
@@ -279,6 +351,20 @@ struct ActionMessage {
 
   /** @brief Encodes this message as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into an ActionMessage. */
   static absl::StatusOr<ActionMessage> FromMsgpack(std::string_view bytes);
 
@@ -315,6 +401,20 @@ struct WireMessage {
 
   /** @brief Encodes this message as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;
+  /**
+   * @brief Append this record's fields to an already-open @p writer.
+   *
+   * What ToMsgpack() is built from, and what a parent record calls through
+   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
+   * produce the same bytes; this one avoids the intermediate string.
+   *
+   * **Assumes the record is already valid.** Validate() recurses through nested
+   * records, so validating here as well would re-check every nested id once per
+   * ancestor level. ToMsgpack() validates the whole tree once and then calls
+   * this; a caller reaching for this directly should do the same, and any
+   * caller that got its record from FromMsgpack() already has.
+   */
+  absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a WireMessage. */
   static absl::StatusOr<WireMessage> FromMsgpack(std::string_view bytes);
 

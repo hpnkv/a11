@@ -17,7 +17,6 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/functional/any_invocable.h>
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -43,6 +42,7 @@
 #include "a11/obs/tracer.h"
 #include "a11/service/internal/exception_guarded_callbacks.h"
 #include "a11/status.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
 #include "thread/select.h"
@@ -54,10 +54,7 @@ namespace {
 enum class Phase { kOpen, kClosing, kAborted };
 
 std::string NewSessionId() {
-  absl::BitGen generator;
-  const std::uint64_t high = absl::Uniform<std::uint64_t>(generator);
-  const std::uint64_t low = absl::Uniform<std::uint64_t>(generator);
-  return absl::StrFormat("%016x%016x", high, low);
+  return absl::StrFormat("%016x%016x", RandomUint64(), RandomUint64());
 }
 
 absl::Status SessionStreamAbortStatus() {

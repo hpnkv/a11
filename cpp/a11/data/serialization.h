@@ -48,6 +48,24 @@ namespace a11::data {
 inline constexpr std::string_view kJsonMimetype = "application/json";
 /** @brief Media type of the built-in MessagePack codec. */
 inline constexpr std::string_view kMsgpackMimetype = "application/x-msgpack";
+/**
+ * @brief Media type of UTF-8 text carried as itself.
+ *
+ * The default for strings in the languages that distinguish text from bytes.
+ * C++ does not -- a @c std::string is a sequence of bytes -- so here it is
+ * available on request and @c kBytesMimetype is the default; see RegisterDefaults.
+ */
+inline constexpr std::string_view kTextMimetype = "text/plain";
+/**
+ * @brief Media type of opaque bytes carried as themselves.
+ *
+ * The default for a @c std::string, and for every language's byte-array type.
+ * Neither this nor @c kTextMimetype takes a @c ;type= parameter: the media type
+ * is the whole description, and the payload is the value with no framing --
+ * which is the point, since the JSON representation of bytes is base64 inside a
+ * quoted string, a third larger than the bytes themselves.
+ */
+inline constexpr std::string_view kBytesMimetype = "application/octet-stream";
 
 /**
  * @brief A registry of serializers and deserializers indexed by type and MIME.

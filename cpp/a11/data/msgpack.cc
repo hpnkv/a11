@@ -7,9 +7,11 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <absl/base/nullability.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -237,12 +239,194 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
   return SkipValue(bytes, position, depth);
 }
 
+// Append @p value big-endian, which is the byte order MessagePack uses for
+// every multi-byte length and integer.
+template <typename T>
+void AppendBigEndian(std::string* absl_nonnull out, T value) {
+  static_assert(std::is_unsigned_v<T>);
+  for (int shift = static_cast<int>(sizeof(T)) * 8 - 8; shift >= 0; shift -= 8) {
+    out->push_back(static_cast<char>((value >> shift) & 0xffU));
+  }
+}
+
+void AppendByte(std::string* absl_nonnull out, std::uint8_t byte) {
+  out->push_back(static_cast<char>(byte));
+}
+
+// Encode buffers, reused per thread.
+//
+// A nested record is encoded into one of these and then copied into its parent
+// as a binary field, so without pooling every record at every level would
+// allocate a buffer whose lifetime ends immediately. Records nest about four
+// deep and each level holds its buffer only while its children encode, so a
+// handful per thread is all that is ever live.
+constexpr size_t kMaxPooledBuffers = 8;
+// A buffer that grew to hold one large message is not worth keeping alive for
+// the rest of the thread's life; the pool exists for the steady stream of small
+// ones.
+constexpr size_t kMaxPooledCapacity = 1U << 20U;
+
+std::vector<std::string>& ScratchPool() {
+  static thread_local std::vector<std::string> pool;
+  return pool;
+}
+
+// Borrows an encode buffer for a scope, returning it to the pool with its
+// capacity intact.
+class ScratchBytes {
+ public:
+  ScratchBytes() {
+    std::vector<std::string>& pool = ScratchPool();
+    if (!pool.empty()) {
+      bytes_ = std::move(pool.back());
+      pool.pop_back();
+      bytes_.clear();
+    }
+  }
+
+  ~ScratchBytes() {
+    std::vector<std::string>& pool = ScratchPool();
+    if (pool.size() < kMaxPooledBuffers &&
+        bytes_.capacity() <= kMaxPooledCapacity) {
+      pool.push_back(std::move(bytes_));
+    }
+  }
+
+  ScratchBytes(const ScratchBytes&) = delete;
+  ScratchBytes& operator=(const ScratchBytes&) = delete;
+
+  std::string& get() { return bytes_; }
+
+ private:
+  std::string bytes_;
+};
+
 }  // namespace
 
 absl::Status MsgpackWriter::Pack(const nlohmann::json& value) {
   ABSL_ASSIGN_OR_RETURN(const std::string encoded,
                         PackMsgpack(value, "a value"));
-  bytes_.append(encoded);
+  bytes_->append(encoded);
+  return absl::OkStatus();
+}
+
+void MsgpackWriter::Reserve(size_t extra) {
+  if (bytes_->capacity() - bytes_->size() < extra) {
+    bytes_->reserve(bytes_->size() + extra);
+  }
+}
+
+void MsgpackWriter::PackNil() { AppendByte(bytes_, 0xc0U); }
+
+void MsgpackWriter::PackBool(bool value) {
+  AppendByte(bytes_, value ? 0xc3U : 0xc2U);
+}
+
+void MsgpackWriter::PackUint(std::uint64_t value) {
+  if (value < 128U) {  // positive fixint
+    AppendByte(bytes_, static_cast<std::uint8_t>(value));
+  } else if (value <= std::numeric_limits<std::uint8_t>::max()) {
+    AppendByte(bytes_, 0xccU);
+    AppendByte(bytes_, static_cast<std::uint8_t>(value));
+  } else if (value <= std::numeric_limits<std::uint16_t>::max()) {
+    AppendByte(bytes_, 0xcdU);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(value));
+  } else if (value <= std::numeric_limits<std::uint32_t>::max()) {
+    AppendByte(bytes_, 0xceU);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(value));
+  } else {
+    AppendByte(bytes_, 0xcfU);
+    AppendBigEndian(bytes_, value);
+  }
+}
+
+void MsgpackWriter::PackInt(std::int64_t value) {
+  // MessagePack does not distinguish a non-negative signed integer from an
+  // unsigned one, and neither does nlohmann when it encodes: it takes the
+  // unsigned path. Matching that is what keeps the bytes identical.
+  if (value >= 0) {
+    PackUint(static_cast<std::uint64_t>(value));
+    return;
+  }
+  if (value >= -32) {  // negative fixint
+    AppendByte(bytes_, static_cast<std::uint8_t>(value));
+  } else if (value >= std::numeric_limits<std::int8_t>::min()) {
+    AppendByte(bytes_, 0xd0U);
+    AppendByte(bytes_, static_cast<std::uint8_t>(value));
+  } else if (value >= std::numeric_limits<std::int16_t>::min()) {
+    AppendByte(bytes_, 0xd1U);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(value));
+  } else if (value >= std::numeric_limits<std::int32_t>::min()) {
+    AppendByte(bytes_, 0xd2U);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(value));
+  } else {
+    AppendByte(bytes_, 0xd3U);
+    AppendBigEndian(bytes_, static_cast<std::uint64_t>(value));
+  }
+}
+
+void MsgpackWriter::PackString(std::string_view value) {
+  Reserve(value.size() + 5);
+  if (value.size() < 32U) {  // fixstr
+    AppendByte(bytes_, static_cast<std::uint8_t>(0xa0U | value.size()));
+  } else if (value.size() <= std::numeric_limits<std::uint8_t>::max()) {
+    AppendByte(bytes_, 0xd9U);
+    AppendByte(bytes_, static_cast<std::uint8_t>(value.size()));
+  } else if (value.size() <= std::numeric_limits<std::uint16_t>::max()) {
+    AppendByte(bytes_, 0xdaU);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(value.size()));
+  } else {
+    AppendByte(bytes_, 0xdbU);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(value.size()));
+  }
+  bytes_->append(value);
+}
+
+void MsgpackWriter::PackBinary(std::string_view value) {
+  Reserve(value.size() + 5);
+  if (value.size() <= std::numeric_limits<std::uint8_t>::max()) {
+    AppendByte(bytes_, 0xc4U);
+    AppendByte(bytes_, static_cast<std::uint8_t>(value.size()));
+  } else if (value.size() <= std::numeric_limits<std::uint16_t>::max()) {
+    AppendByte(bytes_, 0xc5U);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(value.size()));
+  } else {
+    AppendByte(bytes_, 0xc6U);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(value.size()));
+  }
+  bytes_->append(value);
+}
+
+void MsgpackWriter::PackArrayHeader(size_t length) {
+  if (length < 16U) {  // fixarray
+    AppendByte(bytes_, static_cast<std::uint8_t>(0x90U | length));
+  } else if (length <= std::numeric_limits<std::uint16_t>::max()) {
+    AppendByte(bytes_, 0xdcU);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(length));
+  } else {
+    AppendByte(bytes_, 0xddU);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(length));
+  }
+}
+
+void MsgpackWriter::PackMapHeader(size_t length) {
+  if (length < 16U) {  // fixmap
+    AppendByte(bytes_, static_cast<std::uint8_t>(0x80U | length));
+  } else if (length <= std::numeric_limits<std::uint16_t>::max()) {
+    AppendByte(bytes_, 0xdeU);
+    AppendBigEndian(bytes_, static_cast<std::uint16_t>(length));
+  } else {
+    AppendByte(bytes_, 0xdfU);
+    AppendBigEndian(bytes_, static_cast<std::uint32_t>(length));
+  }
+}
+
+absl::Status MsgpackWriter::PackRecord(
+    absl::FunctionRef<absl::Status(MsgpackWriter* absl_nonnull)> encode) {
+  ScratchBytes scratch;
+  MsgpackWriter child(&scratch.get());
+  ABSL_RETURN_IF_ERROR(encode(&child));
+  PackBinary(scratch.get());
   return absl::OkStatus();
 }
 

@@ -9,9 +9,12 @@
 #define A11_DATA_MSGPACK_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
+#include <absl/base/nullability.h>
+#include <absl/functional/function_ref.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <nlohmann/json.hpp>
@@ -26,17 +29,83 @@ namespace a11::data {
  */
 class MsgpackWriter {
  public:
+  /// Encode into a buffer of this writer's own.
+  MsgpackWriter() : bytes_(&owned_) {}
+
+  /**
+   * @brief Encode into a caller-supplied buffer, appending to what is there.
+   *
+   * @p target must outlive the writer. This is what lets a nested record be
+   * encoded into a reused scratch buffer, or straight onto the end of a parent
+   * record, rather than into a fresh string per level; see PackRecord().
+   */
+  explicit MsgpackWriter(std::string* absl_nonnull target)
+      : bytes_(target) {}
+
+  // Holds a pointer into its own member in the owning case, so copying or
+  // moving one would leave the pointer behind. Nothing needs to.
+  MsgpackWriter(const MsgpackWriter&) = delete;
+  MsgpackWriter& operator=(const MsgpackWriter&) = delete;
+
   /// Append a JSON-compatible field to the encoded record.
   absl::Status Pack(const nlohmann::json& value);
 
-  /// View the encoded bytes without transferring ownership.
-  [[nodiscard]] const std::string& bytes() const { return bytes_; }
+  // The typed field writers below encode directly into the buffer, producing
+  // byte-for-byte what Pack() produces for the equivalent JSON value -- the
+  // same MessagePack size classes, chosen the same way -- without building a
+  // `nlohmann::json` or the intermediate `std::string` that `Pack` gets back
+  // from `PackMsgpack`. On the wire path that mattered: every field cost an
+  // allocation and two copies of its own encoding, and A11's records nest three
+  // deep, so a payload was allocated and copied about nine times on its way out.
+  // `MsgpackWriterEncodingTest` pins the equivalence.
 
-  /// Transfer the encoded bytes out of this writer.
-  [[nodiscard]] std::string TakeBytes() { return std::move(bytes_); }
+  /// Append a MessagePack nil.
+  void PackNil();
+  /// Append a MessagePack boolean.
+  void PackBool(bool value);
+  /// Append an unsigned integer in the narrowest MessagePack form that fits.
+  void PackUint(std::uint64_t value);
+  /// Append a signed integer in the narrowest MessagePack form that fits.
+  void PackInt(std::int64_t value);
+  /// Append a string field, copying @p value once.
+  void PackString(std::string_view value);
+  /// Append a binary field, copying @p value once.
+  void PackBinary(std::string_view value);
+  /// Append an array header; @p length element fields must follow.
+  void PackArrayHeader(size_t length);
+  /// Append a map header; @p length key/value field pairs must follow.
+  void PackMapHeader(size_t length);
+
+  /**
+   * @brief
+   *   Append a nested record as one binary field, encoded by @p encode.
+   *
+   * @p encode is handed a writer over a pooled scratch buffer, so a nested
+   * record costs no allocation of its own after the pool has warmed. The result
+   * is embedded exactly as building the child with its own writer and packing
+   * `Binary(child)` would: one binary field, the same size class, the same
+   * bytes.
+   */
+  absl::Status PackRecord(
+      absl::FunctionRef<absl::Status(MsgpackWriter* absl_nonnull)> encode);
+
+  /// View the encoded bytes without transferring ownership.
+  [[nodiscard]] const std::string& bytes() const { return *bytes_; }
+
+  /**
+   * @brief Transfer the encoded bytes out of this writer.
+   *
+   * Only meaningful for a writer that owns its buffer; moving out of a borrowed
+   * one would empty the caller's buffer.
+   */
+  [[nodiscard]] std::string TakeBytes() { return std::move(*bytes_); }
 
  private:
-  std::string bytes_;
+  /// Reserve @p extra bytes beyond what is already written.
+  void Reserve(size_t extra);
+
+  std::string owned_;
+  std::string* absl_nonnull bytes_;
 };
 
 /// Sequentially decode the fields of one A11 MessagePack wire record.

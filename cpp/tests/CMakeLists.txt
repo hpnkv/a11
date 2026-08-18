@@ -2,6 +2,8 @@ add_executable(a11_core_test
   byte_chunking_test.cc
   data_json_test.cc
   data_types_test.cc
+  msgpack_writer_encoding_test.cc
+  string_codec_test.cc
   future_test.cc
   http1_codec_test.cc
   http1_connection_test.cc
@@ -35,10 +37,13 @@ add_executable(a11_core_test
   obs_tracer_test.cc
   obs_action_span_test.cc
   obs_session_stream_test.cc)
+# a11::allocator so the suite runs against the allocator the executables ship
+# with: swapping malloc under a fibre runtime is exactly the kind of change that
+# should be exercised by 200-odd tests rather than only by the benchmark.
 target_link_libraries(
   a11_core_test PRIVATE a11::concurrency a11::data a11::net a11::nodes
                         a11::stores a11::actions a11::service a11::obs
-                        GTest::gtest_main)
+                        GTest::gtest_main a11::allocator)
 add_test(NAME a11_core_test COMMAND a11_core_test)
 
 # The Flow language. Its own executable because a11::flow_lang links nothing but

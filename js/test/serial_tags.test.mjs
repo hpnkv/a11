@@ -20,6 +20,9 @@ import {
   CLOSE_STATUS_ATTRIBUTE,
   Chunk,
   ChunkMetadata,
+  JSON_MIMETYPE,
+  OCTET_STREAM_MIMETYPE,
+  MSGPACK_MIMETYPE,
   NodeFragment,
   SerializationRegistry,
   decodeStatusChunk,
@@ -27,6 +30,7 @@ import {
   isCloseStatusChunk,
   isOk,
   statusToChunk,
+  TEXT_MIMETYPE,
   makeTextMessageInteraction,
   makeOllamaCreateChatConfig,
   toChunk,
@@ -42,11 +46,15 @@ const fixtureTags = () => {
   const data = testdata('serial_tags.json');
   const result = [];
   for (const [section, entries] of Object.entries(data)) {
-    if (section.startsWith('_')) continue;
+    // `media_types` is the other half of the fixture and holds media types, not
+    // tags; see the media-type test below.
+    if (section.startsWith('_') || section === 'media_types') continue;
     result.push(...Object.values(entries));
   }
   return result;
 };
+
+const fixtureMediaTypes = () => testdata('serial_tags.json').media_types;
 
 const need = (value) => {
   assert.ok(isOk(value), `expected ok, got ${JSON.stringify(value)}`);
@@ -286,4 +294,34 @@ test('a registry built before an SDK import still sees its codecs', async () => 
   const chunk = need(await registry.toChunk(interaction));
 
   assert.equal(chunk.mimetype, `application/json;type=${tags.INTERACTION_TAG}`);
+});
+
+test('media types match the fixture', () => {
+  // Pinned across languages exactly as the tags are. `text` and `bytes` are the
+  // ones that matter: they are the defaults for a string and a Uint8Array, and a
+  // chunk using either carries no `type` parameter, so the media type alone is
+  // what a peer has to go on.
+  const media = fixtureMediaTypes();
+
+  assert.equal(media.json, JSON_MIMETYPE);
+  assert.equal(media.msgpack, MSGPACK_MIMETYPE);
+  assert.equal(media.text, TEXT_MIMETYPE);
+  // This side's constant keeps its established name; the fixture key is what
+  // is pinned, not the identifier each language spells it with.
+  assert.equal(media.bytes, OCTET_STREAM_MIMETYPE);
+});
+
+test('a string and bytes travel as themselves under the pinned media types', async () => {
+  const media = fixtureMediaTypes();
+
+  const text = need(await toChunk('value'));
+  const bytes = need(await toChunk(new Uint8Array([0, 255])));
+
+  assert.equal(text.mimetype, media.text);
+  assert.equal(bytes.mimetype, media.bytes);
+  // No framing: the bytes on the wire are the value.
+  assert.deepEqual(Buffer.from(text.data), Buffer.from('value'));
+  assert.deepEqual(Buffer.from(bytes.data), Buffer.from([0, 255]));
+  assert.equal(need(await fromChunk(text)), 'value');
+  assert.deepEqual(need(await fromChunk(bytes)), new Uint8Array([0, 255]));
 });

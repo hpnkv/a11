@@ -136,6 +136,7 @@ nav:
       - Local models on the web: guides/local-models-web.md
       - Compose actions without deploying code: guides/flow.md
       - Checking flows from a toolchain: guides/flow-tooling.md
+      - Getting the faster allocator: guides/allocator.md
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

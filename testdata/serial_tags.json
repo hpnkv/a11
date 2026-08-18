@@ -10,8 +10,23 @@
     "kotlin/src/main/kotlin/a11/SerialTags.kt) and asserts them against this",
     "file in its test suite, so a tag renamed in one language and forgotten in",
     "another fails a test instead of a conversation.",
-    "Keys are language-neutral names for the concept; values are the wire tags."
+    "Keys are language-neutral names for the concept; values are the wire tags.",
+    "",
+    "`media_types` is the other half of the same contract: which media type each",
+    "language uses for the values whose type the media type itself describes.",
+    "text/plain is UTF-8 text and application/octet-stream is bytes, and a chunk",
+    "using either carries no `type` parameter and no framing inside the payload --",
+    "the bytes on the wire are the value. Those two are the defaults for a string",
+    "and for a byte array in every language that tells them apart; C++, whose",
+    "std::string is bytes, defaults to application/octet-stream and takes",
+    "text/plain when asked."
   ],
+  "media_types": {
+    "json": "application/json",
+    "msgpack": "application/x-msgpack",
+    "text": "text/plain",
+    "bytes": "application/octet-stream"
+  },
   "core": {
     "chunk_metadata": "a11.ChunkMetadata",
     "chunk": "a11.Chunk",

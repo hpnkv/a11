@@ -1792,17 +1792,36 @@ void WorkerThreadPool::RunWorker(size_t index) {
   // kMaxIdlePark.
   absl::Duration idle_park = kMaxPark;
 
+  // See the reap call below. Per-worker, so no sharing and no atomics.
+  constexpr size_t kReapEveryPasses = 8;
+  constexpr size_t kReapBacklog = 64;
+  size_t passes_since_reap = 0;
+
   while (true) {
     if (state_.shutting_down()) {
       break;
     }
 
     // Reaping rides along on the workers rather than owning a fiber of its own:
-    // see ReapWhenFinished(). Cheap when there is nothing to reap -- an
-    // empty-vector check under an uncontended std::mutex -- and it runs here
-    // because joining needs a thread that already has a scheduler, and because a
-    // worker is never the fiber it is reaping.
-    ReapFinishedFibers();
+    // see ReapWhenFinished(). It runs here because joining needs a thread that
+    // already has a scheduler, and because a worker is never the fiber it is
+    // reaping.
+    //
+    // Not on every pass, though. `ReapFinishedFibers()` returns without touching
+    // the lock when the queue is empty, but a busy server keeps it permanently
+    // non-empty, and then every pass by every worker is a `try_lock` on one
+    // process-wide mutex. Reaping is pure reclamation, so any pass will do; the
+    // backlog check keeps a saturated pool from deferring it forever.
+    //
+    // Worth less than it looks: measured on the server bench this moved
+    // `pthread_mutex_trylock` from 0.54% of profile to 0.28% and produced no
+    // throughput change at all. Kept because it is strictly less work per pass,
+    // not because it bought anything.
+    if (++passes_since_reap >= kReapEveryPasses ||
+        PendingReapCount() >= kReapBacklog) {
+      passes_since_reap = 0;
+      ReapFinishedFibers();
+    }
 
     bool did_work = state_.CollectDueTimers(index);
 
@@ -1878,6 +1897,19 @@ void WorkerThreadPool::RunWorker(size_t index) {
         continue;
       }
     }
+
+    // About to sleep, so reap now regardless of the throttle above.
+    //
+    // The throttle is there to keep a *busy* worker off a process-wide mutex it
+    // would otherwise touch on every pass. Carrying it into the park would trade
+    // that for something worse: a pool with nothing to do would hold finished
+    // fibres until eight more passes happened, and on an idle pool a pass costs
+    // a park timeout. Reclamation latency would then be measured in tens of
+    // milliseconds, which `ThreadFiberTest.JoinedAndDetachedFibersReleaseCaptured
+    // State` is entitled to object to. Here the worker has nothing better to do
+    // and the queue is usually empty, in which case this touches no lock at all.
+    ReapFinishedFibers();
+    passes_since_reap = 0;
 
     // Go idle by suspending the main *fibre*, not the thread.
     //

@@ -16,7 +16,6 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/log/log.h>
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -39,6 +38,7 @@
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/net/wire_stream.h"
 #include "a11/status.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
@@ -87,10 +87,7 @@ absl::StatusOr<std::string> FormatMessageEndpoint(std::string endpoint,
 }
 
 std::string NewSseId() {
-  absl::BitGen generator;
-  return absl::StrFormat("sse-%016x%016x",
-                         absl::Uniform<std::uint64_t>(generator),
-                         absl::Uniform<std::uint64_t>(generator));
+  return absl::StrFormat("sse-%016x%016x", RandomUint64(), RandomUint64());
 }
 
 absl::Status HttpStatusError(const HttpResponse& response,

@@ -41,8 +41,15 @@ class SerialTagsTest {
     private fun fixtureTags(): List<String> {
         val parsed = ok(A11Json.parse(testdata("serial_tags.json"))) as Map<*, *>
         return parsed.entries
-            .filter { !it.key.toString().startsWith("_") }
+            // `media_types` is the other half of the fixture and holds media
+            // types, not tags; see `media types match the fixture`.
+            .filter { !it.key.toString().startsWith("_") && it.key != "media_types" }
             .flatMap { (it.value as Map<*, *>).values.map { tag -> tag.toString() } }
+    }
+
+    private fun fixtureMediaTypes(): Map<*, *> {
+        val parsed = ok(A11Json.parse(testdata("serial_tags.json"))) as Map<*, *>
+        return parsed["media_types"] as Map<*, *>
     }
 
     private fun goldenChunk(): Pair<Chunk, ByteArray> {
@@ -271,5 +278,38 @@ class SerialTagsTest {
             linkedMapOf<String, Any?>("anything" to 1L),
             ok(registry.fromChunk(chunk)),
         )
+    }
+
+    @Test
+    fun mediaTypesMatchTheFixture() {
+        // Pinned across languages exactly as the tags are. `text` and `bytes` are
+        // the ones that matter: they are the defaults for a String and a
+        // ByteArray, and a chunk using either carries no `type` parameter, so the
+        // media type alone is what a peer has to go on.
+        val media = fixtureMediaTypes()
+
+        assertEquals(media["json"], JSON_MIMETYPE)
+        assertEquals(media["msgpack"], MSGPACK_MIMETYPE)
+        assertEquals(media["text"], TEXT_MIMETYPE)
+        // This side's constant keeps its established name; what is pinned is the
+        // fixture key, not the identifier each language spells it with.
+        assertEquals(media["bytes"], OCTET_STREAM_MIMETYPE)
+    }
+
+    @Test
+    fun aStringAndBytesTravelAsThemselves() {
+        val registry = SerializationRegistry(registerDefaults = true)
+        val media = fixtureMediaTypes()
+
+        val text = ok(registry.toChunk("value"))
+        val bytes = ok(registry.toChunk(byteArrayOf(0, -1)))
+
+        assertEquals(media["text"], text.mimetype)
+        assertEquals(media["bytes"], bytes.mimetype)
+        // No framing: the bytes on the wire are the value.
+        assertEquals("value", ok(utf8Decode(text.data)))
+        assertContentEquals(byteArrayOf(0, -1), bytes.data)
+        assertEquals("value", ok(registry.fromChunk(text)))
+        assertContentEquals(byteArrayOf(0, -1), ok(registry.fromChunk(bytes)) as ByteArray)
     }
 }

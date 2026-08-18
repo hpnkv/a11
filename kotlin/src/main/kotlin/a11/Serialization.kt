@@ -18,6 +18,19 @@ package a11
 const val JSON_MIMETYPE = "application/json"
 const val MSGPACK_MIMETYPE = "application/x-msgpack"
 const val OCTET_STREAM_MIMETYPE = "application/octet-stream"
+const val TEXT_MIMETYPE = "text/plain"
+
+/**
+ * Media types that describe their content completely on their own.
+ *
+ * A chunk using one carries no `type` parameter and no framing inside the
+ * payload: `text/plain` is UTF-8 text and `application/octet-stream` is bytes,
+ * and there is nothing a `;type=` could add. These are the default
+ * representations for [String] and [ByteArray], which is what makes a string
+ * chunk the string itself rather than a JSON-quoted copy, and a bytes chunk the
+ * bytes rather than base64 inside a JSON string.
+ */
+private val SELF_DESCRIBING_MEDIA_TYPES = setOf(TEXT_MIMETYPE, OCTET_STREAM_MIMETYPE)
 
 /**
  * Tags a JSON or MessagePack payload already spells out for itself.
@@ -65,12 +78,32 @@ private fun wildcardMatches(value: String, pattern: String): Boolean {
 
 private fun percentEncodeTag(tag: String): String = tag // A11 tags are token-safe.
 
+/**
+ * `data` as text, refusing anything that is not well-formed UTF-8.
+ *
+ * `String(bytes, UTF_8)` would substitute U+FFFD for malformed input and hand
+ * back a plausible-looking string, which turns a peer's encoding bug into
+ * silent corruption several steps away from its cause.
+ */
+private fun decodeUtf8Strictly(data: ByteArray): StatusOr<String> {
+    val decoder = Charsets.UTF_8.newDecoder()
+        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+    return try {
+        Ok(decoder.decode(java.nio.ByteBuffer.wrap(data)).toString())
+    } catch (error: java.nio.charset.CharacterCodingException) {
+        invalidArgument("A $TEXT_MIMETYPE chunk is not valid UTF-8: ${error.message}.")
+    }
+}
+
 private fun percentDecodeTag(tag: String): String =
     if (tag.contains('%')) java.net.URLDecoder.decode(tag, Charsets.UTF_8) else tag
 
 private fun formatMimetype(parsed: ParsedMimetype, tag: String): String {
     val params = parsed.parameters.filterKeys { it != "type" }.toMutableMap()
-    if (tag !in GENERIC_TAGS) params["type"] = percentEncodeTag(tag)
+    if (tag !in GENERIC_TAGS && parsed.mediaType !in SELF_DESCRIBING_MEDIA_TYPES) {
+        params["type"] = percentEncodeTag(tag)
+    }
     return parsed.mediaType + params.entries.joinToString("") { ";${it.key}=${it.value}" }
 }
 
@@ -226,6 +259,16 @@ class SerializationRegistry(registerDefaults: Boolean = false) {
     }
 
     private fun installDefaults(): Status {
+        // Text first: registration order picks the representation when a caller
+        // names no mimetype, and a string travelling as itself beats a
+        // JSON-quoted copy of itself. The JSON and MessagePack codecs below stay
+        // registered, so asking for them still works and a peer that sends them
+        // is still read.
+        register(functional("string", TEXT_MIMETYPE,
+            test = { it is String },
+            serialize = { Ok((it as String).toByteArray(Charsets.UTF_8)) },
+            deserialize = { data, _ -> decodeUtf8Strictly(data) },
+        )).let { if (!it.isOk) return it }
         val jsonTags = listOf("null", "boolean", "integer", "number", "string", "array", "object")
         for (mimetype in listOf(JSON_MIMETYPE, MSGPACK_MIMETYPE)) {
             for (tag in jsonTags) {

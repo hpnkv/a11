@@ -153,13 +153,21 @@ bool IsGenericTag(std::string_view tag) {
          std::end(kGeneric);
 }
 
+// Media types that describe their content completely on their own, so a chunk
+// using one carries no type parameter and no framing inside the payload. See
+// kTextMimetype and kBytesMimetype.
+bool IsSelfDescribingMediaType(std::string_view media_type) {
+  return media_type == kTextMimetype || media_type == kBytesMimetype;
+}
+
 std::string FormatExactMimetype(const Mimetype& mimetype,
                                 std::string_view type_name) {
   std::string result = mimetype.media_type;
   for (const auto& [key, value] : mimetype.parameters) {
     absl::StrAppend(&result, ";", key, "=", value);
   }
-  if (!IsGenericTag(type_name)) {
+  if (!IsGenericTag(type_name) &&
+      !IsSelfDescribingMediaType(mimetype.media_type)) {
     absl::StrAppend(&result, ";type=", type_name);
   }
   return result;
@@ -201,6 +209,107 @@ absl::Status RegisterNative(SerializationRegistry* registry) {
       },
       [](const Chunk& chunk) -> absl::StatusOr<T> {
         return T::FromMsgpack(chunk.data);
+      });
+}
+
+// Whether `text` is well-formed UTF-8.
+//
+// By the definition every other A11 language's string type enforces, which is
+// stricter than "the bytes are shaped like UTF-8": overlong encodings, surrogate
+// halves and anything above U+10FFFF are all rejected. Python's
+// `bytes.decode("utf-8")`, Kotlin's `String(bytes)` and JavaScript's
+// `TextDecoder` with `fatal` all refuse them, so a chunk carrying them is one a
+// peer cannot read -- and a value this side refuses to write is a much better
+// outcome than a session that dies one hop away.
+bool IsValidUtf8(std::string_view text) {
+  // The smallest code point each sequence length is allowed to encode; anything
+  // smaller is an overlong form of a shorter sequence.
+  static constexpr char32_t kSmallest[] = {0, 0, 0x80, 0x800, 0x10000};
+  size_t at = 0;
+  while (at < text.size()) {
+    const auto lead = static_cast<unsigned char>(text[at]);
+    size_t length = 0;
+    char32_t code_point = 0;
+    if (lead < 0x80U) {
+      ++at;
+      continue;
+    }
+    if ((lead & 0xE0U) == 0xC0U) {
+      length = 2;
+      code_point = lead & 0x1FU;
+    } else if ((lead & 0xF0U) == 0xE0U) {
+      length = 3;
+      code_point = lead & 0x0FU;
+    } else if ((lead & 0xF8U) == 0xF0U) {
+      length = 4;
+      code_point = lead & 0x07U;
+    } else {
+      // A continuation byte with no lead, or a 5-byte form that UTF-8 has not
+      // had since 2003.
+      return false;
+    }
+    if (text.size() - at < length) {
+      return false;
+    }
+    for (size_t index = 1; index < length; ++index) {
+      const auto continuation = static_cast<unsigned char>(text[at + index]);
+      if ((continuation & 0xC0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (continuation & 0x3FU);
+    }
+    if (code_point < kSmallest[length] || code_point > 0x10FFFFU ||
+        (code_point >= 0xD800U && code_point <= 0xDFFFU)) {
+      return false;
+    }
+    at += length;
+  }
+  return true;
+}
+
+// Registers std::string under both self-describing media types.
+//
+// C++ has no type that means "text" as opposed to "bytes" -- a std::string is a
+// sequence of bytes, and whether those bytes are UTF-8 is a fact about the
+// value, not about its type. So the default is application/octet-stream, and
+// text/plain is available by asking for it, which is the only way the
+// distinction can be expressed here. Registration order decides the default:
+// bytes is registered first.
+//
+// Neither codec transforms anything. That is the entire point: the JSON
+// representation of a std::string is a quoted, escaped copy, and of bytes a
+// base64 copy a third larger again.
+absl::Status RegisterStringCodecs(SerializationRegistry* absl_nonnull registry) {
+  ABSL_RETURN_IF_ERROR(registry->Register<std::string>(
+      "bytes", std::string(kBytesMimetype),
+      [](const std::string& value) -> absl::StatusOr<Chunk> {
+        return Chunk{.data = value};
+      },
+      [](const Chunk& chunk) -> absl::StatusOr<std::string> {
+        return chunk.data;
+      }));
+  return registry->Register<std::string>(
+      "string", std::string(kTextMimetype),
+      [](const std::string& value) -> absl::StatusOr<Chunk> {
+        // Checked on the way out, not on the way in. A peer in a language whose
+        // string type *is* text -- which is all three of the others -- will
+        // reject this chunk on arrival, and the useful place to report that is
+        // here, where the offending value came from, rather than in a session
+        // teardown one hop away.
+        if (!IsValidUtf8(value)) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "A ", kTextMimetype,
+              " chunk must be valid UTF-8; use ", kBytesMimetype,
+              " for bytes that are not text"));
+        }
+        return Chunk{.data = value};
+      },
+      [](const Chunk& chunk) -> absl::StatusOr<std::string> {
+        if (!IsValidUtf8(chunk.data)) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("A ", kTextMimetype, " chunk is not valid UTF-8"));
+        }
+        return chunk.data;
       });
 }
 
@@ -451,6 +560,9 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
 }
 
 absl::Status SerializationRegistry::RegisterDefaults() {
+  // Before the JSON codecs, so a std::string with no mimetype asked for lands on
+  // application/octet-stream rather than a quoted JSON copy of itself.
+  ABSL_RETURN_IF_ERROR(RegisterStringCodecs(this));
   ABSL_RETURN_IF_ERROR(Register<nlohmann::json>(
       "json", std::string(kJsonMimetype), SerializeJson, DeserializeJson));
   ABSL_RETURN_IF_ERROR(

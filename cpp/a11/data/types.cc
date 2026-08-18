@@ -3,6 +3,7 @@
 #include "a11/data/types.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -40,15 +41,15 @@ constexpr size_t kDebugPreviewMaxContentChars = 160;
 constexpr size_t kDebugPreviewMaxContentBytes = 24;
 constexpr size_t kDebugStringMaxChars = 24 * 1024;
 
-bool IsAsciiAlpha(char value) {
+constexpr bool IsAsciiAlpha(char value) {
   return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
 }
 
-bool IsNameBoundary(char value) {
+constexpr bool IsNameBoundary(char value) {
   return IsAsciiAlpha(value) || (value >= '0' && value <= '9') || value == '_';
 }
 
-bool IsNameMiddle(char value) {
+constexpr bool IsNameMiddle(char value) {
   return IsNameBoundary(value) || value == '-' || value == '#';
 }
 
@@ -80,12 +81,26 @@ absl::StatusOr<std::string> JsonString(const nlohmann::json& value,
   return value.get<std::string>();
 }
 
-nlohmann::json EncodeByteMap(const ByteMap& values) {
-  nlohmann::json result = nlohmann::json::object();
-  for (const auto& [key, value] : values) {
-    result[key] = Binary(value);
+void PackByteMap(MsgpackWriter* absl_nonnull writer,
+                 const ByteMap& values) {
+  // Sorted, because nlohmann's object type is ordered and a ByteMap is a hash
+  // map: sorting is what keeps these bytes identical to the JSON path's, and
+  // also the only thing that makes the encoding deterministic at all.
+  std::vector<const ByteMap::value_type*> entries;
+  entries.reserve(values.size());
+  for (const auto& entry : values) {
+    entries.push_back(&entry);
   }
-  return result;
+  std::sort(entries.begin(), entries.end(),
+            [](const ByteMap::value_type* left,
+               const ByteMap::value_type* right) {
+              return left->first < right->first;
+            });
+  writer->PackMapHeader(entries.size());
+  for (const ByteMap::value_type* entry : entries) {
+    writer->PackString(entry->first);
+    writer->PackBinary(entry->second);
+  }
 }
 
 absl::StatusOr<ByteMap> DecodeByteMap(const nlohmann::json& value,
@@ -169,9 +184,24 @@ absl::Status ValidateName(std::string_view name) {
     return absl::InvalidArgumentError(
         "name must start and end with an ASCII letter, digit, or underscore");
   }
-  if (!std::all_of(name.begin(), name.end(), IsNameMiddle)) {
-    return absl::InvalidArgumentError(
-        "name contains a character outside [a-zA-Z0-9-_#]");
+  // One table lookup per character rather than the four comparisons and two
+  // calls that the predicate form compiles to. This runs over every id in every
+  // record A11 encodes or decodes -- it was 2.19% of the server benchmark's
+  // profile once the allocator stopped dominating -- and the table is 256 bytes
+  // resolved at compile time.
+  static constexpr std::array<bool, 256> kAllowed = [] {
+    std::array<bool, 256> allowed{};
+    for (int value = 0; value < 256; ++value) {
+      const char character = static_cast<char>(value);
+      allowed[static_cast<size_t>(value)] = IsNameMiddle(character);
+    }
+    return allowed;
+  }();
+  for (const char character : name) {
+    if (!kAllowed[static_cast<unsigned char>(character)]) {
+      return absl::InvalidArgumentError(
+          "name contains a character outside [a-zA-Z0-9-_#]");
+    }
   }
   return absl::OkStatus();
 }
@@ -215,14 +245,24 @@ absl::Status ChunkMetadata::SetAttribute(std::string key, std::string value) {
 }
 
 absl::StatusOr<Bytes> ChunkMetadata::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(mimetype));
-  ABSL_RETURN_IF_ERROR(writer.Pack(
-      timestamp.has_value() ? nlohmann::json(absl::ToUnixMicros(*timestamp))
-                            : nlohmann::json(nullptr)));
-  ABSL_RETURN_IF_ERROR(writer.Pack(EncodeByteMap(attributes)));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status ChunkMetadata::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackString(mimetype);
+  if (timestamp.has_value()) {
+    writer->PackInt(absl::ToUnixMicros(*timestamp));
+  } else {
+    writer->PackNil();
+  }
+  PackByteMap(writer, attributes);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<ChunkMetadata> ChunkMetadata::FromMsgpack(
@@ -284,17 +324,28 @@ absl::Status Chunk::Validate() const {
 }
 
 absl::StatusOr<Bytes> Chunk::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  if (metadata.has_value()) {
-    ABSL_ASSIGN_OR_RETURN(Bytes encoded, metadata->ToMsgpack());
-    ABSL_RETURN_IF_ERROR(writer.Pack(Binary(encoded)));
-  } else {
-    ABSL_RETURN_IF_ERROR(writer.Pack(nullptr));
-  }
-  ABSL_RETURN_IF_ERROR(writer.Pack(ref));
-  ABSL_RETURN_IF_ERROR(writer.Pack(Binary(data)));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status Chunk::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  if (metadata.has_value()) {
+    ABSL_RETURN_IF_ERROR(writer->PackRecord([this](MsgpackWriter* child) {
+      return metadata->ToMsgpackInto(child);
+    }));
+  } else {
+    writer->PackNil();
+  }
+  writer->PackString(ref);
+  // The payload itself, copied once into the buffer instead of once into a
+  // vector, once into a string and once again on append.
+  writer->PackBinary(data);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<Chunk> Chunk::FromMsgpack(std::string_view bytes) {
@@ -379,13 +430,24 @@ absl::Status NodeRef::Validate() const {
 }
 
 absl::StatusOr<Bytes> NodeRef::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(id));
-  ABSL_RETURN_IF_ERROR(writer.Pack(offset));
-  ABSL_RETURN_IF_ERROR(
-      writer.Pack(length ? nlohmann::json(*length) : nlohmann::json(nullptr)));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status NodeRef::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackString(id);
+  writer->PackUint(offset);
+  if (length.has_value()) {
+    writer->PackUint(*length);
+  } else {
+    writer->PackNil();
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<NodeRef> NodeRef::FromMsgpack(std::string_view bytes) {
@@ -468,19 +530,31 @@ absl::StatusOr<const NodeRef* absl_nonnull> NodeFragment::GetNodeRef() const {
 }
 
 absl::StatusOr<Bytes> NodeFragment::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(id));
-  const bool is_chunk = std::holds_alternative<Chunk>(data);
-  ABSL_RETURN_IF_ERROR(writer.Pack(is_chunk ? 0 : 1));
-  ABSL_ASSIGN_OR_RETURN(Bytes encoded,
-                        is_chunk ? std::get<Chunk>(data).ToMsgpack()
-                                 : std::get<NodeRef>(data).ToMsgpack());
-  ABSL_RETURN_IF_ERROR(writer.Pack(Binary(encoded)));
-  ABSL_RETURN_IF_ERROR(
-      writer.Pack(seq ? nlohmann::json(*seq) : nlohmann::json(nullptr)));
-  ABSL_RETURN_IF_ERROR(writer.Pack(continued));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status NodeFragment::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackString(id);
+  const bool is_chunk = std::holds_alternative<Chunk>(data);
+  writer->PackUint(is_chunk ? 0 : 1);
+  ABSL_RETURN_IF_ERROR(writer->PackRecord([this, is_chunk](
+                                              MsgpackWriter* child) {
+    return is_chunk ? std::get<Chunk>(data).ToMsgpackInto(child)
+                    : std::get<NodeRef>(data).ToMsgpackInto(child);
+  }));
+  if (seq.has_value()) {
+    writer->PackUint(*seq);
+  } else {
+    writer->PackNil();
+  }
+  writer->PackBool(continued);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<NodeFragment> NodeFragment::FromMsgpack(std::string_view bytes) {
@@ -553,11 +627,19 @@ absl::Status Port::Validate() const {
 }
 
 absl::StatusOr<Bytes> Port::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(name));
-  ABSL_RETURN_IF_ERROR(writer.Pack(id));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status Port::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackString(name);
+  writer->PackString(id);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<Port> Port::FromMsgpack(std::string_view bytes) {
@@ -616,24 +698,28 @@ absl::Status ActionMessage::Validate() const {
 }
 
 absl::StatusOr<Bytes> ActionMessage::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(id));
-  ABSL_RETURN_IF_ERROR(writer.Pack(name));
-  nlohmann::json packed_inputs = nlohmann::json::array();
-  for (const Port& port : inputs) {
-    ABSL_ASSIGN_OR_RETURN(Bytes encoded, port.ToMsgpack());
-    packed_inputs.push_back(Binary(encoded));
-  }
-  ABSL_RETURN_IF_ERROR(writer.Pack(packed_inputs));
-  nlohmann::json packed_outputs = nlohmann::json::array();
-  for (const Port& port : outputs) {
-    ABSL_ASSIGN_OR_RETURN(Bytes encoded, port.ToMsgpack());
-    packed_outputs.push_back(Binary(encoded));
-  }
-  ABSL_RETURN_IF_ERROR(writer.Pack(packed_outputs));
-  ABSL_RETURN_IF_ERROR(writer.Pack(EncodeByteMap(headers)));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status ActionMessage::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackString(id);
+  writer->PackString(name);
+  for (const std::vector<Port>* ports : {&inputs, &outputs}) {
+    writer->PackArrayHeader(ports->size());
+    for (const Port& port : *ports) {
+      ABSL_RETURN_IF_ERROR(writer->PackRecord([&port](MsgpackWriter* child) {
+        return port.ToMsgpackInto(child);
+      }));
+    }
+  }
+  PackByteMap(writer, headers);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<ActionMessage> ActionMessage::FromMsgpack(
@@ -776,23 +862,31 @@ absl::Status WireMessage::Validate() const {
 }
 
 absl::StatusOr<Bytes> WireMessage::ToMsgpack() const {
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
+  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
-  ABSL_RETURN_IF_ERROR(writer.Pack(kVersion));
-  nlohmann::json fragments = nlohmann::json::array();
-  for (const NodeFragment& fragment : node_fragments) {
-    ABSL_ASSIGN_OR_RETURN(Bytes encoded, fragment.ToMsgpack());
-    fragments.push_back(Binary(encoded));
-  }
-  ABSL_RETURN_IF_ERROR(writer.Pack(fragments));
-  nlohmann::json action_values = nlohmann::json::array();
-  for (const ActionMessage& action : actions) {
-    ABSL_ASSIGN_OR_RETURN(Bytes encoded, action.ToMsgpack());
-    action_values.push_back(Binary(encoded));
-  }
-  ABSL_RETURN_IF_ERROR(writer.Pack(action_values));
-  ABSL_RETURN_IF_ERROR(writer.Pack(EncodeByteMap(headers)));
+  ABSL_RETURN_IF_ERROR(ToMsgpackInto(&writer));
   return writer.TakeBytes();
+}
+
+absl::Status WireMessage::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+  writer->PackUint(kVersion);
+  writer->PackArrayHeader(node_fragments.size());
+  for (const NodeFragment& fragment : node_fragments) {
+    ABSL_RETURN_IF_ERROR(writer->PackRecord([&fragment](MsgpackWriter* child) {
+      return fragment.ToMsgpackInto(child);
+    }));
+  }
+  writer->PackArrayHeader(actions.size());
+  for (const ActionMessage& action : actions) {
+    ABSL_RETURN_IF_ERROR(writer->PackRecord([&action](MsgpackWriter* child) {
+      return action.ToMsgpackInto(child);
+    }));
+  }
+  PackByteMap(writer, headers);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<WireMessage> WireMessage::FromMsgpack(std::string_view bytes) {

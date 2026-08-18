@@ -11,7 +11,6 @@
 #include <utility>
 
 #include <absl/base/thread_annotations.h>
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -28,6 +27,7 @@
 #include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/internal/http2_websocket_channel.h"
 #include "a11/net/wire_stream.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
@@ -35,10 +35,7 @@ namespace {
 
 
 std::string NewWebSocketId() {
-  absl::BitGen generator;
-  return absl::StrFormat("ws-%016x%016x",
-                         absl::Uniform<std::uint64_t>(generator),
-                         absl::Uniform<std::uint64_t>(generator));
+  return absl::StrFormat("ws-%016x%016x", RandomUint64(), RandomUint64());
 }
 
 /** Parses a `ws`/`wss` URL, rejecting the schemes this transport cannot dial. */

@@ -53,6 +53,7 @@ __all__: list[str] = [
     "AudioInputOptions",
     "AudioModelSpec",
     "AudioSubscription",
+    "BYTES_MIMETYPE",
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
     "CANDIDATE",
@@ -146,6 +147,7 @@ __all__: list[str] = [
     "Status",
     "StreamMode",
     "TCP",
+    "TEXT_MIMETYPE",
     "TLS",
     "Time",
     "TranscriptionEvent",
@@ -9081,6 +9083,7 @@ ACTION_DISPATCH_STATUS_OUTPUT: str = "__dispatch_status__"
 ACTION_HEADER_PREFIX: str = "x-a11-"
 ACTION_STATUS_MIMETYPE: str = "application/x-a11-status"
 ACTION_STATUS_OUTPUT: str = "__status__"
+BYTES_MIMETYPE: str = "application/octet-stream"
 CANCEL_ACTION_HEADER: str = "__action"
 CANCEL_ACTION_NAME: str = "__cancel__"
 CANDIDATE: SignallingMessageType
@@ -9106,6 +9109,7 @@ SSE_HTTP_HEADER_PREFIX: str = "x-a11-http-"
 SSE_STREAM_ID_HEADER: str = "x-a11-stream-id"
 START: StreamMode
 TCP: TurnRelayType
+TEXT_MIMETYPE: str = "text/plain"
 TLS: TurnRelayType
 UDP: TurnRelayType
 WEB_FETCH_ACTION: str = "web-fetch"

@@ -58,6 +58,9 @@ std::vector<std::string> SharedTags() {
   std::vector<std::string> result;
   for (const auto& [section, entries] : table.items()) {
     if (!section.empty() && section.front() == '_') continue;
+    // The other half of the fixture: media types, not tags. See
+    // MediaTypesMatchTheFixture below.
+    if (section == "media_types") continue;
     for (const auto& [name, tag] : entries.items()) {
       result.push_back(tag.get<std::string>());
     }
@@ -252,6 +255,36 @@ TEST(SerialTagsTest, AudioTypesPublishTheCanonicalTags) {
   EXPECT_EQ(A11SerialTag(TypeTag<AudioControlEvent>{}), kAudioControlEventTag);
   EXPECT_EQ(A11SerialTag(TypeTag<AudioCaptureEvent>{}), kAudioCaptureEventTag);
   EXPECT_EQ(A11SerialTag(TypeTag<TranscriptionEvent>{}), kTranscriptionEventTag);
+}
+
+
+TEST(SerialTagsTest, MediaTypesMatchTheFixture) {
+  // Pinned across languages exactly as the tags are. `text` and `bytes` are the
+  // ones that matter: they are the defaults for a string and a byte array in the
+  // languages that tell those apart, and a chunk using either carries no `type`
+  // parameter, so the media type alone is what a peer has to go on.
+  const nlohmann::json table = SharedTagTable();
+  const nlohmann::json media_types = table.at("media_types");
+
+  EXPECT_EQ(media_types.at("json").get<std::string>(), kJsonMimetype);
+  EXPECT_EQ(media_types.at("msgpack").get<std::string>(), kMsgpackMimetype);
+  EXPECT_EQ(media_types.at("text").get<std::string>(), kTextMimetype);
+  EXPECT_EQ(media_types.at("bytes").get<std::string>(), kBytesMimetype);
+}
+
+TEST(SerialTagsTest, AStdStringDefaultsToThePinnedBytesMediaType) {
+  // C++ has no text-versus-bytes distinction in its type system, so this is the
+  // one language whose string type defaults to bytes; text/plain is available by
+  // naming it. See cpp/tests/string_codec_test.cc.
+  const nlohmann::json media_types = SharedTagTable().at("media_types");
+  absl::StatusOr<Chunk> chunk =
+      GlobalSerializationRegistry().ToChunk<std::string>("value");
+
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  ASSERT_TRUE(chunk->metadata.has_value());
+  EXPECT_EQ(chunk->metadata->mimetype,
+            media_types.at("bytes").get<std::string>());
+  EXPECT_EQ(chunk->data, "value");
 }
 
 }  // namespace

@@ -10,11 +10,17 @@
 
 namespace a11 {
 
-std::string NewUuid() {
-  // Thread-local so a hot path does not reseed a generator per call.
+std::uint64_t RandomUint64() {
+  // Thread-local so a hot path does not reseed a generator per call. Seeding is
+  // the expensive part -- it reads the OS entropy source -- and a fresh
+  // `absl::BitGen` per call pays it every time.
   thread_local absl::BitGen generator;
-  std::uint64_t high = absl::Uniform<std::uint64_t>(generator);
-  std::uint64_t low = absl::Uniform<std::uint64_t>(generator);
+  return absl::Uniform<std::uint64_t>(generator);
+}
+
+std::string NewUuid() {
+  std::uint64_t high = RandomUint64();
+  std::uint64_t low = RandomUint64();
   // Version 4 in the high nibble of octet 6, and the RFC 4122 variant in the
   // top two bits of octet 8.
   high = (high & ~UINT64_C(0xf000)) | UINT64_C(0x4000);

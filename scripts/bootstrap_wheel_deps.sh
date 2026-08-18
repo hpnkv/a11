@@ -13,37 +13,48 @@ if [[ "${host_os}" == Darwin ]]; then
   deployment_tag="-macos-${MACOSX_DEPLOYMENT_TARGET}"
 fi
 
-# Boost.Fiber spinlock policy. Default to the adaptive TTAS futex spinlock;
-# A11_FIBER_SPINLOCK may switch it to the plain TTAS futex spinlock. The same
-# value MUST be used when compiling A11 (cpp/CMakeLists.txt reads
-# A11_FIBER_SPINLOCK identically), because Boost.Fiber selects the spinlock in
-# headers -- a mismatch changes boost::fibers::mutex's layout across the deps
-# library and the extension.
-fiber_spinlock=${A11_FIBER_SPINLOCK:-BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX}
+# Boost.Fiber spinlock policy. The default is per-platform and must match
+# cpp/CMakeLists.txt's, which picks the same way: the adaptive TTAS futex spinlock
+# on macOS, and the plain TTAS one on Linux, where never sleeping measures better
+# by 3-8% on the server benchmark (bench/PERF_PLAN.md). BOOST_FIBERS_SPINLOCK_TTAS
+# is not a macro Boost knows -- plain TTAS is its `else` branch -- so passing it
+# selects nothing on either side, which is the point: both sides pass the same
+# unrecognised macro and land on the same type.
+#
+# The same value MUST be used when compiling A11, because Boost.Fiber selects the
+# spinlock in headers -- a mismatch changes boost::fibers::mutex's layout across
+# the deps library and the extension.
+if [[ "${host_os}" == Darwin ]]; then
+  fiber_spinlock=${A11_FIBER_SPINLOCK:-BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX}
+else
+  fiber_spinlock=${A11_FIBER_SPINLOCK:-BOOST_FIBERS_SPINLOCK_TTAS}
+fi
 case "${fiber_spinlock}" in
-  BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX | BOOST_FIBERS_SPINLOCK_TTAS_FUTEX) ;;
+  BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX | BOOST_FIBERS_SPINLOCK_TTAS_FUTEX \
+    | BOOST_FIBERS_SPINLOCK_TTAS) ;;
   *)
-    echo "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX" \
-         "or BOOST_FIBERS_SPINLOCK_TTAS_FUTEX (got '${fiber_spinlock}')" >&2
+    echo "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX," \
+         "BOOST_FIBERS_SPINLOCK_TTAS_FUTEX or BOOST_FIBERS_SPINLOCK_TTAS" \
+         "(got '${fiber_spinlock}')" >&2
     exit 2
     ;;
 esac
 
-# The spinlock macro only changes the build on macOS (cpp/CMakeLists.txt applies
-# it under APPLE), so it is part of the cache key there. Folding it into the
-# stamp -- like the deployment target -- means switching A11_FIBER_SPINLOCK
-# rebuilds Boost against the new spinlock instead of silently reusing a prefix
-# whose boost::fibers::mutex layout no longer matches the extension.
-spinlock_tag=
-if [[ "${host_os}" == Darwin ]]; then
-  spinlock_tag="-${fiber_spinlock}"
-fi
+# The spinlock macro changes the build on every platform (cpp/CMakeLists.txt
+# applies it unconditionally), so it is part of the cache key everywhere.
+# Folding it into the stamp -- like the deployment target -- means switching
+# A11_FIBER_SPINLOCK rebuilds Boost against the new spinlock instead of
+# silently reusing a prefix whose boost::fibers::mutex layout no longer matches
+# the extension. It was previously keyed on macOS only, which is why the Linux
+# prefixes that predate this need one forced rebuild.
+spinlock_tag="-${fiber_spinlock}"
 
 sanitize_tag=
 if [[ -n "${A11_DEPS_SANITIZE:-}" ]]; then
   sanitize_tag="-sanitize-${A11_DEPS_SANITIZE//[^a-zA-Z0-9]/}"
 fi
-stamp="${prefix}/.a11-wheel-deps-v11-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
+# v12 adds mimalloc to the prefix.
+stamp="${prefix}/.a11-wheel-deps-v12-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -97,6 +108,7 @@ case "${host_os}:${arch}" in
     boost_arch_args=(toolset=gcc target-os=linux
                      architecture=x86 address-model=64 abi=sysv
                      binary-format=elf
+                     "define=${fiber_spinlock}"
                      cxxflags=-fPIC cflags=-fPIC)
     openssl_target=linux-x86_64
     ;;
@@ -104,6 +116,7 @@ case "${host_os}:${arch}" in
     boost_arch_args=(toolset=gcc target-os=linux
                      architecture=arm address-model=64 abi=aapcs
                      binary-format=elf
+                     "define=${fiber_spinlock}"
                      cxxflags=-fPIC cflags=-fPIC)
     openssl_target=linux-aarch64
     ;;
@@ -200,6 +213,30 @@ download_and_extract \
   ./b2 -j "${jobs}" "${boost_arch_args[@]}" cxxstd=20 variant=release \
     link=static runtime-link=shared threading=multi install
 )
+
+# mimalloc replaces the C library's malloc in A11's native executables, which is
+# worth ~+25% throughput on the server benchmark (bench/PERF_PLAN.md).
+#
+# Three builds, for three jobs. cpp/CMakeLists.txt links the standalone
+# **object** into the executables -- an archive member is only pulled in to
+# satisfy an undefined symbol and `malloc` never is, so linking the archive
+# would leave the override quietly switched off. The **archive** is what
+# a11_require_static_target checks. The **shared** library is what the wheel
+# carries for preloading into a Python process, which is the only safe way to
+# give the extension the same win; see a11/allocator.py.
+#
+# MI_OVERRIDE stays on (its default) as that is what makes any of them define
+# malloc/free at all.
+download_and_extract \
+  "https://github.com/microsoft/mimalloc/archive/refs/tags/v2.1.7.tar.gz" \
+  mimalloc.tar.gz
+cmake -S "${work}/mimalloc-2.1.7" -B "${work}/mimalloc-build" \
+  -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" \
+  -DMI_BUILD_TESTS=OFF -DMI_BUILD_SHARED=ON \
+  -DMI_BUILD_STATIC=ON -DMI_BUILD_OBJECT=ON \
+  ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}
+cmake --build "${work}/mimalloc-build" --target install -j "${jobs}"
 
 download_and_extract \
   "https://github.com/nlohmann/json/archive/refs/tags/v3.12.0.tar.gz" \

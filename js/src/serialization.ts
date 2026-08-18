@@ -24,6 +24,27 @@ export const JSON_MIMETYPE = 'application/json';
 export const MSGPACK_MIMETYPE = 'application/x-msgpack';
 /** Raw byte/blob codec media type. */
 export const OCTET_STREAM_MIMETYPE = 'application/octet-stream';
+/** UTF-8 text codec media type. */
+export const TEXT_MIMETYPE = 'text/plain';
+
+/**
+ * Media types that describe their content completely on their own.
+ *
+ * A chunk using one carries no `type` parameter and no framing inside the
+ * payload: `text/plain` is UTF-8 text and `application/octet-stream` is bytes,
+ * and there is nothing a `;type=` could add. These are the default
+ * representations for strings and `Uint8Array`, which is what makes a string
+ * chunk the string itself rather than a JSON-quoted copy, and a bytes chunk the
+ * bytes rather than base64 inside a JSON string.
+ *
+ * The consequence to know: `ArrayBuffer` and `Blob` share the bytes media type,
+ * so a value round-tripped without naming a type comes back as the canonical
+ * `Uint8Array`. Name the tag to get one of the others, as with Python's
+ * `bytearray`.
+ */
+const SELF_DESCRIBING_MEDIA_TYPES = new Set<string>([
+  TEXT_MIMETYPE, OCTET_STREAM_MIMETYPE,
+]);
 
 const MIME_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
@@ -74,7 +95,9 @@ const GENERIC_TAGS = new Set([
 
 function formatMimetype(mimetype: ParsedMimetype, tag: string): string {
   const parameters = [...mimetype.parameters].filter(([name]) => name !== 'type');
-  if (!GENERIC_TAGS.has(tag)) parameters.push(['type', encodeURIComponent(tag)]);
+  if (!GENERIC_TAGS.has(tag) && !SELF_DESCRIBING_MEDIA_TYPES.has(mimetype.mediaType)) {
+    parameters.push(['type', encodeURIComponent(tag)]);
+  }
   return `${mimetype.mediaType}${parameters.map(([name, value]) => `;${name}=${value}`).join('')}`;
 }
 
@@ -400,6 +423,21 @@ export class SerializationRegistry {
   }
 
   private installDefaults(): Status {
+    // Text first: registration order picks the representation when a caller
+    // names no mimetype, and a string travelling as itself beats a JSON-quoted
+    // copy of itself. The JSON and MessagePack codecs below stay registered, so
+    // asking for them still works and a peer that sends them is still read.
+    const textStatus = this.register<string>({
+      tag: 'string',
+      mimetype: TEXT_MIMETYPE,
+      test: (value): value is string => typeof value === 'string',
+      // utf8Decode is the strict one: it returns InvalidArgument rather
+      // than substituting U+FFFD, so a peer's encoding bug is reported
+      // where it arrives instead of becoming silent corruption.
+      serialize: (value) => utf8Encode(value),
+      deserialize: (data) => utf8Decode(data),
+    });
+    if (!isOk(textStatus)) return textStatus;
     const jsonTags = ['null', 'boolean', 'integer', 'number', 'string', 'array', 'object'] as const;
     for (const mimetype of [JSON_MIMETYPE, MSGPACK_MIMETYPE]) {
       for (const tag of jsonTags) {

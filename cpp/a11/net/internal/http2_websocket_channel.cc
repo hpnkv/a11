@@ -14,7 +14,6 @@
 #include <vector>
 
 #include <absl/base/thread_annotations.h>
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -25,6 +24,7 @@
 #include "a11/net/http2.h"
 #include "a11/net/internal/binary_channel.h"
 #include "a11/status.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net::internal {
@@ -544,7 +544,7 @@ class Http2WebSocketChannel final
       AppendBigEndian64(&frame, payload.size());
     }
     if (masked) {
-      const std::uint32_t key = absl::Uniform<std::uint32_t>(generator_);
+      const auto key = static_cast<std::uint32_t>(RandomUint64());
       const char mask[4] = {
           static_cast<char>((key >> 24U) & 0xffU),
           static_cast<char>((key >> 16U) & 0xffU),
@@ -668,7 +668,6 @@ class Http2WebSocketChannel final
   std::string input_ ABSL_GUARDED_BY(mu_);
   std::optional<std::uint8_t> fragment_opcode_ ABSL_GUARDED_BY(mu_);
   std::string fragmented_ ABSL_GUARDED_BY(mu_);
-  absl::BitGen generator_ ABSL_GUARDED_BY(write_mu_);
 };
 
 }  // namespace

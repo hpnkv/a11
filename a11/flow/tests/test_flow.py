@@ -1025,7 +1025,7 @@ async def test_mime_and_distinct_and_json_filter_a_stream(registry):
           out kept:   string stream
           out unique: string stream
           out parsed: list stream
-          words | mime "application/json" -> kept
+          words | mime "text/*" -> kept
           words | distinct -> unique
           "[1, 2]" | json -> parsed
         }
@@ -1033,6 +1033,9 @@ async def test_mime_and_distinct_and_json_filter_a_stream(registry):
         registry,
         words=["x", "x", "y"],
     )
+    # `text/*`, because that is what a string chunk now is: strings travel as
+    # `text/plain`, not as a JSON-quoted copy of themselves. This is also the
+    # idiom doc/docs/api/flow.md has always used.
     assert result["kept"] == ["x", "x", "y"]
     assert result["unique"] == ["x", "y"]
     assert result["parsed"] == [[1, 2]]

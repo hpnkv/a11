@@ -15,7 +15,6 @@
 #include <string>
 #include <utility>
 
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -32,6 +31,7 @@
 #include "a11/net/wire_stream.h"
 #include "a11/obs/span.h"
 #include "a11/obs/tracer.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
@@ -40,10 +40,7 @@ namespace {
 enum class End { kNone, kHalfClose, kAbort };
 
 std::string NewStreamId() {
-  absl::BitGen bit_generator;
-  const std::uint64_t high = absl::Uniform<std::uint64_t>(bit_generator);
-  const std::uint64_t low = absl::Uniform<std::uint64_t>(bit_generator);
-  return absl::StrFormat("%016x%016x", high, low);
+  return absl::StrFormat("%016x%016x", RandomUint64(), RandomUint64());
 }
 
 absl::Status InvokeMessageCallback(const OnMessage& callback,

@@ -1,1 +1,4 @@
 *.so
+# The preloadable allocator the build stages here for the wheel to carry; see
+# a11/allocator.py and the install rule beside a11_python in cpp/CMakeLists.txt.
+_allocator/

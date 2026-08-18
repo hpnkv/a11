@@ -77,14 +77,25 @@ test('nested A11 wire values round-trip without exceptions', () => {
 
 test('a value JSON already describes carries no type parameter', async () => {
   const registry = new SerializationRegistry({ registerDefaults: true });
-  const values = [null, true, 12, 1.5, 'hello', [1, 2], { answer: 42 }];
+  // A string and a byte array have media types of their own that say what they
+  // are, so they are not JSON at all any more; everything else here is.
+  const values = [
+    [null, 'application/json'],
+    [true, 'application/json'],
+    [12, 'application/json'],
+    [1.5, 'application/json'],
+    [[1, 2], 'application/json'],
+    [{ answer: 42 }, 'application/json'],
+    ['hello', 'text/plain'],
+    [new Uint8Array([1, 2]), 'application/octet-stream'],
+  ];
 
-  for (const value of values) {
+  for (const [value, expected] of values) {
     const chunk = await registry.toChunk(value);
     assert.equal(isOk(chunk), true);
-    // JSON says as much on its own; repeating it in the mimetype would only
-    // stop a peer holding a bare `application/json` from being understood.
-    assert.equal(chunk.mimetype, 'application/json');
+    // The format says as much on its own; repeating it in the mimetype would
+    // only stop a peer holding the bare media type from being understood.
+    assert.equal(chunk.mimetype, expected);
     const decoded = await registry.fromChunk(chunk);
     assert.equal(isOk(decoded), true);
     assert.deepEqual(decoded, value);

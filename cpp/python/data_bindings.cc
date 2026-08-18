@@ -571,6 +571,8 @@ void BindValueProtocol(py::class_<T>& cls) {
 void BindData(py::module_& module) {
   module.attr("JSON_MIMETYPE") = std::string(data::kJsonMimetype);
   module.attr("MSGPACK_MIMETYPE") = std::string(data::kMsgpackMimetype);
+  module.attr("TEXT_MIMETYPE") = std::string(data::kTextMimetype);
+  module.attr("BYTES_MIMETYPE") = std::string(data::kBytesMimetype);
   module.attr("WIRE_MESSAGE_VERSION") = data::WireMessage::kVersion;
   module.def(
       "validate_name_string",

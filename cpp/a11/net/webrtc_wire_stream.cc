@@ -17,7 +17,6 @@
 #include <absl/base/call_once.h>
 #include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
-#include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -43,16 +42,14 @@
 #include "a11/net/internal/path_mtu.h"
 #include "a11/net/signalling.h"
 #include "a11/net/wire_stream.h"
+#include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
 namespace {
 
 std::string NewDataChannelId() {
-  absl::BitGen generator;
-  return absl::StrFormat("a11-%016x%016x",
-                         absl::Uniform<std::uint64_t>(generator),
-                         absl::Uniform<std::uint64_t>(generator));
+  return absl::StrFormat("a11-%016x%016x", RandomUint64(), RandomUint64());
 }
 
 absl::Status ExternalException(const std::exception& error,

@@ -40,6 +40,16 @@ option(A11_BUILD_SQLITE "Build the SQLite ChunkStore" ON)
 option(A11_BUILD_AUDIO
         "Build PortAudio capture and whisper.cpp speech recognition" ON)
 option(A11_FETCH_MISSING_DEPS "Fetch required dependencies not installed" ON)
+# Replaces the C library's malloc in A11's native executables. Worth ~+25%
+# throughput on the server benchmark and nothing else changes; see
+# bench/PERF_PLAN.md for the measurements behind the per-platform default.
+# "auto" means tcmalloc on Linux, mimalloc on macOS, and the system allocator
+# anywhere else. Deliberately *not* applied to the Python extension -- see the
+# a11_allocator block below, and a11/allocator.py for what happens instead.
+set(A11_ALLOCATOR "auto" CACHE STRING
+        "Allocator for A11's native executables: auto, mimalloc, tcmalloc, system")
+set_property(CACHE A11_ALLOCATOR PROPERTY STRINGS
+        auto mimalloc tcmalloc system)
 option(A11_REQUIRE_STATIC_DEPS
         "Fail configuration when a non-system dependency is only shared" ON)
 option(A11_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
@@ -324,33 +334,230 @@ a11_require_static_target(Boost::context)
 a11_require_static_target(Boost::fiber)
 a11_require_static_target(Boost::thread)
 
-if (APPLE)
-    # Precedence: an explicit -DA11_FIBER_SPINLOCK wins (build frontends that
-    # cannot pass the environment through -- e.g. uv, which overwrites
-    # CMAKE_PREFIX_PATH -- inject it via CMAKE_ARGS like the other discovery
-    # flags), then the environment (CMake presets set it there), then the
-    # adaptive futex default. Whatever resolves here MUST match the value the
-    # deps prefix's Boost.Fiber was built with.
-    if (NOT A11_FIBER_SPINLOCK)
-        if (DEFINED ENV{A11_FIBER_SPINLOCK})
-            set(A11_FIBER_SPINLOCK "$ENV{A11_FIBER_SPINLOCK}")
-        else ()
-            set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX)
-        endif ()
+# Boost.Fiber's spinlock policy. Chosen per platform, and applied on all of them.
+#
+# The default differs by platform because the right answer does. On macOS the
+# adaptive futex spinlock wins. On Linux the plain `spinlock_ttas` -- which spins
+# and yields but never sleeps -- is **measurably better**: the server benchmark
+# gives 19.88k ops/s against 18.38k at 256 clients, 21.23k against 19.70k at 64,
+# same sign at every client count (bench/PERF_PLAN.md). The critical sections
+# under this lock are ready-queue pushes and pops, and a futex syscall costs more
+# than spinning through one. `spinlock_ttas::lock()` being the profile's largest
+# entry at ~10% is therefore not a bug to fix by sleeping instead; that was tried.
+#
+# This block used to sit under `if (APPLE)`, which produced the same Linux
+# behaviour by accident -- Boost's own fallback -- while leaving no way to select
+# or even see the choice there. It is explicit now, on both platforms, so the
+# experiment above is one `-DA11_FIBER_SPINLOCK=` away rather than a day of
+# rebuilding Boost to find out what you were already running.
+#
+# Precedence: an explicit -DA11_FIBER_SPINLOCK wins (build frontends that cannot
+# pass the environment through -- e.g. uv, which overwrites CMAKE_PREFIX_PATH --
+# inject it via CMAKE_ARGS like the other discovery flags), then the environment
+# (CMake presets set it there), then the per-platform default. Whatever resolves
+# here MUST match the value the deps prefix's Boost.Fiber was built with: Boost
+# selects the spinlock in headers, so the choices are different types of
+# different sizes, and mixing them changes boost::fibers::mutex's layout between
+# the prefix's library and A11's own translation units. The deps bootstrap keys
+# its stamp on the same variable so a switch rebuilds Boost rather than silently
+# reusing a prefix that no longer matches.
+#
+# BOOST_FIBERS_SPINLOCK_TTAS names the plain one. Boost has no such macro -- it
+# is Boost's `else` branch -- so the define lands nowhere, which is exactly the
+# point: both sides pass the same unrecognised macro and both fall through to the
+# same type. Naming it beats leaving it blank and hoping the two sides agree.
+if (NOT A11_FIBER_SPINLOCK)
+    if (DEFINED ENV{A11_FIBER_SPINLOCK})
+        set(A11_FIBER_SPINLOCK "$ENV{A11_FIBER_SPINLOCK}")
+    elseif (APPLE)
+        set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX)
+    else ()
+        set(A11_FIBER_SPINLOCK BOOST_FIBERS_SPINLOCK_TTAS)
     endif ()
-    if (NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
-            AND NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_FUTEX")
-        message(FATAL_ERROR
-                "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
-                " or BOOST_FIBERS_SPINLOCK_TTAS_FUTEX (got ${A11_FIBER_SPINLOCK})")
-    endif ()
-    add_compile_definitions(${A11_FIBER_SPINLOCK})
 endif ()
+if (NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
+        AND NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_FUTEX"
+        AND NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS")
+    message(FATAL_ERROR
+            "A11_FIBER_SPINLOCK must be BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX,"
+            " BOOST_FIBERS_SPINLOCK_TTAS_FUTEX or BOOST_FIBERS_SPINLOCK_TTAS"
+            " (got ${A11_FIBER_SPINLOCK})")
+endif ()
+add_compile_definitions(${A11_FIBER_SPINLOCK})
 
 if (A11_BUILD_HTTP OR A11_BUILD_REDIS)
     find_package(uvw CONFIG REQUIRED NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
     a11_require_static_target(uvw::uvw)
     a11_require_static_target(uvw::uv_a)
+endif ()
+
+# The process allocator for A11's own executables.
+#
+# glibc's malloc was ~16% of CPU on the server benchmark and its arena contention
+# cost more than that again; replacing it is worth ~+25% throughput for no change
+# to A11's code at all. jemalloc, mimalloc and tcmalloc all measured within noise
+# of each other and all beat glibc by 20-30%, so which one is a per-platform
+# choice recorded in A11_ALLOCATOR below rather than a matter of principle.
+#
+# Two deliberate exclusions:
+#  - Sanitizer builds. ASan and TSan install their own allocators to detect
+#    exactly what this would be replacing.
+#  - The Python extension. `_native.so` is dlopened into an interpreter that has
+#    already allocated through libc, and a module that replaced `free` for the
+#    whole process would eventually be handed a libc pointer. The wheel instead
+#    carries the shared library for preloading, and a11/allocator.py activates
+#    it where A11 launches its own processes; see the install rule beside
+#    a11_python. This is a property of how a process starts, so it cannot be
+#    decided from inside one.
+#
+# This is an executable-level choice: it goes on the executables and never into
+# a11::core's link interface.
+add_library(a11_allocator INTERFACE)
+add_library(a11::allocator ALIAS a11_allocator)
+
+if (A11_ALLOCATOR STREQUAL "auto")
+    # tcmalloc on Linux and mimalloc on macOS, which is how they measured:
+    # tcmalloc took 19.65k ops/s against mimalloc's 18.65k at 256 clients on the
+    # Linux reference box, while mimalloc is the one with first-class macOS
+    # support. Both beat glibc by more than they differ from each other.
+    if (APPLE)
+        set(A11_RESOLVED_ALLOCATOR mimalloc)
+    elseif (UNIX)
+        set(A11_RESOLVED_ALLOCATOR tcmalloc)
+    else ()
+        set(A11_RESOLVED_ALLOCATOR system)
+    endif ()
+else ()
+    set(A11_RESOLVED_ALLOCATOR "${A11_ALLOCATOR}")
+endif ()
+if (A11_SANITIZE AND NOT A11_RESOLVED_ALLOCATOR STREQUAL "system")
+    message(STATUS
+            "A11_SANITIZE is set: using the system allocator so the sanitizer "
+            "keeps its own")
+    set(A11_RESOLVED_ALLOCATOR system)
+endif ()
+if (NOT A11_RESOLVED_ALLOCATOR MATCHES "^(mimalloc|tcmalloc|system)$")
+    message(FATAL_ERROR
+            "A11_ALLOCATOR must be auto, mimalloc, tcmalloc or system "
+            "(got ${A11_ALLOCATOR})")
+endif ()
+message(STATUS "A11 allocator: ${A11_RESOLVED_ALLOCATOR}")
+
+# Set when a preloadable shared build is available for the wheel to carry.
+set(A11_ALLOCATOR_SHARED_LIBRARY "")
+
+if (A11_RESOLVED_ALLOCATOR STREQUAL "mimalloc")
+    find_package(mimalloc 2.1 CONFIG QUIET
+            NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+    if (mimalloc_FOUND)
+        a11_require_static_target(mimalloc-static)
+        # Linked as `mimalloc.o` rather than the archive on purpose: an archive
+        # member is only pulled in to satisfy an undefined symbol, and `malloc`
+        # is never undefined -- libc always has one -- so linking
+        # `libmimalloc.a` silently leaves the override off. An explicitly listed
+        # object file's definitions are always included.
+        # MIMALLOC_OBJECT_DIR is set by mimalloc's own package config.
+        set(A11_MIMALLOC_OBJECT "${MIMALLOC_OBJECT_DIR}/mimalloc.o")
+        if (NOT EXISTS "${A11_MIMALLOC_OBJECT}")
+            message(FATAL_ERROR
+                    "mimalloc was found at ${MIMALLOC_OBJECT_DIR} but without "
+                    "mimalloc.o; rebuild the deps prefix with "
+                    "scripts/bootstrap_wheel_deps.sh, or configure with "
+                    "-DA11_ALLOCATOR=system")
+        endif ()
+        a11_require_from_prefix(mimalloc "${A11_MIMALLOC_OBJECT}")
+        target_link_libraries(a11_allocator INTERFACE "${A11_MIMALLOC_OBJECT}")
+        # The shared build, for the wheel to carry as a preloadable library. Not
+        # linked against anything. Absent from a prefix built before this was
+        # added, which is not an error -- the executables have their allocator
+        # either way.
+        if (TARGET mimalloc)
+            get_target_property(A11_ALLOCATOR_SHARED_LIBRARY
+                    mimalloc IMPORTED_LOCATION)
+            if (NOT A11_ALLOCATOR_SHARED_LIBRARY)
+                get_target_property(A11_ALLOCATOR_SHARED_LIBRARY
+                        mimalloc IMPORTED_LOCATION_RELEASE)
+            endif ()
+        endif ()
+    elseif (A11_FETCH_MISSING_DEPS)
+        # Only the object and shared builds: the archive would be an install rule
+        # for a file nothing ever builds (A11 links the object, so the static
+        # target has no dependent), which fails `cmake --install` rather than the
+        # build. EXCLUDE_FROM_ALL keeps mimalloc's own install rules out of
+        # A11's install altogether -- a dependency consumed as objects has no
+        # business putting headers and archives in A11's prefix.
+        set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+        set(MI_BUILD_SHARED ON CACHE BOOL "" FORCE)
+        set(MI_BUILD_OBJECT ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+                mimalloc
+                GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+                GIT_TAG v2.1.7
+                GIT_SHALLOW TRUE
+                EXCLUDE_FROM_ALL
+                SYSTEM)
+        FetchContent_MakeAvailable(mimalloc)
+        # In-tree, mimalloc's own object library stands in for the installed
+        # mimalloc.o -- but as `$<TARGET_OBJECTS:>` and not as a link to the
+        # target. An OBJECT library's objects reach only the targets that link it
+        # *directly*; routed through this INTERFACE library they are silently
+        # dropped, which builds and links cleanly and leaves the allocator
+        # unreplaced. The generator expression names the object files themselves,
+        # which do propagate (and carry their own build dependency).
+        target_link_libraries(
+                a11_allocator INTERFACE $<TARGET_OBJECTS:mimalloc-obj>)
+        # EXCLUDE_FROM_ALL means the shared build needs an explicit reason to
+        # exist, since nothing links it.
+        if (A11_BUILD_PYTHON AND TARGET mimalloc)
+            add_custom_target(a11_allocator_shared ALL DEPENDS mimalloc)
+            set(A11_ALLOCATOR_SHARED_LIBRARY "$<TARGET_FILE:mimalloc>")
+        endif ()
+    else ()
+        message(FATAL_ERROR
+                "A11_ALLOCATOR=mimalloc needs mimalloc >= 2.1; install it into "
+                "the deps prefix, enable A11_FETCH_MISSING_DEPS, or configure "
+                "with -DA11_ALLOCATOR=system")
+    endif ()
+elseif (A11_RESOLVED_ALLOCATOR STREQUAL "tcmalloc")
+    # gperftools' minimal build: tcmalloc without the heap profiler and leak
+    # checker, which is all that is wanted here and avoids a libunwind
+    # dependency. No object-file trick needed, unlike mimalloc: the archive
+    # member that defines `malloc` also defines `operator new`, which *is* an
+    # undefined symbol in any C++ program, so the member is always pulled in.
+    # `nm <binary> | grep -c tc_malloc` is still the check.
+    # The archive by its exact file name first: a bare `tcmalloc_minimal` finds
+    # the shared library in a prefix that has both, and A11 links its allocator
+    # statically.
+    find_library(A11_TCMALLOC_LIBRARY
+            NAMES "${CMAKE_STATIC_LIBRARY_PREFIX}tcmalloc_minimal${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            tcmalloc_minimal
+            PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib
+            NO_DEFAULT_PATH)
+    if (NOT A11_TCMALLOC_LIBRARY)
+        message(FATAL_ERROR
+                "A11_ALLOCATOR=tcmalloc needs libtcmalloc_minimal in the deps "
+                "prefix; rebuild it with scripts/bootstrap_wheel_deps.sh, or "
+                "configure with -DA11_ALLOCATOR=mimalloc or system")
+    endif ()
+    if (NOT A11_TCMALLOC_LIBRARY MATCHES "\\.a$")
+        message(FATAL_ERROR
+                "tcmalloc resolved to a shared library "
+                "(${A11_TCMALLOC_LIBRARY}); A11 links its allocator statically")
+    endif ()
+    a11_require_from_prefix(tcmalloc "${A11_TCMALLOC_LIBRARY}")
+    target_link_libraries(a11_allocator INTERFACE "${A11_TCMALLOC_LIBRARY}")
+    find_library(A11_TCMALLOC_SHARED_LIBRARY
+            NAMES tcmalloc_minimal
+            PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib
+            NO_DEFAULT_PATH
+            NO_CACHE)
+    file(GLOB A11_TCMALLOC_SHARED_CANDIDATES
+         "${CMAKE_PREFIX_PATH}/lib/libtcmalloc_minimal.so"
+         "${CMAKE_PREFIX_PATH}/lib/libtcmalloc_minimal.dylib")
+    if (A11_TCMALLOC_SHARED_CANDIDATES)
+        list(GET A11_TCMALLOC_SHARED_CANDIDATES 0 A11_ALLOCATOR_SHARED_LIBRARY)
+    endif ()
 endif ()
 
 if (A11_BUILD_REDIS)
@@ -793,7 +1000,8 @@ if (A11_BUILD_FLOW_TOOL)
     target_link_libraries(
             a11_flow_tool
             PRIVATE a11::flow_lang nlohmann_json::nlohmann_json
-            absl::strings absl::str_format absl::flat_hash_map a11::warnings)
+            absl::strings absl::str_format absl::flat_hash_map a11::warnings
+            a11::allocator)
 endif ()
 
 add_library(a11_obs STATIC ${A11_OBS_SOURCES})
@@ -1249,6 +1457,37 @@ if (A11_BUILD_PYTHON)
         endif ()
     endif ()
     install(TARGETS a11_python LIBRARY DESTINATION a11 COMPONENT python)
+
+    # Ship the shared mimalloc beside the extension.
+    #
+    # The extension itself is deliberately *not* built against it (see the
+    # a11_allocator block): replacing malloc from inside a module that an
+    # interpreter dlopens after it has already allocated is not a safe thing to
+    # do to somebody else's process. Replacing it from the start, before the
+    # interpreter allocates anything, is entirely safe -- and that is a preload,
+    # which is a property of how the process is launched and cannot be decided
+    # from inside it.
+    #
+    # So the wheel carries the library and A11 activates it where it launches its
+    # own processes; see a11/allocator.py, which finds it here. Nothing imports
+    # or loads it as a side effect of `import a11`.
+    if (A11_ALLOCATOR_SHARED_LIBRARY)
+        install(FILES "${A11_ALLOCATOR_SHARED_LIBRARY}"
+                DESTINATION a11/_allocator COMPONENT python)
+        if (NOT SKBUILD)
+            # Direct CMake builds keep the fast edit/test loop working by putting
+            # it where the installed layout puts it. A custom command rather than
+            # file(COPY), because for a fetched mimalloc the path is a generator
+            # expression that has no value at configure time.
+            add_custom_command(TARGET a11_python POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../a11/_allocator"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${A11_ALLOCATOR_SHARED_LIBRARY}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../a11/_allocator"
+                    COMMENT "Staging the preloadable allocator in a11/_allocator")
+        endif ()
+    endif ()
     install(FILES
             "${CMAKE_CURRENT_SOURCE_DIR}/../a11/py.typed"
             DESTINATION a11 COMPONENT python)

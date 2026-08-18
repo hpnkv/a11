@@ -249,7 +249,22 @@ std::vector<ReapEntry>& ReapQueue() {
   return *queue;
 }
 
+// ReapQueue().size(), readable without the lock. Workers consult this on every
+// pass round their loop, and an idle pool must not pay a lock acquisition to be
+// told there is nothing there: `try_lock` on a process-wide mutex is a read-modify
+// -write on one shared cache line, so every worker doing it every pass keeps that
+// line bouncing between cores whether or not there is any work. A relaxed load of
+// a line nobody is writing is free by comparison.
+std::atomic<size_t>& ReapPending() {
+  static absl::NoDestructor<std::atomic<size_t>> pending{0};
+  return *pending;
+}
+
 }  // namespace
+
+size_t PendingReapCount() {
+  return ReapPending().load(std::memory_order_relaxed);
+}
 
 void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
                       absl::AnyInvocable<void() &&> on_finished) {
@@ -259,6 +274,10 @@ void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
   const std::lock_guard<std::mutex> lock(ReapMutex());
   ReapQueue().push_back(
       ReapEntry{.fiber = std::move(fiber), .on_finished = std::move(on_finished)});
+  // Written under the lock, so it always agrees with the queue as of the last
+  // release. Readers are relaxed and so may lag by nanoseconds, which costs at
+  // worst a drain deferred to the next pass round a worker's loop.
+  ReapPending().store(ReapQueue().size(), std::memory_order_relaxed);
 }
 
 void ReapFinishedFibers() {
@@ -274,6 +293,14 @@ void ReapFinishedFibers() {
   // window, so the cost per round does not grow with the number of live fibers.
   constexpr size_t kMaxScanPerPass = 32;
   static std::atomic<size_t> cursor{0};
+
+  // The no-work gate. Workers call this on every pass round their loop, so an
+  // otherwise idle pool used to spend a `try_lock` per worker per pass on a shared
+  // cache line to learn that the queue was empty; this reads a line nobody is
+  // writing instead. See ReapPending().
+  if (PendingReapCount() == 0) {
+    return;
+  }
 
   std::vector<ReapEntry> ready;
   {
@@ -301,6 +328,7 @@ void ReapFinishedFibers() {
       }
       ++at;
     }
+    ReapPending().store(queue.size(), std::memory_order_relaxed);
   }
   for (ReapEntry& entry : ready) {
     // Join first: the fiber has finished, so this returns without suspending and

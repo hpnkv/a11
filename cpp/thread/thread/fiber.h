@@ -258,8 +258,23 @@ void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
  * Called by pool workers as they come round, so reaping costs no fiber of its own.
  * Only touches fibers whose `Joinable()` is already true, so it never blocks on
  * work still running.
+ *
+ * Returns immediately, touching no lock, when nothing is pending; see
+ * PendingReapCount().
  */
 void ReapFinishedFibers();
+
+/**
+ * @brief
+ *   How many fibers are waiting to be reaped, without taking the reap lock.
+ *
+ * A hint, not a fence: the count may change the moment it is read. It exists so a
+ * caller in a hot loop can decide whether a drain is worth attempting at all. Zero
+ * is exact in the only direction that matters -- there is genuinely nothing queued,
+ * so a drain would find nothing -- because the count is decremented only after an
+ * entry has been removed from the queue.
+ */
+size_t PendingReapCount();
 
 template <typename F>
 void Detach(TreeOptions tree_options, F&& f) {

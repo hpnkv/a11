@@ -264,8 +264,12 @@ def test_registry_reports_specified_status_codes():
         registry.from_chunk(chunk, obj_type=list)
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 
+    # A representation nothing is registered under. `text/*` used to be one and
+    # is not any more: `text/plain` is how a `str` travels now, so asking for it
+    # explicitly is a documented override rather than a missing codec (see
+    # test_explicit_mimetype_can_override_stale_metadata).
     with pytest.raises(StatusException) as raised:
-        registry.from_chunk(chunk, "text/*")
+        registry.from_chunk(chunk, "image/*")
     assert raised.value.status.code == StatusCode.NOT_FOUND
 
 

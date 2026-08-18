@@ -140,13 +140,41 @@ do the work, write the declared outputs, close them.
 const registry = new ActionRegistry();
 need(registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) => {
     const [ids, colors] = await Promise.all([readAll(action, 'ids'), readAll(action, 'colors')]);
-    for (const [index, id] of ids.entries()) recolour(Number(id), String(colors[index]));
+    const blobs = blobsFor(scene, ids);
+    if (isStatus(blobs)) return await refuse(action, blobs, onLog);
+    blobs.forEach((blob, index) => recolour(blob, colors[index]));
     const result = need(await action.getOutput('recoloured'));
-    need(await result.putFinal(ids.length));
+    need(await result.putFinal(blobs.length));
     need(await result.drainAndClose());
     return okStatus();
 }));
 ```
+
+### Validate, then act
+
+A tool call is the least trustworthy input a page gets: every value in it is a
+model's idea of what the schema said. So each argument is checked **before
+anything is touched**, and a call that cannot be honoured comes back as a status:
+
+```ts
+const dx = rawDx === null ? 0 : finiteNumber(rawDx, 'dx', scene.width);
+if (isStatus(dx)) return await refuse(action, dx, onLog);
+```
+
+Returning `invalidArgumentError('dx must be a number of pixels; got "a bit left".')`
+is not a dead end — the tool runner hands it to the model as *this call's result*,
+so the model sees what was wrong and can call again with a number. Coercing
+instead is what hurts: `Number('a bit left')` is `NaN`, `blob.x + NaN` is `NaN`,
+and the blob leaves the canvas for good while the tool reports "moved 5 blobs".
+
+Two habits fall out of that, and both are the tool's job rather than the model's:
+
+- **Nothing is written until every argument has been read.** A refused call leaves
+  the scene exactly as it was; a half-applied one is harder to undo than to
+  prevent.
+- **The scene's own limits are enforced by the scene.** A move that would take a
+  blob off the canvas stops at the edge, and the run log says so, because "off the
+  left edge" is not a place the page can show or the model can name again.
 
 The registry is bound to the session **before** the stream is attached, so an
 inbound call cannot arrive before there is something to serve it:

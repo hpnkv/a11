@@ -18,7 +18,9 @@ import {
   ActionPortSchema,
   ActionRegistry,
   ActionSchema,
+  invalidArgumentError,
   isOk,
+  isStatus,
   okStatus,
   statusFromUnknown,
   type Action,
@@ -58,6 +60,15 @@ class Scene {
   private readonly canvas = document.querySelector<HTMLCanvasElement>('#tools-canvas')!;
   readonly blobs: Blob[] = [];
 
+  /** The drawing surface, in the coordinates the tools speak. */
+  get width(): number {
+    return this.canvas.width;
+  }
+
+  get height(): number {
+    return this.canvas.height;
+  }
+
   constructor() {
     for (let index = 0; index < 5; index += 1) {
       this.blobs.push({
@@ -91,8 +102,16 @@ class Scene {
     }
   }
 
+  /** [contain], against this canvas. */
+  contain(blob: Blob, x: number, y: number): {x: number; y: number} {
+    return contain(blob, x, y, this.width, this.height);
+  }
+
   /** Move a blob over half a second, so the model's work is visible. */
   async glide(blob: Blob, x: number, y: number): Promise<void> {
+    // Defence in depth: a caller that got past validation with a NaN would
+    // otherwise write NaN into the blob and erase it from the canvas for good.
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     const from = {x: blob.x, y: blob.y};
     const frames = 30;
     for (let frame = 1; frame <= frames; frame += 1) {
@@ -102,6 +121,97 @@ class Scene {
       await new Promise((resolve) => setTimeout(resolve, 500 / frames));
     }
   }
+}
+
+/**
+ * The nearest point to (x, y) that keeps a blob wholly on a `width` x `height`
+ * canvas.
+ *
+ * A tool call is an outside instruction, and "off the left edge" is a place the
+ * scene has no way to show. Clamping is the honest reading of "move it left" when
+ * it is already at the edge; the alternative is a blob nobody can see or name
+ * again.
+ */
+export function contain(
+  blob: Blob,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): {x: number; y: number} {
+  const clamp = (value: number, limit: number) =>
+    Math.min(Math.max(value, blob.radius), limit - blob.radius);
+  return {x: clamp(x, width), y: clamp(y, height)};
+}
+
+// --- Reading a tool call's arguments -----------------------------------------
+//
+// A tool call is the least trustworthy input a page gets: the values are a
+// model's idea of what the schema said. So each argument is *validated before
+// anything is touched*, and a call that cannot be honoured comes back as an
+// INVALID_ARGUMENT status naming what was wrong. The tool runner hands that to
+// the model as the call's result, which is what lets it correct itself and try
+// again — whereas coercing the value silently (`Number("a bit left")` is `NaN`)
+// applies nonsense to the scene and reports success.
+
+/**
+ * `value` as a finite number, or a status saying why it is not one.
+ *
+ * Emptiness is refused rather than read as zero: `Number('')` is `0`, so a model
+ * that sends `dx: null` would otherwise be told it moved five blobs by nothing.
+ * A port that carried *no* value at all is the caller's to default — see the
+ * handler.
+ */
+export function finiteNumber(value: unknown, name: string, limit: number): number | Status {
+  const empty = value === null || value === undefined || String(value).trim() === '';
+  const numeric = empty ? NaN : typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(numeric)) {
+    return invalidArgumentError(
+      `${name} must be a number of pixels; got ${JSON.stringify(value)}.`,
+    );
+  }
+  if (Math.abs(numeric) > limit) {
+    return invalidArgumentError(
+      `${name} must be between -${limit} and ${limit} pixels; got ${numeric}.`,
+    );
+  }
+  return numeric;
+}
+
+/** The blobs `ids` names, or a status naming the ones that do not exist. */
+export function blobsFor(scene: Scene, ids: readonly unknown[]): Blob[] | Status {
+  if (ids.length === 0) {
+    return invalidArgumentError('ids must name at least one blob.');
+  }
+  const found: Blob[] = [];
+  const unknown: unknown[] = [];
+  for (const id of ids) {
+    const numeric = typeof id === 'number' ? id : Number(String(id ?? '').trim());
+    const blob = Number.isInteger(numeric) ? scene.find(numeric) : undefined;
+    if (blob === undefined) unknown.push(id);
+    else found.push(blob);
+  }
+  if (unknown.length > 0) {
+    const known = scene.blobs.map((blob) => blob.id).join(', ');
+    return invalidArgumentError(
+      `no blob has id ${unknown.map((id) => JSON.stringify(id)).join(', ')};` +
+        ` the ids are ${known}.`,
+    );
+  }
+  return found;
+}
+
+/** A CSS colour this scene will accept, or a status saying why not. */
+export function colorFor(value: unknown, id: number): string | Status {
+  const color = typeof value === 'string' ? value.trim() : '';
+  const known = /^#[0-9a-f]{3}$|^#[0-9a-f]{6}$|^[a-z]{3,20}$/i;
+  if (!known.test(color)) {
+    return invalidArgumentError(
+      `the colour for blob ${id} must be #rgb, #rrggbb or a CSS colour name;` +
+        ` got ${JSON.stringify(value)}.`,
+    );
+  }
+  return color;
 }
 
 // --- The actions the page serves ---------------------------------------------
@@ -161,7 +271,9 @@ const SET_COLOR_SCHEMA = new ActionSchema({
 
 const SHIFT_POSITION_SCHEMA = new ActionSchema({
   name: 'shift_position',
-  description: 'Move blobs by an offset in pixels. +x is right and +y is down.',
+  description:
+    'Move blobs by an offset in whole pixels: +x is right, +y is down. The canvas' +
+    ' is 620 by 300, and a blob that would leave it stops at the edge.',
   inputs: {
     ids: new ActionPortSchema({
       name: 'ids',
@@ -174,14 +286,14 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
       type: 'application/json',
       unary: true,
       required: true,
-      description: 'How far to move them horizontally, in pixels.',
+      description: 'How far to move them horizontally, in pixels (a number).',
     }),
     dy: new ActionPortSchema({
       name: 'dy',
       type: 'application/json',
       unary: true,
       required: true,
-      description: 'How far to move them vertically, in pixels.',
+      description: 'How far to move them vertically, in pixels (a number).',
     }),
   },
   outputs: {
@@ -236,6 +348,24 @@ async function narrate(action: Action, text: string, onLog: (text: string) => vo
   need(await node.drainAndClose());
 }
 
+/**
+ * Decline a call, telling both audiences: the log says what the page refused,
+ * and the returned status is what the model is handed as this call's result.
+ */
+async function refuse(
+  action: Action,
+  status: Status,
+  onLog: (text: string) => void,
+): Promise<Status> {
+  try {
+    await narrate(action, `refused: ${status.message}`, onLog);
+  } catch {
+    // The refusal itself is the result; a log that will not write must not
+    // replace it with a different failure.
+  }
+  return status;
+}
+
 /** Register the page's actions, each backed by the canvas. */
 function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegistry {
   const registry = new ActionRegistry();
@@ -259,19 +389,28 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
     registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action): Promise<Status> => {
       try {
         const [ids, colors] = await Promise.all([readAll(action, 'ids'), readAll(action, 'colors')]);
-        let recoloured = 0;
-        for (const [index, id] of ids.entries()) {
-          const blob = scene.find(Number(id));
-          const color = colors[Math.min(index, colors.length - 1)];
-          if (!blob || typeof color !== 'string') continue;
-          blob.color = color;
-          recoloured += 1;
+        const blobs = blobsFor(scene, ids);
+        if (isStatus(blobs)) return await refuse(action, blobs, onLog);
+        // One colour is broadcast to every id; otherwise they pair up in order.
+        const wanted: string[] = [];
+        for (const [index, blob] of blobs.entries()) {
+          const color = colorFor(colors[Math.min(index, colors.length - 1)], blob.id);
+          if (isStatus(color)) return await refuse(action, color, onLog);
+          wanted.push(color);
         }
+
+        blobs.forEach((blob, index) => {
+          blob.color = wanted[index]!;
+        });
         scene.draw();
         const result = need(await action.getOutput('recoloured'));
-        need(await result.putFinal(recoloured));
+        need(await result.putFinal(blobs.length));
         need(await result.drainAndClose());
-        await narrate(action, `Recoloured ${recoloured} blob(s): ${ids.join(', ')}.`, onLog);
+        await narrate(
+          action,
+          `Recoloured ${blobs.length} blob(s): ${blobs.map((blob) => blob.id).join(', ')}.`,
+          onLog,
+        );
         return okStatus();
       } catch (error) {
         return statusFromUnknown(error, 'set_color failed.');
@@ -285,18 +424,42 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
         const ids = await readAll(action, 'ids');
         const dxNode = need(await action.getInput('dx'));
         const dyNode = need(await action.getInput('dy'));
-        const dx = Number(need(await dxNode.consume({timeoutMs: READ_TIMEOUT_MS, allowNone: true})) ?? 0);
-        const dy = Number(need(await dyNode.consume({timeoutMs: READ_TIMEOUT_MS, allowNone: true})) ?? 0);
-        const moving = ids
-          .map((id) => scene.find(Number(id)))
-          .filter((blob): blob is Blob => blob !== undefined);
+        const rawDx = need(await dxNode.consume({timeoutMs: READ_TIMEOUT_MS, allowNone: true}));
+        const rawDy = need(await dyNode.consume({timeoutMs: READ_TIMEOUT_MS, allowNone: true}));
+
+        const blobs = blobsFor(scene, ids);
+        if (isStatus(blobs)) return await refuse(action, blobs, onLog);
+        // An axis the caller left out is zero; both left out is a call that asks
+        // for nothing, which is worth saying rather than reporting as done.
+        if (rawDx === null && rawDy === null) {
+          return await refuse(
+            action,
+            invalidArgumentError('shift_position needs dx, dy, or both.'),
+            onLog,
+          );
+        }
+        const dx = rawDx === null ? 0 : finiteNumber(rawDx, 'dx', scene.width);
+        if (isStatus(dx)) return await refuse(action, dx, onLog);
+        const dy = rawDy === null ? 0 : finiteNumber(rawDy, 'dy', scene.height);
+        if (isStatus(dy)) return await refuse(action, dy, onLog);
+
+        // Nothing is written to a blob until every argument has been read: a
+        // half-applied move is harder to undo than a refused one.
+        const moves = blobs.map((blob) => ({
+          blob,
+          to: scene.contain(blob, blob.x + dx, blob.y + dy),
+        }));
+        const held = moves.filter(
+          ({blob, to}) => to.x !== blob.x + dx || to.y !== blob.y + dy,
+        ).length;
         // Answer the model once the move is under way rather than after it: the
         // animation is for the person watching.
-        void Promise.all(moving.map((blob) => scene.glide(blob, blob.x + dx, blob.y + dy)));
+        void Promise.all(moves.map(({blob, to}) => scene.glide(blob, to.x, to.y)));
         const result = need(await action.getOutput('moved'));
-        need(await result.putFinal(moving.length));
+        need(await result.putFinal(moves.length));
         need(await result.drainAndClose());
-        await narrate(action, `Moved ${moving.length} blob(s) by (${dx}, ${dy}).`, onLog);
+        const edge = held > 0 ? ` ${held} stopped at the edge of the canvas.` : '';
+        await narrate(action, `Moved ${moves.length} blob(s) by (${dx}, ${dy}).${edge}`, onLog);
         return okStatus();
       } catch (error) {
         return statusFromUnknown(error, 'shift_position failed.');

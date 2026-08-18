@@ -67,13 +67,28 @@ mkdir -p "${prefix}"
 download_and_extract() {
   local url=$1
   local archive=$2
-  # --retry-all-errors because the failures that actually happen here are HTTP
-  # ones: GitHub's codeload endpoint rate-limits (429) a host that asks for
-  # several archives in a row, and plain --retry ignores a 4xx/5xx response.
-  # Without it one 429 fails the whole wheel or C++ archive build.
-  curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 \
-    --connect-timeout 30 --output "${work}/${archive}" "${url}"
-  tar -xf "${work}/${archive}" -C "${work}"
+  local attempt
+  # The failures that actually happen here are HTTP ones: GitHub's codeload
+  # endpoint rate-limits (429) a host that asks for several archives in a row,
+  # and curl's own --retry ignores a 4xx/5xx response. The flag that would fix
+  # that, --retry-all-errors, arrived in curl 7.71 and the manylinux_2_28 image
+  # ships an older one -- where an unknown option is a hard error, not a warning,
+  # so passing it fails every Linux wheel build. Retrying the whole request in
+  # the shell needs no flag at all and works on every curl: --fail turns an HTTP
+  # error into a non-zero exit, which is what this loop reacts to.
+  for attempt in 1 2 3 4 5; do
+    if curl --fail --location --retry 3 --connect-timeout 30 \
+        --output "${work}/${archive}" "${url}"; then
+      tar -xf "${work}/${archive}" -C "${work}"
+      return 0
+    fi
+    if [[ "${attempt}" -lt 5 ]]; then
+      echo "download of ${url} failed; retrying in $((attempt * 5))s" >&2
+      sleep "$((attempt * 5))"
+    fi
+  done
+  echo "giving up on ${url} after 5 attempts" >&2
+  return 1
 }
 
 # These arrays stay empty on some hosts (no arch flags on Linux, no ALSA on

@@ -531,9 +531,23 @@ if (A11_RESOLVED_ALLOCATOR STREQUAL "mimalloc")
         # is never undefined -- libc always has one -- so linking
         # `libmimalloc.a` silently leaves the override off. An explicitly listed
         # object file's definitions are always included.
-        # MIMALLOC_OBJECT_DIR is set by mimalloc's own package config.
-        set(A11_MIMALLOC_OBJECT "${MIMALLOC_OBJECT_DIR}/mimalloc.o")
-        if (NOT EXISTS "${A11_MIMALLOC_OBJECT}")
+        # MIMALLOC_OBJECT_DIR is set by mimalloc's own package config -- but only
+        # correctly when the libdir is literally `lib`, because the config gets
+        # there by string-replacing "/lib/cmake/" in its own install path. A
+        # prefix whose libdir is lib64 (GNUInstallDirs' default on non-Debian
+        # 64-bit Linux, which is what manylinux is) leaves that replace unmatched
+        # and MIMALLOC_OBJECT_DIR comes out as the cmake directory itself. So
+        # derive the layout-independent candidate too: the object sits in a
+        # directory named like the config's, two levels up from it
+        # (<libdir>/mimalloc-2.1 next to <libdir>/cmake/mimalloc-2.1).
+        get_filename_component(A11_MIMALLOC_VERSION_DIR "${mimalloc_DIR}" NAME)
+        get_filename_component(A11_MIMALLOC_LIBDIR "${mimalloc_DIR}/../.." ABSOLUTE)
+        find_file(A11_MIMALLOC_OBJECT mimalloc.o
+                PATHS "${MIMALLOC_OBJECT_DIR}"
+                "${A11_MIMALLOC_LIBDIR}/${A11_MIMALLOC_VERSION_DIR}"
+                "${A11_MIMALLOC_LIBDIR}"
+                NO_DEFAULT_PATH)
+        if (NOT A11_MIMALLOC_OBJECT)
             message(FATAL_ERROR
                     "mimalloc was found at ${MIMALLOC_OBJECT_DIR} but without "
                     "mimalloc.o; rebuild the deps prefix with "

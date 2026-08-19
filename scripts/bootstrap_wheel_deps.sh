@@ -53,8 +53,10 @@ sanitize_tag=
 if [[ -n "${A11_DEPS_SANITIZE:-}" ]]; then
   sanitize_tag="-sanitize-${A11_DEPS_SANITIZE//[^a-zA-Z0-9]/}"
 fi
-# v12 adds mimalloc to the prefix.
-stamp="${prefix}/.a11-wheel-deps-v12-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
+# v12 adds mimalloc to the prefix; v13 pins its libdir to lib, which the Linux
+# prefixes that predate it need a rebuild for -- they carry mimalloc under lib64,
+# where its package config cannot find its own object file.
+stamp="${prefix}/.a11-wheel-deps-v13-${arch}${deployment_tag}${spinlock_tag}${sanitize_tag}"
 if [[ -f "${stamp}" ]]; then
   exit 0
 fi
@@ -250,9 +252,16 @@ download_and_extract \
 download_and_extract \
   "https://github.com/microsoft/mimalloc/archive/refs/tags/v2.1.7.tar.gz" \
   mimalloc.tar.gz
+# CMAKE_INSTALL_LIBDIR=lib like every other dep here, and for one extra reason:
+# mimalloc's own package config derives MIMALLOC_OBJECT_DIR by string-replacing
+# the literal "/lib/cmake/" in its install location. On a non-Debian 64-bit Linux
+# -- which manylinux_2_28 is -- GNUInstallDirs would default the libdir to lib64,
+# that replace would not match, and MIMALLOC_OBJECT_DIR would come out as the
+# cmake directory itself, so cpp/CMakeLists.txt would look for mimalloc.o beside
+# the config instead of in lib64/mimalloc-2.1 and fail configure.
 cmake -S "${work}/mimalloc-2.1.7" -B "${work}/mimalloc-build" \
   -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="${prefix}" \
+  -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib \
   -DMI_BUILD_TESTS=OFF -DMI_BUILD_SHARED=ON \
   -DMI_BUILD_STATIC=ON -DMI_BUILD_OBJECT=ON \
   ${cmake_arch_args[@]+"${cmake_arch_args[@]}"}

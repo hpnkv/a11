@@ -173,6 +173,71 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   EXPECT_EQ(branch->else_body[0]->kind, NodeKind::kFail);
 }
 
+TEST(FlowParser, LogAndLogfReadTheSameTailAsAStatementAndAsAStage) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in a: string stream\n"
+      "  out b: string stream\n"
+      "  if a { log warning it2 }\n"
+      "  a | log | logf \"saw %s, %s\" it, a -> b\n"
+      "  log \"done\" after b\n"
+      "}\n");
+  ASSERT_EQ(result.flows.size(), 1u);
+  const syntax::FlowDeclaration& flow = *result.flows.front();
+
+  // The statement inside the `if`: a level and a value.
+  const auto* branch = As<syntax::If>(flow.body[0].get());
+  ASSERT_NE(branch, nullptr);
+  const auto* logged = As<syntax::Log>(branch->then_body.front().get());
+  ASSERT_NE(logged, nullptr);
+  EXPECT_EQ(logged->tail.level.text, "warning");
+  EXPECT_FALSE(logged->tail.has_format);
+  ASSERT_EQ(logged->tail.arguments.size(), 1u);
+
+  // The two stages: `log` with nothing written, and `logf` with a format and two
+  // values to fill it.
+  const auto* pipe = As<syntax::Pipe>(flow.body[1].get());
+  ASSERT_NE(pipe, nullptr);
+  ASSERT_EQ(pipe->pipeline->stages.size(), 2u);
+  const syntax::Stage& bare = *pipe->pipeline->stages[0];
+  EXPECT_EQ(bare.name, "log");
+  EXPECT_EQ(bare.takes, vocabulary::StageArgument::kLog);
+  EXPECT_TRUE(bare.log.level.Empty());
+  EXPECT_TRUE(bare.log.arguments.empty());
+  const syntax::Stage& formatted = *pipe->pipeline->stages[1];
+  EXPECT_EQ(formatted.name, "logf");
+  EXPECT_EQ(formatted.takes, vocabulary::StageArgument::kLogFormat);
+  EXPECT_TRUE(formatted.log.has_format);
+  EXPECT_EQ(formatted.log.format, "saw %s, %s");
+  EXPECT_EQ(formatted.log.arguments.size(), 2u);
+
+  // A trailing `after`, as `fail` takes one.
+  const auto* last = As<syntax::Log>(flow.body[2].get());
+  ASSERT_NE(last, nullptr);
+  ASSERT_EQ(last->after.size(), 1u);
+  EXPECT_EQ(last->after[0].text, "b");
+}
+
+TEST(FlowParser, LogIsStillANameWhereTheGrammarWantsOne) {
+  // Making a word open a statement makes it a keyword *there* and nowhere else.
+  // A port called `log`, a pipeline sourced from it, and a step bound to the name
+  // all still read as they did, because a statement word followed by `->`, `|`,
+  // `=`, `<-`, `.` or `[` is a name.
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in a: string stream\n"
+      "  out log: string stream\n"
+      "  a -> log\n"
+      "  log | count -> n\n"
+      "}\n");
+  EXPECT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  ASSERT_EQ(result.flows.size(), 1u);
+  const syntax::FlowDeclaration& flow = *result.flows.front();
+  EXPECT_EQ(flow.ports[1]->name.text, "log");
+  EXPECT_EQ(BodyKinds(flow), (std::vector<std::string>{"pipe", "pipe"}));
+}
+
 TEST(FlowParser, SkipTakesSeveralSubjectsAndACallsOutputsByName) {
   const ParseResult result = Parse(
       "flow f {\n"

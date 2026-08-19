@@ -38,18 +38,16 @@ private const val DEFAULT_MAX_RESULTS = 20
 private const val READ_TIMEOUT_MS = 5_000L
 
 /**
- * The port every tool narrates its run on, for the user's eyes.
+ * The key every tool's result map carries its narration under, for the user's
+ * eyes.
  *
- * A11's canonical name for it (`a11.sdk.llm.USER_FACING_LOG_PORT`), and using it
- * is not cosmetic. A tool announced to a gateway has its `user_facing` port
- * *renamed* to this on the gateway's side, so a tool that calls it anything else
- * ends up with two names for one port: the gateway's registry has this one and
- * the IDE has the other. That is invisible to a model — the bridge maps between
- * them when it runs the tool — and fatal to a flow, whose `call` step dispatches
- * the ports the gateway's registry declares straight to the IDE, which then does
- * not recognise them.
+ * A key, not a port. Narration travels on the action's own log port, which no
+ * schema declares — so there is nothing to announce, nothing for a gateway to
+ * rename, and nothing a flow's `call` step can fail to recognise. The A11 handler
+ * picks this out of the result and logs it; see `webview/src/ideTools.ts`, which
+ * uses the same string and must keep using it.
  */
-private const val USER_FACING_LOG_PORT = "user_facing_log"
+const val RUN_LOG_KEY = "run_log"
 
 /**
  * Assemble the JSON Schema of one object — a request DTO or a tool result.
@@ -697,48 +695,35 @@ private fun textOutput(
  * mirrors strip it before the tool is announced, so it never enters the
  * conversation — it exists so the UI can show what a tool call actually did.
  */
-private fun userLogOutput(name: String) = textOutput(
-    name,
-    "Human-readable log of this run: first line a one-sentence summary, the rest markdown detail.",
-    unary = true,
-)
 
 /**
  * One IDE tool: its port contract, and the body that runs it.
  *
  * [run] takes the inputs keyed by port name and returns the outputs keyed by port
  * name — a unary port's single value, or the list of values a streaming port
- * carries. Both the A11 handler and the direct bridge call go through it, so the
- * two paths cannot drift.
+ * carries — plus its narration under [RUN_LOG_KEY], which is not a port. Both the
+ * A11 handler and the direct bridge call go through it, so the two paths cannot
+ * drift.
  */
 private class Tool(
     val schema: ActionSchema,
-    /** Output ports meant for the user's eyes, never for the model's context. */
-    val userFacingOutputs: Set<String>,
     val run: (Map<String, Any?>) -> Map<String, Any?>,
 )
 
-/**
- * Assemble a tool from its ports and body.
- *
- * [userLog] is appended to the outputs and flagged as user-facing, so every tool
- * reports what it did without that report reaching the model.
- */
+/** Assemble a tool from its ports and body. */
 private fun tool(
     name: String,
     description: String,
     inputs: List<ActionPortSchema>,
     outputs: List<ActionPortSchema>,
-    userLog: ActionPortSchema,
     run: (Map<String, Any?>) -> Map<String, Any?>,
 ): Tool = Tool(
     ActionSchema(
         name = name,
         description = description,
         inputs = LinkedHashMap(inputs.associateBy { it.name }),
-        outputs = LinkedHashMap((outputs + userLog).associateBy { it.name }),
+        outputs = LinkedHashMap(outputs.associateBy { it.name }),
     ),
-    setOf(userLog.name),
     run,
 )
 
@@ -815,9 +800,31 @@ class IdeTools(private val project: Project) {
             } catch (error: Throwable) {
                 return@handler Status.fromException(error, "IDE tool '${schema.name}' failed.")
             }
+            // Narration, off the result map and onto the action's own log. Never a
+            // port: the log port is in no schema, so what a tool says about itself
+            // cannot become part of the result a model is shown.
+            logNarration(action, outputs[RUN_LOG_KEY])
             writeOutputs(action, schema, outputs).let { if (!it.isOk) return@handler it }
             Status.ok()
         }
+    }
+
+    /**
+     * Log what a tool said about its run, if it said anything.
+     *
+     * A tool hands its narration back as a string or as the lines of one; either
+     * reads as the log a person sees. Best effort: a run log is worth nothing next
+     * to the tool's actual result, so one that will not write does not fail the
+     * call.
+     */
+    private suspend fun logNarration(action: Action, narration: Any?) {
+        val text = when (narration) {
+            is String -> narration
+            is List<*> -> narration.filterIsInstance<String>().joinToString("\n\n")
+            else -> return
+        }
+        if (text.isEmpty()) return
+        action.log(text)
     }
 
     /**
@@ -1326,14 +1333,12 @@ class IdeTools(private val project: Project) {
             "Absolute path of the file in the active editor; absent when no file is open.",
             unary = true,
         )
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_active_file",
             "Return the path of the file in the active editor and its text. Pass a request to" +
                 " read only part of a large file; with none, the whole file is returned.",
             inputs = listOf(request),
             outputs = listOf(lines, path),
-            userLog = log,
         ) { inputs ->
             val asked = ActiveFileRequest.fromJson(objectOn(inputs, request))
             val slice = getActiveFile(asked)
@@ -1350,37 +1355,33 @@ class IdeTools(private val project: Project) {
             mapOf(
                 lines.name to slice.lines,
                 path.name to slice.path,
-                log.name to runLog(summary, slice.path?.let { "`$it`" } ?: "", range),
+                RUN_LOG_KEY to runLog(summary, slice.path?.let { "`$it`" } ?: "", range),
             )
         }
     }
 
     private fun openEditorsTool(): Tool {
         val files = textOutput("files", "Absolute path of each file open in an editor.", unary = false)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_open_editors",
             "List the paths of all files open in editors.",
             inputs = emptyList(),
             outputs = listOf(files),
-            userLog = log,
         ) {
             val open = getOpenEditors()
             val summary = if (open.isEmpty()) "No files are open in editors" else "Listed ${open.size} open editors"
-            mapOf(files.name to open, log.name to runLog(summary, bullets(open)))
+            mapOf(files.name to open, RUN_LOG_KEY to runLog(summary, bullets(open)))
         }
     }
 
     private fun selectionTool(): Tool {
         val metadata = jsonOutput("metadata", SELECTION_METADATA_SCHEMA)
         val lines = textOutput("lines", "The selected lines, one value per line.", unary = false)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_selection",
             "Return the current editor selection: where it sits, and the lines it covers.",
             inputs = emptyList(),
             outputs = listOf(metadata, lines),
-            userLog = log,
         ) {
             val selection = getSelection()
             val where = selection.metadata
@@ -1394,7 +1395,7 @@ class IdeTools(private val project: Project) {
             mapOf(
                 metadata.name to selection.metadata,
                 lines.name to selection.lines,
-                log.name to runLog(summary, excerpt),
+                RUN_LOG_KEY to runLog(summary, excerpt),
             )
         }
     }
@@ -1407,7 +1408,6 @@ class IdeTools(private val project: Project) {
             "Absolute path of the file the symbols come from; absent when no file is open.",
             unary = true,
         )
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_file_symbols",
             "List the named symbols declared in a file, with each one's kind and position." +
@@ -1417,7 +1417,6 @@ class IdeTools(private val project: Project) {
                 " reading a complete file.",
             inputs = listOf(request),
             outputs = listOf(symbols, path),
-            userLog = log,
         ) { inputs ->
             val asked = FileSymbolsRequest.fromJson(objectOn(inputs, request))
             val found = getFileSymbols(asked.path)
@@ -1432,7 +1431,7 @@ class IdeTools(private val project: Project) {
             mapOf(
                 symbols.name to kept,
                 path.name to found.path,
-                log.name to runLog(
+                RUN_LOG_KEY to runLog(
                     summary,
                     if (narrowed.isEmpty()) "" else "Filtered to $narrowed (${found.symbols.size} in the file).",
                     bullets(listed),
@@ -1445,7 +1444,6 @@ class IdeTools(private val project: Project) {
         val request = jsonInput("request", ReadFileRequest.JSON_SCHEMA)
         val lines = textOutput("lines", "The requested lines of the file, one value per line.", unary = false)
         val path = textOutput("path", "Absolute path of the file that was read.", unary = true)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "read_file",
             "Read a range of lines from any file of the project, open in an editor or not." +
@@ -1456,7 +1454,6 @@ class IdeTools(private val project: Project) {
                 " keeps a large file out of the answer.",
             inputs = listOf(request),
             outputs = listOf(lines, path),
-            userLog = log,
         ) { inputs ->
             val asked = ReadFileRequest.fromJson(objectOn(inputs, request))
             val read = readFile(asked)
@@ -1469,7 +1466,7 @@ class IdeTools(private val project: Project) {
             mapOf(
                 lines.name to read.lines,
                 path.name to read.path,
-                log.name to runLog(summary, "`${read.path}`"),
+                RUN_LOG_KEY to runLog(summary, "`${read.path}`"),
             )
         }
     }
@@ -1490,7 +1487,6 @@ class IdeTools(private val project: Project) {
                 " back exactly, indentation included, without line numbers.",
         )
         val metadata = jsonOutput("metadata", PATCH_METADATA_SCHEMA)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "apply_patch",
             "Apply a unified diff to one file of the project. The edit lands as a single IDE" +
@@ -1499,7 +1495,6 @@ class IdeTools(private val project: Project) {
                 " refused with the text that is there instead, and nothing is applied.",
             inputs = listOf(path, patch),
             outputs = listOf(metadata),
-            userLog = log,
         ) { inputs ->
             val where = requireText(inputs, path)
             val diff = requireText(inputs, patch)
@@ -1507,7 +1502,7 @@ class IdeTools(private val project: Project) {
             val hunks = done["hunks"] as? Int ?: 0
             mapOf(
                 metadata.name to done,
-                log.name to runLog(
+                RUN_LOG_KEY to runLog(
                     "Patched ${fileName(done["path"] as? String)}" +
                         " (${if (hunks == 1) "1 hunk" else "$hunks hunks"}," +
                         " -${done["removed"]} +${done["added"]})",
@@ -1522,7 +1517,6 @@ class IdeTools(private val project: Project) {
         val request = jsonInput("request", FileHighlightsRequest.JSON_SCHEMA)
         val highlights = jsonOutput("highlights", HIGHLIGHT_SCHEMA, unary = false)
         val path = textOutput("path", "Absolute path of the file that was analyzed.", unary = true)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "get_error_highlights",
             "Report the problems the IDE's code analysis finds in a range of lines of a file:" +
@@ -1533,7 +1527,6 @@ class IdeTools(private val project: Project) {
                 " and running into it is not missed. The file does not have to be open.",
             inputs = listOf(request),
             outputs = listOf(highlights, path),
-            userLog = log,
         ) { inputs ->
             val asked = FileHighlightsRequest.fromJson(objectOn(inputs, request))
             val found = getFileHighlights(asked)
@@ -1549,7 +1542,7 @@ class IdeTools(private val project: Project) {
             mapOf(
                 highlights.name to found.highlights,
                 path.name to found.path,
-                log.name to runLog(summary, "`${found.path}`", bullets(listed)),
+                RUN_LOG_KEY to runLog(summary, "`${found.path}`", bullets(listed)),
             )
         }
     }
@@ -1557,13 +1550,11 @@ class IdeTools(private val project: Project) {
     private fun renameSymbolTool(): Tool {
         val request = jsonInput("request", RenameSymbolRequest.JSON_SCHEMA)
         val metadata = jsonOutput("metadata", RENAME_METADATA_SCHEMA)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "rename_symbol",
             "Rename a symbol in the active file, updating the references to it.",
             inputs = listOf(request),
             outputs = listOf(metadata),
-            userLog = log,
         ) { inputs ->
             val asked = RenameSymbolRequest.fromJson(objectOn(inputs, request))
             val done = renameSymbol(asked)
@@ -1571,7 +1562,7 @@ class IdeTools(private val project: Project) {
             val references = if (usages == 1) "1 reference" else "$usages references"
             mapOf(
                 metadata.name to done,
-                log.name to runLog(
+                RUN_LOG_KEY to runLog(
                     "Renamed ${asked.name} → ${asked.newName}",
                     (done["path"] as? String)?.let { "`$it`" } ?: "",
                     "Declared at line ${done["line"]}, column ${done["column"]}; $references updated.",
@@ -1583,13 +1574,11 @@ class IdeTools(private val project: Project) {
     private fun findFileTool(): Tool {
         val request = jsonInput("request", FindFileRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "find_file",
             "Find project files by exact file name.",
             inputs = listOf(request),
             outputs = listOf(matches),
-            userLog = log,
         ) { inputs ->
             val asked = FindFileRequest.fromJson(objectOn(inputs, request))
             val found = findFile(asked)
@@ -1598,20 +1587,18 @@ class IdeTools(private val project: Project) {
             } else {
                 "Found ${found.size} file(s) named ${asked.name}"
             }
-            mapOf(matches.name to found, log.name to runLog(summary, bullets(found)))
+            mapOf(matches.name to found, RUN_LOG_KEY to runLog(summary, bullets(found)))
         }
     }
 
     private fun searchProjectTool(): Tool {
         val request = jsonInput("request", SearchProjectRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
-        val log = userLogOutput(USER_FACING_LOG_PORT)
         return tool(
             "search_project",
             "Find project files whose name contains a query substring.",
             inputs = listOf(request),
             outputs = listOf(matches),
-            userLog = log,
         ) { inputs ->
             val asked = SearchProjectRequest.fromJson(objectOn(inputs, request))
             val found = searchProject(asked)
@@ -1620,7 +1607,7 @@ class IdeTools(private val project: Project) {
             } else {
                 "Found ${found.size} file(s) matching \"${asked.query}\""
             }
-            mapOf(matches.name to found, log.name to runLog(summary, bullets(found)))
+            mapOf(matches.name to found, RUN_LOG_KEY to runLog(summary, bullets(found)))
         }
     }
 
@@ -1636,8 +1623,8 @@ class IdeTools(private val project: Project) {
         return linkedMapOf(
             "name" to schema.name,
             "description" to schema.description,
-            "inputs" to schema.inputs.values.map { port(it, tool) },
-            "outputs" to schema.outputs.values.map { port(it, tool) },
+            "inputs" to schema.inputs.values.map { port(it) },
+            "outputs" to schema.outputs.values.map { port(it) },
             "output_to_json_field" to LinkedHashMap(schema.outputToJsonField),
         )
     }
@@ -1645,18 +1632,15 @@ class IdeTools(private val project: Project) {
     /**
      * One port descriptor. `schema` carries the port's JSON Schema when it has
      * one, so the webview mirror can surface the request fields to the model
-     * (its `ToolAdapter` would otherwise see only `application/json`), and
-     * `user_facing` marks a port the model must never be shown.
+     * (its `ToolAdapter` would otherwise see only `application/json`). No port
+     * is flagged: narration is not a port, so there is none to hide.
      */
-    private fun port(p: ActionPortSchema, tool: Tool): Map<String, Any?> {
+    private fun port(p: ActionPortSchema): Map<String, Any?> {
         val descriptor = linkedMapOf<String, Any?>(
             "name" to p.name, "type" to p.type, "required" to p.required, "unary" to p.unary,
             "description" to p.description,
         )
         p.jsonSchema?.let { descriptor["schema"] = it }
-        // Flagged, not named: a consumer keeps this port away from the model by
-        // reading the flag, so the port could be called anything.
-        if (p.name in tool.userFacingOutputs) descriptor["user_facing"] = true
         return descriptor
     }
 }

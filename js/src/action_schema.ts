@@ -23,6 +23,14 @@ export const CLOSE_STATUS_ATTRIBUTE = 'a11-close';
 export const ACTION_STATUS_OUTPUT = '__status__';
 /** Reserved output node acknowledging whether a remote call was dispatched. */
 export const ACTION_DISPATCH_STATUS_OUTPUT = '__dispatch_status__';
+/**
+ * Reserved output node carrying the action's log.
+ *
+ * Every action has one, declared by nobody: it is not in the schema, so it never
+ * appears in an {@link ActionMessage} or in a tool definition. Written through
+ * `Action.log`, closed with the action's other outputs. See `./action_log.js`.
+ */
+export const ACTION_LOG_OUTPUT = '__log__';
 /** Reserved wire action name used to request remote cancellation. */
 export const CANCEL_ACTION_NAME = '__cancel__';
 /** Header naming the action id targeted by a cancellation message. */
@@ -258,7 +266,11 @@ export class ActionSchema {
     if (typeof this.description !== 'string') {
       return invalidArgumentError('Action description must be a string.');
     }
-    const reserved = new Set([ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT]);
+    const reserved = new Set([
+      ACTION_STATUS_OUTPUT,
+      ACTION_DISPATCH_STATUS_OUTPUT,
+      ACTION_LOG_OUTPUT,
+    ]);
     for (const ports of [this.inputs, this.outputs]) {
       if (!(ports instanceof Map)) return invalidArgumentError('Action ports must be a Map.');
       for (const [key, port] of ports) {

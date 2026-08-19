@@ -12,6 +12,14 @@ const val CLOSE_STATUS_ATTRIBUTE = "a11-close"
 const val ACTION_STATUS_OUTPUT = "__status__"
 /** Reserved output node acknowledging whether a remote call was dispatched. */
 const val ACTION_DISPATCH_STATUS_OUTPUT = "__dispatch_status__"
+/**
+ * Reserved output node carrying the action's log.
+ *
+ * Every action has one, declared by nobody: it is not in the schema, so it never
+ * appears in an [ActionMessage] or in a tool definition. Written through
+ * [Action.log], closed with the action's other outputs. See `ActionLog.kt`.
+ */
+const val ACTION_LOG_OUTPUT = "__log__"
 /** Reserved wire action name used to request remote cancellation. */
 const val CANCEL_ACTION_NAME = "__cancel__"
 /** Header naming the action id targeted by a cancellation message. */
@@ -73,7 +81,7 @@ class ActionSchema(
 ) {
     fun validate(): Status {
         validateName(name).let { if (!it.isOk) return it }
-        val reserved = setOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT)
+        val reserved = setOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)
         for (ports in listOf(inputs, outputs)) {
             for ((key, port) in ports) {
                 validateName(key).let { if (!it.isOk) return it }

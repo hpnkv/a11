@@ -14,6 +14,7 @@ import functools
 import pytest
 
 import a11
+from a11 import _native
 from a11.actions import Action, ActionSchema, ActionRegistry
 from a11.sdk import bash
 from a11.sdk.bash.manager import ShellManager
@@ -52,6 +53,9 @@ async def _drive(
     action = registry.make_action(name)
     for key, value in (headers or {}).items():
         action.set_header(key, value.encode())
+    # Claimed before the run, as the tool runner does: an unclaimed log goes to
+    # the process sink and never materialises a node to read.
+    action.get_log_node()
     action.run()
     if command is not None:
         await action["command"].put(command, final=True)
@@ -66,6 +70,17 @@ async def _lines(action: Action, port: str) -> list[str]:
     while (value := await action[port].next_object(str)) is not None:
         out.append(value)
     return out
+
+
+async def _log(action: Action) -> str:
+    """Everything an action narrated, as one block of text."""
+    node = action.get_log_node()
+    parts: list[str] = []
+    while (chunk := await node.next_chunk()) is not None:
+        if chunk.is_null() or _native.is_status_chunk(chunk):
+            continue
+        parts.append(_native.log_record_from_chunk(chunk)["text"])
+    return "".join(parts)
 
 
 @pytest.mark.asyncio
@@ -258,7 +273,7 @@ async def test_exit_requires_the_shell_id_header(manager):
 
 @pytest.mark.asyncio
 async def test_each_action_narrates_its_run_for_the_user(manager):
-    """Every shell action says what it did on its user-facing log port.
+    """Every shell action says what it did, through `Action.log`.
 
     The log is for the person watching, so what is asserted is that it names the
     things a reader needs to identify the run rather than any particular
@@ -270,7 +285,7 @@ async def test_each_action_narrates_its_run_for_the_user(manager):
 
     started = await _drive(registry, "shell_start")
     shell_id = await started["shell_id"].next_object(str)
-    start_log = "".join(await _lines(started, bash.USER_FACING_LOG_PORT))
+    start_log = await _log(started)
     assert shell_id in start_log
 
     executed = await _drive(
@@ -280,18 +295,18 @@ async def test_each_action_narrates_its_run_for_the_user(manager):
         command="echo hello",
     )
     assert await _lines(executed, "output_lines") == ["hello"]
-    execute_log = "".join(await _lines(executed, bash.USER_FACING_LOG_PORT))
+    execute_log = await _log(executed)
     assert "echo hello" in execute_log
     assert "1 line of output" in execute_log
     assert "hello" in execute_log.rsplit("```", 2)[-2]
 
     listed = await _drive(registry, "shell_list")
-    assert shell_id in "".join(await _lines(listed, bash.USER_FACING_LOG_PORT))
+    assert shell_id in await _log(listed)
 
     exited = await _drive(
         registry, "shell_exit", headers={bash.SHELL_ID_HEADER: shell_id}
     )
-    assert shell_id in "".join(await _lines(exited, bash.USER_FACING_LOG_PORT))
+    assert shell_id in await _log(exited)
 
 
 @pytest.mark.asyncio
@@ -299,15 +314,21 @@ async def test_a_failed_command_is_narrated_and_still_fails(manager):
     registry = _registry(manager)
     action = registry.make_action("shell_execute")
     action.set_header(bash.SHELL_ID_HEADER, b"missing")
+    # Claimed before the run, and that ordering is the contract rather than
+    # tidiness: an unclaimed log goes to the process sink, so a consumer that
+    # claims afterwards races the handler for the first line and usually loses.
+    log_node = action.get_log_node()
     action.run()
     await action["command"].put("echo hi", final=True)
     for input_name in action.get_schema().inputs:
         await action[input_name].drain_and_close()
 
-    log = "".join(await _lines(action, bash.USER_FACING_LOG_PORT))
     with pytest.raises(StatusException) as raised:
         await asyncio.wait_for(action.wait(), timeout=30)
     assert raised.value.status.code == StatusCode.NOT_FOUND
+    chunk = await log_node.next_chunk()
+    assert chunk is not None, "a failed run narrated nothing"
+    log = _native.log_record_from_chunk(chunk)["text"]
     # A run that died is the one most worth narrating, so the log leads with
     # the reason rather than the output summary it never got to write.
     assert log.casefold().startswith("error:")

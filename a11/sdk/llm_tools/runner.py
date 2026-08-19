@@ -6,6 +6,7 @@ from typing import Any
 
 from absl import logging
 
+from a11 import _native
 from a11._native import NodeFragment
 
 import a11
@@ -16,7 +17,6 @@ from a11.sdk.llm import (
     get_allowed_llm_action_patterns,
     Interaction,
     TOOL_LOGS_METADATA_KEY,
-    USER_FACING_LOG_PORT,
 )
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
 
@@ -109,10 +109,12 @@ class ExecutedActions:
     backend owes the model one result per call it made, and for a failed call
     that result is the failure.
 
-    ``logs`` holds whatever the called actions wrote to their
-    [user_facing_log][a11.sdk.llm.USER_FACING_LOG_PORT] port: narration for the
-    person watching, kept out of ``outputs`` so it can never reach the model.
-    Only the calls that wrote one appear.
+    ``logs`` holds what the called actions wrote through
+    [log][a11.actions.action.Action.log]: narration for the person watching. It
+    is not in ``outputs`` and cannot get there -- the log port is not one of the
+    action's declared outputs -- so it can never reach the model. Only the calls
+    that logged something user-facing appear; a log marked ``internal`` is A11's
+    own bookkeeping and is left out.
     """
 
     outputs: dict[str, list[NodeFragment]]
@@ -140,21 +142,33 @@ class ExecutedActions:
         return f"{status.code.name}: {status.message}"
 
 
-def _log_text(fragments: list[NodeFragment]) -> str:
-    """The text a call wrote to its user-facing log port, if any.
+async def _user_facing_log(node: a11.AsyncNode, deadline: a11.Duration) -> str:
+    """What a call logged for the person watching, as one block of text.
+
+    Reads the call's log port and keeps the entries that are *not* marked
+    internal -- "user facing" is the absence of that flag, so a handler narrating
+    itself needs no second port and no second decision. Each entry is rendered by
+    [log_record_from_chunk][a11._native.log_record_from_chunk], which is also
+    what the ``a11.action`` logger uses, so a line reads the same wherever it is
+    shown.
 
     Best effort throughout: a log that will not decode is not worth failing a
-    tool over, and a null chunk is an end-of-stream marker rather than a value.
+    tool over. Bounded by the turn's deadline like every other read here.
     """
     parts: list[str] = []
-    for fragment in fragments:
-        chunk = fragment.get_chunk()
-        if chunk is None or chunk.is_null():
+    async for chunk in node.iter_chunks(
+        timeout=max(deadline - a11.now(), a11.zero_duration())
+    ):
+        if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
             continue
         try:
-            parts.append(str(a11.from_chunk(chunk)))
+            record = _native.log_record_from_chunk(chunk)
         except Exception:
-            logging.debug("undecodable user-facing log chunk", exc_info=True)
+            logging.debug("undecodable log chunk", exc_info=True)
+            continue
+        if record["internal"]:
+            continue
+        parts.append(record["text"])
     return "".join(parts)
 
 
@@ -192,6 +206,7 @@ async def execute_actions_from_interaction(
 
     allowed_patterns = get_allowed_llm_action_patterns(action)
     nested_actions: list[a11.Action] = []
+    log_nodes: dict[str, a11.AsyncNode] = {}
     errors: dict[str, Status] = {}
     for call in interaction.action_calls:
         # Setting a call up can fail on its own — an action the model may not
@@ -211,6 +226,10 @@ async def execute_actions_from_interaction(
                 .bind_handler(registry.get_handler(call.name))
             )
             a11.set_deadline_header(nested_action, deadline)
+            # Claimed before the run, because the log the handler writes on its
+            # first line has to arrive here rather than on the process sink: this
+            # runner is the consumer that shows it to a person.
+            log_nodes[call.id] = nested_action.get_log_node()
             nested_action.run()
             input_fragments = interaction.action_inputs.get(call.id, [])
             for fragment in input_fragments:
@@ -275,13 +294,18 @@ async def execute_actions_from_interaction(
             if action_outputs[output_name]:
                 action_outputs[output_name][-1].continued = False
 
-        # Taken out before the result is assembled, so nothing downstream has to
-        # know this port exists: the model's tool result is built from what is
-        # left, and the narration goes to whoever shows the run to a person.
-        # It is drained above like any other port, which it must be -- a port
-        # with no reader stalls the action writing it.
-        if log := _log_text(action_outputs.pop(USER_FACING_LOG_PORT, [])):
-            logs[nested_action.id] = log
+        # Read separately from the outputs above, because the log port is not one
+        # of them: it is not in the schema, so the model's tool result is built
+        # from what the action declared and the narration cannot leak into it by
+        # accident. Nothing has to close the port either -- the action does, with
+        # its other outputs -- so an action that never logs costs one ended read.
+        node = log_nodes.get(nested_action.id)
+        if node is not None:
+            try:
+                if log := await _user_facing_log(node, deadline):
+                    logs[nested_action.id] = log
+            except StatusException as error:
+                errors.setdefault(nested_action.id, error.status)
 
         schema = nested_action.get_schema()
         mapping = dict(schema.output_to_json_field)

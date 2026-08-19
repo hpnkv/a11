@@ -17,7 +17,6 @@ flow count-changes {
   out files:   string stream "The lines themselves."
 
   git = call shell_execute(command: "git status --porcelain") timeout 30s
-  skip git.user_facing_log
 
   # One output, read twice: a stream fans out to as many readers as ask for
   # it, and each of them sees all of it.
@@ -40,7 +39,6 @@ flow explain-a-command {
   # `try` because a gateway run with `--no-shell-tools` serves no shell at all,
   # and that is worth saying plainly rather than dying on a NOT_FOUND.
   cmd = try call shell_execute(command: command) timeout 30s
-  skip cmd.user_facing_log
   outcome = wait cmd
 
   cmd.output_lines -> lines

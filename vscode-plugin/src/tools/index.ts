@@ -22,8 +22,15 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {applyPatch} from './patch.js';
 
-/** The port every tool narrates its run on, for the user's eyes. */
-const USER_FACING_LOG = 'user_facing_log';
+/**
+ * The key every tool's result map carries its narration under, for the user's
+ * eyes.
+ *
+ * A key, not a port: narration travels on the action's own log port, which no
+ * schema declares. The A11 handler picks this out of the result and logs it, so
+ * it reaches whoever is watching without ever being one of the tool's outputs.
+ */
+export const RUN_LOG_KEY = 'run_log';
 
 export interface PortDescriptor {
   name: string;
@@ -72,19 +79,6 @@ function json(
     unary: true,
     description,
     ...(schema ? {schema} : {}),
-  };
-}
-
-function runLog(): PortDescriptor {
-  return {
-    name: USER_FACING_LOG,
-    type: 'text/plain',
-    required: false,
-    unary: false,
-    description:
-      'Narration of this call for the person watching: first line a one-sentence' +
-      ' summary, the rest markdown detail. Not part of the tool result.',
-    user_facing: true,
   };
 }
 
@@ -207,7 +201,6 @@ function activeFileTool(): Tool {
           'path',
           'Absolute path of the file in the active editor; absent when no file is open.',
         ),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -216,7 +209,7 @@ function activeFileTool(): Tool {
         return {
           lines: [],
           path: null,
-          [USER_FACING_LOG]: log('No file is open in an editor'),
+          [RUN_LOG_KEY]: log('No file is open in an editor'),
         };
       }
       const asked = object_(inputs, 'request');
@@ -231,7 +224,7 @@ function activeFileTool(): Tool {
       return {
         lines,
         path: where,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           lines.length === 0
             ? `Read no lines of ${path.basename(where)}`
             : `Read ${lines.length} lines of ${path.basename(where)}`,
@@ -251,7 +244,6 @@ function openEditorsTool(): Tool {
       inputs: [],
       outputs: [
         text('files', 'Absolute path of each file open in an editor.', false),
-        runLog(),
       ],
     },
     async run() {
@@ -265,7 +257,7 @@ function openEditorsTool(): Tool {
       const unique = [...new Set(open)];
       return {
         files: unique,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           unique.length === 0
             ? 'No files are open in editors'
             : `Listed ${unique.length} open editors`,
@@ -295,7 +287,6 @@ function selectionTool(): Tool {
           },
         }),
         text('lines', 'The selected lines, one value per line.', false),
-        runLog(),
       ],
     },
     async run() {
@@ -304,7 +295,7 @@ function selectionTool(): Tool {
         return {
           metadata: null,
           lines: [],
-          [USER_FACING_LOG]: log('Nothing is selected in the active editor'),
+          [RUN_LOG_KEY]: log('Nothing is selected in the active editor'),
         };
       }
       const {start, end} = editor.selection;
@@ -319,7 +310,7 @@ function selectionTool(): Tool {
           end_column: end.character,
         },
         lines,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           `Read the selection in ${path.basename(where)} (lines ${start.line}–${end.line})`,
           lines.length === 0 ? '' : '```\n' + lines.join('\n') + '\n```',
         ),
@@ -365,14 +356,13 @@ function fileSymbolsTool(): Tool {
           type: 'array',
           items: {type: 'object'},
         }),
-        runLog(),
       ],
     },
     async run(inputs) {
       const given = string_(inputs, 'path');
       const document = given ? await openDocument(given) : activeDocument();
       if (!document) {
-        return {symbols: [], [USER_FACING_LOG]: log('No file to read symbols from')};
+        return {symbols: [], [RUN_LOG_KEY]: log('No file to read symbols from')};
       }
       // The language's own provider, whichever extension supplies it: this tool
       // has no business knowing how Python declares a class.
@@ -386,7 +376,7 @@ function fileSymbolsTool(): Tool {
       const where = document.uri.fsPath;
       return {
         symbols: flat,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           `Listed ${flat.length} symbols in ${path.basename(where)}`,
           `\`${where}\``,
         ),
@@ -414,7 +404,6 @@ function readFileTool(): Tool {
             ' number and a tab when the request asked for that.',
           false,
         ),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -431,7 +420,7 @@ function readFileTool(): Tool {
       const where = document.uri.fsPath;
       return {
         lines,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           `Read ${lines.length} lines of ${path.basename(where)}`,
           `\`${where}\``,
           lines.length === 0 ? '' : `Lines ${(from ?? 0) + 1}–${(from ?? 0) + lines.length}.`,
@@ -465,7 +454,6 @@ function applyPatchTool(): Tool {
             removed: {type: 'integer'},
           },
         }),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -495,7 +483,7 @@ function applyPatchTool(): Tool {
           added: outcome.added,
           removed: outcome.removed,
         },
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           `Patched ${path.basename(where)}: ${outcome.hunks} hunk(s),` +
             ` +${outcome.added} −${outcome.removed}`,
           `\`${where}\``,
@@ -530,14 +518,13 @@ function errorHighlightsTool(): Tool {
           type: 'array',
           items: {type: 'object'},
         }),
-        runLog(),
       ],
     },
     async run(inputs) {
       const given = string_(inputs, 'path');
       const document = given ? await openDocument(given) : activeDocument();
       if (!document) {
-        return {highlights: [], [USER_FACING_LOG]: log('No file to read highlights from')};
+        return {highlights: [], [RUN_LOG_KEY]: log('No file to read highlights from')};
       }
       const asked = object_(inputs, 'request');
       const from = number_(asked, 'start_line') ?? 0;
@@ -564,7 +551,7 @@ function errorHighlightsTool(): Tool {
       const where = document.uri.fsPath;
       return {
         highlights: found,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           found.length === 0
             ? `No errors or warnings in ${path.basename(where)}`
             : `Found ${found.length} highlight(s) in ${path.basename(where)}`,
@@ -587,7 +574,6 @@ function renameSymbolTool(): Tool {
       ],
       outputs: [
         json('result', 'What was renamed, and in how many files.', {type: 'object'}),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -623,7 +609,7 @@ function renameSymbolTool(): Tool {
       }
       return {
         result: {name, new_name: renamed, files},
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           `Renamed \`${name}\` to \`${renamed}\` across ${files} file(s)`,
         ),
       };
@@ -652,7 +638,6 @@ function findFileTool(): Tool {
       inputs: [required('name', 'The file name to look for, without a directory.')],
       outputs: [
         text('paths', 'Absolute path of each matching file.', false),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -666,7 +651,7 @@ function findFileTool(): Tool {
       const paths = found.map((one) => one.fsPath);
       return {
         paths,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           paths.length === 0
             ? `No file named \`${name}\``
             : `Found ${paths.length} file(s) named \`${name}\``,
@@ -685,7 +670,6 @@ function searchProjectTool(): Tool {
       inputs: [required('query', 'The substring to look for in file names.')],
       outputs: [
         text('paths', 'Absolute path of each matching file.', false),
-        runLog(),
       ],
     },
     async run(inputs) {
@@ -699,7 +683,7 @@ function searchProjectTool(): Tool {
       const paths = found.map((one) => one.fsPath);
       return {
         paths,
-        [USER_FACING_LOG]: log(
+        [RUN_LOG_KEY]: log(
           paths.length === 0
             ? `Nothing matches \`${query}\``
             : `Found ${paths.length} file(s) matching \`${query}\``,

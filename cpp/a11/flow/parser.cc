@@ -898,6 +898,14 @@ class ParserImpl {
           Advance();
           return ParseFail(keyword);
         }
+        if (word == "log" || word == "logf") {
+          Advance();
+          auto log = Make<syntax::Log>(keyword);
+          log->tail = ParseLogTail(/*formatted=*/word == "logf",
+                                   /*in_stage=*/false);
+          log->after = ParseAfter();
+          return log;
+        }
         if (word == "for") return ParseForEach();
         if (word == "repeat") return ParseRepeat();
         if (word == "until" || word == "while") {
@@ -1110,6 +1118,85 @@ class ParserImpl {
     if (!AtStatementEnd()) fail->message = ParseExpression();
     fail->after = ParseAfter();
     return fail;
+  }
+
+  /// The tail `log` and `logf` share, in a statement or after a `|`.
+  ///
+  /// `[level] what` for a `log`, `[level] "format" [args]` for a `logf`. One
+  /// routine because they are one grammar written in two places: a stage that
+  /// took a subtly different tail from the statement of the same name would be
+  /// a second dialect to learn for no gain.
+  ///
+  /// @param formatted Whether this is a `logf`, which requires a format.
+  /// @param in_stage Whether the value may be left out, meaning `it`.
+  syntax::LogTail ParseLogTail(bool formatted, bool in_stage) {
+    syntax::LogTail tail;
+    // A level is a bare word, the way a `fail` code is. `log error.message`
+    // is not one: a word followed by something that continues an expression is
+    // the start of a value, which is the same test OpensStatement makes.
+    if (Current().IsWord() && vocabulary::IsLogLevel(Keyword())) {
+      switch (Peek().kind) {
+        case TokenKind::kDot:
+        case TokenKind::kLeftBracket:
+        case TokenKind::kLeftParen:
+          break;
+        default: {
+          const Token& level = Advance();
+          tail.level =
+              Word{std::string(level.text), syntax::LocationOf(level)};
+          break;
+        }
+      }
+    }
+    if (formatted) {
+      if (At(TokenKind::kString)) {
+        tail.format = std::string(Advance().string_value);
+        tail.has_format = true;
+      } else {
+        Report("flow.form.log-format",
+               absl::StrCat("A 'logf' takes a format to fill, found ", Found(),
+                            "; write 'log' to log a value as it is."),
+               Current(), Severity::kError, Family::kForm);
+      }
+      while (!AtStatementEnd() && !AtStageEnd()) {
+        tail.arguments.push_back(ParseExpression());
+        if (!AcceptToken(TokenKind::kComma)) break;
+      }
+      return tail;
+    }
+    if (!AtStatementEnd() && !AtStageEnd()) {
+      tail.arguments.push_back(ParseExpression());
+      // Something is still there, so the bare name just read was meant as the
+      // level and is not one of the five. Taken as the level all the same, so
+      // that the resolver reports the level it is rather than this reporting
+      // that the line went on -- and so that what follows is still read as the
+      // value, which is what the author meant it to be.
+      if (tail.level.Empty() && !AtStatementEnd() && !AtStageEnd()) {
+        const syntax::Node* value = tail.arguments.back().get();
+        if (const auto* name = syntax::As<syntax::Name>(value);
+            name != nullptr) {
+          tail.level = Word{name->name, value->location};
+          tail.arguments.clear();
+          tail.arguments.push_back(ParseExpression());
+        }
+      }
+    } else if (!in_stage) {
+      Report("flow.form.log-value",
+             tail.level.Empty()
+                 ? "A 'log' takes something to log."
+                 : absl::StrCat("A 'log' takes something to log after the "
+                                "level. (If ",
+                                Quoted(tail.level.text),
+                                " is the value, a level of the same name is "
+                                "read first; write the level too.)"),
+             Current(), Severity::kError, Family::kForm);
+    }
+    return tail;
+  }
+
+  /// Whether a stage's argument has run out: the next `|`, `->` or line.
+  bool AtStageEnd() const {
+    return At(TokenKind::kPipe) || At(TokenKind::kArrow);
   }
 
   /// `node()`, `node(id)`, or either of those with `in <map>`.
@@ -1480,6 +1567,12 @@ class ParserImpl {
         // A stream rather than a value: `then` reads this one and then that one,
         // so its argument is whatever a pipeline may start with.
         stage->argument = ParsePostfix();
+        break;
+      case vocabulary::StageArgument::kLog:
+      case vocabulary::StageArgument::kLogFormat:
+        stage->log =
+            ParseLogTail(*takes == vocabulary::StageArgument::kLogFormat,
+                         /*in_stage=*/true);
         break;
     }
     return stage;

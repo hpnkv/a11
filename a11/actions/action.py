@@ -435,8 +435,6 @@ class DefaultHeaders(enum.StrEnum):
     DEADLINE = "x-a11-deadline"
     #: Policy describing which actions an LLM may expose as tools.
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
-    #: Node id to which handlers may stream user-visible progress.
-    USER_LOG_NODE = "x-a11-user-log-node"
     #: W3C/OpenTelemetry trace-parent context.
     OTEL_TRACEPARENT = "x-otel-traceparent"
     #: Vendor trace-state accompanying ``OTEL_TRACEPARENT``.
@@ -454,10 +452,6 @@ DEFAULT_HEADERS = {
     DefaultHeaders.ALLOWED_LLM_ACTIONS: ActionHeaderSchema(
         DefaultHeaders.ALLOWED_LLM_ACTIONS,
         "Comma-separated regex patterns of actions the LLM may call as tools.",
-    ),
-    DefaultHeaders.USER_LOG_NODE: ActionHeaderSchema(
-        DefaultHeaders.USER_LOG_NODE,
-        "An AsyncNode that will be used to log messages helpful to the user.",
     ),
     DefaultHeaders.OTEL_TRACEPARENT: ActionHeaderSchema(
         DefaultHeaders.OTEL_TRACEPARENT,

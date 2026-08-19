@@ -15,7 +15,6 @@ from a11.gateway.tool_bridge import (
     _BridgedTool,
     describe_tool,
 )
-from a11.sdk.llm import USER_FACING_LOG_PORT
 
 
 def _descriptor(**overrides) -> dict:
@@ -44,25 +43,25 @@ def _descriptor(**overrides) -> dict:
     return descriptor
 
 
-def test_a_user_facing_output_is_renamed_locally_and_kept_on_the_wire():
+def test_a_narration_port_stays_on_the_wire_and_off_the_local_schema():
     tool = _BridgedTool(_descriptor())
 
     # The peer's own name is what the peer writes, so the wire keeps it.
     assert set(tool.wire_schema.outputs) == {"slice", "user_log_for_run"}
-    # Locally it lands on the canonical port, which is the one the tool runner
-    # holds back from the model and files as the call's log.
-    assert set(tool.schema.outputs) == {"slice", USER_FACING_LOG_PORT}
-    assert tool.forwarded_outputs == {
-        "slice": "slice",
-        "user_log_for_run": USER_FACING_LOG_PORT,
-    }
-    assert tool.drained_ports == []
+    # Locally there is nothing to declare: narration goes to the action's log
+    # port, which is not a schema port, so the model cannot be shown it and a
+    # flow cannot name it.
+    assert set(tool.schema.outputs) == {"slice"}
+    assert tool.forwarded_outputs == {"slice": "slice"}
+    assert tool.log_ports == ["user_log_for_run"]
     # The peer's output-to-JSON mapping survives: which port is the whole result
     # is the tool's choice, not one assumed here.
     assert dict(tool.schema.output_to_json_field) == {"slice": "$"}
 
 
-def test_extra_user_facing_outputs_are_dropped_but_still_drained():
+def test_every_flagged_output_is_logged_rather_than_only_the_first():
+    # There used to be one canonical local port, so a second flagged port could
+    # only be drained and thrown away. Logging has no such limit.
     descriptor = _descriptor(
         outputs=[
             {"name": "slice", "type": "application/json"},
@@ -73,10 +72,8 @@ def test_extra_user_facing_outputs_are_dropped_but_still_drained():
     )
     tool = _BridgedTool(descriptor)
 
-    assert set(tool.schema.outputs) == {"slice", USER_FACING_LOG_PORT}
-    # Dropped from the model's view, but a port nobody reads stalls the peer
-    # writing it, so it is still read on the wire.
-    assert tool.drained_ports == ["log_b"]
+    assert set(tool.schema.outputs) == {"slice"}
+    assert tool.log_ports == ["log_a", "log_b"]
 
 
 def test_a_tool_without_a_log_is_left_alone():
@@ -86,9 +83,23 @@ def test_a_tool_without_a_log_is_left_alone():
     )
     tool = _BridgedTool(descriptor)
 
-    assert tool.log_port is None
+    assert tool.log_ports == []
     assert set(tool.schema.outputs) == {"slice"}
     assert isinstance(tool.schema, a11.ActionSchema)
+
+
+def test_a_client_that_logs_needs_no_flagged_port_and_the_schemas_match():
+    # The migrated shape: a client narrating through its own `log()` announces
+    # nothing extra, and the local and wire schemas are then the same object's
+    # worth of ports -- which is what lets a flow `call` a bridged tool.
+    descriptor = _descriptor(
+        outputs=[{"name": "slice", "type": "application/json"}],
+        output_to_json_field={"slice": "$"},
+    )
+    tool = _BridgedTool(descriptor)
+
+    assert set(tool.schema.outputs) == set(tool.wire_schema.outputs)
+    assert tool.log_ports == []
 
 
 async def _announce(registry: a11.ActionRegistry, *descriptors: dict) -> dict:
@@ -136,7 +147,7 @@ async def test_a_peer_tool_shadows_a_local_one_of_the_same_name():
     assert ok["registered"] == ["get_selection"]
     # The peer's schema is the one registered now, not this side's.
     schema = registry.get_schema("get_selection")
-    assert set(schema.outputs) == {"slice", USER_FACING_LOG_PORT}
+    assert set(schema.outputs) == {"slice"}
 
 
 @pytest.mark.asyncio
@@ -174,10 +185,7 @@ def test_describe_tool_round_trips_a_schema_into_a_callable_proxy():
         outputs={
             "output_lines": a11.ActionPortSchema(
                 name="output_lines", type="text/plain"
-            ),
-            USER_FACING_LOG_PORT: a11.ActionPortSchema(
-                name=USER_FACING_LOG_PORT, type="text/plain"
-            ),
+            )
         },
     )
 
@@ -188,20 +196,18 @@ def test_describe_tool_round_trips_a_schema_into_a_callable_proxy():
     assert set(described) == {"command", "parameters"}
     assert described["command"]["unary"] is True
     assert described["command"]["type"] == "text/plain"
-    # The log port must be flagged, or the model would be shown a tool's
-    # narration of itself as though it were the result.
-    log = next(
-        entry
-        for entry in descriptor["outputs"]
-        if entry["name"] == USER_FACING_LOG_PORT
+    # Nothing is flagged: an A11 schema has no narration port to describe. What
+    # this tool logs travels on its log port, which every peer finds in the same
+    # place without being told.
+    assert not any(
+        entry.get("user_facing") for entry in descriptor["outputs"]
     )
-    assert log["user_facing"] is True
 
     # And the bridge must rebuild a schema the model's arguments can land on.
     rebuilt = _BridgedTool(descriptor)
     assert set(rebuilt.schema.inputs) == {"command", "parameters"}
     assert rebuilt.schema.inputs["command"].unary is True
-    assert USER_FACING_LOG_PORT in rebuilt.schema.outputs
+    assert set(rebuilt.schema.outputs) == {"output_lines"}
 
 
 def test_a_tool_definition_is_not_a_descriptor():

@@ -364,6 +364,79 @@ TEST(FlowResolve, AFailOrCancelAtTheTopOfABodyIsRefused) {
                                       "flow.form.unconditional-cancel"}));
 }
 
+TEST(FlowResolve, ALogAtTheTopOfABodyIsRefused) {
+  // Same rule as `fail` and `cancel`, and for a reason of its own: a log says
+  // what just happened, so one that runs before anything else describes
+  // something that has not happened yet.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  log \"starting\"\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.form.unconditional-log"}));
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  logf \"starting %s\" a\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.form.unconditional-logf"}));
+
+  // An `if`, a loop body and an `after` each say when it happens.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  if a == \"\" { log warning \"empty\" }\n"
+                          "  a -> b\n}\n"))
+                  .empty());
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string stream\n  out b: string\n"
+                          "  for one in a { log one }\n"
+                          "  a | first 1 -> b\n}\n"))
+                  .empty());
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  x = run act(p: a)\n  x.out -> b\n"
+                          "  log \"done\" after x\n}\n"))
+                  .empty());
+
+  // As a stage it is part of a pipeline rather than a statement of its own, so
+  // the rule has nothing to say about it.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string stream\n"
+                          "  out b: string stream\n"
+                          "  a | log | logf \"saw %s\" it -> b\n}\n"))
+                  .empty());
+}
+
+TEST(FlowResolve, ALogNamesALevelOrNothing) {
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  if a { log chatty \"hm\" }\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.form.unknown-log-level"}));
+  // A level is only read where one may stand, so `error` after it is the value.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                          "  if a { log error a }\n  a -> b\n}\n"))
+                  .empty());
+  // Written with nothing to log, a statement says so rather than logging the
+  // level word.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  if a { log warning }\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.form.log-value"}));
+  // A `logf` takes a format, not a value.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  if a { logf a }\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.form.log-format"}));
+}
+
+TEST(FlowResolve, ALogStageChangesNothingAboutTheStream) {
+  // A log is a pass-through, so what the pipeline was carrying it still carries:
+  // the shape survives, and so does the proof that there is one value.
+  const ResolveResult result =
+      Check("struct Hit {\n  url: string\n}\n\n"
+            "flow f {\n  in a: string\n  out b: Hit\n"
+            "  a | map Hit{url: it} | log it.url | first 1 -> b\n}\n");
+  EXPECT_TRUE(Codes(result).empty()) << Messages(result);
+}
+
+TEST(FlowResolve, ItInALogStageIsTheValueInHand) {
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string stream\n"
+                          "  out b: string stream\n"
+                          "  a | log it -> b\n}\n"))
+                  .empty());
+  // And means nothing in the statement, which has no value in hand.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
+                        "  if a { log it }\n  a -> b\n}\n")),
+            (std::vector<std::string>{"flow.name.it-outside-stage"}));
+}
+
 TEST(FlowResolve, ARepeatSaysWhenItStops) {
   // The cap used to be 16 by default, so a `repeat` whose condition never held
   // did sixteen passes and reported *success*. There is no default now, which

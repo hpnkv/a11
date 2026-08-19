@@ -8,7 +8,7 @@
 import {ActionPortSchema, ActionSchema} from '../../../js/src/index.js';
 
 /** A module constant, as a real schema names a shared port. */
-const USER_FACING_LOG_PORT = 'user_facing_log';
+const NARRATION_PORT = 'narration';
 
 /** The name of the action below, bound rather than written inline. */
 const NAMED_ELSEWHERE = 'ts-reads-its-name-from-a-constant';
@@ -45,8 +45,8 @@ export const PROSE = new ActionSchema({
   },
   outputs: {
     answer: new ActionPortSchema({name: 'answer', type: 'text/plain'}),
-    [USER_FACING_LOG_PORT]: new ActionPortSchema({
-      name: USER_FACING_LOG_PORT,
+    [NARRATION_PORT]: new ActionPortSchema({
+      name: NARRATION_PORT,
       type: 'text/plain',
     }),
   },

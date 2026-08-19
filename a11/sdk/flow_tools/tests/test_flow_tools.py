@@ -13,10 +13,11 @@ import re
 import pytest
 import pytest_asyncio
 
+from a11 import _native
 from a11 import flow
 from a11.actions import Action, ActionRegistry, ActionSchema
 from a11.sdk import flow_tools
-from a11.sdk.llm import USER_FACING_LOG_PORT, LlmHeaders
+from a11.sdk.llm import LlmHeaders
 from a11.status import StatusCode, StatusException
 
 UPPER = ActionSchema.model_validate(
@@ -33,7 +34,6 @@ SIZE = ActionSchema.model_validate(
         "description": "Count the characters of one value.",
         "inputs": {
             "text": {"name": "text", "type": str, "unary": True},
-            USER_FACING_LOG_PORT: {"name": USER_FACING_LOG_PORT, "type": str},
         },
         "outputs": {"size": {"name": "size", "type": int, "unary": True}},
     }
@@ -93,6 +93,9 @@ async def drive(
         action.set_header(
             LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed.encode()
         )
+    # Claimed before the run, as the tool runner does: an unclaimed log goes to
+    # the process sink and never materialises a node to read.
+    action.get_log_node()
     action.run()
     for port, value in inputs.items():
         await action[port].put(value, final=True)
@@ -105,6 +108,15 @@ async def drive(
 async def result_of(action: Action, port: str):
     """The one JSON value a flow tool writes."""
     return await action[port].next_object()
+
+
+async def log_of(action: Action) -> str:
+    """What a flow tool narrated, off its log port."""
+    chunk = await asyncio.wait_for(
+        action.get_log_node().next_chunk(), timeout=30
+    )
+    assert chunk is not None, "the tool narrated nothing"
+    return _native.log_record_from_chunk(chunk)["text"]
 
 
 # --- flow_actions -------------------------------------------------------------
@@ -126,10 +138,12 @@ async def test_flow_actions_reports_the_ports_a_flow_needs(registry):
     ]
     assert by_name["text-size"]["inputs"] == [{"port": "text", "type": "str"}]
     assert by_name["text-upper"]["description"] == "Upper-case each value."
-    # A run log is for the person watching, not for a flow to pipe.
-    assert USER_FACING_LOG_PORT not in {
-        port["port"] for port in by_name["text-size"]["inputs"]
-    }
+    # A run log is for the person watching, not for a flow to pipe -- and it
+    # cannot be offered here even by accident, because it is not a schema port.
+    for described in by_name.values():
+        ports = {port["port"] for port in described["inputs"]}
+        ports |= {port["port"] for port in described["outputs"]}
+        assert _native.ACTION_LOG_OUTPUT not in ports
     # The flow tools are not composable into a flow.
     assert not set(by_name) & set(flow_tools.FLOW_TOOL_NAMES)
 
@@ -202,7 +216,7 @@ async def test_flow_run_narrates_its_run_for_the_person_watching(registry):
     action = await drive(
         registry, "flow_run", source=COMPOSITION, inputs={"words": ["hi"]}
     )
-    log = await action[USER_FACING_LOG_PORT].next_object(str)
+    log = await log_of(action)
     assert log.startswith("Ran the flow `shout-and-measure`")
     assert "text-upper" in log
 
@@ -229,6 +243,7 @@ async def drive_streaming(
         action.set_header(
             LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed.encode()
         )
+    action.get_log_node()
     action.run()
     await action["source"].put(source, final=True)
     if flow_name is not None:
@@ -358,7 +373,7 @@ async def test_the_run_log_says_which_ports_the_caller_filled(registry):
     action = await drive_streaming(
         registry, source=COMPOSITION, feed={"words": ["hi"]}
     )
-    log = await action[USER_FACING_LOG_PORT].next_object(str)
+    log = await log_of(action)
     assert log.startswith("Ran the flow `shout-and-measure`")
     assert "The caller filled words." in log
 

@@ -7,23 +7,45 @@ import {
   type ByteSource,
 } from './bytes.js';
 import { Deferred } from './concurrency.js';
+
+/// One encoder for the log attributes, which are written on every log line.
+const encoder = new TextEncoder();
+import {
+  LOG_CHANNEL_ATTRIBUTE,
+  LOG_FILE_ATTRIBUTE,
+  LOG_INTERNAL_ATTRIBUTE,
+  LOG_INTERNAL_FALSE,
+  LOG_INTERNAL_TRUE,
+  LOG_LEVEL_ATTRIBUTE,
+  LOG_LEVELS,
+  LOG_LINENO_ATTRIBUTE,
+  logRecordFromChunk,
+  parseLogLevel,
+  reportLog,
+  type LogOptions,
+} from './action_log.js';
 import { AsyncNode, NodeMap } from './async_node.js';
 import {
   ActionMessage,
+  Chunk,
+  ChunkMetadata,
   NodeFragment,
   Port,
   WireMessage,
   makeNullChunk,
   validateName,
 } from './data.js';
+import { OCTET_STREAM_MIMETYPE, toChunk } from './serialization.js';
 import {
   ACTION_DISPATCH_STATUS_OUTPUT,
+  ACTION_LOG_OUTPUT,
   ACTION_HEADER_PREFIX,
   ACTION_STATUS_OUTPUT,
   CANCEL_ACTION_HEADER,
   CANCEL_ACTION_NAME,
   ActionSchema,
   type ActionSettings,
+  isStatusChunk,
   statusToChunk,
 } from './action_schema.js';
 import {
@@ -198,6 +220,9 @@ export class Action {
   private finishing = false;
   private inputAutofillsApplied = false;
   private tracked = false;
+  // Set once a consumer has taken the log port through getLogNode(). It then owns
+  // presentation, so log() stops reporting to the process sink.
+  private logClaimed = false;
   private readonly done = new Deferred<Status>();
   private readonly dispatched = new Deferred<Status>();
   private readonly cancelController = new AbortController();
@@ -839,6 +864,157 @@ export class Action {
     return okStatus();
   }
 
+  /**
+   * Log `value` on the reserved {@link ACTION_LOG_OUTPUT} port.
+   *
+   * The value becomes a chunk the way `node.put(value)` would make one -- a
+   * `string` is `text/plain`, a `Uint8Array` is `application/octet-stream` -- and
+   * the chunk always carries a timestamp.
+   *
+   * Only a running handler may log: logging before `run`, or on the calling side
+   * of a `call`, is a failed precondition, because the port would have nowhere to
+   * go and no reader to close it. Nothing else about logging fails the action --
+   * once the chunk is built, a transport or lifecycle problem is reported through
+   * the sink rather than returned.
+   *
+   * Where it goes: always to the process's action log sink, and additionally onto
+   * the log port when something could read it -- a peer is attached, or a local
+   * consumer claimed the port with {@link getLogNode}. Nobody has to drain it and
+   * nobody has to close it.
+   */
+  async log(value: unknown, options: LogOptions = {}): Promise<Status> {
+    let chunk: Chunk;
+    if (value instanceof Chunk) {
+      if (options.mimetype !== undefined && options.mimetype !== '') {
+        return invalidArgumentError(
+          'Cannot give a log mimetype for a chunk that already has one.',
+        );
+      }
+      chunk = value;
+    } else {
+      const made = await toChunk(value, options.mimetype ?? '');
+      if (!isOk(made)) return made;
+      chunk = made;
+    }
+    return this.writeLog(chunk, options);
+  }
+
+  /**
+   * Log a formatted line: `%s` is replaced by each argument in turn.
+   *
+   * Deliberately not a full format language -- `absl::StrFormat`'s specifiers are
+   * C++'s, and a flow's `logf` is `strformat`'s. `%s` is what all three agree on,
+   * and `%%` is a literal per cent.
+   */
+  async logf(format: string, ...args: unknown[]): Promise<Status> {
+    let index = 0;
+    const filled = format.replace(/%[%s]/g, (found) =>
+      found === '%%' ? '%' : String(args[index++] ?? ''),
+    );
+    return this.log(filled);
+  }
+
+  /**
+   * Log a formatted line with explicit options.
+   *
+   * A second name rather than an overload, so it matches the C++ surface, where
+   * a leading-options overload of `Logf` is ambiguous against the format spec.
+   */
+  async logfWith(
+    options: LogOptions,
+    format: string,
+    ...args: unknown[]
+  ): Promise<Status> {
+    let index = 0;
+    const filled = format.replace(/%[%s]/g, (found) =>
+      found === '%%' ? '%' : String(args[index++] ?? ''),
+    );
+    return this.log(filled, options);
+  }
+
+  /**
+   * Return the log port's node, claiming it for this consumer.
+   *
+   * Claiming suppresses the process sink for this action, so a consumer that
+   * presents the logs itself does not also have them reported twice. Claim before
+   * the action runs: logs written earlier have already gone to the sink.
+   *
+   * The stream is deliberately not bound. On the calling side a bound output tees
+   * what it receives straight back to the peer, which corrupts the connection for
+   * every later call on it.
+   */
+  async getLogNode(): Promise<StatusOr<AsyncNode>> {
+    this.logClaimed = true;
+    return this.getOutput(ACTION_LOG_OUTPUT, false);
+  }
+
+  /** Apply `options` to `chunk`, report it, and write it where anything reads. */
+  private async writeLog(chunk: Chunk, options: LogOptions): Promise<Status> {
+    const level = parseLogLevel(options.level ?? '');
+    if (level === null) {
+      return invalidArgumentError(
+        `Unknown log level '${options.level}'; expected one of ${LOG_LEVELS.join(', ')}.`,
+      );
+    }
+    if (this.mode !== 'run') {
+      return failedPreconditionError(
+        'Only a running Action may log; a caller logs on its own action.',
+      );
+    }
+    const metadata = chunk.metadata ?? new ChunkMetadata();
+    if (metadata.mimetype === '') metadata.mimetype = OCTET_STREAM_MIMETYPE;
+    if (isStatusChunk(chunk)) {
+      return invalidArgumentError(
+        'Cannot log a status chunk; log its message instead.',
+      );
+    }
+    metadata.timestamp = new Date();
+    // The caller's map first, then the named options, so an explicit level wins
+    // over a 'level' the same caller also put in the map.
+    if (options.metadata !== undefined) {
+      const pairs = options.metadata instanceof Map
+        ? options.metadata.entries()
+        : Object.entries(options.metadata);
+      for (const [key, value] of pairs) {
+        metadata.attributes.set(
+          key,
+          typeof value === 'string' ? encoder.encode(value) : value,
+        );
+      }
+    }
+    metadata.attributes.set(LOG_LEVEL_ATTRIBUTE, encoder.encode(level));
+    metadata.attributes.set(
+      LOG_INTERNAL_ATTRIBUTE,
+      encoder.encode(options.internal === true ? LOG_INTERNAL_TRUE : LOG_INTERNAL_FALSE),
+    );
+    if (options.channel !== undefined && options.channel !== '') {
+      metadata.attributes.set(LOG_CHANNEL_ATTRIBUTE, encoder.encode(options.channel));
+    }
+    if (options.file !== undefined && options.file !== '') {
+      metadata.attributes.set(LOG_FILE_ATTRIBUTE, encoder.encode(options.file));
+    }
+    if (options.lineno !== undefined) {
+      metadata.attributes.set(LOG_LINENO_ATTRIBUTE, encoder.encode(String(options.lineno)));
+    }
+    chunk.metadata = metadata;
+
+    if (!this.logClaimed) {
+      reportLog(logRecordFromChunk(chunk, this.schema.name, this.id));
+    }
+    // Nothing reads a local log port nobody claimed, so materialising it would
+    // buffer every line of a narrating action for the length of the run and then
+    // throw them away. A peer is always a reader: it is mirroring the node.
+    const readable = this.logClaimed || this.stream !== null || this.session !== null;
+    if (!readable || this.finishing) return okStatus();
+
+    // From here on nothing is returned to the handler: a log that could not be
+    // written is a fault in the logging, not in the action.
+    const node = await this.getOutput(ACTION_LOG_OUTPUT, this.stream !== null);
+    if (!isOk(node)) return okStatus();
+    await node.putChunk(chunk);
+    return okStatus();
+  }
+
   private remapDefaultPorts(): Status {
     this.inputIds.clear();
     this.outputIds.clear();
@@ -852,7 +1028,11 @@ export class Action {
       if (!isOk(id)) return id;
       this.outputIds.set(name, id);
     }
-    for (const name of [ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT]) {
+    for (const name of [
+      ACTION_STATUS_OUTPUT,
+      ACTION_DISPATCH_STATUS_OUTPUT,
+      ACTION_LOG_OUTPUT,
+    ]) {
       const id = Action.makeNodeId(this.id, name);
       if (!isOk(id)) return id;
       this.outputIds.set(name, id);
@@ -995,7 +1175,9 @@ export class Action {
   }
 
   private async finishOutputNodes(status: Status): Promise<Status> {
-    const ids = [...this.schema.outputs.keys()]
+    // The log port is closed with the ordinary outputs -- that is what makes it
+    // something a handler never has to close and a reader never waits forever on.
+    const ids = [...this.schema.outputs.keys(), ACTION_LOG_OUTPUT]
       .map((name) => this.outputIds.get(name))
       .filter((id): id is string => id !== undefined);
     let first: Status = okStatus();

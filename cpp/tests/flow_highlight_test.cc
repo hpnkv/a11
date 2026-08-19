@@ -35,6 +35,25 @@ std::vector<std::string> Coloured(std::string_view source,
   return out;
 }
 
+TEST(FlowHighlight, ALevelIsALevelOnlyWhereALogTakesOne) {
+  EXPECT_EQ(Coloured("log warning \"hm\""),
+            (std::vector<std::string>{"statement-keyword:log",
+                                      "log-level:warning", "string:\"hm\""}));
+  EXPECT_EQ(Coloured("a | logf error \"hm\""),
+            (std::vector<std::string>{"identifier:a", "flow-operator:|",
+                                      "stage:logf", "log-level:error",
+                                      "string:\"hm\""}));
+  // Anywhere else `error` is a name as ordinary as any other, so a port called
+  // one of the five is not coloured as a keyword.
+  EXPECT_EQ(Coloured("error -> out"),
+            (std::vector<std::string>{"identifier:error", "flow-operator:->",
+                                      "declaration-keyword:out"}));
+  EXPECT_EQ(Coloured("log error.message"),
+            (std::vector<std::string>{"statement-keyword:log",
+                                      "identifier:error", "punctuation:.",
+                                      "member:message"}));
+}
+
 TEST(FlowHighlight, ADeclarationNamesItsFlow) {
   EXPECT_EQ(Coloured("flow research {}"),
             (std::vector<std::string>{"declaration-keyword:flow",

@@ -288,6 +288,12 @@ class Inspector {
         Expression(fail->message.get());
         return;
       }
+      case NodeKind::kLog:
+        for (const syntax::NodePtr& argument :
+             syntax::As<syntax::Log>(statement)->tail.arguments) {
+          Expression(argument.get());
+        }
+        return;
       case NodeKind::kNodes:
         Statements(syntax::As<syntax::Nodes>(statement)->body);
         return;
@@ -325,6 +331,9 @@ class Inspector {
           stage.argument != nullptr) {
         // `| where (x | count) > 0` -- a pipeline inside a stage is a pipeline.
         Expression(stage.argument.get());
+      }
+      for (const syntax::NodePtr& argument : stage.log.arguments) {
+        Expression(argument.get());
       }
       if (stage.takes == vocabulary::StageArgument::kNumber &&
           stage.number < 1) {

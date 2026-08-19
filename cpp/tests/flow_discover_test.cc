@@ -120,7 +120,7 @@ TEST(FlowDiscover, JoinsProseWrittenAcrossLinesAndGivesBackTheIndentation) {
 TEST(FlowDiscover, ResolvesANameOrAPortKeyBoundToAConstantOfTheSameFile) {
   // Without this the C++ side finds almost nothing, since nearly every action
   // there names itself with a `constexpr std::string_view`, and the Python side
-  // offers a port called `USER_FACING_LOG_PORT` -- a port that does not exist.
+  // offers a port called `NARRATION_PORT` -- a port that does not exist.
   EXPECT_NE(Find(Scanned(), "reads-its-name-from-a-constant"), nullptr);
   EXPECT_NE(Find(Scanned(), "ts-reads-its-name-from-a-constant"), nullptr);
 
@@ -129,9 +129,9 @@ TEST(FlowDiscover, ResolvesANameOrAPortKeyBoundToAConstantOfTheSameFile) {
   for (const std::string_view name : {"prose", "ts-prose"}) {
     const catalogue::ActionInfo* action = Find(Scanned(), name);
     ASSERT_NE(action, nullptr) << name;
-    EXPECT_NE(Port(action->outputs, "user_facing_log"), nullptr)
+    EXPECT_NE(Port(action->outputs, "narration"), nullptr)
         << name << " lost the port its constant named";
-    EXPECT_EQ(Port(action->outputs, "USER_FACING_LOG_PORT"), nullptr)
+    EXPECT_EQ(Port(action->outputs, "NARRATION_PORT"), nullptr)
         << name << " offers a port named after the constant rather than by it";
   }
 }

@@ -97,6 +97,7 @@ int TokenTypeOf(SemanticKind kind) {
     case SemanticKind::kType:
       return 5;
     case SemanticKind::kStatusCode:
+    case SemanticKind::kLogLevel:
       return 6;
     case SemanticKind::kWordOperator:
     case SemanticKind::kFlowOperator:
@@ -178,6 +179,7 @@ int CompletionItemKind(ProposalKind kind) {
     case ProposalKind::kType:
       return 25;  // TypeParameter
     case ProposalKind::kStatusCode:
+    case ProposalKind::kLogLevel:
       return 20;  // EnumMember
     case ProposalKind::kConstant:
       return 21;  // Constant

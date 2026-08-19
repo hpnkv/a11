@@ -1001,6 +1001,42 @@ void BindActions(py::module_& module) {
                 WithoutGil([&] { return self.GetPort(std::move(name)); }));
           },
           "Return the port node with the given name.", py::arg("name"))
+      // The log surface. Only the chunk-taking half is native: turning a Python
+      // object into a chunk is the Python registry's job, and it already reads a
+      // str as text/plain, which is what a log wants. See a11.actions.Action.log.
+      .def(
+          "log_chunk",
+          [](actions::Action& self, data::Chunk chunk,
+             std::optional<std::string> level,
+             std::optional<data::ByteMap> metadata,
+             std::optional<std::string> channel,
+             std::optional<std::string> file, std::optional<int> lineno,
+             bool internal) {
+            actions::LogOptions options;
+            if (level.has_value()) options.level = *level;
+            if (channel.has_value()) options.channel = *channel;
+            if (file.has_value()) options.file = *file;
+            options.lineno = lineno;
+            options.internal = internal;
+            if (metadata.has_value()) options.metadata = &*metadata;
+            // Released for the reason every port accessor releases it: writing
+            // the log port waits, and what it waits for can need the GIL.
+            ThrowIfNotOk(
+                WithoutGil([&] { return self.Log(std::move(chunk), options); }));
+          },
+          "Write an already-built chunk to the action's log port. Only a "
+          "running action may log.",
+          py::arg("chunk"), py::arg("level") = std::nullopt,
+          py::arg("metadata") = std::nullopt, py::arg("channel") = std::nullopt,
+          py::arg("file") = std::nullopt, py::arg("lineno") = std::nullopt,
+          py::arg("internal") = false)
+      .def(
+          "get_log_node",
+          [](actions::Action& self) {
+            return ValueOrThrow(WithoutGil([&] { return self.GetLogNode(); }));
+          },
+          "Return the action's log port node, claiming it for this consumer so "
+          "the process log sink is not also told.")
       .def(
           "__getitem__",
           [](actions::Action& self, std::string name) {
@@ -1419,6 +1455,68 @@ Examples:
       std::string(actions::kActionStatusOutput);
   module.attr("ACTION_DISPATCH_STATUS_OUTPUT") =
       std::string(actions::kActionDispatchStatusOutput);
+  module.def(
+      "log_record_from_chunk",
+      [](const data::Chunk& chunk, std::string action_name,
+         std::string action_id) {
+        const actions::LogRecord record =
+            actions::LogRecordFromChunk(chunk, action_name, action_id);
+        py::dict result;
+        result["action"] = std::string(record.action_name);
+        result["action_id"] = std::string(record.action_id);
+        result["level"] = std::string(actions::LogLevelName(record.level));
+        result["channel"] = std::string(record.channel);
+        result["file"] = std::string(record.file);
+        result["lineno"] = record.lineno.has_value()
+                               ? py::cast(*record.lineno)
+                               : py::none();
+        result["internal"] = record.internal;
+        result["mimetype"] = std::string(record.mimetype);
+        result["data"] = py::bytes(record.data.data(), record.data.size());
+        result["text"] = actions::LogText(record);
+        result["timestamp"] =
+            record.timestamp == absl::InfinitePast()
+                ? py::none()
+                : py::cast(absl::ToDoubleSeconds(record.timestamp -
+                                                 absl::UnixEpoch()));
+        return result;
+      },
+      "Read a log chunk's metadata back out as a mapping: level, channel, "
+      "file, lineno, internal, mimetype, data, text, timestamp.\n\n"
+      "The one way to read what an action logged, so a consumer on the far end "
+      "of a wire interprets the metadata the way every other language does. "
+      "`text` is the payload where its media type is textual and a description "
+      "of its size and type where it is not; `internal` says whether the log "
+      "was A11's own bookkeeping rather than something to show a person.",
+      py::arg("chunk"), py::arg("action_name") = std::string(),
+      py::arg("action_id") = std::string());
+  module.def("is_textual_log_mimetype", &actions::IsTextualLogMimetype,
+             "Whether a log payload of this media type reads as text (text/* "
+             "and JSON) rather than as bytes.",
+             py::arg("mimetype"));
+  module.attr("ACTION_LOG_OUTPUT") = std::string(actions::kActionLogOutput);
+  module.attr("LOG_LEVEL_ATTRIBUTE") = std::string(actions::kLogLevelAttribute);
+  module.attr("LOG_INTERNAL_ATTRIBUTE") =
+      std::string(actions::kLogInternalAttribute);
+  module.attr("LOG_CHANNEL_ATTRIBUTE") =
+      std::string(actions::kLogChannelAttribute);
+  module.attr("LOG_FILE_ATTRIBUTE") = std::string(actions::kLogFileAttribute);
+  module.attr("LOG_LINENO_ATTRIBUTE") =
+      std::string(actions::kLogLinenoAttribute);
+  module.attr("LOG_INTERNAL_TRUE") = std::string(actions::kLogInternalTrue);
+  module.attr("LOG_INTERNAL_FALSE") = std::string(actions::kLogInternalFalse);
+  {
+    py::list levels;
+    for (const actions::LogLevel level :
+         {actions::LogLevel::kDebug, actions::LogLevel::kInfo,
+          actions::LogLevel::kWarning, actions::LogLevel::kError,
+          actions::LogLevel::kCritical}) {
+      levels.append(std::string(actions::LogLevelName(level)));
+    }
+    module.attr("LOG_LEVELS") = py::tuple(levels);
+  }
+  module.attr("DEFAULT_LOG_LEVEL") =
+      std::string(actions::LogLevelName(actions::kDefaultLogLevel));
   module.attr("CANCEL_ACTION_NAME") = std::string(actions::kCancelActionName);
   module.attr("CANCEL_ACTION_HEADER") =
       std::string(actions::kCancelActionHeader);

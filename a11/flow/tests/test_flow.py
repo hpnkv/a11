@@ -2413,7 +2413,13 @@ async def test_a_node_nothing_writes_is_an_empty_stream(registry):
 
 @pytest.mark.asyncio
 async def test_a_flow_can_attach_to_a_node_its_caller_named(registry):
-    """The `x-a11-user-log-node` pattern: the caller says where to write."""
+    """A caller naming a node for the callee to write to, by header.
+
+    Not how a handler narrates itself -- that is
+    :meth:`a11.actions.action.Action.log`, whose port every action already has.
+    This is the general mechanism underneath: a caller that wants output on a
+    node *it* chose passes the id and the callee writes there.
+    """
 
     async def progress(action: Action) -> None:
         target = action.get_header("x-a11-progress-node", decode=True)

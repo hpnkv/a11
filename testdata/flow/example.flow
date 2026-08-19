@@ -1,7 +1,7 @@
 # The file the syntax format is pinned against. Small on purpose, and still one
 # of nearly every construct the language has: a described struct with constrained
 # fields, and a described flow with ports and a header, a call with modifiers, a
-# loop, a pipeline, a branch, a block, an advanced value and a failure.
+# loop, a pipeline, a branch, a block, an advanced value, a log and a failure.
 struct Source {
   describe "Where an answer came from."
 
@@ -47,7 +47,9 @@ flow example {
       # A value made into a declared shape, with the rest of what `hit` holds
       # spread in beside the key this overrides.
       hit | map Source{...it, "url": it.url, "tags": ["searched"]} -> sources
-      page.text | truncate 200 | where it != "" -> pages
+      # A log in a pipeline: it says what went past and changes nothing, so the
+      # stage may be dropped in and taken out without touching what comes out.
+      page.text | truncate 200 | where it != "" | log debug it -> pages
     }
   }
 
@@ -69,9 +71,11 @@ flow example {
   # One value, named: `budget` is a header and `read` is however many pages
   # actually arrived, and both read as values rather than as streams.
   let read = pages | count
+  logf "read %s pages" read after search
   if read > 0 {
     summary -> answer
   } else {
+    log warning "nothing worth reading"
     fail not_found "nothing worth reading"
   }
 

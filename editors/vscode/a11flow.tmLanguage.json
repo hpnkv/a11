@@ -19,6 +19,7 @@
         {"include": "#statement"},
         {"include": "#modifier"},
         {"include": "#status-code"},
+        {"include": "#log-level"},
         {"include": "#constant"},
         {"include": "#word-operator"},
         {"include": "#member"},
@@ -66,7 +67,7 @@
     },
     "stage": {
       "//": "A word is a stage after a `|`, and the same word may be a function elsewhere.",
-      "match": "(\\|)\\s*(first|last|drop|truncate|batch|group|where|map|match|distinct|then|mime|strformat|chunk|collect|count|join|text|json|packb|FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|WHERE|MAP|MATCH|DISTINCT|THEN|MIME|STRFORMAT|CHUNK|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB)\\b",
+      "match": "(\\|)\\s*(first|last|drop|truncate|batch|group|where|map|match|distinct|then|log|logf|mime|strformat|chunk|collect|count|join|text|json|packb|FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP|WHERE|MAP|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB)\\b",
       "captures": {
         "1": {"name": "keyword.operator.pipe.a11flow"},
         "2": {"name": "support.function.stage.a11flow"}
@@ -104,7 +105,7 @@
       "name": "keyword.declaration.a11flow"
     },
     "statement": {
-      "match": "\\b(advance|call|cancel|drain|else|fail|for|if|let|max|nodes|of|parallel|repeat|run|skip|status|try|until|wait|while|zip|ADVANCE|CALL|CANCEL|DRAIN|ELSE|FAIL|FOR|IF|LET|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(advance|call|cancel|drain|else|fail|for|if|let|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|until|wait|while|zip|ADVANCE|CALL|CANCEL|DRAIN|ELSE|FAIL|FOR|IF|LET|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {
@@ -114,6 +115,10 @@
     "status-code": {
       "match": "\\b(ok|cancelled|unknown|invalid_argument|deadline_exceeded|not_found|already_exists|permission_denied|resource_exhausted|failed_precondition|aborted|out_of_range|unimplemented|internal|unavailable|data_loss|unauthenticated|OK|CANCELLED|UNKNOWN|INVALID_ARGUMENT|DEADLINE_EXCEEDED|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|RESOURCE_EXHAUSTED|FAILED_PRECONDITION|ABORTED|OUT_OF_RANGE|UNIMPLEMENTED|INTERNAL|UNAVAILABLE|DATA_LOSS|UNAUTHENTICATED)\\b",
       "name": "constant.other.status.a11flow"
+    },
+    "log-level": {
+      "match": "\\b(debug|info|warning|error|critical|DEBUG|INFO|WARNING|ERROR|CRITICAL)\\b",
+      "name": "constant.other.log-level.a11flow"
     },
     "constant": {
       "match": "\\b(false|it|null|true|FALSE|IT|NULL|TRUE)\\b",

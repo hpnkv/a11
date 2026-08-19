@@ -8,6 +8,7 @@
 
 #include "a11/flow/runtime.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -27,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/log.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -34,6 +36,7 @@
 #include "a11/data/types.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "thread/boost_primitives.h"
 
 namespace a11::flow {
 namespace {
@@ -202,6 +205,70 @@ Outcome RunFlow(std::string_view source, std::string_view name,
   for (auto& [port, node] : outputs) outcome.outputs[port] = Collect(node);
   return outcome;
 }
+
+/// Collects what the process log sink is handed while this is in scope.
+///
+/// The flow's log goes to the same sink an action's does, so a flow that narrates
+/// itself is observed the way anything else consuming those logs would observe
+/// it, rather than by reaching into a port.
+class LogCapture {
+ public:
+  LogCapture() {
+    actions::SetActionLogSink([this](const actions::LogRecord& record) {
+      // Locked because a flow's statements run concurrently: two logs whose
+      // `after` clauses are satisfied together reach the sink from two fibres.
+      thread::MutexLock lock(&mu_);
+      lines_.push_back(Line{.level = std::string(actions::LogLevelName(
+                                record.level)),
+                            .channel = std::string(record.channel),
+                            .text = std::string(record.data),
+                            .mimetype = std::string(record.mimetype),
+                            .lineno = record.lineno.value_or(0)});
+    });
+  }
+  ~LogCapture() { actions::SetActionLogSink(nullptr); }
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  struct Line {
+    std::string level;
+    std::string channel;
+    std::string text;
+    std::string mimetype;
+    int lineno = 0;
+  };
+
+  std::vector<Line> lines() const {
+    thread::MutexLock lock(&mu_);
+    return lines_;
+  }
+
+  /// What was logged, in the order it arrived.
+  Values texts() const {
+    Values out;
+    for (const Line& line : lines()) out.push_back(line.text);
+    return out;
+  }
+
+  /// The same, sorted -- for the cases where the flow does not order the logs.
+  Values sorted_texts() const {
+    Values out = texts();
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+
+  /// The line whose text is `text`, or nullopt.
+  std::optional<Line> find(std::string_view text) const {
+    for (const Line& line : lines()) {
+      if (line.text == text) return line;
+    }
+    return std::nullopt;
+  }
+
+ private:
+  mutable thread::Mutex mu_;
+  std::vector<Line> lines_;
+};
 
 // --- The cases ---------------------------------------------------------------
 
@@ -1195,6 +1262,150 @@ flow tagged {
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("joined"),
             Values({"[\"a\", \"tag\"]", "[\"b\", null]"}));
+}
+
+
+TEST(FlowRuntimeTest, ALogStatementWritesToTheFlowsOwnLog) {
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow narrated {
+  in  words: string stream
+  out said:  string stream
+  words -> said
+  log "copied the words" after said
+  logf warning "%s words in all" 2 after said
+}
+)",
+                              "narrated", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
+
+  // Both wait for the same thing and so race each other, which is the language's
+  // answer and not this test's business: what is pinned is that both arrived.
+  EXPECT_EQ(logs.sorted_texts(),
+            Values({"2 words in all", "copied the words"}));
+
+  const std::optional<LogCapture::Line> plain = logs.find("copied the words");
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_EQ(plain->level, "info");
+  // The channel is the flow's name, so a consumer can tell one flow's narration
+  // from another's without a port per flow.
+  EXPECT_EQ(plain->channel, "narrated");
+  EXPECT_GT(plain->lineno, 0);
+
+  const std::optional<LogCapture::Line> warned = logs.find("2 words in all");
+  ASSERT_TRUE(warned.has_value());
+  EXPECT_EQ(warned->level, "warning");
+}
+
+TEST(FlowRuntimeTest, ALogStageLetsEveryValueThrough) {
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow watched {
+  in  words: string stream
+  out said:  string stream
+  words | log | logf "saw %s" it -> said
+}
+)",
+                              "watched", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // Two stages, neither of which changed anything: the values arrive as written,
+  // JSON quoting and all.
+  EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
+  // Every value is logged once by each stage. The grouping is by stage rather
+  // than by value: a stage is its own producer, so the first one has seen the
+  // whole stream before the second sees any of it. Pinned because a reader
+  // watching a pipeline through two logs would otherwise expect them
+  // interleaved.
+  EXPECT_EQ(logs.texts(), Values({"a", "b", "saw a", "saw b"}));
+}
+
+TEST(FlowRuntimeTest, ALogInALoopRunsEveryPass) {
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow counted {
+  in  words: string stream
+  out said:  string stream
+  for one in words {
+    logf "one: %s" one
+    one -> said
+  }
+}
+)",
+                              "counted", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(logs.texts(), Values({"one: a", "one: b"}));
+}
+
+TEST(FlowRuntimeTest, ALogKeepsTheValuesOwnRepresentation) {
+  // A `log` hands the value over as the value it is: a string is text, and a
+  // record is the record, so a consumer decides how to render it. Only `logf`
+  // makes a string, because a format is what asks for one.
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+struct Hit {
+  url:   string
+  score: number
+}
+
+flow shaped {
+  in  urls: string stream
+  out kept: Hit stream
+  urls | map Hit{url: it, score: 1} | log | logf "at %s" it.url -> kept
+}
+)",
+                              "shaped", {{"urls", {"\"a\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+
+  ASSERT_EQ(logs.lines().size(), 2u);
+  // The record, as a record. Not `Hit{...}` and not a quoted rendering of it.
+  EXPECT_EQ(logs.lines()[0].mimetype, "application/json");
+  EXPECT_EQ(logs.lines()[0].text, "{\"score\": 1, \"url\": \"a\"}");
+  // The format made a string, which is what a format is for.
+  EXPECT_EQ(logs.lines()[1].mimetype, "text/plain");
+  EXPECT_EQ(logs.lines()[1].text, "at a");
+}
+
+TEST(FlowRuntimeTest, ALoggedStringIsTextRatherThanItsJsonSpelling) {
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow said {
+  in  words: string stream
+  out out:   string stream
+  words | log -> out
+  log "a literal" after out
+}
+)",
+                              "said", {{"words", {"\"a\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  for (const LogCapture::Line& line : logs.lines()) {
+    EXPECT_EQ(line.mimetype, "text/plain") << line.text;
+    EXPECT_EQ(line.text.find('"'), std::string::npos) << line.text;
+  }
+  EXPECT_EQ(logs.sorted_texts(), Values({"a", "a literal"}));
+}
+
+TEST(FlowRuntimeTest, AFlowThatLogsDeclaresNoPortForIt) {
+  // The whole point of the reserved port: the log is not part of what the flow
+  // says it is, so nothing calling it has to know about it.
+  absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
+      CompiledProgram::Compile(R"(
+flow quiet {
+  in  words: string stream
+  out said:  string stream
+  words -> said
+  log "done" after said
+}
+)",
+                               "test.flow");
+  ASSERT_TRUE(program.ok()) << program.status();
+  const ResolvedFlow* flow = (*program)->Flow("quiet");
+  ASSERT_NE(flow, nullptr);
+  const absl::StatusOr<actions::ActionSchema> schema = FlowSchema(flow->plan);
+  ASSERT_TRUE(schema.ok()) << schema.status();
+  EXPECT_EQ(schema->outputs.size(), 1u);
+  EXPECT_TRUE(schema->outputs.contains("said"));
+  EXPECT_FALSE(schema->outputs.contains(actions::kActionLogOutput));
 }
 
 }  // namespace

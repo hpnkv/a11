@@ -25,6 +25,9 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/actions/log.h"
+#include "a11/actions/schema.h"
+
 #include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
 #include "a11/data/serialization.h"
@@ -285,6 +288,70 @@ TEST(SerialTagsTest, AStdStringDefaultsToThePinnedBytesMediaType) {
   EXPECT_EQ(chunk->metadata->mimetype,
             media_types.at("bytes").get<std::string>());
   EXPECT_EQ(chunk->data, "value");
+}
+
+nlohmann::json SharedLogChunk() {
+  const std::filesystem::path path =
+      (std::filesystem::path(A11_CPP_SOURCE_ROOT).parent_path() /
+       std::filesystem::path(__FILE__))
+          .parent_path()
+          .parent_path()
+          .parent_path() /
+      "testdata" / "log_chunk.json";
+  std::ifstream stream(path);
+  EXPECT_TRUE(stream.is_open()) << "cannot open " << path;
+  std::stringstream buffer;
+  buffer << stream.rdbuf();
+  return nlohmann::json::parse(buffer.str());
+}
+
+TEST(LogChunkTest, TheReservedPortAndItsMetadataMatchTheFixture) {
+  // The log port and its attribute names are a cross-language contract: a peer
+  // in another language reads these chunks, so the words have to be the same
+  // words. Pinned here beside the status chunk for the same reason.
+  const nlohmann::json fixture = SharedLogChunk();
+  EXPECT_EQ(fixture.at("port").get<std::string>(), actions::kActionLogOutput);
+
+  const nlohmann::json attributes = fixture.at("attributes");
+  EXPECT_EQ(attributes.at("level").get<std::string>(),
+            actions::kLogLevelAttribute);
+  EXPECT_EQ(attributes.at("internal").get<std::string>(),
+            actions::kLogInternalAttribute);
+  EXPECT_EQ(attributes.at("channel").get<std::string>(),
+            actions::kLogChannelAttribute);
+  EXPECT_EQ(attributes.at("file").get<std::string>(),
+            actions::kLogFileAttribute);
+  EXPECT_EQ(attributes.at("lineno").get<std::string>(),
+            actions::kLogLinenoAttribute);
+  EXPECT_EQ(fixture.at("internal_true").get<std::string>(),
+            actions::kLogInternalTrue);
+  EXPECT_EQ(fixture.at("internal_false").get<std::string>(),
+            actions::kLogInternalFalse);
+
+  std::vector<std::string> levels;
+  for (const nlohmann::json& level : fixture.at("levels")) {
+    levels.push_back(level.get<std::string>());
+  }
+  EXPECT_EQ(levels,
+            (std::vector<std::string>{"debug", "info", "warning", "error",
+                                      "critical"}));
+  for (const std::string& name : levels) {
+    const absl::StatusOr<actions::LogLevel> parsed =
+        actions::ParseLogLevel(name);
+    ASSERT_TRUE(parsed.ok()) << name << ": " << parsed.status();
+    EXPECT_EQ(actions::LogLevelName(*parsed), name);
+  }
+  EXPECT_EQ(actions::LogLevelName(actions::kDefaultLogLevel),
+            fixture.at("default_level").get<std::string>());
+
+  // Both spellings host languages differ on resolve to the canonical name.
+  for (const auto& [written, meant] :
+       fixture.at("level_aliases").items()) {
+    const absl::StatusOr<actions::LogLevel> parsed =
+        actions::ParseLogLevel(written);
+    ASSERT_TRUE(parsed.ok()) << written << ": " << parsed.status();
+    EXPECT_EQ(actions::LogLevelName(*parsed), meant.get<std::string>());
+  }
 }
 
 }  // namespace

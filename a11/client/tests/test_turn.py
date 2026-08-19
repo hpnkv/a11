@@ -107,8 +107,10 @@ class _FakeOllama:
         return _FakeStream(chunks)
 
 
-#: A tool the *client* owns. Its user-facing log is what a reader sees for the
-#: run; its result is what the model sees.
+#: A tool the *client* owns. What it logs is what a reader sees for the run; its
+#: result is what the model sees. Nothing declares a port for the log: it goes
+#: through `Action.log`, and the bridge re-emits it onto the gateway-side action's
+#: own log, which is where the tool runner finds it.
 _ECHO_SCHEMA = a11.ActionSchema(
     name="client_echo",
     description="Echo text back, as the client's own tool.",
@@ -118,19 +120,16 @@ _ECHO_SCHEMA = a11.ActionSchema(
         )
     },
     outputs={
-        "result": a11.ActionPortSchema(name="result", type="application/json"),
-        "user_facing_log": a11.ActionPortSchema(
-            name="user_facing_log", type="text/plain"
-        ),
+        "result": a11.ActionPortSchema(name="result", type="application/json")
     },
 )
 
 
 async def _echo(action: a11.Action) -> None:
     text = await action["text"].consume(str)
-    async with action["result"] as result, action["user_facing_log"] as log:
+    async with action["result"] as result:
         await result.put_final({"echoed": text})
-        await log.put_final(_LOG)
+    await action.log(_LOG)
 
 
 def _descriptor() -> dict:
@@ -145,14 +144,9 @@ def _descriptor() -> dict:
                 "required": True,
             }
         ],
-        "outputs": [
-            {"name": "result", "type": "application/json"},
-            {
-                "name": "user_facing_log",
-                "type": "text/plain",
-                "user_facing": True,
-            },
-        ],
+        # No output is flagged `user_facing`: this client narrates through
+        # `Action.log`, so there is no port to declare and none to flag.
+        "outputs": [{"name": "result", "type": "application/json"}],
         # "$" means the `result` port *is* the whole tool result, rather than a
         # field of an object wrapping it.
         "output_to_json_field": {"result": "$"},

@@ -63,6 +63,9 @@ class Action private constructor(
     private var finishing = false
     private var inputAutofillsApplied = false
     private var tracked = false
+    // Set once a consumer has taken the log port through getLogNode(). It then
+    // owns presentation, so log() stops reporting to the process sink.
+    private var logClaimed = false
     private val done = Deferred<Status>()
     private val dispatched = Deferred<Status>()
     private val cancelCallbacks = mutableListOf<OnActionCancelled>()
@@ -138,6 +141,131 @@ class Action private constructor(
         val bind = bindStream ?: settings.bindStreamsOnOutputsByDefault ?: (mode == ActionMode.RUN)
         attachStreamIfRequested(node, bind && name != ACTION_STATUS_OUTPUT && name != ACTION_DISPATCH_STATUS_OUTPUT)
         return Ok(node)
+    }
+
+    /**
+     * Log [value] on the reserved [ACTION_LOG_OUTPUT] port.
+     *
+     * The value becomes a chunk the way `node.put(value)` would make one -- a
+     * `String` is `text/plain`, a `ByteArray` is `application/octet-stream` -- and
+     * the chunk always carries a timestamp.
+     *
+     * Only a running handler may log: logging before `run`, or on the calling side
+     * of a `call`, is a failed precondition, because the port would have nowhere
+     * to go and no reader to close it. Nothing else about logging fails the action
+     * -- once the chunk is built, a transport or lifecycle problem is reported
+     * through the sink rather than returned.
+     *
+     * Where it goes: always to the process's action log sink, and additionally
+     * onto the log port when something could read it -- a peer is attached, or a
+     * local consumer claimed the port with [getLogNode]. Nobody has to drain it
+     * and nobody has to close it.
+     */
+    suspend fun log(value: Any?, options: LogOptions = LogOptions()): Status {
+        val chunk: Chunk
+        if (value is Chunk) {
+            if (options.mimetype.isNotEmpty()) {
+                return invalidArgument("Cannot give a log mimetype for a chunk that already has one.")
+            }
+            chunk = value
+        } else {
+            chunk = SerializationRegistry.getGlobal().toChunk(value, options.mimetype).orElse { return it }
+        }
+        return writeLog(chunk, options)
+    }
+
+    /**
+     * Log a formatted line: `%s` is replaced by each argument in turn.
+     *
+     * Deliberately not a full format language -- `absl::StrFormat`'s specifiers
+     * are C++'s, and a flow's `logf` is `strformat`'s. `%s` is what all three
+     * agree on, and `%%` is a literal per cent.
+     */
+    suspend fun logf(format: String, vararg args: Any?): Status = logfWith(LogOptions(), format, *args)
+
+    /**
+     * Log a formatted line with explicit options.
+     *
+     * A second name rather than an overload, so it matches the C++ surface, where
+     * a leading-options overload of `Logf` is ambiguous against the format spec.
+     */
+    suspend fun logfWith(options: LogOptions, format: String, vararg args: Any?): Status {
+        val filled = StringBuilder()
+        var index = 0
+        var at = 0
+        while (at < format.length) {
+            val char = format[at]
+            if (char == '%' && at + 1 < format.length) {
+                when (format[at + 1]) {
+                    '%' -> { filled.append('%'); at += 2; continue }
+                    's' -> {
+                        filled.append(if (index < args.size) args[index++].toString() else "")
+                        at += 2
+                        continue
+                    }
+                }
+            }
+            filled.append(char)
+            at += 1
+        }
+        return log(filled.toString(), options)
+    }
+
+    /**
+     * Return the log port's node, claiming it for this consumer.
+     *
+     * Claiming suppresses the process sink for this action, so a consumer that
+     * presents the logs itself does not also have them reported twice. Claim
+     * before the action runs: logs written earlier have already gone to the sink.
+     *
+     * The stream is deliberately not bound. On the calling side a bound output tees
+     * what it receives straight back to the peer, which corrupts the connection
+     * for every later call on it.
+     */
+    suspend fun getLogNode(): StatusOr<AsyncNode> {
+        logClaimed = true
+        return getOutput(ACTION_LOG_OUTPUT, bindStream = false)
+    }
+
+    /** Apply [options] to [chunk], report it, and write it where anything reads. */
+    private suspend fun writeLog(chunk: Chunk, options: LogOptions): Status {
+        val level = parseLogLevel(options.level)
+            ?: return invalidArgument(
+                "Unknown log level '${options.level}'; expected one of " +
+                    LOG_LEVELS.joinToString(", ") + "."
+            )
+        if (mode != ActionMode.RUN) {
+            return failedPrecondition("Only a running Action may log; a caller logs on its own action.")
+        }
+        val metadata = chunk.metadata ?: ChunkMetadata()
+        if (metadata.mimetype.isEmpty()) metadata.mimetype = OCTET_STREAM_MIMETYPE
+        if (isStatusChunk(chunk)) {
+            return invalidArgument("Cannot log a status chunk; log its message instead.")
+        }
+        metadata.timestampMillis = System.currentTimeMillis()
+        // The caller's map first, then the named options, so an explicit level wins
+        // over a "level" the same caller also put in the map.
+        options.metadata?.forEach { (key, value) -> metadata.attributes[key] = value }
+        metadata.attributes[LOG_LEVEL_ATTRIBUTE] = level.toByteArray()
+        metadata.attributes[LOG_INTERNAL_ATTRIBUTE] =
+            (if (options.internal) LOG_INTERNAL_TRUE else LOG_INTERNAL_FALSE).toByteArray()
+        if (options.channel.isNotEmpty()) metadata.attributes[LOG_CHANNEL_ATTRIBUTE] = options.channel.toByteArray()
+        if (options.file.isNotEmpty()) metadata.attributes[LOG_FILE_ATTRIBUTE] = options.file.toByteArray()
+        options.lineno?.let { metadata.attributes[LOG_LINENO_ATTRIBUTE] = it.toString().toByteArray() }
+        chunk.metadata = metadata
+
+        if (!logClaimed) reportLog(logRecordFromChunk(chunk, schema.name, id))
+        // Nothing reads a local log port nobody claimed, so materialising it would
+        // buffer every line of a narrating action for the length of the run and then
+        // throw them away. A peer is always a reader: it is mirroring the node.
+        val readable = logClaimed || stream != null || session != null
+        if (!readable || finishing) return Status.ok()
+
+        // From here on nothing is returned to the handler: a log that could not be
+        // written is a fault in the logging, not in the action.
+        val node = getOutput(ACTION_LOG_OUTPUT, bindStream = stream != null).orElse { return Status.ok() }
+        node.putChunk(chunk)
+        return Status.ok()
     }
 
     fun containsPort(name: String): Boolean = inputIds.containsKey(name) || outputIds.containsKey(name)
@@ -321,7 +449,9 @@ class Action private constructor(
         inputIds.clear(); outputIds.clear()
         for (name in schema.inputs.keys) inputIds[name] = makeNodeId(id, name).orElse { return it }
         for (name in schema.outputs.keys) outputIds[name] = makeNodeId(id, name).orElse { return it }
-        for (name in listOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT)) outputIds[name] = makeNodeId(id, name).orElse { return it }
+        for (name in listOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)) {
+            outputIds[name] = makeNodeId(id, name).orElse { return it }
+        }
         return Status.ok()
     }
 
@@ -390,7 +520,9 @@ class Action private constructor(
     }
 
     private suspend fun finishOutputNodes(status: Status): Status {
-        val ids = schema.outputs.keys.mapNotNull { outputIds[it] }
+        // The log port is closed with the ordinary outputs -- that is what makes it
+        // something a handler never closes and a reader never waits forever on.
+        val ids = (schema.outputs.keys + ACTION_LOG_OUTPUT).mapNotNull { outputIds[it] }
         var first: Status = Status.ok()
         val s = stream
         if (!status.isOk && s != null && ids.isNotEmpty()) {

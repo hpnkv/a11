@@ -13,7 +13,6 @@ flow suggest-fixes {
   # --- what the client is looking at -----------------------------------------
 
   active = call get_active_file(request: {include_line_numbers: true})
-  skip active.user_facing_log
 
   file_path = node() in scratch
   active.path -> file_path
@@ -25,7 +24,6 @@ flow suggest-fixes {
     request: file_path | map {path: it, start_line: 0}
   )
   skip found.path  # we asked about a path we already have
-  skip found.user_facing_log
 
   whole = run interact_with_llm(
     config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}

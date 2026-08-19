@@ -38,6 +38,16 @@ inline constexpr std::string_view kActionStatusOutput = "__status__";
 /** @brief Reserved output port name carrying the remote dispatch status. */
 inline constexpr std::string_view kActionDispatchStatusOutput =
     "__dispatch_status__";
+/**
+ * @brief Reserved output port name carrying the action's log.
+ *
+ * Every action has one, declared by nobody: it is not in the schema, so it does
+ * not appear in an ::a11::data::ActionMessage, in a tool definition, or in the
+ * flow catalogue, and a handler that never logs never materialises it. Written
+ * through Action::Log, closed with the action's other outputs. See
+ * @c a11/actions/log.h.
+ */
+inline constexpr std::string_view kActionLogOutput = "__log__";
 /** @brief Reserved action name used to signal cancellation to a peer. */
 inline constexpr std::string_view kCancelActionName = "__cancel__";
 /** @brief Header naming the action targeted by a cancel request. */

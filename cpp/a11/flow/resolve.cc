@@ -524,6 +524,15 @@ std::string StageLabel(const syntax::Stage& stage) {
     case vocabulary::StageArgument::kExpression:
     case vocabulary::StageArgument::kStream:
       return absl::StrCat(stage.name, " ", Unparse(stage.argument.get()));
+    case vocabulary::StageArgument::kLog:
+    case vocabulary::StageArgument::kLogFormat: {
+      if (stage.log.has_format) {
+        return absl::StrCat(stage.name, " \"", stage.log.format, "\"");
+      }
+      if (stage.log.arguments.empty()) return stage.name;
+      return absl::StrCat(stage.name, " ",
+                          Unparse(stage.log.arguments.front().get()));
+    }
     case vocabulary::StageArgument::kNone:
       return stage.name;
   }
@@ -797,7 +806,7 @@ class FlowResolver {
 
   /// The graph stage one written stage becomes, with its argument resolved.
   graph::Stage GraphStage(const syntax::Stage& stage, graph::RefId stream,
-                          graph::ExprId expr) {
+                          graph::ExprId expr, graph::LogTail log = {}) {
     graph::Stage made;
     made.name = stage.name;
     made.takes = stage.takes;
@@ -814,6 +823,10 @@ class FlowResolver {
         break;
       case vocabulary::StageArgument::kStream:
         made.stream = stream;
+        break;
+      case vocabulary::StageArgument::kLog:
+      case vocabulary::StageArgument::kLogFormat:
+        made.log = std::move(log);
         break;
       case vocabulary::StageArgument::kNone:
         break;
@@ -1114,6 +1127,35 @@ class FlowResolver {
         step.after = ResolveAfter(fail->after, scope, made);
         CheckReachedByChoice("flow.form.unconditional-fail", "fail",
                              fail->after, fail->location);
+        steps.push_back(std::move(step));
+        return;
+      }
+      case NodeKind::kLog: {
+        const auto* log = syntax::As<syntax::Log>(statement);
+        const bool formatted = log->tail.has_format;
+        const graph::LogTail tail =
+            ResolveLogTail(log->tail, scope, /*allow_it=*/false,
+                           log->location);
+        StepPlan step;
+        step.kind = formatted ? "logf" : "log";
+        const syntax::Node* subject =
+            log->tail.arguments.empty() ? nullptr
+                                        : log->tail.arguments.front().get();
+        step.label = formatted ? tail.format : Unparse(subject);
+        step.location = log->location;
+        graph::StepId made = graph::kNone;
+        if (builder_ != nullptr) {
+          made = NewStep(graph::StepKind::kLog, step.kind, log->location);
+          builder_->step(made).log = tail;
+        }
+        step.after = ResolveAfter(log->after, scope, made);
+        // A log says what just happened, so one at the top of a body with
+        // nothing to wait for describes something that has not happened yet.
+        // Same rule as `fail` and `cancel`, and for the same reason.
+        CheckReachedByChoice(
+            formatted ? "flow.form.unconditional-logf"
+                      : "flow.form.unconditional-log",
+            step.kind, log->after, log->location);
         steps.push_back(std::move(step));
         return;
       }
@@ -1942,6 +1984,38 @@ class FlowResolver {
     }
   }
 
+  /// The tail a `log` or `logf` was written with.
+  ///
+  /// One routine for the statement and the stage, as the parser has one: the
+  /// difference between them is only whether `it` is bound, which the caller
+  /// knows and this does not have to.
+  ///
+  /// @param allow_it Whether the arguments may say `it` -- true in a stage.
+  graph::LogTail ResolveLogTail(const syntax::LogTail& tail, Scope& scope,
+                                bool allow_it, const Location& location) {
+    graph::LogTail made;
+    made.line = location.line;
+    made.format = tail.format;
+    made.has_format = tail.has_format;
+    if (!tail.level.Empty()) {
+      if (!vocabulary::IsLogLevel(tail.level.text)) {
+        Report("flow.form.unknown-log-level",
+               absl::StrCat("Unknown log level ", Quoted(tail.level.text),
+                            " (known: ",
+                            absl::StrJoin(vocabulary::LogLevels(), ", "),
+                            ", either case)."),
+               tail.level.location, Severity::kError, Family::kForm);
+      } else {
+        made.level = vocabulary::Canonical(tail.level.text);
+      }
+    }
+    for (const syntax::NodePtr& argument : tail.arguments) {
+      made.arguments.push_back(
+          ResolveExpression(argument.get(), scope, allow_it));
+    }
+    return made;
+  }
+
   /// A `fail` code: a canonical name, a number, or an expression.
   ///
   /// A named code is not an expression -- nothing in scope is called
@@ -2150,7 +2224,15 @@ class FlowResolver {
     for (const syntax::StagePtr& stage : pipeline.stages) {
       graph::RefId stream = graph::kNone;
       graph::ExprId expr = graph::kNone;
-      if (stage->takes == vocabulary::StageArgument::kStream) {
+      graph::LogTail log;
+      if (stage->takes == vocabulary::StageArgument::kLog ||
+          stage->takes == vocabulary::StageArgument::kLogFormat) {
+        const std::string outer = it_pattern_;
+        it_pattern_ = previous_pattern;
+        log = ResolveLogTail(stage->log, scope, /*allow_it=*/true,
+                             stage->location);
+        it_pattern_ = outer;
+      } else if (stage->takes == vocabulary::StageArgument::kStream) {
         stream = ResolveSource(stage->argument.get(), scope).node;
       } else if (stage->argument != nullptr) {
         // `it` is the value this stage is looking at, which is whatever the stage
@@ -2171,7 +2253,9 @@ class FlowResolver {
       ref.writable = false;
       ref.tolerant = false;
       ref.shape = ShapeAfter(*stage, ref.shape);
-      ref.node = Derive(source, GraphStage(*stage, stream, expr), ref.label);
+      ref.node =
+          Derive(source, GraphStage(*stage, stream, expr, std::move(log)),
+                 ref.label);
     }
     return ref;
   }
@@ -2191,6 +2275,11 @@ class FlowResolver {
       const auto* typed = syntax::As<syntax::TypedValue>(stage.argument.get());
       if (typed == nullptr) return "";
       return known_.Dto(typed->type.name) != nullptr ? typed->type.name : "";
+    }
+    if (name == "log" || name == "logf") {
+      // A log changes nothing about the value, so it changes nothing about what
+      // the stream is carrying either.
+      return carried;
     }
     if (vocabulary::PositionalStages().contains(name) || name == "then" ||
         name == "batch" || name == "group") {

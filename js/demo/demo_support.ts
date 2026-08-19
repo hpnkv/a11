@@ -213,13 +213,6 @@ export const REGISTER_TOOLS_SCHEMA = new ActionSchema({
     outputs: {ok: new ActionPortSchema({name: 'ok', type: 'application/json', required: true})},
 });
 
-/**
- * Output port carrying a tool's narration of its own run, written for the person
- * watching rather than for the model. The name is the contract: it is what makes
- * the backend keep the port out of the model's tool result.
- */
-export const USER_FACING_LOG_PORT = 'user_facing_log';
-
 /** One port, as the backend's tool bridge reads it back. */
 function describePort(port: ActionPortSchema, userFacing = false): Record<string, unknown> {
     const described: Record<string, unknown> = {
@@ -244,13 +237,12 @@ export function describeTool(schema: ActionSchema): Record<string, unknown> {
         name: schema.name,
         description: schema.description,
         inputs: [...schema.inputs.values()].map((port) => describePort(port)),
-        // Flagging the log port is what moves it onto the canonical name on the far
-        // side, where the tool runner drains it, keeps it away from the model, and
-        // files it under the call — so a replayed conversation still shows what a
-        // tool did rather than only that it ran.
-        outputs: [...schema.outputs.values()].map((port) =>
-            describePort(port, port.name === USER_FACING_LOG_PORT),
-        ),
+        // Nothing is flagged: narration goes through `action.log()`, whose port is
+        // not in the schema. The backend finds it in the same place on every
+        // action, keeps it away from the model, and files it under the call — so a
+        // replayed conversation still shows what a tool did rather than only that
+        // it ran.
+        outputs: [...schema.outputs.values()].map((port) => describePort(port)),
     };
 }
 

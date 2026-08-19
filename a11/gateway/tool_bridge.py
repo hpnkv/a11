@@ -16,13 +16,18 @@ input. The bridge builds an :class:`a11.ActionSchema` per descriptor and
 registers the proxy before the first chat turn. Registration is therefore
 per-connection, which is why the gateway hands each stream its own registry.
 
-A descriptor may flag an output ``user_facing``: a port carrying the tool's
-narration of its run for the person watching, never part of the model's tool
-result. Those are re-pointed onto the canonical
-[user_facing_log][a11.sdk.llm.USER_FACING_LOG_PORT] port name locally, so a
-bridged tool's log is handled by exactly the same code as a local tool's -- the
-runner drains it, keeps it out of the result, and files it under the call id.
-The wire keeps the client's own port name, which is the one the client writes.
+Narration -- what a tool did, for the person watching, never part of the model's
+tool result -- rides the reserved log port. A client that logs through its own
+A11 runtime needs nothing from this module: the log port of the action the bridge
+dispatched mirrors back like any other output, and the proxy re-emits it through
+:meth:`a11.actions.action.Action.log` on the local action, which is where the
+tool runner reads it.
+
+A descriptor may also flag an output ``user_facing``, which is how a client that
+declares its own narration port says so. Such a port is not part of the local
+schema -- there is nothing to declare, the log port is not a schema port -- and
+its values are re-emitted through ``log()`` as well, so both kinds of client end
+up in one place. Retained for clients that have not moved to ``log()``.
 """
 
 from __future__ import annotations
@@ -33,8 +38,8 @@ from typing import Any
 from absl import logging
 
 import a11
+from a11 import _native
 from a11.net.wire_stream import WireStream
-from a11.sdk.llm import USER_FACING_LOG_PORT
 from a11.service.session import Session
 from a11.status import Status, StatusCode
 
@@ -93,9 +98,11 @@ def describe_tool(schema: a11.ActionSchema) -> dict:
             for port in schema.inputs.values()
         ],
         "outputs": [
-            # The log port is the one the model must never see; flagging it is
-            # what moves it onto USER_FACING_LOG_PORT on the far side.
-            describe_port(port, user_facing=port.name == USER_FACING_LOG_PORT)
+            # Nothing is flagged: an A11 schema has no narration port to flag.
+            # What a tool logs travels on the reserved log port, which is not in
+            # the schema and so is not describable -- and does not need to be,
+            # because the far side finds it in the same place on every action.
+            describe_port(port, user_facing=False)
             for port in schema.outputs.values()
         ],
         "output_to_json_field": dict(schema.output_to_json_field),
@@ -121,45 +128,35 @@ def _ports(
 class _BridgedTool:
     """One remote tool: the schema it is called with here, and on the wire.
 
-    The two differ in one respect only. Ports the descriptor flagged
-    ``user_facing`` keep their names on the wire (the client writes them) and
-    are renamed locally: the first becomes ``user_facing_log``, where every
-    consumer of a tool run looks for its narration. A descriptor with several
-    flagged ports is unusual; the extras are dropped from the local schema and
-    merely drained, since an unread port stalls the peer writing it.
+    The two are the same but for narration. A port the descriptor flagged
+    ``user_facing`` exists on the wire, because the client writes it, and not
+    locally, because narration is not a schema port here -- its values are
+    re-emitted through :meth:`a11.actions.action.Action.log` instead. A client
+    that has moved to ``log()`` flags nothing and the two schemas are identical.
 
-    That rename is only safe for a caller that goes *through* this bridge, which
-    is what a model's tool call does. A **flow** does not: a ``call`` step
-    dispatches the ports of the schema in the registry -- the local one -- to the
-    peer directly, so a client whose user-facing port is called anything other
-    than ``user_facing_log`` gets a dispatch naming a port it does not have, and
-    the composition fails there. Announce that port under its canonical name and
-    the two schemas are identical, which is what the IntelliJ plugin does
-    (`IdeTools.USER_FACING_LOG_PORT`).
+    That identity is worth more than it looks. A **flow** does not go through the
+    proxy's forwarding: a ``call`` step dispatches the ports of the schema in the
+    registry -- the local one -- straight to the peer. When the local schema was
+    the wire schema with a port renamed, a flow calling a bridged tool named a
+    port the client did not have and the composition failed there. With narration
+    off the schema entirely, there is nothing left to diverge.
     """
 
     def __init__(self, descriptor: dict[str, Any]) -> None:
         self.name: str = descriptor["name"]
         wire_outputs = _ports(descriptor.get("outputs", []))
-        user_facing = [
+        #: Wire ports the client narrates on. Logged rather than forwarded.
+        self.log_ports: list[str] = [
             entry["name"]
             for entry in descriptor.get("outputs", []) or []
             if entry.get("user_facing")
         ]
-        self.log_port: str | None = user_facing[0] if user_facing else None
-        self.drained_ports: list[str] = user_facing[1:]
 
         local_outputs = {
             name: port
             for name, port in wire_outputs.items()
-            if name not in user_facing
+            if name not in self.log_ports
         }
-        if self.log_port is not None:
-            local_outputs[USER_FACING_LOG_PORT] = a11.ActionPortSchema(
-                name=USER_FACING_LOG_PORT,
-                type=wire_outputs[self.log_port].type,
-                description=wire_outputs[self.log_port].description,
-            )
 
         inputs = _ports(descriptor.get("inputs", []))
         self.schema = a11.ActionSchema(
@@ -186,15 +183,16 @@ class _BridgedTool:
 
     @property
     def forwarded_outputs(self) -> dict[str, str]:
-        """Wire output port -> the local port it lands on."""
-        forwarded = {
+        """Wire output port -> the local port it lands on.
+
+        The identity on everything the local schema declares. Narration is not in
+        it and is not forwarded: see :meth:`log_ports`.
+        """
+        return {
             name: name
             for name in self.wire_schema.outputs
             if name in self.schema.outputs
         }
-        if self.log_port is not None:
-            forwarded[self.log_port] = USER_FACING_LOG_PORT
-        return forwarded
 
 
 class RemoteToolBridge:
@@ -306,17 +304,61 @@ class RemoteToolBridge:
                     )
                     for wire, local in tool.forwarded_outputs.items()
                 ],
-                # Drained and discarded, for the same backpressure reason: a
-                # port nobody reads stalls the peer writing it.
+                # Narration, from either kind of client, onto the local action's
+                # log -- which is where the tool runner reads it, and the only
+                # place it can be without becoming visible to the model. Read for
+                # the same backpressure reason as everything else: a port nobody
+                # reads stalls the peer writing it.
+                _relog(remote.get_log_node(), nested, from_log_port=True),
                 *[
-                    _drain(remote.get_output(name))
-                    for name in tool.drained_ports
+                    _relog(remote.get_output(name), nested, from_log_port=False)
+                    for name in tool.log_ports
                 ],
             )
 
             await remote.wait()
 
         return proxy
+
+
+async def _relog(
+    src: a11.AsyncNode, action: a11.Action, *, from_log_port: bool
+) -> None:
+    """Re-emit what a peer narrated as this action's own log.
+
+    ``from_log_port`` says the chunks are already log chunks, in which case the
+    level, channel, location and internal flag they came with are passed back
+    through -- a client's ``debug`` line must not arrive here as ``info``. A
+    client's own declared narration port carries plain values instead, and those
+    become ordinary user-facing entries.
+
+    Best effort: a peer's narration is worth nothing next to its result, so a log
+    that will not re-emit does not fail the call.
+    """
+    while True:
+        chunk = await src.next_chunk()
+        if chunk is None:
+            break
+        if chunk.is_null() or _native.is_status_chunk(chunk):
+            continue
+        try:
+            if from_log_port:
+                record = _native.log_record_from_chunk(chunk)
+                await action.log(
+                    chunk,
+                    level=record["level"],
+                    channel=record["channel"] or None,
+                    internal=record["internal"],
+                    # The peer's location, or none at all -- an empty file rather
+                    # than None, so `log` does not helpfully stamp this module's
+                    # own line onto somebody else's log.
+                    file=record["file"],
+                    lineno=record["lineno"],
+                )
+            else:
+                await action.log(chunk, file="")
+        except Exception:
+            logging.warning("failed to re-emit a peer's log", exc_info=True)
 
 
 async def _pump(
@@ -337,8 +379,3 @@ async def _pump(
 
     await dst.drain_and_close()
 
-
-async def _drain(node: a11.AsyncNode) -> None:
-    """Read a node to the end and throw it away."""
-    while await node.next_fragment() is not None:
-        pass

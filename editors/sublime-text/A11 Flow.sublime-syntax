@@ -210,6 +210,7 @@ contexts:
     - include: literals
     - include: builtins
     - include: status-codes
+    - include: log-levels
     - include: expression-keywords
     - include: names
 
@@ -228,9 +229,9 @@ contexts:
   statement-keywords:
     - match: |-
         (?x) \b (
-          let|advance|skip|wait|drain|cancel|fail|if|for|repeat|until
-          |while|else|LET|ADVANCE|SKIP|WAIT|DRAIN|CANCEL|FAIL|IF|FOR
-          |REPEAT|UNTIL|WHILE|ELSE
+          let|advance|skip|wait|drain|cancel|fail|log|logf|if|for
+          |repeat|until|while|else|LET|ADVANCE|SKIP|WAIT|DRAIN|CANCEL
+          |FAIL|LOG|LOGF|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
     - match: '\b(parallel|max|of|PARALLEL|MAX|OF){{kw_boundary}}'
@@ -291,10 +292,10 @@ contexts:
         - match: |-
             (?x) \b (
               first|last|drop|truncate|batch|group|where|map|match
-              |distinct|then|mime|strformat|chunk|collect|count|join
-              |text|json|packb|FIRST|LAST|DROP|TRUNCATE|BATCH|GROUP
-              |WHERE|MAP|MATCH|DISTINCT|THEN|MIME|STRFORMAT|CHUNK
-              |COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
+              |distinct|then|log|logf|mime|strformat|chunk|collect
+              |count|join|text|json|packb|FIRST|LAST|DROP|TRUNCATE
+              |BATCH|GROUP|WHERE|MAP|MATCH|DISTINCT|THEN|LOG|LOGF|MIME
+              |STRFORMAT|CHUNK|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true
@@ -390,6 +391,14 @@ contexts:
           |DATA_LOSS|UNAUTHENTICATED
         ) {{kw_boundary}}
       scope: constant.language.status-code.a11flow
+
+  log-levels:
+    - match: |-
+        (?x) \b (
+          debug|info|warning|error|critical|DEBUG|INFO|WARNING|ERROR
+          |CRITICAL
+        ) {{kw_boundary}}
+      scope: constant.language.log-level.a11flow
 
   literals:
     - match: '\b(true|false|null|TRUE|FALSE|NULL){{kw_boundary}}'

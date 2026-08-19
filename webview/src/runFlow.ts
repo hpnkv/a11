@@ -19,6 +19,9 @@ import {
   ActionSchema,
   StatusCode,
   isOk,
+  isStatusChunk,
+  logRecordFromChunk,
+  logText,
   type AsyncNode,
   type Session,
   type Status,
@@ -49,7 +52,6 @@ const FLOW_RUN_SCHEMA = new ActionSchema({
   },
   outputs: {
     result: new ActionPortSchema({ name: 'result', type: 'application/json', unary: true, required: true }),
-    user_facing_log: new ActionPortSchema({ name: 'user_facing_log', type: 'text/plain' }),
   },
 });
 
@@ -151,14 +153,16 @@ export async function runFlow(
   await write('inputs', null);
   await write('flow', run.flow ?? null);
   await write('source', run.source);
-  // Every output of a call has to be drained, including the ones this caller
-  // does not care about.
+  // What the flow narrated, off the log port every action has. Not one of
+  // `flow_run`'s outputs -- it is not in its schema, which is what keeps it out
+  // of the result -- and nothing has to close it: the action does.
   const logging = (async () => {
-    const node = need(await call.getOutput('user_facing_log', false));
+    const node = need(await call.getLogNode());
     for (;;) {
-      const line = need(await node.next({ timeoutMs }));
-      if (line === null) break;
-      run.onLog?.(String(line));
+      const chunk = need(await node.nextChunk(timeoutMs));
+      if (chunk === null) break;
+      if (isStatusChunk(chunk)) continue;
+      run.onLog?.(logText(logRecordFromChunk(chunk)));
     }
   })();
   logging.catch(() => undefined);

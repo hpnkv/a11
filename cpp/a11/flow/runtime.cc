@@ -1045,6 +1045,11 @@ class Scope {
   absl::Status RunRepeat(StepId step);
   absl::Status RunWait(StepId step);
   absl::Status Failure(StepId step);
+  absl::Status WriteLog(const graph::LogTail& tail,
+                        const ItemPtr& subject);
+  absl::Status LogValue(const Value& value, const Item* absl_nullable carried,
+                        const actions::LogOptions& options);
+  absl::Status Logged(const absl::Status& logged);
 
   /// An independent view of a ref's values, for one reader.
   absl::StatusOr<ReaderPtr> Subscribe(RefId ref);
@@ -1661,6 +1666,16 @@ absl::Status Scope::ProduceStage(RefId ref, Bus::Emit emit) {
       return emit(item);
     });
   }
+  if (name == "log" || name == "logf") {
+    // Shaped like `where`, not like `map`: the value is read so the log can say
+    // something about it, and then emitted *as the item it was* -- bytes,
+    // mimetype and all -- so dropping a log into a pipeline changes nothing
+    // about what comes out of it.
+    return each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_RETURN_IF_ERROR(WriteLog(stage.log, item));
+      return emit(item);
+    });
+  }
   if (name == "match") {
     // Compiled once: the pattern is written once in the source, and a bad one is
     // the flow's own mistake rather than something a value could fix.
@@ -2148,6 +2163,8 @@ absl::Status Scope::Execute(StepId step) {
     }
     case StepKind::kFail:
       return Failure(step);
+    case StepKind::kLog:
+      return WriteLog(one.log, nullptr);
     case StepKind::kBlock: {
       // The same nesting an `if` branch runs in. What a block adds is that its
       // outcome is *its own*: a failure inside it is the block's, and a `try`
@@ -2291,6 +2308,107 @@ absl::Status Scope::Failure(StepId step) {
   return Fail(text.empty() ? absl::StrCat(runner_->plan().name, " failed.")
                            : text,
               resolved);
+}
+
+/// Write one entry to the flow's own log.
+///
+/// `subject` is the value a stage is looking at, and null in a statement -- the
+/// only difference between the two, since `it` means nothing where there is no
+/// value in hand.
+///
+/// What is logged keeps its own representation. A `logf` makes a string because
+/// that is what a format is for; a `log` hands the *value* over, so a record
+/// arrives as the record it is and a chunk that came off a port arrives with the
+/// bytes and mimetype it came with. Rendering it is the consumer's business, and
+/// a log that stringified everything on the way out would have taken that
+/// decision away from them.
+///
+/// A failure to log is the flow's, not the log's: writing is what
+/// actions::Action::Log already declines to fail on, so what can go wrong here
+/// is only evaluating what was written, and that is a mistake in the flow.
+absl::Status Scope::WriteLog(const graph::LogTail& tail,
+                            const ItemPtr& subject) {
+  std::optional<Value> in_hand;
+  if (subject != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(in_hand, subject->Read(&bridge()));
+  }
+  const auto evaluate = [&](ExprId expr) -> absl::StatusOr<Value> {
+    if (in_hand.has_value()) return EvaluateWith(expr, *in_hand);
+    return Evaluate(expr);
+  };
+
+  actions::LogOptions options;
+  options.level = tail.level;
+  // The flow's name rather than the step's: a consumer filtering logs wants the
+  // flow they came from, and the line already says which statement it was.
+  options.channel = runner_->plan().name;
+  if (tail.line > 0) options.lineno = tail.line;
+
+  if (tail.has_format) {
+    std::vector<Value> arguments;
+    arguments.reserve(tail.arguments.size());
+    for (const ExprId expr : tail.arguments) {
+      ABSL_ASSIGN_OR_RETURN(Value value, evaluate(expr));
+      arguments.push_back(std::move(value));
+    }
+    return Logged(runner_->action()->Log(
+        Strformat(Value::String(tail.format), arguments), options));
+  }
+
+  if (!tail.arguments.empty()) {
+    ABSL_ASSIGN_OR_RETURN(const Value value, evaluate(tail.arguments.front()));
+    return Logged(LogValue(value, /*carried=*/nullptr, options));
+  }
+
+  // `| log` with nothing written logs the value going past, which is what the
+  // stage is for.
+  if (subject != nullptr) {
+    return Logged(LogValue(*in_hand, subject.get(), options));
+  }
+  return absl::OkStatus();
+}
+
+/// Log one value as the value it is.
+///
+/// The one rule, and the same one every language's `log` follows: a string is
+/// text, and everything else keeps its own representation. `carried` is the item
+/// the value was read out of, where there is one -- a chunk that arrived on a
+/// port is logged as the bytes and mimetype it arrived with rather than decoded
+/// and re-encoded, so audio stays audio and msgpack stays msgpack.
+absl::Status Scope::LogValue(const Value& value,
+                             const Item* absl_nullable carried,
+                             const actions::LogOptions& options) {
+  const std::shared_ptr<actions::Action>& action = runner_->action();
+  if (value.kind() == Value::Kind::kString) {
+    // Built here rather than asked of the host: a host is entitled to answer a
+    // request for `text/plain` with the JSON spelling of the string -- the
+    // native bridge does -- and a logged string is the characters, not a quoted
+    // rendering of them.
+    data::Chunk chunk;
+    chunk.metadata =
+        data::ChunkMetadata{.mimetype = std::string(data::kTextMimetype)};
+    chunk.data = value.text();
+    return action->Log(std::move(chunk), options);
+  }
+  // A chunk the flow never opened: log the producer's own bytes and mimetype.
+  if (value.kind() == Value::Kind::kChunk &&
+      !data::IsStatusChunk(value.chunk())) {
+    return action->Log(value.chunk(), options);
+  }
+  if (carried != nullptr && carried->chunk().has_value() &&
+      !data::IsStatusChunk(*carried->chunk())) {
+    return action->Log(*carried->chunk(), options);
+  }
+  ABSL_ASSIGN_OR_RETURN(const data::Chunk chunk,
+                        bridge().ToChunk(value, /*mimetype=*/{}));
+  return action->Log(chunk, options);
+}
+
+/// Turn a refused log into the flow's failure, and anything else into nothing.
+absl::Status Scope::Logged(const absl::Status& logged) {
+  if (logged.ok()) return absl::OkStatus();
+  return Fail(absl::StrCat("This log could not be written: ", logged.message()),
+              logged.code());
 }
 
 absl::Status Scope::RunForEach(StepId step) {

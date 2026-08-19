@@ -50,6 +50,12 @@ enum class StageArgument {
   kOptionalString,
   /// Another stream to read after this one: `| then other`.
   kStream,
+  /// An optional level word and an optional expression, with `it` bound to the
+  /// value in hand: `| log`, `| log warning it.error`.
+  kLog,
+  /// An optional level word, a format string, and the values to fill it with,
+  /// with `it` bound to the value in hand: `| logf "took %s" it.elapsed`.
+  kLogFormat,
 };
 
 /// Every pipeline stage, in the order they read best in a listing.
@@ -147,6 +153,8 @@ enum class WordRole {
   kOperatorWord,
   /// One of Abseil's canonical status codes. [StatusCodes].
   kStatusCode,
+  /// The severity a `log` or `logf` may name. [LogLevels].
+  kLogLevel,
   /// A field of a status record, read after a `.`. [StatusFields].
   kStatusField,
   /// A duration suffix: `ms`, `h`. [DurationUnits].
@@ -296,6 +304,15 @@ absl::Span<const std::string_view> StatusCodes();
 
 /// Whether a word names a canonical status code, in either case.
 bool IsStatusCode(std::string_view word);
+
+/// The severities a `log` or `logf` may name, quietest first.
+///
+/// The same five names A11's own log carries on a chunk, so what a flow writes
+/// and what a consumer filters on are one vocabulary rather than two.
+absl::Span<const std::string_view> LogLevels();
+
+/// Whether a word names a log level, in either case.
+bool IsLogLevel(std::string_view word);
 
 /// The fields of a status record: what reading an outcome gives.
 const absl::flat_hash_set<std::string_view>& StatusFields();

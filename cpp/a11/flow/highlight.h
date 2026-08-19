@@ -38,6 +38,8 @@ enum class SemanticKind {
   kType,
   /// A canonical status code: `not_found`, `NOT_FOUND`.
   kStatusCode,
+  /// A log level a `log` or `logf` named: `warning`, `DEBUG`.
+  kLogLevel,
   /// `true`, `false`, `null`, `it`.
   kConstant,
   /// `and`, `or`, `not`.

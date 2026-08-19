@@ -239,6 +239,7 @@ absl::Span<const vocabulary::WordRole> RolesFor(SemanticKind kind) {
   static constexpr WordRole kConstant[] = {WordRole::kConstant};
   static constexpr WordRole kOperatorWord[] = {WordRole::kOperatorWord};
   static constexpr WordRole kStatusCode[] = {WordRole::kStatusCode};
+  static constexpr WordRole kLogLevel[] = {WordRole::kLogLevel};
   static constexpr WordRole kDuration[] = {WordRole::kDurationUnit};
   // A field of a status record is the one thing after a `.` that the language
   // itself named; every other member belongs to a shape or a step, and is
@@ -264,6 +265,8 @@ absl::Span<const vocabulary::WordRole> RolesFor(SemanticKind kind) {
       return absl::MakeConstSpan(kOperatorWord);
     case SemanticKind::kStatusCode:
       return absl::MakeConstSpan(kStatusCode);
+    case SemanticKind::kLogLevel:
+      return absl::MakeConstSpan(kLogLevel);
     case SemanticKind::kDuration:
       return absl::MakeConstSpan(kDuration);
     case SemanticKind::kMember:
@@ -312,6 +315,8 @@ std::string_view RoleName(vocabulary::WordRole role) {
       return "a constant";
     case vocabulary::WordRole::kOperatorWord:
       return "an operator";
+    case vocabulary::WordRole::kLogLevel:
+      return "a log level";
     case vocabulary::WordRole::kStatusCode:
       return "a status code";
     case vocabulary::WordRole::kStatusField:

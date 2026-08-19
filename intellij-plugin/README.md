@@ -190,18 +190,18 @@ implementation of the check, and would corrupt a file the day the two disagreed.
   **allowed-tools header** matches, and run there. That header is the IDE tool
   names plus the patterns from the *Extra allowed tools* setting (`shell_.*` by
   default), so turning the shell off is emptying a field.
-- **A tool's run log reaches the gateway but never the model.** An output flagged
-  `user_facing` in the Kotlin descriptor carries the plugin's narration of a run,
-  written for the person watching; the gateway's shell tools write the same thing
-  on their `user_facing_log` port. Either way the LLM **tool runner** is what
-  holds it back — it drains that port, keeps it out of the tool result, and files
-  it under the tool-call id
+- **A tool's run log reaches the gateway but never the model.** Every action has
+  a reserved log port that no schema declares, and a handler narrates itself onto
+  it with `log()`. The IDE tools return their narration under `RUN_LOG_KEY` and
+  the A11 handler logs it; the gateway's shell tools call `log()` directly. The
+  LLM **tool runner** reads that port separately from the action's outputs, keeps
+  it out of the tool result, and files it under the tool-call id
   ([`a11/sdk/llm_tools/runner.py`](../a11/sdk/llm_tools/runner.py)); the bridge
-  merely re-points a remote tool's flagged port onto that canonical name
+  re-emits what a remote tool logged onto the local action's log
   ([`a11/gateway/tool_bridge.py`](../a11/gateway/tool_bridge.py)). That is why the
   log can be recorded with the conversation — a reopened chat shows what a tool
-  did, not merely that it ran — while the model's contract never mentions the
-  port.
+  did, not merely that it ran — while the model's contract cannot mention it,
+  because the port is not part of any schema.
 - The plugin holds the API key (IDE `PasswordSafe`) and hands it to the page via
   `getConfig` alongside the gateway URL and provider/model; the gateway holds no
   provider config of its own.
@@ -342,7 +342,7 @@ override `traverseUI`.
 
 - Gateway: `python -m pytest a11/gateway a11/sdk/llm_tools` from the repo root
   covers the tool bridge's schema mapping, and the tool runner's handling of a
-  user-facing run log and of the tools a caller's patterns admit.
+  run log and of the tools a caller's patterns admit.
 - Flow language: what a *word means* is tested in `cpp/tests/` -- one lexer, one
   set of expectations -- so what is tested here is this plugin's own two jobs.
   `FlowEngineTest` drives the protocol: a request out, an envelope back, and the
@@ -363,7 +363,7 @@ override `traverseUI`.
 - Plugin: `IdeToolsTest` (`BasePlatformTestCase`) builds the tool registry,
   drives `get_active_file` through an A11 action, and exercises the direct
   `IdeTools.runByName` / `listDescriptors` path the JCEF bridge uses, plus the
-  reverse-dispatch proxy's handling of a tool's user-facing run log.
+  reverse-dispatch proxy's handling of a tool's run log.
 - Webview: `cd ../webview && npm run typecheck` type-checks the shared UI, and
   `cd webview && npm run typecheck` this host's entry point with it.
 - Library: `../kotlin` has round-trip, **golden byte-vector** (decodes bytes

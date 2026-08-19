@@ -293,7 +293,8 @@ things it does are ones a tool loop cannot reach:
 ## Where to go from here
 
 The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,
-`try`/`wait`/`fail`, `match`, `strformat`, and what a flow deliberately cannot do
+`try`/`wait`/`fail`, `log`/`logf`, `match`, `strformat`, and what a flow
+deliberately cannot do
 — is in the [Flow language reference](../api/flow.md), and `a11.flow.REFERENCE` is
 the same thing sized for a prompt.
 

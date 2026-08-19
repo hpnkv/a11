@@ -19,6 +19,7 @@ export * from './chunk_store_writer.js';
 export * from './async_node.js';
 
 export * from './action_schema.js';
+export * from './action_log.js';
 export * from './action.js';
 export * from './action_registry.js';
 export * from './session.js';

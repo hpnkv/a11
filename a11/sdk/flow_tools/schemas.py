@@ -26,27 +26,7 @@ mechanism cares how many values a port carries.
 from __future__ import annotations
 
 import a11
-from a11.sdk.llm import USER_FACING_LOG_PORT
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT
-
-
-def _user_facing_log_port() -> a11.ActionPortSchema:
-    """The port each Action narrates its run on, for the user's eyes.
-
-    The same contract the shell tools use: a UI showing the call reads this,
-    and the LLM tool runner keeps it out of the result the model is given. See
-    [USER_FACING_LOG_PORT][a11.sdk.llm.USER_FACING_LOG_PORT].
-    """
-    return a11.ActionPortSchema(
-        USER_FACING_LOG_PORT,
-        "text/plain",
-        description=(
-            "Narration of this call for the person watching: first line a"
-            " one-sentence summary, the rest markdown detail. Not part of the"
-            " tool result."
-        ),
-        required=False,
-    )
 
 
 FLOW_ACTIONS_SCHEMA = a11.ActionSchema(
@@ -71,7 +51,6 @@ FLOW_ACTIONS_SCHEMA = a11.ActionSchema(
             unary=True,
             required=True,
         ),
-        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
     output_to_json_field={"actions": WHOLE_JSON_OUTPUT},
 )
@@ -106,7 +85,6 @@ FLOW_CHECK_SCHEMA = a11.ActionSchema(
             unary=True,
             required=True,
         ),
-        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
     output_to_json_field={"plan": WHOLE_JSON_OUTPUT},
 )
@@ -193,7 +171,6 @@ FLOW_RUN_SCHEMA = a11.ActionSchema(
             unary=True,
             required=True,
         ),
-        USER_FACING_LOG_PORT: _user_facing_log_port(),
     },
     output_to_json_field={"result": WHOLE_JSON_OUTPUT},
 )

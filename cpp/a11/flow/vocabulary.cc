@@ -25,7 +25,8 @@ constexpr std::array kStageOrder = {
     std::string_view("batch"),  std::string_view("group"),
     std::string_view("where"),  std::string_view("map"),
     std::string_view("match"),  std::string_view("distinct"),
-    std::string_view("then"),
+    std::string_view("then"),   std::string_view("log"),
+    std::string_view("logf"),
     std::string_view("mime"),   std::string_view("strformat"),
     std::string_view("chunk"),  std::string_view("collect"),
     std::string_view("count"),  std::string_view("join"),
@@ -50,6 +51,8 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"match", StageArgument::kString},
           {"mime", StageArgument::kString},
           {"then", StageArgument::kStream},
+          {"log", StageArgument::kLog},
+          {"logf", StageArgument::kLogFormat},
           {"collect", StageArgument::kNone},
           {"count", StageArgument::kNone},
           {"distinct", StageArgument::kNone},
@@ -123,6 +126,22 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "downstream. Anything else makes something the language cannot name, "
         "and it says nothing about it rather than guessing.",
         "hits | map Source{url: it.url} -> sources"}},
+      {"log",
+       {"Logs each value and passes it on unchanged.",
+        "optionally a level, and an expression with `it` bound to the value in "
+        "hand",
+        "Written without an expression it logs the value itself, so a stage may "
+        "be dropped into a pipeline to see what is going through it without "
+        "changing what comes out. The log goes to the flow's own log, which no "
+        "port has to declare and nothing has to drain.",
+        "hits | log warning it.error | collect -> problems"}},
+      {"logf",
+       {"Logs a formatted line per value and passes the value on unchanged.",
+        "optionally a level, a format, and the values to fill it with",
+        "The format is `strformat`'s, and `it` is the value in hand, so the "
+        "usual shape is one format and one field of it. Like `log` it changes "
+        "nothing about the stream.",
+        "pages | logf \"fetched %s\" it.url -> fetched"}},
       {"match",
        {"Pulls named fields out of each value, and drops the ones that do not "
         "fit.",
@@ -572,6 +591,21 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "body reads like a last resort and is refused, because it is in fact "
         "the first thing that would happen.",
         "fail invalid_argument \"the topic is empty\""}},
+      {"log",
+       {"Writes a line to the flow's log.",
+        "optionally a level, and what to log",
+        "The log is the flow's own: no port declares it, nothing has to drain "
+        "it, and a flow that never logs pays nothing for it. Waits for nothing, "
+        "so like `fail` it belongs in an `if` or a loop body, or carries an "
+        "`after` saying what it waits for; one at the top of a body would run "
+        "before the thing it is describing.",
+        "log \"searching\" after plan"}},
+      {"logf",
+       {"Writes a formatted line to the flow's log.",
+        "optionally a level, a format, and the values to fill it with",
+        "The format is `strformat`'s. Waits for nothing, so like `log` it needs "
+        "an `if`, a loop body, or an `after`.",
+        "logf \"found %s results\" count after search"}},
       {"if",
        {"Runs a block when a condition holds, and another when it does not.",
         "a condition, a block, and optionally `else`",
@@ -998,6 +1032,39 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
 // them here is the pairs a reader confuses: `permission_denied` against
 // `unauthenticated`, `failed_precondition` against `invalid_argument`, and which
 // of them a *flow* itself can raise.
+const absl::flat_hash_map<std::string_view, WordDoc>& LogLevelDocs() {
+  static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"debug",
+       {"Detail for whoever is working on the flow.", "",
+        "The level to reach for when the line is only interesting while "
+        "something is wrong. A consumer showing a user what a flow is doing "
+        "normally leaves these out.",
+        "log debug it after step"}},
+      {"info",
+       {"What the flow is doing, as a person would describe it.", "",
+        "The level a `log` with no level written takes, and the one a narration "
+        "meant for a reader belongs at.",
+        "log info \"searching\" after plan"}},
+      {"warning",
+       {"Something is off, and the flow is carrying on.", "",
+        "A retry, a partial result, an input that had to be corrected: the flow "
+        "still produces what it promised.",
+        "log warning \"retrying\" after fetch"}},
+      {"error",
+       {"Something failed, whether or not the flow did.", "",
+        "A step that failed inside a `try`, or a value that had to be dropped. "
+        "Logging this does not end the flow: `fail` is what does that.",
+        "log error status fetch.message after fetch"}},
+      {"critical",
+       {"The worst the log has to say.", "",
+        "Kept apart from `error` for consumers that separate the two; A11 "
+        "reports both at its own error severity, so nothing is aborted by "
+        "naming it.",
+        "log critical \"the index is gone\" after check"}},
+  };
+  return *table;
+}
+
 const absl::flat_hash_map<std::string_view, WordDoc>& StatusCodeDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"ok",
@@ -1319,6 +1386,14 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
   return *table;
 }
 
+// Quietest first, which is the order a reader thinks of them in and the order a
+// completion list is most useful in.
+constexpr std::array kLogLevels = {
+    std::string_view("debug"), std::string_view("info"),
+    std::string_view("warning"), std::string_view("error"),
+    std::string_view("critical"),
+};
+
 constexpr std::array kStatusCodes = {
     std::string_view("ok"),
     std::string_view("cancelled"),
@@ -1420,6 +1495,7 @@ constexpr std::array kStatementOrder = {
     std::string_view("advance"), std::string_view("skip"),
     std::string_view("wait"),   std::string_view("drain"),
     std::string_view("cancel"), std::string_view("fail"),
+    std::string_view("log"),    std::string_view("logf"),
     std::string_view("if"),     std::string_view("for"),
     std::string_view("repeat"), std::string_view("until"),
     std::string_view("while"),  std::string_view("nodes"),
@@ -1528,6 +1604,10 @@ std::string_view StageArgumentName(StageArgument argument) {
       return "string?";
     case StageArgument::kStream:
       return "stream";
+    case StageArgument::kLog:
+      return "log";
+    case StageArgument::kLogFormat:
+      return "logf";
   }
   return "none";
 }
@@ -1587,6 +1667,9 @@ const WordDoc* absl_nullable Documentation(WordRole role,
     case WordRole::kStatusCode:
       table = &StatusCodeDocs();
       break;
+    case WordRole::kLogLevel:
+      table = &LogLevelDocs();
+      break;
     case WordRole::kStatusField:
       table = &StatusFieldDocs();
       break;
@@ -1624,8 +1707,9 @@ absl::Span<const WordRole> WordRoles() {
       WordRole::kSource,       WordRole::kPortModifier,
       WordRole::kFieldModifier, WordRole::kType,
       WordRole::kConstant,     WordRole::kOperatorWord,
-      WordRole::kStatusCode,   WordRole::kStatusField,
-      WordRole::kDurationUnit, WordRole::kSymbol,
+      WordRole::kStatusCode,   WordRole::kLogLevel,
+      WordRole::kStatusField,  WordRole::kDurationUnit,
+      WordRole::kSymbol,
   };
   return absl::MakeConstSpan(kAll.data(), kAll.size());
 }
@@ -1658,6 +1742,8 @@ std::string_view WordRoleName(WordRole role) {
       return "operator";
     case WordRole::kStatusCode:
       return "status_code";
+    case WordRole::kLogLevel:
+      return "log_level";
     case WordRole::kStatusField:
       return "status_field";
     case WordRole::kDurationUnit:
@@ -1710,6 +1796,8 @@ std::vector<std::string_view> WordsOf(WordRole role) {
       return ordered_set(OperatorWords());
     case WordRole::kStatusCode:
       return listed(StatusCodes());
+    case WordRole::kLogLevel:
+      return listed(LogLevels());
     case WordRole::kStatusField:
       return listed(OrderedStatusFields());
     case WordRole::kDurationUnit:
@@ -1832,6 +1920,18 @@ const absl::flat_hash_set<std::string_view>& FieldModifierWords() {
 absl::Span<const std::string_view> OrderedFieldModifiers() {
   return absl::MakeConstSpan(kFieldModifierOrder.data(),
                              kFieldModifierOrder.size());
+}
+
+absl::Span<const std::string_view> LogLevels() {
+  return absl::MakeConstSpan(kLogLevels.data(), kLogLevels.size());
+}
+
+bool IsLogLevel(std::string_view word) {
+  const std::string canonical = Canonical(word);
+  for (const std::string_view level : kLogLevels) {
+    if (level == canonical) return true;
+  }
+  return false;
 }
 
 absl::Span<const std::string_view> StatusCodes() {

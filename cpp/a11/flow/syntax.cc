@@ -171,6 +171,8 @@ std::string_view NodeKindName(NodeKind kind) {
       return "cancel";
     case NodeKind::kFail:
       return "fail";
+    case NodeKind::kLog:
+      return "log";
     case NodeKind::kForEach:
       return "for-each";
     case NodeKind::kRepeat:
@@ -333,9 +335,12 @@ void VisitChildren(const Node& node,
       one(binary.right);
       return;
     }
-    case NodeKind::kStage:
-      one(static_cast<const Stage&>(node).argument);
+    case NodeKind::kStage: {
+      const auto& stage = static_cast<const Stage&>(node);
+      one(stage.argument);
+      all(stage.log.arguments);
       return;
+    }
     case NodeKind::kPipeline: {
       const auto& pipeline = static_cast<const Pipeline&>(node);
       one(pipeline.source);
@@ -405,6 +410,9 @@ void VisitChildren(const Node& node,
       one(fail.message);
       return;
     }
+    case NodeKind::kLog:
+      all(static_cast<const Log&>(node).tail.arguments);
+      return;
     case NodeKind::kForEach: {
       const auto& loop = static_cast<const ForEach&>(node);
       if (loop.pipeline != nullptr) visit(*loop.pipeline);

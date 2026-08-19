@@ -30,8 +30,8 @@ touches the canvas; and the model sees three ordinary A11 actions.
 ## Try it
 
 Try "make blob 2 red and move it left", "spread them out", or "give them a warm
-palette". The right pane logs every call the page served, including each tool's
-`user_facing_log`; the model's own sentence arrives underneath the canvas.
+palette". The right pane logs every call the page served, including what each
+tool narrated; the model's own sentence arrives underneath the canvas.
 
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="tools-demo" class="a11-demo">
@@ -93,7 +93,6 @@ const SET_COLOR_SCHEMA = new ActionSchema({
     outputs: {
         recoloured: new ActionPortSchema({name: 'recoloured', type: 'application/json',
             unary: true, required: true}),
-        user_facing_log: new ActionPortSchema({name: 'user_facing_log', type: 'text/plain'}),
     },
 });
 ```
@@ -116,20 +115,20 @@ const SET_COLOR_SCHEMA = new ActionSchema({
     Those go to `getToolDefinitions(registry, names, PORT_SCHEMAS)`. Python needs
     no equivalent: an `ActionPortSchema` there carries `typeinfo`.
 
-## 2. `user_facing_log` is not part of the result
+## 2. Narration is not part of the result
 
-One output port is special by name.
-[`a11.sdk.llm.USER_FACING_LOG_PORT`](../llm-sdk/tool-runner.md) carries the tool's
-narration of its own run, for the person watching. The backend's tool runner
-drains it, keeps it out of the tool result the model is shown, and files it under
-the call id — and records it in the turn's metadata, so a conversation replayed
-later still shows what a tool *did* rather than only that it ran.
+A tool's account of its own run goes to `action.log()`, for the person watching.
+No port declares it, so it cannot become part of the tool result the model is
+shown; the backend's [tool runner](../llm-sdk/tool-runner.md) reads it separately,
+files it under the call id, and records it in the turn's metadata — so a
+conversation replayed later still shows what a tool *did* rather than only that it
+ran.
 
 ```ts
-const log = need(await action.getOutput('user_facing_log'));
-need(await log.putFinal(`Recoloured ${recoloured} blob(s).`));
-need(await log.drainAndClose());
+need(await action.log(`Recoloured ${recoloured} blob(s).`));
 ```
+
+Nothing to close, and nothing to remember to strip.
 
 ## 3. The page serves its actions
 
@@ -206,7 +205,7 @@ need(await tools.putNullFinal());
 
 ```ts
 outputs: [...schema.outputs.values()].map((port) =>
-    describePort(port, port.name === USER_FACING_LOG_PORT)),
+    describePort(port)),
 ```
 
 !!! danger "Two documents, one word"

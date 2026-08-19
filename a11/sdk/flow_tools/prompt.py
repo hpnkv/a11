@@ -134,12 +134,17 @@ task needs real computation, that is what an action is for.
 - **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is \
 refused rather than quietly stopping after some number of passes and \
 calling that success.
-- **`fail` and `cancel` go in an `if`.** They wait for nothing, so at \
+- **`fail`, `cancel` and `log` go in an `if`.** They wait for nothing, so at \
 the top of a flow's body they run at once and race every other \
 statement. Put one in an `if` or a loop body, or write `fail internal \
 "..." after x` to say what it waits for. A `fail` alone at the end of a \
 body reads like a last resort and is refused, because it is the first \
 thing that would happen.
+- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" \
+n after search` write to a log the flow already has: nothing declares it, \
+nothing drains it, and it is not one of the outputs you pay for. As a stage, \
+`| log` and `| logf "saw %s" it` say what is going past and pass every value \
+on unchanged, which is the way to see into a pipeline without changing it.
 
 ## The language
 

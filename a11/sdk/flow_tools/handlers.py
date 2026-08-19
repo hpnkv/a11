@@ -18,9 +18,9 @@ who is asking rather than about what a flow means:
 * **A flow may not call the flow tools.** Composing ``flow_run`` into a flow is
   a way to run something the check above just refused, and a way to recurse.
 
-Each handler narrates its run on the ``user_facing_log`` port, which the LLM
-tool runner keeps out of the model's result; see
-``a11.sdk.llm.USER_FACING_LOG_PORT``.
+Each handler narrates its run through :meth:`a11.actions.action.Action.log`. The
+LLM tool runner reads that separately from the action's outputs, so the narration
+cannot reach the model's result -- and no schema here declares a port for it.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from a11.flow.runtime import invoke as invoke_flow
 from a11.flow.runtime import start as start_flow
 from a11.sdk.flow_tools.schemas import FLOW_TOOL_NAMES
 from a11.sdk.llm import (
-    USER_FACING_LOG_PORT,
     action_name_matches_allowed,
     get_allowed_llm_action_patterns,
 )
@@ -48,24 +47,6 @@ SOURCE_NAME = "flow"
 
 #: How many characters of a flow a run log quotes.
 _SOURCE_LOG_LIMIT = 2000
-
-
-async def _write_log(action: a11.Action, log: str) -> None:
-    """Narrate this run on the user-facing log port, then close it.
-
-    Best effort, and for the same reason as the shell tools': a run log is
-    worth nothing next to the result, so a port that will not take it does not
-    fail the call.
-    """
-    node = action[USER_FACING_LOG_PORT]
-    try:
-        if log:
-            await node.put(log, final=True)
-        else:
-            await node.put_null_final()
-        await node.drain_and_close()
-    except Exception:
-        logging.warning("failed to write the run log", exc_info=True)
 
 
 def _fenced(source: str) -> str:
@@ -159,10 +140,11 @@ def describe_composable_actions(
     here with a handler is one to `run`, and one registered for its schema
     alone is one to `call`.
 
-    Two kinds of port are left out, because a flow that named one would be
-    making a mistake: an autofilled input, which is supplied before the handler
-    runs (a tool definition hides these too), and the ``user_facing_log`` port,
-    which is narration for whoever is watching rather than a value to move.
+    One kind of port is left out, because a flow that named it would be making a
+    mistake: an autofilled input, which is supplied before the handler runs (a
+    tool definition hides these too). Narration needs no exclusion -- an action
+    logs through :meth:`a11.actions.action.Action.log`, whose port is not in the
+    schema, so there is nothing here to hide.
     """
     described: list[dict[str, Any]] = []
     for name in sorted(registry.list_registered_actions()):
@@ -179,12 +161,10 @@ def describe_composable_actions(
                 "inputs": [
                     _describe_port(port)
                     for port in schema.inputs.values()
-                    if not port.autofills and _composable(port)
+                    if not port.autofills
                 ],
                 "outputs": [
-                    _describe_port(port)
-                    for port in schema.outputs.values()
-                    if _composable(port)
+                    _describe_port(port) for port in schema.outputs.values()
                 ],
             }
         )
@@ -202,11 +182,6 @@ def _has_handler(registry: Any, name: str) -> bool:
         return registry.get_handler(name) is not None
     except StatusException:
         return False
-
-
-def _composable(port: Any) -> bool:
-    """Whether a port is one a flow has any business naming."""
-    return port.name != USER_FACING_LOG_PORT
 
 
 def _describe_port(port: Any) -> dict[str, Any]:
@@ -229,8 +204,7 @@ async def flow_actions(action: a11.Action) -> None:
     await action["actions"].put(described, final=True)
     await action["actions"].drain_and_close()
     names = ", ".join(one["action"] for one in described) or "none"
-    await _write_log(
-        action,
+    await action.log(
         f"Listed {len(described)} action(s) a flow may call.\n\n{names}",
     )
 
@@ -245,8 +219,7 @@ async def flow_check(action: a11.Action) -> None:
     await action["plan"].put(described, final=True)
     await action["plan"].drain_and_close()
     flows = ", ".join(one["flow"] for one in described["flows"])
-    await _write_log(
-        action,
+    await action.log(
         f"Compiled {len(described['flows'])} flow(s): {flows}."
         f"\n\n{_fenced(source)}",
     )
@@ -397,8 +370,7 @@ async def flow_run(action: a11.Action) -> None:
     ports = ", ".join(sorted(outputs)) or "no outputs"
     filled = ", ".join(sorted(running.inputs))
     fed = f" The caller filled {filled}." if filled else ""
-    await _write_log(
-        action,
+    await action.log(
         f"Ran the flow `{plan.name}` ({ports}).{fed}\n\n{_fenced(source)}",
     )
 

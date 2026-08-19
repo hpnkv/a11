@@ -37,6 +37,8 @@ std::string_view StepKindName(StepKind kind) {
       return "cancel";
     case StepKind::kFail:
       return "fail";
+    case StepKind::kLog:
+      return "log";
     case StepKind::kCapture:
       return "capture";
     case StepKind::kForEach:

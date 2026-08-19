@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "The log chunk, once, for every language.",
+    "An action narrates what it is doing on one reserved output port, whose name",
+    "no schema declares: `port` below. What travels on it is an ordinary chunk --",
+    "the payload is the logged value in whatever media type it serialised to --",
+    "carrying a timestamp and the attributes named here. Nothing about the shape",
+    "is per-language, so a Kotlin consumer reads a C++ handler's logs and a",
+    "TypeScript one reads a flow's.",
+    "The attribute keys are unprefixed, unlike `a11-close` in status_chunk.json,",
+    "because they only ever appear on this port: there is no user metadata there",
+    "to collide with, and a consumer in another language reads them as the plain",
+    "words they are.",
+    "`internal` is the one boolean, and is spelled out rather than encoded: `true`",
+    "or `false`, and absent means false. `lineno` is decimal digits. Every other",
+    "attribute is free text.",
+    "`levels` is the whole set, quietest first. A level is not a status code and",
+    "not an Abseil severity: Abseil has no debug and its fatal ends the process,",
+    "so a reporter folds `debug` onto INFO and `critical` onto ERROR while the",
+    "level written here stays exact. A consumer that can tell them apart still",
+    "can.",
+    "Each language asserts these names against this file (C++",
+    "cpp/tests/action_log_test.cc, Python a11/actions/tests/test_action_log.py,",
+    "TypeScript js/test/action_log.test.mjs, Kotlin",
+    "kotlin/src/test/kotlin/a11/ActionLogTest.kt), so a divergence fails a test",
+    "instead of a conversation."
+  ],
+  "port": "__log__",
+  "levels": ["debug", "info", "warning", "error", "critical"],
+  "default_level": "info",
+  "level_aliases": {
+    "warn": "warning",
+    "fatal": "critical"
+  },
+  "attributes": {
+    "level": "level",
+    "internal": "internal",
+    "channel": "channel",
+    "file": "file",
+    "lineno": "lineno"
+  },
+  "internal_true": "true",
+  "internal_false": "false"
+}

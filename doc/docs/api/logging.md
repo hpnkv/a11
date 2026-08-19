@@ -82,6 +82,46 @@ a11.logging.sync()
 A11 follows absl-py's convention: a standard level under `DEBUG` selects an
 Abseil `VLOG` tier, so `logging.DEBUG - 1` enables `VLOG(2)`.
 
+## What actions log
+
+`Action.log` and `Action.logf` are a different thing from the two above. The
+bridge carries A11 telling you about *itself*; an action's log is the action
+telling you what it is *doing* -- part of the work, not of the runtime -- and it
+travels as chunks on a reserved port, so a caller across a wire receives it as
+data rather than as text on somebody else's stderr.
+
+```python
+await action.log("searching", channel="fetch")
+await action.logf("read %d of %d pages", done, total)
+await action.log({"hits": 12}, level="debug", internal=True)
+```
+
+Nothing declares that port, nothing drains it and nothing closes it; an action
+that never logs pays nothing for it. Only a *running* action may log -- before
+`run`, or on the calling side of a `call`, there is nothing to close the port and
+no reader waiting on it.
+
+What is consumed in this process becomes a record on the `a11.action` logger, so
+`setLevel`, `dictConfig` and your existing handlers apply. The chunk's whole
+description travels with it as record attributes -- `a11_action`, `a11_channel`,
+`a11_internal`, `a11_mimetype`, `a11_data` -- so a handler can filter on the
+channel or drop A11's internal lines without parsing the message back apart.
+
+`A11_ACTION_LOG=0` leaves them on the native log instead.
+[set_action_log_sink][a11.logging.set_action_log_sink] takes them somewhere else
+entirely. There is one sink rather than one per interested party, which is what
+keeps a line from being reported twice; a consumer that wants the chunks
+themselves calls `action.get_log_node()` instead, and that suppresses the sink
+for that action.
+
+In Flow the same log is two statements and two pipeline stages:
+
+```
+log warning "nothing worth reading"
+logf "read %s pages" read after search
+pages | log debug it -> kept
+```
+
 ## Escape hatch
 
 `A11_LOG_BRIDGE=0`, or `enable(bridge=False)`, leaves native entries on

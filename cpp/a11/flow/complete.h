@@ -33,6 +33,8 @@ enum class ProposalKind {
   kType,
   /// A canonical status code, as `fail` names one.
   kStatusCode,
+  /// A log level, as `log` and `logf` name one.
+  kLogLevel,
   /// `true`, `false`, `null`, `it`.
   kConstant,
   /// What a port says about itself: `stream`, `required`.

@@ -34,7 +34,6 @@ from a11.sdk.bash.manager import (
     get_shell_manager,
 )
 from a11.sdk.bash.prompt import get_system_prompt
-from a11.sdk.llm import USER_FACING_LOG_PORT
 from a11.sdk.bash.schemas import (
     SHELL_EXECUTE_SCHEMA,
     SHELL_EXIT_SCHEMA,
@@ -73,7 +72,6 @@ __all__ = [
     "SHELL_LIST_SCHEMA",
     "SHELL_START_SCHEMA",
     "ShellManager",
-    "USER_FACING_LOG_PORT",
     "get_shell_manager",
     "get_system_prompt",
     "register",

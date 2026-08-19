@@ -133,6 +133,18 @@
       "summary": "'headers' without the 'forward' that owns it."
     },
     {
+      "code": "flow.form.log-format",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'logf' written without a format to fill."
+    },
+    {
+      "code": "flow.form.log-value",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'log' written without anything to log."
+    },
+    {
       "code": "flow.form.missing-field",
       "family": "form",
       "severity": "error",
@@ -205,6 +217,18 @@
       "summary": "A 'fail' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
     },
     {
+      "code": "flow.form.unconditional-log",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'log' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+    },
+    {
+      "code": "flow.form.unconditional-logf",
+      "family": "form",
+      "severity": "error",
+      "summary": "A 'logf' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+    },
+    {
       "code": "flow.form.unknown-builtin",
       "family": "form",
       "severity": "error",
@@ -215,6 +239,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A value of a declared shape names a field the shape does not have."
+    },
+    {
+      "code": "flow.form.unknown-log-level",
+      "family": "form",
+      "severity": "error",
+      "summary": "A level a 'log' named that is not one of the five."
     },
     {
       "code": "flow.form.unknown-stage",

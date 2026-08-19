@@ -20,10 +20,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, overload
 
 from a11 import _native
+from a11.data import serialization
+from a11.data import types
 from a11._native_protocol import attach_protocol
 from a11.status import StatusException
 
@@ -33,11 +36,68 @@ from a11._native import ActionSettings
 # Native descriptors captured before ``attach_protocol`` overwrites them.
 _native_get_header = Action.get_header
 _native_run = Action.run
+_native_log_chunk = Action.log_chunk
 _native_settings = Action.__dict__["settings"]
 
 # Langfuse reads a span/observation's input and output from these attributes.
 _LANGFUSE_INPUT_ATTR = "langfuse.observation.input"
 _LANGFUSE_OUTPUT_ATTR = "langfuse.observation.output"
+
+
+def _caller_location(depth: int) -> tuple[str | None, int | None]:
+    """The file and line ``depth`` frames above this one.
+
+    So a log written by A11's own helpers points at the handler that wrote it
+    rather than at the helper: the location is what a consumer displays, and the
+    plumbing is never the interesting answer.
+    """
+    try:
+        frame = sys._getframe(depth + 1)
+    except ValueError:  # pragma: no cover -- shallower stack than expected
+        return None, None
+    return frame.f_code.co_filename, frame.f_lineno
+
+
+async def _log_value(
+    action: Action,
+    value: Any,
+    *,
+    level: str | None,
+    mimetype: str | None,
+    metadata: Mapping[str, bytes | str] | None,
+    channel: str | None,
+    internal: bool,
+    file: str | None,
+    lineno: int | None,
+) -> None:
+    """Turn ``value`` into a chunk and write it to the log port."""
+    if isinstance(value, types.Chunk):
+        if mimetype is not None:
+            raise ValueError(
+                "Cannot give a log mimetype for a chunk that already has one"
+            )
+        chunk = value
+    else:
+        registry = serialization.get_global_serialization_registry()
+        chunk = await registry.to_chunk_async(value, mimetype or "")
+    attributes = (
+        {
+            key: value.encode() if isinstance(value, str) else value
+            for key, value in metadata.items()
+        }
+        if metadata is not None
+        else None
+    )
+    _native_log_chunk(
+        action,
+        chunk,
+        level=level,
+        metadata=attributes,
+        channel=channel,
+        file=file,
+        lineno=lineno,
+        internal=internal,
+    )
 
 
 class _ActionDoneEvent:
@@ -188,6 +248,94 @@ class _ActionProtocol:
         if value is not None and decode:
             return value.decode()
         return value
+
+    async def log(
+        self,
+        value: Any,
+        *,
+        level: str | None = None,
+        mimetype: str | None = None,
+        metadata: Mapping[str, bytes | str] | None = None,
+        channel: str | None = None,
+        internal: bool = False,
+        file: str | None = None,
+        lineno: int | None = None,
+    ) -> None:
+        """Log ``value`` on the action's reserved log port.
+
+        The object becomes a chunk exactly as ``node.put(value)`` would make one
+        -- a ``str`` is ``text/plain``, ``bytes`` are
+        ``application/octet-stream``, anything else is JSON -- and the chunk
+        always carries a timestamp. Pass an already-built
+        [Chunk][a11.data.types.Chunk] to log it as it is.
+
+        Nobody declares the log port, nobody drains it and nobody closes it: the
+        action closes it with its other outputs, and a handler that never logs
+        pays nothing for it. Only a *running* action may log; logging before
+        ``run``, or on the calling side of a ``call``, raises.
+
+        Where it goes is the sink's business, which defaults to A11's own logger
+        (see [a11.logging][]). A consumer that wants the chunks themselves calls
+        `get_log_node`.
+
+        Args:
+            value: What to log.
+            level: One of `a11._native.LOG_LEVELS`; ``None`` is ``"info"``.
+            mimetype: Media-type hint for the serializer.
+            metadata: Extra chunk attributes, merged before the arguments above
+                -- so an explicit ``level`` wins over one written here.
+            channel: A label a consumer can filter on.
+            internal: Whether this is A11's own bookkeeping rather than
+                something an end user should be shown.
+            file: Source file to report; defaults to the caller's.
+            lineno: Source line to report; defaults to the caller's.
+        """
+        if file is None and lineno is None:
+            file, lineno = _caller_location(1)
+        await _log_value(
+            self,
+            value,
+            level=level,
+            mimetype=mimetype,
+            metadata=metadata,
+            channel=channel,
+            internal=internal,
+            file=file,
+            lineno=lineno,
+        )
+
+    async def logf(
+        self,
+        format: str,
+        /,
+        *args: Any,
+        level: str | None = None,
+        metadata: Mapping[str, bytes | str] | None = None,
+        channel: str | None = None,
+        internal: bool = False,
+        file: str | None = None,
+        lineno: int | None = None,
+    ) -> None:
+        """Log ``format % args`` -- percent-style, as `logging` formats.
+
+        ``await action.logf("read %d of %d pages", done, total)``. The
+        interpolation happens here rather than in a handler, so a message whose
+        level is filtered out still costs only the call. Everything else is
+        `log`'s.
+        """
+        if file is None and lineno is None:
+            file, lineno = _caller_location(1)
+        await _log_value(
+            self,
+            format % args if args else format,
+            level=level,
+            mimetype=None,
+            metadata=metadata,
+            channel=channel,
+            internal=internal,
+            file=file,
+            lineno=lineno,
+        )
 
     def set_span_input(self, value: Any) -> None:
         """Record this action span's input (Langfuse observation input)."""

@@ -39,7 +39,7 @@ absl::Status ActionHeaderSchema::Validate() const {
 absl::Status ActionSchema::Validate() const {
   ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   const absl::flat_hash_set<std::string_view> reserved = {
-      kActionStatusOutput, kActionDispatchStatusOutput};
+      kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput};
   for (const auto* ports : {&inputs, &outputs}) {
     for (const auto& [key, port] : *ports) {
       ABSL_RETURN_IF_ERROR(data::ValidateName(key));

@@ -104,6 +104,8 @@ std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
       return vocabulary::WordRole::kType;
     case ProposalKind::kStatusCode:
       return vocabulary::WordRole::kStatusCode;
+    case ProposalKind::kLogLevel:
+      return vocabulary::WordRole::kLogLevel;
     case ProposalKind::kConstant:
       return vocabulary::WordRole::kConstant;
     case ProposalKind::kPortModifier:
@@ -409,6 +411,12 @@ class Completer {
   void AddStatusCodes() {
     for (const std::string_view code : vocabulary::StatusCodes()) {
       Add(std::string(code), ProposalKind::kStatusCode);
+    }
+  }
+
+  void AddLogLevels() {
+    for (const std::string_view level : vocabulary::LogLevels()) {
+      Add(std::string(level), ProposalKind::kLogLevel);
     }
   }
 
@@ -1012,6 +1020,12 @@ class Completer {
       AddStatusCodes();
       return true;
     }
+    if (previous == "log" || previous == "logf") {
+      // A level, and then whatever a value may be: the level is optional, so
+      // both are offered rather than the level alone.
+      AddLogLevels();
+      return false;
+    }
     if (previous == "wait" || previous == "drain" || previous == "cancel" ||
         previous == "status") {
       ProposeSubjects();
@@ -1231,6 +1245,8 @@ std::string_view ProposalKindName(ProposalKind kind) {
       return "type";
     case ProposalKind::kStatusCode:
       return "status-code";
+    case ProposalKind::kLogLevel:
+      return "log-level";
     case ProposalKind::kConstant:
       return "constant";
     case ProposalKind::kPortModifier:

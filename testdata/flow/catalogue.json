@@ -93,12 +93,6 @@
           "name": "actions",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -119,12 +113,6 @@
           "name": "plan",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -160,12 +148,6 @@
           "name": "result",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -190,11 +172,6 @@
         {
           "description": "Which backend to route to, one of: claude, gemini, ollama.",
           "name": "x-a11-llm-provider",
-          "type": "string"
-        },
-        {
-          "description": "An AsyncNode that will be used to log messages helpful to the user.",
-          "name": "x-a11-user-log-node",
           "type": "string"
         },
         {
@@ -374,11 +351,6 @@
           "type": "string"
         },
         {
-          "description": "An AsyncNode that will be used to log messages helpful to the user.",
-          "name": "x-a11-user-log-node",
-          "type": "string"
-        },
-        {
           "description": "OpenTelemetry baggage header.",
           "name": "x-otel-baggage",
           "type": "string"
@@ -413,12 +385,6 @@
           "name": "output_lines",
           "type": "text/plain",
           "unary": false
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -431,15 +397,7 @@
           "type": "string"
         }
       ],
-      "name": "shell_exit",
-      "outputs": [
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
-        }
-      ]
+      "name": "shell_exit"
     },
     {
       "description": "List the ids of shells currently running in the caller's scope (the current Session, or the global scope when outside one).",
@@ -448,12 +406,6 @@
         {
           "description": "Id of each running shell in the caller's scope.",
           "name": "shell_ids",
-          "type": "text/plain",
-          "unary": false
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
           "type": "text/plain",
           "unary": false
         }
@@ -468,12 +420,6 @@
           "name": "shell_id",
           "required": true,
           "type": "text/plain"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },

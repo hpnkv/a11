@@ -30,7 +30,6 @@ import {
 import {
   BackendControls,
   DEFAULT_SERVER_URL,
-  USER_FACING_LOG_PORT,
   addBubble,
   addLine,
   announceTools,
@@ -217,7 +216,7 @@ export function colorFor(value: unknown, id: number): string | Status {
 // --- The actions the page serves ---------------------------------------------
 
 /**
- * A port per argument, and a `user_facing_log` on the ones that change something.
+ * A port per argument. Narration needs none: `log()` has its own.
  * That port is the tool's narration for the person watching: the backend keeps it
  * out of the model's result and records it with the turn.
  */
@@ -261,11 +260,6 @@ const SET_COLOR_SCHEMA = new ActionSchema({
       required: true,
       description: 'How many blobs changed colour.',
     }),
-    [USER_FACING_LOG_PORT]: new ActionPortSchema({
-      name: USER_FACING_LOG_PORT,
-      type: 'text/plain',
-      description: 'What the page did, for the person watching.',
-    }),
   },
 });
 
@@ -304,11 +298,6 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
       required: true,
       description: 'How many blobs moved.',
     }),
-    [USER_FACING_LOG_PORT]: new ActionPortSchema({
-      name: USER_FACING_LOG_PORT,
-      type: 'text/plain',
-      description: 'What the page did, for the person watching.',
-    }),
   },
 });
 
@@ -340,12 +329,16 @@ async function readAll(action: Action, port: string): Promise<unknown[]> {
   return values;
 }
 
-/** Write the tool's narration and close the port. */
+/**
+ * Narrate the run, to the page and to whoever called the tool.
+ *
+ * No port and nothing to close: `log()` writes to the action's own log, which the
+ * backend reads separately from the outputs, so a tool's account of itself can
+ * never turn up in the model's result.
+ */
 async function narrate(action: Action, text: string, onLog: (text: string) => void): Promise<void> {
   onLog(text);
-  const node = need(await action.getOutput(USER_FACING_LOG_PORT));
-  need(await node.putFinal(text));
-  need(await node.drainAndClose());
+  need(await action.log(text));
 }
 
 /**

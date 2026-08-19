@@ -4,6 +4,7 @@ import a11.sdk.getToolDefinitions
 import a11.valueOrThrow
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.curiositystack.a11.clion.tools.IdeTools
+import dev.curiositystack.a11.clion.tools.RUN_LOG_KEY
 
 /**
  * Verifies the IDE tools against a real (headless) platform fixture, exercising
@@ -75,14 +76,14 @@ class IdeToolsTest : BasePlatformTestCase() {
         }
     }
 
-    fun testEveryToolReportsAUserFacingRunLog() {
+    fun testNoToolDeclaresAPortForItsRunLog() {
+        // Narration is not a port. Every tool still reports what it did -- see
+        // [testRunLogsSummarizeWhatHappened] -- but it hands it back under
+        // [RUN_LOG_KEY] and the A11 handler logs it, so there is nothing in any
+        // schema for a model to be shown or a flow to name.
         for (name in IdeTools(project).listDescriptors().map { it["name"] as String }) {
-            val log = outputPorts(name).filter { it["user_facing"] == true }.single()
-            assertEquals("user_facing_log", log["name"])
-            assertEquals("text/plain", log["type"])
-            // One value or none, and never part of what the model is promised.
-            assertEquals(true, log["unary"])
-            assertEquals(false, log["required"])
+            assertTrue(name, outputPorts(name).none { it["user_facing"] == true })
+            assertTrue(name, outputPorts(name).none { it["name"] == RUN_LOG_KEY })
         }
     }
 
@@ -94,13 +95,13 @@ class IdeToolsTest : BasePlatformTestCase() {
             "rename_symbol",
             mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")),
         )
-        val log = renamed["user_facing_log"] as String
+        val log = renamed[RUN_LOG_KEY] as String
         // First line stands alone: it is all the folded box shows.
         assertEquals("Renamed bean → widget", log.lineSequence().first())
         assertTrue(log, log.contains("beans.xml") && log.contains("line 2"))
 
         val symbols = tools.runByName("get_file_symbols", emptyMap())
-        val symbolLog = symbols["user_facing_log"] as String
+        val symbolLog = symbols[RUN_LOG_KEY] as String
         assertTrue(symbolLog, symbolLog.lineSequence().first().startsWith("Found "))
         assertTrue(symbolLog, symbolLog.contains("- `root"))
     }
@@ -465,7 +466,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(0, metadata["first_line"])
         assertEquals(3, metadata["added"])
         assertEquals(3, metadata["removed"])
-        val log = done["user_facing_log"] as String
+        val log = done[RUN_LOG_KEY] as String
         assertTrue(log, log.lineSequence().first().startsWith("Patched patched.txt (1 hunk"))
         assertTrue(log, log.contains("```diff"))
 
@@ -664,7 +665,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(lines.sorted(), lines)
         for (highlight in highlights) assertNotNull(highlight["text"])
 
-        val log = all["user_facing_log"] as String
+        val log = all[RUN_LOG_KEY] as String
         assertTrue(log, log.lineSequence().first().startsWith("Found "))
         assertTrue(log, log.contains("broken.xml"))
     }

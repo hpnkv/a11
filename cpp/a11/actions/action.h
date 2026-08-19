@@ -24,6 +24,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <absl/base/thread_annotations.h>
@@ -33,8 +35,12 @@
 #include <absl/status/statusor.h>
 #include <absl/time/time.h>
 
+#include <absl/strings/str_format.h>
+
+#include "a11/actions/log.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
+#include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "a11/obs/span.h"
 #include "thread/boost_primitives.h"
@@ -205,6 +211,87 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetPort(std::string name);
   /** @brief Whether the schema declares a port named @p name. */
   [[nodiscard]] bool ContainsPort(std::string_view name) const;
+
+  /**
+   * @brief Logs @p value on the reserved ::kActionLogOutput port.
+   *
+   * The object is turned into a ::a11::data::Chunk the way
+   * ::a11::nodes::AsyncNode::Put would, with one deliberate difference: a
+   * string, a @c std::string_view, a string literal or a @c const @c char* is
+   * ::a11::data::kTextMimetype rather than ::a11::data::kBytesMimetype, because
+   * a log is text unless the caller says otherwise. @p options carries the
+   * level, the media type, the channel, the source location and any extra
+   * metadata; see a11::actions::LogOptions. The chunk's timestamp is always
+   * set.
+   *
+   * Only a running handler may log. Logging before Run, from the calling side
+   * of a Call, or after a cancellation that beat the start returns
+   * @c FailedPrecondition -- the log would have nowhere to go and no reader to
+   * close it. Nothing else about logging can fail the action: once the chunk is
+   * built, a transport or lifecycle failure is reported through the sink rather
+   * than returned, so an action never fails because it narrated itself.
+   *
+   * Where the log goes: always to the process's a11::actions::ActionLogSink,
+   * and additionally onto the log port when something could read it -- a peer
+   * is attached, or a local consumer claimed the port with GetLogNode. Nobody
+   * has to drain it and nobody has to close it; the action closes it with its
+   * other outputs.
+   *
+   * @param value Object to log.
+   * @param options Level, media type, channel, location and extra metadata.
+   * @return OK once the log has been reported, or an error when the action is
+   *         not running or @p value cannot be serialized.
+   */
+  template <typename T>
+  absl::Status Log(const T& value, const LogOptions& options = {});
+  /**
+   * @brief Logs an already-built chunk, keeping its mimetype and data.
+   *
+   * LogOptions::mimetype must be empty here: the chunk already says what it is,
+   * and two answers to that question is a bug rather than a precedence rule.
+   */
+  absl::Status Log(data::Chunk chunk, const LogOptions& options = {});
+  /**
+   * @brief Logs a formatted string, as ::absl::StrFormat would format it.
+   *
+   * @code
+   *   action->Logf("read %d of %d pages", done, total);
+   *   action->LogfWith({.level = "warning", .channel = "fetch"},
+   *                    "retrying %s", url);
+   * @endcode
+   *
+   * The format is checked at compile time, so it must be a literal or an
+   * ::absl::ParsedFormat; to log a string computed at runtime, use Log.
+   */
+  template <typename... Args>
+  absl::Status Logf(const absl::FormatSpec<Args...>& format,
+                    const Args&... args);
+  /**
+   * @brief Logs a formatted string with explicit options.
+   *
+   * A second name rather than a leading-LogOptions overload of Logf, because
+   * ::absl::FormatSpec has a catch-all constructor to diagnose a non-constexpr
+   * format: it makes @c Logf(options, ...) match both overloads, one better in
+   * its first argument and the other in its second, which is ambiguous. Keeping
+   * the format spec a direct parameter is what keeps the format checked at
+   * compile time, so the name gives way rather than the checking.
+   */
+  template <typename... Args>
+  absl::Status LogfWith(const LogOptions& options,
+                        const absl::FormatSpec<Args...>& format,
+                        const Args&... args);
+  /**
+   * @brief Returns the log port's node, claiming it for this consumer.
+   *
+   * Claiming suppresses the process sink for this action, so a consumer that
+   * presents the logs itself does not also have them reported twice. Claim
+   * before the action runs: logs written earlier have already gone to the sink.
+   *
+   * The node's stream is deliberately not bound. On the calling side a bound
+   * output tees what it receives straight back to the peer, which corrupts the
+   * connection for every later call on it.
+   */
+  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetLogNode();
 
   /** @brief Returns the wire ::a11::data::ActionMessage describing this action. */
   [[nodiscard]] data::ActionMessage GetActionMessage() const;
@@ -380,6 +467,10 @@ class Action : public std::enable_shared_from_this<Action> {
   // is only being materialised now, so a late reader sees the end of the stream.
   static absl::Status CloseUnwrittenOutput(
       const std::shared_ptr<nodes::AsyncNode>& node, const absl::Status& status);
+  // Applies `options` to `chunk`, reports it to the process sink, and writes it
+  // to the log port when anything could read it. The one place the log policy
+  // lives; the Log/Logf templates only build the chunk.
+  absl::Status WriteLog(data::Chunk chunk, const LogOptions& options);
   absl::Status CommunicateStatus(const absl::Status& status);
   absl::Status AbortInputs(const absl::Status& status);
   absl::Status SendNodeAbortStatuses(
@@ -438,6 +529,9 @@ class Action : public std::enable_shared_from_this<Action> {
   // carries the same terminal state as one closed in place.
   bool outputs_finished_ ABSL_GUARDED_BY(mu_) = false;
   absl::Status outputs_final_status_ ABSL_GUARDED_BY(mu_);
+  // Set once a consumer has taken the log port through GetLogNode(). It then
+  // owns presentation, so WriteLog stops reporting to the process sink.
+  bool log_claimed_ ABSL_GUARDED_BY(mu_) = false;
   std::optional<absl::Status> dispatch_status_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<a11::Promise<a11::Unit>> done_promise_ ABSL_GUARDED_BY(mu_);
   a11::Task done_future_ ABSL_GUARDED_BY(mu_);
@@ -452,6 +546,58 @@ class Action : public std::enable_shared_from_this<Action> {
   friend class ActionRegistry;
   friend class service::Session;
 };
+
+namespace internal {
+
+/**
+ * @brief Whether Action::Log reads a @c T as text rather than as bytes.
+ *
+ * C++ does not distinguish the two -- a @c std::string is a sequence of bytes,
+ * which is why ::a11::data::kBytesMimetype is what
+ * ::a11::nodes::AsyncNode::Put defaults a string to. A log is the case where
+ * the other reading is nearly always the intended one, so anything a
+ * @c std::string_view can be made from is text here: @c std::string,
+ * @c std::string_view, a literal, and @c const @c char*.
+ */
+template <typename T>
+inline constexpr bool kLogsAsText =
+    std::is_convertible_v<const T&, std::string_view>;
+
+}  // namespace internal
+
+template <typename T>
+absl::Status Action::Log(const T& value, const LogOptions& options) {
+  const data::SerializationRegistry& registry =
+      data::GlobalSerializationRegistry();
+  absl::StatusOr<data::Chunk> chunk;
+  if constexpr (internal::kLogsAsText<T>) {
+    // Normalised to std::string first: the registry has a codec for that, not
+    // for a pointer or an array of char.
+    const std::string text{std::string_view(value)};
+    chunk = registry.ToChunk<std::string>(
+        text, options.mimetype.empty() ? data::kTextMimetype
+                                       : options.mimetype);
+  } else {
+    chunk = registry.ToChunk<T>(value, options.mimetype);
+  }
+  if (!chunk.ok()) {
+    return chunk.status();
+  }
+  return WriteLog(*std::move(chunk), options);
+}
+
+template <typename... Args>
+absl::Status Action::Logf(const absl::FormatSpec<Args...>& format,
+                          const Args&... args) {
+  return Log(absl::StrFormat(format, args...), LogOptions{});
+}
+
+template <typename... Args>
+absl::Status Action::LogfWith(const LogOptions& options,
+                              const absl::FormatSpec<Args...>& format,
+                              const Args&... args) {
+  return Log(absl::StrFormat(format, args...), options);
+}
 
 }  // namespace a11::actions
 

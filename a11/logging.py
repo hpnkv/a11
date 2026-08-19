@@ -62,11 +62,20 @@ LOGGER_NAME = "a11"
 #: Logger carrying entries emitted by the C++ runtime.
 NATIVE_LOGGER_NAME = "a11.native"
 
+#: Logger carrying what actions log through ``Action.log``.
+#:
+#: A subtree of its own rather than `NATIVE_LOGGER_NAME`, because the two answer
+#: different questions: one is A11 telling you about itself, the other is an
+#: action telling you what it is doing. Filtering them apart is a `setLevel` on
+#: one name.
+ACTION_LOGGER_NAME = "a11.action"
+
 #: Level applied when nothing in the process has configured logging.
 DEFAULT_LEVEL = logging.WARNING
 
 _LEVEL_ENV = "A11_LOG_LEVEL"
 _BRIDGE_ENV = "A11_LOG_BRIDGE"
+_ACTION_ENV = "A11_ACTION_LOG"
 
 # Abseil severities, as the native sink reports them.
 _SEVERITY_INFO = 0
@@ -143,6 +152,108 @@ def _emit(
     record.created = unix_seconds
     record.msecs = (unix_seconds - int(unix_seconds)) * 1000.0
     logger.handle(record)
+
+
+#: Level names an action log carries, mapped onto the standard ones.
+_ACTION_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+def _is_textual(mimetype: str) -> bool:
+    """Whether a log payload of this media type reads as a line of characters.
+
+    Text and JSON do, so both print as themselves. Anything else is bytes, and a
+    log line is not the place to render a blob -- the payload still travels on
+    the record as ``a11_data`` for a handler that wants it.
+    """
+    if mimetype.startswith("text/"):
+        return True
+    media = mimetype.split(";", 1)[0]
+    return media == _native.JSON_MIMETYPE or media.endswith("+json")
+
+
+def _emit_action_log(
+    action_name: str,
+    action_id: str,
+    level: str,
+    channel: str,
+    file: str,
+    lineno: int | None,
+    internal: bool,
+    mimetype: str,
+    data: bytes,
+    unix_seconds: float,
+) -> None:
+    """Turn one action log into a record on the action logger.
+
+    Called by the C++ sink on whichever thread the action logged from. The whole
+    record travels as attributes rather than being folded into the message, so a
+    handler can filter on the channel or drop the internal ones without parsing
+    text back apart.
+    """
+    logger = logging.getLogger(ACTION_LOGGER_NAME)
+    resolved = _ACTION_LEVELS.get(level, logging.INFO)
+    if not logger.isEnabledFor(resolved):
+        return
+    if _is_textual(mimetype):
+        message = data.decode("utf-8", "replace")
+    else:
+        message = f"<{len(data)} bytes of {mimetype}>"
+    record = logger.makeRecord(
+        logger.name, resolved, file or "<flow>", lineno or 0, message, (), None
+    )
+    record.created = unix_seconds
+    record.msecs = (unix_seconds - int(unix_seconds)) * 1000.0
+    record.a11_action = action_name
+    record.a11_action_id = action_id
+    record.a11_channel = channel
+    record.a11_internal = internal
+    record.a11_mimetype = mimetype
+    record.a11_data = data
+    logger.handle(record)
+
+
+def _action_log_allowed() -> bool:
+    return os.environ.get(_ACTION_ENV, "").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+
+
+def _install_action_sink(enabled: bool) -> None:
+    """Take the action log sink, or hand it back to the native default.
+
+    One slot, not two consumers: the native default reports through Abseil,
+    which `_emit` already turns into Python records, so installing this
+    *beside* it would report every action log twice.
+    """
+    _native.set_action_log_sink(_emit_action_log if enabled else None)
+
+
+def set_action_log_sink(callback: Any | None = None) -> None:
+    """Route what actions log somewhere other than A11's own logger.
+
+    ``callback(action_name, action_id, level, channel, file, lineno, internal,
+    mimetype, data, unix_seconds)`` is called for each log an action writes and
+    nothing else consumes -- an action whose log port a consumer claimed does
+    not reach a sink at all. ``None`` restores the default, which is a record on
+    the `ACTION_LOGGER_NAME` logger (or, with ``A11_ACTION_LOG=0``, the native
+    log).
+
+    There is one slot rather than one sink per interested party, so a caller
+    that takes it takes it from whoever had it. Nothing is reported twice as a
+    result, which is the point.
+    """
+    if callback is None:
+        _install_action_sink(_action_log_allowed())
+        return
+    _native.set_action_log_sink(callback)
 
 
 def _push_native_level(level: int) -> None:
@@ -290,6 +401,7 @@ def _configure_from_context() -> int:
         level = _level_from_env() or DEFAULT_LEVEL
 
     _install_bridge(_bridge_allowed())
+    _install_action_sink(_action_log_allowed())
     _push_native_level(level)
     # Pinned only when the resolved level is not what inheritance already
     # gives, so a later basicConfig on the root logger still reaches A11.
@@ -303,6 +415,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "ACTION_LOGGER_NAME",
     "DEFAULT_LEVEL",
     "LOGGER_NAME",
     "NATIVE_LOGGER_NAME",
@@ -311,6 +424,7 @@ __all__ = [
     "get_level",
     "get_logger",
     "parse_level",
+    "set_action_log_sink",
     "set_level",
     "sync",
 ]

@@ -94,8 +94,8 @@ BINDING_VERBS = _keywords("run", "call", "try", "node", "wait", "drain")
 
 #: Words that open a statement.
 STATEMENTS = _keywords(
-    "let", "advance", "skip", "wait", "drain", "cancel", "fail", "if",
-    "for", "repeat", "until", "while", "else"
+    "let", "advance", "skip", "wait", "drain", "cancel", "fail", "log",
+    "logf", "if", "for", "repeat", "until", "while", "else"
 )
 
 #: Words that stand inside a statement without opening one.
@@ -109,8 +109,8 @@ MODIFIERS = _keywords(
 #: Every pipeline stage.
 STAGES = _keywords(
     "first", "last", "drop", "truncate", "batch", "group", "where", "map",
-    "match", "distinct", "then", "mime", "strformat", "chunk", "collect",
-    "count", "join", "text", "json", "packb"
+    "match", "distinct", "then", "log", "logf", "mime", "strformat",
+    "chunk", "collect", "count", "join", "text", "json", "packb"
 )
 
 #: The stages that may be written without their leading ``|``.
@@ -139,6 +139,9 @@ STATUS_CODES = _keywords(
     "out_of_range", "unimplemented", "internal", "unavailable",
     "data_loss", "unauthenticated"
 )
+
+#: The severities ``log`` and ``logf`` name.
+LOG_LEVELS = _keywords("debug", "info", "warning", "error", "critical")
 
 #: Literals that are words.
 CONSTANTS = _keywords("true", "false", "null")
@@ -233,6 +236,7 @@ class A11FlowLexer(RegexLexer):
             (_group(OPERATOR_WORDS), Operator.Word),
             (_group(BUILTINS) + r"(?=\s*\()", Name.Builtin),
             (_group(STATUS_CODES), Name.Constant),
+            (_group(LOG_LEVELS), Name.Constant),
             include("literal"),
             include("operator"),
             include("name"),

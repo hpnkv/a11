@@ -870,7 +870,7 @@ PortInfo ReadPort(const Masked& masked, std::string_view port_name,
 /// disagree about when: `{PORT: ..}` in Python is a dict whose key is whatever
 /// `PORT` holds, while `{text: ..}` in TypeScript is a property literally called
 /// `text` and `{[PORT]: ..}` is the variable form. Getting this wrong is not
-/// harmless -- it offers a port called `USER_FACING_LOG_PORT`, which is a port
+/// harmless -- it offers a port called `NARRATION_PORT`, which is a port
 /// that does not exist -- so a name that cannot be resolved gives nothing and the
 /// port is dropped.
 std::string KeyName(const Entry& entry, Language language,

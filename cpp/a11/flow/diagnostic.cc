@@ -79,6 +79,10 @@ constexpr std::array kCodes = {
              "the field holds."},
     CodeInfo{"flow.form.forward-headers", Family::kForm, Severity::kError,
              "'headers' without the 'forward' that owns it."},
+    CodeInfo{"flow.form.log-format", Family::kForm, Severity::kError,
+             "A 'logf' written without a format to fill."},
+    CodeInfo{"flow.form.log-value", Family::kForm, Severity::kError,
+             "A 'log' written without anything to log."},
     CodeInfo{"flow.form.missing-field", Family::kForm, Severity::kError,
              "A value of a declared shape leaves out a field the shape requires "
              "and gives no default for."},
@@ -113,12 +117,20 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.form.unconditional-fail", Family::kForm, Severity::kError,
              "A 'fail' at the top of a flow's body with no 'after': it runs at "
              "once rather than where it is written."},
+    CodeInfo{"flow.form.unconditional-log", Family::kForm, Severity::kError,
+             "A 'log' at the top of a flow's body with no 'after': it runs at "
+             "once rather than where it is written."},
+    CodeInfo{"flow.form.unconditional-logf", Family::kForm, Severity::kError,
+             "A 'logf' at the top of a flow's body with no 'after': it runs at "
+             "once rather than where it is written."},
     CodeInfo{"flow.form.unknown-builtin", Family::kForm, Severity::kError,
              "A function call naming something that is not one of the "
              "language's fixed functions."},
     CodeInfo{"flow.form.unknown-field", Family::kForm, Severity::kError,
              "A value of a declared shape names a field the shape does not "
              "have."},
+    CodeInfo{"flow.form.unknown-log-level", Family::kForm, Severity::kError,
+             "A level a 'log' named that is not one of the five."},
     CodeInfo{"flow.form.unknown-stage", Family::kForm, Severity::kError,
              "A pipeline stage the language does not have."},
     CodeInfo{"flow.form.unknown-status-code", Family::kForm, Severity::kError,

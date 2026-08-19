@@ -110,12 +110,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "actions",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -136,12 +130,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "plan",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -177,12 +165,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "result",
           "required": true,
           "type": "application/json"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -207,11 +189,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
         {
           "description": "Which backend to route to, one of: claude, gemini, ollama.",
           "name": "x-a11-llm-provider",
-          "type": "string"
-        },
-        {
-          "description": "An AsyncNode that will be used to log messages helpful to the user.",
-          "name": "x-a11-user-log-node",
           "type": "string"
         },
         {
@@ -391,11 +368,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "type": "string"
         },
         {
-          "description": "An AsyncNode that will be used to log messages helpful to the user.",
-          "name": "x-a11-user-log-node",
-          "type": "string"
-        },
-        {
           "description": "OpenTelemetry baggage header.",
           "name": "x-otel-baggage",
           "type": "string"
@@ -430,12 +402,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "output_lines",
           "type": "text/plain",
           "unary": false
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },
@@ -448,15 +414,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "type": "string"
         }
       ],
-      "name": "shell_exit",
-      "outputs": [
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
-        }
-      ]
+      "name": "shell_exit"
     },
     {
       "description": "List the ids of shells currently running in the caller's scope (the current Session, or the global scope when outside one).",
@@ -465,12 +423,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
         {
           "description": "Id of each running shell in the caller's scope.",
           "name": "shell_ids",
-          "type": "text/plain",
-          "unary": false
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
           "type": "text/plain",
           "unary": false
         }
@@ -485,12 +437,6 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "shell_id",
           "required": true,
           "type": "text/plain"
-        },
-        {
-          "description": "Narration of this call for the person watching: first line a one-sentence summary, the rest markdown detail. Not part of the tool result.",
-          "name": "user_facing_log",
-          "type": "text/plain",
-          "unary": false
         }
       ]
     },

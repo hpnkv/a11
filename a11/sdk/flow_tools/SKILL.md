@@ -44,7 +44,8 @@ Do not reach for one when a single tool call does the job, or when you need to *
 - **Order between two streams is `| then`.** Two statements writing to the same port interleave by arrival. When one lot has to come before another — a conversation's history before the new message — write `history | then asked -> port` and the flow reads them in that order.
 - **No arithmetic, no functions, no code.** Expressions read values, compare them, take them apart, and build new ones. That is the whole of it. If the task needs real computation, that is what an action is for.
 - **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is refused rather than quietly stopping after some number of passes and calling that success.
-- **`fail` and `cancel` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "..." after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
+- **`fail`, `cancel` and `log` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "..." after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
+- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" n after search` write to a log the flow already has: nothing declares it, nothing drains it, and it is not one of the outputs you pay for. As a stage, `| log` and `| logf "saw %s" it` say what is going past and pass every value on unchanged, which is the way to see into a pipeline without changing it.
 
 ## The language
 
@@ -66,15 +67,22 @@ flow NAME {
   N = node([ID]) [in MAP]                  # a stream of the flow's own
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
-  skip SOURCE                              # read to the end, keep nothing
+  skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
+  skip X                                   # every output of a call X
+  skip O[, O...] of X                      # just those outputs of X
+           # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
   cancel X                                 # ask X to stop
   fail [CODE] [MESSAGE]                    # end the flow with a status
-           # `fail` and `cancel` wait for nothing, so they go in an `if`
-           # or a loop body, or carry an `after`: at the top of a body
-           # they race every other statement, and are refused there
+  log [LEVEL] WHAT                         # write to the flow's own log
+  logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
+           # `fail`, `cancel` and `log` wait for nothing, so they go in an
+           # `if` or a loop body, or carry an `after`: at the top of a body
+           # they race every other statement, and are refused there.
+           # No port declares the log, nothing drains it, and a flow that
+           # never logs pays nothing for it
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
                                            # names take a tuple apart
   repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
@@ -180,7 +188,7 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
 STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
         group EXPR | then SOURCE | where EXPR | map EXPR | join "sep" |
         strformat "fmt" | mime "text/*" | collect | count | distinct | text |
-        json | packb
+        json | packb | log [LEVEL] [EXPR] | logf [LEVEL] "fmt" [ARG, ...]
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
       Text stops at a character boundary rather than splitting one. A value
@@ -189,6 +197,10 @@ STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
       then and where may drop the `|`: `history then asked`, `hits where
       it.ok`. Every other stage keeps it.
       strformat "fmt" is `map strformat(fmt, it)`, the one-value shorthand.
+      log and logf say what is going past and pass every value on unchanged,
+      so a stage may be dropped into a pipeline and taken out again without
+      touching what comes out of it. `| log` with nothing written logs the
+      value itself; otherwise `it` is the value in hand, as in a `map`.
       then SOURCE reads this stream and then that one, in that order --
       `history | then asked` is how a conversation keeps its turns straight,
       which two writers to one node cannot.

@@ -7,11 +7,12 @@ it reads the action's inputs and headers, calls the manager, and streams results
 back onto the action's output ports. All policy (scope caps, timeouts,
 validation, output processing, cleanup) lives in the manager.
 
-Each also narrates its run on the ``user_facing_log`` port, for whoever is
-showing the tool call to a person: the lifecycle handlers name the shell they
-acted on, and ``shell_execute`` names the command and how much came back. That
-port is kept out of the result the model is given; see
-:data:`a11.sdk.llm.USER_FACING_LOG_PORT`.
+Each also narrates its run through :meth:`a11.actions.action.Action.log`, for
+whoever is showing the tool call to a person: the lifecycle handlers name the
+shell they acted on, and ``shell_execute`` names the command and how much came
+back. None of it declares a port and none of it can reach the model -- the log
+port is not one of the action's outputs, and the tool runner reads it separately
+from them.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from absl import logging
 import a11
 from a11.sdk.bash.manager import ShellManager, get_shell_manager
 from a11.sdk.bash.schemas import SHELL_ID_HEADER, A11ShellExecuteParameters
-from a11.sdk.llm import USER_FACING_LOG_PORT
 from a11.status import Status, StatusCode
 
 #: How much of a command is quoted in a run log's summary line.
@@ -29,30 +29,6 @@ _COMMAND_SUMMARY_LIMIT = 72
 #: How many output lines a run log's detail reproduces, at each end.
 _LOG_HEAD_LINES = 12
 _LOG_TAIL_LINES = 4
-
-
-async def _write_log(action: a11.Action, log: str) -> None:
-    """Narrate this run on the user-facing log port, then close it.
-
-    The log is one whole value, so it is written as one *final* fragment: its
-    readers -- the LLM tool runner, a UI showing the run -- learn from the
-    marker that they have the complete narration rather than a prefix. An empty
-    log is terminated the only way an empty stream can be, with a null final;
-    both readers skip null chunks.
-
-    Best effort: a run log is worth nothing next to the tool's actual result, so
-    a port that will not take it (a caller that aborted it, say) does not fail
-    the call.
-    """
-    node = action[USER_FACING_LOG_PORT]
-    try:
-        if log:
-            await node.put(log, final=True)
-        else:
-            await node.put_null_final()
-        await node.drain_and_close()
-    except Exception:
-        logging.warning("failed to write the run log", exc_info=True)
 
 
 def _quote_command(command: str) -> str:
@@ -129,8 +105,7 @@ async def shell_start(
     await action["shell_id"].drain_and_close()
     in_session = action.get_session() is not None
     scope = "this session" if in_session else "the global scope"
-    await _write_log(
-        action,
+    await action.log(
         f"Started a shell.\n\nShell `{shell_id}`, scoped to {scope}. It keeps"
         " its working directory and environment until it is exited.",
     )
@@ -208,7 +183,7 @@ async def shell_execute(
         )
         if part
     )
-    await _write_log(action, f"{summary}\n\n{detail}" if detail else summary)
+    await action.log(f"{summary}\n\n{detail}" if detail else summary)
 
     if failure is not None:
         raise failure
@@ -225,7 +200,7 @@ async def shell_list(
     count = len(shell_ids)
     summary = f"Listed running shells — {count} of them."
     detail = "\n".join(f"- `{shell_id}`" for shell_id in shell_ids)
-    await _write_log(action, f"{summary}\n\n{detail}" if detail else summary)
+    await action.log(f"{summary}\n\n{detail}" if detail else summary)
 
 
 async def shell_exit(
@@ -235,8 +210,7 @@ async def shell_exit(
     manager = manager or get_shell_manager()
     shell_id = _required_shell_id(action)
     await manager.exit_shell(shell_id)
-    await _write_log(
-        action,
+    await action.log(
         f"Exited shell `{shell_id}`.\n\nIts process is gone; anything it held"
         " (working directory, environment, background jobs) is released.",
     )

@@ -8,17 +8,15 @@
  * Kotlin `IdeTools.buildRegistry()` handler shape (read the declared inputs, run
  * the tool, write its outputs back onto the declared output ports).
  *
- * One class of port never reaches the model: a descriptor may flag an output
- * `user_facing`, meaning it carries a run log for the person watching. Those
- * ports are written and announced like any other, and the gateway is what holds
- * them back — its bridge re-points a flagged port onto the canonical
- * `user_facing_log` name (`a11/gateway/tool_bridge.py`) and its LLM tool runner
- * drains that port, keeps it out of the model's tool result, and files it under
- * the tool call (`a11/sdk/llm_tools/runner.py`). Stripping there rather than here
- * is what lets the log be recorded with the conversation, so a replayed
- * transcript shows what a tool did and not merely that it ran. The values still
- * go to [ToolRunSink] as well, which is what the live UI renders — that path
- * needs no round trip.
+ * Narration never reaches the model, and is not a port. A tool returns it under
+ * [RUN_LOG_KEY] in its result map, and this writes it with `action.log()`: the
+ * log port is not in any schema, so there is nothing for the model's tool result
+ * to be built from. The gateway's LLM tool runner reads it separately from the
+ * outputs, keeps it out of that result, and files it under the tool call
+ * (`a11/sdk/llm_tools/runner.py`) — which is what lets the log be recorded with
+ * the conversation, so a replayed transcript shows what a tool did and not merely
+ * that it ran. The same values also go to [ToolRunSink], which is what the live UI
+ * renders; that path needs no round trip.
  */
 
 import {
@@ -33,7 +31,7 @@ import {
   type ToolDefinition,
 } from '@curiositystack/a11';
 
-import { runAction, type ActionDescriptor, type PortDescriptor } from './bridge.js';
+import { runAction, type ActionDescriptor } from './bridge.js';
 
 /** How long a handler waits for an input value the caller already sent. */
 const READ_TIMEOUT_MS = 5_000;
@@ -41,8 +39,28 @@ const READ_TIMEOUT_MS = 5_000;
 /** Notified when a tool runs, with the run log it produced (if any). */
 export type ToolRunSink = (run: { tool: string; log: string | null }) => void;
 
-/** Whether a port is the user's to see rather than part of the model contract. */
-const isUserFacing = (port: PortDescriptor): boolean => port.user_facing === true;
+/**
+ * The key a tool's result map carries its narration under.
+ *
+ * A key, not a port. Mirrors `vscode-plugin/src/tools/index.ts` and Kotlin's
+ * `IdeTools`; the three have to agree, which is why it is one string named here.
+ */
+export const RUN_LOG_KEY = 'run_log';
+
+/**
+ * A tool's narration as one block of text, or null when it wrote none.
+ *
+ * A tool may hand back a string or the lines of one; either reads as the log a
+ * person sees, and anything else is not narration at all.
+ */
+function asLogText(value: unknown): string | null {
+  if (typeof value === 'string') return value.length > 0 ? value : null;
+  if (Array.isArray(value)) {
+    const lines = value.filter((one): one is string => typeof one === 'string');
+    return lines.length > 0 ? lines.join('\n\n') : null;
+  }
+  return null;
+}
 
 function toSchema(descriptor: ActionDescriptor): ActionSchema {
   const inputs: Record<string, ActionPortSchema> = {};
@@ -149,10 +167,6 @@ async function writeOutputs(
         const put = await node.put(item, { final: index === values.length - 1 });
         if (!isOk(put)) return put;
       }
-      if (values.length === 0 && isUserFacing(port)) {
-        const end = await node.putNullFinal();
-        if (!isOk(end)) return end;
-      }
       return node.drainAndClose();
     }),
   );
@@ -161,7 +175,6 @@ async function writeOutputs(
 
 function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
   const name = descriptor.name;
-  const userFacing = descriptor.outputs.filter(isUserFacing);
   return async (action: Action): Promise<Status> => {
     const inputs = await readInputs(action, descriptor);
     let outputs: unknown;
@@ -178,12 +191,14 @@ function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
       );
     }
     const produced = outputs as Record<string, unknown>;
-    // The log goes straight to the UI, which is why the live transcript shows it
-    // without waiting for a round trip. It is *also* written to its port, where
-    // the backend picks it up for the conversation record and keeps it away from
-    // the model; see the note at the top of this file.
-    const log = userFacing.map((port) => produced[port.name]).find((value) => typeof value === 'string');
-    onRun?.({ tool: name, log: typeof log === 'string' ? log : null });
+    // Straight to the UI, which is why the live transcript shows it without
+    // waiting for a round trip — and onto the action's log, where the backend
+    // picks it up for the conversation record. Never onto a port: see the note at
+    // the top of this file.
+    const narration = produced[RUN_LOG_KEY];
+    const log = asLogText(narration);
+    onRun?.({ tool: name, log });
+    if (log !== null) await action.log(log);
     return writeOutputs(action, descriptor, produced);
   };
 }

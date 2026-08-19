@@ -64,6 +64,25 @@ enum class RefKind {
 /// vocabulary rather than being decided here: the stage table is the one table.
 /// `kAt` is the one stage the grammar has no spelling for -- it is what `x.field`
 /// and `x[0]` over a *stream* compile to, taking the field out of each value.
+/// What a resolved `log`/`logf` was written with, in a statement or a stage.
+///
+/// The resolved twin of [syntax::LogTail], and one struct for both places for
+/// the same reason: `log warning it.error` means the same thing wherever it
+/// stands, so the runtime reads it out of one shape.
+struct LogTail {
+  /// The level, canonically spelled, or empty for the default.
+  std::string level;
+  /// `logf`'s format. Empty and `has_format` false for a `log`.
+  std::string format;
+  bool has_format = false;
+  /// What to log, or what fills the format. Empty in a stage means `it`.
+  std::vector<ExprId> arguments;
+  /// The line it was written on, which the log carries so a consumer can point
+  /// at it. There is no path to go with it: a plan does not know where it was
+  /// read from, and a flow's name is not a file.
+  int line = 0;
+};
+
 struct Stage {
   std::string name;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
@@ -75,6 +94,8 @@ struct Stage {
   ExprId expr = kNone;
   /// `kStream`: the stream `then` reads after this one.
   RefId stream = kNone;
+  /// `kLog`/`kLogFormat`: what was written after the stage name.
+  LogTail log;
   /// Whether `at` was written as an index rather than a field name.
   bool indexed = false;
   long long index = 0;
@@ -160,6 +181,7 @@ enum class StepKind {
   kDrain,
   kCancel,
   kFail,
+  kLog,
   /// Remember a stream's first value for the loop that owns this body: what `<-`
   /// and an `until` condition compile to.
   kCapture,
@@ -228,6 +250,9 @@ struct Step {
   /// nothing in scope is called `not_found` -- and the runtime should not have to
   /// decide which of the two a bare word was. Where this is set, `code` is not.
   std::string code_name;
+
+  /// `kLog`: the level, the format and what fills it.
+  LogTail log;
 
   /// `kForEach`, `kRepeat`, `kIf`: the bodies nested here, in reading order. An
   /// `if` has two; the loops have one.
@@ -375,18 +400,18 @@ class GraphBuilder {
   /// Whether a stage yields one value per value it was given.
   ///
   /// Then one in gives one out. `map`, `at`, `truncate`, `text`, `json`, `packb`
-  /// and `strformat` reshape each value; `where`, `mime` and `distinct` may drop
+  /// and `strformat` reshape each value; `log` and `logf` reshape nothing and
+  /// pass each value straight on; `where`, `mime` and `distinct` may drop
   /// one, which is still at most one out per one in; `batch` and `group` gather
   /// several into a list, which is *fewer*, and `chunk` and `then` make more.
   /// Anything the language gains is assumed not to preserve the count until it
   /// says so, which is the safe direction.
   static bool StagePreservesCount(const Stage& stage) {
     static const auto* const kPerValue =
-        new absl::flat_hash_set<std::string>{"map",       "at",     "truncate",
-                                             "text",      "json",   "packb",
-                                             "strformat", "where",  "mime",
-                                             "distinct",  "first",  "last",
-                                             "drop"};
+        new absl::flat_hash_set<std::string>{
+            "map",  "at",       "truncate", "text", "json",     "packb",
+            "strformat", "where", "mime",   "distinct", "first", "last",
+            "drop", "log",      "logf"};
     return kPerValue->contains(stage.name);
   }
 

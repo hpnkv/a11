@@ -158,6 +158,7 @@ enum class NodeKind {
   kDrain,
   kCancel,
   kFail,
+  kLog,
   kForEach,
   kRepeat,
   kCarry,
@@ -308,6 +309,25 @@ struct Binary : NodeOf<NodeKind::kBinary> {
 
 // --- Pipelines ---------------------------------------------------------------
 
+/// What a `log` or `logf` was written with, wherever it was written.
+///
+/// One struct for the statement and the stage because they take the same thing:
+/// `log warning it.error` reads the same at the top of an `if` and after a `|`,
+/// and one shape is what keeps them from drifting into two dialects. `format` is
+/// empty for a `log` and holds the format for a `logf`; `arguments` is what
+/// fills it, and for a `log` holds at most the one value to log.
+struct LogTail {
+  /// The level as written, or empty for the default. See
+  /// [vocabulary::LogLevels].
+  Word level;
+  /// `logf`'s format, with escapes resolved. Empty for a `log`.
+  std::string format;
+  /// Whether a format was written at all, which tells `logf ""` from `log`.
+  bool has_format = false;
+  /// What to log, or what fills the format. `it` is bound inside a stage.
+  std::vector<NodePtr> arguments;
+};
+
 /// One `| name arg` stage of a pipeline.
 ///
 /// `takes` says which of the argument fields is the one that was filled, and is
@@ -324,6 +344,9 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `kExpression`: the expression, with `it` bound. `kStream`: the stream to
   /// read next.
   NodePtr argument;
+  /// `kLog`/`kLogFormat`: what was written after the stage name. The same shape
+  /// the statement of the same name carries.
+  LogTail log;
 };
 
 using StagePtr = std::unique_ptr<Stage>;
@@ -506,6 +529,13 @@ struct Cancel : NodeOf<NodeKind::kCancel> {
 struct Fail : NodeOf<NodeKind::kFail> {
   NodePtr code;
   NodePtr message;
+  std::vector<Word> after;
+};
+
+/// `log [level] [what]` / `logf [level] "format" [args]` -- write to the flow's
+/// own log.
+struct Log : NodeOf<NodeKind::kLog> {
+  LogTail tail;
   std::vector<Word> after;
 };
 

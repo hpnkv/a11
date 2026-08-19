@@ -76,6 +76,21 @@ nlohmann::json WordList(const std::vector<syntax::Word>& words) {
   return list;
 }
 
+/// The tail a `log`/`logf` statement and the stages of the same names share.
+///
+/// One shape in the envelope because it is one shape in the grammar: a reader
+/// that can display a logged line does not have to know which of the two it came
+/// from.
+nlohmann::json LogTailJson(const syntax::LogTail& tail) {
+  nlohmann::json value = nlohmann::json::object();
+  value["level"] = tail.level.Empty() ? nlohmann::json(nullptr)
+                                      : nlohmann::json(tail.level.text);
+  value["format"] = tail.has_format ? nlohmann::json(tail.format)
+                                    : nlohmann::json(nullptr);
+  value["arguments"] = NodeList(tail.arguments);
+  return value;
+}
+
 nlohmann::json DurationJson(const std::optional<absl::Duration>& duration) {
   if (!duration.has_value()) return nullptr;
   return nlohmann::json{{"$duration", absl::ToDoubleSeconds(*duration)}};
@@ -200,6 +215,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
         case vocabulary::StageArgument::kNone:
           value["arg"] = nullptr;
           break;
+        case vocabulary::StageArgument::kLog:
+        case vocabulary::StageArgument::kLogFormat:
+          value["arg"] = LogTailJson(stage->log);
+          break;
       }
       break;
     }
@@ -316,6 +335,12 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["code"] = NodeJson(fail->code.get());
       value["message"] = NodeJson(fail->message.get());
       value["after"] = WordList(fail->after);
+      break;
+    }
+    case syntax::NodeKind::kLog: {
+      const auto* log = syntax::As<syntax::Log>(node);
+      value["log"] = LogTailJson(log->tail);
+      value["after"] = WordList(log->after);
       break;
     }
     case syntax::NodeKind::kForEach: {

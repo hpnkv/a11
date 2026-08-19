@@ -117,6 +117,22 @@ class Classifier {
     return At(index_ + 1).IsWord() && At(index_ + 2).kind == TokenKind::kColon;
   }
 
+  /// Whether the word here is the start of a longer expression rather than a
+  /// word standing alone: `error.message`, `levels[0]`, `info(x)`.
+  ///
+  /// The same test the parser makes before reading a bare word after a `log` as
+  /// the level, so the colour and the meaning agree.
+  bool ExpressionContinues() const {
+    switch (At(index_ + 1).kind) {
+      case TokenKind::kDot:
+      case TokenKind::kLeftBracket:
+      case TokenKind::kLeftParen:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   /// Whether something a stage could apply to follows a bare `then`/`where`.
   bool OperandFollows() const {
     switch (At(index_ + 1).kind) {
@@ -304,6 +320,12 @@ class Classifier {
     }
     if (vocabulary::TypeNames().contains(word)) return SemanticKind::kType;
     if (vocabulary::IsStatusCode(word)) return SemanticKind::kStatusCode;
+    // A level is a level only directly after the word that takes one. Elsewhere
+    // `error` and `info` are names as ordinary as any other, and a port called
+    // one of them should not be coloured as a keyword.
+    if (after_log_ && vocabulary::IsLogLevel(word) && !ExpressionContinues()) {
+      return SemanticKind::kLogLevel;
+    }
     return SemanticKind::kIdentifier;
   }
 
@@ -317,9 +339,16 @@ class Classifier {
     }
     if (token.kind == TokenKind::kPipe) {
       after_pipe_ = true;
+      after_log_ = false;
       return;
     }
     if (token.kind != TokenKind::kNewline) after_pipe_ = false;
+    if (token.kind != TokenKind::kNewline) {
+      const std::string word = vocabulary::Canonical(token.text);
+      after_log_ = token.IsWord() && (word == "log" || word == "logf") &&
+                   (produced == SemanticKind::kStatementKeyword ||
+                    produced == SemanticKind::kStage);
+    }
 
     // A tag runs from its first word to the `{` that makes it one.
     if (state_ == State::kInTypeTag) {
@@ -447,6 +476,9 @@ class Classifier {
   State state_ = State::kDefault;
   bool after_dot_ = false;
   bool after_pipe_ = false;
+  /// Whether the word just seen was a `log`/`logf` keyword, which is the one
+  /// position a level word means a level. See [WordKind].
+  bool after_log_ = false;
   /// How many braces are open. Counted only so a field can be told from a value
   /// written inside one; nothing else here needs nesting.
   int braces_ = 0;
@@ -482,6 +514,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "type";
     case SemanticKind::kStatusCode:
       return "status-code";
+    case SemanticKind::kLogLevel:
+      return "log-level";
     case SemanticKind::kConstant:
       return "constant";
     case SemanticKind::kWordOperator:
@@ -523,7 +557,8 @@ SemanticKind SemanticKindFromName(std::string_view name) {
       SemanticKind::kDeclarationKeyword, SemanticKind::kStatementKeyword,
       SemanticKind::kModifierKeyword,   SemanticKind::kStage,
       SemanticKind::kBuiltin,           SemanticKind::kType,
-      SemanticKind::kStatusCode,        SemanticKind::kConstant,
+      SemanticKind::kStatusCode,        SemanticKind::kLogLevel,
+      SemanticKind::kConstant,
       SemanticKind::kWordOperator,      SemanticKind::kFlowName,
       SemanticKind::kActionName,        SemanticKind::kNodeMapName,
       SemanticKind::kMember,            SemanticKind::kPortName,

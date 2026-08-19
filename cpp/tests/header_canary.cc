@@ -20,6 +20,7 @@
  */
 
 #include "a11/actions/action.h"
+#include "a11/actions/log.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/callback_scheduler.h"

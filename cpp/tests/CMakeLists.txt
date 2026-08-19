@@ -26,6 +26,7 @@ add_executable(a11_core_test
   chunk_store_writer_test.cc
   async_node_test.cc
   action_test.cc
+  action_log_test.cc
   exception_boundary_test.cc
   service_test.cc
   session_test.cc

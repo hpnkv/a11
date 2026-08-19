@@ -2,7 +2,7 @@
 
 """The two things the tool runner does besides running tools.
 
-It keeps a tool's ``user_facing_log`` out of the result the model is shown and
+It keeps a tool's narration out of the result the model is shown and
 hands it back as that call's log, and it offers the model the actions registered
 on this side that the caller's allowed-tool patterns match.
 """
@@ -16,7 +16,6 @@ from a11.sdk.llm import (
     Interaction,
     LlmHeaders,
     TOOL_LOGS_METADATA_KEY,
-    USER_FACING_LOG_PORT,
 )
 from a11.sdk.llm_tools import runner
 
@@ -28,12 +27,7 @@ _ECHO_SCHEMA = ActionSchema(
             "word", "text/plain", typeinfo=str, unary=True, required=True
         )
     },
-    outputs={
-        "echoed": ActionPortSchema("echoed", "text/plain", required=True),
-        USER_FACING_LOG_PORT: ActionPortSchema(
-            USER_FACING_LOG_PORT, "text/plain", required=False
-        ),
-    },
+    outputs={"echoed": ActionPortSchema("echoed", "text/plain", required=True)},
 )
 
 
@@ -41,8 +35,11 @@ async def _echo(action: a11.Action) -> None:
     word = await action["word"].consume(str)
     await action["echoed"].put(word)
     await action["echoed"].drain_and_close()
-    await action[USER_FACING_LOG_PORT].put(f"Echoed `{word}`.")
-    await action[USER_FACING_LOG_PORT].drain_and_close()
+    # Narration: no port declares it and nothing here closes it.
+    await action.log(f"Echoed `{word}`.")
+    # And one the runner must leave out, because it is A11's own bookkeeping
+    # rather than something to show a person.
+    await action.log("resolved the shell", internal=True)
 
 
 def _registry() -> ActionRegistry:
@@ -66,7 +63,7 @@ def _call(call_id: str, word: str) -> Interaction:
 
 
 @pytest.mark.asyncio
-async def test_user_facing_log_is_taken_out_of_the_tool_result():
+async def test_narration_is_taken_out_of_the_tool_result():
     registry = _registry()
     executed: list[runner.ExecutedActions] = []
 
@@ -89,6 +86,8 @@ async def test_user_facing_log_is_taken_out_of_the_tool_result():
     executed = executed[0]
 
     assert executed.errors == {}
+    # The user-facing entry, and only it: "user facing" is the absence of the
+    # internal flag, so the bookkeeping line the handler also wrote is left out.
     assert executed.logs == {"call-1": "Echoed `hello`."}
     # The result the model is handed carries the tool's own output and nothing
     # from the log port.

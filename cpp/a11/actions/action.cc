@@ -14,6 +14,7 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/log/log.h>
 #include <absl/random/random.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
@@ -25,6 +26,7 @@
 #include <absl/time/time.h>
 
 #include "a11/actions/internal/exception_guarded_handlers.h"
+#include "a11/actions/log.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -534,6 +536,138 @@ bool Action::ContainsPort(std::string_view name) const {
   thread::MutexLock lock(&mu_);
   return input_ids_.find(std::string(name)) != input_ids_.end() ||
          output_ids_.find(std::string(name)) != output_ids_.end();
+}
+
+absl::Status Action::Log(data::Chunk chunk, const LogOptions& options) {
+  if (!options.mimetype.empty()) {
+    return absl::InvalidArgumentError(
+        "Cannot give a log mimetype for a chunk that already has one");
+  }
+  return WriteLog(std::move(chunk), options);
+}
+
+absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetLogNode() {
+  {
+    thread::MutexLock lock(&mu_);
+    log_claimed_ = true;
+  }
+  return GetOutput(std::string(kActionLogOutput), /*bind_stream=*/false);
+}
+
+absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
+  ABSL_ASSIGN_OR_RETURN(const LogLevel level, ParseLogLevel(options.level));
+  if (!chunk.metadata.has_value()) {
+    chunk.metadata.emplace();
+  }
+  if (chunk.metadata->mimetype.empty()) {
+    chunk.metadata->mimetype = std::string(data::kBytesMimetype);
+  }
+  // A status chunk on an ordinary node is a lifecycle marker rather than a
+  // value, and a peer receiving one aborts the node it arrived on. Logging one
+  // would therefore tear down the log port instead of filling it.
+  if (data::IsStatusChunk(chunk)) {
+    return absl::InvalidArgumentError(
+        "Cannot log a status chunk; log its message instead");
+  }
+  chunk.metadata->timestamp = absl::Now();
+  // The caller's map first, then the named options, so an explicit level wins
+  // over a "level" the same caller also put in the map.
+  if (options.metadata != nullptr) {
+    for (const auto& [key, value] : *options.metadata) {
+      ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(key, value));
+    }
+  }
+  ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+      std::string(kLogLevelAttribute), std::string(LogLevelName(level))));
+  ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+      std::string(kLogInternalAttribute),
+      std::string(options.internal ? kLogInternalTrue : kLogInternalFalse)));
+  if (!options.channel.empty()) {
+    ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+        std::string(kLogChannelAttribute), std::string(options.channel)));
+  }
+  if (!options.file.empty()) {
+    ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+        std::string(kLogFileAttribute), std::string(options.file)));
+  }
+  if (options.lineno.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        chunk.metadata->SetAttribute(std::string(kLogLinenoAttribute),
+                                     absl::StrCat(*options.lineno)));
+  }
+
+  std::string node_id;
+  std::string action_name;
+  std::string action_id;
+  bool claimed = false;
+  bool finished = false;
+  bool readable = false;
+  {
+    thread::MutexLock lock(&mu_);
+    // Only a running handler has a log port worth writing to: before Run
+    // there is nothing to close it, and on the calling side of a Call the port
+    // belongs to the peer that is executing the action.
+    if (mode_ != Mode::kRun) {
+      return absl::FailedPreconditionError(
+          "Only a running Action may log; a caller logs on its own action");
+    }
+    action_name = schema_.name;
+    action_id = id_;
+    claimed = log_claimed_;
+    finished = outputs_finished_;
+    // Nothing reads a local log port nobody claimed, so materialising it
+    // would buffer every line of a narrating action for the length of the run
+    // and then throw them away. A peer is always a reader: it mirrors the node.
+    readable = claimed || stream_ != nullptr || !session_.expired();
+    const auto found = output_ids_.find(std::string(kActionLogOutput));
+    if (found != output_ids_.end()) {
+      node_id = found->second;
+    }
+  }
+  if (!claimed) {
+    ReportLog(LogRecordFromChunk(chunk, action_name, action_id));
+  }
+  if (!readable || finished || node_id.empty()) {
+    return absl::OkStatus();
+  }
+
+  // From here on nothing is returned to the handler. A log that could not be
+  // written is a fault in the logging, not in the action, and the action is
+  // entitled to have narrated itself without that becoming its outcome.
+  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node = GetNode(node_id);
+  if (!node.ok()) {
+    LOG(WARNING) << "Could not open the log port of action " << action_name
+                 << ": " << node.status();
+    return absl::OkStatus();
+  }
+  const absl::Status attached = AttachStreamIfRequested(*node, /*bind=*/true);
+  if (!attached.ok()) {
+    LOG(WARNING) << "Could not attach the log port of action " << action_name
+                 << " to its peer: " << attached;
+  }
+  bool finished_now = false;
+  absl::Status final_status;
+  {
+    thread::MutexLock lock(&mu_);
+    output_nodes_.insert(*node);
+    finished_now = outputs_finished_;
+    final_status = outputs_final_status_;
+  }
+  // The node was created after the action published its terminal state, so
+  // FinishOutputNodes did not see it and nothing else will close it. Same
+  // handshake as GetOutput, and the same reason: a reader of an unclosed node
+  // waits forever.
+  if (finished_now) {
+    (void)CloseUnwrittenOutput(*node, final_status);
+    return absl::OkStatus();
+  }
+  const absl::StatusOr<std::uint32_t> written =
+      (*node)->PutChunk(std::move(chunk)).Await();
+  if (!written.ok()) {
+    LOG(WARNING) << "Could not write to the log port of action " << action_name
+                 << ": " << written.status();
+  }
+  return absl::OkStatus();
 }
 
 data::ActionMessage Action::GetActionMessage() const {
@@ -1187,7 +1321,7 @@ absl::Status Action::RemapDefaultPorts() {
     output_ids_.emplace(name, std::move(id));
   }
   for (const std::string_view name :
-       {kActionStatusOutput, kActionDispatchStatusOutput}) {
+       {kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput}) {
     ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
     output_ids_.emplace(std::string(name), std::move(id));
   }
@@ -1503,6 +1637,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   absl::flat_hash_map<std::string, std::shared_ptr<nodes::AsyncNode>> nodes;
   absl::flat_hash_set<std::string> ids;
   std::shared_ptr<nodes::NodeMap> node_map;
+  std::string log_id;
   bool remote = false;
   {
     thread::MutexLock lock(&mu_);
@@ -1520,6 +1655,9 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     for (const auto& [name, id] : output_ids_) {
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
         ids.insert(id);
+      }
+      if (name == kActionLogOutput) {
+        log_id = id;
       }
     }
     for (const auto& node : output_nodes_) {
@@ -1547,6 +1685,19 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
       } else if (*node != nullptr) {
         nodes.insert_or_assign(id, *node);
       }
+    }
+  }
+  // A graceful close only tees its end-of-stream marker to streams something
+  // attached, and nothing attaches the log port unless the handler logged. A
+  // caller that opted into reading logs would then wait forever on a silent
+  // action, so the attach happens here, where the node exists anyway. Only the
+  // log port: it is the one output a caller reads without the schema promising
+  // anything will be written to it.
+  if (remote && !log_id.empty()) {
+    const auto found = nodes.find(log_id);
+    if (found != nodes.end()) {
+      KeepFirstError(AttachStreamIfRequested(found->second, /*bind=*/true),
+                     &first);
     }
   }
   if (!status.ok()) {

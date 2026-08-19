@@ -176,6 +176,8 @@ skip-target := pipeline
             | name ("," name)* "of" name   # or "(" name ("," name)* [ "of" name ] ")"
             | "cancel" name
             | "fail" [expr [expr]]
+            | "log" [level] expr
+            | "logf" [level] string [expr ("," expr)*]
             | "for" name "in" pipeline ["parallel" number] block
             | "repeat" [name "=" expr] ["max" number] block
             | name "<-" pipeline
@@ -195,6 +197,8 @@ stage      := "first" n | "drop" n | "truncate" n | "batch" n | "group" expr
             | "then" source | "where" expr | "map" expr | "join" [string]
             | "strformat" string | "mime" string | "collect" | "count"
             | "distinct" | "text" | "json" | "packb"
+            | "log" [level] [expr] | "logf" [level] string [expr ("," expr)*]
+level      := "debug" | "info" | "warning" | "error" | "critical"
 type       := name ("." name)* ["[" type ("," type)* "]"] | string
 description := string | newline string   # alone on its line, at any indent
 string     := '"' ... '"' | '"""' ... '"""'   # the second may hold line breaks
@@ -369,9 +373,13 @@ flow NAME {
   S = drain NODE                           # end a node, and say how it ended
   cancel X                                 # ask X to stop
   fail [CODE] [MESSAGE]                    # end the flow with a status
-           # `fail` and `cancel` wait for nothing, so they go in an `if`
-           # or a loop body, or carry an `after`: at the top of a body
-           # they race every other statement, and are refused there
+  log [LEVEL] WHAT                         # write to the flow's own log
+  logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
+           # `fail`, `cancel` and `log` wait for nothing, so they go in an
+           # `if` or a loop body, or carry an `after`: at the top of a body
+           # they race every other statement, and are refused there.
+           # No port declares the log, nothing drains it, and a flow that
+           # never logs pays nothing for it
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
                                            # names take a tuple apart
   repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
@@ -477,7 +485,7 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
 STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
         group EXPR | then SOURCE | where EXPR | map EXPR | join "sep" |
         strformat "fmt" | mime "text/*" | collect | count | distinct | text |
-        json | packb
+        json | packb | log [LEVEL] [EXPR] | logf [LEVEL] "fmt" [ARG, ...]
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
       Text stops at a character boundary rather than splitting one. A value
@@ -486,6 +494,10 @@ STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
       then and where may drop the `|`: `history then asked`, `hits where
       it.ok`. Every other stage keeps it.
       strformat "fmt" is `map strformat(fmt, it)`, the one-value shorthand.
+      log and logf say what is going past and pass every value on unchanged,
+      so a stage may be dropped into a pipeline and taken out again without
+      touching what comes out of it. `| log` with nothing written logs the
+      value itself; otherwise `it` is the value in hand, as in a `map`.
       then SOURCE reads this stream and then that one, in that order --
       `history | then asked` is how a conversation keeps its turns straight,
       which two writers to one node cannot.

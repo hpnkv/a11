@@ -106,8 +106,7 @@ async def registry(toy_actions):
         await action["parameters"].consume(dict, allow_none=True)
         for line in (" M cpp/a11/flow/parser.cc", "?? scripts/", ""):
             await (await action["output_lines"].put(line))
-        for port in ("output_lines", "user_facing_log"):
-            await action[port].drain_and_close()
+        await action["output_lines"].drain_and_close()
 
     async def fake_mic(action: Action) -> None:
         await action["options"].consume(dict, allow_none=True)

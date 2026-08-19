@@ -13,7 +13,7 @@ from __future__ import annotations
 import a11
 
 #: A module constant, which is how a real schema names a shared port.
-USER_FACING_LOG_PORT = "user_facing_log"
+NARRATION_PORT = "narration"
 
 #: The name of the action below, bound to a name rather than written inline.
 NAMED_ELSEWHERE = "reads-its-name-from-a-constant"
@@ -55,8 +55,8 @@ PROSE = a11.ActionSchema(
     },
     outputs={
         "answer": a11.ActionPortSchema("answer", "text/plain"),
-        USER_FACING_LOG_PORT: a11.ActionPortSchema(
-            USER_FACING_LOG_PORT,
+        NARRATION_PORT: a11.ActionPortSchema(
+            NARRATION_PORT,
             "text/plain",
             description="Narration for the person watching.",
         ),
@@ -69,7 +69,7 @@ PROSE = a11.ActionSchema(
 FROM_CONSTANT = a11.ActionSchema(
     name=NAMED_ELSEWHERE,
     description="Names itself with a constant declared above.",
-    outputs={USER_FACING_LOG_PORT: a11.ActionPortSchema(USER_FACING_LOG_PORT, "text/plain")},
+    outputs={NARRATION_PORT: a11.ActionPortSchema(NARRATION_PORT, "text/plain")},
 )
 
 

@@ -15,6 +15,7 @@
 #include <absl/time/time.h>
 #include <pybind11/pybind11.h>
 
+#include "a11/actions/log.h"
 #include "python/bindings.h"
 #include "python/interop.h"
 
@@ -83,6 +84,40 @@ class PythonLogSink final : public absl::LogSink {
 std::unique_ptr<PythonLogSink>& InstalledSink() {
   static auto* sink = new std::unique_ptr<PythonLogSink>();
   return *sink;
+}
+
+// Forwards each action log to a Python callable. The same shape as the Abseil
+// bridge above and for the same reason: one sink slot, so a log is reported once.
+// Replacing this slot is what keeps Python from adding a *second* consumer of the
+// log port alongside the default, which would report every line twice.
+void SetActionLogSink(const py::object& callback) {
+  if (callback.is_none()) {
+    actions::SetActionLogSink(nullptr);
+    return;
+  }
+  py::object held = callback;
+  actions::SetActionLogSink([held = std::move(held)](
+                                const actions::LogRecord& record) {
+    if (InterpreterIsGoingAway()) {
+      return;
+    }
+    const PyGILState_STATE gil = PyGILState_Ensure();
+    try {
+      held(std::string(record.action_name), std::string(record.action_id),
+           std::string(actions::LogLevelName(record.level)),
+           std::string(record.channel), std::string(record.file),
+           record.lineno.has_value() ? py::cast(*record.lineno) : py::none(),
+           record.internal, std::string(record.mimetype),
+           py::bytes(record.data.data(), record.data.size()),
+           absl::ToDoubleSeconds(record.timestamp - absl::UnixEpoch()));
+    } catch (const py::error_already_set&) {
+      // A failure to log must never reach the code that was logging.
+      PyErr_Clear();
+    } catch (...) {
+      PyErr_Clear();
+    }
+    PyGILState_Release(gil);
+  });
 }
 
 void SetLogSink(const py::object& callback) {
@@ -169,6 +204,16 @@ void BindLogging(py::module_& module) {
       "line, message, unix_seconds)`, replacing any previously installed "
       "sink. None removes the sink. FATAL entries are never routed; Abseil "
       "writes those to stderr with a backtrace.");
+
+  module.def(
+      "set_action_log_sink", &SetActionLogSink, py::arg("callback"),
+      "Route what actions log to `callback(action_name, action_id, level, "
+      "channel, file, lineno, internal, mimetype, data, unix_seconds)`, "
+      "replacing the default, which reports each one through the native log. "
+      "None restores that default.\n\n"
+      "One slot rather than one consumer per language: the native default "
+      "already reaches Python through set_log_sink, so a Python sink installed "
+      "*beside* it would report every line twice.");
 }
 
 }  // namespace a11::python

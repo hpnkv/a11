@@ -399,6 +399,7 @@ contexts:
     - include: literals
     - include: builtins
     - include: status-codes
+    - include: log-levels
     - include: expression-keywords
     - include: names
 
@@ -557,6 +558,13 @@ contexts:
         ) {{kw_boundary}}
       scope: constant.language.status-code.a11flow
 
+  log-levels:
+    - match: |-
+        (?x) \b (
+          @LOG_LEVELS@
+        ) {{kw_boundary}}
+      scope: constant.language.log-level.a11flow
+
   literals:
     - match: '\b(@CONSTANTS@){{kw_boundary}}'
       scope: constant.language.a11flow
@@ -704,6 +712,7 @@ std::string Sublime() {
           {"@OPERATOR_WORDS@", Inline(operators)},
           {"@BUILTINS@", Wrapped(vocabulary::OrderedBuiltins(), "          ")},
           {"@STATUS_CODES@", Wrapped(vocabulary::StatusCodes(), "          ")},
+          {"@LOG_LEVELS@", Wrapped(vocabulary::LogLevels(), "          ")},
           {"@CONSTANTS@", Inline(constants)},
           {"@DURATION_UNITS@", absl::StrJoin(units, "|")},
       });
@@ -832,6 +841,9 @@ BUILTINS = @BUILTINS@
 #: The canonical status codes, which is what ``fail`` names.
 STATUS_CODES = @STATUS_CODES@
 
+#: The severities ``log`` and ``logf`` name.
+LOG_LEVELS = @LOG_LEVELS@
+
 #: Literals that are words.
 CONSTANTS = @CONSTANTS@
 
@@ -925,6 +937,7 @@ class A11FlowLexer(RegexLexer):
             (_group(OPERATOR_WORDS), Operator.Word),
             (_group(BUILTINS) + r"(?=\s*\()", Name.Builtin),
             (_group(STATUS_CODES), Name.Constant),
+            (_group(LOG_LEVELS), Name.Constant),
             include("literal"),
             include("operator"),
             include("name"),
@@ -1127,6 +1140,7 @@ std::string Pygments() {
           {"@BUILTINS@", Call(vocabulary::OrderedBuiltins(), "BUILTINS = ")},
           {"@STATUS_CODES@",
            Call(vocabulary::StatusCodes(), "STATUS_CODES = ")},
+          {"@LOG_LEVELS@", Call(vocabulary::LogLevels(), "LOG_LEVELS = ")},
           {"@CONSTANTS@", Call(constants, "CONSTANTS = ")},
           {"@DURATION_UNITS@", absl::StrJoin(units, "|")},
       });
@@ -1171,6 +1185,7 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
         {"include": "#statement"},
         {"include": "#modifier"},
         {"include": "#status-code"},
+        {"include": "#log-level"},
         {"include": "#constant"},
         {"include": "#word-operator"},
         {"include": "#member"},
@@ -1266,6 +1281,10 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
     "status-code": {
       "match": "\\b(@STATUS_CODES@)\\b",
       "name": "constant.other.status.a11flow"
+    },
+    "log-level": {
+      "match": "\\b(@LOG_LEVELS@)\\b",
+      "name": "constant.other.log-level.a11flow"
     },
     "constant": {
       "match": "\\b(@CONSTANTS@)\\b",
@@ -1399,6 +1418,7 @@ std::string VsCode() {
           {"@STATEMENTS@", Inline(statements)},
           {"@MODIFIERS@", Inline(modifiers)},
           {"@STATUS_CODES@", Inline(vocabulary::StatusCodes())},
+          {"@LOG_LEVELS@", Inline(vocabulary::LogLevels())},
           {"@CONSTANTS@", Inline(constants)},
           {"@OPERATOR_WORDS@", Inline(OperatorWords())},
       });

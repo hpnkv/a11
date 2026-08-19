@@ -93,6 +93,12 @@ struct CompleteResult {
   /// that filtered twice would drop what a fuzzy matcher would have kept.
   std::string prefix;
   /// Where that word starts, so an editor knows what a proposal replaces.
+  ///
+  /// **The caret itself when there is no partial word**, which makes
+  /// `[prefix_start, caret)` the range a proposal replaces in every case rather
+  /// than only when something has been typed. It defaulted to zero, and that
+  /// range is the whole document up to the caret: taking a proposal at a position
+  /// where nothing had been typed yet deleted everything in front of it.
   size_t prefix_start = 0;
 };
 

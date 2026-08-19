@@ -261,7 +261,7 @@ python scripts/flow_playground.py   # --check_only compiles without a microphone
 Nothing about the gateway changed to make that work. It was already serving these
 actions; the composition arrived as an argument.
 
-## …including by a model
+## ...including by a model
 
 A model with three tools and a task that needs all three calls them one at a
 time and reads every intermediate result on the way. It pays for each of them

@@ -100,6 +100,60 @@ async def test_import_failure_is_graceful(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unimportable_sdk_is_a_precondition(monkeypatch):
+    """An SDK that is installed but broken is still a precondition failure."""
+    module = types.ModuleType("a11.sdk._raises_on_use")
+
+    def bad_import(name):
+        raise RuntimeError("incompatible pydantic")
+
+    monkeypatch.setitem(sys.modules, "a11.sdk._raises_on_use", module)
+    monkeypatch.setattr(illm.importlib, "import_module", bad_import)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "claude",
+        illm._Provider("a11.sdk._raises_on_use", "x", "claude"),
+    )
+    with pytest.raises(StatusException) as excinfo:
+        await _run({LlmHeaders.PROVIDER.value: "claude"})
+    assert excinfo.value.status.code == StatusCode.FAILED_PRECONDITION
+    assert "incompatible pydantic" in excinfo.value.status.message
+
+
+def test_load_provider_rejects_an_unknown_name():
+    with pytest.raises(StatusException) as excinfo:
+        illm.load_provider("bogus")
+    assert excinfo.value.status.code == StatusCode.INVALID_ARGUMENT
+
+
+def test_load_provider_reports_a_missing_sdk(monkeypatch):
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "claude",
+        illm._Provider("a11.sdk._does_not_exist", "x", "claude"),
+    )
+    with pytest.raises(StatusException) as excinfo:
+        illm.load_provider("claude")
+    assert excinfo.value.status.code == StatusCode.FAILED_PRECONDITION
+    assert "pip install 'a11-kit[claude]'" in excinfo.value.status.message
+
+
+def test_load_provider_imports_an_available_backend(monkeypatch):
+    async def fake_handler(action):
+        pass
+
+    module = types.ModuleType("a11.sdk._fake_preload")
+    module.fake_handler = fake_handler
+    monkeypatch.setitem(sys.modules, "a11.sdk._fake_preload", module)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "claude",
+        illm._Provider("a11.sdk._fake_preload", "fake_handler", "claude"),
+    )
+    illm.load_provider("claude")
+
+
+@pytest.mark.asyncio
 async def test_text_output_and_thoughts_stream_through_router(monkeypatch):
     async def fake_handler(action):
         for token in ["Hel", "lo ", "world"]:

@@ -72,7 +72,7 @@ def _fenced(source: str) -> str:
     """A flow, fenced for the run log and cut if it is very long."""
     text = source.strip()
     if len(text) > _SOURCE_LOG_LIMIT:
-        text = text[:_SOURCE_LOG_LIMIT] + "\n…"
+        text = text[:_SOURCE_LOG_LIMIT] + "\n..."
     return f"```\n{text}\n```"
 
 

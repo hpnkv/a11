@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "//": "F5 from this folder. The idiomatic way to run the extension, and the one that cannot point at the wrong directory: `${workspaceFolder}` is this folder, whatever the shell was in.",
+      "name": "Run the A11 extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extensions",
+        "${workspaceFolder}/test/fixtures"
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: build:dev"
+    },
+    {
+      "name": "Run the integration test",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/test/runIntegration.mjs",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "npm: build"
+    }
+  ]
+}

@@ -317,7 +317,7 @@ async def run_on_the_gateway(url: str) -> None:
         quoted = await assistant["quote-the-pages"].invoke(
             {"question": "how do nodes and actions stream"}, **where
         )
-        print(f" {quoted['answer'][:70]}…)")
+        print(f" {quoted['answer'][:70]}...)")
         return
 
     print("answer:", answered["answer"])

@@ -51,7 +51,7 @@ flight, and their intermediate reports never cross the socket.
   </div>
   <div id="research-errors" class="a11-errors" role="alert" aria-live="polite"></div>
   <form id="research-form" class="a11-compose">
-    <input id="research-topic" aria-label="Topic" autocomplete="off" placeholder="A topic to research…">
+    <input id="research-topic" aria-label="Topic" autocomplete="off" placeholder="A topic to research...">
     <button type="submit">Research</button>
   </form>
   <div class="a11-panes">
@@ -113,11 +113,11 @@ flow deep-research {
 
 Four things in that are worth reading twice.
 
-**`for … parallel 3`** is the fan-out. The planner's `briefs` port is still open
+**`for ... parallel 3`** is the fan-out. The planner's `briefs` port is still open
 when the loop starts reading it, so an investigation begins as soon as its brief
 exists rather than after the plan is complete.
 
-**`nodes research { … }`** gives everything inside it a
+**`nodes research { ... }`** gives everything inside it a
 [node map][a11.nodes.async_node.NodeMap] of its own. The investigations' reports
 are written, read and dropped on the backend; the page that dispatched the flow
 is not sent three intermediate reports to get one report back.
@@ -130,7 +130,7 @@ things happened, and it is what the page shows while it waits.
 
 ## 2. A model call, in a language with no model in it
 
-`interact_with_llm` wants an `a11.sdk.llm.Interaction`, and a flow can make one: `TYPE{…}` names a type the host's
+`interact_with_llm` wants an `a11.sdk.llm.Interaction`, and a flow can make one: `TYPE{...}` names a type the host's
 serialization registry knows, and
 `to_chunk` makes the content it is built from.
 
@@ -138,7 +138,7 @@ serialization registry knows, and
 llm = run ask_model(
   interactions: brief | map a11.sdk.Interaction{
     role: "user",
-    system_instructions: [to_chunk("You are one of several research agents…")],
+    system_instructions: [to_chunk("You are one of several research agents...")],
     content: [to_chunk({
       role: "user",
       content: [{type: "text", text: join([
@@ -196,7 +196,7 @@ then on nothing can tell the composition from a handler:
 from a11 import flow
 
 program = flow.load("a11/demos/deep_research.flow")
-program.register_all(registry)  # deep-research, plan-research, investigate, …
+program.register_all(registry)  # deep-research, plan-research, investigate, ...
 ```
 
 ## 5. Calling it from the browser

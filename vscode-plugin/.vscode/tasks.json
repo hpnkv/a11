@@ -1,0 +1,7 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"type": "npm", "script": "build", "problemMatcher": []},
+    {"type": "npm", "script": "build:dev", "problemMatcher": []}
+  ]
+}

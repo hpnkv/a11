@@ -173,6 +173,108 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   EXPECT_EQ(branch->else_body[0]->kind, NodeKind::kFail);
 }
 
+TEST(FlowParser, SkipTakesSeveralSubjectsAndACallsOutputsByName) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in  our_input: string\n"
+      "  act1 = run action1(text: our_input)\n"
+      "  act2 = run action2(text: our_input)\n"
+      "  act3 = run action3(text: our_input)\n"
+      "  act4 = run action4(text: our_input)\n"
+      "  skip our_input,\n"
+      "    act1,\n"
+      "    (o1, o2) of act2,\n"
+      "    (o1, o2 of act3),\n"
+      "    act4.o1, act4.o2\n"
+      "}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  ASSERT_EQ(result.flows.size(), 1u);
+  const syntax::FlowDeclaration& flow = *result.flows.front();
+  ASSERT_EQ(flow.body.size(), 5u);
+  const auto* skip = As<syntax::Skip>(flow.body.back().get());
+  ASSERT_NE(skip, nullptr);
+  ASSERT_EQ(skip->targets.size(), 6u);
+
+  // `our_input`: an ordinary pipeline target.
+  EXPECT_NE(skip->targets[0].pipeline, nullptr);
+  EXPECT_TRUE(skip->targets[0].call.Empty());
+
+  // `act1`: a bare call name, which the parser leaves as an ordinary
+  // pipeline -- only the resolver knows it names a call.
+  EXPECT_NE(skip->targets[1].pipeline, nullptr);
+  EXPECT_EQ(As<syntax::Name>(skip->targets[1].pipeline->source.get())->name,
+            "act1");
+
+  // `(o1, o2) of act2`.
+  EXPECT_EQ(skip->targets[2].pipeline, nullptr);
+  EXPECT_EQ(skip->targets[2].call.text, "act2");
+  ASSERT_EQ(skip->targets[2].outputs.size(), 2u);
+  EXPECT_EQ(skip->targets[2].outputs[0].text, "o1");
+  EXPECT_EQ(skip->targets[2].outputs[1].text, "o2");
+
+  // `(o1, o2 of act3)`.
+  EXPECT_EQ(skip->targets[3].pipeline, nullptr);
+  EXPECT_EQ(skip->targets[3].call.text, "act3");
+  ASSERT_EQ(skip->targets[3].outputs.size(), 2u);
+  EXPECT_EQ(skip->targets[3].outputs[0].text, "o1");
+  EXPECT_EQ(skip->targets[3].outputs[1].text, "o2");
+
+  // `act4.o1`, `act4.o2`: ordinary dotted references.
+  EXPECT_NE(skip->targets[4].pipeline, nullptr);
+  EXPECT_EQ(skip->targets[4].pipeline->source->kind, NodeKind::kAttr);
+  EXPECT_NE(skip->targets[5].pipeline, nullptr);
+  EXPECT_EQ(skip->targets[5].pipeline->source->kind, NodeKind::kAttr);
+}
+
+TEST(FlowParser, SkipNamesAWholeOutputGroupWithNoParenthesesOnlyAsTheWholeStatement) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  act = run action(text: \"x\")\n"
+      "  skip o1, o2 of act\n"
+      "}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const auto* skip = As<syntax::Skip>(result.flows[0]->body.back().get());
+  ASSERT_NE(skip, nullptr);
+  ASSERT_EQ(skip->targets.size(), 1u);
+  EXPECT_EQ(skip->targets[0].call.text, "act");
+  ASSERT_EQ(skip->targets[0].outputs.size(), 2u);
+  EXPECT_EQ(skip->targets[0].outputs[0].text, "o1");
+  EXPECT_EQ(skip->targets[0].outputs[1].text, "o2");
+}
+
+TEST(FlowParser, SkipStillReadsAParenthesizedPipelineAsAPlainTarget) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in  rows: string stream\n"
+      "  skip (rows | count)\n"
+      "}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const auto* skip = As<syntax::Skip>(result.flows[0]->body.back().get());
+  ASSERT_NE(skip, nullptr);
+  ASSERT_EQ(skip->targets.size(), 1u);
+  ASSERT_NE(skip->targets[0].pipeline, nullptr);
+  EXPECT_TRUE(skip->targets[0].call.Empty());
+  EXPECT_EQ(skip->targets[0].pipeline->source->kind, NodeKind::kPipelineValue);
+}
+
+TEST(FlowParser, SkipStillTakesACountedSingleReference) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in  rows: string stream\n"
+      "  skip 1 rows\n"
+      "}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const auto* skip = As<syntax::Skip>(result.flows[0]->body.back().get());
+  ASSERT_NE(skip, nullptr);
+  ASSERT_EQ(skip->count, 1);
+  ASSERT_EQ(skip->targets.size(), 1u);
+  ASSERT_NE(skip->targets[0].pipeline, nullptr);
+}
+
 TEST(FlowParser, ANoteAboutTheOnlyPlaceAWordMeansTwoThings) {
   // `then` and `where` may go without their pipe; a word spelled like a stage
   // with nothing after it is a name.

@@ -90,7 +90,7 @@ def _tool_panel(block: PresentationBlock) -> RenderableType:
     body: RenderableType = (
         Text(block.text.rstrip())
         if block.text
-        else Text("running…", style="dim italic")
+        else Text("running...", style="dim italic")
     )
     return Panel(body, title=title, title_align="left", border_style="dim")
 

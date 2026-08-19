@@ -4,6 +4,7 @@
 #define A11_FLOW_NAVIGATE_H_
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "a11/flow/catalogue.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/syntax.h"
+#include "a11/flow/vocabulary.h"
 
 namespace a11::flow {
 
@@ -87,6 +89,14 @@ struct Description {
   /// Where it was declared, when it was declared in this document.
   bool has_definition = false;
   Range definition;
+  /// Where it was declared, when it was declared in *another* file and something
+  /// read that file: an action or a type the catalogue carries an origin for.
+  ///
+  /// Kept apart from [definition] rather than folded into it because the two
+  /// answer differently: a definition is a range in the document that was passed
+  /// in, and this is a path a host has to open. A frontend that treated them as
+  /// one would put the caret at line 12 of the wrong file.
+  std::optional<catalogue::Origin> origin;
 };
 
 /// What is at `offset`, and where it came from.
@@ -103,6 +113,18 @@ Description Describe(
 /// second copy of this is how the two came to disagree.
 std::string ActionMarkdown(const catalogue::ActionInfo& action);
 
+/// One port, written out as the Markdown a reader wants beside its name.
+///
+/// What the popup next to a half-typed argument shows. A completion list has one
+/// line per item and a port's description is prose, so the line carries a summary
+/// and this carries the whole of it -- which is the same split `ActionMarkdown`
+/// makes, and the reason both are here rather than in the completer: the answer to
+/// "what is this port for" should not depend on whether the caret is on the word
+/// or one character before it.
+std::string PortMarkdown(std::string_view name, std::string_view type,
+                         bool required, bool unary,
+                         std::string_view description);
+
 /// A flow of the document, written out the same way: what it does, then its
 /// ports and which direction each runs.
 std::string FlowMarkdown(const FlowPlan& flow);
@@ -110,18 +132,27 @@ std::string FlowMarkdown(const FlowPlan& flow);
 /// A struct, written out the same way: how many fields, then each of them.
 std::string ShapeMarkdown(const DtoPlan& shape);
 
-/// A pipeline stage, written out as reference: what it does, what it takes, how
-/// it behaves, and a line of Flow using it.
+/// One word or mark of the language, written out as reference: what it does,
+/// what it takes, how it behaves, and a line of Flow using it.
 ///
-/// Empty where the name is not a stage. The name may be written in either case,
-/// as the language allows: `TRUNCATE` is documented and shown as written.
+/// Empty where nothing documents the name. `role` says which position the name
+/// was read in, since a word can mean two things; where that role's table has no
+/// entry the other tables are asked, because a word set may list a word that a
+/// neighbouring set documents (`vocabulary::AnyDocumentation`).
+///
+/// The name may be written in either case, as the language allows: `TRUNCATE` is
+/// documented and shown as written.
+std::string WordMarkdown(std::string_view name, vocabulary::WordRole role);
+
+/// A pipeline stage, written out as reference.
+///
+/// [WordMarkdown] with the role fixed. Kept as a name of its own because the
+/// completer asks for a stage's text in several places, and because it is the
+/// pair of [BuiltinMarkdown]: a word can be both a stage and a function and they
+/// do different things, so whichever the caret is on is the one that answers.
 std::string StageMarkdown(std::string_view name);
 
 /// A built-in function, the same way.
-///
-/// Kept apart from [StageMarkdown] because a word can be both and they do
-/// different things: `| text` re-writes every value of a stream, `text(x)` one
-/// value. Whichever the caret is on is the one that answers.
 std::string BuiltinMarkdown(std::string_view name);
 
 /// The `format` field of the symbols envelope.

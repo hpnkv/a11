@@ -204,6 +204,11 @@ struct Step {
   /// `kSkip`: `skip n port`, which claims no reader slot -- the count is applied
   /// where the stream is produced and this step has nothing left to do.
   std::optional<long long> count;
+  /// `kSkip`: the call `skip act` named, when its real ports are not known here
+  /// (an action from a registry, not a sibling flow) so there is nothing to set
+  /// `source` to. Purely informational -- the runtime already drains every
+  /// output of a call that nothing reads, whether or not this step exists.
+  StepId call = kNone;
   /// `kCapture`: which slot of the enclosing loop it fills.
   std::string slot;
 

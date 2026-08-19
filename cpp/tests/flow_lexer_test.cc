@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include <absl/container/flat_hash_set.h>
+#include <absl/strings/ascii.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
@@ -283,6 +285,78 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
   EXPECT_EQ(vocabulary::BuiltinDocumentation("truncate"), nullptr);
 }
 
+TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
+  // The same contract as the stages and the functions, over every other word
+  // set: a statement, a declaration, a modifier, a type, a status code, a
+  // constant, a duration unit and a mark of punctuation each have reference
+  // text. This is what stops a form reaching a reader as its token's kind --
+  // "`|` — flow operator" was the whole of what a hover said about a pipe --
+  // and it is why adding a word to the grammar without writing what it does
+  // fails here rather than in an editor.
+  for (const vocabulary::WordRole role : vocabulary::WordRoles()) {
+    const std::string_view role_name = vocabulary::WordRoleName(role);
+    for (const std::string_view word : vocabulary::WordsOf(role)) {
+      // The role's own table, or whichever documents the word: a set may list a
+      // word a neighbouring set documents, which is deliberate. `stream` is in
+      // the declarations because a port declaration is where it is offered, and
+      // is documented as the port modifier it is.
+      const vocabulary::WordDoc* doc = vocabulary::Documentation(role, word);
+      if (doc == nullptr) doc = vocabulary::AnyDocumentation(word);
+      const std::string where = absl::StrCat(role_name, " '", word, "'");
+      ASSERT_NE(doc, nullptr) << where << " has no reference text";
+      EXPECT_FALSE(doc->summary.empty()) << where;
+      EXPECT_FALSE(doc->detail.empty()) << where;
+      EXPECT_FALSE(doc->example.empty()) << where;
+      // A summary is one sentence, and it is shown as one.
+      EXPECT_TRUE(absl::EndsWith(doc->summary, "."))
+          << where << ": " << doc->summary;
+      // `--` is never written in text a reader sees: a colon or an em dash.
+      for (const std::string_view text :
+           {doc->summary, doc->takes, doc->detail, doc->example}) {
+        EXPECT_EQ(text.find("--"), std::string_view::npos)
+            << where << ": " << text;
+      }
+      // The word appears in its own example, so the example is about the word
+      // rather than about something near it. Case-insensitively, because a
+      // status code is written `not_found` and shown `"NOT_FOUND"`.
+      EXPECT_NE(absl::AsciiStrToLower(doc->example)
+                    .find(absl::AsciiStrToLower(word)),
+                std::string::npos)
+          << where << ": " << doc->example;
+    }
+  }
+
+  // The form the request for all this named. Not "flow operator", which is the
+  // token's kind and was the whole answer before.
+  const vocabulary::WordDoc* pipe =
+      vocabulary::Documentation(vocabulary::WordRole::kSymbol, "|");
+  ASSERT_NE(pipe, nullptr);
+  EXPECT_EQ(pipe->summary, "Puts a stream through a stage.");
+  EXPECT_FALSE(pipe->takes.empty());
+
+  // A role answers for its own words and not for another's: `|` is not a
+  // statement, and `run` is not a mark.
+  EXPECT_EQ(vocabulary::Documentation(vocabulary::WordRole::kStatement, "|"),
+            nullptr);
+  EXPECT_EQ(vocabulary::Documentation(vocabulary::WordRole::kSymbol, "run"),
+            nullptr);
+  // And a word the language does not have is documented nowhere.
+  EXPECT_EQ(vocabulary::AnyDocumentation("flatten"), nullptr);
+}
+
+TEST(FlowVocabulary, EveryRoleHasItsOwnNameAndItsOwnWords) {
+  // The role names travel in `flow.vocabulary/v1`, so two roles sharing one
+  // would be two word sets arriving under one key.
+  absl::flat_hash_set<std::string_view> names;
+  for (const vocabulary::WordRole role : vocabulary::WordRoles()) {
+    EXPECT_TRUE(names.insert(vocabulary::WordRoleName(role)).second)
+        << vocabulary::WordRoleName(role) << " is used twice";
+    EXPECT_FALSE(vocabulary::WordsOf(role).empty())
+        << vocabulary::WordRoleName(role) << " lists no words";
+  }
+  EXPECT_EQ(names.size(), vocabulary::WordRoles().size());
+}
+
 TEST(FlowVocabulary, EveryStageSaysWhatItTakes) {
   for (const std::string_view stage : vocabulary::Stages()) {
     EXPECT_TRUE(vocabulary::StageTakes(stage).has_value()) << stage;
@@ -337,7 +411,7 @@ TEST(FlowLexer, ReadsRangesAndSpreadsWithoutBreakingNumbers) {
   // Longest wins: `...` is a spread, `..` a range, `.` a dot.
   EXPECT_EQ(absl::StrJoin(Dump("...x"), " "), "...:... word:x");
   EXPECT_EQ(absl::StrJoin(Dump("a.b"), " "), "word:a .:. word:b");
-  // `…` is *not* a second spelling. Two ways of writing one operator is two
+  // `...` is *not* a second spelling. Two ways of writing one operator is two
   // ways for a file to differ from one that means the same thing, and the one
   // that survives a chat window and a keyboard without the key is three dots.
   // It is still read as the spread it plainly meant, with the repair attached,

@@ -115,6 +115,99 @@ TEST(FlowComplete, ACallNamesASiblingFlowThenItsPorts) {
   EXPECT_EQ(question->type, "string");
 }
 
+TEST(FlowComplete, WhatAProposalReplacesIsThePartialWordAndNothingElse) {
+  // `[prefix_start, caret)` is what a frontend replaces with what it inserts, so
+  // with nothing typed yet it has to be *empty*. It defaulted to zero, which made
+  // that range the whole document up to the caret: taking any proposal at a
+  // position where no word had been started -- after a `(`, after a `|`, after a
+  // space, which is most of them -- deleted everything in front of it.
+  const auto replaced = [](std::string_view marked) {
+    const size_t caret = marked.find(kCaret);
+    const CompleteResult result = At(marked);
+    EXPECT_LE(result.prefix_start, caret)
+        << "a proposal would replace text after the caret";
+    return caret - result.prefix_start;
+  };
+
+  // Nothing typed: an empty range, wherever the caret is.
+  EXPECT_EQ(replaced(InOuter("  x = run inner(|CARET|)")), 0u);
+  EXPECT_EQ(replaced(InOuter("  q |CARET|")), 0u);
+  EXPECT_EQ(replaced(InOuter("  |CARET|")), 0u);
+  EXPECT_EQ(replaced("|CARET|"), 0u);
+
+  // A partial word: exactly that word, and its text says which.
+  const CompleteResult typing = At(InOuter("  x = run inner(que|CARET|)"));
+  EXPECT_EQ(typing.prefix, "que");
+  EXPECT_EQ(replaced(InOuter("  x = run inner(que|CARET|)")), 3u);
+  const CompleteResult stage = At(InOuter("  q | fir|CARET|"));
+  EXPECT_EQ(stage.prefix, "fir");
+  EXPECT_EQ(replaced(InOuter("  q | fir|CARET|")), 3u);
+}
+
+TEST(FlowComplete, AnArgumentIsOfferedWithWhatThePortIsFor) {
+  // The question somebody has inside a call's parentheses is "what goes here",
+  // and the answer is the port's description. It used to be dropped for exactly
+  // the ports that have to be written: `(required)` *replaced* the description
+  // rather than joining it, so the list said least about the arguments it was
+  // most important about.
+  constexpr std::string_view kDescribed =
+      "flow inner {\n"
+      "  in  topic:    string required \"What to research.\"\n"
+      "  in  depth:    integer \"How many passes; three when nothing says.\"\n"
+      "  in  findings: string stream required \"One report per investigation.\"\n"
+      "  out report:   string\n"
+      "  topic -> report\n"
+      "}\n"
+      "\n"
+      "flow outer {\n"
+      "  in  q: string\n"
+      "  out r: string\n"
+      "  x = run inner(|CARET|)\n";
+
+  // Required first, since those are the ones that have to be written.
+  EXPECT_EQ(Names(kDescribed),
+            (std::vector<std::string>{"topic", "depth", "findings"}));
+
+  const Proposal* topic = Find(kDescribed, "topic");
+  ASSERT_NE(topic, nullptr);
+  EXPECT_EQ(topic->insert, "topic: ");
+  // Both, and the description last: what it is for is the question, and whether
+  // it is required is the aside.
+  EXPECT_EQ(topic->tail, " (required) — What to research.");
+  EXPECT_EQ(topic->type, "string");
+  // The whole of it in the popup, since a list line holds one sentence.
+  EXPECT_NE(topic->documentation.find("What to research."), std::string::npos);
+  EXPECT_NE(topic->documentation.find("required"), std::string::npos);
+
+  // An optional port has no `(required)` to join, and still says what it is for.
+  const Proposal* depth = Find(kDescribed, "depth");
+  ASSERT_NE(depth, nullptr);
+  EXPECT_EQ(depth->tail, " How many passes; three when nothing says.");
+  EXPECT_NE(depth->documentation.find("optional"), std::string::npos);
+
+  // A stream is written differently from a single value, so the grey type says
+  // which -- and the popup spells it out.
+  const Proposal* findings = Find(kDescribed, "findings");
+  ASSERT_NE(findings, nullptr);
+  EXPECT_EQ(findings->type, "string stream");
+  EXPECT_NE(findings->documentation.find("a stream"), std::string::npos);
+
+  // A port already written on the line is not offered again.
+  constexpr std::string_view kPartly =
+      "flow inner {\n"
+      "  in  topic: string required \"What to research.\"\n"
+      "  in  depth: integer \"How deep.\"\n"
+      "  out report: string\n"
+      "  topic -> report\n"
+      "}\n"
+      "\n"
+      "flow outer {\n"
+      "  in  q: string\n"
+      "  out r: string\n"
+      "  x = run inner(topic: q, |CARET|)\n";
+  EXPECT_EQ(Names(kPartly), std::vector<std::string>{"depth"});
+}
+
 TEST(FlowComplete, ACallsPortsAndItsStatusFollowItsDot) {
   const std::string source =
       InOuter("  x = run inner(question: q)\n  x.|CARET|");

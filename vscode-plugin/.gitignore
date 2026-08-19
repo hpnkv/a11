@@ -1,0 +1,11 @@
+node_modules/
+# Both bundles, and the two files copied in beside them at build time: the shared
+# `index.html` and the generated grammars. Each is owned somewhere else -- the
+# grammars by `a11 flow syntax`, the HTML by ../webview -- so a copy here would be
+# a copy that drifts.
+dist/
+syntaxes/
+# The per-platform `a11-flow`, which is built rather than checked in.
+bin/
+*.vsix
+.vscode-test/

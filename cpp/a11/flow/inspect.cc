@@ -240,7 +240,10 @@ class Inspector {
         return;
       }
       case NodeKind::kSkip:
-        Pipeline(*syntax::As<syntax::Skip>(statement)->pipeline);
+        for (const syntax::SkipTarget& target :
+             syntax::As<syntax::Skip>(statement)->targets) {
+          if (target.pipeline != nullptr) Pipeline(*target.pipeline);
+        }
         return;
       case NodeKind::kCarry:
         Pipeline(*syntax::As<syntax::Carry>(statement)->pipeline);

@@ -17,3 +17,6 @@ CMakeUserPresets.json
 # checkout asking for submodules) fail on "No url found for submodule path".
 # Untracked now; keep a stray local checkout out of git's way.
 tools/vcpkg/
+
+vscode-plugin/dist/
+vscode-plugin/node_modules/

@@ -274,7 +274,14 @@ class FlowDeclarationHandler :
     ): Array<PsiElement>? {
         val file = source?.containingFile as? FlowPsiFile ?: return null
         val answer = FlowEngine.instance().definition(file.text, offset) ?: return null
-        if (answer["found"] != true) return null
+        if (answer["found"] != true) {
+            // Not a name of this document, which used to be the end of it. It may
+            // still be an action declared in one of the project's own files, and
+            // the language now says where: that is the one target that leaves the
+            // flow, and the reason an `ActionSchema` in a `.py` two directories
+            // away is a jump rather than a search.
+            return elsewhere(file, answer)
+        }
         @Suppress("UNCHECKED_CAST")
         val range = answer["range"] as? Map<String, Any?> ?: return null
         @Suppress("UNCHECKED_CAST")
@@ -292,5 +299,40 @@ class FlowDeclarationHandler :
         // since a token's range is never empty.
         if (target.textRange.containsOffset(offset)) return null
         return arrayOf(target)
+    }
+
+    /**
+     * The declaration an `origin` points at, in another file.
+     *
+     * The path is the one the scan was given, which is the project's own base
+     * path, so a relative one is resolved against it. A line and a column rather
+     * than an offset, because the answer travelled from a file this process never
+     * opened; the document is here now, so the offset is worked out from them.
+     */
+    private fun elsewhere(
+        file: FlowPsiFile,
+        answer: Map<String, Any?>,
+    ): Array<PsiElement>? {
+        @Suppress("UNCHECKED_CAST")
+        val origin = answer["origin"] as? Map<String, Any?> ?: return null
+        val path = origin["file"] as? String ?: return null
+        val project = file.project
+        val found = com.intellij.openapi.vfs.LocalFileSystem.getInstance().let { fs ->
+            fs.findFileByPath(path)
+                ?: project.basePath?.let { fs.findFileByPath("$it/$path") }
+        } ?: return null
+        val declared = PsiManager.getInstance(project).findFile(found) ?: return null
+        val line = (origin["line"] as? Number)?.toInt() ?: 1
+        val column = (origin["column"] as? Number)?.toInt() ?: 1
+        val document = com.intellij.psi.PsiDocumentManager.getInstance(project)
+            .getDocument(declared) ?: return arrayOf(declared)
+        val zeroLine = (line - 1).coerceIn(0, (document.lineCount - 1).coerceAtLeast(0))
+        val lineStart = document.getLineStartOffset(zeroLine)
+        val lineEnd = document.getLineEndOffset(zeroLine)
+        val at = (lineStart + (column - 1).coerceAtLeast(0)).coerceIn(lineStart, lineEnd)
+        // The element covering the declaration's own position, or the file itself
+        // where the host language has no PSI there. Either way the caret lands on
+        // the line, which is what somebody following the jump wanted.
+        return arrayOf(declared.findElementAt(at) ?: declared)
     }
 }

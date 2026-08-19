@@ -2,6 +2,7 @@
 
 #include "a11/flow/catalogue.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -60,6 +61,33 @@ nlohmann::json PortToJson(const PortInfo& port) {
   if (port.required) value["required"] = true;
   if (!port.unary) value["unary"] = false;
   return value;
+}
+
+/// Where an entry was declared, or `nullopt` where nothing said.
+///
+/// A file is what makes an origin worth having, so an entry naming a line and no
+/// file is read as saying nothing rather than as pointing at line 12 of
+/// somewhere.
+std::optional<Origin> OriginFromJson(const nlohmann::json& value) {
+  const auto found = value.find("origin");
+  if (found == value.end() || !found->is_object()) return std::nullopt;
+  Origin origin;
+  origin.file = Text(*found, "file");
+  if (origin.file.empty()) return std::nullopt;
+  if (const auto line = found->find("line");
+      line != found->end() && line->is_number_integer()) {
+    origin.line = line->get<int>();
+  }
+  if (const auto column = found->find("column");
+      column != found->end() && column->is_number_integer()) {
+    origin.column = column->get<int>();
+  }
+  return origin;
+}
+
+nlohmann::json OriginToJson(const Origin& origin) {
+  return nlohmann::json{
+      {"file", origin.file}, {"line", origin.line}, {"column", origin.column}};
 }
 
 nlohmann::json PortsToJson(const std::vector<PortInfo>& ports) {
@@ -194,6 +222,14 @@ std::vector<std::string> ActionInfo::PortNames(
   return names;
 }
 
+Catalogue Catalogue::Of(std::vector<ActionInfo> actions,
+                        std::vector<TypeInfo> types) {
+  Catalogue built;
+  built.actions_ = std::move(actions);
+  built.types_ = std::move(types);
+  return built;
+}
+
 Catalogue Catalogue::FromJson(const nlohmann::json& value) {
   Catalogue built;
   if (!value.is_object()) return built;
@@ -209,6 +245,7 @@ Catalogue Catalogue::FromJson(const nlohmann::json& value) {
       action.inputs = PortsFromJson(one, "inputs");
       action.outputs = PortsFromJson(one, "outputs");
       action.headers = PortsFromJson(one, "headers");
+      action.origin = OriginFromJson(one);
       built.actions_.push_back(std::move(action));
     }
   }
@@ -220,6 +257,7 @@ Catalogue Catalogue::FromJson(const nlohmann::json& value) {
       type.tag = Text(one, "tag");
       if (type.tag.empty()) continue;
       type.shape = ShapeFromJson(type.tag, one);
+      type.origin = OriginFromJson(one);
       built.types_.push_back(std::move(type));
     }
   }
@@ -234,12 +272,14 @@ nlohmann::json Catalogue::ToJson() const {
     if (!action.inputs.empty()) one["inputs"] = PortsToJson(action.inputs);
     if (!action.outputs.empty()) one["outputs"] = PortsToJson(action.outputs);
     if (!action.headers.empty()) one["headers"] = PortsToJson(action.headers);
+    if (action.origin.has_value()) one["origin"] = OriginToJson(*action.origin);
     actions.push_back(std::move(one));
   }
   nlohmann::json types = nlohmann::json::array();
   for (const TypeInfo& type : types_) {
     nlohmann::json one = ShapeToJson(type.shape);
     one["tag"] = type.tag;
+    if (type.origin.has_value()) one["origin"] = OriginToJson(*type.origin);
     types.push_back(std::move(one));
   }
   return nlohmann::json{{"format", kCatalogueFormat},

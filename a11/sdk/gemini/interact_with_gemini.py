@@ -69,7 +69,7 @@ def _content_to_steps(content: Any) -> list[dict[str, Any]]:
     """Normalize an interaction's content into a list of Interactions steps.
 
     User content — a bare string, a list of content parts (``{"type": "text",
-    ...}``, ``{"type": "image", ...}``, …), or a ``{"role", "content"}``
+    ...}``, ``{"type": "image", ...}``, ...), or a ``{"role", "content"}``
     envelope à la the Claude handler — becomes a single ``user_input`` step.
     Content that is already a list of steps (e.g. ``function_result`` steps
     produced from tool outputs) is passed through unchanged.

@@ -398,7 +398,7 @@ absl::StatusOr<Value> Coerce(const Value& value,
 /// message nobody can act on.
 ///
 /// A key the shape does not have is **dropped**, not refused: extra data is how
-/// `{…it, ..}` is useful, and a producer that sends more than a reader declared
+/// `{...it, ..}` is useful, and a producer that sends more than a reader declared
 /// has done nothing wrong. Writing such a key out by hand is a different thing
 /// and the resolver says so.
 absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,

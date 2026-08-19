@@ -974,12 +974,15 @@ class ParserImpl {
     return token.IsWord() && token.text == word;
   }
 
-  /// `skip pipeline`, or `skip n reference` for the first `n`.
+  /// `skip pipeline`, `skip n reference` for the first `n`, `skip a, b, c` for
+  /// several subjects, `skip act` for every output of a call, or `skip o1, o2
+  /// of act` / `skip (o1, o2) of act` for some of them.
   ///
   /// The counted form takes a reference rather than a pipeline because the count
   /// belongs to the node: it is the node's first `n` values that go unread, for
   /// every reader of it, which is not something a pipeline of one reader's own
-  /// could say.
+  /// could say. It stays single-subject: there is no one node a count over a
+  /// list of them would belong to.
   NodePtr ParseSkip(const Token& keyword) {
     auto skip = Make<syntax::Skip>(keyword);
     if (At(TokenKind::kNumber)) {
@@ -994,12 +997,110 @@ class ParserImpl {
       }
       auto pipeline = Make<syntax::Pipeline>(Current());
       pipeline->source = ParseReference();
-      skip->pipeline = std::move(pipeline);
+      syntax::SkipTarget target;
+      target.pipeline = std::move(pipeline);
+      skip->targets.push_back(std::move(target));
+    } else if (AtOutputGroupWithoutParens()) {
+      // `o1, o2 of act` with no parentheses claims the whole list: nothing
+      // marks where its names end, so it cannot share the statement with
+      // another target.
+      skip->targets.push_back(ParseOutputGroup(/*bracketed=*/false));
     } else {
-      skip->pipeline = ParsePipeline();
+      skip->targets.push_back(ParseSkipTarget());
+      while (AcceptToken(TokenKind::kComma)) {
+        SkipNewlines();
+        skip->targets.push_back(ParseSkipTarget());
+      }
     }
     skip->after = ParseAfter();
     return skip;
+  }
+
+  /// Whether the tokens ahead are `name (, name)* of`, unparenthesized -- the
+  /// one shape of an output group that has to be the entire `skip` list, since
+  /// without brackets nothing else says where its names stop.
+  bool AtOutputGroupWithoutParens() const {
+    if (!Current().IsWord()) return false;
+    size_t offset = 0;
+    while (true) {
+      if (Peek(offset).kind != TokenKind::kWord) return false;
+      ++offset;
+      if (Peek(offset).kind != TokenKind::kComma) break;
+      ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    }
+    return Peek(offset).IsWord() && Peek(offset).text == "of";
+  }
+
+  /// `(o1, o2) of act` and `(o1, o2 of act)`: which one is decided by whether
+  /// `of` shows up before or after the closing paren.
+  ///
+  /// `bracketed` says whether a leading `(` has to be consumed and a trailing
+  /// `)` expected; the unparenthesized form (`o1, o2 of act`) reuses the same
+  /// name-list reading with both off.
+  syntax::SkipTarget ParseOutputGroup(bool bracketed) {
+    syntax::SkipTarget target;
+    std::optional<Bracketed> brackets;
+    if (bracketed) {
+      Advance();  // '('
+      brackets.emplace(this);
+      SkipNewlines();
+    }
+    target.outputs.push_back(ExpectName("an output name"));
+    while (AcceptToken(TokenKind::kComma)) {
+      SkipNewlines();
+      target.outputs.push_back(ExpectName("an output name"));
+    }
+    SkipNewlines();
+    if (bracketed && AtWord("of")) {
+      // `(o1, o2 of act)`: the whole clause is inside the parentheses.
+      Advance();
+      target.call = ExpectName("the call these outputs belong to");
+      SkipNewlines();
+      Expect(TokenKind::kRightParen);
+      return target;
+    }
+    if (bracketed) Expect(TokenKind::kRightParen);
+    ExpectWord("of");
+    target.call = ExpectName("the call these outputs belong to");
+    return target;
+  }
+
+  /// One comma-separated item of an uncounted `skip`.
+  ///
+  /// A bare call name (`skip act`) parses as an ordinary pipeline, same as
+  /// any other name: only the resolver knows a name is a call rather than a
+  /// port, and that is where `skip act` becomes "every output of it" instead
+  /// of the call-as-stream error a plain reference would otherwise be.
+  syntax::SkipTarget ParseSkipTarget() {
+    if (At(TokenKind::kLeftParen) && LooksLikeParenthesizedOutputGroup()) {
+      return ParseOutputGroup(/*bracketed=*/true);
+    }
+    syntax::SkipTarget target;
+    target.pipeline = ParsePipeline();
+    return target;
+  }
+
+  /// Whether a `(` here opens an output group (`(o1, o2) of act` or
+  /// `(o1, o2 of act)`) rather than an ordinary parenthesized expression or
+  /// pipeline value (`(a | count)`), by looking past it without consuming
+  /// anything.
+  bool LooksLikeParenthesizedOutputGroup() const {
+    size_t offset = 1;  // past '('
+    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    if (Peek(offset).kind != TokenKind::kWord) return false;
+    while (true) {
+      if (Peek(offset).kind != TokenKind::kWord) return false;
+      ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+      if (Peek(offset).IsWord() && Peek(offset).text == "of") return true;
+      if (Peek(offset).kind != TokenKind::kComma) break;
+      ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    }
+    if (Peek(offset).kind != TokenKind::kRightParen) return false;
+    ++offset;
+    return Peek(offset).IsWord() && Peek(offset).text == "of";
   }
 
   /// `fail`, `fail thing`, or `fail code thing`.

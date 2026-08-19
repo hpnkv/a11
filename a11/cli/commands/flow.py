@@ -349,11 +349,19 @@ async def _run_highlight(args: argparse.Namespace) -> int:
     return 0
 
 
-#: The targets there are. A short list on purpose: an editor that can run a
-#: process reads the language directly (`a11-flow serve`), and only one that
-#: cannot -- a static grammar file, loaded by a highlighter with no way to call
-#: out -- needs a generated copy of the word lists at all.
-_TARGET_NAMES = ("sublime",)
+def _target_names() -> tuple[str, ...]:
+    """Every target the language generates a definition for.
+
+    Asked rather than listed. A target is a C++ decision -- the template and the
+    tables that fill it are there -- and a copy of the list here would be one more
+    thing to keep in step, which is the whole failure mode generating these files
+    exists to avoid. Only an editor that *cannot* call the language out needs one
+    of these at all: a static grammar file loaded by a highlighter with no way to
+    run a process.
+    """
+    from a11._native import flow as native_flow
+
+    return tuple(one["target"] for one in native_flow.syntax_targets())
 
 
 async def _run_syntax(args: argparse.Namespace) -> int:
@@ -366,7 +374,7 @@ async def _run_syntax(args: argparse.Namespace) -> int:
     """
     from a11._native import flow as native_flow
 
-    names = _TARGET_NAMES if args.target == "all" else (args.target,)
+    names = _target_names() if args.target == "all" else (args.target,)
     changed = 0
     written: list[str] = []
     for name in names:
@@ -561,6 +569,54 @@ async def _run_codes(args: argparse.Namespace) -> int:
     width = max(len(entry.code) for entry in diag.known_codes())
     for entry in diag.known_codes():
         print(f"{entry.code:<{width}}  {entry.severity:<12}  {entry.summary}")
+    return 0
+
+
+async def _run_scan(args: argparse.Namespace) -> int:
+    """Report the actions a project declares in its own source.
+
+    The catalogue tells the tools what the world contains, and until this the
+    world meant the SDK: an action somebody wrote this afternoon was not in it,
+    so hovering its name in a flow said nothing and there was nowhere to go. This
+    reads the project for ``ActionSchema`` declarations in Python, C++ and
+    TypeScript and prints them with the file and line each was written at.
+
+    What an editor runs on a workspace open, and what a CI step can diff to
+    notice an action that lost its description.
+    """
+    from a11._native import flow as native
+
+    payload = native.scan(list(args.paths))
+    if args.format in ("json", "sarif"):
+        _emit(payload)
+        return 0
+
+    actions = payload.get("actions", [])
+    width = max((len(one["name"]) for one in actions), default=0)
+    for one in actions:
+        origin = one.get("origin") or {}
+        where = f"{origin.get('file', '?')}:{origin.get('line', 0)}"
+        print(f"{one['name']:<{width}}  {where}")
+        description = one.get("description", "")
+        if description and not args.quiet:
+            print(f"  {description}")
+
+    # What was *not* read. A cap that applied itself silently would make a
+    # half-read tree look like a project with two actions in it.
+    scanned = payload.get("scanned", {})
+    for path in scanned.get("too_large", []):
+        print(f"skipped (too large): {path}", file=sys.stderr)
+    if scanned.get("reached_file_limit"):
+        print(
+            f"stopped after {scanned.get('files_read', 0)} files: some of the"
+            " tree was not read",
+            file=sys.stderr,
+        )
+    files = scanned.get("files_read", 0)
+    print(
+        f"{len(actions)} action{'' if len(actions) == 1 else 's'} in"
+        f" {files} file{'' if files == 1 else 's'}"
+    )
     return 0
 
 
@@ -801,7 +857,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     syntax.add_argument(
         "--target",
-        choices=(*_TARGET_NAMES, "all"),
+        choices=(*_target_names(), "all"),
         default="all",
         help="Which editor definition.",
     )
@@ -834,6 +890,39 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     _add_format(codes)
     codes.set_defaults(_flow_handler=_run_codes)
+
+    scan = subparsers.add_parser(
+        "scan",
+        help="The actions a project declares, read out of its source.",
+        description=(
+            "Reads each path -- a file or a directory -- for ActionSchema"
+            " declarations in Python, C++ and TypeScript, and reports every"
+            " action with the file and line it was declared at. The JSON form is"
+            " a flow.catalogue/v1 payload whose entries carry an 'origin', which"
+            " is what an editor folds into its context so that hovering a"
+            " project's own action shows what it does and 'go to declaration'"
+            " lands on it."
+            "\n\n"
+            "A tolerant textual read rather than a parser for three languages: a"
+            " schema written as a constructor call with literal arguments comes"
+            " back whole, one assembled statement by statement comes back with"
+            " thinner ports, and one whose name is computed at run time is not"
+            " found at all."
+        ),
+    )
+    scan.add_argument(
+        "paths",
+        nargs="+",
+        metavar="PATH",
+        help="Files or directories to read.",
+    )
+    scan.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Names and locations only, without each action's description.",
+    )
+    _add_format(scan)
+    scan.set_defaults(_flow_handler=_run_scan)
 
 
 FLOW_COMMAND = Command(

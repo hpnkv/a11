@@ -1,0 +1,8 @@
+# A flow with one thing wrong with it, for the integration test: the type is
+# misspelled, so the resolver reports an unknown type and the client shows it.
+flow broken {
+  in  question: strig required
+  out answer:   string
+
+  question -> answer
+}

@@ -180,7 +180,7 @@ The two paths differ only in the last mile:
 
 | Local | Remote |
 | --- | --- |
-| `a11.Action(SHOUT).bind_handler(shout)` | `registry.make_action("shout", stream=…, session=…)` |
+| `a11.Action(SHOUT).bind_handler(shout)` | `registry.make_action("shout", stream=..., session=...)` |
 | `.run()` — handler runs here | `.call()` — handler runs on the peer |
 
 The handler, schema, and port I/O are identical. That is why

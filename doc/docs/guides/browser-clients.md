@@ -34,7 +34,7 @@ client will send no more data while allowing already-sent work to drain.
     <section class="echo-chat" aria-label="Echo chat">
       <div id="echo-messages" class="echo-messages"></div>
       <form id="echo-form" class="echo-compose">
-        <input id="echo-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
+        <input id="echo-input" aria-label="Message" autocomplete="off" placeholder="Say something...">
         <button type="submit">Send</button>
       </form>
     </section>

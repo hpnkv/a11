@@ -35,7 +35,7 @@ enum class TokenKind {
   kDot,
   /// `..` -- the range between two bounds, either of which may be left out.
   kRange,
-  /// `...` or `…` -- everything the thing after it holds, spread in here.
+  /// `...` or `...` -- everything the thing after it holds, spread in here.
   kSpread,
   kArrow,
   kCarry,

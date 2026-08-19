@@ -57,7 +57,7 @@ def make_title(interaction: llm.Interaction) -> str:
         return _UNTITLED
     if len(text) <= TITLE_LIMIT:
         return text
-    return text[: TITLE_LIMIT - 1].rstrip() + "…"
+    return text[: TITLE_LIMIT - 1].rstrip() + "..."
 
 
 class ConversationIndex:

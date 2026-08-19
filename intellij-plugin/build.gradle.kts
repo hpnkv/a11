@@ -95,23 +95,42 @@ intellijPlatform {
 }
 
 // Builds the JCEF webview bundle (chat + action explorer) into plugin resources.
-// It first builds the local TypeScript A11 library (`../js`) that the webview
-// depends on, then bundles the webview with esbuild. Requires Node.js >= 20.
+//
+// The UI itself is `../webview`, shared with the VSCode extension: the same chat,
+// action explorer, conversation list and markdown renderer, behind the six-method
+// bridge in `webview/src/bridge.ts`. What is in `webview/` *here* is this host's
+// half — the entry point that installs the JCEF bridge — and the bundling.
+//
+// Three installs and a build, because the shared package owns the UI's own
+// dependencies (`marked`, the TypeScript A11 client) and esbuild resolves them
+// from where the importing file lives. Requires Node.js >= 20.
 val buildWebview by tasks.registering(Exec::class) {
     group = "build"
     description = "Build the JCEF webview bundle into src/main/resources/webview/app.js."
     workingDir = layout.projectDirectory.asFile
     inputs.dir(layout.projectDirectory.dir("webview/src"))
     inputs.file(layout.projectDirectory.file("webview/package.json"))
+    inputs.dir(layout.projectDirectory.dir("../webview/src"))
+    inputs.file(layout.projectDirectory.file("../webview/package.json"))
+    inputs.file(layout.projectDirectory.file("../webview/index.html"))
     inputs.dir(layout.projectDirectory.dir("../js/src"))
     inputs.file(layout.projectDirectory.file("../js/package.json"))
     outputs.file(layout.projectDirectory.file("src/main/resources/webview/app.js"))
+    outputs.file(layout.projectDirectory.file("src/main/resources/webview/index.html"))
     // Install dependencies only when missing (first build / CI); otherwise just
     // run the local, offline builds so the task never needs the network.
+    //
+    // `index.html` is copied rather than duplicated: it carries the theme
+    // variables both hosts substitute into, so it belongs with the UI it styles
+    // and is placed here because `A11WebView` loads it off the classpath.
     commandLine(
         "bash", "-c",
         "[ -d ../js/node_modules ] || npm --prefix ../js ci; npm --prefix ../js run build && " +
-            "{ [ -d webview/node_modules ] || npm --prefix webview ci; }; npm --prefix webview run build",
+            "{ [ -d ../webview/node_modules ] || npm --prefix ../webview ci; }; " +
+            "{ [ -d webview/node_modules ] || npm --prefix webview ci; }; " +
+            "npm --prefix webview run build && " +
+            "mkdir -p src/main/resources/webview && " +
+            "cp ../webview/index.html src/main/resources/webview/index.html",
     )
 }
 

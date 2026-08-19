@@ -468,7 +468,7 @@ class InteractionAdapter(metaclass=abc.ABCMeta):
 # --- Cross-backend interaction normalization ---------------------------------
 #
 # Different LLM backends persist an interaction's `content` in their own native
-# shape (Anthropic message blocks, Gemini interaction steps, …). When a
+# shape (Anthropic message blocks, Gemini interaction steps, ...). When a
 # conversation is handed from one backend to another mid-flight, the receiving
 # backend cannot read the other's native content directly. To bridge them each
 # interaction is tagged (in `backend_specific_metadata`) with the backend that

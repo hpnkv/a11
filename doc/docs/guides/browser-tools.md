@@ -54,7 +54,7 @@ palette". The right pane logs every call the page served, including each tool's
         <canvas id="tools-canvas" width="620" height="300" aria-label="Five coloured blobs"></canvas>
       </div>
       <form id="tools-form" class="a11-compose">
-        <input id="tools-input" aria-label="Instruction" autocomplete="off" placeholder="Make blob 2 red and move it left…">
+        <input id="tools-input" aria-label="Instruction" autocomplete="off" placeholder="Make blob 2 red and move it left...">
         <button type="submit">Send</button>
       </form>
     </section>

@@ -26,8 +26,8 @@ namespace a11::flow {
 /// {"id": 1, "method": "check", "source": "flow t { }", "path": "t.flow"}
 /// ```
 ///
-/// and the answer is `{"id": 1, "ok": true, "result": {…}}` with the envelope the
-/// method produces, or `{"id": 1, "ok": false, "error": {"message": "…"}}` when
+/// and the answer is `{"id": 1, "ok": true, "result": {...}}` with the envelope the
+/// method produces, or `{"id": 1, "ok": false, "error": {"message": "..."}}` when
 /// the request itself made no sense. A *flow* that makes no sense is not an
 /// error: it answers with diagnostics, which is the whole point.
 ///

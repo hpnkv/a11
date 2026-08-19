@@ -171,7 +171,9 @@ statement  := [name "="] call
             | [name "="] "wait" reference ["timeout" duration]
             | [name "="] "drain" reference
             | pipeline "->" reference ("," reference)*
-            | "skip" (pipeline | number reference)
+            | "skip" (number reference | skip-target ("," skip-target)*)
+skip-target := pipeline
+            | name ("," name)* "of" name   # or "(" name ("," name)* [ "of" name ] ")"
             | "cancel" name
             | "fail" [expr [expr]]
             | "for" name "in" pipeline ["parallel" number] block
@@ -358,8 +360,11 @@ flow NAME {
   N = node([ID]) [in MAP]                  # a stream of the flow's own
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
-  skip SOURCE                              # read to the end, keep nothing
+  skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
+  skip X                                   # every output of a call X
+  skip O[, O...] of X                      # just those outputs of X
+           # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
   cancel X                                 # ask X to stop

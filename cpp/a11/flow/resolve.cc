@@ -1017,38 +1017,13 @@ class FlowResolver {
       }
       case NodeKind::kSkip: {
         const auto* skip = syntax::As<syntax::Skip>(statement);
-        const Ref source = ResolvePipeline(*skip->pipeline, scope);
-        if (skip->count.has_value() && !source.has_front) {
-          Report("flow.sequence.skip-count-target",
-                 absl::StrCat("'skip ", *skip->count,
-                              "' takes a port or a node, and ", source.label,
-                              " is not one. Use '| drop ", *skip->count,
-                              "' to drop values from a pipeline instead."),
-                 skip->location, Severity::kError, Family::kSequence);
-        } else if (skip->count.has_value() && builder_ != nullptr &&
-                   source.node != graph::kNone) {
-          // The count is the node's, not this statement's: it accumulates on the
-          // one ref, and every reader of it inherits what was taken off.
-          builder_->ref(source.node).skip += *skip->count;
+        // One `after` for however many targets, as `kPipe` does: the barriers
+        // are made once and every target of the statement waits for them.
+        const std::vector<std::string> after = ResolveAfter(skip->after, scope);
+        const std::vector<graph::StepId> held = after_waits_;
+        for (const syntax::SkipTarget& target : skip->targets) {
+          ResolveSkipTarget(target, skip->count, scope, after, held, steps);
         }
-        StepPlan step;
-        step.kind = "skip";
-        step.label = source.label;
-        step.source = source.label;
-        step.location = skip->location;
-        graph::StepId made = graph::kNone;
-        if (builder_ != nullptr) {
-          made = NewStep(graph::StepKind::kSkip,
-                         skip->count.has_value()
-                             ? absl::StrCat("skip ", *skip->count, " of ",
-                                            source.label)
-                             : absl::StrCat("skip ", source.label),
-                         skip->location);
-          builder_->step(made).source = source.node;
-          builder_->step(made).count = skip->count;
-        }
-        step.after = ResolveAfter(skip->after, scope, made);
-        steps.push_back(std::move(step));
         return;
       }
       case NodeKind::kWait: {
@@ -1834,6 +1809,137 @@ class FlowResolver {
     }
     ++resolved_.symbols[index].reads;
     return index;
+  }
+
+  /// One target of a `skip`, expanded into the plan/graph steps it becomes.
+  ///
+  /// `after`/`held` are the statement's own barrier, resolved once and applied
+  /// to every step a target expands to, the way `kPipe` shares one `after`
+  /// across several targets.
+  void ResolveSkipTarget(const syntax::SkipTarget& target,
+                         std::optional<long long> count, Scope& scope,
+                         const std::vector<std::string>& after,
+                         const std::vector<graph::StepId>& held,
+                         std::vector<StepPlan>& steps) {
+    if (target.call.Empty()) {
+      // An ordinary pipeline -- unless its source turns out to be a call, in
+      // which case `skip act` means every output of it. The parser cannot
+      // tell a call from a port, so that is decided here.
+      if (target.pipeline->stages.empty()) {
+        if (const auto* name =
+                syntax::As<syntax::Name>(target.pipeline->source.get());
+            name != nullptr) {
+          const size_t index = Lookup(scope, name->name);
+          if (index != kNoSymbol &&
+              resolved_.symbols[index].kind == SymbolKind::kCall) {
+            ++resolved_.symbols[index].reads;
+            EmitCallOutputSkips(index, {}, name->location, after, held, steps);
+            return;
+          }
+        }
+      }
+      EmitPlainSkip(*target.pipeline, count, scope, after, held, steps);
+      return;
+    }
+    // `skip o1, o2 of act` / `skip (o1, o2) of act`: named outputs of a call,
+    // which is the only thing this shape can mean.
+    const size_t index = ExpectCall(target.call.text, target.call.location, scope);
+    if (index == kNoSymbol) return;
+    EmitCallOutputSkips(index, target.outputs, target.call.location, after,
+                        held, steps);
+  }
+
+  /// `skip pipeline`, or `skip n reference`: today's single-subject form.
+  void EmitPlainSkip(const syntax::Pipeline& pipeline,
+                     std::optional<long long> count, Scope& scope,
+                     const std::vector<std::string>& after,
+                     const std::vector<graph::StepId>& held,
+                     std::vector<StepPlan>& steps) {
+    const Ref source = ResolvePipeline(pipeline, scope);
+    if (count.has_value() && !source.has_front) {
+      Report("flow.sequence.skip-count-target",
+             absl::StrCat("'skip ", *count, "' takes a port or a node, and ",
+                          source.label, " is not one. Use '| drop ", *count,
+                          "' to drop values from a pipeline instead."),
+             pipeline.location, Severity::kError, Family::kSequence);
+    } else if (count.has_value() && builder_ != nullptr &&
+               source.node != graph::kNone) {
+      // The count is the node's, not this statement's: it accumulates on the
+      // one ref, and every reader of it inherits what was taken off.
+      builder_->ref(source.node).skip += *count;
+    }
+    StepPlan step;
+    step.kind = "skip";
+    step.label = source.label;
+    step.source = source.label;
+    step.location = pipeline.location;
+    if (builder_ != nullptr) {
+      const graph::StepId made = NewStep(
+          graph::StepKind::kSkip,
+          count.has_value()
+              ? absl::StrCat("skip ", *count, " of ", source.label)
+              : absl::StrCat("skip ", source.label),
+          pipeline.location);
+      builder_->step(made).source = source.node;
+      builder_->step(made).count = count;
+      builder_->step(made).after = held;
+    }
+    step.after = after;
+    steps.push_back(std::move(step));
+  }
+
+  /// `outputs` of `call`, or (when `outputs` is empty) every one of them: from
+  /// a sibling flow's declared ports when they are known here, or as a single
+  /// step against the call itself when they are not (an action from a
+  /// registry) -- the runtime already drains every output nobody reads, so
+  /// there is nothing this step needs to enumerate to be correct.
+  void EmitCallOutputSkips(size_t call, std::vector<syntax::Word> outputs,
+                           const Location& location,
+                           const std::vector<std::string>& after,
+                           const std::vector<graph::StepId>& held,
+                           std::vector<StepPlan>& steps) {
+    const Symbol& symbol = resolved_.symbols[call];
+    if (outputs.empty() && symbol.target != nullptr) {
+      for (const std::string& name :
+           symbol.target->PortNames(syntax::PortDirection::kOutput)) {
+        outputs.push_back(syntax::Word{name, location});
+      }
+    }
+    if (outputs.empty() && symbol.target == nullptr) {
+      StepPlan step;
+      step.kind = "skip";
+      step.label = symbol.name;
+      step.source = symbol.name;
+      step.location = location;
+      if (builder_ != nullptr) {
+        const graph::StepId made = NewStep(
+            graph::StepKind::kSkip, absl::StrCat("skip ", symbol.name),
+            location);
+        builder_->step(made).call = symbol.step;
+        builder_->step(made).after = held;
+      }
+      step.after = after;
+      steps.push_back(std::move(step));
+      return;
+    }
+    for (const syntax::Word& name : outputs) {
+      const Ref port = CallPort(call, name.text, syntax::PortDirection::kOutput,
+                                name.location);
+      StepPlan step;
+      step.kind = "skip";
+      step.label = port.label;
+      step.source = port.label;
+      step.location = name.location;
+      if (builder_ != nullptr) {
+        const graph::StepId made = NewStep(
+            graph::StepKind::kSkip, absl::StrCat("skip ", port.label),
+            name.location);
+        builder_->step(made).source = port.node;
+        builder_->step(made).after = held;
+      }
+      step.after = after;
+      steps.push_back(std::move(step));
+    }
   }
 
   /// A `fail` code: a canonical name, a number, or an expression.

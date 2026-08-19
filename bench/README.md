@@ -169,7 +169,7 @@ Per backend (`local`, `sqlite`, `redis` when one is reachable):
 |---|---|
 | `node_create` ops/s, `node_resident` bytes | actions make two nodes per port, so this is per-call |
 | `put[path=object\|chunk][stage=admitted\|confirmed]` | the object path against the chunk path, and admission against store confirmation |
-| `drain[path=…]` items/s | what an output-port reader gets |
+| `drain[path=...]` items/s | what an output-port reader gets |
 | `read_one_at_a_time[via=AsyncNode.next_fragment]` vs `read_batched[via=ChunkStore.next(limit=64)]` | the node read against the store's batched read on identical data; the gap is headroom the node layer has not claimed |
 | `put_then_read`, `producer_consumer` | the streaming unit, both pacings |
 | `replicated_read[readers=N]` | one node, several readers |
@@ -191,11 +191,11 @@ Per transport (`in-process`, `websocket`, `sse`):
 
 | metric | what it says |
 |---|---|
-| `local_action[ports=…]` | built, run and awaited here; the ceiling |
-| `dispatched_action[ports=…]` | over a session; the gap is the session's own cost |
+| `local_action[ports=...]` | built, run and awaited here; the ceiling |
+| `dispatched_action[ports=...]` | over a session; the gap is the session's own cost |
 | `actions_in_flight[in_flight=N]` | **actions per second**, and whether concurrency buys anything |
 | `local_in_flight`, `sessions_in_flight` | attribution: is the ceiling the loop, the session, or the transport |
-| `live_action[ports=…]` `bytes_each` | a wide schema is a memory decision |
+| `live_action[ports=...]` `bytes_each` | a wide schema is a memory decision |
 
 ### `service` — capacity
 
@@ -252,10 +252,10 @@ several client populations work at once, not a repeated single call.
 | `join_burst[idle_population=N]` | clients dialling at once: the reconnect-storm ceiling |
 | `steady_actions[churn=off\|on]` | **the headline** — established clients' rate and tail, with and without joins and leaves underneath, measured back to back on the same connections. `degradation_*` is the ratio |
 | `churn_cycle` | sustained connect + call + disconnect rate while that load runs |
-| `population_alone` / `population_mixed[population=…]` | four workload kinds solo, then together; `interference` is solo over mixed |
+| `population_alone` / `population_mixed[population=...]` | four workload kinds solo, then together; `interference` is solo over mixed |
 | `mixed_total` | the aggregate, to be read after `server_cores_busy` and not before |
 | `survivor_latency[dropped=N]` | what a mass disconnect does to the clients that stayed; `spike_p99` is during over before |
-| `soak_bucket[population=…]` (slow) | per-second buckets over minutes: `cov`, `drift`, `worst_second`, and RSS growth |
+| `soak_bucket[population=...]` (slow) | per-second buckets over minutes: `cov`, `drift`, `worst_second`, and RSS growth |
 | `actions_by_clients[clients=N]` (slow) | the capacity curve; the *knee* is the result, and how many cores were busy at it |
 
 `p999_us` is a column in the table rather than a note, because it is the figure

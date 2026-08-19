@@ -1,0 +1,34 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    {"open": "{", "close": "}"},
+    {"open": "[", "close": "]"},
+    {"open": "(", "close": ")"},
+    {"open": "\"", "close": "\"", "notIn": ["string", "comment"]}
+  ],
+  "surroundingPairs": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"],
+    ["\"", "\""]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "\\{\\s*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  },
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_-]*",
+  "onEnterRules": [
+    {
+      "//": "A described port or flow continues its description on the next line, and a `\"\"\"` block keeps its indentation, which is what the formatter expects to find.",
+      "beforeText": "\"\"\"\\s*$",
+      "action": {"indent": "indent"}
+    }
+  ]
+}

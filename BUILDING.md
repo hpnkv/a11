@@ -40,7 +40,7 @@ cross the boundary as
 ## Prerequisites
 
 A11 does **not** take its C++ libraries from the system package manager. From
-Homebrew (or apt/dnf/…) you install only the *tools*:
+Homebrew (or apt/dnf/...) you install only the *tools*:
 
 - Python 3.11 or newer and [uv](https://docs.astral.sh/uv/);
 - CMake 3.28 or newer, Ninja, a C++20 compiler, Git, `pkg-config`, `curl`, Make,

@@ -388,8 +388,9 @@ void VisitChildren(const Node& node,
       return;
     }
     case NodeKind::kSkip: {
-      const PipelinePtr& pipeline = static_cast<const Skip&>(node).pipeline;
-      if (pipeline != nullptr) visit(*pipeline);
+      for (const SkipTarget& target : static_cast<const Skip&>(node).targets) {
+        if (target.pipeline != nullptr) visit(*target.pipeline);
+      }
       return;
     }
     case NodeKind::kWait:

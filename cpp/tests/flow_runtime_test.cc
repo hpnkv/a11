@@ -54,14 +54,17 @@ struct Outcome {
   PortValues outputs;
 };
 
-/// An action that writes every value of its input twice, upper-cased.
+/// An action that writes every value of its input twice, upper-cased, and
+/// also lower-cased on a second output nothing in most flows reads.
 actions::ActionSchema TwiceSchema() {
   return actions::ActionSchema{
       .name = "twice",
       .inputs = {{"text", actions::ActionPortSchema{.name = "text",
                                                     .type = "str"}}},
       .outputs = {{"out", actions::ActionPortSchema{.name = "out",
-                                                    .type = "str"}}},
+                                                    .type = "str"}},
+                  {"quiet", actions::ActionPortSchema{.name = "quiet",
+                                                      .type = "str"}}},
   };
 }
 
@@ -72,6 +75,8 @@ actions::ActionHandler TwiceHandler() {
                               action->GetInput("text"));
         ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> output,
                               action->GetOutput("out"));
+        ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> quiet,
+                              action->GetOutput("quiet"));
         while (true) {
           ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> chunk,
                                 input->NextChunk().Await());
@@ -82,9 +87,15 @@ actions::ActionHandler TwiceHandler() {
             ABSL_RETURN_IF_ERROR(
                 output->PutChunk(JsonChunk(shouted)).Await().status());
           }
+          ABSL_RETURN_IF_ERROR(
+              quiet->PutChunk(JsonChunk(absl::AsciiStrToLower(chunk->data)))
+                  .Await()
+                  .status());
         }
         ABSL_RETURN_IF_ERROR(output->PutNullFinal().Await().status());
-        return output->DrainAndClose().Await().status();
+        ABSL_RETURN_IF_ERROR(output->DrainAndClose().Await().status());
+        ABSL_RETURN_IF_ERROR(quiet->PutNullFinal().Await().status());
+        return quiet->DrainAndClose().Await().status();
       });
 }
 
@@ -260,6 +271,36 @@ flow ignore {
   out done:  string
   say = run twice(text: words)
   skip say.out
+  "finished" -> done
+}
+)",
+                              "ignore", {{"words", {"\"a\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
+}
+
+TEST(FlowRuntimeTest, SkipACallDrainsEveryOutputOfIt) {
+  const Outcome outcome = RunFlow(R"(
+flow ignore {
+  in  words: string stream
+  out done:  string
+  say = run twice(text: words)
+  skip say
+  "finished" -> done
+}
+)",
+                              "ignore", {{"words", {"\"a\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
+}
+
+TEST(FlowRuntimeTest, SkipNamesSeveralOutputsOfOneCallTogether) {
+  const Outcome outcome = RunFlow(R"(
+flow ignore {
+  in  words: string stream
+  out done:  string
+  say = run twice(text: words)
+  skip (out, quiet) of say
   "finished" -> done
 }
 )",

@@ -29,7 +29,7 @@
  *   - `a11.sdk.<Class>` for the SDKs, with subpackages omitted and names chosen
  *     for what the type *is* rather than where it lives.
  *   - JSON-native values keep their language-neutral tags (`object`, `array`,
- *     `string`, …); they are not listed here.
+ *     `string`, ...); they are not listed here.
  *
  * @packageDocumentation
  */

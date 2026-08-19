@@ -28,9 +28,11 @@ __all__: list[str] = [
     "parse",
     "plan",
     "request",
+    "scan",
     "stages",
     "strformat",
     "syntax",
+    "syntax_targets",
     "tokenize",
     "vocabulary",
 ]
@@ -216,7 +218,9 @@ def compile(source: str, source_name: str = "") -> Program:
     turns that into ``FlowSyntaxError``.
     """
 
-def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
+def complete(
+    source: str, offset: typing.SupportsInt | typing.SupportsIndex
+) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 
@@ -286,6 +290,26 @@ def request(request: dict[str, typing.Any]) -> dict[str, typing.Any]:
     of which method means which call.
     """
 
+def scan(paths: collections.abc.Sequence[str]) -> dict[str, typing.Any]:
+    """
+    The actions a project declares, read out of its source.
+
+    Walks each path -- a file or a directory -- for ``ActionSchema`` declarations in
+    Python, C++ and TypeScript, and returns a ``flow.catalogue/v1`` payload in which
+    every entry carries the ``origin`` it was declared at. That is what makes an
+    action somebody wrote this afternoon hoverable in a flow, and what gives it
+    somewhere for "go to declaration" to land.
+
+    A tolerant textual read, not a parser for three languages: a schema written as a
+    constructor call with literal arguments comes back whole, one assembled statement
+    by statement comes back with thinner ports, and one whose *name* is computed is
+    not found. ``scanned`` says how many files were read and what was skipped, so a
+    caller can tell a half-read tree from a small one.
+
+    The result is what a frontend passes as ``context`` to the other methods, or
+    merges over the embedded snapshot itself.
+    """
+
 def stages() -> dict[str, str]:
     """
     Every pipeline stage, and what each one takes after its name.
@@ -316,6 +340,16 @@ def syntax(target: str = "sublime") -> dict[str, str]:
 
     ``target`` is ``"sublime"`` for the Sublime/TextMate-family grammar or
     ``"pygments"`` for the lexer that colours a fenced flow in A11's documentation.
+    """
+
+def syntax_targets() -> list[dict[str, str]]:
+    """
+    Every editor definition the language generates, and where each belongs.
+
+    One entry per target: its name, as ``syntax`` is asked for it, and the path the
+    generated file is checked in at. What the CLI offers as a choice and what it
+    walks when it is asked to check them all -- so a target added in C++ is a target
+    the check covers, rather than one a list in Python has to be told about.
     """
 
 def tokenize(source: str, keep_comments: bool = True) -> dict[str, typing.Any]:

@@ -54,6 +54,12 @@
         <completion.contributor
                 language="A11Flow"
                 implementationClass="dev.curiositystack.a11.clion.flow.FlowCompletionContributor"/>
+        <!-- Continuation-aware indent on Enter: a `skip` list past a `,`, a
+             pipeline still open after `|`/`->`, an unclosed `(`/`[`. Built on the
+             shape of the punctuation alone (see FlowShape), never the language
+             tool, since Enter is processed synchronously and a subprocess round
+             trip has no place there. -->
+        <enterHandlerDelegate implementation="dev.curiositystack.a11.clion.flow.FlowEnterHandler"/>
 
         <!-- Everything that needs to know what a flow *means* asks the
              language: one `a11-flow serve` process per IDE (see FlowEngine).
@@ -64,6 +70,18 @@
              the IDE. Without the tool, the editor still colours what it can. -->
         <applicationService
                 serviceImplementation="dev.curiositystack.a11.clion.flow.FlowEngine"/>
+
+        <!-- What *this project* declares that a flow may call. The language ships
+             a snapshot of what the SDK registers; an action somebody wrote this
+             afternoon is in no snapshot, so `a11-flow scan` reads the project's
+             own .py/.cc/.ts for ActionSchema declarations and every hover,
+             completion and go-to-declaration afterwards sees them, with the
+             file and line each was written at. That location is what gives
+             Ctrl+B somewhere to go. Read once on open and again after a save. -->
+        <projectService
+                serviceImplementation="dev.curiositystack.a11.clion.flow.FlowCatalogueService"/>
+        <postStartupActivity
+                implementation="dev.curiositystack.a11.clion.flow.FlowCatalogueStartup"/>
         <!-- One balloon, at most once: "there is no tool for this platform, so
              flows are coloured but not checked". A missing binary is a degraded
              editor rather than an error, and saying so twice is worse than

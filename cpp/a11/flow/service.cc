@@ -14,6 +14,7 @@
 
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
@@ -46,6 +47,8 @@ constexpr std::array kMethods = {
                          "flow.definition/v1"},
     Method{"catalogue", "the actions and types the tools know, as "
                         "flow.catalogue/v1"},
+    Method{"scan", "the actions `paths` declares in source, as "
+                   "flow.catalogue/v1 with origins"},
     Method{"schema",
            "the JSON Schema a shape describes, as flow.schema/v1"},
     Method{"shapes",
@@ -84,6 +87,13 @@ catalogue::Catalogue KnownWorld(const nlohmann::json& request) {
   const catalogue::Catalogue given = catalogue::Catalogue::FromJson(*context);
   if (context->value("replace", false)) return given;
   return catalogue::Catalogue::Builtin().MergedWith(given);
+}
+
+/// Where a catalogue entry was declared, for a hover or a definition that found
+/// one outside this document.
+nlohmann::json OriginToJson(const catalogue::Origin& origin) {
+  return nlohmann::json{
+      {"file", origin.file}, {"line", origin.line}, {"column", origin.column}};
 }
 
 nlohmann::json RangeToJson(const Range& range) {
@@ -234,6 +244,15 @@ nlohmann::json Handle(const nlohmann::json& request) {
         result["name"] = about.text;
         result["kind"] = SymbolClassName(about.kind);
       }
+      // A name this document did not declare may still have somewhere to go: an
+      // action a scan found in a project file. `found` stays about *this*
+      // document, so a client reads `origin` for the other case rather than
+      // having one field mean a range here and a path elsewhere.
+      if (about.origin.has_value()) {
+        result["origin"] = OriginToJson(*about.origin);
+        result["name"] = about.text;
+        result["kind"] = SymbolClassName(about.kind);
+      }
       return answer(std::move(result));
     }
     nlohmann::json result{{"format", kHoverFormat},
@@ -248,6 +267,9 @@ nlohmann::json Handle(const nlohmann::json& request) {
       result["range"] = RangeToJson(about.range);
       if (about.has_definition) {
         result["definition"] = RangeToJson(about.definition);
+      }
+      if (about.origin.has_value()) {
+        result["origin"] = OriginToJson(*about.origin);
       }
     }
     return answer(std::move(result));
@@ -265,6 +287,38 @@ nlohmann::json Handle(const nlohmann::json& request) {
     // What the tools would use for this request, snapshot and override merged --
     // so a frontend can see exactly what its context did rather than guess.
     return Success(request, KnownWorld(request).ToJson());
+  }
+  if (method == "scan") {
+    // The actions a *project* declares, read out of its source. Answers a
+    // catalogue, because that is what it is: a host folds this into the context
+    // it sends, and everything downstream -- hover, completion, go to
+    // declaration -- treats a scanned action exactly as it treats one the SDK
+    // registered, except that this one knows where it was written.
+    std::vector<std::string> roots;
+    if (const auto paths = request.find("paths");
+        paths != request.end() && paths->is_array()) {
+      for (const nlohmann::json& one : *paths) {
+        if (one.is_string()) roots.push_back(one.get<std::string>());
+      }
+    }
+    if (roots.empty()) {
+      return Failure(request, "'scan' needs 'paths': a list of files or "
+                              "directories to read.");
+    }
+    discover::Options options = discover::Options::Default();
+    if (const auto limit = request.find("max_files");
+        limit != request.end() && limit->is_number_unsigned()) {
+      options.max_files = limit->get<size_t>();
+    }
+    const discover::Result found = discover::Discover(roots, options);
+    nlohmann::json answer = found.found.ToJson();
+    // What was read and what was not. A cap that applied itself silently would
+    // make a half-read project look like a project with two actions in it.
+    answer["scanned"] = nlohmann::json{
+        {"files_read", found.files_read},
+        {"reached_file_limit", found.reached_file_limit},
+        {"too_large", found.too_large}};
+    return Success(request, std::move(answer));
   }
   // The two directions of the shape/schema translation. Both are about *shapes*
   // rather than about a document, so neither takes an offset and neither needs

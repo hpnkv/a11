@@ -59,9 +59,9 @@ def _quote_command(command: str) -> str:
     """One line of a command, short enough for a summary line."""
     first = command.strip().splitlines()[0] if command.strip() else ""
     if len(first) > _COMMAND_SUMMARY_LIMIT:
-        first = first[: _COMMAND_SUMMARY_LIMIT - 1] + "…"
+        first = first[: _COMMAND_SUMMARY_LIMIT - 1] + "..."
     elif command.strip().count("\n"):
-        first += " …"
+        first += " ..."
     return first
 
 
@@ -75,7 +75,7 @@ def _output_excerpt(lines: list[str]) -> str:
         elided = len(lines) - _LOG_HEAD_LINES - _LOG_TAIL_LINES
         shown = [
             *lines[:_LOG_HEAD_LINES],
-            f"… {elided} more line{'s' if elided != 1 else ''} …",
+            f"... {elided} more line{'s' if elided != 1 else ''} ...",
             *lines[-_LOG_TAIL_LINES:],
         ]
     body = "\n".join(line.rstrip("\n") for line in shown)

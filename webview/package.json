@@ -1,0 +1,17 @@
+{
+  "name": "@curiositystack/a11-ide-webview",
+  "version": "0.2.3",
+  "private": true,
+  "description": "The A11 chat and action-explorer UI, shared by the JetBrains and VSCode extensions.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@curiositystack/a11": "file:../js",
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

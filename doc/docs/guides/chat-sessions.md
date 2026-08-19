@@ -63,7 +63,7 @@ there, on a port of its own, while `text_output` streams the answer.
       <header>Chat</header>
       <div id="chat-messages" class="a11-messages"></div>
       <form id="chat-form" class="a11-compose">
-        <input id="chat-input" aria-label="Message" autocomplete="off" placeholder="Ask something…">
+        <input id="chat-input" aria-label="Message" autocomplete="off" placeholder="Ask something...">
         <button type="submit">Send</button>
       </form>
     </section>

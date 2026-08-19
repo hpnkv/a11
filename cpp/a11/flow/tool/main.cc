@@ -31,6 +31,7 @@
 
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
@@ -91,6 +92,7 @@ Commands:
   complete FILE        what may be written at --offset N or --line L --column C
   codes                every diagnostic code the language publishes
   vocabulary           every word the language gives meaning to
+  scan PATH...         the actions the project declares, read out of its source
   syntax               an editor definition, generated: --check or --generate
   serve                answer requests on stdin: --protocol json|lsp
   version              what this is
@@ -115,6 +117,8 @@ Options:
             << R"(
   --root DIR                 the checkout an editor definition lives in
   --protocol json|lsp        what `serve` speaks
+  --stdio                    serve LSP over stdio, which is what an LSP client
+                             says; the same as `serve --protocol lsp`
 
 `serve --protocol lsp` speaks the Language Server Protocol over stdio, which is
 what an editor with a language-server client wants. `--protocol json` answers one
@@ -588,6 +592,50 @@ int Vocabulary(const Options& options) {
   return 0;
 }
 
+/// `scan PATH...` -- the actions the project declares, read out of its source.
+///
+/// Prints a catalogue, which is what a host folds into the context it sends. The
+/// text form is a listing for a person checking what a scan can see; the JSON
+/// form is what an editor or a CI step reads.
+int Scan(const Options& options) {
+  const discover::Result found = discover::Discover(options.files);
+  if (options.format != Output::kText) {
+    nlohmann::json payload = found.found.ToJson();
+    payload["scanned"] =
+        nlohmann::json{{"files_read", found.files_read},
+                       {"reached_file_limit", found.reached_file_limit},
+                       {"too_large", found.too_large}};
+    Emit(payload);
+    return 0;
+  }
+  size_t width = 0;
+  for (const catalogue::ActionInfo& action : found.found.actions()) {
+    width = std::max(width, action.name.size());
+  }
+  for (const catalogue::ActionInfo& action : found.found.actions()) {
+    std::printf("%-*s  %s:%d\n", static_cast<int>(width), action.name.c_str(),
+                action.origin.has_value() ? action.origin->file.c_str() : "?",
+                action.origin.has_value() ? action.origin->line : 0);
+    if (!options.quiet && !action.description.empty()) {
+      std::printf("  %s\n", action.description.c_str());
+    }
+  }
+  // What was not read, because a cap that applied itself silently would make a
+  // half-read project look like a project with two actions in it.
+  for (const std::string& path : found.too_large) {
+    std::fprintf(stderr, "skipped (too large): %s\n", path.c_str());
+  }
+  if (found.reached_file_limit) {
+    std::fprintf(stderr,
+                 "stopped after %zu files: some of the tree was not read\n",
+                 found.files_read);
+  }
+  std::printf("%zu action%s in %zu file%s\n", found.found.actions().size(),
+              found.found.actions().size() == 1 ? "" : "s", found.files_read,
+              found.files_read == 1 ? "" : "s");
+  return 0;
+}
+
 int Syntax(const Options& options) {
   SyntaxTarget target = SyntaxTarget::kSublime;
   if (!SyntaxTargetFromName(options.target, target)) {
@@ -708,6 +756,16 @@ Options ReadOptions(int argc, char** argv) {
       options.root = value("--root");
     } else if (argument == "--protocol") {
       options.protocol = value("--protocol");
+    } else if (argument == "--stdio") {
+      // What every LSP client says to a language server it is talking to over a
+      // pipe, and `vscode-languageclient` appends it to the argument list on its
+      // own. Refusing it exited 2 before a single message was read, which the
+      // client reported as "Pending response rejected since connection got
+      // disposed" -- a sentence about the symptom two layers up from an unknown
+      // flag. Accepted, and it *means* something: serving over stdio is what
+      // `serve` does, so this says so rather than being ignored.
+      options.command = options.command.empty() ? "serve" : options.command;
+      options.protocol = "lsp";
     } else if (argument == "--help" || argument == "-h") {
       options.command = "help";
     } else if (argument == "--version") {
@@ -760,6 +818,13 @@ int Main(int argc, char** argv) {
   if (command == "complete") return Complete(options);
   if (command == "codes") return Codes(options);
   if (command == "vocabulary") return Vocabulary(options);
+  if (command == "scan") {
+    if (options.files.empty()) {
+      std::cerr << "scan takes a file or a directory to read\n";
+      return 2;
+    }
+    return Scan(options);
+  }
   if (command == "syntax") return Syntax(options);
   if (command == "serve") return Serve(options);
   std::cerr << command << " is not a command. Try `a11-flow help`.\n";

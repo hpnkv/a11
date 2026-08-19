@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <absl/base/nullability.h>
 #include <absl/container/flat_hash_set.h>
@@ -100,6 +101,101 @@ const WordDoc* absl_nullable StageDocumentation(std::string_view canonical_name)
 /// judgement ([SemanticKind]), so whatever asks here has already been told.
 const WordDoc* absl_nullable BuiltinDocumentation(
     std::string_view canonical_name);
+
+/// Which table a word is documented in.
+///
+/// One role per word set rather than one table keyed by the word, for the reason
+/// [StageDocumentation] and [BuiltinDocumentation] are already two functions: a
+/// word means different things in different positions, and a single table would
+/// have to pick one. `default` says what a header falls back to, what a field
+/// falls back to, and -- as a function -- what to use instead of an empty value;
+/// `number` is a type, a field of a status record, and a function. Which one a
+/// position means is the highlighter's judgement ([SemanticKind]), so whatever
+/// asks here has already been told.
+///
+/// A word genuinely in two sets -- `stream` is a declaration word and a port
+/// modifier -- has one [WordDoc] referenced from both tables rather than two
+/// texts that drift.
+enum class WordRole {
+  /// A pipeline stage: `| first 3`. Same table as [StageDocumentation].
+  kStage,
+  /// A built-in function, where it is called. Same table as
+  /// [BuiltinDocumentation].
+  kBuiltin,
+  /// A word that opens a statement: `run`, `let`, `for`. [StatementWords].
+  kStatement,
+  /// A word that declares something: `flow`, `in`, `header`.
+  /// [DeclarationWords].
+  kDeclaration,
+  /// A word that continues a statement: `else`, `parallel`. [ClauseWords].
+  kClause,
+  /// A word that may follow a call's `)`: `via`, `timeout`. [ModifierWords].
+  kModifier,
+  /// A word that opens a pipeline source rather than naming one: `status`,
+  /// `zip`. [SourceWords].
+  kSource,
+  /// What a port says about itself after its type. [PortModifierWords].
+  kPortModifier,
+  /// What a `struct` field says about itself after its type.
+  /// [FieldModifierWords].
+  kFieldModifier,
+  /// A built-in port type name. [TypeNames].
+  kType,
+  /// A literal that is a word: `true`, `it`. [ConstantWords].
+  kConstant,
+  /// An operator that is a word: `and`, `not`. [OperatorWords].
+  kOperatorWord,
+  /// One of Abseil's canonical status codes. [StatusCodes].
+  kStatusCode,
+  /// A field of a status record, read after a `.`. [StatusFields].
+  kStatusField,
+  /// A duration suffix: `ms`, `h`. [DurationUnits].
+  kDurationUnit,
+  /// Punctuation and the operators that are not words, keyed by the symbol
+  /// itself: `|`, `->`, `==`, `{`. [OrderedSymbols].
+  kSymbol,
+};
+
+/// What one word does under whichever role documents it, or `nullptr`.
+///
+/// For a caller that has a word and no position: a word set lists a word that
+/// another set documents, which is deliberate rather than a gap. `stream` is in
+/// [OrderedDeclarations] because a port declaration is where it is offered, and
+/// is documented as the port modifier it is. A hover knows the position and asks
+/// [Documentation] for the role that position means; a listing does not, and
+/// asks this.
+const WordDoc* absl_nullable AnyDocumentation(std::string_view canonical_name);
+
+/// Every role, for something walking all of them.
+absl::Span<const WordRole> WordRoles();
+
+/// The name a role travels under in `flow.vocabulary/v1`: `port_modifier`.
+///
+/// The same spelling as that envelope's word-list keys, so the documentation of
+/// a set and the set itself are found under names a reader can put together.
+std::string_view WordRoleName(WordRole role);
+
+/// The words `role` documents, in the order a listing reads them.
+///
+/// The ordered word list the role covers, which is what something writing every
+/// entry out walks. [WordRole::kSymbol] gives [OrderedSymbols], and the roles
+/// whose words are only ever a set give them sorted.
+std::vector<std::string_view> WordsOf(WordRole role);
+
+/// What one word of `role` does, or `nullptr` where that table has no entry.
+///
+/// The word is the canonical form for every role but [WordRole::kSymbol], where
+/// it is the punctuation as written.
+const WordDoc* absl_nullable Documentation(WordRole role,
+                                          std::string_view canonical_name);
+
+/// Every punctuation mark and non-word operator the language gives meaning to,
+/// in the order a listing reads them.
+///
+/// Here rather than only in the lexer because these are the forms an editor is
+/// asked about most and had least to say: a hover on `|` used to answer "flow
+/// operator", which is the token's kind rather than an answer.
+absl::Span<const std::string_view> OrderedSymbols();
 
 /// The two stages that may be written without their leading `|`.
 ///

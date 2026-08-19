@@ -60,6 +60,49 @@ catalogue::Catalogue Known() {
 
 size_t At(std::string_view needle) { return kSource.find(needle); }
 
+/// Every symbol's selection is inside its range, however deep.
+void CheckContained(const std::vector<DocumentSymbol>& symbols,
+                    std::string_view where) {
+  for (const DocumentSymbol& symbol : symbols) {
+    EXPECT_LE(symbol.range.start.offset, symbol.selection.start.offset)
+        << where << ": " << symbol.name << " begins before its range";
+    EXPECT_LE(symbol.selection.end.offset, symbol.range.end.offset)
+        << where << ": " << symbol.name << " ends after its range";
+    CheckContained(symbol.children, where);
+  }
+}
+
+TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
+  // The one invariant a document symbol has to satisfy, and the reason it is worth
+  // a test of its own: LSP refuses the *whole* answer when one entry breaks it --
+  // "selectionRange must be contained in fullRange" -- so a single bad symbol cost
+  // the document its entire outline. It broke for every `flow` and every `struct`,
+  // because the parser records where a node *started* and a flow's name is the token
+  // after its keyword.
+  CheckContained(Symbols(kSource), "the two-declaration source");
+
+  // A range is the whole construct, which is the other half of what the format
+  // promises: "select symbol" takes the block.
+  const std::vector<DocumentSymbol> symbols = Symbols(kSource);
+  ASSERT_GE(symbols.size(), 2u);
+  const DocumentSymbol& flow = symbols[1];
+  EXPECT_EQ(kSource.substr(flow.range.start.offset, 4), "flow");
+  EXPECT_EQ(kSource[flow.range.end.offset - 1], '}')
+      << "a flow's range should end on the brace that closes it";
+  EXPECT_EQ(kSource.substr(flow.selection.start.offset,
+                           flow.selection.end.offset - flow.selection.start.offset),
+            "research");
+
+  // And it holds for text somebody is part-way through typing, which is where a
+  // range that stopped at the keyword would otherwise still be produced: there is
+  // no closing brace to find.
+  for (const std::string_view unfinished :
+       {"flow half {\n  in q: string\n", "flow\n", "struct S {\n  a: string\n",
+        "flow a { }\nflow b {\n", ""}) {
+    CheckContained(Symbols(unfinished), unfinished);
+  }
+}
+
 TEST(FlowNavigate, ListsWhatADocumentDeclaresNestedAsItIsWritten) {
   const std::vector<DocumentSymbol> symbols = Symbols(kSource);
   ASSERT_EQ(symbols.size(), 2u);
@@ -183,6 +226,80 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
   EXPECT_FALSE(about.has_definition);
 }
 
+TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
+  // The regression this exists for: a hover on a mark or a keyword used to be
+  // the token's kind and nothing else -- "`|` — flow operator", "`in` —
+  // declaration keyword" -- which answers nothing a reader could not see. Each
+  // of these is now a sentence about what the form does, and the kind survives
+  // only as the label above it.
+  struct Case {
+    std::string_view at;      ///< The text to put the caret in.
+    std::string_view label;   ///< What the summary calls it.
+    std::string_view says;    ///< What the summary goes on to say.
+  };
+  const Case kCases[] = {
+      {"| join", "flow operator", "Puts a stream through a stage."},
+      {"-> found", "flow operator",
+       "Writes a stream into one or more destinations."},
+      {"= node()", "operator", "Binds a name to a step, a node, or a value."},
+      {"in  question", "a declaration",
+       "Declares an input port: what a caller sends."},
+      {"out answer", "a declaration",
+       "Declares an output port: what a caller reads back."},
+      {"struct Source", "a declaration",
+       "Declares a shape: a record with named, typed, constrained fields."},
+      {"stream", "a port modifier",
+       "Says the port carries many values rather than one."},
+      {"required \"Stable id.\"", "a port modifier",
+       "Says the port or field has to be there."},
+      {"run web-search", "a statement",
+       "Dispatches an action where this flow is running."},
+      {"node()", "a declaration", "Makes a stream of the flow's own."},
+      {"map Source", "a pipeline stage",
+       "Replaces each value with what the expression makes of it."},
+  };
+  for (const Case& one : kCases) {
+    const size_t offset = kSource.find(one.at);
+    ASSERT_NE(offset, std::string_view::npos) << one.at;
+    const Description about = Describe(kSource, offset);
+    ASSERT_TRUE(about.found) << one.at;
+    EXPECT_NE(about.summary.find(one.label), std::string::npos)
+        << one.at << ": " << about.summary;
+    EXPECT_NE(about.summary.find(one.says), std::string::npos)
+        << one.at << ": " << about.summary;
+    // The whole of it, which is what an editor shows: the summary, then what
+    // the form takes, then how it behaves, then a line of Flow using it.
+    EXPECT_NE(about.markdown.find("**Example:**"), std::string::npos)
+        << one.at << ": " << about.markdown;
+    EXPECT_FALSE(about.detail.empty()) << one.at;
+  }
+}
+
+TEST(FlowNavigate, ADurationHoversAsItsUnit) {
+  const std::string one = "flow f {\n  in a: string\n  out b: string\n"
+                          "  x = run act(q: a) timeout 250ms\n  x.r -> b\n}\n";
+  const Description ms = Describe(one, one.find("250ms"));
+  ASSERT_TRUE(ms.found);
+  EXPECT_EQ(ms.text, "250ms");
+  EXPECT_NE(ms.summary.find("Milliseconds."), std::string::npos) << ms.summary;
+
+  // A compound duration is two tokens to the lexer and added by the parser, so
+  // a caret is always in a duration of one unit -- there is no whole `1m30s`
+  // for a hover to be about.
+  const std::string many = "flow f {\n  in a: string\n  out b: string\n"
+                           "  x = run act(q: a) timeout 1m30s\n  x.r -> b\n}\n";
+  const Description minutes = Describe(many, many.find("1m30s"));
+  ASSERT_TRUE(minutes.found);
+  EXPECT_EQ(minutes.text, "1m");
+  EXPECT_NE(minutes.summary.find("Minutes."), std::string::npos)
+      << minutes.summary;
+  const Description seconds = Describe(many, many.find("30s"));
+  ASSERT_TRUE(seconds.found);
+  EXPECT_EQ(seconds.text, "30s");
+  EXPECT_NE(seconds.summary.find("Seconds."), std::string::npos)
+      << seconds.summary;
+}
+
 TEST(FlowNavigate, ARegisteredTypeReadsTheWayAShapeDoes) {
   // Both are records with described fields, and the catalogue records them the
   // same way -- so hover, completion and everything else is one code path.
@@ -270,6 +387,18 @@ TEST(FlowCatalogue, CompletionOffersAnActionsPortsAndItsName) {
     names.push_back(proposal.name);
   }
   EXPECT_EQ(absl::StrJoin(names, ","), "query");
+
+  // And with what the port is *for*, which is the whole reason a catalogue
+  // carries descriptions: the same treatment a sibling flow's ports get, since
+  // both go through one place.
+  const CompleteResult inside =
+      CompleteAt(source, source.find("web-search()") + 11, Known());
+  ASSERT_FALSE(inside.proposals.empty());
+  const Proposal& query = inside.proposals.front();
+  EXPECT_EQ(query.insert, "query: ");
+  EXPECT_EQ(query.tail, " (required) — What to look for.");
+  EXPECT_EQ(query.type, "str");
+  EXPECT_NE(query.documentation.find("What to look for."), std::string::npos);
 
   names.clear();
   for (const Proposal& proposal :

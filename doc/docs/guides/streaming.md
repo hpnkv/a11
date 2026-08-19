@@ -57,7 +57,7 @@ These do different jobs, and a correct writer usually wants **both**:
   reader cannot tell the value was complete.
 
 A value can be anything the node's serialization registry can encode (strings,
-dicts, dataclasses, Pydantic models, …); see
+dicts, dataclasses, Pydantic models, ...); see
 [serialization](../api/data.md). It comes back out as the same type.
 
 ## Read it back

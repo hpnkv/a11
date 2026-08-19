@@ -1,11 +1,16 @@
 /**
- * Thin typed wrappers over the JS↔Kotlin bridge that `A11WebView.kt` injects
- * into the page. Each `window.__a11Bridge.*` function is backed by a
- * `JBCefJsQuery`; the Kotlin handler runs the real IDE work and returns a JSON
- * string (or rejects with an error message on the query's failure channel).
+ * What this UI asks of the editor it is running in, and nothing more.
  *
- * The Kotlin side is the single source of truth for tool schemas and behavior;
- * this module never hard-codes a tool.
+ * **The seam.** Everything in this package is ordinary browser code: the chat,
+ * the action explorer, the conversation list, the markdown renderer, the forms
+ * built from a port schema. The six functions below are the whole of what any of
+ * it needs from the host, and each host implements them its own way — JetBrains
+ * over `JBCefJsQuery`, VSCode over `postMessage`. That is why one UI serves two
+ * editors without either of them running the other's code.
+ *
+ * **The host is the single source of truth for tools.** Nothing here hard-codes a
+ * tool: the schemas arrive from `listActions()` and execution goes back through
+ * `runAction()`, so a tool added on the host side shows up here with no change.
  */
 
 /** One IDE-exposed action, as described by `IdeTools.listDescriptors()`. */
@@ -80,7 +85,14 @@ export interface HighlightNote {
   end_column: number;
 }
 
-interface RawBridge {
+/**
+ * The editor, as this UI sees it.
+ *
+ * Every method answers with a JSON *string* rather than a value, because that is
+ * what both hosts can carry: a `JBCefJsQuery` returns one, and a `postMessage`
+ * channel is serialised anyway. Parsing happens once, in the wrappers below.
+ */
+export interface HostBridge {
   listActions(): Promise<string>;
   runAction(name: string, inputs: unknown): Promise<string>;
   getConfig(): Promise<string>;
@@ -91,16 +103,30 @@ interface RawBridge {
 
 declare global {
   interface Window {
-    __a11Bridge?: RawBridge;
-    /** "chat" or "actions"; set by the injected bootstrap script. */
+    /**
+     * The JetBrains host, injected into the page by `A11WebView.kt` before this
+     * bundle runs. Read by that host's own entry point, which hands it to
+     * [setHost]; nothing in the shared UI looks at it.
+     */
+    __a11Bridge?: HostBridge;
+    /** "chat" or "actions": which surface to mount. Set by the host. */
     __A11_VIEW?: string;
   }
 }
 
-function raw(): RawBridge {
-  const bridge = window.__a11Bridge;
-  if (!bridge) throw new Error('The A11 Kotlin bridge is not available.');
-  return bridge;
+let installed: HostBridge | undefined;
+
+/**
+ * Say which editor this is running in. Called once, by the host's entry point,
+ * before anything is mounted.
+ */
+export function setHost(bridge: HostBridge): void {
+  installed = bridge;
+}
+
+function raw(): HostBridge {
+  if (!installed) throw new Error('No A11 editor bridge has been installed.');
+  return installed;
 }
 
 /** The IDE-exposed actions and their schemas. */

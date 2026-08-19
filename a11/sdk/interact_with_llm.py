@@ -18,7 +18,9 @@ Failures are surfaced the ordinary A11 way. An unknown/absent provider raises
 `INVALID_ARGUMENT`; a provider whose SDK is not installed raises
 `FAILED_PRECONDITION` with an install hint. In both cases the raised status is
 propagated by the runtime onto every output node, so a caller reading e.g.
-`new_interactions` observes the error instead of hanging.
+`new_interactions` observes the error instead of hanging. A caller that would
+rather learn about a missing SDK before the first turn can call
+`load_provider` at start-up.
 """
 
 from __future__ import annotations
@@ -175,6 +177,11 @@ def _resolve_provider(action: a11.Action) -> str:
     ).to_exception()
 
 
+def install_hint(provider: str) -> str:
+    """The ``pip install`` line that adds ``provider``'s SDK."""
+    return f"pip install 'a11-kit[{_PROVIDERS[provider].extra}]'"
+
+
 def _load_handler(provider: str) -> Handler:
     """Import ``provider``'s module lazily and return its handler coroutine."""
     spec = _PROVIDERS[provider]
@@ -185,10 +192,48 @@ def _load_handler(provider: str) -> Handler:
             code=StatusCode.FAILED_PRECONDITION,
             message=(
                 f"The {provider!r} backend needs its provider SDK. Install it"
-                f" with:  pip install 'a11-kit[{spec.extra}]'"
+                f" with:  {install_hint(provider)}"
+            ),
+        ).to_exception() from exc
+    except Exception as exc:  # noqa: BLE001 - a broken SDK is a precondition
+        # An SDK that is installed but unimportable (a version conflict, say)
+        # would otherwise surface as whatever it happened to raise, from a
+        # frame the caller cannot place. Name the provider instead.
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message=(
+                f"The {provider!r} backend's SDK failed to import:"
+                f" {type(exc).__name__}: {exc}"
             ),
         ).to_exception() from exc
     return getattr(module, spec.handler)
+
+
+def load_provider(provider: str) -> None:
+    """Import ``provider``'s backend now, so a later turn cannot fail on it.
+
+    `interact_with_llm` imports the provider SDK on the first turn that needs
+    it, inside the running action. A caller that knows it will drive a provider
+    -- `a11 chat` against an in-process gateway, say -- can call this at
+    start-up instead: the import then happens on an ordinary stack, and a
+    missing or broken SDK is reported before the user has typed anything.
+
+    Args:
+        provider: Provider name, one of the keys of the router's table.
+
+    Raises:
+        StatusException: `INVALID_ARGUMENT` when ``provider`` is unknown,
+            `FAILED_PRECONDITION` when its SDK is missing or unimportable.
+    """
+    if provider not in _PROVIDERS:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                f"Unknown LLM provider {provider!r}; expected one of"
+                f" {', '.join(_PROVIDERS)}."
+            ),
+        ).to_exception()
+    _load_handler(provider)
 
 
 async def interact_with_llm(action: a11.Action) -> None:
@@ -198,4 +243,9 @@ async def interact_with_llm(action: a11.Action) -> None:
     await handler(action)
 
 
-__all__ = ["INTERACT_WITH_LLM_SCHEMA", "interact_with_llm"]
+__all__ = [
+    "INTERACT_WITH_LLM_SCHEMA",
+    "install_hint",
+    "interact_with_llm",
+    "load_provider",
+]

@@ -1,0 +1,215 @@
+{
+  "name": "a11-flow",
+  "displayName": "A11 Flow & Chat",
+  "version": "0.1.0",
+  "publisher": "curiositystack",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "The A11 Flow language, and an AI chat that can call tools backed by your editor.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hpnkv/a11.git",
+    "directory": "vscode-plugin"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Chat"
+  ],
+  "keywords": [
+    "a11",
+    "flow",
+    "dataflow",
+    "llm",
+    "agent"
+  ],
+  "main": "./dist/extension.js",
+  "type": "commonjs",
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:java",
+    "onLanguage:kotlin",
+    "onLanguage:go",
+    "onLanguage:cpp",
+    "workspaceContains:**/*.flow"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "a11flow",
+        "aliases": [
+          "A11 Flow",
+          "a11flow"
+        ],
+        "extensions": [
+          ".flow"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/a11flow.svg",
+          "dark": "./icons/a11flow.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "a11flow",
+        "scopeName": "source.a11flow",
+        "path": "./syntaxes/a11flow.tmLanguage.json"
+      },
+      {
+        "scopeName": "a11flow.injection",
+        "path": "./syntaxes/a11flow-injection.tmLanguage.json",
+        "injectTo": [
+          "source.python",
+          "source.ts",
+          "source.tsx",
+          "source.js",
+          "source.jsx",
+          "source.java",
+          "source.kotlin",
+          "source.go",
+          "source.cpp"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.a11flow": "a11flow"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "A11",
+      "properties": {
+        "a11.gatewayUrl": {
+          "type": "string",
+          "default": "ws://127.0.0.1:8011/a11",
+          "markdownDescription": "The A11 gateway to run the chat against. This is where `a11 gateway` listens; a bare `host:port` is accepted and completed."
+        },
+        "a11.provider": {
+          "type": "string",
+          "default": "claude",
+          "enum": [
+            "claude",
+            "gemini",
+            "ollama"
+          ],
+          "description": "Which provider answers. The gateway holds no provider configuration of its own."
+        },
+        "a11.model": {
+          "type": "string",
+          "default": "",
+          "description": "The model to ask for. Empty lets the provider apply its own default."
+        },
+        "a11.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "An alternative provider endpoint, for a proxy or a local server."
+        },
+        "a11.extraAllowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "shell_.*"
+          ],
+          "markdownDescription": "Patterns for the gateway's *own* tools, added to this editor's. Emptying this turns the gateway's shell tools off."
+        },
+        "a11.flow.toolPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where to find `a11-flow`. Empty looks in the extension's own `bin/<os>-<arch>/`, then on the `PATH`."
+        },
+        "a11.flow.scanWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read the workspace's own `.py`, `.cc` and `.ts` for `ActionSchema` declarations, so hovering an action this project declares shows what it does and go-to-declaration lands on it."
+        },
+        "a11.flow.checkFragments": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Check flows written inside string literals of other languages, not only `.flow` files."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "a11.setApiKey",
+        "title": "Set the provider API key",
+        "category": "A11"
+      },
+      {
+        "command": "a11.clearApiKey",
+        "title": "Forget the provider API key",
+        "category": "A11"
+      },
+      {
+        "command": "a11.newChat",
+        "title": "New chat",
+        "category": "A11"
+      },
+      {
+        "command": "a11.rescanActions",
+        "title": "Re-read the workspace's actions",
+        "category": "A11"
+      },
+      {
+        "command": "a11.restartFlowServer",
+        "title": "Restart the Flow language server",
+        "category": "A11"
+      },
+      {
+        "command": "a11.clearSuggestions",
+        "title": "Clear review suggestions",
+        "category": "A11"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "a11",
+          "title": "A11",
+          "icon": "./icons/a11flow.svg"
+        }
+      ]
+    },
+    "views": {
+      "a11": [
+        {
+          "type": "webview",
+          "id": "a11.chat",
+          "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "a11.actions",
+          "name": "Actions"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:dev": "node esbuild.mjs --dev",
+    "sync-syntaxes": "mkdir -p syntaxes && cp ../editors/vscode/a11flow.tmLanguage.json ../editors/vscode/a11flow-injection.tmLanguage.json syntaxes/",
+    "typecheck": "tsc --noEmit && tsc --noEmit --project webview",
+    "test": "node --test test/*.test.mjs",
+    "test:integration": "node ./test/runIntegration.mjs",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}

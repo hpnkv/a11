@@ -137,7 +137,7 @@ calling that success.
 - **`fail` and `cancel` go in an `if`.** They wait for nothing, so at \
 the top of a flow's body they run at once and race every other \
 statement. Put one in an `if` or a loop body, or write `fail internal \
-"…" after x` to say what it waits for. A `fail` alone at the end of a \
+"..." after x` to say what it waits for. A `fail` alone at the end of a \
 body reads like a last resort and is refused, because it is the first \
 thing that would happen.
 

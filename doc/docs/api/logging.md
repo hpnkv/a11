@@ -14,7 +14,7 @@ one:
    `--verbosity` was passed, or `absl.logging`'s handler is on the root logger.
 2. **The standard library** — the effective level of the `a11` logger, which
    inherits `logging.basicConfig` and `logging.config.dictConfig`.
-3. **`A11_LOG_LEVEL`** — a name (`debug`, `info`, …) or an integer, read only
+3. **`A11_LOG_LEVEL`** — a name (`debug`, `info`, ...) or an integer, read only
    when neither of the above says anything.
 
 With none of those the level is `WARNING`, the same default a bare interpreter

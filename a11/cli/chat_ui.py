@@ -41,6 +41,7 @@ from a11.cli.backends import PROVIDERS, Provider, make_user_interaction
 from a11.cli.presentation_render import render_blocks
 from a11.client.connection import GatewayConnection, open_gateway
 from a11.client.turn import TurnConfig, run_turn
+from a11.sdk.interact_with_llm import load_provider
 from a11.sdk.llm import Interaction
 from a11.sdk.presentation import PresentationReducer
 from a11.status import Status, StatusCode, StatusException
@@ -171,6 +172,7 @@ class ChatUI:
         )
         if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
+        self._report_missing_sdk()
         # Announced once per connection: the gateway registers a proxy per tool
         # and reverse-dispatches the model's calls back here to run them.
         if self._tool_descriptors and not self._tools_announced:
@@ -282,11 +284,17 @@ class ChatUI:
         self._print_status()
         if provider.api_key_env and not provider.api_key():
             self._warn_missing_key()
+        self._report_missing_sdk()
 
     # -- one conversational turn ------------------------------------------
 
     async def _turn(self, text: str) -> None:
         """Run one turn on the gateway and draw what it produces."""
+        # Nothing to send if the backend cannot run here: the gateway would
+        # raise the same precondition, only after a round-trip.
+        if self._report_missing_sdk():
+            return
+
         user_interaction = make_user_interaction(text)
         # The tool system prompt rides on the first interaction of the
         # conversation (every backend reads system instructions only there).
@@ -473,6 +481,37 @@ class ChatUI:
             style="dim",
             highlight=False,
         )
+
+    def _report_missing_sdk(self) -> bool:
+        """Print why the current backend cannot run here; return that it can't.
+
+        Only asked of an in-process gateway. A gateway reached over the network
+        runs in its own environment, so what is installed here says nothing
+        about whether it can serve the backend -- there, the turn's
+        `FAILED_PRECONDITION` remains the only honest answer.
+        """
+        if not self._connection.embedded:
+            return False
+        try:
+            # Importing the backend up front also keeps the SDK's (deep) import
+            # off the stack of the action that would otherwise trigger it.
+            load_provider(self._provider.name)
+        except StatusException as exc:
+            # Soft-wrapped: the message ends in a command to run, and a wrap
+            # rich inserted mid-command would not survive a copy-paste.
+            self._console.print(
+                f"error: {exc.status.message}",
+                style="red",
+                markup=False,
+                soft_wrap=True,
+            )
+            self._console.print(
+                f"or switch backends with /model <{'|'.join(PROVIDERS)}>.",
+                style="dim",
+                markup=False,
+            )
+            return True
+        return False
 
     def _warn_missing_key(self) -> None:
         envs = ", ".join(self._provider.api_key_env)

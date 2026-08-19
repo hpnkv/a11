@@ -23,6 +23,7 @@
 #include "a11/net/wire_stream.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
@@ -943,6 +944,62 @@ the language reaches the editor by running this, and CI notices when nobody has.
 
 ``target`` is ``"sublime"`` for the Sublime/TextMate-family grammar or
 ``"pygments"`` for the lexer that colours a fenced flow in A11's documentation.
+)doc");
+
+  flow.def(
+      "syntax_targets",
+      [] {
+        py::typing::List<PyStringMap> targets;
+        for (const flow::SyntaxTarget target : flow::SyntaxTargets()) {
+          PyStringMap one;
+          one["target"] = std::string(flow::SyntaxTargetName(target));
+          one["path"] = std::string(flow::SyntaxTargetPath(target));
+          targets.append(one);
+        }
+        return targets;
+      },
+      R"doc(Every editor definition the language generates, and where each belongs.
+
+One entry per target: its name, as ``syntax`` is asked for it, and the path the
+generated file is checked in at. What the CLI offers as a choice and what it
+walks when it is asked to check them all -- so a target added in C++ is a target
+the check covers, rather than one a list in Python has to be told about.
+)doc");
+
+  flow.def(
+      "scan",
+      [](const std::vector<std::string>& paths) {
+        const flow::discover::Result found = flow::discover::Discover(paths);
+        PyJsonObject value =
+            JsonToPython(found.found.ToJson()).cast<PyJsonObject>();
+        PyJsonObject scanned;
+        scanned["files_read"] = static_cast<long long>(found.files_read);
+        scanned["reached_file_limit"] = found.reached_file_limit;
+        py::typing::List<py::str> too_large;
+        for (const std::string& path : found.too_large) {
+          too_large.append(path);
+        }
+        scanned["too_large"] = too_large;
+        value["scanned"] = scanned;
+        return value;
+      },
+      py::arg("paths"),
+      R"doc(The actions a project declares, read out of its source.
+
+Walks each path -- a file or a directory -- for ``ActionSchema`` declarations in
+Python, C++ and TypeScript, and returns a ``flow.catalogue/v1`` payload in which
+every entry carries the ``origin`` it was declared at. That is what makes an
+action somebody wrote this afternoon hoverable in a flow, and what gives it
+somewhere for "go to declaration" to land.
+
+A tolerant textual read, not a parser for three languages: a schema written as a
+constructor call with literal arguments comes back whole, one assembled statement
+by statement comes back with thinner ports, and one whose *name* is computed is
+not found. ``scanned`` says how many files were read and what was skipped, so a
+caller can tell a half-read tree from a small one.
+
+The result is what a frontend passes as ``context`` to the other methods, or
+merges over the embedded snapshot itself.
 )doc");
 
   flow.def(

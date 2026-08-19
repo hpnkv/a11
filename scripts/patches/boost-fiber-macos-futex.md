@@ -12,7 +12,7 @@ The patch does two things:
    corrupts `boost::fibers::mutex` ownership and the scheduler queues on arm64.
 
 With fix (2) in place, selecting a futex spinlock
-(`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX` or `…_TTAS_FUTEX`) is **safe** on
+(`BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX` or `..._TTAS_FUTEX`) is **safe** on
 Apple silicon. A shared_work + fiber `mutex` + `condition_variable` stress
 reproducer that fails **30/30** without the fix passes **60/60** with it, matching
 the non-futex spinlock exactly.

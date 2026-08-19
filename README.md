@@ -162,7 +162,7 @@ Boost.Fiber without futex support and fails with
 **3. Use it from your own CMake project.** The install exports a CMake package
 named `a11` with per-component targets (`a11::service` links the whole runtime).
 Point your consumer's `CMAKE_PREFIX_PATH` at both the install prefix and the
-dependency prefix from step 1, so the transitive static Boost/OpenSSL/… resolve:
+dependency prefix from step 1, so the transitive static Boost/OpenSSL/... resolve:
 
 ```cmake
 find_package(a11 CONFIG REQUIRED)

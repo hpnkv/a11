@@ -233,7 +233,7 @@ contexts:
           |REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
-    - match: '\b(parallel|max|PARALLEL|MAX){{kw_boundary}}'
+    - match: '\b(parallel|max|of|PARALLEL|MAX|OF){{kw_boundary}}'
       scope: keyword.other.a11flow
 
   node-map:

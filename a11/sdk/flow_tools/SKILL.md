@@ -44,7 +44,7 @@ Do not reach for one when a single tool call does the job, or when you need to *
 - **Order between two streams is `| then`.** Two statements writing to the same port interleave by arrival. When one lot has to come before another — a conversation's history before the new message — write `history | then asked -> port` and the flow reads them in that order.
 - **No arithmetic, no functions, no code.** Expressions read values, compare them, take them apart, and build new ones. That is the whole of it. If the task needs real computation, that is what an action is for.
 - **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is refused rather than quietly stopping after some number of passes and calling that success.
-- **`fail` and `cancel` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "…" after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
+- **`fail` and `cancel` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "..." after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
 
 ## The language
 

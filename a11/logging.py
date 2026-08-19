@@ -21,7 +21,7 @@ choosing one, in this order:
    logger.
 2. **The standard library** — the effective level of the ``a11`` logger, which
    inherits `logging.basicConfig` and `dictConfig`.
-3. **``A11_LOG_LEVEL``** — a name (``debug``, ``info``, …) or an integer, read
+3. **``A11_LOG_LEVEL``** — a name (``debug``, ``info``, ...) or an integer, read
    only when neither of the above says anything.
 
 With none of those, the level is `logging.WARNING`, the same default a bare

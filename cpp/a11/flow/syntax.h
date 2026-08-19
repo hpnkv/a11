@@ -456,12 +456,28 @@ struct Pipe : NodeOf<NodeKind::kPipe> {
   std::vector<Word> after;
 };
 
-/// `skip pipeline` -- read a stream to its end and discard the values.
+/// One subject of a `skip`: a plain pipeline, or named outputs of a call.
+///
+/// `pipeline` and `call` are mutually exclusive. A bare call name (`skip act`)
+/// parses as an ordinary `pipeline` -- the parser cannot tell a call from a
+/// port -- and it is the resolver that turns it into "every output of act"
+/// once it knows `act` names a call. `call` with `outputs` is written only by
+/// `skip o1, o2 of act` / `skip (o1, o2) of act`, which have no other
+/// resolution: they always mean those specific outputs of that call.
+struct SkipTarget {
+  PipelinePtr pipeline;
+  Word call;
+  std::vector<Word> outputs;
+};
+
+/// `skip pipeline, pipeline, ...` -- read streams to their end and discard the
+/// values, one or more at a time.
 ///
 /// With a `count` it is `skip n reference`, which discards the first `n` values
-/// of that one node for every reader of it rather than reading the whole thing.
+/// of that one node for every reader of it rather than reading the whole thing;
+/// the counted form takes exactly one target.
 struct Skip : NodeOf<NodeKind::kSkip> {
-  PipelinePtr pipeline;
+  std::vector<SkipTarget> targets;
   std::vector<Word> after;
   std::optional<long long> count;
 };

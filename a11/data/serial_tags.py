@@ -30,7 +30,7 @@ Conventions:
     provider's request-config model is ``a11.sdk.InteractWith<Provider>Config``
     whatever its class happens to be called in that language.
   * JSON-native values keep their language-neutral tags (``object``, ``array``,
-    ``string``, …); they are not listed here.
+    ``string``, ...); they are not listed here.
 
 A Python class declares its tag with an ``A11_SERIAL_TAG`` ClassVar:
 

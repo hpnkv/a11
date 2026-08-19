@@ -134,7 +134,7 @@ header, verbatim. So Flow's `with "accept": "application/json"` and
 `forward headers "authorization"` are already HTTP header syntax, and A11's own
 framework headers — a deadline, a trace — stay out of the request.
 `options.headers` wins over an inherited value of the same name, and is how a
-literal `x-a11-…` header reaches a peer that wants one.
+literal `x-a11-...` header reaches a peer that wants one.
 
 ## Connections
 

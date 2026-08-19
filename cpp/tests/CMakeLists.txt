@@ -52,6 +52,7 @@ add_test(NAME a11_core_test COMMAND a11_core_test)
 add_executable(a11_flow_test
   flow_complete_test.cc
   flow_diagnostic_test.cc
+  flow_discover_test.cc
   flow_dto_test.cc
   flow_emit_json_test.cc
   flow_highlight_test.cc

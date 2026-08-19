@@ -13,6 +13,7 @@
 
 import { A11ChatSession } from './a11client.js';
 import { clearSuggestions, suggestOnHighlight } from './bridge.js';
+import type { MountedView } from './mount.js';
 import {
   interactionText,
   isToolResultCarrier,
@@ -210,7 +211,7 @@ export class AssistantBubble {
       details.className = 'thinking-details';
       details.open = true;
       const summary = document.createElement('summary');
-      summary.textContent = 'Thinking…';
+      summary.textContent = 'Thinking...';
       details.append(summary);
       this.element.append(details);
       this.thinking = { details, summary, tools: 0 };
@@ -317,7 +318,7 @@ export class ChatView {
     composer.className = 'composer';
     this.textarea = document.createElement('textarea');
     this.textarea.rows = COMPOSER_ROWS;
-    this.textarea.placeholder = 'Ask A11 about your project…  (Enter to send, Shift+Enter for newline)';
+    this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
     this.sendButton = document.createElement('button');
     this.sendButton.type = 'submit';
     this.sendButton.textContent = 'Send';
@@ -395,6 +396,17 @@ export class ChatView {
     this.historyButton.classList.toggle('active', open);
   }
 
+  /**
+   * Start a fresh conversation.
+   *
+   * Public because an editor may offer this as a command of its own as well as a
+   * button in the page -- VSCode's palette, a JetBrains action -- and both should
+   * be the same action rather than two that drift.
+   */
+  newChat(): void {
+    this.startNewChat();
+  }
+
   private startNewChat(): void {
     if (this.busy) return;
     this.showHistory(false);
@@ -415,7 +427,7 @@ export class ChatView {
       return;
     }
     this.historyPanel.innerHTML = '';
-    this.historyPanel.append(this.note('Loading…'));
+    this.historyPanel.append(this.note('Loading...'));
     this.showHistory(true);
     try {
       const session = await this.ensureSession();
@@ -687,6 +699,7 @@ function formatWhen(startedAtMillis: number): string {
 }
 
 /** Mount the chat view into `root`. */
-export function mountChat(root: HTMLElement): void {
-  new ChatView(root);
+export function mountChat(root: HTMLElement): MountedView {
+  const view = new ChatView(root);
+  return {newChat: () => view.newChat()};
 }

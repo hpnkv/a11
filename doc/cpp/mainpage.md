@@ -17,7 +17,7 @@ A11 is a small stack of layers, each written against the one below it:
 
 - **concurrency** — the fiber-aware task/future primitives (`a11::Task`,
   executors, schedulers) every asynchronous operation is built on. Awaitables
-  returned across the runtime "resolve when …" some work completes.
+  returned across the runtime "resolve when ..." some work completes.
 - **data** — the wire value types (`a11::data::Chunk`, `a11::data::NodeFragment`,
   `a11::data::WireMessage`) and the `a11::data::SerializationRegistry` that maps
   application objects to and from chunks.

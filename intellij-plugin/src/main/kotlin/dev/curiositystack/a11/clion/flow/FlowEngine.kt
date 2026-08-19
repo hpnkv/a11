@@ -55,6 +55,9 @@ class FlowEngine : Disposable {
     /** What the world contains, when something has said: see [setContext]. */
     private var context: Map<String, Any?>? = null
 
+    /** What each open project's own source declares: see [setProjectCatalogue]. */
+    private val projects = HashMap<String, Map<String, Any?>>()
+
     /** Whether a tool was found at all, which is what "degraded" means here. */
     val available: Boolean get() = executable() != null
 
@@ -126,9 +129,59 @@ class FlowEngine : Disposable {
         }
     }
 
-    /** The `context` argument, where one has been set. */
-    private fun contextArgument(): Map<String, Any?> =
-        lock.withLock { context }?.let { mapOf("context" to it) } ?: emptyMap()
+    /**
+     * What one project's own source declares, under a key naming that project.
+     *
+     * This service is one per *IDE* -- one `a11-flow` process, however many
+     * projects are open -- while an action declared in a project is that
+     * project's. Keeping them apart by key and merging on the way out is what
+     * stops the second project opened from silently replacing the first one's
+     * actions. The union is the honest answer for a shared process: at worst a
+     * flow is offered an action from the other window, which is a name too many
+     * rather than a name missing.
+     */
+    fun setProjectCatalogue(key: String, catalogue: Map<String, Any?>?) {
+        lock.withLock {
+            if (catalogue == null) projects.remove(key) else projects[key] = catalogue
+            cache.clear()
+        }
+    }
+
+    /**
+     * The actions `paths` declares in their own source: `flow.catalogue/v1`, or
+     * `null`.
+     *
+     * Reads Python, C++ and TypeScript for `ActionSchema` declarations, each with
+     * the file and line it was written at. That origin is what turns an action
+     * somebody wrote this afternoon into a hover with a description and a
+     * "go to declaration" that lands on it.
+     */
+    fun scan(paths: List<String>): Map<String, Any?>? =
+        request(mapOf("method" to "scan", "paths" to paths))
+
+    /**
+     * The `context` argument: whatever was set, with every project's own actions.
+     *
+     * Merged here rather than at each call site, and merged as *lists*, because
+     * that is what the language does with a catalogue -- a name given twice takes
+     * the later description, and the language is the one place that rule lives.
+     */
+    private fun contextArgument(): Map<String, Any?> {
+        val (given, scanned) = lock.withLock { context to projects.values.toList() }
+        if (given == null && scanned.isEmpty()) return emptyMap()
+        val actions = mutableListOf<Any?>()
+        val types = mutableListOf<Any?>()
+        for (catalogue in scanned + listOfNotNull(given)) {
+            (catalogue["actions"] as? List<*>)?.let { actions.addAll(it) }
+            (catalogue["types"] as? List<*>)?.let { types.addAll(it) }
+        }
+        val merged = mutableMapOf<String, Any?>("actions" to actions, "types" to types)
+        // `replace` is the caller's word about the *whole* world, so it survives
+        // the merge: an IDE that knows exactly which registry an inline flow is
+        // attached to means it.
+        (given?.get("replace") as? Boolean)?.let { merged["replace"] = it }
+        return mapOf("context" to merged)
+    }
 
     /** One request, with the last answer reused when the text has not changed. */
     private fun ask(method: String, text: String): Map<String, Any?>? {

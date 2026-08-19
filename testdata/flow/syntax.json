@@ -1551,36 +1551,42 @@
           },
           "count": null,
           "kind": "skip",
-          "pipeline": {
-            "at": {
-              "column": 8,
-              "end": 3927,
-              "line": 105,
-              "start": 3921
-            },
-            "kind": "pipeline",
-            "source": {
-              "at": {
-                "column": 14,
-                "end": 3928,
-                "line": 105,
-                "start": 3927
-              },
-              "base": {
+          "targets": [
+            {
+              "call": null,
+              "outputs": [],
+              "pipeline": {
                 "at": {
                   "column": 8,
                   "end": 3927,
                   "line": 105,
                   "start": 3921
                 },
-                "kind": "name",
-                "name": "search"
-              },
-              "kind": "attr",
-              "name": "debug"
-            },
-            "stages": []
-          }
+                "kind": "pipeline",
+                "source": {
+                  "at": {
+                    "column": 14,
+                    "end": 3928,
+                    "line": 105,
+                    "start": 3927
+                  },
+                  "base": {
+                    "at": {
+                      "column": 8,
+                      "end": 3927,
+                      "line": 105,
+                      "start": 3921
+                    },
+                    "kind": "name",
+                    "name": "search"
+                  },
+                  "kind": "attr",
+                  "name": "debug"
+                },
+                "stages": []
+              }
+            }
+          ]
         }
       ],
       "description": "Read a few pages and answer from them.",

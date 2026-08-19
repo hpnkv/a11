@@ -3,6 +3,7 @@
 #ifndef A11_FLOW_CATALOGUE_H_
 #define A11_FLOW_CATALOGUE_H_
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,27 @@ namespace a11::flow {
 /// a default, and a name given twice takes the later description.
 namespace catalogue {
 
+/// Where an entry was declared, for an entry that was found by reading source.
+///
+/// Absent for everything that arrived from a live registry or from the embedded
+/// snapshot: a registry knows what it holds and not where the text that put it
+/// there was written. Present for what `discover::Discover` read out of a
+/// project, which is what lets "go to symbol" leave the flow and land on the
+/// `ActionSchema` itself.
+///
+/// 1-based line and column, the convention every other position in these
+/// formats uses.
+struct Origin {
+  /// The path as the host gave it to the scanner: absolute if the root was,
+  /// relative if it was. Passed through rather than normalised, because the host
+  /// has to open the answer in the terms it asked in.
+  std::string file;
+  int line = 1;
+  int column = 1;
+
+  friend bool operator==(const Origin&, const Origin&) = default;
+};
+
 /// One port of an action, as a tool needs to show it.
 struct PortInfo {
   std::string name;
@@ -54,6 +76,8 @@ struct ActionInfo {
   std::vector<PortInfo> outputs;
   /// Header names the action declares, with what each is for.
   std::vector<PortInfo> headers;
+  /// Where the declaration is, when it was found by reading source.
+  std::optional<Origin> origin;
 
   const PortInfo* absl_nullable Port(std::string_view name,
                                      syntax::PortDirection direction) const;
@@ -69,6 +93,8 @@ struct ActionInfo {
 struct TypeInfo {
   std::string tag;
   DtoPlan shape;
+  /// Where the declaration is, when it was found by reading source.
+  std::optional<Origin> origin;
 };
 
 /// Everything the tools know about the world, in one place.
@@ -77,6 +103,15 @@ class Catalogue {
   /// The embedded snapshot: what a standalone tool knows with nothing
   /// configured.
   static const Catalogue& Builtin();
+
+  /// The catalogue these entries make.
+  ///
+  /// For a producer that has the entries as values rather than as JSON, which is
+  /// what `discover::Discover` is: it reads source and builds `ActionInfo`s, and
+  /// routing them out through JSON and back would be a round trip that could
+  /// only lose things.
+  static Catalogue Of(std::vector<ActionInfo> actions,
+                      std::vector<TypeInfo> types = {});
 
   /// The catalogue `value` describes, in the shape [ToJson] writes.
   ///

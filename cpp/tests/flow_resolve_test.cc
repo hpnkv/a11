@@ -135,6 +135,79 @@ TEST(FlowResolve, ChecksACallsPortsAgainstTheFlowItNames) {
   }
 }
 
+TEST(FlowResolve, SkipACallExpandsToEveryDeclaredOutputOfASiblingFlow) {
+  const std::string inner =
+      "flow inner { in a: string\n out b: string\n out c: string\n"
+      "  a -> b\n a -> c }\n";
+  const std::string outer =
+      "flow outer { in a: string\n"
+      "  x = run inner(a: a)\n  skip x }\n";
+  const ResolveResult result = Check(inner + outer);
+  ASSERT_TRUE(result.diagnostics.empty()) << Messages(result);
+  ASSERT_EQ(result.program.flows.size(), 2u);
+  const FlowPlan& plan = result.program.flows[1];
+  // The call, the pipe feeding it, then one 'skip' per declared output.
+  ASSERT_EQ(plan.steps.size(), 4u);
+  EXPECT_EQ(plan.steps[2].kind, "skip");
+  EXPECT_EQ(plan.steps[2].source, "x.b");
+  EXPECT_EQ(plan.steps[3].kind, "skip");
+  EXPECT_EQ(plan.steps[3].source, "x.c");
+}
+
+TEST(FlowResolve, SkipACallWhoseRealPortsAreUnknownHereStillResolves) {
+  // `unknown-action` names nothing this program declares, so the resolver has
+  // no port list to expand -- the same situation as an action from a registry.
+  const ResolveResult result = Check(
+      "flow f { in a: string\n"
+      "  x = run unknown-action(a: a)\n  skip x }\n");
+  ASSERT_TRUE(result.diagnostics.empty()) << Messages(result);
+  const FlowPlan& plan = result.program.flows[0];
+  ASSERT_EQ(plan.steps.size(), 3u);
+  EXPECT_EQ(plan.steps[2].kind, "skip");
+  EXPECT_EQ(plan.steps[2].label, "x");
+  EXPECT_EQ(plan.steps[2].source, "x");
+}
+
+TEST(FlowResolve, SkipNamedOutputsOfACallReusesThePortValidationOfADottedReference) {
+  const std::string inner =
+      "flow inner { in a: string\n out b: string\n a -> b }\n";
+  const std::string outer =
+      "flow outer { in a: string\n"
+      "  x = run inner(a: a)\n  skip nope of x }\n";
+  const ResolveResult result = Check(inner + outer);
+  EXPECT_EQ(Codes(result), (std::vector<std::string>{"flow.name.unknown-port"}));
+  EXPECT_NE(Messages(result).find("has no output port 'nope'"),
+            std::string::npos)
+      << Messages(result);
+}
+
+TEST(FlowResolve, SkipOfACallRequiresACall) {
+  const ResolveResult result =
+      Check("flow f { in a: string\n  skip nope of a }\n");
+  EXPECT_EQ(Codes(result), (std::vector<std::string>{"flow.name.not-a-call"}));
+}
+
+TEST(FlowResolve, SkipCombinesAPortAndACallsOutputsInOneStatement) {
+  const std::string inner =
+      "flow inner { in a: string\n out b: string\n a -> b }\n";
+  const std::string outer =
+      "flow outer { in a: string\n out done: string\n"
+      "  x = run inner(a: a)\n"
+      "  skip a,\n"
+      "    (b) of x\n"
+      "  \"done\" -> done }\n";
+  const ResolveResult result = Check(inner + outer);
+  ASSERT_TRUE(result.diagnostics.empty()) << Messages(result);
+  const FlowPlan& plan = result.program.flows[1];
+  // The call, the pipe feeding it, the skip of 'a', the skip of 'x.b', the
+  // final pipe.
+  ASSERT_EQ(plan.steps.size(), 5u);
+  EXPECT_EQ(plan.steps[2].kind, "skip");
+  EXPECT_EQ(plan.steps[2].source, "a");
+  EXPECT_EQ(plan.steps[3].kind, "skip");
+  EXPECT_EQ(plan.steps[3].source, "x.b");
+}
+
 TEST(FlowResolve, AFlowIsInItsOwnProgramSoItMayCallItself) {
   const ResolveResult good = Check(
       "flow loop { in a: string\n out b: string\n"

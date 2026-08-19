@@ -1,7 +1,7 @@
 # A11 Chat for JetBrains IDEs
 
 An AI chat tool window for JetBrains IDEs — IntelliJ IDEA, PyCharm, CLion,
-GoLand, Rider, WebStorm, … — powered by [A11](https://github.com/hpnkv/a11).
+GoLand, Rider, WebStorm, ... — powered by [A11](https://github.com/hpnkv/a11).
 The chat UI is a **JCEF** (embedded Chromium) page that runs the **TypeScript
 A11 library** and talks to the **A11 gateway** (`a11 gateway`) over a WebSocket,
 letting the model call **tools backed by the IDE** — open editors, the current
@@ -99,7 +99,7 @@ with no change here at all — and what it reports is word for word what
 `a11 flow check` and CI report, because it is the same code.
 
 The binary comes from `bin/<os>-<arch>/a11-flow` in the plugin's resources, or from
-`-Da11.flow.tool=…`/`A11_FLOW_TOOL`, or from the path. Build one with
+`-Da11.flow.tool=...`/`A11_FLOW_TOOL`, or from the path. Build one with
 
 ```sh
 cmake --build --preset debug --target a11_flow_tool
@@ -122,6 +122,18 @@ fields of a status. `it` is offered inside `where`/`map`/`group` and nowhere els
 and a name is never offered above the statement that binds it. All of that is
 decided by `CompleteAt` in the language; the plugin turns the answers into lookup
 elements.
+
+**Actions this project declares** are found by reading it. The language ships a
+snapshot of what the SDK registers, so hovering `interact_with_llm` has always said
+something useful; an action somebody wrote this afternoon was in no snapshot, so
+hovering it said "action name" and Ctrl+B had nowhere to go. `a11-flow scan` reads
+the project's own `.py`, `.cc` and `.ts` for `ActionSchema` declarations — on open,
+and again a moment after one is saved — and `FlowCatalogueService` hands the result
+to `FlowEngine`. Hovering that action then shows its description and every port it
+has, completion offers its ports, and **Ctrl+B goes to the declaration**, in
+whichever language it was written in. A tolerant textual read rather than a parser
+for three languages: `a11 flow scan` prints exactly what it can see, which is the
+way to check what it made of a particular schema.
 
 Diagnostics arrive as one external annotator rather than as inspections, because
 the checks, their messages, their severities and their families are the language's:
@@ -152,11 +164,18 @@ implementation of the check, and would corrupt a file the day the two disagreed.
  └────────────────────────────┘
 ```
 
-- The **web UI** lives in [`webview/`](webview) — a small TypeScript app bundled
-  with esbuild into `src/main/resources/webview/app.js`. It imports the
-  TypeScript A11 library from [`../js`](../js) and owns the WebSocket to the
-  gateway directly (no Kotlin broker). Chat renders markdown turns, streams
-  tokens, auto-scrolls, and shows a live "thinking" affordance.
+- The **web UI** lives in [`../webview`](../webview) and is **shared with the
+  VSCode extension**: the chat, the action explorer, the conversation list, the
+  markdown renderer, the forms built from a port schema, and the `index.html` they
+  are styled by. It imports the TypeScript A11 library from [`../js`](../js) and
+  owns the WebSocket to the gateway directly (no Kotlin broker). Chat renders
+  markdown turns, streams tokens, auto-scrolls, and shows a live "thinking"
+  affordance.
+  [`webview/`](webview) *here* is this host's half: an entry point that installs
+  the JCEF bridge, bundled with esbuild into `src/main/resources/webview/app.js`.
+  The seam between them is six methods (`bridge.ts`) — `listActions`, `runAction`,
+  `getConfig`, `readFlow`, `suggestOnHighlight`, `clearSuggestions` — which is the
+  whole of what the UI asks of an editor, and why one UI serves two.
 - The **A11 compatibility layer** in [`../kotlin`](../kotlin) — a byte-compatible
   Kotlin port of the A11 client runtime — is **kept intact** and still consumed
   as a Gradle composite build, so future Kotlin-driven experiences can reuse it.
@@ -237,7 +256,7 @@ install matching `platformVersion` in `gradle.properties`, and a Python env with
 
 ```sh
 cd intellij-plugin
-./gradlew buildWebview    # bundles ../js + webview/ into resources/webview/app.js
+./gradlew buildWebview    # bundles ../js + ../webview + webview/ into resources/webview/
 ./gradlew runIde          # launches a sandbox CLion (2026.1) with the plugin
 ./gradlew buildPlugin     # produces a distributable .zip under build/distributions
 ./gradlew test            # headless BasePlatformTestCase tool tests
@@ -345,10 +364,11 @@ override `traverseUI`.
   drives `get_active_file` through an A11 action, and exercises the direct
   `IdeTools.runByName` / `listDescriptors` path the JCEF bridge uses, plus the
   reverse-dispatch proxy's handling of a tool's user-facing run log.
-- Webview: `cd webview && npm run typecheck` type-checks the UI + client.
+- Webview: `cd ../webview && npm run typecheck` type-checks the shared UI, and
+  `cd webview && npm run typecheck` this host's entry point with it.
 - Library: `../kotlin` has round-trip, **golden byte-vector** (decodes bytes
   produced by the native Python encoder), end-to-end (call + reverse tool
-  dispatch), and **live interop** (`A11_BACKEND_URL=… ./gradlew test`) tests.
+  dispatch), and **live interop** (`A11_BACKEND_URL=... ./gradlew test`) tests.
 
 ## Status
 

@@ -42,7 +42,7 @@ step, from the `progress` port; the image appears when `image` closes.
   </div>
   <div id="media-errors" class="a11-errors" role="alert" aria-live="polite"></div>
   <form id="media-form" class="a11-compose">
-    <input id="media-prompt" aria-label="Prompt" autocomplete="off" placeholder="a lighthouse in a storm, oil painting…">
+    <input id="media-prompt" aria-label="Prompt" autocomplete="off" placeholder="a lighthouse in a storm, oil painting...">
     <button type="submit">Draw</button>
   </form>
   <div class="a11-media">

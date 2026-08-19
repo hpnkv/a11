@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -15,12 +16,14 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/catalogue.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
@@ -298,6 +301,49 @@ class Server {
     return document->value("uri", std::string());
   }
 
+  /// A filesystem path as a `file://` URI.
+  ///
+  /// Percent-encodes everything outside the unreserved set, which is what a path
+  /// with a space in it needs. The separators stay separators: a URI whose
+  /// slashes were escaped would name one file called `a/b`.
+  static std::string FileUri(std::string_view path) {
+    std::string out = "file://";
+    if (!path.empty() && path.front() != '/') {
+      // A relative path is relative to wherever the tool was started, which is
+      // the project root for every host that starts one. Making it absolute here
+      // would guess at a directory this process may not be in.
+      std::error_code error;
+      const std::filesystem::path absolute =
+          std::filesystem::absolute(std::filesystem::path(path), error);
+      if (!error) return FileUri(absolute.string());
+    }
+    for (const char c : path) {
+      const unsigned char byte = static_cast<unsigned char>(c);
+      const bool plain = absl::ascii_isalnum(byte) || c == '/' || c == '-' ||
+                         c == '_' || c == '.' || c == '~';
+      if (plain) {
+        out.push_back(c);
+      } else {
+        absl::StrAppend(&out, absl::StrFormat("%%%02X", byte));
+      }
+    }
+    return out;
+  }
+
+  /// A zero-width range at a 1-based line and column, as the protocol counts
+  /// them: 0-based, and a column in UTF-16 units.
+  ///
+  /// The column is used as given rather than converted, because converting it
+  /// would mean reading a file this process was never asked to open. A caret one
+  /// unit out on a line with prose before the declaration is a smaller wrong
+  /// than opening the wrong file, and every host scrolls to the line.
+  static nlohmann::json PositionAt(int line, int column) {
+    const int zero_line = line > 0 ? line - 1 : 0;
+    const int zero_column = column > 0 ? column - 1 : 0;
+    nlohmann::json position{{"line", zero_line}, {"character", zero_column}};
+    return nlohmann::json{{"start", position}, {"end", position}};
+  }
+
   static nlohmann::json RangeOf(const Document& document, const Range& range) {
     const auto [start_line, start_character] =
         document.PositionOf(range.start.offset);
@@ -379,6 +425,7 @@ class Server {
         message.contains("params") ? message.at("params") : nlohmann::json::object();
 
     if (method == "initialize") {
+      ReadClientCapabilities(message.value("params", nlohmann::json::object()));
       Answer(message, Capabilities());
       return;
     }
@@ -502,6 +549,31 @@ class Server {
       for (const auto& [uri, document] : documents_) Publish(uri, document);
       return;
     }
+    if (method == "a11flow/scan") {
+      Scan(message, params);
+      return;
+    }
+    if (method == "a11flow/relay") {
+      // The JSON service, reached through the LSP connection: `{"method":
+      // "check", "source": ".."}` answered exactly as `serve --protocol json`
+      // answers it.
+      //
+      // For the questions the protocol has no place for, and there is one that
+      // matters: a flow written inside a *string literal* of another language is
+      // not a document the server has, so it is asked about as text. Without this
+      // a client would have to run a second process for it, and the two would
+      // then disagree about the world the moment one of them was sent a context.
+      nlohmann::json relayed = params.is_object() ? params : nlohmann::json::object();
+      if (!relayed.contains("context") && !known_.Empty()) {
+        // What this session knows, so a fragment is checked against the same
+        // world its file's `.flow` siblings are.
+        nlohmann::json context = known_.ToJson();
+        context["replace"] = true;
+        relayed["context"] = std::move(context);
+      }
+      Answer(message, Handle(relayed));
+      return;
+    }
     // Anything else: an unknown request still needs an answer, or a client waits
     // for one for ever.
     if (message.contains("id")) Answer(message, nlohmann::json());
@@ -522,9 +594,23 @@ class Server {
       return;
     }
     const size_t offset = OffsetIn(*document, params);
-    const CompleteResult completed = CompleteAt(document->Text(), offset);
+    // Against the world this session knows, which is the whole point of knowing
+    // it. Hover and go-to-declaration were given `known_` and this was not, so an
+    // action the project declares hovered with its description and had somewhere
+    // to go, and was the one thing never *offered* -- which is the case that
+    // matters most, since a name you have to know already is a name you did not
+    // need completing.
+    const CompleteResult completed =
+        CompleteAt(document->Text(), offset, known_);
+    // What taking a proposal replaces: the partial word, and nothing else.
+    //
+    // Clamped rather than trusted. Every other answer in this adapter is read-only
+    // -- a colour, a message, a hover -- and this one *edits the document*, so the
+    // cost of the language being wrong about the range is somebody's file rather
+    // than a wrong colour. It was wrong once, and a completion taken where nothing
+    // had been typed replaced everything before the caret.
     Range replaced;
-    replaced.start.offset = completed.prefix_start;
+    replaced.start.offset = std::min(completed.prefix_start, offset);
     replaced.end.offset = offset;
     const nlohmann::json range = RangeOf(*document, replaced);
     nlohmann::json items = nlohmann::json::array();
@@ -541,9 +627,31 @@ class Server {
           // than alphabetically.
           {"sortText", absl::StrCat(SortKey(items.size()))},
       };
-      if (!proposal.type.empty()) item["detail"] = proposal.type;
-      if (!proposal.tail.empty()) {
-        item["labelDetails"] = nlohmann::json{{"detail", proposal.tail}};
+      // The type beside the name, and what the thing is *for* after it. A client
+      // that renders `labelDetails` gets the two apart, which reads better; one
+      // that does not gets both in `detail`, because a description that only
+      // appears for some clients is a description somebody does not see.
+      std::string detail = proposal.type;
+      if (label_details_) {
+        if (!proposal.tail.empty()) {
+          item["labelDetails"] = nlohmann::json{{"detail", proposal.tail}};
+        }
+      } else if (!proposal.tail.empty()) {
+        // The tail already opens with the space that separates it from whatever
+        // it follows, so nothing is added here; with no type in front of it that
+        // space would be a leading one, and is taken off.
+        absl::StrAppend(&detail, proposal.tail);
+        if (!detail.empty() && detail.front() == ' ') detail.erase(0, 1);
+      }
+      if (!detail.empty()) item["detail"] = detail;
+      // The reference text beside the list, which is the same text a hover over
+      // the finished word gives. The language works it out for every proposal it
+      // has one for; dropping it here was why this client's popup was empty
+      // where the IntelliJ one, reading the same field off the JSON protocol,
+      // was not.
+      if (!proposal.documentation.empty()) {
+        item["documentation"] = nlohmann::json{
+            {"kind", "markdown"}, {"value", proposal.documentation}};
       }
       items.push_back(std::move(item));
     }
@@ -638,15 +746,27 @@ class Server {
     }
     const Description about =
         Describe(document->Text(), OffsetIn(*document, params), known_);
-    if (!about.has_definition) {
-      // A word that is not a name of this document -- an action, a stage --
-      // has no location here. Null rather than an empty list, which is what a
-      // client reads as "nowhere to go".
-      Answer(message, nlohmann::json());
+    if (about.has_definition) {
+      Answer(message,
+             nlohmann::json{{"uri", Uri(params)},
+                            {"range", RangeOf(*document, about.definition)}});
       return;
     }
-    Answer(message, nlohmann::json{{"uri", Uri(params)},
-                                   {"range", RangeOf(*document, about.definition)}});
+    // A name this document did not declare may still have somewhere to go: an
+    // action declared in a project file that something scanned. This is the one
+    // answer that leaves the document, and it is why an `ActionSchema` written
+    // in a `.py` two directories away is now a jump rather than a search.
+    if (about.origin.has_value()) {
+      Answer(message,
+             nlohmann::json{
+                 {"uri", FileUri(about.origin->file)},
+                 {"range", PositionAt(about.origin->line, about.origin->column)}});
+      return;
+    }
+    // A word that is not a name at all -- a stage, a keyword -- has no location.
+    // Null rather than an empty list, which is what a client reads as "nowhere
+    // to go".
+    Answer(message, nlohmann::json());
   }
 
   /// One symbol, as the protocol's `DocumentSymbol`.
@@ -694,6 +814,62 @@ class Server {
     return 13;
   }
 
+  /// What the client said it can render, for the fields that are opt-in.
+  void ReadClientCapabilities(const nlohmann::json& params) {
+    label_details_ = false;
+    if (!params.is_object()) return;
+    const auto capabilities = params.find("capabilities");
+    if (capabilities == params.end() || !capabilities->is_object()) return;
+    const auto document = capabilities->find("textDocument");
+    if (document == capabilities->end() || !document->is_object()) return;
+    const auto completion = document->find("completion");
+    if (completion == document->end() || !completion->is_object()) return;
+    const auto item = completion->find("completionItem");
+    if (item == completion->end() || !item->is_object()) return;
+    label_details_ = item->value("labelDetailsSupport", false);
+  }
+
+  /// `a11flow/scan`: read the project's own source for the actions it declares,
+  /// and fold what is found into the world these documents are read against.
+  ///
+  /// A *request* rather than a notification, unlike `setContext`, because a
+  /// client wants to know what was found: how many actions, and whether a cap
+  /// stopped the walk. It behaves like a `setContext` besides -- the result is
+  /// merged over what is already known, and every open document is re-checked,
+  /// since an action that exists now may make a flow that named it correct.
+  ///
+  /// Merged rather than replacing, so a host may scan *and* send a live registry
+  /// and get both.
+  void Scan(const nlohmann::json& message, const nlohmann::json& params) {
+    std::vector<std::string> roots;
+    if (params.is_object()) {
+      if (const auto paths = params.find("paths");
+          paths != params.end() && paths->is_array()) {
+        for (const nlohmann::json& one : *paths) {
+          if (one.is_string()) roots.push_back(one.get<std::string>());
+        }
+      }
+    }
+    if (roots.empty()) {
+      if (message.contains("id")) {
+        Answer(message, nlohmann::json{{"actions", 0},
+                                       {"error", "no paths were given"}});
+      }
+      return;
+    }
+    const discover::Result found = discover::Discover(roots);
+    known_ = known_.MergedWith(found.found);
+    for (const auto& [uri, document] : documents_) Publish(uri, document);
+    if (message.contains("id")) {
+      Answer(message,
+             nlohmann::json{
+                 {"actions", found.found.actions().size()},
+                 {"files_read", found.files_read},
+                 {"reached_file_limit", found.reached_file_limit},
+                 {"too_large", found.too_large}});
+    }
+  }
+
   /// `a11flow/setContext`: what the world outside these documents contains.
   ///
   /// Stateful, and deliberately so. A client that knows which action registry an
@@ -729,7 +905,15 @@ class Server {
                                                         {"quickfix"})}}},
              {"completionProvider",
               nlohmann::json{{"triggerCharacters",
-                              nlohmann::json::array({".", "|", ":", ">", " "})},
+                              // `(` and `,` are what open an argument list and
+                              // what separate one argument from the next, so both
+                              // are positions where the answer is "these ports".
+                              // Without them, typing `run act(` asked for nothing
+                              // and the ports of the action being called -- the
+                              // thing hardest to remember -- were the one list
+                              // that needed Ctrl+Space to see.
+                              nlohmann::json::array(
+                                  {".", "|", ":", ">", " ", "(", ","})},
                              {"resolveProvider", false}}},
              {"semanticTokensProvider",
               nlohmann::json{
@@ -751,6 +935,13 @@ class Server {
   catalogue::Catalogue known_ = catalogue::Catalogue::Builtin();
   bool shutdown_ = false;
   bool exited_ = false;
+  /// Whether the client said it renders `labelDetails`.
+  ///
+  /// It is an opt-in capability, and a client that did not ask for it is entitled
+  /// to ignore the field -- which would drop a port's description out of the row
+  /// and leave the list saying only the port's name. So where it is absent the
+  /// same text goes in `detail`, which every client has always shown.
+  bool label_details_ = false;
 };
 
 }  // namespace

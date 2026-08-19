@@ -277,7 +277,16 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     }
     case syntax::NodeKind::kSkip: {
       const auto* skip = syntax::As<syntax::Skip>(node);
-      value["pipeline"] = NodeJson(skip->pipeline.get());
+      nlohmann::json targets = nlohmann::json::array();
+      for (const syntax::SkipTarget& target : skip->targets) {
+        nlohmann::json one = nlohmann::json::object();
+        one["pipeline"] = NodeJson(target.pipeline.get());
+        one["call"] = target.call.Empty() ? nlohmann::json(nullptr)
+                                          : nlohmann::json(target.call.text);
+        one["outputs"] = WordList(target.outputs);
+        targets.push_back(std::move(one));
+      }
+      value["targets"] = std::move(targets);
       value["after"] = WordList(skip->after);
       value["count"] = skip->count.has_value() ? nlohmann::json(*skip->count)
                                                : nlohmann::json(nullptr);
@@ -583,6 +592,33 @@ nlohmann::json VocabularyToJsonValue() {
     stages[std::string(stage)] = vocabulary::StageArgumentName(
         *vocabulary::StageTakes(stage));
   }
+  // What each word *does*, beside the lists of which words there are. Keyed by
+  // role and then by word, under the same role names the word-list keys use, so
+  // a reader can put `port_modifiers` and `documentation.port_modifier`
+  // together. A sibling key rather than a change to the lists themselves: those
+  // are what the generated grammar files are written from, and a generated file
+  // that changed shape because reference text was added would fail a check that
+  // is meant to be about the words.
+  nlohmann::json documentation = nlohmann::json::object();
+  for (const vocabulary::WordRole role : vocabulary::WordRoles()) {
+    nlohmann::json words = nlohmann::json::object();
+    for (const std::string_view word : vocabulary::WordsOf(role)) {
+      // The role's own table first, then whichever documents the word: a set
+      // may list a word another set documents, and `AnyDocumentation` says
+      // which cases those are.
+      const vocabulary::WordDoc* doc = vocabulary::Documentation(role, word);
+      if (doc == nullptr) doc = vocabulary::AnyDocumentation(word);
+      if (doc == nullptr) continue;
+      nlohmann::json entry{{"summary", doc->summary}};
+      if (!doc->takes.empty()) entry["takes"] = doc->takes;
+      if (!doc->detail.empty()) entry["detail"] = doc->detail;
+      if (!doc->example.empty()) entry["example"] = doc->example;
+      words[std::string(word)] = std::move(entry);
+    }
+    documentation[std::string(vocabulary::WordRoleName(role))] =
+        std::move(words);
+  }
+
   return nlohmann::json{
       {"format", kVocabularyFormat},
       {"stages", ordered(vocabulary::Stages())},
@@ -603,6 +639,9 @@ nlohmann::json VocabularyToJsonValue() {
       {"constants", sorted(vocabulary::ConstantWords())},
       {"operators", sorted(vocabulary::OperatorWords())},
       {"duration_units", ordered(vocabulary::DurationUnits())},
+      {"field_modifiers", ordered(vocabulary::OrderedFieldModifiers())},
+      {"symbols", ordered(vocabulary::OrderedSymbols())},
+      {"documentation", std::move(documentation)},
   };
 }
 

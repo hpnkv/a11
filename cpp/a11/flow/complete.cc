@@ -3,6 +3,7 @@
 #include "a11/flow/complete.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -54,7 +55,7 @@ std::string Summary(std::string_view description) {
   if (stop != std::string_view::npos) first = first.substr(0, stop + 1);
   constexpr size_t kWidest = 72;
   if (first.size() > kWidest) {
-    return absl::StrCat(" ", first.substr(0, kWidest - 1), "…");
+    return absl::StrCat(" ", first.substr(0, kWidest - 1), "...");
   }
   return absl::StrCat(" ", first);
 }
@@ -76,6 +77,49 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
       return " source";
   }
   return "";
+}
+
+/// Which of the language's word tables documents a proposal of this kind, or
+/// `nullopt` where the proposal names something this document or the host
+/// declared rather than a word of the language.
+///
+/// A name the *document* bound gets its text from the plan it was resolved to,
+/// beside where this is called; this is only for the fixed vocabulary. `kField`
+/// is deliberately absent: a field proposal may be a status's `code` or a shape's
+/// own field of the same name, and answering with the status text for the latter
+/// would be confidently wrong.
+std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
+  switch (kind) {
+    case ProposalKind::kStatement:
+      return vocabulary::WordRole::kStatement;
+    case ProposalKind::kDeclaration:
+      return vocabulary::WordRole::kDeclaration;
+    case ProposalKind::kModifier:
+      return vocabulary::WordRole::kModifier;
+    case ProposalKind::kStage:
+      return vocabulary::WordRole::kStage;
+    case ProposalKind::kFunction:
+      return vocabulary::WordRole::kBuiltin;
+    case ProposalKind::kType:
+      return vocabulary::WordRole::kType;
+    case ProposalKind::kStatusCode:
+      return vocabulary::WordRole::kStatusCode;
+    case ProposalKind::kConstant:
+      return vocabulary::WordRole::kConstant;
+    case ProposalKind::kPortModifier:
+      return vocabulary::WordRole::kPortModifier;
+    case ProposalKind::kFlow:
+    case ProposalKind::kPort:
+    case ProposalKind::kNode:
+    case ProposalKind::kNodeMap:
+    case ProposalKind::kCall:
+    case ProposalKind::kBarrier:
+    case ProposalKind::kVariable:
+    case ProposalKind::kHeader:
+    case ProposalKind::kField:
+      return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 /// Everything that may be written at one offset in one document.
@@ -132,6 +176,12 @@ class Completer {
   /// which tokens count as being *before* it.
   void Locate() {
     cut_ = 0;
+    // No partial word means one that starts *at the caret* and is empty, which is
+    // what `prefix_start` has to say: a frontend replaces `[prefix_start, caret)`
+    // with what it inserts. Left at zero, that range was the whole document up to
+    // the caret -- so taking any proposal at a position where nothing had been
+    // typed yet, which is most of them, deleted the file in front of it.
+    prefix_start_ = offset_;
     for (size_t index = 0; index < tokens_.size(); ++index) {
       const Token& token = tokens_[index];
       cut_ = index;
@@ -295,13 +345,12 @@ class Completer {
     proposal.insert = proposal.name;
     proposal.tail = std::string(tail);
     proposal.type = std::string(type);
-    // A stage and a function each have the language's own reference text,
-    // and it is the text a hover over the finished word gives: the popup
-    // beside the list is the same question, asked a moment earlier.
-    if (kind == ProposalKind::kStage) {
-      proposal.documentation = StageMarkdown(proposal.name);
-    } else if (kind == ProposalKind::kFunction) {
-      proposal.documentation = BuiltinMarkdown(proposal.name);
+    // A word of the language has the language's own reference text, and it is
+    // the text a hover over the finished word gives: the popup beside the list
+    // is the same question, asked a moment earlier.
+    if (const std::optional<vocabulary::WordRole> role = RoleOf(kind);
+        role.has_value()) {
+      proposal.documentation = WordMarkdown(proposal.name, *role);
     }
     proposals_.push_back(std::move(proposal));
   }
@@ -534,7 +583,7 @@ class Completer {
   /// A field being written: its type, then what may bound it.
   void ProposeField() {
     if (line_.empty()) {
-      Add("describe", ProposalKind::kDeclaration, " \"…\"");
+      Add("describe", ProposalKind::kDeclaration, " \"...\"");
       return;
     }
     if (!LineHas(TokenKind::kColon)) return;  // naming the field
@@ -571,7 +620,7 @@ class Completer {
     return "";
   }
 
-  /// The keys of a `Shape{…}` being written, when the shape is one this file
+  /// The keys of a `Shape{...}` being written, when the shape is one this file
   /// declares.
   ///
   /// True when it answered, so the ordinary expression rules do not also run:
@@ -905,7 +954,8 @@ class Completer {
       return false;
     };
     const auto offer = [&](std::string_view name, std::string_view type,
-                           bool required, std::string_view description) {
+                           bool required, bool unary,
+                           std::string_view description) {
       if (given(name)) return;
       Proposal proposal;
       proposal.name = std::string(name);
@@ -913,16 +963,30 @@ class Completer {
       // An argument is a name and a colon; writing the colon is writing what
       // the grammar requires, not guessing what the author meant.
       proposal.insert = absl::StrCat(name, ": ");
-      proposal.tail =
-          required ? " (required)" : Summary(description);
-      proposal.type = std::string(type);
+      // Both, and in that order. `(required)` used to *replace* the description,
+      // so the ports that have to be written were the ones the list said least
+      // about -- which is backwards: what a port is for is the question, and
+      // whether it is required is the aside.
+      if (required) absl::StrAppend(&proposal.tail, " (required)");
+      if (!description.empty()) {
+        if (required) absl::StrAppend(&proposal.tail, " —");
+        absl::StrAppend(&proposal.tail, Summary(description));
+      }
+      // A stream port is written differently from a single value, so the type
+      // says which. This is the grey text beside the name in every frontend.
+      proposal.type = absl::StrCat(type, unary ? "" : " stream");
+      // The whole description, for the popup beside the list: a completion line
+      // holds one sentence and a port's description is prose.
+      proposal.documentation =
+          PortMarkdown(name, type, required, unary, description);
       proposals_.push_back(std::move(proposal));
     };
 
     if (const FlowPlan* target = FlowNamed(action); target != nullptr) {
       for (const PortPlan& port : target->ports) {
         if (port.direction != syntax::PortDirection::kInput) continue;
-        offer(port.name, port.declared, port.required, port.description);
+        offer(port.name, port.declared.empty() ? port.type : port.declared,
+              port.required, port.unary, port.description);
       }
       return;
     }
@@ -934,7 +998,8 @@ class Completer {
     for (const bool required : {true, false}) {
       for (const catalogue::PortInfo& port : known->inputs) {
         if (port.required != required) continue;
-        offer(port.name, port.type, port.required, port.description);
+        offer(port.name, port.type, port.required, port.unary,
+              port.description);
       }
     }
   }

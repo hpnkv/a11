@@ -174,7 +174,7 @@ const fragmentPreview = (fragment: WireMessage['nodeFragments'][number]): string
   const value = result.mimetype.startsWith('text/')
     ? new TextDecoder().decode(bytes)
     : [...bytes].map((byte) => `\\x${byte.toString(16).padStart(2, '0')}`).join('');
-  const truncated = result.data.byteLength > 100 ? `… (${result.data.byteLength - 100} more bytes)` : '';
+  const truncated = result.data.byteLength > 100 ? `... (${result.data.byteLength - 100} more bytes)` : '';
   const timestamp = metadata?.timestamp?.toISOString() ?? 'none';
   const reference = result.ref === '' ? '' : `\nChunk reference: ${result.ref}`;
   return `MIME type: ${mimetype}\nTimestamp: ${timestamp}\nAttributes: ${attributes}${reference}\nData: ${value}${truncated}`;

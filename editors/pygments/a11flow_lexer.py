@@ -99,7 +99,7 @@ STATEMENTS = _keywords(
 )
 
 #: Words that stand inside a statement without opening one.
-CLAUSES = _keywords("parallel", "max")
+CLAUSES = _keywords("parallel", "max", "of")
 
 #: What may follow a call's closing parenthesis.
 MODIFIERS = _keywords(

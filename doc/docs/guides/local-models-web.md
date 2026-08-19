@@ -38,7 +38,7 @@ browser is required.
   <section class="gemma-chat" aria-label="Local Gemma chat">
     <div id="gemma-messages" class="gemma-messages"></div>
     <form id="gemma-form" class="gemma-compose">
-      <input id="gemma-input" aria-label="Message" autocomplete="off" placeholder="Say something…">
+      <input id="gemma-input" aria-label="Message" autocomplete="off" placeholder="Say something...">
       <button type="submit">Send</button>
     </form>
   </section>
@@ -158,7 +158,7 @@ setGemmaEngineFactory(async (config) => {
         async generate(prompt, onToken) {
             // stream pieces via onToken(delta); resolve with the full text,
             // or return a Status on failure — never throw.
-            return '…';
+            return '...';
         },
     };
     return engine;

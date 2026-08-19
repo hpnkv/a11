@@ -12,47 +12,22 @@ flow suggest-fixes {
 
   # --- what the client is looking at -----------------------------------------
 
-  # Numbered, which is off by default and asked for here: every suggestion has to
-  # name a range and most carry a patch, and both are line arithmetic the model
-  # would otherwise do by counting. The numbers are 0-based, as the highlights are.
   active = call get_active_file(request: {include_line_numbers: true})
-  # The IDE's narration of the run, read and dropped: an output nobody reads
-  # stalls the action producing it. `user_facing_log` and not the name the IDE's
-  # own schema uses, because a tool announced to a gateway arrives with its
-  # user-facing port under that canonical name.
   skip active.user_facing_log
 
-  # The path is wanted more than once -- by the highlights call, by the prompt,
-  # and by every record that comes back -- and a node is where a value waits to
-  # be read that often. The port itself is drained once, here.
   file_path = node() in scratch
   active.path -> file_path
 
-  # The file as one string. Bounded on the way in: a prompt is not the place for
-  # an unbounded file, and this is the one value here that has no natural size.
   file_text = node() in scratch
   active.lines | join "\n" | truncate 40000 -> file_text
 
-  # --- and what the IDE underlines in it -------------------------------------
-
-  # From line 0 with no end_line: the whole file. Both are 0-based, as the
-  # highlights that come back are. Input to the review, not its subject: the
-  # model answers these and whatever else it finds.
   found = call get_error_highlights(
     request: file_path | map {path: it, start_line: 0}
   )
+  skip path, user_facing_log of found
   skip found.path  # we asked about a path we already have
   skip found.user_facing_log
 
-  # --- one turn: a review of the file ----------------------------------------
-
-  # The budget is the whole answer, thinking included, and a model left to
-  # decide for itself thinks for as long as the file is interesting: at the
-  # default 10240 this turn spent every token reasoning and wrote no text at
-  # all, which reads at this end as a run that produced nothing. Room for both,
-  # and a middling effort, because copying a file's lines into a patch exactly
-  # is careful work rather than deep work. Each provider reads the key it knows
-  # and ignores the others.
   whole = run interact_with_llm(
     config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}
   )
@@ -156,24 +131,12 @@ flow suggest-fixes {
     | where it != ""
     -> pieces
 
-  # The paragraph is whatever follows the last separator, read off the answer as
-  # one string and not out of `pieces`. `group` closes on the delta that carries
-  # the separator and keeps that delta, so a delta carrying the separator *and*
-  # the paragraph's first words leaves those words at the end of the previous
-  # piece -- and the paragraph then arrives with its opening cut off. Nothing is
-  # lost by buffering here: this port carries one value, and the paragraph is the
-  # last thing written.
   whole.text_output
     | text
     | join ""
     | map replace(it, "```json", "")
     | map replace(it, "```", "")
     | map get(split(it, "§"), -1, "")
-    # And after the last object, if one is still in front of it. A model that
-    # forgets the separator before the paragraph leaves its final record here,
-    # and a raw JSON blob in the transcript reads as a broken run. Split on a
-    # brace that *ends a line*, not on any brace: prose that happens to mention
-    # a `}` keeps its opening, which the paragraph would otherwise lose.
     | map get(split(it, "}\n"), -1, "")
     | map trim(it)
     -> file_comment

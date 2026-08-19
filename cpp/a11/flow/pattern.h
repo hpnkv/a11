@@ -26,7 +26,7 @@ namespace a11::flow::pattern {
 /// | a run of whitespace | matches any run of whitespace, at least one |
 /// | `{name}` | captures up to whatever literal follows, as little as it can |
 /// | `{name:int}` | and reads it as an integer |
-/// | `{}` | captures without a name, read as `it[0]`, `it[1]`, … |
+/// | `{}` | captures without a name, read as `it[0]`, `it[1]`, ... |
 /// | `{{`, `}}` | a literal brace |
 ///
 /// The pattern **searches**: it matches anywhere in the value, so

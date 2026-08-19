@@ -10,6 +10,7 @@
  */
 
 import { listActions, runAction, type ActionDescriptor } from './bridge.js';
+import type { MountedView } from './mount.js';
 import { createPortInput, describeSchema, type PortInput } from './portForm.js';
 
 class ActionExplorer {
@@ -125,7 +126,7 @@ class ActionExplorer {
       }
 
       run.disabled = true;
-      timing.textContent = 'running…';
+      timing.textContent = 'running...';
       const started = performance.now();
       try {
         const result = await runAction(descriptor.name, inputs);
@@ -193,6 +194,7 @@ function errorLine(error: unknown): HTMLElement {
 }
 
 /** Mount the action explorer into `root`. */
-export function mountActions(root: HTMLElement): void {
+export function mountActions(root: HTMLElement): MountedView {
   void new ActionExplorer(root).load();
+  return {};
 }

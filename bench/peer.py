@@ -193,8 +193,7 @@ _STORE_IDS = iter(range(1 << 40))
 
 async def _handle_echo(action: a11.Action) -> None:
     text = await action["text"].consume(str)
-    async with action["out"] as port:
-        await port.put_final(text)
+    await action["out"].finalize(text)
     _counters.actions += 1
 
 
@@ -219,11 +218,10 @@ async def _handle_sink(action: a11.Action) -> None:
             if fragment is None:
                 _counters.bytes_in += total
                 _counters.fragments_in += fragments
-                async with action["report"] as report:
-                    await report.put_final({
-                        "bytes": total,
-                        "fragments": fragments,
-                    })
+                await action["report"].finalize({
+                    "bytes": total,
+                    "fragments": fragments,
+                })
                 _counters.actions += 1
                 return
             total += len(fragment.data.data) if fragment.data else 0
@@ -237,10 +235,10 @@ async def _handle_source(action: a11.Action) -> None:
     chunk = types.Chunk(
         data=b"s" * size, metadata=types.ChunkMetadata(mimetype=_OCTET)
     )
-    async with action["data"] as port:
-        for _index in range(count - 1):
-            await port.put_chunk(chunk)
-        await port.put_chunk(chunk, final=True)
+    port = action["data"]
+    for _index in range(count - 1):
+        await port.put_chunk(chunk)
+    await port.finalize(chunk)
     _counters.bytes_out += count * size
     _counters.fragments_out += count
     _counters.actions += 1
@@ -263,19 +261,20 @@ async def _handle_store(action: a11.Action) -> None:
     )
     node = a11.AsyncNode.create(f"bench-store-{next(_STORE_IDS)}")
     written = 0
-    async with node as writer:
-        pending = []
-        for index in range(count):
-            final = index == count - 1
-            confirmation = await writer.put_chunk(chunk, final=final)
-            pending.append(confirmation)
-            if len(pending) >= batch:
-                for item in pending:
-                    await item
-                pending.clear()
-            written += 1
-        for item in pending:
-            await item
+    pending = []
+    for index in range(count):
+        final = index == count - 1
+        confirmation = await node.put_chunk(chunk, final=final)
+        pending.append(confirmation)
+        if len(pending) >= batch:
+            for item in pending:
+                await item
+            pending.clear()
+        written += 1
+    for item in pending:
+        await item
+    # The last chunk above carried finality, so the node is only closed.
+    await node.close()
     read = 0
     read_bytes = 0
     while True:
@@ -289,12 +288,11 @@ async def _handle_store(action: a11.Action) -> None:
             read_bytes += len(fragment.data.data) if fragment.data else 0
         if done:
             break
-    async with action["report"] as port:
-        await port.put_final({
-            "written": written,
-            "read": read,
-            "bytes": read_bytes,
-        })
+    await action["report"].finalize({
+        "written": written,
+        "read": read,
+        "bytes": read_bytes,
+    })
     _counters.actions += 1
 
 
@@ -336,8 +334,9 @@ async def _handle_compute(action: a11.Action) -> None:
         digest = hashlib.sha256(buffer + digest).digest()
     _counters.compute_rounds += rounds
     _counters.actions += 1
-    async with action["report"] as port:
-        await port.put_final({"rounds": rounds, "digest": digest[:8].hex()})
+    await action["report"].finalize(
+        {"rounds": rounds, "digest": digest[:8].hex()}
+    )
 
 
 def registry() -> a11.ActionRegistry:

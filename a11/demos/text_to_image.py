@@ -214,5 +214,8 @@ async def text_to_image(action: a11.Action) -> None:
         )
     finally:
         # A caller reading either port must see it end, however this went.
-        await progress.drain_and_close()
-        await image_out.drain_and_close()
+        # Closed rather than finalized: `progress` has no last event worth
+        # marking, and `image_out` marked its own above -- or failed before it
+        # had anything to mark.
+        await progress.close()
+        await image_out.close()

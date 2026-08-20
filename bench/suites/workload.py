@@ -64,9 +64,8 @@ def _install_fake_provider(tokens: int, thoughts: int = 0):
             await action["thoughts"].put(f"thought{index}")
         await action["new_interactions"].put(Interaction(model="bench"))
         for name in ("event_stream", "text_output", "thoughts"):
-            await action[name].put_null_final()
-            await action[name].drain_and_close()
-        await action["new_interactions"].drain_and_close()
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
 
     module_name = f"a11.sdk._bench_provider_{tokens}_{thoughts}"
     module = types.ModuleType(module_name)
@@ -88,16 +87,13 @@ async def _one_turn(read: str = "text_output") -> int:
     )
     action.set_header(LlmHeaders.PROVIDER.value, b"bench")
     action = action.run()
-    async with (
-        action["interactions"] as interactions,
-        action["config"],
-        action["tools"],
-    ):
-        await interactions.put_final(
-            a11.to_chunk(
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-            )
+    await action["interactions"].finalize(
+        a11.to_chunk(
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]}
         )
+    )
+    await action["config"].finalize()
+    await action["tools"].finalize()
     seen = 0
     async for _value in action[read]:
         seen += 1
@@ -195,8 +191,9 @@ async def _drive(registry, name, *, headers=None, command=None):
     action.run()
     if command is not None:
         await action["command"].put(command, final=True)
+    # Closed rather than finalized: `command` marked its own value final.
     for input_name in action.get_schema().inputs:
-        await action[input_name].drain_and_close()
+        await action[input_name].close()
     await asyncio.wait_for(action.wait(), timeout=60)
     return action
 

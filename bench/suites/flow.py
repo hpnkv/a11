@@ -230,8 +230,7 @@ _ECHO = a11.ActionSchema(
 
 async def _echo(action: a11.Action) -> None:
     text = await action["text"].consume(str)
-    async with action["out"] as port:
-        await port.put_final(text)
+    await action["out"].finalize(text)
 
 
 def _runtime_registry() -> a11.ActionRegistry:
@@ -280,8 +279,7 @@ async def step_overhead(scale: float) -> list[Result]:
     async def bare(_index) -> None:
         call = a11.Action(_ECHO, handler=_echo)
         call.run()
-        async with call["text"] as port:
-            await port.put_final("payload")
+        await call["text"].finalize("payload")
         await call["out"].consume(str)
         await call.wait(a11.Duration.seconds(30))
 

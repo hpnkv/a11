@@ -130,12 +130,13 @@ export async function executeActionsFromInteraction(
       }
 
       // Autofilled inputs are written and closed by the native run flow, so the
-      // runner only closes the inputs it fed itself.
+      // runner only closes the inputs it fed itself. Closed, not finalized: the
+      // forwarded fragments carry whatever finality the model's arguments had.
       for (const [inputName, portSchema] of nested.getSchema().inputs) {
         if (portSchema.autofills.length > 0) continue;
         const port = await nested.getInput(inputName);
         if (!isOk(port)) return port;
-        const closed = await port.drainAndClose();
+        const closed = await port.close();
         if (!isOk(closed)) return closed;
       }
       nestedActions.push({ call, action: nested });

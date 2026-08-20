@@ -349,8 +349,8 @@ void BindNodes(py::module_& module) {
           "sequence number. This is the primary way an agent produces "
           "streaming output: call it repeatedly as data becomes available, "
           "passing final=True on the last chunk to establish the logical "
-          "final sequence. Finality does not close the writer; call "
-          "drain_and_close() afterwards. An explicit seq can place the chunk "
+          "final sequence. Finality does not close the writer; finalize() is "
+          "the one call that does both. An explicit seq can place the chunk "
           "at a specific position.",
           py::arg("chunk"), py::arg("seq") = std::nullopt,
           py::arg("final") = false)
@@ -366,16 +366,28 @@ void BindNodes(py::module_& module) {
           "already in hand (one forwarded from another node, say).",
           py::arg("fragment"))
       .def(
-          "put_null_final",
+          "finalize",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
-             std::optional<std::uint32_t> seq) {
-            return FutureToPython(
-                WithoutGil([&] { return self->PutNullFinal(seq); }));
+             const std::optional<data::Chunk>& chunk,
+             std::optional<std::uint32_t> seq, bool wait, bool close) {
+            const nodes::FinalizeOptions options{
+                .wait = wait, .close = close, .seq = seq};
+            return FutureToPython(WithoutGil([&] {
+              return chunk.has_value() ? self->Finalize(*chunk, options)
+                                       : self->Finalize(options);
+            }));
           },
-          "Appends a final null marker and returns a future resolving to its "
-          "sequence number. Use this to declare the logical end when there is "
-          "no final payload, then call drain_and_close() to close writes.",
-          py::arg("seq") = std::nullopt)
+          "Ends the stream: appends `chunk` (or a null marker when it is "
+          "omitted) as the logical final fragment and, unless close=False, "
+          "closes the writer. Returns a future that resolves immediately "
+          "unless wait=True, in which case it resolves once the backing store "
+          "confirmed the write and closed. Not waiting is safe -- the writer's "
+          "pump carries the work out after the producer has moved on -- and a "
+          "failure is logged and left visible through get_writer_status(). "
+          "This is the Chunk-level entry point; the Python AsyncNode wraps it "
+          "as finalize(value=None, ...) and serializes for you.",
+          py::arg("chunk") = std::nullopt, py::arg("seq") = std::nullopt,
+          py::arg("wait") = false, py::arg("close") = true)
       .def(
           "next_fragment",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
@@ -447,15 +459,15 @@ void BindNodes(py::module_& module) {
           "Await it to apply backpressure from a fast producer, letting "
           "consumers catch up before you push more chunks.")
       .def(
-          "drain_and_close",
+          "close",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
-            return FutureToPython(
-                WithoutGil([&] { return self->DrainAndClose(); }));
+            return FutureToPython(WithoutGil([&] { return self->Close(); }));
           },
           "Returns a future that resolves once all buffered chunks have been "
-          "flushed and the writer is closed. This does not mark a chunk as "
-          "final: call put_final() or put_null_final() first when readers "
-          "must synchronise on the logical end of the stream.")
+          "flushed and the writer is closed. This marks no chunk as final, so "
+          "it is the specialised case -- a producer that cannot say which "
+          "chunk was last, such as a log. Everywhere else use finalize(), "
+          "which does both.")
       .def(
           "abort_with_status",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
@@ -494,22 +506,25 @@ void BindNodes(py::module_& module) {
           "Detaches a previously attached wire stream so the node stops "
           "mirroring its chunks over that transport.",
           py::arg("stream"))
-      .def("cancel_reader",
-           [](nodes::AsyncNode& self) {
-             WithoutGil([&] { self.CancelReader(); });
-           },
-           "Cancels the node's reader, unblocking any pending next-chunk or "
-           "next-fragment awaits on the consuming side of the stream.")
-      .def("cancel_writer",
-           [](nodes::AsyncNode& self) {
-             WithoutGil([&] { self.CancelWriter(); });
-           },
-           "Cancels the node's writer, unblocking any pending put or drain "
-           "awaits on the producing side of the stream.")
-      .def("cancel",
-           [](nodes::AsyncNode& self) { WithoutGil([&] { self.Cancel(); }); },
-           "Cancels both the reader and the writer, tearing down all pending "
-           "streaming operations on the node at once.");
+      .def(
+          "cancel_reader",
+          [](nodes::AsyncNode& self) {
+            WithoutGil([&] { self.CancelReader(); });
+          },
+          "Cancels the node's reader, unblocking any pending next-chunk or "
+          "next-fragment awaits on the consuming side of the stream.")
+      .def(
+          "cancel_writer",
+          [](nodes::AsyncNode& self) {
+            WithoutGil([&] { self.CancelWriter(); });
+          },
+          "Cancels the node's writer, unblocking any pending put or drain "
+          "awaits on the producing side of the stream.")
+      .def(
+          "cancel",
+          [](nodes::AsyncNode& self) { WithoutGil([&] { self.Cancel(); }); },
+          "Cancels both the reader and the writer, tearing down all pending "
+          "streaming operations on the node at once.");
 }
 
 }  // namespace a11::python

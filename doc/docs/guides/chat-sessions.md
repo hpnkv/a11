@@ -130,8 +130,7 @@ puts the whole list back in front of the model:
 ```ts
 const interactions = need(await call.getInput('interactions'));
 for (const interaction of history) need(await interactions.put(interaction));
-need(await interactions.putFinal(question));
-need(await interactions.drainAndClose());
+need(await interactions.finalize(question));
 ```
 
 A conversation's identity comes for free from that: **its id is the id of the

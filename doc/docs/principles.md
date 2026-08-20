@@ -23,10 +23,10 @@ Two conveniences make this pleasant:
 - **Completion is an event.** An [`Action`][a11.actions.action.Action] and a
   [`Session`][a11.service.session.Session] each expose a `done` you can
   `await action.done.wait()`, shaped like an `asyncio.Event`.
-- **Lifecycles are context managers.** `async with` a node, wire stream, or
-  session and it is finalised for you — drained and closed on success, aborted
-  with the right [`Status`][a11.status.Status] on error, so the other side of a
-  stream always learns how it ended.
+- **Ending a stream is one call.** `await node.finalize()` marks the logical end
+  of the data and closes the writer, so the other side always learns how it
+  ended; `abort_with_status` ends it with a failure instead. Wire streams and
+  sessions are context managers, and finalise themselves on the way out.
 
 ## Everything is a stream
 
@@ -38,10 +38,10 @@ This is deliberate. An agent rarely has its whole answer at once; it has the
 *next* token, the *next* audio frame, the *next* tool call. Nodes make that the
 natural shape:
 
-- **Produce incrementally** with `put()` / `put_final()`. Each write returns a
-  future that completes when the backing store accepts the chunk. Attached
-  transport sends are attempted during the same flush, but this is not a
-  remote-delivery acknowledgement.
+- **Produce incrementally** with `put()`, and end with `finalize()`. Each write
+  returns a future that completes when the backing store accepts the chunk.
+  Attached transport sends are attempted during the same flush, but this is not
+  a remote-delivery acknowledgement.
 - **Consume in whatever shape fits** — `await node.next()` for the next value,
   `async for value in node` to drain, or `await node.consume()` for a single
   whole result. Objects are serialized on the way in and deserialized on the way

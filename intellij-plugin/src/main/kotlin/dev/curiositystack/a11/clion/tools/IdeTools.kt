@@ -856,10 +856,10 @@ class IdeTools(private val project: Project) {
                     port.unary -> listOf(value)
                     else -> (value as? Iterable<*>)?.toList() ?: listOf(value)
                 }
-                for ((index, item) in values.withIndex()) {
-                    node.put(item, final = index == values.lastIndex).orElse { return@async it }
+                for (item in values) {
+                    node.put(item).orElse { return@async it }
                 }
-                node.drainAndClose()
+                node.finalize()
             }
         }.awaitAll()
         written.firstOrNull { !it.isOk } ?: Status.ok()

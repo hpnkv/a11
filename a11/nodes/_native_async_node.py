@@ -62,6 +62,8 @@ _native_node_writer = AsyncNode.writer
 _native_reader_options = AsyncNode.__dict__["reader_options"]
 _native_writer_options = AsyncNode.__dict__["writer_options"]
 _native_reset_reader = AsyncNode.reset_reader
+_native_finalize = AsyncNode.finalize
+_native_close = AsyncNode.close
 _native_writer_enqueue = _native.ChunkStoreWriter.enqueue_chunk
 
 
@@ -254,18 +256,18 @@ class _AsyncNodeProtocol:
     - ``await node.consume()`` when exactly one whole value is expected;
     - the ``*_chunk`` / ``*_fragment`` variants to stay at the transport level.
 
-    Use it as an async context manager to guarantee buffered writes are
-    drained and the writer is closed::
+    End the stream with `finalize`, which marks the logical end of the data and
+    closes the writer::
 
-        async with AsyncNode.create("output") as node:
-            await node.put("hello")
-            await node.put_final("world")
+        node = AsyncNode.create("output")
+        await node.put("hello")
+        await node.finalize("world")
 
-    A clean exit drains and closes the writer; it does not invent a final
-    fragment, so write one with `put_final` or `put_null_final` before leaving
-    the block. Leaving via an exception aborts the node with that error's
-    [Status][a11.status.Status], so a reader on the far end observes the
-    failure instead of a truncated stream.
+    `finalize` does not wait: the writer's pump completes the write and the
+    closure after the producing coroutine has returned. `close` is the rarer
+    half on its own -- closure with nothing marked final -- and
+    `abort_with_status` ends the stream with a failure, so a reader on the far
+    end observes the error instead of a truncated stream.
     """
 
     def __init__(
@@ -516,11 +518,11 @@ class _AsyncNodeProtocol:
         [Chunk][a11.data.types.Chunk], or any Python object the node's
         serialization registry can encode (``mimetype`` selects the encoding).
         Set ``final=True`` on the last data fragment so readers know where the
-        logical value ends. Finality does not close the writer: call
-        `drain_and_close` after the confirmation future resolves. The returned
-        `asyncio.Future` resolves to the stored sequence number after the
-        backing store accepts the fragment. Attached WireStream sends are
-        attempted or queued by the writer but are not separately acknowledged.
+        logical value ends. Finality does not close the writer: `finalize` is
+        the one call that does both. The returned `asyncio.Future` resolves to
+        the stored sequence number after the backing store accepts the
+        fragment. Attached WireStream sends are attempted or queued by the
+        writer but are not separately acknowledged.
 
         Examples:
             Add an intermediate token while a model response is produced:
@@ -552,45 +554,98 @@ class _AsyncNodeProtocol:
         )
         return await self.put_chunk(chunk, seq=seq, final=final)
 
-    async def put_final(
+    async def finalize(
         self,
-        value: Any,
+        value: Any = None,
         seq: int | None = None,
         mimetype: str = "",
-    ) -> asyncio.Future[int]:
-        """Write ``value`` as the logical final element.
+        wait: bool = False,
+        close: bool = True,
+    ) -> None:
+        """End the stream: mark the logical end, and close the writer.
 
-        This marks the final sequence but leaves the writer open. The returned
-        confirmation can be awaited when immediate store acceptance matters;
-        otherwise a later `drain_and_close` flushes queued work.
+        The one call an ordinary producer needs. ``value`` is written as the
+        final fragment; passing nothing (or ``None``) writes a null terminator
+        instead, which is the form to use once the last visible value has
+        already gone out with `put`. Unless ``close`` is cleared the writer is
+        closed as well, so readers waiting on data that can no longer arrive
+        are released and a peer's mirror of the node closes too.
+
+        It does not wait. The write and the close are carried out by the
+        writer's pump, which keeps running after this coroutine -- and the
+        enclosing action -- has returned, so a producer can finalise and walk
+        away. Nothing is swallowed: a failed write or close is logged and stays
+        visible through `get_writer_status`. Pass ``wait=True`` when the
+        producer must know the store accepted the end of the stream before
+        going on, or await `wait_for_buffer_to_drain` separately.
+
+        ``value`` may be a [NodeFragment][a11.data.types.NodeFragment] (whose
+        own ``seq`` is used), a [Chunk][a11.data.types.Chunk], or any object the
+        node's serialization registry can encode.
 
         Examples:
-            Mark the last visible fragment and close the producer:
+            Finish a streamed answer whose last token is not known in advance:
 
             ```python
-            await answer.put_final("arrives Friday.")
+            async for token in model:
+                await answer.put(token)
+            await answer.finalize()
+            ```
+
+            Deliver a unary result, which is one chunk and one call:
+
+            ```python
+            await action["customer"].finalize(customer)
             ```
         """
-        return await self.put(value, seq=seq, final=True, mimetype=mimetype)
+        chunk: types.Chunk | None
+        if value is None:
+            chunk = None
+            if mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="mimetype cannot be supplied without a value.",
+                ).to_exception()
+        elif isinstance(value, types.NodeFragment):
+            if seq is not None or mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "seq and mimetype are carried by a NodeFragment and "
+                        "cannot be supplied separately."
+                    ),
+                ).to_exception()
+            if not isinstance(value.data, types.Chunk):
+                raise Status(
+                    code=StatusCode.UNIMPLEMENTED,
+                    message=(
+                        "AsyncNode writers do not resolve NodeRef payloads."
+                    ),
+                ).to_exception()
+            chunk = value.data
+            seq = value.seq
+        elif isinstance(value, types.Chunk):
+            if mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="mimetype cannot be supplied with a raw Chunk.",
+                ).to_exception()
+            chunk = value
+        else:
+            chunk = await _get_serialization_registry(self).to_chunk_async(
+                value, mimetype
+            )
+        await _native_finalize(self, chunk, seq=seq, wait=wait, close=close)
 
-    async def put_null_final(
-        self, seq: int | None = None
-    ) -> asyncio.Future[int]:
-        """Write an explicit null fragment as the logical terminator.
+    async def close(self) -> None:
+        """Flush buffered writes and close the writer, marking nothing final.
 
-        Use this after a non-final value when `consume` should treat that value
-        as one complete unary result. It does not close the writer; finish with
-        `drain_and_close` after the confirmation resolves.
+        The specialised half of `finalize`: closure without finality, for a
+        producer that cannot say which chunk was the last one -- a log, say --
+        but can say that no more are coming. Closing always drains, so this
+        resolves once the backing store is closed.
         """
-        return await self.put_chunk(
-            types.Chunk(
-                metadata=types.ChunkMetadata(
-                    mimetype="application/octet-stream"
-                )
-            ),
-            seq=seq,
-            final=True,
-        )
+        await _native_close(self)
 
     # --- Reading -------------------------------------------------------------
 
@@ -785,22 +840,7 @@ class _AsyncNodeProtocol:
             except StopAsyncIteration:
                 return
 
-    # --- Lifecycle and async iteration --------------------------------------
-
-    async def __aenter__(self) -> AsyncNode:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: Any,
-    ) -> None:
-        del exc_type, traceback
-        if exc is None:
-            await self.drain_and_close()
-        else:
-            await self.abort_with_status(Status.from_exception(exc))
+    # --- Async iteration -----------------------------------------------------
 
     def __aiter__(self) -> AsyncNode:
         return self

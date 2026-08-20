@@ -237,10 +237,12 @@ async def execute_actions_from_interaction(
 
             # Autofilled inputs are written, drained, and closed by the native
             # run flow, so the runner must only close the inputs it fed itself.
+            # Closed, not finalized: the forwarded fragments carry whatever
+            # finality the model's arguments had.
             for input_name, port in nested_action.get_schema().inputs.items():
                 if port.autofills:
                     continue
-                await nested_action[input_name].drain_and_close()
+                await nested_action[input_name].close()
             nested_actions.append(nested_action)
         except Exception as error:
             errors[call.id] = _status_of(error)

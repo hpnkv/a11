@@ -236,8 +236,7 @@ async def one_cycle(port: int, teardown: str) -> None:
             .bind_stream(stream)
         )
         await call.call()
-        async with call["text"] as port:
-            await port.put_final("x")
+        await call["text"].finalize("x")
         await call["out"].consume(str)
         await asyncio.wait_for(call.wait(), _DRAIN_TIMEOUT)
     except Exception:  # noqa: BLE001 - the teardown is what is under test

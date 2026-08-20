@@ -30,8 +30,7 @@ async def main(_: Sequence[str]):
         .bind_session(session)
     )
     await ping.call()
-    async with ping["input"]:
-        await ping["input"].put_final("ping")
+    await ping["input"].finalize("ping")
 
     logging.info("here")
 
@@ -53,10 +52,9 @@ async def main(_: Sequence[str]):
     #     .bind_session(session)
     # )
     # await capture_audio.call()
-    # async with (capture_audio["options"] as capture_options,):
-    #     await capture_options.put_final(
-    #         audio.AudioInputOptions(device_name="MacBook Pro Microphone")
-    #     )
+    # await capture_audio["options"].finalize(
+    #     audio.AudioInputOptions(device_name="MacBook Pro Microphone")
+    # )
     # logging.info("capture_audio called")
     #
     # timeout = 60.0
@@ -86,8 +84,7 @@ async def main(_: Sequence[str]):
     #         buffer.end_time,
     #     )
     #
-    # await capture_audio["control_events"].put_null_final()
-    # await capture_audio["control_events"].drain_and_close()
+    # await capture_audio["control_events"].finalize()
 
     capture_transcription_schema = audio_registry.get_schema(
         audio.actions.CAPTURE_TRANSCRIPTION
@@ -100,21 +97,17 @@ async def main(_: Sequence[str]):
         .bind_session(session)
     )
     await capture_transcription.call()
-    async with (
-        capture_transcription["capture_options"] as capture_options,
-        capture_transcription["asr_options"] as asr_options_node,
-    ):
-        await capture_options.put_final(
-            audio.AudioInputOptions(device_name="MacBook Pro Microphone")
+    await capture_transcription["capture_options"].finalize(
+        audio.AudioInputOptions(device_name="MacBook Pro Microphone")
+    )
+    await capture_transcription["asr_options"].finalize(
+        audio.SpeechRecognizerOptions(
+            model="/Users/helena/.cache/a11/audio/ggml-tiny.en.bin",
+            vad_model=(
+                "/Users/helena/.cache/a11/audio/ggml-silero-v5.1.2.bin"
+            ),
         )
-        await asr_options_node.put_final(
-            audio.SpeechRecognizerOptions(
-                model="/Users/helena/.cache/a11/audio/ggml-tiny.en.bin",
-                vad_model=(
-                    "/Users/helena/.cache/a11/audio/ggml-silero-v5.1.2.bin"
-                ),
-            )
-        )
+    )
     logging.info("capture_transcription called")
 
     timeout = 60.0
@@ -138,8 +131,7 @@ async def main(_: Sequence[str]):
             logging.info("transcription_pieces stream closed")
             break
 
-    await capture_transcription["control_events"].put_null_final()
-    await capture_transcription["control_events"].drain_and_close()
+    await capture_transcription["control_events"].finalize()
 
     session.half_close()
     try:

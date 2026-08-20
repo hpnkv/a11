@@ -90,20 +90,53 @@ class AsyncNode private constructor(
         }
     }
 
-    suspend fun putFinal(value: Any?, seq: Long? = null, mimetype: String = ""): StatusOr<Long> =
-        put(value, seq, final = true, mimetype = mimetype)
-
-    suspend fun putNullFinal(seq: Long? = null): StatusOr<Long> = putChunk(makeNullChunk(), seq, final = true)
+    /**
+     * End the stream: mark the logical end of the data, and close the writer.
+     *
+     * The one call an ordinary producer needs. [value] is written as the final
+     * fragment; passing nothing (or null) writes a null terminator instead,
+     * which is the form to use once the last visible value has already gone out
+     * with [put]. Unless [close] is cleared the writer is closed too, so
+     * readers waiting for data that can no longer arrive are released and a
+     * peer's mirror of the node closes as well.
+     *
+     * [wait] exists for byte-compatibility with the other A11 runtimes: this
+     * port keeps its log in memory, so the write and the close are done by the
+     * time this returns either way.
+     */
+    suspend fun finalize(
+        value: Any? = null,
+        seq: Long? = null,
+        mimetype: String = "",
+        wait: Boolean = false,
+        close: Boolean = true,
+    ): Status {
+        when (value) {
+            null -> putChunk(makeNullChunk(), seq, final = true)
+            is NodeFragment -> putChunk(
+                value.getChunk().orElse { return it },
+                value.seq,
+                final = true,
+            )
+            is Chunk -> putChunk(value, seq, final = true)
+            else -> put(value, seq, final = true, mimetype = mimetype)
+        }.orElse { return it }
+        return if (close) this.close() else Status.ok()
+    }
 
     /**
-     * Close the producing half without adding a final fragment.
+     * Flush queued writes and close the producing half, marking nothing final.
+     *
+     * The specialised half of [finalize]: closure without finality, for a
+     * producer that cannot say which chunk was the last one -- a log, say -- but
+     * can say that no more are coming.
      *
      * Attached streams are told, because a peer ends a node on a not-continued
      * fragment and closing writes none: after the last teed fragment the node
      * sends one closure marker, so a mirror of this node on the far side closes
      * its write half too.
      */
-    suspend fun drainAndClose(): Status {
+    suspend fun close(): Status {
         val alreadyClosed: Boolean
         mutex.withLock {
             alreadyClosed = writerClosed
@@ -156,7 +189,7 @@ class AsyncNode private constructor(
         return Status.ok()
     }
 
-    suspend fun cancelWriter(): Status = drainAndClose()
+    suspend fun cancelWriter(): Status = close()
 
     // --- consuming half ------------------------------------------------------
 

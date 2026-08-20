@@ -62,24 +62,27 @@
 #include <rtc/candidate.hpp>
 #include <rtc/configuration.hpp>
 #include <rtc/datachannel.hpp>
-#include <rtc/global.hpp>
 #include <rtc/description.hpp>
+#include <rtc/global.hpp>
 #include <rtc/peerconnection.hpp>
 
 #include "a11/actions/action.h"
+#include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/flow/runtime.h"
+#include "a11/net/http_sse_wire_stream.h"
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/net/internal/http_transport.h"
-#include "a11/net/http_sse_wire_stream.h"
 #include "a11/net/signalling.h"
 #include "a11/net/webrtc_wire_stream.h"
 #include "a11/net/websocket_wire_stream.h"
 #include "a11/net/wire_stream.h"
 #include "a11/nodes/async_node.h"
+#include "a11/nodes/node_map.h"
 #include "a11/service/service.h"
 #include "a11/service/session.h"
 #include "a11/stores/local_chunk_store.h"
@@ -89,6 +92,17 @@
 
 namespace a11::bench {
 namespace {
+
+/// `--only` : run just the rows whose name contains this.
+///
+/// A suite is the wrong granularity for an optimisation round. Attributing a
+/// process-wide counter (`A11_POOL_STATS`) to one operation needs two runs of
+/// *one* row at different scales, and a `--suite` run mixes a dozen.
+std::string g_only;
+
+bool Wanted(std::string_view name) {
+  return g_only.empty() || name.find(g_only) != std::string::npos;
+}
 
 absl::Time Deadline() {
   return absl::Now() + absl::Seconds(30);
@@ -510,7 +524,8 @@ void NodesSuite(Recorder& recorder, double scale) {
 }
 
 // `<sys/resource.h>` explicitly: macOS pulls it in transitively through other
-// headers, GCC on Linux does not, so leaving it out builds here and fails there.
+// headers, GCC on Linux does not, so leaving it out builds here and fails
+// there.
 #include <sys/resource.h>
 
 // How much CPU this process has used, across every thread.
@@ -591,11 +606,11 @@ actions::ActionSchema PortlessSchema() {
 /// A schema with `width` inputs and `width` outputs, none of which the handler
 /// touches.
 ///
-/// This is the shape that prices the Action's *teardown*, which is the only place
-/// the width of a schema is paid in full: a handler that writes nothing still
-/// leaves every output to be closed and every input to be finalised, and those
-/// were once one pool handoff each in series. A caller that reads one output of
-/// many is the normal case, not a pathological one -- see the note in
+/// This is the shape that prices the Action's *teardown*, which is the only
+/// place the width of a schema is paid in full: a handler that writes nothing
+/// still leaves every output to be closed and every input to be finalised, and
+/// those were once one pool handoff each in series. A caller that reads one
+/// output of many is the normal case, not a pathological one -- see the note in
 /// Action::CloseUnwrittenOutputs about not materialising untouched outputs.
 actions::ActionSchema WideSchema(int width) {
   actions::ActionSchema schema{.name = absl::StrCat("wide-", width)};
@@ -736,17 +751,18 @@ void ActionsSuite(Recorder& recorder, double scale) {
 
   // Width, which is what prices teardown. The handler touches nothing, so the
   // whole cost is creating the action and finalising 2*width ports -- the path
-  // that used to be one pool handoff per port in series. Two widths, because the
-  // interesting question is whether the row scales with width or with a constant.
+  // that used to be one pool handoff per port in series. Two widths, because
+  // the interesting question is whether the row scales with width or with a
+  // constant.
   for (const int width : {8, 32}) {
     const actions::ActionSchema wide = WideSchema(width);
-    // The handler *opens* every port and closes none. That matters: an output the
-    // handler never touched is deliberately never materialised (see
-    // Action::CloseUnwrittenOutputs), so a handler that ignores its ports leaves
-    // teardown with nothing to do and the row measures only the schema. Opening
-    // them is also the realistic shape -- an action that took its ports and then
-    // failed, or wrote some and exited -- and it is the only way this row prices
-    // finalising 2*width real nodes.
+    // The handler *opens* every port and closes none. That matters: an output
+    // the handler never touched is deliberately never materialised (see
+    // Action::CloseUnwrittenOutputs), so a handler that ignores its ports
+    // leaves teardown with nothing to do and the row measures only the schema.
+    // Opening them is also the realistic shape -- an action that took its ports
+    // and then failed, or wrote some and exited -- and it is the only way this
+    // row prices finalising 2*width real nodes.
     const actions::ActionHandler noop =
         [width](std::shared_ptr<actions::Action> action) -> a11::Task {
       for (int index = 0; index < width; ++index) {
@@ -1108,18 +1124,19 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   // larger ones -- and they do, as soon as anything delivers in bursts rather
   // than one at a time (a transport with concurrent outbound requests, say). A
   // window counted in messages then waits for echoes that will never come
-  // separately and the row reports a stall that is not one. Fragments survive the
-  // fold, so one echo fragment per arriving fragment keeps the credit exact.
+  // separately and the row reports a stall that is not one. Fragments survive
+  // the fold, so one echo fragment per arriving fragment keeps the credit
+  // exact.
   //
   // Replies on the fibre the transport already delivered on.
   //
   // A SubmitTask here would be a pool round trip (2.2us) plus, when the pool's
-  // workers are parked, an OS thread wake -- on both sides of every message, and
-  // charged to every transport equally. That is a large fraction of the small-
-  // message rows and it prices A11's scheduler rather than the wire. The
-  // delivery fibre is a legitimate place to send from: it is a fibre, Send takes
-  // the endpoint's claim and writes inline, and no callback runs on a caller of
-  // Send on any of these transports.
+  // workers are parked, an OS thread wake -- on both sides of every message,
+  // and charged to every transport equally. That is a large fraction of the
+  // small- message rows and it prices A11's scheduler rather than the wire. The
+  // delivery fibre is a legitimate place to send from: it is a fibre, Send
+  // takes the endpoint's claim and writes inline, and no callback runs on a
+  // caller of Send on any of these transports.
   const std::shared_ptr<std::weak_ptr<net::WireStream>> peer = setup.peer;
   net::OnMessage on_server =
       [peer](std::optional<data::WireMessage> message) -> a11::Task {
@@ -1274,8 +1291,8 @@ void MeasureRoundTrip(Recorder& recorder, double scale,
  *
  * The window is what makes it a pipeline and also what keeps it safe: Send has
  * no admission signal, so an unpaced flood aborts the connection rather than
- * pushing back (FINDINGS.md item 7). The peer's one-byte echo per message is the
- * credit that lets the next one go -- cheap enough on the wire (~80 bytes
+ * pushing back (FINDINGS.md item 7). The peer's one-byte echo per message is
+ * the credit that lets the next one go -- cheap enough on the wire (~80 bytes
  * against 64 KiB) that the reverse direction does not distort the rate, and it
  * doubles as the completion signal.
  */
@@ -1459,15 +1476,15 @@ std::optional<BenchPair> WebSocketPair(
                    }};
 }
 
-// Server-Sent Events: the transport a browser can always reach, and the only one
-// whose two directions are different mechanisms -- an SSE response stream
+// Server-Sent Events: the transport a browser can always reach, and the only
+// one whose two directions are different mechanisms -- an SSE response stream
 // inbound, and outbound either one HTTP POST per message or a single streamed
 // request body. Both outbound modes get a row, because they are the two ends of
 // the trade the option exists for: `sse` is what a `fetch()` client can do, and
 // `sse-stream` is what a capable backend can.
 //
-// A11_BENCH_SSE_POSTS sets how many outbound POSTs the `sse` row keeps in flight;
-// 1 restores the strictly serialised delivery this used to have.
+// A11_BENCH_SSE_POSTS sets how many outbound POSTs the `sse` row keeps in
+// flight; 1 restores the strictly serialised delivery this used to have.
 std::optional<BenchPair> HttpSseVariantPair(
     net::SseOutboundDelivery outbound,
     std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
@@ -1643,11 +1660,11 @@ std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
       // has the peer echoing the whole payload back, so setting only the client
       // would leave half the measurement at 1280 and understate the change.
       //
-      // Retried briefly because SetPathMtu reports FAILED_PRECONDITION until the
-      // association exists, and Start() resolving means the data channel opened,
-      // not that usrsctp has finished its handshake. A discovery loop has the
-      // same race and answers it the same way; here a bounded retry keeps the
-      // row honest instead of silently measuring an unset MTU.
+      // Retried briefly because SetPathMtu reports FAILED_PRECONDITION until
+      // the association exists, and Start() resolving means the data channel
+      // opened, not that usrsctp has finished its handshake. A discovery loop
+      // has the same race and answers it the same way; here a bounded retry
+      // keeps the row honest instead of silently measuring an unset MTU.
       const absl::Time limit = absl::Now() + absl::Seconds(5);
       bool client_set = false;
       bool peer_set = false;
@@ -1703,10 +1720,10 @@ std::optional<BenchPair> WebRtcLiveMtuPair(
 // A round trip to the libuv loop and back, with nothing else in it.
 //
 // Every socket transport crosses this boundary twice per message: once to hand
-// the write to the loop thread, once when the loop hands a read back. Pricing it
-// on its own is what turns "a WebSocket round trip costs 63us" into a budget,
-// because the crossing is the largest thing in that number that is neither the
-// kernel nor A11's own scheduling.
+// the write to the loop thread, once when the loop hands a read back. Pricing
+// it on its own is what turns "a WebSocket round trip costs 63us" into a
+// budget, because the crossing is the largest thing in that number that is
+// neither the kernel nor A11's own scheduling.
 void MeasureUvCrossing(Recorder& recorder, double scale) {
   thread::Mutex mu;
   thread::CondVar cv;
@@ -2338,13 +2355,14 @@ void WireSuite(Recorder& recorder, double scale) {
 // because there is no Python in it at all.
 //
 // Read the `cores_busy` column first. Throughput that plateaus while cores stay
-// near one is a serial path; throughput that plateaus with cores near the machine
-// width is saturation, which is a different problem with different fixes.
+// near one is a serial path; throughput that plateaus with cores near the
+// machine width is saturation, which is a different problem with different
+// fixes.
 //
-// One caveat the note on every row repeats: client and server share this process,
-// so `cpu_us_per_op` covers both ends. It is still the number that matters --
-// what an operation costs the machine -- but it is not comparable with a figure
-// taken from a server in a process of its own.
+// One caveat the note on every row repeats: client and server share this
+// process, so `cpu_us_per_op` covers both ends. It is still the number that
+// matters -- what an operation costs the machine -- but it is not comparable
+// with a figure taken from a server in a process of its own.
 void ServerSuite(Recorder& recorder, double scale) {
   for (const int clients : {1, 4, 16, 64, 256, 1024}) {
     const std::int64_t per_client =
@@ -2459,11 +2477,11 @@ void ServerSuite(Recorder& recorder, double scale) {
     const absl::Time started = absl::Now();
     g_echo_handler_replies.store(0, std::memory_order_relaxed);
     std::atomic<std::int64_t> completed{0};
-    // When the last successful round-trip landed. Dividing by wall-clock instead
-    // charges this row for the 5s stage timeout that the wedged 1-3% of drivers
-    // sit out, which understates throughput by more than an order of magnitude
-    // at high client counts -- 3986 of 4096 operations completing looked like
-    // 772 ops/s.
+    // When the last successful round-trip landed. Dividing by wall-clock
+    // instead charges this row for the 5s stage timeout that the wedged 1-3% of
+    // drivers sit out, which understates throughput by more than an order of
+    // magnitude at high client counts -- 3986 of 4096 operations completing
+    // looked like 772 ops/s.
     std::atomic<std::int64_t> last_completion_unix_nanos{0};
     std::vector<a11::Task> drivers;
     drivers.reserve(sessions.size());
@@ -2477,17 +2495,17 @@ void ServerSuite(Recorder& recorder, double scale) {
               if (!call.ok()) {
                 return call.status();
               }
-              // The id must be empty so each call gets a generated one. It is an
-              // *instance* id, not the action name: a literal here makes every
-              // call in the process share one id, so their port nodes collide in
-              // the shared node map and round two's put lands on round one's
-              // node. That presented as a put-input stall, and as a collapse to
-              // 13 ops/s at 64 clients rather than as any kind of error.
-              // The node map matters as much as the session and the stream:
-              // without it the call's ports have nowhere to live, and the first
-              // version of this suite hung here rather than failing, with the
-              // client connected and every thread idle. The Python client binds
-              // all three, which is what this mirrors.
+              // The id must be empty so each call gets a generated one. It is
+              // an *instance* id, not the action name: a literal here makes
+              // every call in the process share one id, so their port nodes
+              // collide in the shared node map and round two's put lands on
+              // round one's node. That presented as a put-input stall, and as a
+              // collapse to 13 ops/s at 64 clients rather than as any kind of
+              // error. The node map matters as much as the session and the
+              // stream: without it the call's ports have nowhere to live, and
+              // the first version of this suite hung here rather than failing,
+              // with the client connected and every thread idle. The Python
+              // client binds all three, which is what this mirrors.
               if (!(*call)->BindNodeMap(sessions[index]->GetNodeMap()).ok() ||
                   !(*call)->BindSession(sessions[index]).ok() ||
                   !(*call)->BindStream(streams[index]).ok()) {
@@ -2543,11 +2561,11 @@ void ServerSuite(Recorder& recorder, double scale) {
               }
               // One read, no retries. `bind_stream` must be false on a
               // caller's *output*: the session routes inbound fragments to the
-              // node by id, and a bound output node tees what it receives back to
-              // the peer -- an echo of the reply that corrupted the connection for
-              // every later call. Binding it was what made reads here appear to
-              // lose their wake, and the retry loop that used to be here was
-              // hiding the damage rather than measuring it.
+              // node by id, and a bound output node tees what it receives back
+              // to the peer -- an echo of the reply that corrupted the
+              // connection for every later call. Binding it was what made reads
+              // here appear to lose their wake, and the retry loop that used to
+              // be here was hiding the damage rather than measuring it.
               const absl::StatusOr<std::optional<data::Chunk>> replied =
                   (*output)->NextChunk().Await(absl::Now() + kStageTimeout);
               if (!replied.ok() || !replied->has_value()) {
@@ -2579,13 +2597,13 @@ void ServerSuite(Recorder& recorder, double scale) {
           thread::TreeOptions{.stack_size = 512 * 1024}));
     }
     // Reported, not discarded -- for the third time in this suite's short life.
-    // A driver that returns an error and is ignored shows up as a row that never
-    // appears, which reads as "the benchmark is broken" rather than "the call
-    // failed and here is why".
+    // A driver that returns an error and is ignored shows up as a row that
+    // never appears, which reads as "the benchmark is broken" rather than "the
+    // call failed and here is why".
     // Every distinct driver error, not just the first. A driver that times out
-    // keeps running -- Await returning DEADLINE_EXCEEDED does not stop the fibre
-    // -- so the teardown below then aborts a stream it is still using and it
-    // fails FAILED_PRECONDITION. Reporting only the first error in iteration
+    // keeps running -- Await returning DEADLINE_EXCEEDED does not stop the
+    // fibre -- so the teardown below then aborts a stream it is still using and
+    // it fails FAILED_PRECONDITION. Reporting only the first error in iteration
     // order surfaces that cascade and hides the timeout that caused it.
     std::vector<std::string> driver_errors;
     for (const a11::Task& driver : drivers) {
@@ -2608,10 +2626,10 @@ void ServerSuite(Recorder& recorder, double scale) {
                    static_cast<long long>(
                        g_echo_handler_replies.load(std::memory_order_relaxed)));
     }
-    // Printed so a fibre or scheduling census can be divided by it. Counters like
-    // A11_POOL_STATS are process-wide and include connection setup, so the honest
-    // way to get a per-operation figure is to run two scales and divide the
-    // differences -- which needs the operation count, not just the rate.
+    // Printed so a fibre or scheduling census can be divided by it. Counters
+    // like A11_POOL_STATS are process-wide and include connection setup, so the
+    // honest way to get a per-operation figure is to run two scales and divide
+    // the differences -- which needs the operation count, not just the rate.
     std::fprintf(stderr, "  server[%d clients]: completed=%lld\n", clients,
                  static_cast<long long>(
                      completed.load(std::memory_order_relaxed)));
@@ -2649,6 +2667,414 @@ void ServerSuite(Recorder& recorder, double scale) {
 }
 
 // ---------------------------------------------------------------------------
+// flow: the language's runtime, with no host bridge in the way
+// ---------------------------------------------------------------------------
+
+/**
+ * The same flows `bench/suites/flow.py` runs, with the Python taken out.
+ *
+ * The Python suite can say what a flow costs and not what the *runtime* costs:
+ * every value crossing a stage is read and written through the [HostBridge],
+ * which on that path is an interpreter call under the GIL. This suite runs the
+ * identical sources against the native bridge, so the difference between the
+ * two tables is the bridge and everything left is the runtime.
+ *
+ * Names match the Python suite's on purpose (`flow_run`, `pipe_values`), and
+ * the rows the Python suite does not have -- per-stage cost, a chain of pipes,
+ * a loop with a call per pass -- are the ones that answer whether a pipeline
+ * paces itself or runs item by item.
+ */
+
+/// `echo`, as the Python flow suite declares it: one unary input, one output.
+actions::ActionSchema FlowEchoSchema() {
+  return actions::ActionSchema{
+      .name = "echo",
+      .inputs = {{"text",
+                  actions::ActionPortSchema{
+                      .name = "text", .type = "text/plain", .unary = true}}},
+      .outputs = {{"out", actions::ActionPortSchema{.name = "out",
+                                                    .type = "text/plain"}}},
+  };
+}
+
+actions::ActionHandler FlowEchoHandler() {
+  return actions::MakeAsyncActionHandler([](std::shared_ptr<actions::Action>
+                                                action) -> absl::Status {
+    ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> input,
+                          action->GetInput("text"));
+    ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> output,
+                          action->GetOutput("out"));
+    ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> chunk,
+                          input->NextChunk().Await());
+    data::Chunk reply = chunk.has_value()
+                            ? *chunk
+                            : data::Chunk{.metadata = data::ChunkMetadata{
+                                              .mimetype = "text/plain"}};
+    return output->Finalize(std::move(reply), {.wait = true}).Await().status();
+  });
+}
+
+std::shared_ptr<actions::ActionRegistry> FlowRegistry() {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  (void)registry->Register("echo", FlowEchoSchema(), FlowEchoHandler());
+  return registry;
+}
+
+data::Chunk TextChunk(std::string text) {
+  return data::Chunk{.metadata = data::ChunkMetadata{.mimetype = "text/plain"},
+                     .data = std::move(text)};
+}
+
+/// One run of one flow: feed every input, drain every output, wait.
+///
+/// Deliberately the whole thing, exactly as `flow_lang.invoke` does it, so the
+/// row is comparable with the Python one rather than with a fragment of it.
+struct FlowRun {
+  absl::Status status;
+  std::int64_t values_out = 0;
+};
+
+FlowRun RunOneFlow(
+    const std::shared_ptr<flow::CompiledProgram>& program,
+    const std::string& name,
+    const std::shared_ptr<actions::ActionRegistry>& registry,
+    const std::map<std::string, std::vector<std::string>>& inputs,
+    std::int64_t index, bool prefilled = false) {
+  FlowRun ran;
+  const flow::ResolvedFlow* found = program->Flow(name);
+  if (found == nullptr) {
+    ran.status = absl::NotFoundError(name);
+    return ran;
+  }
+  absl::StatusOr<actions::ActionSchema> schema = flow::FlowSchema(found->plan);
+  if (!schema.ok()) {
+    ran.status = schema.status();
+    return ran;
+  }
+  absl::StatusOr<actions::ActionHandler> handler =
+      flow::MakeHandler(program, name);
+  if (!handler.ok()) {
+    ran.status = handler.status();
+    return ran;
+  }
+  absl::StatusOr<std::shared_ptr<nodes::NodeMap>> map =
+      nodes::NodeMap::Create();
+  if (!map.ok()) {
+    ran.status = map.status();
+    return ran;
+  }
+  absl::StatusOr<std::shared_ptr<actions::Action>> action =
+      actions::Action::Create(*schema, absl::StrCat(name, "-", index), *handler,
+                              *map, nullptr, nullptr, registry);
+  if (!action.ok()) {
+    ran.status = action.status();
+    return ran;
+  }
+  std::map<std::string, std::shared_ptr<nodes::AsyncNode>> outputs;
+  for (const auto& [port, unused] : schema->outputs) {
+    absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
+        (*action)->GetOutput(port, false);
+    if (!node.ok()) {
+      ran.status = node.status();
+      return ran;
+    }
+    outputs[port] = *node;
+  }
+  // Either the flow starts and is then fed value by value -- a live producer,
+  // which is what every other row measures -- or it is handed a stream that is
+  // already there: a node an earlier step filled, a stored conversation, a
+  // file. The second is the shape in which a stage sees several values at once,
+  // and so the shape that says what batching is worth.
+  const auto feed = [&]() -> absl::Status {
+    for (const auto& [port, unused] : schema->inputs) {
+      ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> node,
+                            (*action)->GetInput(port, false));
+      const auto given = inputs.find(port);
+      if (given != inputs.end()) {
+        for (const std::string& value : given->second) {
+          ABSL_RETURN_IF_ERROR(
+              node->PutChunk(TextChunk(value)).Await().status());
+        }
+      }
+      ABSL_RETURN_IF_ERROR(node->Finalize({.wait = true}).Await().status());
+    }
+    return absl::OkStatus();
+  };
+  if (prefilled) {
+    ran.status = feed();
+    if (!ran.status.ok())
+      return ran;
+  }
+  ran.status = (*action)->Run().status();
+  if (!ran.status.ok())
+    return ran;
+  if (!prefilled) {
+    ran.status = feed();
+    if (!ran.status.ok())
+      return ran;
+  }
+  // Drained as the caller would: an output nobody reads stalls its writer.
+  for (auto& [port, node] : outputs) {
+    while (true) {
+      absl::StatusOr<std::optional<data::Chunk>> chunk =
+          node->NextChunk().Await(Deadline());
+      if (!chunk.ok()) {
+        ran.status = chunk.status();
+        break;
+      }
+      if (!chunk->has_value())
+        break;
+      if (!(*chunk)->IsNull())
+        ++ran.values_out;
+    }
+  }
+  if (ran.status.ok()) {
+    ran.status = (*action)->Wait(absl::Seconds(30)).Await(Deadline()).status();
+  }
+  return ran;
+}
+
+/// A flow that threads one value through `steps` sequential `run`s.
+std::string ChainSource(int steps) {
+  std::string source =
+      absl::StrCat("flow chain", steps, " {\n", "  in text: string required\n",
+                   "  out result: string\n");
+  std::string previous = "text";
+  for (int index = 0; index < steps; ++index) {
+    absl::StrAppend(&source, "  s", index, " = run echo(text: ", previous,
+                    ")\n");
+    previous = absl::StrCat("s", index, ".out");
+  }
+  absl::StrAppend(&source, "  ", previous, " -> result\n}\n");
+  return source;
+}
+
+/// `stages` chained per-value stages in one pipeline.
+///
+/// The question is whether stage *n* costs what stage 1 costs. Each stage is
+/// its own ref in the plan, which the runtime gives its own producer and its
+/// own bounded queue, so a pipeline should pace itself: the second value can be
+/// in stage 1 while the first is in stage 2. If the per-stage cost is flat, it
+/// does; if the whole pipeline costs one stage times the number of stages, it
+/// does not.
+std::string StageSource(int stages) {
+  std::string source = absl::StrCat("flow staged", stages, " {\n",
+                                    "  in items: string stream required\n",
+                                    "  out result: string stream\n  items");
+  for (int index = 0; index < stages; ++index) {
+    absl::StrAppend(&source, " | map it");
+  }
+  absl::StrAppend(&source, " -> result\n}\n");
+  return source;
+}
+
+void FlowSuite(Recorder& recorder, double scale) {
+  const std::shared_ptr<actions::ActionRegistry> registry = FlowRegistry();
+
+  // The baseline the flow rows are charged against: the same action, called
+  // directly, with the same feed-and-drain the flow pays for.
+  const std::int64_t calls = Scaled(400, scale, 20);
+  const actions::ActionSchema echo = FlowEchoSchema();
+  const actions::ActionHandler echo_handler = FlowEchoHandler();
+  if (Wanted("action_direct"))
+    recorder.Add(
+        {.suite = "flow",
+         .name = "action_direct",
+         .metrics = Latency(
+             [&](std::int64_t index) {
+               absl::StatusOr<std::shared_ptr<actions::Action>> action =
+                   actions::Action::Create(echo, absl::StrCat("echo-", index),
+                                           echo_handler);
+               if (!action.ok())
+                 return;
+               absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> out =
+                   (*action)->GetOutput("out", false);
+               if (!out.ok() || !(*action)->Run().ok())
+                 return;
+               absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> in =
+                   (*action)->GetInput("text", false);
+               if (!in.ok())
+                 return;
+               (void)(*in)
+                   ->Finalize(TextChunk("payload"), {.wait = true})
+                   .Await();
+               (void)(*out)->NextChunk().Await(Deadline());
+               (void)(*out)->NextChunk().Await(Deadline());
+               (void)(*action)->Wait(absl::Seconds(30)).Await(Deadline());
+             },
+             calls, calls / 10),
+         .params = {{"steps", "0"}},
+         .note =
+             "no flow involved -- the baseline the flow is charged against"});
+
+  for (const int steps : {1, 2, 8}) {
+    if (!Wanted("flow_run"))
+      break;
+    absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
+        flow::CompiledProgram::Compile(ChainSource(steps), "bench.flow");
+    if (!program.ok())
+      continue;
+    const std::string name = absl::StrCat("chain", steps);
+    std::map<std::string, double> metrics = Latency(
+        [&](std::int64_t index) {
+          const FlowRun ran = RunOneFlow(*program, name, registry,
+                                         {{"text", {"payload"}}}, index);
+          (void)ran;
+        },
+        calls, calls / 10);
+    metrics["steps_per_s"] = metrics["ops_per_s"] * steps;
+    recorder.Add({.suite = "flow",
+                  .name = "flow_run",
+                  .metrics = std::move(metrics),
+                  .params = {{"steps", absl::StrCat(steps)}}});
+  }
+
+  // Values through `|`. The same counts the Python suite uses, so the two rows
+  // divide into the bridge's share of a value and the runtime's.
+  absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> piped =
+      flow::CompiledProgram::Compile(StageSource(1), "bench.flow");
+  if (piped.ok() && Wanted("pipe_values")) {
+    for (const int count : {16, 256, 4096}) {
+      std::vector<std::string> values;
+      values.reserve(count);
+      for (int index = 0; index < count; ++index) {
+        values.push_back(absl::StrCat("value-", index));
+      }
+      const std::int64_t iterations = Scaled(count <= 256 ? 120 : 20, scale, 4);
+      std::int64_t out = 0;
+      std::map<std::string, double> metrics = Throughput(
+          [&](std::int64_t index) {
+            const FlowRun ran = RunOneFlow(*piped, "staged1", registry,
+                                           {{"items", values}}, index);
+            out = ran.values_out;
+          },
+          iterations, iterations / 10, count);
+      metrics["items_per_s"] = metrics["ops_per_s"] * count;
+      metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / count;
+      recorder.Add({.suite = "flow",
+                    .name = "pipe_values",
+                    .metrics = std::move(metrics),
+                    .params = {{"values", absl::StrCat(count)}},
+                    .note = absl::StrCat(out, " values out per run")});
+    }
+  }
+
+  // The same pipeline over a stream that is already there.
+  if (piped.ok() && Wanted("pipe_prefilled")) {
+    constexpr int kValues = 256;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const std::int64_t iterations = Scaled(120, scale, 4);
+    std::map<std::string, double> metrics = Throughput(
+        [&](std::int64_t index) {
+          const FlowRun ran =
+              RunOneFlow(*piped, "staged1", registry, {{"items", values}},
+                         index, /*prefilled=*/true);
+          (void)ran;
+        },
+        iterations, iterations / 10, kValues);
+    metrics["items_per_s"] = metrics["ops_per_s"] * kValues;
+    metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / kValues;
+    recorder.Add({.suite = "flow",
+                  .name = "pipe_prefilled",
+                  .metrics = std::move(metrics),
+                  .params = {{"values", absl::StrCat(kValues)}},
+                  .note = "the input written and closed before the flow starts,"
+                          " so a stage sees several values at once"});
+  }
+
+  // Per-stage cost, which is what says whether stages pace themselves.
+  for (const int stages : {1, 2, 4, 8}) {
+    if (!Wanted("pipe_stages"))
+      break;
+    absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
+        flow::CompiledProgram::Compile(StageSource(stages), "bench.flow");
+    if (!program.ok())
+      continue;
+    constexpr int kValues = 256;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const std::int64_t iterations = Scaled(60, scale, 4);
+    std::map<std::string, double> metrics = Throughput(
+        [&](std::int64_t index) {
+          const FlowRun ran =
+              RunOneFlow(*program, absl::StrCat("staged", stages), registry,
+                         {{"items", values}}, index);
+          (void)ran;
+        },
+        iterations, iterations / 10, kValues);
+    metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / kValues;
+    metrics["us_per_value_per_stage"] = metrics["us_per_value"] / stages;
+    recorder.Add({.suite = "flow",
+                  .name = "pipe_stages",
+                  .metrics = std::move(metrics),
+                  .params = {{"stages", absl::StrCat(stages)},
+                             {"values", absl::StrCat(kValues)}}});
+  }
+
+  // A loop with a call per pass: the shape of a real composition, and the one
+  // place `parallel` decides whether the passes overlap.
+  for (const int parallel : {1, 4, 16}) {
+    if (!Wanted("for_each_call"))
+      break;
+    const std::string source = absl::StrCat(
+        "flow fanned", parallel, " {\n", "  in items: string stream required\n",
+        "  out result: string stream\n", "  for item in items parallel ",
+        parallel, " {\n", "    r = run echo(text: item)\n",
+        "    r.out -> result\n", "  }\n}\n");
+    absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
+        flow::CompiledProgram::Compile(source, "bench.flow");
+    if (!program.ok())
+      continue;
+    constexpr int kValues = 32;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const std::int64_t iterations = Scaled(40, scale, 4);
+    std::map<std::string, double> metrics = Throughput(
+        [&](std::int64_t index) {
+          const FlowRun ran =
+              RunOneFlow(*program, absl::StrCat("fanned", parallel), registry,
+                         {{"items", values}}, index);
+          (void)ran;
+        },
+        iterations, iterations / 10, kValues);
+    metrics["us_per_pass"] = metrics["ns_per_op"] / 1000.0 / kValues;
+    recorder.Add({.suite = "flow",
+                  .name = "for_each_call",
+                  .metrics = std::move(metrics),
+                  .params = {{"parallel", absl::StrCat(parallel)},
+                             {"values", absl::StrCat(kValues)}},
+                  .note = "one action call per pass"});
+  }
+
+  // Compilation, for the same document the Python suite compiles.
+  const std::int64_t compiles = Scaled(2000, scale, 50);
+  const std::string chain = ChainSource(2);
+  if (Wanted("compile_source"))
+    recorder.Add(
+        {.suite = "flow",
+         .name = "compile_source",
+         .metrics = Throughput(
+             [&](std::int64_t) {
+               absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
+                   flow::CompiledProgram::Compile(chain, "bench");
+               (void)program;
+             },
+             compiles, compiles / 10, 1,
+             static_cast<std::int64_t>(chain.size())),
+         .params = {{"doc", "chain2"}, {"bytes", absl::StrCat(chain.size())}}});
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -2661,6 +3087,7 @@ const std::vector<std::pair<std::string, SuiteFn>>& Suites() {
       {"nodes", NodesSuite},
       {"actions", ActionsSuite},
       {"scheduling", SchedulingSuite},
+      {"flow", FlowSuite},
       {"wire", WireSuite},
       {"server", ServerSuite},
   };
@@ -2695,11 +3122,17 @@ int main(int argc, char** argv) {
       json_path = argv[++index];
     } else if (flag == "--suite" && has_value) {
       chosen.emplace_back(argv[++index]);
+    } else if (flag == "--only" && has_value) {
+      a11::bench::g_only = argv[++index];
     } else if (flag == "--help" || flag == "-h") {
       std::printf(
-          "a11_bench [--suite NAME]... [--scale N] [--json PATH]\n"
+          "a11_bench [--suite NAME]... [--only SUBSTRING] [--scale N]"
+          " [--json PATH]\n"
           "  Native counterparts to `python -m bench`. Same record shape,\n"
-          "  same benchmark names, no Python.\n");
+          "  same benchmark names, no Python.\n"
+          "  --only runs the rows whose name contains SUBSTRING, which is "
+          "what\n"
+          "  attributing a process-wide counter to one operation needs.\n");
       return 0;
     } else {
       std::fprintf(stderr, "unknown argument: %s\n", flag.c_str());

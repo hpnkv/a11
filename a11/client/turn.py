@@ -137,19 +137,17 @@ async def run_turn(
         asyncio.create_task(read_events()),
     ]
     try:
-        async with (
-            call["interactions"] as interactions,
-            call["config"],
-            call["tools"] as tools,
-        ):
-            for interaction in history:
-                await interactions.put(interaction)
-            await interactions.put_final(user_interaction)
-            # `config` is left empty and closed on block exit, so the backend
-            # applies its own default request configuration.
-            for definition in tool_definitions:
-                await tools.put(definition)
-            await tools.put_null_final()
+        interactions = call["interactions"]
+        for interaction in history:
+            await interactions.put(interaction)
+        await interactions.finalize(user_interaction)
+        # `config` is finalized empty, so the backend applies its own default
+        # request configuration.
+        await call["config"].finalize()
+        tools = call["tools"]
+        for definition in tool_definitions:
+            await tools.put(definition)
+        await tools.finalize()
 
         async for piece in call["text_output"]:
             reducer.on_text(piece)

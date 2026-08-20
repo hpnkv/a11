@@ -130,8 +130,7 @@ class GatewayConnection:
     async def _ping(self) -> None:
         call = self._action(PING_ACTION, PING_SCHEMA)
         await call.call()
-        async with call["input"] as request:
-            await request.put_final("probe")
+        await call["input"].finalize("probe")
         await call["output"].consume(str)
         await call.wait(PROBE_CALL_TIMEOUT)
 
@@ -152,11 +151,10 @@ class GatewayConnection:
 
         call = self._action(REGISTER_TOOLS_ACTION, REGISTER_TOOLS_SCHEMA)
         await call.call()
-        async with call["tools"] as tools:
-            for definition in definitions:
-                await tools.put(definition)
-            await tools.put_null_final()
-        await call["tools"].drain_and_close()
+        tools = call["tools"]
+        for definition in definitions:
+            await tools.put(definition)
+        await tools.finalize()
         acknowledged = await call["ok"].consume(dict)
         await call.wait(timing.Duration.seconds(10))
         logging.info(

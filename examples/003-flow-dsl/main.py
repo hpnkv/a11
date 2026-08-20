@@ -409,8 +409,7 @@ async def run_dictation(url: str) -> None:
     ):
         node = action.get_input(name, bind_stream=False)
         await (await node.put(value))
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
 
     print()
     print(
@@ -427,8 +426,7 @@ async def run_dictation(url: str) -> None:
     # The caller holds the off switch, which is why the flow takes one.
     control = action.get_input("control", bind_stream=False)
     await (await control.put({"command": "stop"}))
-    await (await control.put_null_final())
-    await control.drain_and_close()
+    await control.finalize()
 
     tidied = [str(value) async for value in note]
     await watching

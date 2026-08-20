@@ -99,7 +99,7 @@ STATEMENTS = _keywords(
 )
 
 #: Words that stand inside a statement without opening one.
-CLAUSES = _keywords("parallel", "max", "of")
+CLAUSES = _keywords("parallel", "unordered", "max", "of", "by", "desc", "into")
 
 #: What may follow a call's closing parenthesis.
 MODIFIERS = _keywords(
@@ -108,16 +108,17 @@ MODIFIERS = _keywords(
 
 #: Every pipeline stage.
 STAGES = _keywords(
-    "first", "last", "drop", "truncate", "batch", "group", "where", "map",
-    "match", "distinct", "then", "log", "logf", "mime", "strformat",
-    "chunk", "collect", "count", "join", "text", "json", "packb"
+    "first", "last", "drop", "truncate", "batch", "flatten", "group",
+    "sort", "where", "map", "match", "distinct", "then", "log", "logf",
+    "mime", "strformat", "chunk", "collect", "count", "sum", "min", "max",
+    "avg", "fold", "join", "text", "json", "packb", "timeout", "pace"
 )
 
 #: The stages that may be written without their leading ``|``.
 BARE_STAGES = _keywords("where", "then")
 
 #: Words that open a pipeline source rather than naming one.
-SOURCE_WORDS = _keywords("status", "zip")
+SOURCE_WORDS = _keywords("interleave", "status", "zip")
 
 #: Operators that are words.
 OPERATOR_WORDS = _keywords("and", "or", "not", "in")

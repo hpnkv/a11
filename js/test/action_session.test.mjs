@@ -71,8 +71,8 @@ test('local Action streams output and completion status', async () => {
     handler: async (running) => {
       const output = await running.getOutput('result');
       if (!isOk(output)) return output;
-      const written = await output.putFinal('complete');
-      return isOk(written) ? okStatus() : written;
+      const ended = await output.finalize('complete', { wait: true });
+      return isOk(ended) ? okStatus() : ended;
     },
   });
   assert.equal(isOk(action), true);
@@ -159,8 +159,8 @@ test('sessions call an Action with streaming input and output', async () => {
     if (!isOk(value)) return value;
     const output = await action.getOutput('output');
     if (!isOk(output)) return output;
-    const stored = await output.putFinal(`reply:${value}`);
-    return isOk(stored) ? okStatus() : stored;
+    const ended = await output.finalize(`reply:${value}`, { wait: true });
+    return isOk(ended) ? okStatus() : ended;
   })), true);
   const clientRegistry = new ActionRegistry();
   assert.equal(isOk(clientRegistry.register('echo', schema)), true);
@@ -175,7 +175,7 @@ test('sessions call an Action with streaming input and output', async () => {
   assert.equal(isOk(await action.call()), true);
   const input = await action.getInput('input');
   assert.equal(isOk(input), true);
-  assert.equal(isOk(await input.putFinal('request')), true);
+  assert.equal(isOk(await input.finalize('request')), true);
   assert.equal(isOk(await action.waitForDispatch(2000)), true);
   assert.equal(isOk(await action.wait(2000)), true);
   const output = await action.getOutput('output', false);

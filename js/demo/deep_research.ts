@@ -66,8 +66,7 @@ class DeepResearchDemo {
       need(await call.call());
 
       const topicInput = need(await call.getInput('topic'));
-      need(await topicInput.putFinal(topic));
-      need(await topicInput.drainAndClose());
+      need(await topicInput.finalize(topic));
 
       // All three ports at once: the narration is the point of watching, and it
       // arrives while the report is still being written.

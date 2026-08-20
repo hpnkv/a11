@@ -58,9 +58,9 @@ std::string_view SarifLevel(Severity severity) {
 
 // --- The syntax tree ---------------------------------------------------------
 //
-// One function, one switch, one case per node kind, and the compiler holds it to
-// being exhaustive -- which is what makes a node added to the language impossible
-// to forget here.
+// One function, one switch, one case per node kind, and the compiler holds it
+// to being exhaustive -- which is what makes a node added to the language
+// impossible to forget here.
 
 nlohmann::json NodeJson(const syntax::Node* node);
 
@@ -79,8 +79,8 @@ nlohmann::json WordList(const std::vector<syntax::Word>& words) {
 /// The tail a `log`/`logf` statement and the stages of the same names share.
 ///
 /// One shape in the envelope because it is one shape in the grammar: a reader
-/// that can display a logged line does not have to know which of the two it came
-/// from.
+/// that can display a logged line does not have to know which of the two it
+/// came from.
 nlohmann::json LogTailJson(const syntax::LogTail& tail) {
   nlohmann::json value = nlohmann::json::object();
   value["level"] = tail.level.Empty() ? nlohmann::json(nullptr)
@@ -219,7 +219,35 @@ nlohmann::json NodeJson(const syntax::Node* node) {
         case vocabulary::StageArgument::kLogFormat:
           value["arg"] = LogTailJson(stage->log);
           break;
+        case vocabulary::StageArgument::kOptionalExpression:
+          value["arg"] = stage->argument == nullptr
+                             ? nlohmann::json(nullptr)
+                             : NodeJson(stage->argument.get());
+          break;
+        case vocabulary::StageArgument::kSortKey:
+          value["arg"] = stage->argument == nullptr
+                             ? nlohmann::json(nullptr)
+                             : NodeJson(stage->argument.get());
+          value["desc"] = stage->descending;
+          break;
+        case vocabulary::StageArgument::kFold:
+          value["arg"] = NodeJson(stage->argument.get());
+          value["start"] = ConstantToJsonValue(stage->start);
+          value["carried"] = stage->carried.text;
+          break;
+        case vocabulary::StageArgument::kDuration:
+          value["arg"] = absl::FormatDuration(stage->duration);
+          break;
       }
+      // The tail a stage may carry, always written so a frontend can read one
+      // shape: a plugin asking what a stage does should not have to know which
+      // of them may be tried, run wide, or routed.
+      value["try"] = stage->tolerant;
+      value["parallel"] = stage->parallel;
+      value["ordered"] = stage->ordered;
+      value["into"] = stage->failures == nullptr
+                          ? nlohmann::json(nullptr)
+                          : NodeJson(stage->failures.get());
       break;
     }
     case syntax::NodeKind::kPipeline: {
@@ -314,6 +342,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     case syntax::NodeKind::kWait: {
       const auto* wait = syntax::As<syntax::Wait>(node);
       value["subject"] = NodeJson(wait->subject.get());
+      value["subjects"] = NodeList(wait->subjects);
+      value["race"] = wait->race;
+      value["targets"] = NodeList(wait->targets);
       value["timeout"] = DurationJson(wait->timeout);
       value["after"] = WordList(wait->after);
       break;
@@ -598,8 +629,8 @@ nlohmann::json CodesToJsonValue() {
 
 nlohmann::json VocabularyToJsonValue() {
   // Ordered where the language has an order for the words and sorted where it
-  // does not, so the payload is stable either way: a generated grammar file must
-  // not change because a hash table was rebuilt.
+  // does not, so the payload is stable either way: a generated grammar file
+  // must not change because a hash table was rebuilt.
   const auto ordered = [](absl::Span<const std::string_view> words) {
     nlohmann::json list = nlohmann::json::array();
     for (const std::string_view word : words) list.push_back(word);
@@ -939,7 +970,8 @@ nlohmann::json DtoToJson(const DtoPlan& dto) {
       {"description", dto.description},
       {"fields", fields},
       // The order is beside the fields rather than implied by them: a JSON
-      // object has no order a reader may rely on, and a shape's fields have one.
+      // object has no order a reader may rely on, and a shape's fields have
+      // one.
       {"order", order},
       {"binary", dto.binary},
   };

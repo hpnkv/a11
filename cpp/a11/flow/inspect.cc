@@ -48,9 +48,13 @@ bool IsPositional(const syntax::Stage& stage) {
 }
 
 /// The stages that reshape every value the same way, so twice is once.
+///
+/// `sort` is here because sorting a sorted stream is the same stream, and
+/// `flatten` is deliberately *not*: a stream of lists of lists is flattened one
+/// level at a time, so twice is a second level and not a repeat.
 bool IsIdempotent(std::string_view stage) {
   return stage == "collect" || stage == "distinct" || stage == "text" ||
-         stage == "json" || stage == "packb";
+         stage == "json" || stage == "packb" || stage == "sort";
 }
 
 class Inspector {
@@ -319,9 +323,9 @@ class Inspector {
 
   /// The stage arithmetic, over one pipeline.
   ///
-  /// One fact carries down the chain: after a reducing stage there is exactly one
-  /// value, whatever the stream held before it. Everything here follows from that,
-  /// which is why it is a walk rather than a table of pairs.
+  /// One fact carries down the chain: after a reducing stage there is exactly
+  /// one value, whatever the stream held before it. Everything here follows
+  /// from that, which is why it is a walk rather than a table of pairs.
   void Pipeline(const syntax::Pipeline& pipeline) {
     const syntax::Stage* reduced_by = nullptr;
     const syntax::Stage* previous = nullptr;
@@ -432,9 +436,10 @@ class Inspector {
 
   /// The orderings a body's own steps make impossible.
   ///
-  /// Read off the resolved steps rather than the text, because that is where the
-  /// order is: a barrier the flow reaches twice, and a `cancel` of something this
-  /// body already waited for, are both statements about the sequence.
+  /// Read off the resolved steps rather than the text, because that is where
+  /// the order is: a barrier the flow reaches twice, and a `cancel` of
+  /// something this body already waited for, are both statements about the
+  /// sequence.
   void Barriers(const std::vector<StepPlan>& steps) {
     absl::flat_hash_map<std::string, size_t> waited;
     for (const StepPlan& step : steps) {
@@ -452,8 +457,8 @@ class Inspector {
         continue;
       }
       if (step.kind == "cancel") {
-        // `wait x` puts the call's outcome under `status x`, which is the label a
-        // wait step carries.
+        // `wait x` puts the call's outcome under `status x`, which is the label
+        // a wait step carries.
         if (waited.contains(absl::StrCat("status ", step.label))) {
           Report("flow.barrier.cancel-after-wait",
                  absl::StrCat("This body already waited for ",
@@ -479,9 +484,9 @@ std::vector<Diagnostic> Inspect(std::string_view source,
                                 const ParseResult& parsed,
                                 const ResolveResult& resolved) {
   std::vector<Diagnostic> found;
-  // A file that does not resolve is a file whose facts are unreliable: an unknown
-  // name reads as nothing using the thing it meant to use, and every "nothing uses
-  // this" would be noise on top of the real problem.
+  // A file that does not resolve is a file whose facts are unreliable: an
+  // unknown name reads as nothing using the thing it meant to use, and every
+  // "nothing uses this" would be noise on top of the real problem.
   if (resolved.HasErrors()) return found;
   const LineIndex lines(source);
   Inspector(lines, found).Run(parsed, resolved);

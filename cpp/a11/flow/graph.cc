@@ -68,7 +68,7 @@ std::vector<RefId> FlowGraph::Upstreams(RefId ref) const {
   // A zip reads every one of its sources, so each is a reader slot on whatever
   // produces it -- which is what makes the existing materialise-and-replay
   // analysis apply to one without knowing what a zip is.
-  if (one.kind == RefKind::kZip) {
+  if (one.kind == RefKind::kZip || one.kind == RefKind::kMerge) {
     for (const RefId source : one.sources) Push(found, source);
   }
   return found;
@@ -105,7 +105,15 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
       break;
     case StepKind::kWait:
     case StepKind::kDrain:
-      Push(found, one.outcome);
+      // A `wait first of` / `wait all of` reads one outcome per subject, and
+      // each is a reader of whatever produces it: counted here, or the second
+      // one is told the stream has more readers than the plan accounted for.
+      // `outcome` *is* the first subject, so the two forms do not double-count.
+      if (one.subjects.empty()) {
+        Push(found, one.outcome);
+      } else {
+        for (const RefId subject : one.subjects) Push(found, subject);
+      }
       break;
     case StepKind::kForEach:
       Push(found, one.source);
@@ -135,6 +143,25 @@ std::vector<RefId> FlowGraph::Destinations(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
   if (one.kind == StepKind::kPipe) Push(found, one.destination);
+  return found;
+}
+
+std::vector<RefId> FlowGraph::StageDestinations(StepId step) const {
+  std::vector<RefId> found;
+  // Every ref the step reads, and everything those read, since a stage may be
+  // several deep: `items | try map f into bad | where it.ok`. The chain is
+  // finite and built bottom-up, so walking it needs no cycle guard.
+  std::vector<RefId> pending = Sources(step);
+  for (const RefId ref : ValueSources(step)) pending.push_back(ref);
+  while (!pending.empty()) {
+    const RefId ref = pending.back();
+    pending.pop_back();
+    if (ref == kNone || ref >= refs.size()) continue;
+    if (refs[ref].kind == RefKind::kDerived) {
+      Push(found, refs[ref].stage.failures);
+    }
+    for (const RefId up : Upstreams(ref)) pending.push_back(up);
+  }
   return found;
 }
 
@@ -252,9 +279,9 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   // A *value* read of a ref does not get a reader of its own. Every value read
   // of one ref in one body shares a single cursor over it (see
   // `Scope::ValueOf`), because that is what makes two `let`s on one node two
-  // different values rather than two names for the first: they take turns on one
-  // view of the stream. So the slots are one per *stream* read plus at most one
-  // for all the value reads together.
+  // different values rather than two names for the first: they take turns on
+  // one view of the stream. So the slots are one per *stream* read plus at most
+  // one for all the value reads together.
   //
   // Counting one each instead would allocate slots nobody takes, and an untaken
   // slot fills to `kQueueDepth` and then stops the producer for everybody: this
@@ -282,10 +309,10 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
 
   for (const RefId ref : nested) own(ref);
 
-  // A derived or computed stream reads its own upstream, so the upstream needs a
-  // reader for it. A ref is always built from refs created before it, so taking
-  // the highest id still to do settles the whole chain -- including the ones only
-  // reached through another derivation.
+  // A derived or computed stream reads its own upstream, so the upstream needs
+  // a reader for it. A ref is always built from refs created before it, so
+  // taking the highest id still to do settles the whole chain -- including the
+  // ones only reached through another derivation.
   absl::flat_hash_set<RefId> settled;
   while (true) {
     RefId next = kNone;
@@ -299,8 +326,8 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
     const int reads = found == local.end() ? 0 : found->second;
     if (reads == 0 && !nested.contains(next)) continue;
     for (const RefId up : flow.Upstreams(next)) note(up);
-    // A stage's own expression reads for a value, and shares the one cursor with
-    // every other value read of the same ref.
+    // A stage's own expression reads for a value, and shares the one cursor
+    // with every other value read of the same ref.
     for (const RefId value : flow.ValueRefs(next)) value_read(value);
     // `owned` may have grown; the loop picks the new highest next time round.
   }
@@ -333,9 +360,16 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
       if (flow.refs[ref].owner == body) held.push_back(ref);
       count_writer(ref);
     }
+    // A `try ... into failures` writes from inside a stream this step reads, so
+    // the stream's failures hold that node open exactly as the step's own
+    // destination does.
+    for (const RefId ref : flow.StageDestinations(step)) {
+      if (flow.refs[ref].owner == body) held.push_back(ref);
+      count_writer(ref);
+    }
     for (const RefId ref : flow.Observed(step)) {
-      // Only a ref this flow could write becomes a destination; a readable one is
-      // finished by being read to its end instead.
+      // Only a ref this flow could write becomes a destination; a readable one
+      // is finished by being read to its end instead.
       if (flow.refs[ref].owner == body && Writable(flow, ref)) {
         if (is_destination.insert(ref).second) {
           analysis.destinations.push_back(ref);

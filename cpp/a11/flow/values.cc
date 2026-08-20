@@ -53,8 +53,8 @@ constexpr Unit kUnits[] = {
 /// A double as Python's `repr` writes it: the shortest text that reads back as
 /// the same number, with a `.0` where it would otherwise look like an integer.
 ///
-/// The spelling is part of the contract -- `text 3.0` has always been `"3.0"` --
-/// and the round-trip search is what `repr` itself does.
+/// The spelling is part of the contract -- `text 3.0` has always been `"3.0"`
+/// -- and the round-trip search is what `repr` itself does.
 std::string FormatDouble(double value) {
   if (std::isnan(value)) return "nan";
   if (std::isinf(value)) return value > 0 ? "inf" : "-inf";
@@ -138,8 +138,8 @@ std::string Utf8Slice(std::string_view text, std::int64_t start,
 /// A string as a JSON string literal, escaped the way `json.dumps` escapes one.
 ///
 /// `ensure_ascii` is the default there, so anything outside ASCII becomes a
-/// `\uXXXX` escape -- surrogate pair and all -- and a rendered object is the same
-/// text whichever engine rendered it.
+/// `\uXXXX` escape -- surrogate pair and all -- and a rendered object is the
+/// same text whichever engine rendered it.
 void AppendJsonString(std::string_view text, std::string& out) {
   out.push_back('"');
   size_t at = 0;
@@ -970,9 +970,9 @@ namespace {
 
 /// A value with a `%(SPEC)` applied.
 ///
-/// Only times and durations have anything a spec could mean -- printf's own flags
-/// and precision cover the rest -- so anything else is handed on untouched rather
-/// than a spec being invented for it.
+/// Only times and durations have anything a spec could mean -- printf's own
+/// flags and precision cover the rest -- so anything else is handed on
+/// untouched rather than a spec being invented for it.
 Value WithSpec(const Value& value, std::string_view spec) {
   if (value.kind() == Value::Kind::kDuration) {
     return Value::String(DurationText(value.duration(), spec));
@@ -1154,8 +1154,8 @@ bool Contains(const Value& container, const Value& member) {
 
 /// The endings `starts-with`/`ends-with` were given: one, or a list of them.
 ///
-/// A list of candidates is one question, not three: a piece that ends a sentence
-/// ends with any of `[".", "?", "!"]`.
+/// A list of candidates is one question, not three: a piece that ends a
+/// sentence ends with any of `[".", "?", "!"]`.
 std::vector<std::string> Endings(const Value& value) {
   std::vector<std::string> options;
   if (value.kind() == Value::Kind::kList) {
@@ -1413,8 +1413,8 @@ namespace {
 ///
 /// A list gives its items. Anything else gives itself, one item -- spreading a
 /// value that is not a list is not a mistake worth ending a flow over, and
-/// treating it as one thing is what a reader would expect from `[...a, b]` where
-/// `a` turned out to be a single record.
+/// treating it as one thing is what a reader would expect from `[...a, b]`
+/// where `a` turned out to be a single record.
 std::vector<Value> SpreadItems(const Value& value) {
   if (value.kind() == Value::Kind::kList) return value.items();
   if (value.IsNull()) return {};
@@ -1484,8 +1484,8 @@ bool BoundsLength(std::string_view type) {
          type == "json";
 }
 
-/// The number a bound is, as a double, which is enough for every bound there is:
-/// a length is a count and a duration compares by its seconds.
+/// The number a bound is, as a double, which is enough for every bound there
+/// is: a length is a count and a duration compares by its seconds.
 double BoundNumber(const syntax::Constant& bound) {
   if (bound.kind == syntax::Constant::Kind::kDuration) {
     return DurationSeconds(bound.duration);
@@ -1737,10 +1737,10 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return value;
   }
   if (lowered == "any") return value;
-  // A shape this program declared, before a registry is asked: a `struct` outranks
-  // a tag of the same name, because what the file says about the name is what
-  // the file means by it. Its own spelling, not the canonical one: `struct` names
-  // are not keywords.
+  // A shape this program declared, before a registry is asked: a `struct`
+  // outranks a tag of the same name, because what the file says about the name
+  // is what the file means by it. Its own spelling, not the canonical one:
+  // `struct` names are not keywords.
   if (context.shapes != nullptr) {
     if (const DtoPlan* shape = context.shapes->Dto(type.name);
         shape != nullptr) {
@@ -1795,11 +1795,11 @@ absl::StatusOr<Value> Arithmetic(std::string_view op, const Value& left,
 
 /// Where the two sit relative to one another: -1, 0 or 1.
 ///
-/// Two instants, or two durations, compare as themselves: turning them into text
-/// would order `9s` after `10s`, and into numbers would lose the difference
-/// between an instant and a length. Otherwise a number compares as a number and
-/// everything else as text, so a flow never dies on `"3" < 5`.
-int Order(const Value& left, const Value& right) {
+/// Two instants, or two durations, compare as themselves: turning them into
+/// text would order `9s` after `10s`, and into numbers would lose the
+/// difference between an instant and a length. Otherwise a number compares as a
+/// number and everything else as text, so a flow never dies on `"3" < 5`.
+int OrderImpl(const Value& left, const Value& right) {
   if (left.IsTimelike() && right.IsTimelike()) {
     const double one = AsDouble(left);
     const double two = AsDouble(right);
@@ -1823,6 +1823,14 @@ const Value* absl_nullable Bound(const syntax::Node& node,
 }
 
 }  // namespace
+
+int Order(const Value& left, const Value& right) {
+  return OrderImpl(left, right);
+}
+
+absl::StatusOr<Value> Add(const Value& left, const Value& right) {
+  return Arithmetic("+", left, right);
+}
 
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context) {
@@ -1942,7 +1950,7 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       if (binary.op == "+" || binary.op == "-") {
         return Arithmetic(binary.op, left, right);
       }
-      const int order = Order(left, right);
+      const int order = OrderImpl(left, right);
       if (binary.op == "<") return Value::Bool(order < 0);
       if (binary.op == "<=") return Value::Bool(order <= 0);
       if (binary.op == ">") return Value::Bool(order > 0);

@@ -63,25 +63,15 @@ async def _write_all_final(node: a11.AsyncNode, values: list[str]) -> None:
 
     For a producer that has its whole sequence in hand. Finality is what tells
     a whole-value consumer that the sequence ran to its end rather than being
-    cut short; a ``put_null_final`` terminator would say the same thing, but it
-    is deliberately avoided on these ports -- the LLM-tool runner collects
-    every emitted fragment, and a trailing null (octet-stream) chunk would then
-    reach output decoders that cannot deserialize it.
+    cut short; the null terminator ``finalize()`` would write says the same
+    thing, but it is deliberately avoided on these ports -- the LLM-tool runner
+    collects every emitted fragment, and a trailing null (octet-stream) chunk
+    would then reach output decoders that cannot deserialize it. So the last
+    value carries finality and the node is only closed.
     """
     for index, value in enumerate(values):
         await node.put(value, final=index == len(values) - 1)
-    await _close_output(node)
-
-
-async def _close_output(node: a11.AsyncNode) -> None:
-    """Flush and close a streaming output node with no final marker of its own.
-
-    For the two cases that have no last fragment to mark: an empty sequence,
-    and a run that failed part way and so did not reach an end worth
-    declaring. Closing still ends a reader on either side of a wire — a drained
-    writer tees a closure marker to its peers.
-    """
-    await node.drain_and_close()
+    await node.close()
 
 
 def _required_shell_id(action: a11.Action) -> str:
@@ -101,8 +91,7 @@ async def shell_start(
     """Start a shell in the action's scope and emit its id."""
     manager = manager or get_shell_manager()
     shell_id = await manager.start_shell(action.get_session())
-    await action["shell_id"].put(shell_id, final=True)
-    await action["shell_id"].drain_and_close()
+    await action["shell_id"].finalize(shell_id)
     in_session = action.get_session() is not None
     scope = "this session" if in_session else "the global scope"
     await action.log(
@@ -165,7 +154,10 @@ async def shell_execute(
             # Only a run that finished claims finality; a failed one stops
             # where it stopped.
             await output.put(held, final=failure is None)
-        await _close_output(output)
+        # Closed rather than finalized: an empty sequence, or a run that
+        # failed part way, has no last fragment worth marking. Closing still
+        # ends a reader on either side of a wire.
+        await output.close()
 
     count = len(lines)
     if failure is not None:

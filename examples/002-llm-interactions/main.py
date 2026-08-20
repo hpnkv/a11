@@ -16,8 +16,7 @@ from a11.sdk.llm_tools import runner
 
 async def get_weather(action: a11.Action):
     location = await action["location"].consume(str)
-    await action["report"].put(f"It is 22°C and sunny in {location}.")
-    await action["report"].drain_and_close()
+    await action["report"].finalize(f"It is 22°C and sunny in {location}.")
 
     logging.info(
         "get_weather action %s called for location: %s",
@@ -139,21 +138,20 @@ async def send_text_message(
 
     stream_task = asyncio.create_task(stream_text())
 
-    async with (
-        interact["interactions"] as interactions,
-        interact["config"],
-        interact["tools"] as tools,
-    ):
-        for interaction in previous_interactions:
-            await interactions.put(interaction)
-        await interactions.put_final(text_interaction)
+    interactions = interact["interactions"]
+    for interaction in previous_interactions:
+        await interactions.put(interaction)
+    await interactions.finalize(text_interaction)
+    # Finalized empty, so the backend applies its own defaults.
+    await interact["config"].finalize()
 
-        tool_definitions = runner.get_tool_definitions(
-            available_actions, available_action_names
-        )
-        for tool in tool_definitions:
-            await tools.put(tool)
-        await tools.put_null_final()
+    tools = interact["tools"]
+    tool_definitions = runner.get_tool_definitions(
+        available_actions, available_action_names
+    )
+    for tool in tool_definitions:
+        await tools.put(tool)
+    await tools.finalize()
 
     new_interactions = []
     try:

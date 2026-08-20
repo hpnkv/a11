@@ -239,7 +239,7 @@ class Session(
             // creating one would resurrect it.
             val mirror = nodeMap.getIfExists(fragment.id).orElse { return it } ?: return seq
             if (!mirror.isWritable().orElse { return it }) return seq
-            val applied = if (closed.isOk) mirror.drainAndClose() else mirror.abortWithStatus(closed)
+            val applied = if (closed.isOk) mirror.close() else mirror.abortWithStatus(closed)
             if (!applied.isOk) return applied
             return seq
         }

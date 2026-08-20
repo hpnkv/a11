@@ -56,9 +56,8 @@ async def ping(action: actions.Action) -> None:
         stream_str = str(action.get_stream().get_id())
 
     logging.info(f"[{stream_str}] running ping on stream {stream_str}")
-    async with action["output"] as output_node:
-        ping_value = cast(str, await action["input"].consume(str))
-        await output_node.put_final(ping_value)
+    ping_value = cast(str, await action["input"].consume(str))
+    await action["output"].finalize(ping_value)
 
     logging.info(f"[{stream_str}] ping complete")
 

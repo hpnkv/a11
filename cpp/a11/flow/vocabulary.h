@@ -16,21 +16,22 @@ namespace a11::flow {
 
 /// The words the language gives meaning to, and what each one may be given.
 ///
-/// This is the one table. The Python parser, the Sublime syntax and the IntelliJ
-/// plugin each used to keep a copy, and `a11/flow/tests/test_editor_support.py`
-/// existed to catch them drifting; everything now reads these instead, generating
-/// what a static grammar file needs rather than restating it.
+/// This is the one table. The Python parser, the Sublime syntax and the
+/// IntelliJ plugin each used to keep a copy, and
+/// `a11/flow/tests/test_editor_support.py` existed to catch them drifting;
+/// everything now reads these instead, generating what a static grammar file
+/// needs rather than restating it.
 ///
-/// There are no reserved words: a word is only significant where the grammar puts
-/// it, which is why these are sets to be consulted at a position rather than a
-/// list of keywords the lexer could stamp on sight.
+/// There are no reserved words: a word is only significant where the grammar
+/// puts it, which is why these are sets to be consulted at a position rather
+/// than a list of keywords the lexer could stamp on sight.
 namespace vocabulary {
 
 /// The lower-case form of a uniformly-cased word, or the word unchanged.
 ///
 /// `FOR` and `for` are the keyword; `For` is a name. The rule is the compiler's
-/// (`a11.flow.lexer.canonical`), and applying it in one place is what keeps every
-/// surface agreeing about it.
+/// (`a11.flow.lexer.canonical`), and applying it in one place is what keeps
+/// every surface agreeing about it.
 std::string Canonical(std::string_view word);
 
 /// Whether the word, canonicalised, is written entirely in upper case.
@@ -48,6 +49,16 @@ enum class StageArgument {
   kString,
   /// A string, optional: `| join`, `| join ", "`.
   kOptionalString,
+  /// An expression, optional, with `it` bound: `| sum`, `| sum it.price`.
+  kOptionalExpression,
+  /// An optional `by` key with `it` bound, and an optional `desc`:
+  /// `| sort`, `| sort by it.score desc`.
+  kSortKey,
+  /// A literal to start from, a name for what is carried, and the expression
+  /// that folds one value into it: `| fold 0 as total, total + it`.
+  kFold,
+  /// A length of time: `| timeout 30s`, `| pace 100ms`.
+  kDuration,
   /// Another stream to read after this one: `| then other`.
   kStream,
   /// An optional level word and an optional expression, with `it` bound to the
@@ -69,15 +80,15 @@ std::string_view StageArgumentName(StageArgument argument);
 
 /// What one word of the language does, as reference an editor can show.
 ///
-/// Here rather than in each editor for the reason everything else in this file is
-/// here: there are four frontends and one language. A hover, the popup beside a
-/// completion list, and `a11-flow vocabulary` are three questions with one answer,
-/// and a copy of this in the IntelliJ plugin would be a copy that goes stale the
-/// first time a stage learns a new argument.
+/// Here rather than in each editor for the reason everything else in this file
+/// is here: there are four frontends and one language. A hover, the popup
+/// beside a completion list, and `a11-flow vocabulary` are three questions with
+/// one answer, and a copy of this in the IntelliJ plugin would be a copy that
+/// goes stale the first time a stage learns a new argument.
 ///
-/// Written as reference rather than as a gloss. "stage, takes number" is what the
-/// editor used to say about `truncate`, and it answers nothing a reader did not
-/// already know from looking at the line.
+/// Written as reference rather than as a gloss. "stage, takes number" is what
+/// the editor used to say about `truncate`, and it answers nothing a reader did
+/// not already know from looking at the line.
 struct WordDoc {
   /// One line: what it does. A sentence, because it is shown as one.
   std::string_view summary;
@@ -101,23 +112,24 @@ const WordDoc* absl_nullable StageDocumentation(std::string_view canonical_name)
 
 /// What a built-in function does, or `nullptr` where the name is not one.
 ///
-/// A word that is both a stage and a function has an entry in each table, because
-/// they do different things: `| text` re-writes every value of a stream and
-/// `text(x)` re-writes one value. Which one a position means is the highlighter's
-/// judgement ([SemanticKind]), so whatever asks here has already been told.
+/// A word that is both a stage and a function has an entry in each table,
+/// because they do different things: `| text` re-writes every value of a stream
+/// and `text(x)` re-writes one value. Which one a position means is the
+/// highlighter's judgement ([SemanticKind]), so whatever asks here has already
+/// been told.
 const WordDoc* absl_nullable BuiltinDocumentation(
     std::string_view canonical_name);
 
 /// Which table a word is documented in.
 ///
-/// One role per word set rather than one table keyed by the word, for the reason
-/// [StageDocumentation] and [BuiltinDocumentation] are already two functions: a
-/// word means different things in different positions, and a single table would
-/// have to pick one. `default` says what a header falls back to, what a field
-/// falls back to, and -- as a function -- what to use instead of an empty value;
-/// `number` is a type, a field of a status record, and a function. Which one a
-/// position means is the highlighter's judgement ([SemanticKind]), so whatever
-/// asks here has already been told.
+/// One role per word set rather than one table keyed by the word, for the
+/// reason [StageDocumentation] and [BuiltinDocumentation] are already two
+/// functions: a word means different things in different positions, and a
+/// single table would have to pick one. `default` says what a header falls back
+/// to, what a field falls back to, and -- as a function -- what to use instead
+/// of an empty value; `number` is a type, a field of a status record, and a
+/// function. Which one a position means is the highlighter's judgement
+/// ([SemanticKind]), so whatever asks here has already been told.
 ///
 /// A word genuinely in two sets -- `stream` is a declaration word and a port
 /// modifier -- has one [WordDoc] referenced from both tables rather than two
@@ -169,9 +181,9 @@ enum class WordRole {
 /// For a caller that has a word and no position: a word set lists a word that
 /// another set documents, which is deliberate rather than a gap. `stream` is in
 /// [OrderedDeclarations] because a port declaration is where it is offered, and
-/// is documented as the port modifier it is. A hover knows the position and asks
-/// [Documentation] for the role that position means; a listing does not, and
-/// asks this.
+/// is documented as the port modifier it is. A hover knows the position and
+/// asks [Documentation] for the role that position means; a listing does not,
+/// and asks this.
 const WordDoc* absl_nullable AnyDocumentation(std::string_view canonical_name);
 
 /// Every role, for something walking all of them.
@@ -212,11 +224,19 @@ absl::Span<const std::string_view> OrderedSymbols();
 /// which is what tells the stage from a port of the same name.
 const absl::flat_hash_set<std::string_view>& BareStages();
 
+/// The stages a value may pass through several at a time.
+///
+/// `parallel n` says how many, and only these accept it: a stage that gathers
+/// values or depends on their order has nothing to run concurrently, and one
+/// that reshapes each value on its own has everything. What comes *after* still
+/// sees the original order -- see [syntax::Stage::ordered].
+const absl::flat_hash_set<std::string_view>& ParallelStages();
+
 /// The stages that read a whole stream and yield exactly one value.
 ///
 /// Their arithmetic is what makes some sequences impossible rather than merely
-/// odd: after one of these there is a single value, so `| drop 2` yields nothing
-/// and `| count` is 1 however long the stream was.
+/// odd: after one of these there is a single value, so `| drop 2` yields
+/// nothing and `| count` is 1 however long the stream was.
 const absl::flat_hash_set<std::string_view>& ReducingStages();
 
 /// The stages that choose *which* values of a stream to keep, or group them,
@@ -229,14 +249,14 @@ const absl::flat_hash_set<std::string_view>& Builtins();
 /// The built-in port type names.
 ///
 /// Not the whole of what may stand where a type does: a port may name a type by
-/// the tag a serialisation registry knows it by (`a11.sdk.AudioBuffer`), say what
-/// a generic one holds (`list[a11.NodeFragment]`), or quote a mimetype.
+/// the tag a serialisation registry knows it by (`a11.sdk.AudioBuffer`), say
+/// what a generic one holds (`list[a11.NodeFragment]`), or quote a mimetype.
 const absl::flat_hash_set<std::string_view>& TypeNames();
 
 /// How many type parameters a built-in type may be given.
 ///
-/// Empty means none are allowed. A `list` says what it holds, an `object` what it
-/// maps; a tag is already concrete.
+/// Empty means none are allowed. A `list` says what it holds, an `object` what
+/// it maps; a tag is already concrete.
 absl::Span<const int> TypeParameters(std::string_view canonical_name);
 
 /// The built-in port type names, in the order a listing reads them.
@@ -256,10 +276,10 @@ absl::Span<const std::string_view> OrderedStatements();
 ///
 /// `else` continues an `if`, and `parallel` and `max` say how wide a loop runs.
 /// They are keywords where the grammar puts them and nowhere else, which is why
-/// they are not in [StatementWords]: a word there is one that stops being a name
-/// at the head of a statement, and none of these ever stands there. They are
-/// here so that everything colouring a flow colours them, which is what a list
-/// living only in the parser cost.
+/// they are not in [StatementWords]: a word there is one that stops being a
+/// name at the head of a statement, and none of these ever stands there. They
+/// are here so that everything colouring a flow colours them, which is what a
+/// list living only in the parser cost.
 const absl::flat_hash_set<std::string_view>& ClauseWords();
 
 /// The same, in the order they read.
@@ -290,9 +310,9 @@ absl::Span<const std::string_view> OrderedPortModifiers();
 
 /// What a `struct` field says about itself after its type.
 ///
-/// A superset of [PortModifierWords] in spirit rather than in fact -- a field is
-/// never a `stream`, and a port never has a `default` -- so the two tables are
-/// kept apart and each position consults its own.
+/// A superset of [PortModifierWords] in spirit rather than in fact -- a field
+/// is never a `stream`, and a port never has a `default` -- so the two tables
+/// are kept apart and each position consults its own.
 const absl::flat_hash_set<std::string_view>& FieldModifierWords();
 
 /// The same, in the order a field writes them, which is the order they are

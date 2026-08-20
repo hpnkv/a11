@@ -35,10 +35,10 @@ async def get_conversations(
 ) -> None:
     store = store or conversations.get_conversation_store()
 
-    async with action["conversations"] as conversations_node:
-        for summary in await store.list():
-            await conversations_node.put(summary)
-        await conversations_node.put_null_final()
+    conversations_node = action["conversations"]
+    for summary in await store.list():
+        await conversations_node.put(summary)
+    await conversations_node.finalize()
 
 
 GET_CONVERSATION_SCHEMA = actions.ActionSchema(
@@ -75,10 +75,10 @@ async def get_conversation(
     conversation_id = cast(str, await action["id"].consume(str))
 
     # An unknown id yields an empty conversation rather than an error.
-    async with action["interactions"] as interactions_out:
-        for interaction in await store.read(conversation_id):
-            await interactions_out.put(interaction)
-        await interactions_out.put_null_final()
+    interactions_out = action["interactions"]
+    for interaction in await store.read(conversation_id):
+        await interactions_out.put(interaction)
+    await interactions_out.finalize()
 
 
 async def _persist(

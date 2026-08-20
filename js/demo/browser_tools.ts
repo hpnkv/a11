@@ -368,10 +368,8 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
       try {
         onLog(`describe_scene → ${scene.blobs.length} blobs`);
         const node = need(await action.getOutput('blobs'));
-        for (const [index, blob] of scene.blobs.entries()) {
-          need(await node.put({...blob}, {final: index === scene.blobs.length - 1}));
-        }
-        return await node.drainAndClose();
+        for (const blob of scene.blobs) need(await node.put({...blob}));
+        return await node.finalize();
       } catch (error) {
         return statusFromUnknown(error, 'describe_scene failed.');
       }
@@ -397,8 +395,7 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
         });
         scene.draw();
         const result = need(await action.getOutput('recoloured'));
-        need(await result.putFinal(blobs.length));
-        need(await result.drainAndClose());
+        need(await result.finalize(blobs.length));
         await narrate(
           action,
           `Recoloured ${blobs.length} blob(s): ${blobs.map((blob) => blob.id).join(', ')}.`,
@@ -449,8 +446,7 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
         // animation is for the person watching.
         void Promise.all(moves.map(({blob, to}) => scene.glide(blob, to.x, to.y)));
         const result = need(await action.getOutput('moved'));
-        need(await result.putFinal(moves.length));
-        need(await result.drainAndClose());
+        need(await result.finalize(moves.length));
         const edge = held > 0 ? ` ${held} stopped at the edge of the canvas.` : '';
         await narrate(action, `Moved ${moves.length} blob(s) by (${dx}, ${dy}).${edge}`, onLog);
         return okStatus();

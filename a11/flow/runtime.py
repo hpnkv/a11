@@ -259,13 +259,11 @@ async def start(
         node = action.get_input(name, bind_stream=False)
         for one in value if isinstance(value, (list, tuple)) else [value]:
             await (await node.put(one))
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
     for name in declared_inputs:
         if name not in inputs and name not in left_open:
             node = action.get_input(name, bind_stream=False)
-            await (await node.put_null_final())
-            await node.drain_and_close()
+            await node.finalize()
     return running
 
 

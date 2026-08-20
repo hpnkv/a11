@@ -117,8 +117,8 @@ async def test_async_iteration_deserializes_objects_and_preserves_none():
 async def test_async_iteration_skips_a_null_final_marker():
     node = AsyncNode(LocalChunkStore("iteration-null"))
     value_write = await node.put(("only", "value"))
-    null_write = await node.put_null_final()
-    assert await _confirm(value_write, null_write) == [0, 1]
+    assert await _confirm(value_write) == [0]
+    await node.finalize(wait=True)
 
     # The language-neutral JSON ``array`` tag deliberately does not retain
     # whether Python supplied a list or tuple; default JSON decoding uses list.
@@ -282,10 +282,9 @@ async def test_consume_accepts_both_valid_terminal_shapes(trailing_null):
         {"value": 1},
         final=not trailing_null,
     )
-    writes = [value_write]
+    await _confirm(value_write)
     if trailing_null:
-        writes.append(await node.put_null_final())
-    await _confirm(*writes)
+        await node.finalize(wait=True)
 
     assert await node.consume() == {"value": 1}
     assert await node.next_fragment() is None
@@ -320,9 +319,9 @@ async def test_consume_treats_a_node_holding_no_value_as_none(closed_with_null):
     """
     node = AsyncNode(LocalChunkStore(f"consume-empty-{closed_with_null}"))
     if closed_with_null:
-        assert await (await node.put_null_final()) == 0
+        await node.finalize(wait=True)
     else:
-        await node.drain_and_close()
+        await node.close()
 
     assert await node.consume(allow_none=True) is None
 
@@ -333,8 +332,8 @@ async def test_iteration_skips_a_null_marker_rather_than_failing():
     await _confirm(
         await node.put("first"),
         await node.put("second"),
-        await node.put_null_final(),
     )
+    await node.finalize(wait=True)
 
     assert [value async for value in node] == ["first", "second"]
 
@@ -342,7 +341,7 @@ async def test_iteration_skips_a_null_marker_rather_than_failing():
 @pytest.mark.asyncio
 async def test_consume_rejects_invalid_terminal_shapes():
     null_node = AsyncNode(LocalChunkStore("consume-null"))
-    assert await (await null_node.put_null_final()) == 0
+    await null_node.finalize(wait=True)
     with pytest.raises(StatusException) as raised:
         await null_node.consume()
     assert raised.value.status.code == StatusCode.FAILED_PRECONDITION
@@ -358,7 +357,7 @@ async def test_consume_rejects_invalid_terminal_shapes():
     missing_node = AsyncNode(LocalChunkStore("consume-missing"))
     value = await missing_node.put("value")
     assert await value == 0
-    await missing_node.drain_and_close()
+    await missing_node.close()
     with pytest.raises(StatusException) as raised:
         await missing_node.consume()
     assert raised.value.status.code == StatusCode.FAILED_PRECONDITION
@@ -427,9 +426,7 @@ async def test_lifecycle_and_status_methods_delegate_to_accessors():
     assert node.get_reader_status().is_ok()
     assert node.get_writer_status().is_ok()
 
-    confirmation = await node.put("value", final=True)
-    await confirmation
-    await node.drain_and_close()
+    await node.finalize("value", wait=True)
 
     assert node.get_writer_status().is_ok()
     assert await node.next() == "value"
@@ -437,63 +434,80 @@ async def test_lifecycle_and_status_methods_delegate_to_accessors():
 
 
 @pytest.mark.asyncio
-async def test_context_manager_closes_node_on_success():
-    node = AsyncNode(LocalChunkStore("context-success"))
+async def test_finalize_ends_the_stream_without_waiting():
+    """The ordinary producer's ending: one call, and nothing awaited for it.
 
-    async with node as output:
-        assert output is node
-        await (await output.put("value"))
+    The write and the closure are the writer pump's work, which is what lets a
+    handler finalise and return.
+    """
+    node = AsyncNode(LocalChunkStore("finalize-async"))
 
+    await (await node.put("value"))
+    await node.finalize()
+
+    assert [value async for value in node] == ["value"]
     assert node.get_writer_status().is_ok()
-    assert await node.next() == "value"
-    assert await node.next() is None
+    assert not await node.is_writable()
 
 
 @pytest.mark.asyncio
-async def test_context_manager_aborts_node_with_body_error():
-    node = AsyncNode(LocalChunkStore("context-error"))
+async def test_finalize_writes_a_last_value_and_can_wait_for_it():
+    node = AsyncNode(LocalChunkStore("finalize-value"))
+
+    await node.finalize({"value": 1}, wait=True)
+
+    assert await node.consume() == {"value": 1}
+    assert not node.writer.is_writable()
+
+
+@pytest.mark.asyncio
+async def test_finalize_can_place_the_final_chunk_at_a_sequence():
+    """A producer that knows which seq is last spends one chunk, not two."""
+    store = LocalChunkStore("finalize-seq")
+    node = AsyncNode(store)
+
+    await node.finalize("last", seq=3, wait=True)
+
+    assert await store.get_final_seq() == 3
+
+
+@pytest.mark.asyncio
+async def test_finalize_can_leave_the_writer_open():
+    """Finality and closure are two facts; `close=False` writes only one."""
+    node = AsyncNode(LocalChunkStore("finalize-open"))
+
+    await node.finalize(wait=True, close=False)
+
+    # The node reports unwritable because a final sequence exists -- that is
+    # finality. The writer is still open until it is closed.
+    assert not await node.is_writable()
+    assert node.writer.is_writable()
+
+    await node.close()
+    assert not node.writer.is_writable()
+
+
+@pytest.mark.asyncio
+async def test_close_ends_a_stream_that_has_no_final_value():
+    """The specialised half: a log says "no more", not "that was the last"."""
+    node = AsyncNode(LocalChunkStore("close-only"))
+
+    await (await node.put("line"))
+    await node.close()
+
+    assert [value async for value in node] == ["line"]
+    with pytest.raises(StatusException) as raised:
+        await node.consume()
+    assert raised.value.status.code == StatusCode.FAILED_PRECONDITION
+
+
+@pytest.mark.asyncio
+async def test_abort_with_status_fails_readers_instead_of_ending_them():
+    node = AsyncNode(LocalChunkStore("aborted"))
     failure = Status(code=StatusCode.DATA_LOSS, message="producer failed")
 
-    with pytest.raises(StatusException) as raised:
-        async with node:
-            raise failure.to_exception()
+    await node.abort_with_status(failure)
 
-    assert raised.value.status == failure
     with pytest.raises(StatusException) as raised:
         await node.next_fragment()
     assert raised.value.status == failure
-
-
-@pytest.mark.asyncio
-async def test_context_manager_preserves_non_status_body_error():
-    node = AsyncNode(LocalChunkStore("context-unknown-error"))
-
-    with pytest.raises(ValueError, match="producer failed"):
-        async with node:
-            raise ValueError("producer failed")
-
-    with pytest.raises(StatusException) as raised:
-        await node.next_fragment()
-    assert raised.value.status.code == StatusCode.UNKNOWN
-    assert raised.value.status.message == "producer failed"
-
-
-@pytest.mark.asyncio
-async def test_context_manager_aborts_node_and_preserves_cancellation():
-    node = AsyncNode(LocalChunkStore("context-cancelled"))
-    entered = asyncio.Event()
-
-    async def produce() -> None:
-        async with node:
-            entered.set()
-            await asyncio.Event().wait()
-
-    task = asyncio.create_task(produce())
-    await entered.wait()
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    with pytest.raises(StatusException) as raised:
-        await node.next_fragment()
-    assert raised.value.status.code == StatusCode.CANCELLED

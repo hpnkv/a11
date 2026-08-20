@@ -234,7 +234,7 @@ contexts:
           |FAIL|LOG|LOGF|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
-    - match: '\b(parallel|max|of|PARALLEL|MAX|OF){{kw_boundary}}'
+    - match: '\b(parallel|unordered|max|of|by|desc|into|PARALLEL|UNORDERED|MAX|OF|BY|DESC|INTO){{kw_boundary}}'
       scope: keyword.other.a11flow
 
   node-map:
@@ -291,11 +291,13 @@ contexts:
       push:
         - match: |-
             (?x) \b (
-              first|last|drop|truncate|batch|group|where|map|match
-              |distinct|then|log|logf|mime|strformat|chunk|collect
-              |count|join|text|json|packb|FIRST|LAST|DROP|TRUNCATE
-              |BATCH|GROUP|WHERE|MAP|MATCH|DISTINCT|THEN|LOG|LOGF|MIME
-              |STRFORMAT|CHUNK|COLLECT|COUNT|JOIN|TEXT|JSON|PACKB
+              first|last|drop|truncate|batch|flatten|group|sort|where
+              |map|match|distinct|then|log|logf|mime|strformat|chunk
+              |collect|count|sum|min|max|avg|fold|join|text|json|packb
+              |timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|FLATTEN
+              |GROUP|SORT|WHERE|MAP|MATCH|DISTINCT|THEN|LOG|LOGF|MIME
+              |STRFORMAT|CHUNK|COLLECT|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN
+              |TEXT|JSON|PACKB|TIMEOUT|PACE
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true
@@ -355,7 +357,7 @@ contexts:
     # `a11.sdk.Interaction{...}`: a value of a named type.
     - match: '{{name}}(?:\.{{name}})+(?=\s*\{)'
       scope: storage.type.a11flow
-    - match: '\b(status|zip|STATUS|ZIP){{kw_boundary}}'
+    - match: '\b(interleave|status|zip|INTERLEAVE|STATUS|ZIP){{kw_boundary}}'
       scope: keyword.other.status.a11flow
     - match: '\b(it|IT){{kw_boundary}}'
       scope: variable.language.it.a11flow

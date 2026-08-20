@@ -34,7 +34,7 @@ async def _port(name: str, interactions: list[Interaction]) -> AsyncNode:
     node = AsyncNode.create(name)
     for interaction in interactions:
         await node.put(interaction, mimetype="application/json")
-    await node.drain_and_close()
+    await node.finalize()
     return node
 
 

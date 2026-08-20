@@ -132,8 +132,7 @@ async def check_the_flow(
     """
     call = remote(session, stream, flow_tools.FLOW_CHECK_SCHEMA)
     await call.call()
-    async with call["source"] as source:
-        await source.put_final(FLOW_SOURCE)
+    await call["source"].finalize(FLOW_SOURCE)
     plan = await call["plan"].next_object()
     await call.wait()
 
@@ -174,7 +173,7 @@ async def write_history(
     node.attach_stream(stream)
     for interaction in history:
         await (await node.put(interaction))
-    await node.put_null_final()
+    await node.finalize()
     return node.get_id()
 
 
@@ -238,18 +237,12 @@ async def run_one_turn(
     # Every input port, including the ones this call has nothing for: an input
     # nobody writes and nobody closes is one the handler waits on, and with no
     # deadline on the call it waits for good.
-    async with (
-        called["source"] as source,
-        called["inputs"] as inputs,
-        called["flow"] as which,
-        called["input_streams"] as streamed,
-    ):
-        await source.put_final(FLOW_SOURCE)
-        await inputs.put_final(inputs_value)
-        await which.put_null_final()
-        # This flow's history arrives on a node of its own (see `write_history`),
-        # named inside `inputs` rather than as a port left open here.
-        await streamed.put_null_final()
+    await called["source"].finalize(FLOW_SOURCE)
+    await called["inputs"].finalize(inputs_value)
+    await called["flow"].finalize()
+    # This flow's history arrives on a node of its own (see `write_history`),
+    # named inside `inputs` rather than as a port left open here.
+    await called["input_streams"].finalize()
 
     remembered: list[Any] = []
 

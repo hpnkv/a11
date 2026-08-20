@@ -201,8 +201,7 @@ async def flow_actions(action: a11.Action) -> None:
     described = describe_composable_actions(
         action.get_registry(), get_allowed_llm_action_patterns(action)
     )
-    await action["actions"].put(described, final=True)
-    await action["actions"].drain_and_close()
+    await action["actions"].finalize(described)
     names = ", ".join(one["action"] for one in described) or "none"
     await action.log(
         f"Listed {len(described)} action(s) a flow may call.\n\n{names}",
@@ -216,8 +215,7 @@ async def flow_check(action: a11.Action) -> None:
     program = _compile(source)
     verify_calls(program, get_allowed_llm_action_patterns(action))
     described = program.describe()
-    await action["plan"].put(described, final=True)
-    await action["plan"].drain_and_close()
+    await action["plan"].finalize(described)
     flows = ", ".join(one["flow"] for one in described["flows"])
     await action.log(
         f"Compiled {len(described['flows'])} flow(s): {flows}."
@@ -270,12 +268,11 @@ def flow_input_node_id(call_id: str, port: str) -> str:
     ```python
     call = a11.Action(FLOW_RUN_SCHEMA)...
     await call.call()
-    await call["input_streams"].put_final(["words"])   # this port is mine
+    await call["input_streams"].finalize(["words"])  # this port is mine
     words = session.node_map.get(flow_input_node_id(call.get_id(), "words"))
     words.attach_stream(stream)
-    await (await words.put("one"))        # the flow reads it now, not later
-    await (await words.put_null_final())  # and this is what ends the port
-    await words.drain_and_close()
+    await (await words.put("one"))  # the flow reads it now, not later
+    await words.finalize()          # and this is what ends the port
     ```
 
     Arity is not a second mechanism: a port declared `stream` takes as many
@@ -365,8 +362,7 @@ async def flow_run(action: a11.Action) -> None:
     )
 
     outputs = await running.collect()
-    await action["result"].put(outputs, final=True)
-    await action["result"].drain_and_close()
+    await action["result"].finalize(outputs)
     ports = ", ".join(sorted(outputs)) or "no outputs"
     filled = ", ".join(sorted(running.inputs))
     fed = f" The caller filled {filled}." if filled else ""

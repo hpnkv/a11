@@ -31,8 +31,7 @@ async def test_action_callback_fires_on_success():
     schema = ActionSchema(name="ok", outputs={"result": _result_port()})
 
     async def handler(action: Action) -> None:
-        async with action["result"]:
-            await action["result"].put("v", final=True)
+        await action["result"].finalize("v")
 
     action = Action(schema, handler=handler)
     seen = []

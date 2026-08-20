@@ -59,8 +59,10 @@ async def _drive(
     action.run()
     if command is not None:
         await action["command"].put(command, final=True)
+    # Closed rather than finalized: `command` marked its own value final
+    # above, and a second final sequence would be invalid.
     for input_name in action.get_schema().inputs:
-        await action[input_name].drain_and_close()
+        await action[input_name].close()
     await asyncio.wait_for(action.wait(), timeout=30)
     return action
 
@@ -197,13 +199,11 @@ async def test_timeout_terminates_command_and_keeps_shell(manager):
 
     action = registry.make_action("shell_execute")
     action.set_header(bash.SHELL_ID_HEADER, shell_id.encode())
-    await action["parameters"].put(
-        bash.A11ShellExecuteParameters(timeout_seconds=1), final=True
+    await action["parameters"].finalize(
+        bash.A11ShellExecuteParameters(timeout_seconds=1)
     )
     action.run()
-    await action["command"].put("echo before; sleep 30", final=True)
-    await action["parameters"].drain_and_close()
-    await action["command"].drain_and_close()
+    await action["command"].finalize("echo before; sleep 30")
 
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -232,9 +232,8 @@ async def test_cancellation_terminates_running_command(manager):
     action = registry.make_action("shell_execute")
     action.set_header(bash.SHELL_ID_HEADER, shell_id.encode())
     action.run()
-    await action["command"].put("echo started; sleep 30", final=True)
-    await action["parameters"].drain_and_close()
-    await action["command"].drain_and_close()
+    await action["command"].finalize("echo started; sleep 30")
+    await action["parameters"].finalize()
 
     # Wait until the command is actually running, then cancel the action.
     await asyncio.sleep(1.0)
@@ -320,8 +319,10 @@ async def test_a_failed_command_is_narrated_and_still_fails(manager):
     log_node = action.get_log_node()
     action.run()
     await action["command"].put("echo hi", final=True)
+    # Closed rather than finalized: `command` marked its own value final
+    # above, and a second final sequence would be invalid.
     for input_name in action.get_schema().inputs:
-        await action[input_name].drain_and_close()
+        await action[input_name].close()
 
     with pytest.raises(StatusException) as raised:
         await asyncio.wait_for(action.wait(), timeout=30)

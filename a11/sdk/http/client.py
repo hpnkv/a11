@@ -43,8 +43,7 @@ _STREAMING_PORTS = frozenset({"body", "fields", "items", "redirects", "pushes"})
 
 async def _put_one(action: Action, port: str, value: Any) -> None:
     """Write one value to a unary input and end it."""
-    await (await action[port].put(value, final=True))
-    await action[port].drain_and_close()
+    await action[port].finalize(value)
 
 
 def _bytes_chunk(data: bytes) -> types.Chunk:
@@ -70,8 +69,7 @@ async def _feed_body(
         )
         for piece in pieces:
             await (await node.put_chunk(_bytes_chunk(bytes(piece))))
-    await node.put_null_final()
-    await node.drain_and_close()
+    await node.finalize()
 
 
 class Response:

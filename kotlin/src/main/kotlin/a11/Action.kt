@@ -423,11 +423,16 @@ class Action private constructor(
             val id = inputIds[name] ?: continue
             val node = nodeMap.get(id).orElse { return it }
             for (autofill in port.autofills) {
-                val stored = if (autofill == null) node.putNullFinal()
-                else node.putFragment(NodeFragment(id, autofill.data, autofill.seq, autofill.continued))
-                if (stored is Status && !stored.isOk) return stored
+                if (autofill == null) {
+                    node.finalize(wait = true, close = false).let { if (!it.isOk) return it }
+                } else {
+                    val stored = node.putFragment(
+                        NodeFragment(id, autofill.data, autofill.seq, autofill.continued),
+                    )
+                    if (stored is Status && !stored.isOk) return stored
+                }
             }
-            node.drainAndClose().let { if (!it.isOk) return it }
+            node.close().let { if (!it.isOk) return it }
         }
         inputAutofillsApplied = true
         return Status.ok()
@@ -536,7 +541,7 @@ class Action private constructor(
             val node = nodeMap.get(id).orElse { first = firstError(first, it); continue }
             val writable = node.isWritable().orElse { first = firstError(first, it); continue }
             if (!writable) continue
-            val closed = if (status.isOk) node.drainAndClose() else node.abortWithStatus(status)
+            val closed = if (status.isOk) node.close() else node.abortWithStatus(status)
             first = firstError(first, closed)
         }
         return first
@@ -550,7 +555,7 @@ class Action private constructor(
         if (!writable) return failedPrecondition("Action status node was already finalized.")
         stream?.let { node.attachStream(it); boundNodes.add(node) }
         node.putFragment(NodeFragment(id, chunk, 0, false)).let { if (it is Status && !it.isOk) return it }
-        return node.drainAndClose()
+        return node.close()
     }
 
     private suspend fun releaseNodesAfterRun(): Status {

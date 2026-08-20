@@ -97,10 +97,10 @@ builds a portable text turn.
 const user = need(await makeTextMessageInteraction('Explain WebGPU in one sentence.'));
 
 const interactions = need(await action.getInput('interactions'));
-need(await interactions.put(user, {final: true}));
+need(await interactions.finalize(user));
 
 const config = need(await action.getInput('config'));
-need(await config.putFinal({
+need(await config.finalize({
     model_asset_path:
         'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm?download=true',
 }));

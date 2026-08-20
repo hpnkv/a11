@@ -675,7 +675,7 @@ async def test_remote_input_mirror_closes_when_the_caller_drains_it():
         assert (await action.wait_for_dispatch()).is_ok()
         await _confirm(await action["lines"].put("one"))
         await _confirm(await action["lines"].put("two"))
-        await action["lines"].drain_and_close()
+        await action["lines"].close()
 
         await asyncio.wait_for(drained.wait(), timeout=5)
         assert seen == ["one", "two"]
@@ -693,8 +693,8 @@ async def test_remote_handler_error_propagates_status_and_output_abort():
     )
 
     async def handler(action: Action) -> None:
-        async with action["result"]:
-            raise failure.to_exception()
+        # The Action's own cleanup aborts the output with this status.
+        raise failure.to_exception()
 
     registry = ActionRegistry()
     registry.register("remote-error", schema, handler)
@@ -770,9 +770,8 @@ async def test_remote_cancel_action_cancels_handler_and_aborts_outputs():
 
     async def handler(action: Action) -> None:
         try:
-            async with action["result"]:
-                started.set()
-                await asyncio.Event().wait()
+            started.set()
+            await asyncio.Event().wait()
         finally:
             handler_cancelled.set()
 
@@ -830,8 +829,7 @@ async def test_remote_cancel_immediately_after_call_is_not_lost():
     )
 
     async def handler(action: Action) -> None:
-        async with action["result"]:
-            await asyncio.Event().wait()
+        await asyncio.Event().wait()
 
     registry = ActionRegistry()
     registry.register("cancel-immediately", schema, handler)

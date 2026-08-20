@@ -726,7 +726,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
         return a11::CompletedFuture<std::uint32_t>(seq);
       }
       a11::Task applied = (close_marker && carried->ok())
-                              ? (*node)->DrainAndClose()
+                              ? (*node)->Close()
                               : (*node)->AbortWithStatus(*carried);
       return a11::Then(
           std::move(applied),
@@ -795,7 +795,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
         return seq;
       }
       const a11::Task applied =
-          closed.ok() ? mirror->DrainAndClose()
+          closed.ok() ? mirror->Close()
                       : mirror->AbortWithStatus(std::move(closed));
       ABSL_RETURN_IF_ERROR(applied.Await().status());
       return seq;

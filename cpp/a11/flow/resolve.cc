@@ -41,12 +41,12 @@ using DtoNames = absl::flat_hash_set<std::string>;
 
 /// What a written type means, in the one place that decides it.
 ///
-/// A port and a `struct` field both name a type, and they have to agree about what
-/// a name means or a field could hold something its port could not carry. The
-/// order is the whole of the rule: a **built-in** name first, so no declaration
-/// can redefine `string`; then a **shape this file declares**, which is what
-/// makes a `struct` outrank the registry; then a dotted **registry tag** or a
-/// mimetype, which only the host can check.
+/// A port and a `struct` field both name a type, and they have to agree about
+/// what a name means or a field could hold something its port could not carry.
+/// The order is the whole of the rule: a **built-in** name first, so no
+/// declaration can redefine `string`; then a **shape this file declares**,
+/// which is what makes a `struct` outrank the registry; then a dotted
+/// **registry tag** or a mimetype, which only the host can check.
 class TypeReader {
  public:
   /// Where a diagnostic goes. A `std::function` rather than a template because
@@ -70,8 +70,9 @@ class TypeReader {
       CheckParameters(type, std::vector<int>(allowed.begin(), allowed.end()));
       return declared;
     }
-    // A shape is written as it was declared, case and all: `struct` names are not
-    // keywords and `Canonical` would fold a shouted one into something else.
+    // A shape is written as it was declared, case and all: `struct` names are
+    // not keywords and `Canonical` would fold a shouted one into something
+    // else.
     if (dtos_.contains(type.name)) {
       CheckParameters(type, {0});
       return type.name;
@@ -193,9 +194,9 @@ bool ConstantFits(const syntax::Constant& value, std::string_view type) {
 /// The shapes a file declares, resolved: their fields, their types, and
 /// everything wrong with them.
 ///
-/// A pass of its own and ahead of the flows, because a port may name a shape and
-/// a shape may name another one, in either order. Nothing here reads a flow, so
-/// it does not need one.
+/// A pass of its own and ahead of the flows, because a port may name a shape
+/// and a shape may name another one, in either order. Nothing here reads a
+/// flow, so it does not need one.
 class DtoResolver {
  public:
   DtoResolver(const LineIndex& lines,
@@ -425,11 +426,30 @@ class DtoResolver {
 
 /// One stage as it was written: `truncate 200`, `where it.ok`.
 std::string StageLabel(const syntax::Stage& stage);
+std::string StageBodyLabel(const syntax::Stage& stage);
 
 /// An expression as a person would read it back, for a label or a message.
 ///
-/// Not a formatter: this is the shortest faithful spelling of one expression, the
-/// way `a11.flow.plan.unparse` writes it, so a step's label says what it does.
+/// Not a formatter: this is the shortest faithful spelling of one expression,
+/// the way `a11.flow.plan.unparse` writes it, so a step's label says what it
+/// does. A literal as it would be written.
+std::string ConstantText(const syntax::Constant& value) {
+  switch (value.kind) {
+    case syntax::Constant::Kind::kString:
+      return absl::StrCat("\"", value.text, "\"");
+    case syntax::Constant::Kind::kInteger:
+      return absl::StrCat(value.integer);
+    case syntax::Constant::Kind::kDouble:
+      return absl::StrCat(value.number);
+    case syntax::Constant::Kind::kBool:
+      return value.boolean ? "true" : "false";
+    case syntax::Constant::Kind::kDuration:
+      return absl::FormatDuration(value.duration);
+    default:
+      return "null";
+  }
+}
+
 std::string Unparse(const Node* node) {
   if (node == nullptr) return "";
   switch (node->kind) {
@@ -509,7 +529,55 @@ std::string Unparse(const Node* node) {
 }
 
 /// One stage as it was written: `truncate 200`, `where it.ok`.
+///
+/// The tail a stage may carry -- `try` in front, `parallel n`, `unordered`,
+/// `into failures` -- is written the way the author wrote it, because this
+/// label is what `describe` prints and what an error message quotes back.
 std::string StageLabel(const syntax::Stage& stage) {
+  std::string tail;
+  if (stage.parallel > 1) {
+    absl::StrAppend(&tail, " parallel ", stage.parallel);
+    if (!stage.ordered) absl::StrAppend(&tail, " unordered");
+  }
+  if (stage.failures != nullptr) {
+    absl::StrAppend(&tail, " into ", Unparse(stage.failures.get()));
+  }
+  const std::string head = stage.tolerant ? "try " : "";
+  const auto written = [&](std::string_view body) {
+    return absl::StrCat(head, body, tail);
+  };
+  switch (stage.takes) {
+    case vocabulary::StageArgument::kOptionalExpression:
+      if (stage.argument == nullptr) return written(stage.name);
+      return written(
+          absl::StrCat(stage.name, " ", Unparse(stage.argument.get())));
+    case vocabulary::StageArgument::kSortKey: {
+      std::string body = stage.name;
+      if (stage.argument != nullptr) {
+        absl::StrAppend(&body, " by ", Unparse(stage.argument.get()));
+      }
+      if (stage.descending) absl::StrAppend(&body, " desc");
+      return written(body);
+    }
+    case vocabulary::StageArgument::kFold:
+      return written(absl::StrCat(stage.name, " ",
+                                  ConstantText(stage.start), " as ",
+                                  stage.carried.text, ", ",
+                                  Unparse(stage.argument.get())));
+    case vocabulary::StageArgument::kDuration:
+      return written(absl::StrCat(stage.name, " ",
+                                  absl::FormatDuration(stage.duration)));
+    default:
+      break;
+  }
+  if (!head.empty() || !tail.empty()) {
+    return written(StageBodyLabel(stage));
+  }
+  return StageBodyLabel(stage);
+}
+
+/// The stage without the tail: what the older shapes have always printed.
+std::string StageBodyLabel(const syntax::Stage& stage) {
   switch (stage.takes) {
     case vocabulary::StageArgument::kNumber:
       return absl::StrCat(stage.name, " ",
@@ -534,6 +602,7 @@ std::string StageLabel(const syntax::Stage& stage) {
                           Unparse(stage.log.arguments.front().get()));
     }
     case vocabulary::StageArgument::kNone:
+    default:
       return stage.name;
   }
   return stage.name;
@@ -541,10 +610,10 @@ std::string StageLabel(const syntax::Stage& stage) {
 
 /// What a reference resolved to.
 ///
-/// Enough for the questions the resolver has to answer -- may this be read, may it
-/// be written, does it have a status, is it the front of a stream a counted `skip`
-/// could take values off -- and no more. The runtime's ref, with its buffers and
-/// its readers, is a different object for a different job.
+/// Enough for the questions the resolver has to answer -- may this be read, may
+/// it be written, does it have a status, is it the front of a stream a counted
+/// `skip` could take values off -- and no more. The runtime's ref, with its
+/// buffers and its readers, is a different object for a different job.
 struct Ref {
   enum class Kind {
     kUnknown,
@@ -570,15 +639,15 @@ struct Ref {
   bool writable = false;
   /// The symbol this reads through, for the usage counts.
   size_t symbol = kNoSymbol;
-  /// Whether a counted `skip` may take values off the front of it: only a stream
-  /// that is genuinely produced somewhere has a front.
+  /// Whether a counted `skip` may take values off the front of it: only a
+  /// stream that is genuinely produced somewhere has a front.
   bool has_front = false;
   /// The graph ref this answer corresponds to, when a graph is being built.
   ///
   /// One extra field rather than a second resolver: ~25 sites return one of
-  /// these, and what the runtime needs from them is the *identity* of the stream
-  /// they named. [graph::kNone] on the editor path, and wherever the reference
-  /// did not resolve.
+  /// these, and what the runtime needs from them is the *identity* of the
+  /// stream they named. [graph::kNone] on the editor path, and wherever the
+  /// reference did not resolve.
   graph::RefId node = graph::kNone;
   /// For an outcome: whether a bad one is the flow's business or the subject's.
   /// True where the subject is a `try` call, or a barrier on one.
@@ -587,9 +656,9 @@ struct Ref {
   /// with a `struct`, or what a `map Shape{..}` or an `as Shape` just made.
   ///
   /// Not a type system -- the language does not have one and is not getting one
-  /// here. It is one fact carried along a pipeline, and it is carried because it
-  /// answers a question that is otherwise unanswerable until a value arrives:
-  /// whether `| json` has anything to render.
+  /// here. It is one fact carried along a pipeline, and it is carried because
+  /// it answers a question that is otherwise unanswerable until a value
+  /// arrives: whether `| json` has anything to render.
   std::string shape;
 };
 
@@ -625,8 +694,8 @@ class FlowResolver {
   /// The flow's ports and headers, without resolving its body.
   ///
   /// The first of two passes, for the reason `a11/flow/plan.py` gives: a flow's
-  /// ports are what a *sibling* calling it needs, and which flow is written first
-  /// is the author's convenience rather than a dependency order.
+  /// ports are what a *sibling* calling it needs, and which flow is written
+  /// first is the author's convenience rather than a dependency order.
   void Declare() {
     FlowPlan& plan = resolved_.plan;
     plan.name = declaration_.name.text;
@@ -683,9 +752,9 @@ class FlowResolver {
           input ? SymbolKind::kInputPort : SymbolKind::kOutputPort;
       symbol.name = port.name;
       symbol.location = port.location;
-      // An `in` port is read and an `out` port is written. Reading an `out` port
-      // back is what a node of the flow's own is for, and the message for it says
-      // so rather than leaving the author guessing.
+      // An `in` port is read and an `out` port is written. Reading an `out`
+      // port back is what a node of the flow's own is for, and the message for
+      // it says so rather than leaving the author guessing.
       symbol.readable = input;
       symbol.writable = !input;
       if (builder_ != nullptr) {
@@ -762,8 +831,9 @@ class FlowResolver {
 
   /// The status of `subject`, as the graph's own ref.
   ///
-  /// A call's is memoised on its step; a node's or a port's is fresh per mention,
-  /// exactly as `a11.flow.plan` makes them, because the counts follow from it.
+  /// A call's is memoised on its step; a node's or a port's is fresh per
+  /// mention, exactly as `a11.flow.plan` makes them, because the counts follow
+  /// from it.
   graph::RefId StatusOfStep(graph::StepId step) {
     if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
     graph::Step& one = builder_->step(step);
@@ -778,12 +848,31 @@ class FlowResolver {
     return made;
   }
 
+  /// Which subject of a race won, as the value that barrier is.
+  ///
+  /// Memoised on the step the way a call's status is: `n = wait first of a, b`
+  /// and `wait first of a, b -> n` are one race however many read it.
+  graph::RefId WinnerOfStep(graph::StepId step) {
+    if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
+    if (builder_->step(step).winner != graph::kNone) {
+      return builder_->step(step).winner;
+    }
+    graph::Ref ref;
+    ref.kind = graph::RefKind::kWinner;
+    ref.label = absl::StrCat("winner of ", builder_->step(step).label);
+    ref.owner = builder_->step(step).body;
+    ref.subject_step = step;
+    const graph::RefId made = builder_->AddRef(std::move(ref));
+    builder_->step(step).winner = made;
+    return made;
+  }
+
   /// The status of a call, fresh per mention.
   ///
   /// `wait x` and `status x` each make their own, exactly as `a11.flow.plan`
-  /// does -- only `x.status` is memoised -- and the reader counts follow from it.
-  /// A status is one value however many refs name it, so this costs nothing but
-  /// keeps the two implementations countable against each other.
+  /// does -- only `x.status` is memoised -- and the reader counts follow from
+  /// it. A status is one value however many refs name it, so this costs nothing
+  /// but keeps the two implementations countable against each other.
   graph::RefId FreshStatusOfStep(graph::StepId step) {
     if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
     graph::Ref ref;
@@ -806,10 +895,15 @@ class FlowResolver {
 
   /// The graph stage one written stage becomes, with its argument resolved.
   graph::Stage GraphStage(const syntax::Stage& stage, graph::RefId stream,
-                          graph::ExprId expr, graph::LogTail log = {}) {
+                          graph::ExprId expr, graph::LogTail log = {},
+                          graph::RefId failures = graph::kNone) {
     graph::Stage made;
     made.name = stage.name;
     made.takes = stage.takes;
+    made.tolerant = stage.tolerant;
+    made.failures = failures;
+    made.parallel = stage.parallel;
+    made.ordered = stage.ordered;
     switch (stage.takes) {
       case vocabulary::StageArgument::kNumber:
         made.count = static_cast<long long>(stage.number);
@@ -819,7 +913,20 @@ class FlowResolver {
         made.text = stage.text;
         break;
       case vocabulary::StageArgument::kExpression:
+      case vocabulary::StageArgument::kOptionalExpression:
         made.expr = expr;
+        break;
+      case vocabulary::StageArgument::kSortKey:
+        made.expr = expr;
+        made.descending = stage.descending;
+        break;
+      case vocabulary::StageArgument::kFold:
+        made.expr = expr;
+        made.start = stage.start;
+        made.carried = stage.carried.text;
+        break;
+      case vocabulary::StageArgument::kDuration:
+        made.duration = stage.duration;
         break;
       case vocabulary::StageArgument::kStream:
         made.stream = stream;
@@ -909,7 +1016,8 @@ class FlowResolver {
 
   // -- types -----------------------------------------------------------------
 
-  /// What a declared type gives a port, and a diagnostic where it gives nothing.
+  /// What a declared type gives a port, and a diagnostic where it gives
+  /// nothing.
   ///
   /// Delegated to [TypeReader] rather than decided here: a port and a `struct`
   /// field have to agree about what a name means, and they do so by asking the
@@ -939,7 +1047,14 @@ class FlowResolver {
     if (guarded) ++guarded_;
     std::vector<StepPlan> steps;
     for (const syntax::NodePtr& statement : statements) {
+      // A statement may make a step *while resolving its own source*: a race
+      // read where a value is expected is a barrier, and the plan should say so.
+      // Kept here rather than threaded through every source: the pointer is the
+      // list this statement is being appended to, and nothing else appends.
+      std::vector<StepPlan>* const outer_pending = pending_steps_;
+      pending_steps_ = &steps;
       ResolveStatement(statement.get(), scope, steps);
+      pending_steps_ = outer_pending;
     }
     if (guarded) --guarded_;
     body_ = outer;
@@ -950,14 +1065,15 @@ class FlowResolver {
   ///
   /// `fail` and `cancel` take no input and wait for nothing, so at the top of a
   /// flow's body they run *at once*, racing every other statement: the flow is
-  /// over before the call three lines up has been dispatched. Read top to bottom
-  /// they look like a last resort; they are the first thing that happens.
+  /// over before the call three lines up has been dispatched. Read top to
+  /// bottom they look like a last resort; they are the first thing that
+  /// happens.
   ///
-  /// Inside an `if`, a `for` or a `repeat` they are conditional on something, and
-  /// an `after` is the author saying in the source what they are waiting for.
-  /// Either is enough. A `nodes` block is not, because it joins the body around
-  /// it and changes nothing about when its statements run; nor is a `{ ... }`
-  /// block, whose statements race each other exactly as a flow's own do.
+  /// Inside an `if`, a `for` or a `repeat` they are conditional on something,
+  /// and an `after` is the author saying in the source what they are waiting
+  /// for. Either is enough. A `nodes` block is not, because it joins the body
+  /// around it and changes nothing about when its statements run; nor is a `{
+  /// ... }` block, whose statements race each other exactly as a flow's own do.
   void CheckReachedByChoice(std::string_view code, std::string_view what,
                             const std::vector<syntax::Word>& after,
                             const Location& location) {
@@ -1041,6 +1157,78 @@ class FlowResolver {
       }
       case NodeKind::kWait: {
         const auto* wait = syntax::As<syntax::Wait>(statement);
+        // `wait first of a, b` and `wait all of a, b` read several outcomes.
+        // One step, several outcomes: what a reader of the plan wants to know
+        // is that this statement is one barrier over a set, and whether the
+        // first of them is enough.
+        if (!wait->subjects.empty()) {
+          std::vector<Ref> outcomes;
+          std::vector<std::string> labels;
+          outcomes.reserve(wait->subjects.size());
+          for (const syntax::NodePtr& subject : wait->subjects) {
+            outcomes.push_back(ResolveOutcome(subject.get(), scope));
+            labels.push_back(SubjectLabel(outcomes.back().label));
+          }
+          const std::string written = absl::StrCat(
+              "wait ", wait->race ? "first" : "all", " of ",
+              absl::StrJoin(labels, ", "));
+          StepPlan step;
+          step.kind = "wait";
+          step.label = written.substr(std::strlen("wait "));
+          step.source = step.label;
+          step.timeout = wait->timeout;
+          step.location = wait->location;
+          graph::StepId made = graph::kNone;
+          if (builder_ != nullptr) {
+            made = NewStep(graph::StepKind::kWait, written, wait->location);
+            graph::Step& one = builder_->step(made);
+            one.race = wait->race;
+            one.timeout = wait->timeout;
+            bool tolerant = true;
+            for (const Ref& outcome : outcomes) {
+              one.subjects.push_back(outcome.node);
+              if (!outcome.tolerant) tolerant = false;
+            }
+            // The first outcome is also the step's own, so everything that
+            // reads a wait's outcome keeps working: with `first`, that is
+            // whichever won, and the runtime fills it in.
+            one.outcome = outcomes.front().node;
+            one.tolerant = tolerant;
+            if (wait->race) builder_->step(made).winner = WinnerOfStep(made);
+          }
+          step.after = ResolveAfter(wait->after, scope, made);
+          const graph::RefId winner =
+              made == graph::kNone ? graph::kNone
+                                   : builder_->step(made).winner;
+          steps.push_back(std::move(step));
+          // `-> n` writes the number of whichever won, which only a race has.
+          for (const syntax::NodePtr& target : wait->targets) {
+            if (!wait->race) {
+              Report("flow.form.wait-all-has-no-value",
+                     "'wait all of' waits for every one of them, so there is "
+                     "no single winner to write. 'wait first of a, b -> n' "
+                     "writes which one it was.",
+                     target->location);
+              break;
+            }
+            const Ref destination = ResolveDestination(target.get(), scope);
+            StepPlan pipe;
+            pipe.kind = "pipe";
+            pipe.label = absl::StrCat(written, " -> ", destination.label);
+            pipe.source = written;
+            pipe.destination = destination.label;
+            pipe.location = wait->location;
+            if (builder_ != nullptr) {
+              const graph::StepId piped = NewStep(graph::StepKind::kPipe,
+                                                  pipe.label, wait->location);
+              graph::Step& one = builder_->step(piped);
+              one.source = winner;
+              one.destination = destination.node;
+            }
+            steps.push_back(std::move(pipe));
+          }
+          return;
+        }
         const Ref outcome = ResolveOutcome(wait->subject.get(), scope);
         StepPlan step;
         step.kind = "wait";
@@ -1273,10 +1461,10 @@ class FlowResolver {
         // resolved against, not on the copy pushed in.
         const bool stopped = repeats_.back().stopped;
         repeats_.pop_back();
-        // Nothing ends it. With the old default of `max 16` this was a loop that
-        // quietly did sixteen passes and reported success; now that a bound is
-        // only ever the author's, a loop with neither is one that runs until
-        // something cancels the flow, which nobody writes on purpose.
+        // Nothing ends it. With the old default of `max 16` this was a loop
+        // that quietly did sixteen passes and reported success; now that a
+        // bound is only ever the author's, a loop with neither is one that runs
+        // until something cancels the flow, which nobody writes on purpose.
         if (!stopped && !repeat->max_iterations.has_value()) {
           Report("flow.form.unbounded-repeat",
                  absl::StrCat(
@@ -1356,9 +1544,9 @@ class FlowResolver {
           graph::Step& one = builder_->step(owner);
           one.condition = condition;
           one.stop_when = until->stop_when;
-          // Each stream the condition reads is captured inside the pass, because
-          // the question is asked once the pass is over and the streams are gone
-          // by then.
+          // Each stream the condition reads is captured inside the pass,
+          // because the question is asked once the pass is over and the streams
+          // are gone by then.
           const std::vector<graph::RefId> read = builder_->expr(condition).refs;
           for (const graph::RefId ref : read) {
             const graph::StepId made = NewStep(
@@ -1437,15 +1625,15 @@ class FlowResolver {
   ///
   /// It is **lazy**, like every other stream here: nothing is read until
   /// something reads the name. That is what makes `let` free to write next to
-  /// the thing it describes rather than where the value is first needed -- and a
-  /// `let` nothing reads is reported, because a value nobody looked at is a line
-  /// that does nothing.
+  /// the thing it describes rather than where the value is first needed -- and
+  /// a `let` nothing reads is reported, because a value nobody looked at is a
+  /// line that does nothing.
   /// The literal `match` pattern a pipeline's values came out of, if any.
   ///
-  /// Either the pipeline *is* a `match(..)` call or its last stage was a `match`.
-  /// Anything after that reshapes the value into something the pattern no longer
-  /// describes, so only the last stage is looked at: `| match "p" | count` is a
-  /// number, not a record.
+  /// Either the pipeline *is* a `match(..)` call or its last stage was a
+  /// `match`. Anything after that reshapes the value into something the pattern
+  /// no longer describes, so only the last stage is looked at: `| match "p" |
+  /// count` is a number, not a record.
   static std::string PatternOf(const syntax::Pipeline& pipeline) {
     if (!pipeline.stages.empty()) {
       const syntax::Stage& last = *pipeline.stages.back();
@@ -1468,8 +1656,8 @@ class FlowResolver {
                   std::vector<StepPlan>& steps) {
     absl::flat_hash_set<std::string> taken;
     for (const syntax::Word& name : let->names) {
-      // Its own names as well as the scope's: `let age, age = u` defines one and
-      // shadows it with the other, which nobody writes on purpose.
+      // Its own names as well as the scope's: `let age, age = u` defines one
+      // and shadows it with the other, which nobody writes on purpose.
       if (Lookup(scope, name.text) != kNoSymbol || !taken.insert(name.text).second) {
         Report("flow.name.taken",
                absl::StrCat(Quoted(name.text),
@@ -1520,8 +1708,8 @@ class FlowResolver {
         value.value_offset = 0;
       } else {
         // A part of the value: its field where the value has one, and its
-        // position where the value is a list. Which of the two is settled by the
-        // value rather than by the text, because `let name, age = user` and
+        // position where the value is a list. Which of the two is settled by
+        // the value rather than by the text, because `let name, age = user` and
         // `let first, second = pair` are the same statement written twice.
         graph::Stage part;
         part.name = "at";
@@ -1542,14 +1730,14 @@ class FlowResolver {
 
   /// `advance name` -- the same stream's next value, under the same name.
   ///
-  /// **Why this is an offset and not a barrier.** Written out, the second binding
-  /// is `let x = src` again with an `after` on the first, and what the `after`
-  /// buys is that the earlier binding took the earlier value. An offset gives the
-  /// same guarantee without the ordering: the *k*th binding of a name reads the
-  /// *k*th value of its stream whenever it happens to run, so the guarantee holds
-  /// however the flow is scheduled rather than because of how it was scheduled.
-  /// That is a stronger promise than a sync point, and it needs nothing to
-  /// synchronise.
+  /// **Why this is an offset and not a barrier.** Written out, the second
+  /// binding is `let x = src` again with an `after` on the first, and what the
+  /// `after` buys is that the earlier binding took the earlier value. An offset
+  /// gives the same guarantee without the ordering: the *k*th binding of a name
+  /// reads the *k*th value of its stream whenever it happens to run, so the
+  /// guarantee holds however the flow is scheduled rather than because of how
+  /// it was scheduled. That is a stronger promise than a sync point, and it
+  /// needs nothing to synchronise.
   ///
   /// The name is rebound rather than redefined: statements written before this
   /// one already hold the ref they resolved against, and everything after it
@@ -1643,8 +1831,8 @@ class FlowResolver {
                   bind->name.text, bind->name.location);
       return;
     }
-    // A bound `wait`/`drain`: the barrier is the step, and the name reads as the
-    // outcome it waited for.
+    // A bound `wait`/`drain`: the barrier is the step, and the name reads as
+    // the outcome it waited for.
     const size_t before = steps.size();
     const size_t graph_before =
         builder_ == nullptr ? 0 : builder_->flow().steps.size();
@@ -1655,10 +1843,16 @@ class FlowResolver {
     barrier.location = bind->name.location;
     barrier.readable = true;
     if (builder_ != nullptr && builder_->flow().steps.size() > graph_before) {
-      // The statement's own step is the first one it made; anything after it is a
-      // barrier `after` grew, which belongs to nobody's name.
+      // The statement's own step is the first one it made; anything after it is
+      // a barrier `after` grew, which belongs to nobody's name.
       barrier.step = graph_before;
-      barrier.ref = builder_->step(graph_before).outcome;
+      // A race is a *value* -- which of them won -- so that is what its name
+      // reads. Every other barrier's name reads the outcome it waited for,
+      // which for a race is available as `status a` of the subject itself.
+      const graph::RefId winner = builder_->step(graph_before).winner;
+      barrier.ref = winner != graph::kNone
+                        ? winner
+                        : builder_->step(graph_before).outcome;
       barrier.tolerant = builder_->step(graph_before).tolerant;
       builder_->step(graph_before).label = bind->name.text;
     }
@@ -1670,9 +1864,10 @@ class FlowResolver {
   ///
   /// The step carries a status the way a call does, which is what lets the
   /// ordinary bound-statement path hand it to a name: `s = try { .. }` needs
-  /// nothing here beyond the outcome existing. A block is *not* a guarding scope
-  /// for the `fail`/`cancel` rule: its statements run at once like any body's, so
-  /// a `fail` at the top of one races them exactly as it would in the flow.
+  /// nothing here beyond the outcome existing. A block is *not* a guarding
+  /// scope for the `fail`/`cancel` rule: its statements run at once like any
+  /// body's, so a `fail` at the top of one races them exactly as it would in
+  /// the flow.
   void ResolveBlock(const syntax::Block* block, Scope& scope,
                     std::vector<StepPlan>& steps) {
     StepPlan step;
@@ -1689,8 +1884,8 @@ class FlowResolver {
       one.bodies.push_back(inner_body);
       one.tolerant = block->tolerant;
       // Its own outcome, so a name bound to it reads how the block went. Made
-      // here rather than on demand because the bound-statement path looks for it
-      // on the step it finds.
+      // here rather than on demand because the bound-statement path looks for
+      // it on the step it finds.
       graph::Ref outcome;
       outcome.kind = graph::RefKind::kStatus;
       outcome.label = absl::StrCat("status ", step.label);
@@ -1773,14 +1968,14 @@ class FlowResolver {
 
   /// The steps a statement waits for, from its `after` names.
   ///
-  /// A name may be a step -- a call, a bound `wait`/`drain` -- or a port or node,
-  /// in which case the statement waits for that stream to be finished. The second
-  /// reading is the one an author reaches for without thinking.
+  /// A name may be a step -- a call, a bound `wait`/`drain` -- or a port or
+  /// node, in which case the statement waits for that stream to be finished.
+  /// The second reading is the one an author reaches for without thinking.
   ///
-  /// With `step` it also hangs the graph's own answer on that step: a name that is
-  /// a call or a barrier waits for its step, and a port or a node grows a `wait`
-  /// step of its own here -- the same step a written-out `x = wait port` would
-  /// have made, so the two spellings cannot drift apart.
+  /// With `step` it also hangs the graph's own answer on that step: a name that
+  /// is a call or a barrier waits for its step, and a port or a node grows a
+  /// `wait` step of its own here -- the same step a written-out `x = wait port`
+  /// would have made, so the two spellings cannot drift apart.
   std::vector<std::string> ResolveAfter(const std::vector<syntax::Word>& after,
                                        Scope& scope,
                                        graph::StepId step = graph::kNone) {
@@ -2084,9 +2279,9 @@ class FlowResolver {
     const size_t index = resolved_.symbols.size() - 1;
 
     StepPlan step;
-    // The verb it was written with, not "a call": a described step says which of
-    // `run` and `call` it is, the way a `wait`/`drain` step says which of those it
-    // was, because that is the distinction a reader is checking for.
+    // The verb it was written with, not "a call": a described step says which
+    // of `run` and `call` it is, the way a `wait`/`drain` step says which of
+    // those it was, because that is the distinction a reader is checking for.
     step.kind = call.mode;
     step.label = std::string(label);
     step.action = call.action;
@@ -2096,8 +2291,8 @@ class FlowResolver {
     step.tolerant = call.tolerant;
     step.tee = call.modifiers->tee;
     step.location = call.location;
-    // The headers and the id first: they are read where the call is written, and
-    // the step carries what they resolved to.
+    // The headers and the id first: they are read where the call is written,
+    // and the step carries what they resolved to.
     std::vector<std::pair<std::string, graph::ExprId>> headers;
     for (const auto& [name, value] : call.modifiers->headers) {
       headers.emplace_back(name, ResolveExpression(value.get(), scope, false));
@@ -2179,8 +2374,8 @@ class FlowResolver {
       return ref;
     }
     if (builder_ == nullptr) return ref;
-    // Memoised per `direction:name`: the flow may name one port of one call from
-    // several places, and it is one stream however often it is written.
+    // Memoised per `direction:name`: the flow may name one port of one call
+    // from several places, and it is one stream however often it is written.
     const graph::StepId step = symbol.step;
     if (step == graph::kNone) return ref;
     const std::string key = absl::StrCat(
@@ -2198,10 +2393,10 @@ class FlowResolver {
     port.direction = direction;
     port.call = step;
     port.writable = ref.writable;
-    // A sibling flow declared its ports here, so this one is knowable. An action
-    // from a registry did not: the resolver has its name and nothing else, and
-    // guessing would be claiming something it cannot see. The runtime has the
-    // real schema and refines it there.
+    // A sibling flow declared its ports here, so this one is knowable. An
+    // action from a registry did not: the resolver has its name and nothing
+    // else, and guessing would be claiming something it cannot see. The runtime
+    // has the real schema and refines it there.
     if (symbol.target != nullptr) {
       if (const PortPlan* declared = symbol.target->Port(name, direction);
           declared != nullptr) {
@@ -2217,13 +2412,14 @@ class FlowResolver {
 
   Ref ResolvePipeline(const syntax::Pipeline& pipeline, Scope& scope) {
     Ref ref = ResolveSource(pipeline.source.get(), scope);
-    // The pattern the values carry as the pipeline is walked, so `it` in a stage
-    // knows what the stage before made of them.
+    // The pattern the values carry as the pipeline is walked, so `it` in a
+    // stage knows what the stage before made of them.
     std::string previous_pattern = PatternOf(pipeline);
     if (!pipeline.stages.empty()) previous_pattern.clear();
     for (const syntax::StagePtr& stage : pipeline.stages) {
       graph::RefId stream = graph::kNone;
       graph::ExprId expr = graph::kNone;
+      graph::RefId carry = graph::kNone;
       graph::LogTail log;
       if (stage->takes == vocabulary::StageArgument::kLog ||
           stage->takes == vocabulary::StageArgument::kLogFormat) {
@@ -2234,9 +2430,33 @@ class FlowResolver {
         it_pattern_ = outer;
       } else if (stage->takes == vocabulary::StageArgument::kStream) {
         stream = ResolveSource(stage->argument.get(), scope).node;
+      } else if (stage->takes == vocabulary::StageArgument::kFold) {
+        // The fold's expression sees two things: `it`, the value in hand, and
+        // the name the author gave what the last value produced. The name is an
+        // ordinary name in an ordinary scope -- so a typo in it is the same
+        // diagnostic as any other unknown name -- bound to a ref the runtime
+        // fills in per value rather than one it reads a stream for.
+        // Its own role, because a fold's accumulator is not a stream: nothing
+        // produces it and nothing may subscribe to it. See [Scope::Prepare].
+        carry = BoundRef(body_, graph::kNone, "fold");
+        Scope folding;
+        folding.parent = &scope;
+        if (!stage->carried.text.empty()) {
+          Symbol carried;
+          carried.kind = SymbolKind::kLoopVariable;
+          carried.name = stage->carried.text;
+          carried.location = stage->carried.location;
+          carried.ref = carry;
+          Define(folding, carried);
+        }
+        const std::string outer = it_pattern_;
+        it_pattern_ = previous_pattern;
+        expr = ResolveExpression(stage->argument.get(), folding, true);
+        it_pattern_ = outer;
       } else if (stage->argument != nullptr) {
-        // `it` is the value this stage is looking at, which is whatever the stage
-        // before it made -- so a `map` after a `match` knows the pattern's fields.
+        // `it` is the value this stage is looking at, which is whatever the
+        // stage before it made -- so a `map` after a `match` knows the
+        // pattern's fields.
         const std::string outer = it_pattern_;
         it_pattern_ = previous_pattern;
         expr = ResolveExpression(stage->argument.get(), scope, true);
@@ -2246,6 +2466,14 @@ class FlowResolver {
           vocabulary::Canonical(stage->name) == "match" ? stage->text : "";
       CheckShapeStage(*stage, ref);
       CheckPatternStage(*stage);
+      // `into failures` names a destination, so it resolves the way a pipe's
+      // target does: as something this flow may write.
+      graph::RefId failures = graph::kNone;
+      if (stage->failures != nullptr) {
+        const Ref target =
+            ResolveDestination(stage->failures.get(), scope);
+        failures = target.node;
+      }
       const graph::RefId source = ref.node;
       absl::StrAppend(&ref.label, " | ", StageLabel(*stage));
       ref.kind = Ref::Kind::kDerived;
@@ -2253,9 +2481,10 @@ class FlowResolver {
       ref.writable = false;
       ref.tolerant = false;
       ref.shape = ShapeAfter(*stage, ref.shape);
-      ref.node =
-          Derive(source, GraphStage(*stage, stream, expr, std::move(log)),
-                 ref.label);
+      graph::Stage made = GraphStage(*stage, stream, expr, std::move(log),
+                                     failures);
+      made.carry = carry;
+      ref.node = Derive(source, std::move(made), ref.label);
     }
     return ref;
   }
@@ -2327,14 +2556,15 @@ class FlowResolver {
   /// Every argument has to be a stream, and each is resolved as one -- so each
   /// counts as a reader of whatever produces it, and the existing analysis
   /// materialises and replays them the way it would for any other reader. An
-  /// argument that is a plain value is a stream of one, which is the same rule a
-  /// pipeline's source follows.
+  /// argument that is a plain value is a stream of one, which is the same rule
+  /// a pipeline's source follows.
   Ref ResolveZip(const syntax::Zip& zip, Scope& scope) {
     Ref ref;
     ref.kind = Ref::Kind::kDerived;
     // A zip has a front -- the tuples are produced here -- but a counted `skip`
-    // on it would have to take tuples off a stream nothing else holds, and there
-    // is nowhere upstream to apply the count. `| drop n` is the one that works.
+    // on it would have to take tuples off a stream nothing else holds, and
+    // there is nowhere upstream to apply the count. `| drop n` is the one that
+    // works.
     ref.has_front = false;
     std::vector<std::string> labels;
     std::vector<graph::RefId> sources;
@@ -2343,14 +2573,52 @@ class FlowResolver {
       labels.push_back(one.label);
       sources.push_back(one.node);
     }
-    ref.label = absl::StrCat("zip(", absl::StrJoin(labels, ", "), ")");
+    ref.label = absl::StrCat(zip.name, "(", absl::StrJoin(labels, ", "), ")");
     if (builder_ == nullptr) return ref;
     graph::Ref made;
-    made.kind = graph::RefKind::kZip;
+    made.kind = zip.name == "interleave" ? graph::RefKind::kMerge
+                                        : graph::RefKind::kZip;
     made.label = ref.label;
     made.owner = body_;
     made.sources = std::move(sources);
     ref.node = builder_->AddRef(std::move(made));
+    return ref;
+  }
+
+  /// `wait first of a, b` read where a value is expected.
+  ///
+  /// The barrier is a step like any other -- it has to be, because it waits and
+  /// because `after` may name it -- so this makes the step and hands back the
+  /// value it produces. Written this way, `let n = wait first of a, b` and
+  /// `n = wait first of a, b` are the same race as the statement form.
+  Ref ResolveRaceValue(const syntax::Wait& wait, Scope& scope) {
+    Ref ref;
+    ref.label = "wait";
+    if (!wait.race) {
+      Report("flow.form.wait-all-has-no-value",
+             "'wait all of' waits for every one of them, so there is no single "
+             "winner to name. 'wait first of a, b' is the one that is a value.",
+             wait.location);
+      return Ref{Ref::Kind::kUnknown, "wait all of"};
+    }
+    // The statement path is the one implementation: it makes the step, its
+    // outcomes and its winner, and reports whatever is wrong with the subjects.
+    std::vector<StepPlan> made;
+    const size_t graph_before =
+        builder_ == nullptr ? 0 : builder_->flow().steps.size();
+    ResolveStatement(&wait, scope, made);
+    if (pending_steps_ != nullptr) {
+      for (StepPlan& one : made) pending_steps_->push_back(std::move(one));
+    }
+    if (builder_ == nullptr ||
+        builder_->flow().steps.size() <= graph_before) {
+      return Ref{Ref::Kind::kUnknown, "wait first of"};
+    }
+    const graph::Step& step = builder_->step(graph_before);
+    ref.kind = Ref::Kind::kValue;
+    ref.label = step.label;
+    ref.node = step.winner;
+    ref.has_front = true;
     return ref;
   }
 
@@ -2382,6 +2650,8 @@ class FlowResolver {
             *syntax::As<syntax::PipelineValue>(expression)->pipeline, scope);
       case NodeKind::kZip:
         return ResolveZip(*syntax::As<syntax::Zip>(expression), scope);
+      case NodeKind::kWait:
+        return ResolveRaceValue(*syntax::As<syntax::Wait>(expression), scope);
       case NodeKind::kOutcome:
         return ResolveOutcome(
             syntax::As<syntax::Outcome>(expression)->subject.get(), scope);
@@ -2521,8 +2791,8 @@ class FlowResolver {
         ref.node = StatusOfStep(symbol.step);
         return ref;
       }
-      // An output unless the flow it names declares it as an input, which is what
-      // lets `x.in-port` be written and `x.out-port` be read.
+      // An output unless the flow it names declares it as an input, which is
+      // what lets `x.in-port` be written and `x.out-port` be read.
       syntax::PortDirection direction = syntax::PortDirection::kOutput;
       if (symbol.target != nullptr &&
           !symbol.target->HasPort(attr->name, syntax::PortDirection::kOutput) &&
@@ -2564,14 +2834,14 @@ class FlowResolver {
 
   /// The status of what `expression` names.
   ///
-  /// The longest prefix of the reference that names something with a status wins,
-  /// and anything left over reads into the record: `status x.ok` is the call's
-  /// status asked whether it is ok, and `status x.out` is that port's.
+  /// The longest prefix of the reference that names something with a status
+  /// wins, and anything left over reads into the record: `status x.ok` is the
+  /// call's status asked whether it is ok, and `status x.out` is that port's.
   Ref ResolveOutcome(const Node* expression, Scope& scope) {
     std::vector<std::string> path;
     const Node* cursor = expression;
-    // A trailing field of the record belongs to the record, not to a port of that
-    // name: `status x.code` is what x finished with.
+    // A trailing field of the record belongs to the record, not to a port of
+    // that name: `status x.code` is what x finished with.
     while (true) {
       const auto* attr = syntax::As<syntax::Attr>(cursor);
       if (attr == nullptr) break;
@@ -2608,8 +2878,8 @@ class FlowResolver {
              expression->location);
       return Ref{Ref::Kind::kUnknown, Unparse(expression)};
     }
-    // Reading a status is reading the subject: count it, so a `try` whose status
-    // nothing reads can be told from one that is waited on.
+    // Reading a status is reading the subject: count it, so a `try` whose
+    // status nothing reads can be told from one that is waited on.
     if (const auto* name = syntax::As<syntax::Name>(cursor); name != nullptr) {
       if (Symbol* found = Find(scope, name->name); found != nullptr) {
         ++found->reads;
@@ -2632,8 +2902,8 @@ class FlowResolver {
     for (auto at = path.rbegin(); at != path.rend(); ++at) {
       const graph::RefId source = ref.node;
       absl::StrAppend(&ref.label, ".", *at);
-      // A field of the record: the status is still the thing waited for, and the
-      // field is read out of the value it gives.
+      // A field of the record: the status is still the thing waited for, and
+      // the field is read out of the value it gives.
       ref.node = Derive(source, AtStage(*at), ref.label);
     }
     return ref;
@@ -2641,8 +2911,8 @@ class FlowResolver {
 
   /// The graph ref that is the status of what `cursor` names.
   ///
-  /// A call's and a node's are fresh per mention; a bound barrier's is the one it
-  /// already waited for, because `s` and `wait ...` are the same moment.
+  /// A call's and a node's are fresh per mention; a bound barrier's is the one
+  /// it already waited for, because `s` and `wait ...` are the same moment.
   void GraphSubject(const Node* cursor, Scope& scope, Ref& out) {
     if (builder_ == nullptr) return;
     if (const auto* name = syntax::As<syntax::Name>(cursor); name != nullptr) {
@@ -2857,8 +3127,8 @@ class FlowResolver {
         }
         return;
       case NodeKind::kSpread:
-        // What is spread has to be a value with parts, but which parts it has is
-        // not known until it is read; the walk is of the thing being spread.
+        // What is spread has to be a value with parts, but which parts it has
+        // is not known until it is read; the walk is of the thing being spread.
         WalkExpression(syntax::As<syntax::Spread>(expression)->value.get(),
                        scope, allow_it, out);
         return;
@@ -2871,8 +3141,8 @@ class FlowResolver {
       case NodeKind::kTypedValue: {
         const auto* typed = syntax::As<syntax::TypedValue>(expression);
         // The type is checked as far as it can be here -- a built-in name is
-        // either known or misspelt -- and a tag is left to the runtime, which is
-        // the only place that knows what has been registered.
+        // either known or misspelt -- and a tag is left to the runtime, which
+        // is the only place that knows what has been registered.
         if (typed->type.name.find('.') == std::string::npos &&
             typed->type.name.find('/') == std::string::npos &&
             !typed->type.quoted) {
@@ -2946,10 +3216,10 @@ class FlowResolver {
   /// The field names a value is known to have, and what said so.
   ///
   /// Two things in this language say what a value holds: a port declared with a
-  /// `struct`, and a `match` pattern, whose holes *are* its fields. Nothing else
-  /// does, and where nothing said, nothing is checked -- a value carrying `object`
-  /// or `json` may hold anything, and reporting a field it has would be worse
-  /// than reporting none.
+  /// `struct`, and a `match` pattern, whose holes *are* its fields. Nothing
+  /// else does, and where nothing said, nothing is checked -- a value carrying
+  /// `object` or `json` may hold anything, and reporting a field it has would
+  /// be worse than reporting none.
   struct Fields {
     /// What to call it in the message: `'Source'`, or `the pattern`.
     std::string subject;
@@ -2960,8 +3230,8 @@ class FlowResolver {
     if (text.empty()) return std::nullopt;
     const pattern::Compiled compiled = pattern::Compile(text);
     // A pattern that does not read is reported where it is written; nothing is
-    // known about what it names, so nothing is checked here. Nor is a positional
-    // one, which names no fields at all.
+    // known about what it names, so nothing is checked here. Nor is a
+    // positional one, which names no fields at all.
     if (!compiled.ok() || !compiled.pattern.AllNamed()) return std::nullopt;
     Fields found;
     found.subject = "the pattern";
@@ -2994,10 +3264,10 @@ class FlowResolver {
 
   /// `x.field` against what `x` is known to hold.
   ///
-  /// Only where the base is a name or `it`, and only one level deep: a field that
-  /// holds a record of its own says nothing about *its* keys, so `src.meta.title`
-  /// checks `meta` and stops. Conservative on purpose -- the value of this check
-  /// is that it never cries wolf.
+  /// Only where the base is a name or `it`, and only one level deep: a field
+  /// that holds a record of its own says nothing about *its* keys, so
+  /// `src.meta.title` checks `meta` and stops. Conservative on purpose -- the
+  /// value of this check is that it never cries wolf.
   void CheckMember(const syntax::Attr* attr, Scope& scope) {
     std::optional<Fields> known;
     if (syntax::As<syntax::It>(attr->base.get()) != nullptr) {
@@ -3022,11 +3292,11 @@ class FlowResolver {
   /// `Shape{...}`, against the shape it names.
   ///
   /// Only what is knowable without running anything: a key the shape does not
-  /// have, a constant that could not be a value of the field's type, and -- when
-  /// nothing is spread in -- a required field left out. A spread makes the set of
-  /// keys a run-time fact, so the missing-field check stands down rather than
-  /// guessing; the coercion at run time is what catches it then, with the same
-  /// words.
+  /// have, a constant that could not be a value of the field's type, and --
+  /// when nothing is spread in -- a required field left out. A spread makes the
+  /// set of keys a run-time fact, so the missing-field check stands down rather
+  /// than guessing; the coercion at run time is what catches it then, with the
+  /// same words.
   void CheckShapeLiteral(const DtoPlan& shape, const Node* value) {
     const auto* object = syntax::As<syntax::ObjectLiteral>(value);
     if (object == nullptr) return;
@@ -3111,11 +3381,15 @@ class FlowResolver {
   std::vector<Diagnostic>& diagnostics_;
   /// Null on the editor path: no graph, and none of the work of building one.
   graph::GraphBuilder* absl_nullable builder_ = nullptr;
-  /// The body statements are being read into, which is what a ref made here owns.
+  /// The body statements are being read into, which is what a ref made here
+  /// owns.
   graph::BodyId body_ = graph::kNone;
   /// The graph steps the last [ResolveAfter] found, for the one statement that
   /// makes several steps out of one `after`.
   std::vector<graph::StepId> after_waits_;
+  /// The plan steps the statement being resolved is appending to; see
+  /// [ResolveStatements]. Null outside one.
+  std::vector<StepPlan>* pending_steps_ = nullptr;
   absl::flat_hash_map<std::string, int> labels_;
   std::string node_map_;
   std::vector<RepeatState> repeats_;
@@ -3210,17 +3484,17 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
   result.diagnostics = parsed.diagnostics;
   const LineIndex lines(source);
 
-  // The shapes first, and all of them: a port may be typed with one, and a shape
-  // may name another, so neither declaration order nor the flows can be waited
-  // for.
+  // The shapes first, and all of them: a port may be typed with one, and a
+  // shape may name another, so neither declaration order nor the flows can be
+  // waited for.
   result.program.dtos =
       DtoResolver(lines, absl::MakeConstSpan(parsed.dtos), result.diagnostics)
           .Run();
 
   // Then two passes over the flows, for the reason a program is a set of flows
   // rather than a sequence: every flow declares its ports before any body is
-  // read, so a call to a sibling is checked whichever order the two were written
-  // in.
+  // read, so a call to a sibling is checked whichever order the two were
+  // written in.
   absl::flat_hash_set<std::string> seen;
   std::vector<const syntax::FlowDeclaration*> declared;
   for (const syntax::FlowDeclarationPtr& declaration : parsed.flows) {
@@ -3241,8 +3515,8 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
   }
 
   result.flows.resize(declared.size());
-  // Reserved rather than grown: a call's symbol points at the plan of the flow it
-  // names, and a reallocation would leave that pointer behind.
+  // Reserved rather than grown: a call's symbol points at the plan of the flow
+  // it names, and a reallocation would leave that pointer behind.
   result.program.flows.reserve(declared.size());
   for (size_t index = 0; index < declared.size(); ++index) {
     FlowResolver(lines, *declared[index], result.program, result.flows[index],

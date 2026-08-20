@@ -22,8 +22,8 @@ output port, exactly like the LLM interaction:
 ```python
 async def shout(action):
     text = await action["text"].consume()
-    await action["result"].put_final(text.upper())
-    await action["result"].drain_and_close()   # seal the output with OK
+    # `finalize` marks the value final and seals the port with OK.
+    await action["result"].finalize(text.upper())
 
 
 SHOUT = a11.ActionSchema(
@@ -37,8 +37,7 @@ SHOUT = a11.ActionSchema(
 
 async def run_locally() -> str:
     action = a11.Action(SHOUT).bind_handler(shout).run()
-    async with action["text"] as text:
-        await text.put_final("hello")
+    await action["text"].finalize("hello")
     return await action["result"].consume()      # -> "HELLO"
 ```
 
@@ -97,8 +96,7 @@ input, read the output — but the bytes now travel over the network to the
 server's handler and back:
 
 ```python
-await action["text"].put_final("hello")           # mark the input final...
-await action["text"].drain_and_close()            # ...and seal it
+await action["text"].finalize("hello")            # mark it final, and seal it
 print(await action["result"].consume())           # -> "HELLO"
 ```
 
@@ -106,7 +104,7 @@ Sealing a port carries across the connection as well as locally: closing a
 writer tees a closure marker to the stream, so the peer's copy of that node
 closes too. A handler that streams with plain `put()` and then closes therefore
 ends the caller's read even though it never marked a fragment final — see
-[the node lifecycle](../lifecycles/async-node.md#4-drain-and-close-writes).
+[the node lifecycle](../lifecycles/async-node.md#4-close-writes).
 
 ## Putting it together
 
@@ -120,8 +118,8 @@ import a11
 
 async def shout(action):
     text = await action["text"].consume()
-    await action["result"].put_final(text.upper())
-    await action["result"].drain_and_close()   # seal the output with OK
+    # `finalize` marks the value final and seals the port with OK.
+    await action["result"].finalize(text.upper())
 
 
 SHOUT = a11.ActionSchema(
@@ -136,8 +134,7 @@ SHOUT = a11.ActionSchema(
 async def main() -> None:
     # Local: the handler runs in this process.
     local = a11.Action(SHOUT).bind_handler(shout).run()
-    async with local["text"] as text:
-        await text.put_final("hello")
+    await local["text"].finalize("hello")
     print("local:", await local["result"].consume())      # -> HELLO
 
     # Remote: host the same action on a server and call it over a socket.
@@ -163,8 +160,7 @@ async def main() -> None:
             "shout", node_map=client.node_map, stream=stream, session=client
         )
         await action.call()
-        await action["text"].put_final("hello")
-        await action["text"].drain_and_close()
+        await action["text"].finalize("hello")
         print("remote:", await action["result"].consume())  # -> HELLO
         await action.wait()
     finally:

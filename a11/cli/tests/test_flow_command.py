@@ -36,12 +36,14 @@ flow shout {
 }
 """
 
+#: A flow with one thing wrong with it: a stage the language does not have.
+#: (`flatten` stood here until the language gained it, on 2026-08-20.)
 BROKEN = """
 flow shout {
   in  words:   string stream
   out loudest: string
 
-  words | flatten -> loudest
+  words | shuffle -> loudest
 }
 """
 
@@ -123,7 +125,7 @@ def test_the_json_envelope_is_the_documented_one(flow_file, capsys):
     # Offsets place the problem without needing the file again.
     text = pathlib.Path(envelope["source"]).read_text(encoding="utf-8")
     start = found["range"]["start"]["offset"]
-    assert text[start : start + 7] == "flatten"
+    assert text[start : start + 7] == "shuffle"
 
 
 def test_sarif_is_a_log_a_scanner_can_read(flow_file, capsys):

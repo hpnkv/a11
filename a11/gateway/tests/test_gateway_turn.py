@@ -155,14 +155,9 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
         role=Role.USER,
         content=[a11.to_chunk({"role": "user", "content": f"echo {_TOKEN}"})],
     )
-    async with (
-        call["interactions"] as interactions,
-        call["tools"] as tools,
-        call["config"] as config,
-    ):
-        await interactions.put_final(question)
-        await tools.put_null_final()
-        await config.put_null_final()
+    await call["interactions"].finalize(question)
+    await call["tools"].finalize()
+    await call["config"].finalize()
 
     text: list[str] = []
     produced: list[Interaction] = []

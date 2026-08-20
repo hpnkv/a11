@@ -290,6 +290,58 @@ things it does are ones a tool loop cannot reach:
   in fragments is not much better;
 * **and cheap anyway**: the model in this composition reads exactly one sentence.
 
+## Four shapes worth knowing about
+
+Nothing above needs them, and once a composition is real it usually does.
+
+**Work on several values at once.** A `map` whose expression is expensive — a
+coercion, a round trip through the host — may say how many values it may have in
+hand. What follows still reads them in the order they arrived, so this can be
+added to a pipeline nobody else changed:
+
+```a11flow
+urls | map fetch_page(it) parallel 8 -> bodies
+```
+
+**One bad value out of a thousand.** `try` on a stage says a value the stage
+cannot do is not a reason to abandon the stream, and `into` says where those go
+as status records:
+
+```a11flow
+docs | try map it as Order into rejected -> orders
+```
+
+**Two streams, whichever arrives.** `interleave` reads several at once and gives
+each value as it comes, so a slow source does not hold up a fast one — which is
+what a flow watching a model and a tool at the same time wants:
+
+```a11flow
+interleave(llm.text_output, tool.progress) -> shown
+```
+
+**Whichever call answers first.** `wait first of` holds until one of several
+calls finishes and lets the rest carry on. It is a value as well as a barrier:
+the number of the one that won, counted from zero, so the flow can act on *which*
+answer it got.
+
+```a11flow
+fast = call cached(query: q)
+slow = call searched(query: q)
+wait first of fast, slow -> whose_answer
+```
+
+**Arithmetic over a stream.** `| sum`, `| min`, `| max`, `| avg` and `| sort`
+read the whole stream and are written where they read:
+
+```a11flow
+orders | sum it.price -> revenue
+hits   | sort by it.score desc | first 10 -> best
+```
+
+`| fold 0 as total, total + it` is the general form, and `| timeout 30s` and
+`| pace 100ms` are the two stages about *when* a value arrives rather than what
+it is.
+
 ## Where to go from here
 
 The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,

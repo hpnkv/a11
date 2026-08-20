@@ -67,9 +67,10 @@ import a11
 
 
 async def main() -> None:
-    async with a11.AsyncNode.create("tokens") as node:   # seals on exit
-        for word in ["A11", "streams", "everything"]:
-            await node.put(word)                          # await = backpressure
+    node = a11.AsyncNode.create("tokens")
+    for word in ["A11", "streams", "everything"]:
+        await node.put(word)                              # await = backpressure
+    await node.finalize()                                 # ends and seals it
 
     async for token in node:
         print(token)

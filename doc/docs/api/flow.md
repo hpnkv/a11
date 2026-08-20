@@ -242,6 +242,109 @@ things they sit between rather than as transformations applied to a stream:
 which is what stops a stage name from swallowing a port that shares it — a
 port really called `then` still reads as one.
 
+`| flatten` is `batch` backwards: a stream of lists becomes a stream of what
+they held.
+
+```a11flow
+pages | map it.lines | flatten -> lines
+```
+
+A value that is not a list goes through as itself, so a mixed stream is
+flattened rather than refused.
+
+`interleave(a, b, ...)` is the other kind of fan-in. Where `zip` reads its
+sources *in step* and gives a tuple per round, this reads them at once and gives
+each value as it arrives, so a fast stream is not held behind a slow one:
+
+```a11flow
+interleave(llm.text_output, tool.progress) -> shown
+```
+
+The order between the sources is whatever the values did — that is the point of
+asking — and it ends when every source has. A source that ends badly ends the
+stream with its status.
+
+### Reducing a stream to one value
+
+`| collect` and `| count` were the whole of it; the arithmetic ones are here for
+the same reason:
+
+```a11flow
+orders | sum it.price -> revenue
+runs   | avg it.elapsed -> typical
+hits   | max it.score -> best
+```
+
+`sum`, `min`, `max` and `avg` read the whole stream and yield one value. With no
+expression they use the values themselves; with one they read a field of each, so
+`| sum it.price` is `| map it.price | sum` said once. Durations add and average
+as durations. `min`, `max` and `avg` of an *empty* stream yield **nothing** —
+the smallest of no values is not a value — while `| sum` of one is `0`, because
+adding nothing is.
+
+`| fold` is the general form, for the shape none of those is:
+
+```a11flow
+orders | fold 0 as total, total + it.price -> revenue
+```
+
+The name is bound to what the last value produced and `it` to the value in hand.
+The starting value is a literal, not an expression: `fold 0 as total` read as an
+expression would be a cast of `0` to a type called `total`, and the language
+should not have to guess which was meant.
+
+`| sort` puts a stream in order:
+
+```a11flow
+hits | sort by it.score desc | first 10 -> best
+```
+
+It reads the whole stream to find out what the order is, so nothing comes out
+until the stream ends. Values compare the way `<` compares them, `by` names what
+to compare, `desc` reverses it, and it is **stable**: values that tie stay in the
+order they were written.
+
+### When a value arrives
+
+Two stages are about time rather than about values.
+
+```a11flow
+tokens   | timeout 30s  -> answer
+requests | pace 100ms   -> to_api
+```
+
+`timeout` is a **gap**: a stream that keeps arriving runs as long as it likes,
+and one that goes quiet for longer than this ends the flow with
+`deadline_exceeded`. That is what a stalled producer looks like from here; a
+budget for a whole step is `wait ... timeout`, which already existed.
+
+`pace` spaces values out and **drops nothing** — whoever is producing them is
+held back behind the buffer, which is what makes it a rate limit rather than a
+sample. What it costs is latency, on purpose.
+
+### Working on several values at once
+
+A per-value stage may say how many values it may have in hand:
+
+```a11flow
+urls | map fetch_page(it) parallel 8 -> bodies
+```
+
+**What follows still reads them in the order they arrived.** The stage finishes
+its values in whatever order it finishes them and puts the stream back together
+before anything downstream sees it, so `parallel` can be added to a pipeline
+nobody else changed. `unordered` gives that up for whatever it saves:
+
+```a11flow
+urls | map fetch_page(it) parallel 8 unordered -> bodies
+```
+
+It is worth writing where the per-value work is expensive — a round trip through
+the host, a coercion, a large `chunk` — and nowhere else: eight workers taking a
+field out of a record is eight fibres doing what one was already fast at. A
+stage that gathers or orders values refuses `parallel`, because there is nothing
+to run at once.
+
 ### Text, times, and how long something took
 
 `strformat("%s of %s", got, wanted)` is printf, because a format string is
@@ -415,6 +518,44 @@ record — `fail outcome` re-raises exactly what happened, and
 
 Waiting on something that finished badly ends the flow with *that* status, unless
 it was a `try`: those are the failures the flow said it would handle.
+
+`wait first of a, b` holds until the first of several calls finishes and leaves
+the rest running; `wait all of a, b` holds for every one of them. A race is
+between *calls* — a node is finished when whoever writes it says so, which is
+what `wait` and `drain` are for.
+
+A race is also a *value*: which one won, counted from zero. It is written where
+a number is written, so the flow can act on the answer rather than only on the
+fact that someone finished:
+
+```a11flow
+won = wait first of primary, backup        # 0 or 1
+wait first of primary, backup -> chosen    # ...or straight to a port
+let n = wait first of primary, backup      # ...or named
+```
+
+`wait all of` has no single winner, so it is a barrier only.
+
+### A failure one value at a time
+
+A `try` on a *stage* is the same idea inside a pipeline: one value the stage
+cannot do is not a reason to abandon the stream.
+
+```a11flow
+docs | try map it as Order -> good
+```
+
+The value is dropped and the failure logged once at warning. Where the failures
+matter, `into` sends them somewhere:
+
+```a11flow
+docs | try map it as Order into rejected -> good
+```
+
+They arrive as status records — the same shape `status x` yields — so a stream of
+failures is an ordinary stream: countable, writable to a port, readable by the
+caller. Without `try`, a value a stage cannot do ends the flow, which is the
+right default for a composition that is not expecting one.
 
 ## Loops, branches, and state
 

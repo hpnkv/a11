@@ -66,13 +66,12 @@ class GenerativeMediaDemo {
       const request = need(await call.getInput('request'));
       const seed = this.seed.value.trim();
       need(
-        await request.putFinal({
+        await request.finalize({
           prompt,
           num_inference_steps: steps,
           ...(seed ? {seed: Number(seed)} : {}),
         }),
       );
-      need(await request.drainAndClose());
 
       // The counter is read alongside the image, not before it: an undrained
       // port stalls the action producing it, and this one runs the whole time

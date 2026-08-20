@@ -458,8 +458,11 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       so `advance` on one says so rather than binding the next whole value.
 
 SOURCE is a port (in-port, X.out-port), a node, a loop variable, a `let` value,
-a header alias, a literal, `status SUBJECT`, `N.id`, `zip(SOURCE, ...)`, or any
-of those with `.field` / `[i]`.
+a header alias, a literal, `status SUBJECT`, `N.id`, `zip(SOURCE, ...)`,
+`interleave(SOURCE, ...)`, or any of those with `.field` / `[i]`.
+`interleave(a, b, ...)` reads several streams *at once* and gives one stream of
+their values in the order they arrive, so a fast stream is not held behind a
+slow one. `zip` is the other shape: one tuple per round, in step.
 `zip(a, b, ...)` reads several streams in step and gives one stream of tuples,
 read as `it[0]`, `it[1]`, or taken apart by `for x, y in zip(a, b)`. A source
 that ends *well* contributes a null to every tuple after it, so the longer
@@ -469,6 +472,11 @@ like any other — `wait`, `drain`, `| first n`, `| drop n`, `| count` all work
 on one.
 DEST is an out-port, X.in-port, or a node.
 SUBJECT is a call, a node, a port, or a named wait/drain.
+`wait first of a, b` holds until the first of several *calls* finishes and lets
+the rest carry on; `wait all of a, b` holds for every one of them.
+A race is a value too: which one won, from zero. `wait first of a, b -> n`,
+`let n = wait first of a, b` and `n = wait first of a, b` all name it.
+`wait all of` has no winner, so it is a barrier only.
 MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
            to wait for) |
            id EXPR | with "header": EXPR, ... |
@@ -482,10 +490,23 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
            Either may name another flow of the same file, in any order, and
            needs nothing registered for it: a composition can be factored into
            several flows and still arrive as one text.
-STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
-        group EXPR | then SOURCE | where EXPR | map EXPR | join "sep" |
-        strformat "fmt" | mime "text/*" | collect | count | distinct | text |
-        json | packb | log [LEVEL] [EXPR] | logf [LEVEL] "fmt" [ARG, ...]
+STAGES: first N | last N | drop N | truncate N | batch N | flatten | chunk N |
+        group EXPR | sort [by EXPR] [desc] | then SOURCE | where EXPR |
+        map EXPR | join "sep" | strformat "fmt" | mime "text/*" | collect |
+        count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
+        fold LITERAL as NAME, EXPR | distinct | text | json | packb |
+        timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
+        logf [LEVEL] "fmt" [ARG, ...]
+      Any stage may be written `try STAGE` — a value the stage cannot do is
+      dropped and logged instead of ending the flow — and a `try` stage may say
+      `into DEST` to send those failures somewhere as status records:
+      `docs | try map it as Order into bad -> good`.
+      A per-value stage may say `parallel N` to work on N values at once, and
+      what follows still reads them in the order they arrived. `unordered`
+      gives that up for whatever it saves:
+      `urls | map fetch(it) parallel 8 -> bodies`. It is worth writing where
+      the per-value work is expensive (a host round trip, a coercion) and
+      nowhere else.
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
       Text stops at a character boundary rather than splitting one. A value
@@ -501,6 +522,22 @@ STAGES: first N | last N | drop N | truncate N | batch N | chunk N |
       then SOURCE reads this stream and then that one, in that order --
       `history | then asked` is how a conversation keeps its turns straight,
       which two writers to one node cannot.
+      sum/min/max/avg read the whole stream and give one value; with an
+      expression they read one field of each (`| sum it.price`). min/max/avg of
+      an *empty* stream give nothing, because the smallest of no values is not
+      a value; `| sum` of one is 0. fold is the general form:
+      `| fold 0 as total, total + it.price` binds `total` to what the last
+      value produced and `it` to the value in hand. `+` is arithmetic, not
+      concatenation -- `| join` is what puts strings together.
+      sort reads the whole stream (nothing comes out until it ends), compares
+      the way `<` does, and is stable: values that tie stay in the order they
+      were written. `by` names what to compare and `desc` reverses it.
+      flatten is the inverse of batch: a stream of lists becomes a stream of
+      what they held. A value that is not a list goes through as itself.
+      timeout 30s fails the flow when the *gap* between two values exceeds it,
+      which is what a stalled producer looks like; a whole-step budget is
+      `wait ... timeout` instead. pace 100ms spaces values out and drops
+      nothing -- the producer is held behind the buffer.
       group EXPR gathers values into a list and closes it when EXPR holds of
       the one just added — `| group ends-with(it, [".", "?"]) | map join(it)`
       is how partial pieces become whole sentences. packb writes a value as

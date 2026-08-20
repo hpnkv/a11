@@ -100,7 +100,7 @@ async def drive(
     for port, value in inputs.items():
         await action[port].put(value, final=True)
     for port in action.get_schema().inputs:
-        await action[port].drain_and_close()
+        await action[port].close()
     await asyncio.wait_for(action.wait(), timeout=30)
     return action
 
@@ -251,7 +251,7 @@ async def drive_streaming(
     if feed:
         await action["input_streams"].put(sorted(feed), final=True)
     for port in action.get_schema().inputs:
-        await action[port].drain_and_close()
+        await action[port].close()
 
     for port, values in (feed or {}).items():
         node = action.get_node(
@@ -260,8 +260,7 @@ async def drive_streaming(
         for value in values:
             await (await node.put(value))
         # The caller's close, because nothing else will do it.
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
 
     await asyncio.wait_for(action.wait(), timeout=30)
     return action
@@ -323,13 +322,12 @@ async def test_a_value_and_a_node_can_fill_different_ports_of_one_flow(
     await action["inputs"].put({"many": ["a", "b"]}, final=True)
     await action["input_streams"].put(["one"], final=True)
     for port in action.get_schema().inputs:
-        await action[port].drain_and_close()
+        await action[port].close()
     node = action.get_node(
         flow_tools.flow_input_node_id(action.get_id(), "one")
     )
     await (await node.put("solo"))
-    await (await node.put_null_final())
-    await node.drain_and_close()
+    await node.finalize()
     await asyncio.wait_for(action.wait(), timeout=30)
     assert sorted((await result_of(action, "result"))["said"]) == [
         "A",
@@ -348,7 +346,7 @@ async def test_a_port_cannot_be_given_a_value_and_named_as_a_stream(registry):
         await action["inputs"].put({"words": ["one"]}, final=True)
         await action["input_streams"].put(["words"], final=True)
         for port in action.get_schema().inputs:
-            await action[port].drain_and_close()
+            await action[port].close()
         await asyncio.wait_for(action.wait(), timeout=30)
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
     assert "given a value and left open" in raised.value.status.message
@@ -363,7 +361,7 @@ async def test_input_streams_must_be_a_list_of_port_names(registry):
             await action["source"].put(COMPOSITION, final=True)
             await action["input_streams"].put(named, final=True)
             for port in action.get_schema().inputs:
-                await action[port].drain_and_close()
+                await action[port].close()
             await asyncio.wait_for(action.wait(), timeout=30)
         assert raised.value.status.code == StatusCode.INVALID_ARGUMENT, named
 

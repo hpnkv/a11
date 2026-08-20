@@ -13,6 +13,7 @@
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
+#include <absl/types/span.h>
 #include <nlohmann/json.hpp>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -143,9 +144,9 @@ PyJsonObject LexToDict(std::string_view source, bool keep_comments) {
 
 /// A JSON value as the Python objects it stands for.
 ///
-/// Built here rather than handed over as text: the syntax tree is the one payload
-/// big enough for the difference to show, and a caller that got a string back
-/// would parse it again immediately.
+/// Built here rather than handed over as text: the syntax tree is the one
+/// payload big enough for the difference to show, and a caller that got a
+/// string back would parse it again immediately.
 py::object JsonToPython(const nlohmann::json& value) {
   switch (value.type()) {
     case nlohmann::json::value_t::null:
@@ -180,9 +181,9 @@ py::object JsonToPython(const nlohmann::json& value) {
 /// A Python object as the JSON value it stands for.
 ///
 /// Only what a request is made of -- the containers, the scalars, and nothing
-/// else -- because that is the whole of what crosses this way. Anything else is a
-/// caller passing something a request cannot hold, and saying so is better than
-/// quietly stringifying it.
+/// else -- because that is the whole of what crosses this way. Anything else is
+/// a caller passing something a request cannot hold, and saying so is better
+/// than quietly stringifying it.
 nlohmann::json PythonToJson(const py::handle& value) {
   if (value.is_none()) return nullptr;
   if (py::isinstance<py::bool_>(value)) return value.cast<bool>();
@@ -342,9 +343,9 @@ std::string TypeName(const py::handle& value) {
 
 /// A Python value as the Flow value it stands for.
 ///
-/// Everything the language has a kind for becomes that kind, and everything else
-/// -- a pydantic model, an enum member, a dataclass -- becomes a host object,
-/// which is the escape hatch that lets `coerce` mean anything at all.
+/// Everything the language has a kind for becomes that kind, and everything
+/// else -- a pydantic model, an enum member, a dataclass -- becomes a host
+/// object, which is the escape hatch that lets `coerce` mean anything at all.
 flow::Value ValueFromPython(const py::handle& value) {
   if (value.is_none()) return flow::Value::Null();
   if (py::isinstance<py::bool_>(value)) {
@@ -436,20 +437,18 @@ py::object ValueToPython(const flow::Value& value) {
 
 /// The three questions only the host can answer, answered by the interpreter.
 ///
-/// Every one of these reaches into CPython from a flow's fibre, which is why the
-/// runtime gives its fibres a stack an interpreter frame chain fits in. The GIL
-/// is taken here rather than held across a flow: a flow spends its time waiting
-/// on nodes, and holding the interpreter while it did would serialise every
-/// other Python thread behind it.
+/// Every one of these reaches into CPython from a flow's fibre, which is why
+/// the runtime gives its fibres a stack an interpreter frame chain fits in. The
+/// GIL is taken here rather than held across a flow: a flow spends its time
+/// waiting on nodes, and holding the interpreter while it did would serialise
+/// every other Python thread behind it.
 class PythonBridge : public flow::HostBridge {
  public:
   absl::StatusOr<flow::Value> Coerce(std::string_view tag,
                                      const flow::Value& value) override {
     const py::gil_scoped_acquire acquire;
     try {
-      const py::object registry =
-          py::module_::import("a11.data.serialization")
-              .attr("get_global_serialization_registry")();
+      const py::object registry = Registry();
       const py::object target =
           registry.attr("resolve_type")(std::string(tag));
       if (target.is_none()) {
@@ -477,18 +476,15 @@ class PythonBridge : public flow::HostBridge {
     const py::gil_scoped_acquire acquire;
     absl::Status from_registry;
     try {
-      const py::object registry =
-          py::module_::import("a11.data.serialization")
-              .attr("get_global_serialization_registry")();
-      return ValueFromPython(registry.attr("from_chunk")(py::cast(chunk)));
+      return ValueFromPython(Registry().attr("from_chunk")(py::cast(chunk)));
     } catch (py::error_already_set& error) {
       from_registry = StatusFromPythonException(error);
     }
     // Nothing is registered for a media type that describes bytes rather than a
     // structure -- `application/octet-stream` for a response body, `text/plain`
     // for a log line -- and the default C++ bridge reads those as a bytes or
-    // string value rather than failing. The two bridges have to agree, or a flow
-    // that runs in a C++ host stops working in a Python one.
+    // string value rather than failing. The two bridges have to agree, or a
+    // flow that runs in a C++ host stops working in a Python one.
     if (absl::IsNotFound(from_registry)) {
       const std::string mimetype = chunk.GetMimetype();
       if (absl::StartsWith(mimetype, "text/")) {
@@ -503,15 +499,85 @@ class PythonBridge : public flow::HostBridge {
                                       std::string_view mimetype) override {
     const py::gil_scoped_acquire acquire;
     try {
-      const py::object registry =
-          py::module_::import("a11.data.serialization")
-              .attr("get_global_serialization_registry")();
-      const py::object chunk = registry.attr("to_chunk")(
+      const py::object chunk = Registry().attr("to_chunk")(
           ValueToPython(value), std::string(mimetype));
       return chunk.cast<data::Chunk>();
     } catch (py::error_already_set& error) {
       return StatusFromPythonException(error);
     }
+  }
+
+  /// A batch of chunks decoded with one visit to the interpreter.
+  ///
+  /// The cost of this bridge is not the decoding, it is the crossing: taking
+  /// the GIL from a flow's fibre puts it behind the interpreter thread that
+  /// dispatched the flow, twice per value through a stage. A pipeline usually
+  /// has several values in hand, so the runtime asks for them together and this
+  /// pays the crossing once.
+  ///
+  /// Per-value statuses, so a batch fails exactly where a one-at-a-time decode
+  /// would have: a chunk nothing can read is that chunk's failure and not the
+  /// batch's.
+  std::vector<absl::StatusOr<flow::Value>> FromChunks(
+      absl::Span<const data::Chunk* const> chunks) override {
+    std::vector<absl::StatusOr<flow::Value>> values;
+    values.reserve(chunks.size());
+    const py::gil_scoped_acquire acquire;
+    py::object from_chunk;
+    try {
+      from_chunk = Registry().attr("from_chunk");
+    } catch (py::error_already_set& error) {
+      const absl::Status failed = StatusFromPythonException(error);
+      values.assign(chunks.size(), failed);
+      return values;
+    }
+    for (const data::Chunk* chunk : chunks) {
+      absl::Status from_registry;
+      try {
+        values.push_back(ValueFromPython(from_chunk(py::cast(*chunk))));
+        continue;
+      } catch (py::error_already_set& error) {
+        from_registry = StatusFromPythonException(error);
+      }
+      // The same fallback the single-value path takes, for the media types that
+      // describe bytes rather than a structure. See [FromChunk].
+      if (absl::IsNotFound(from_registry)) {
+        const std::string mimetype = chunk->GetMimetype();
+        values.push_back(absl::StartsWith(mimetype, "text/")
+                             ? flow::Value::String(chunk->data)
+                             : flow::Value::Bytes(chunk->data));
+      } else {
+        values.push_back(from_registry);
+      }
+    }
+    return values;
+  }
+
+  /// The writing counterpart of [FromChunks]: one crossing for the batch.
+  std::vector<absl::StatusOr<data::Chunk>> ToChunks(
+      absl::Span<const flow::Value* const> values,
+      std::string_view mimetype) override {
+    std::vector<absl::StatusOr<data::Chunk>> chunks;
+    chunks.reserve(values.size());
+    const py::gil_scoped_acquire acquire;
+    py::object to_chunk;
+    try {
+      to_chunk = Registry().attr("to_chunk");
+    } catch (py::error_already_set& error) {
+      const absl::Status failed = StatusFromPythonException(error);
+      chunks.assign(values.size(), failed);
+      return chunks;
+    }
+    const std::string requested(mimetype);
+    for (const flow::Value* value : values) {
+      try {
+        chunks.push_back(
+            to_chunk(ValueToPython(*value), requested).cast<data::Chunk>());
+      } catch (py::error_already_set& error) {
+        chunks.push_back(StatusFromPythonException(error));
+      }
+    }
+    return chunks;
   }
 
   /// A value of a `struct` becomes an instance of the pydantic model that shape
@@ -542,6 +608,31 @@ class PythonBridge : public flow::HostBridge {
       return StatusFromPythonException(error);
     }
   }
+
+ private:
+  /// The registry every conversion goes through.
+  ///
+  /// The *getter* is cached, not the registry:
+  /// `set_global_serialization_registry` rebinds the module's own global, so
+  /// asking it each time is what keeps a swapped registry honest -- while
+  /// importing the module and looking the getter up again is not. This runs
+  /// twice per value through a stage, which made those two lookups a per-value
+  /// cost of the language.
+  ///
+  /// REQUIRES: the GIL is held.
+  py::object Registry() {
+    if (!getter_.has_value()) {
+      getter_ = py::module_::import("a11.data.serialization")
+                    .attr("get_global_serialization_registry");
+    }
+    return (*getter_)();
+  }
+
+  /// Never destroyed: the bridge itself is a deliberately leaked singleton (see
+  /// [HostBridgeForPython]), so this reference outlives interpreter teardown
+  /// rather than being released without the GIL. See DeferredPythonRefs for the
+  /// cases that are not like that.
+  std::optional<py::object> getter_;
 };
 
 std::shared_ptr<flow::HostBridge> HostBridgeForPython() {
@@ -634,8 +725,8 @@ nested bodies and all.
             }
             // A native handler, handed over as the opaque holder the bindings
             // accept anywhere a handler is taken: wrapping it in a Python
-            // callable would bounce every invocation through the interpreter for
-            // nothing, and would need a running loop it does not have.
+            // callable would bounce every invocation through the interpreter
+            // for nothing, and would need a running loop it does not have.
             return py::cast(NativeActionHandler(ValueOrThrow(
                 flow::MakeHandler(self.program, self.name,
                                   std::move(options)))));
@@ -1005,8 +1096,8 @@ merges over the embedded snapshot itself.
   flow.def(
       "request",
       [](const PyJsonObject& request) {
-        // Always an object: `{ok, result}` or `{ok, error}`, which is what makes
-        // the answer safe to index rather than something to type-test.
+        // Always an object: `{ok, result}` or `{ok, error}`, which is what
+        // makes the answer safe to index rather than something to type-test.
         return JsonToPython(flow::Handle(PythonToJson(request)))
             .cast<PyJsonObject>();
       },

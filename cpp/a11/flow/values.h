@@ -33,11 +33,11 @@ class Value;
 /// The language's own values are JSON-ish, plus durations, instants, bytes and
 /// chunks -- everything a flow can *write*. But `coerce` validates into types a
 /// serialisation registry has been told about, and which types exist is the
-/// host's decision: a flow cannot import anything, so `a11.sdk.Interaction` is a
-/// pydantic model in the process running the flow and nothing the language can
-/// construct. So a coerced value is carried as one of these, and the language
-/// only ever asks it the questions an expression can ask: render it, index it,
-/// compare it, is it there.
+/// host's decision: a flow cannot import anything, so `a11.sdk.Interaction` is
+/// a pydantic model in the process running the flow and nothing the language
+/// can construct. So a coerced value is carried as one of these, and the
+/// language only ever asks it the questions an expression can ask: render it,
+/// index it, compare it, is it there.
 ///
 /// A host object is immutable and shared: an item fans out to every reader of a
 /// stream, and copying a model per reader would be paid for in the host's
@@ -66,8 +66,8 @@ class HostObject {
 
 /// One Flow value.
 ///
-/// Immutable and cheap to copy: a container is held behind a `shared_ptr`, so an
-/// item read once and handed to eight readers is one allocation, not eight.
+/// Immutable and cheap to copy: a container is held behind a `shared_ptr`, so
+/// an item read once and handed to eight readers is one allocation, not eight.
 /// Integers are kept apart from doubles because the language's own output
 /// depends on it -- `text 3` is `"3"` and `text 3.0` is `"3.0"`, exactly as the
 /// Python reference rendered them -- and because a count of values has to be a
@@ -76,8 +76,8 @@ class Value {
  public:
   enum class Kind {
     /// A value that is not there: an absent key, an empty stream, a missing
-    /// header. One kind for all of them, because a flow asking `if not x` should
-    /// not have to know which sort of nothing it got.
+    /// header. One kind for all of them, because a flow asking `if not x`
+    /// should not have to know which sort of nothing it got.
     kNull,
     kBool,
     kInteger,
@@ -88,8 +88,8 @@ class Value {
     kObject,
     kDuration,
     kTime,
-    /// An undecoded chunk, kept whole so a pipe that only moves values re-writes
-    /// the producer's own bytes and mimetype.
+    /// An undecoded chunk, kept whole so a pipe that only moves values
+    /// re-writes the producer's own bytes and mimetype.
     kChunk,
     kHost,
   };
@@ -181,8 +181,8 @@ class HostBridge {
 
   /// Make `value` a value of the type `tag` names.
   ///
-  /// `tag` is a dotted registry tag or a quoted mimetype: the built-in names are
-  /// the language's own and are coerced before this is reached.
+  /// `tag` is a dotted registry tag or a quoted mimetype: the built-in names
+  /// are the language's own and are coerced before this is reached.
   virtual absl::StatusOr<Value> Coerce(std::string_view tag,
                                        const Value& value) = 0;
 
@@ -193,14 +193,49 @@ class HostBridge {
   virtual absl::StatusOr<data::Chunk> ToChunk(const Value& value,
                                               std::string_view mimetype) = 0;
 
-  /// How this host would rather hold a value of a shape the *language* declared.
+  /// The values a batch of chunks holds, in order, each with its own outcome.
+  ///
+  /// **Why a batch is its own question.** Crossing into a host is not free per
+  /// crossing: the Python bridge takes the GIL, which a flow's fibre competes
+  /// for with the interpreter thread that dispatched it, and that -- not the
+  /// decoding -- is what a value through a stage costs. A pipeline usually has
+  /// several values in hand at once, so it asks once for all of them.
+  ///
+  /// Per-value statuses rather than one for the batch, because the values
+  /// before a bad one are still values: a reader that would have seen three of
+  /// five and then a failure sees exactly that.
+  ///
+  /// The default asks one at a time, so a host need not implement it.
+  virtual std::vector<absl::StatusOr<Value>> FromChunks(
+      absl::Span<const data::Chunk* const> chunks) {
+    std::vector<absl::StatusOr<Value>> values;
+    values.reserve(chunks.size());
+    for (const data::Chunk* chunk : chunks) values.push_back(FromChunk(*chunk));
+    return values;
+  }
+
+  /// Chunks holding `values`, in order, each with its own outcome.
+  ///
+  /// The writing counterpart of [FromChunks]; the same reasoning applies.
+  virtual std::vector<absl::StatusOr<data::Chunk>> ToChunks(
+      absl::Span<const Value* const> values, std::string_view mimetype) {
+    std::vector<absl::StatusOr<data::Chunk>> chunks;
+    chunks.reserve(values.size());
+    for (const Value* value : values) {
+      chunks.push_back(ToChunk(*value, mimetype));
+    }
+    return chunks;
+  }
+
+  /// How this host would rather hold a value of a shape the *language*
+  /// declared.
   ///
   /// Called with a value that has already been validated against `shape` --
   /// defaults filled, bounds checked, nested shapes coerced -- so this is about
   /// presentation and nothing else. The default is to hand it back unchanged,
   /// which is what a host with no opinion wants; the Python bindings build the
-  /// pydantic model the shape describes and wrap an instance of it, so a value on
-  /// a `struct`-typed port arrives in Python as a real model.
+  /// pydantic model the shape describes and wrap an instance of it, so a value
+  /// on a `struct`-typed port arrives in Python as a real model.
   ///
   /// Validation stays on this side of the boundary on purpose: there is one
   /// implementation of what a shape means, and a host that disagreed with it
@@ -230,11 +265,26 @@ std::unique_ptr<HostBridge> NativeHostBridge();
 /// Take `key` out of `value`: a mapping key, an index, or a field.
 ///
 /// Answers null when it is not there, because a flow reading a field a producer
-/// did not send should be able to say `if not thing.field` rather than fall over.
+/// did not send should be able to say `if not thing.field` rather than fall
+/// over.
 Value Lookup(const Value& value, const Value& key);
 
 /// Whether `value` counts as true, as an `if` and a `where` decide it.
 bool Truthy(const Value& value);
+
+/// Where two values sit relative to one another: -1, 0 or 1.
+///
+/// What `<` and `>` mean in an expression, and so what `| sort` means: two
+/// instants or two durations compare as themselves, a number as a number, and
+/// everything else as text, so nothing dies on `"3" < 5`.
+int Order(const Value& left, const Value& right);
+
+/// `left + right`, as an expression means it.
+///
+/// For `| sum`, `| avg` and `| fold`, which add values the way `+` does:
+/// numbers as numbers, durations as durations, an instant and a duration as the
+/// shifted instant, and text as text.
+absl::StatusOr<Value> Add(const Value& left, const Value& right);
 
 /// `value` as text, the way the `text` stage and builtin render it.
 std::string AsText(const Value& value);
@@ -247,12 +297,12 @@ Value AsNumber(const Value& value);
 /// The fields a pattern pulls out of `subject`, or null where it does not fit.
 ///
 /// One implementation for both senses of `match`: the stage drops a value this
-/// answers null for, and the function hands the null on. A record when every hole
-/// is named, and a list when they are not -- `{}` is read by position, so
+/// answers null for, and the function hands the null on. A record when every
+/// hole is named, and a list when they are not -- `{}` is read by position, so
 /// `it[0]` is what a positional pattern gives.
 ///
-/// See [pattern::Compile] for the language. A pattern that does not compile is an
-/// `invalid_argument` naming what is wrong with it, because a pattern is a
+/// See [pattern::Compile] for the language. A pattern that does not compile is
+/// an `invalid_argument` naming what is wrong with it, because a pattern is a
 /// literal almost every time and a silent no-match would hide a typo in it.
 absl::StatusOr<Value> MatchPattern(std::string_view pattern,
                                    std::string_view subject);
@@ -260,8 +310,8 @@ absl::StatusOr<Value> MatchPattern(std::string_view pattern,
 /// The same, against a pattern already compiled.
 ///
 /// What a stage uses: the pattern is written once in the source and the stream
-/// may be ten thousand values, so compiling it per value would be paying for the
-/// same scan over and over.
+/// may be ten thousand values, so compiling it per value would be paying for
+/// the same scan over and over.
 Value MatchCompiled(const pattern::Pattern& pattern, std::string_view subject);
 
 /// `AsNumber` as a double, for the places that only want the magnitude.
@@ -292,8 +342,8 @@ double DurationSeconds(absl::Duration value);
 /// A duration of `total` seconds, negative ones included.
 ///
 /// `absl::Seconds` is fine with a negative, but A11's own `Duration.seconds`
-/// reads one as *infinite*, and this is the language's spelling: a number beside
-/// a duration is a length, so `-30` is thirty seconds the other way.
+/// reads one as *infinite*, and this is the language's spelling: a number
+/// beside a duration is a length, so `-30` is thirty seconds the other way.
 absl::Duration SecondsDuration(double total);
 
 /// A duration from the way the language writes one, or `nullopt`.
@@ -330,9 +380,9 @@ std::string TimeText(absl::Time value, std::string_view spec = {});
 /// template language would.
 ///
 /// `%(SPEC)s` applies a spec to the value first -- a duration unit, a strftime
-/// pattern, `epoch` -- and a conversion with no value behind it is left as it was
-/// written, because a visible `%3$s` in the output is easier to diagnose than a
-/// flow that died formatting a log line.
+/// pattern, `epoch` -- and a conversion with no value behind it is left as it
+/// was written, because a visible `%3$s` in the output is easier to diagnose
+/// than a flow that died formatting a log line.
 std::string Strformat(const Value& format, absl::Span<const Value> arguments);
 
 // --- Evaluation --------------------------------------------------------------
@@ -341,8 +391,9 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments);
 ///
 /// Two things, and they are different in kind: `bridge` is the *host* -- which
 /// types have been registered where the flow runs -- and `shapes` is the
-/// *program* -- which `struct`s this text declared. A shape wins over a registry tag
-/// of the same name, which is why both are here and consulted in that order.
+/// *program* -- which `struct`s this text declared. A shape wins over a
+/// registry tag of the same name, which is why both are here and consulted in
+/// that order.
 struct CoerceContext {
   HostBridge* absl_nullable bridge = nullptr;
   const Program* absl_nullable shapes = nullptr;
@@ -352,9 +403,9 @@ struct CoerceContext {
 ///
 /// `bound` is the first value of each stream the expression mentions, keyed by
 /// the syntax node that mentioned it. Keying on the node rather than rewriting
-/// the tree is what lets the AST stay immutable and shared: the Python reference
-/// replaced each resolved name with a `RefValue` node, which a tree handed across
-/// a language boundary cannot do.
+/// the tree is what lets the AST stay immutable and shared: the Python
+/// reference replaced each resolved name with a `RefValue` node, which a tree
+/// handed across a language boundary cannot do.
 struct EvalContext {
   const absl::flat_hash_map<const syntax::Node*, Value>* absl_nullable bound =
       nullptr;
@@ -373,16 +424,17 @@ struct EvalContext {
 /// Fails only where a flow asked for something that cannot be done at all -- a
 /// type nothing here knows, two instants added together -- because everything
 /// else the language answers rather than dying on: a bad comparison compares as
-/// text, a missing key is null, an unreadable number is zero. That is what makes
-/// a flow safe to accept from somewhere else and run.
+/// text, a missing key is null, an unreadable number is zero. That is what
+/// makes a flow safe to accept from somewhere else and run.
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context);
 
 /// Make `value` a value of the type `type` names.
 ///
-/// A built-in name coerces the way the matching builtin does; a shape the program
-/// declared is **validated** against, field by field; a tag or a mimetype goes to
-/// the host, which is the only place that knows what has been registered.
+/// A built-in name coerces the way the matching builtin does; a shape the
+/// program declared is **validated** against, field by field; a tag or a
+/// mimetype goes to the host, which is the only place that knows what has been
+/// registered.
 absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
                              const CoerceContext& context);
@@ -390,17 +442,17 @@ absl::StatusOr<Value> Coerce(const Value& value,
 /// Make `value` a value of `shape`: fill its defaults, check its bounds, and
 /// coerce every field to the type the shape gives it.
 ///
-/// **The one implementation of what a shape means.** The resolver checks what it
-/// can before anything runs -- a key the shape does not have, a constant of the
-/// wrong kind -- and this checks the rest, when a value actually arrives. A
+/// **The one implementation of what a shape means.** The resolver checks what
+/// it can before anything runs -- a key the shape does not have, a constant of
+/// the wrong kind -- and this checks the rest, when a value actually arrives. A
 /// failure names the field it was about, by path (`parent.tags[2]`), because a
 /// flow's data comes from somewhere else and "invalid" without a path is a
 /// message nobody can act on.
 ///
 /// A key the shape does not have is **dropped**, not refused: extra data is how
-/// `{...it, ..}` is useful, and a producer that sends more than a reader declared
-/// has done nothing wrong. Writing such a key out by hand is a different thing
-/// and the resolver says so.
+/// `{...it, ..}` is useful, and a producer that sends more than a reader
+/// declared has done nothing wrong. Writing such a key out by hand is a
+/// different thing and the resolver says so.
 absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
                                   const CoerceContext& context);
 
@@ -417,8 +469,8 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
 /// A status as the record a flow sees when it looks at an outcome.
 ///
 /// `{"ok": .., "code": "NOT_FOUND", "number": 5, "message": ..}` -- data, so a
-/// flow can branch on it, put it on an output, or raise it again, without any of
-/// the language knowing what a status is.
+/// flow can branch on it, put it on an output, or raise it again, without any
+/// of the language knowing what a status is.
 Value StatusRecord(const absl::Status& status);
 
 /// The status a record like the one above describes.
@@ -427,8 +479,8 @@ absl::Status StatusOfRecord(const Value& record);
 /// The canonical code `value` names, by name or by number, or `nullopt`.
 ///
 /// Either case of a canonical name, and any number Abseil defines a code for,
-/// which is what lets a flow re-raise a status it was handed without knowing how
-/// it was spelled.
+/// which is what lets a flow re-raise a status it was handed without knowing
+/// how it was spelled.
 std::optional<absl::StatusCode> StatusCodeOf(const Value& value);
 
 }  // namespace a11::flow

@@ -154,8 +154,7 @@ class Outputs {
       if (omit) {
         // Nothing will be written here, and saying so now is what lets a caller
         // ask for three of eight ports without draining the other five.
-        ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
-        ABSL_RETURN_IF_ERROR(node->DrainAndClose().Await().status());
+        ABSL_RETURN_IF_ERROR(node->Finalize({.wait = true}).Await().status());
         continue;
       }
       outputs.nodes_.emplace(name, std::move(node));
@@ -229,10 +228,10 @@ class Outputs {
     if (node == nullptr) {
       return absl::OkStatus();
     }
-    if (!terminated) {
-      ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
+    if (terminated) {
+      return node->Close().Await().status();
     }
-    return node->DrainAndClose().Await().status();
+    return node->Finalize({.wait = true}).Await().status();
   }
 
  private:

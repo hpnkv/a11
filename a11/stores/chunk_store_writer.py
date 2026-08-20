@@ -100,7 +100,8 @@ class _ChunkStoreWriterProtocol:
 
         Set ``final=True`` on the last chunk when readers must know the logical
         end of the sequence. Calling `drain_and_close` later only flushes and
-        closes the writer; it does not add that final marker for you.
+        closes the writer; it does not add that final marker for you. A node
+        does both at once -- see `AsyncNode.finalize`.
 
         Examples:
             Checkpoint only after the store accepts the final event:

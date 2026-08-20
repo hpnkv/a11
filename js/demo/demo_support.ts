@@ -262,8 +262,7 @@ export async function announceTools(
     need(await announce.call());
     const tools = need(await announce.getInput('tools'));
     for (const schema of schemas) need(await tools.put(describeTool(schema)));
-    need(await tools.putNullFinal());
-    need(await tools.drainAndClose());
+    need(await tools.finalize());
     const ok = need(await announce.getOutput('ok', false));
     const acknowledged = need(await ok.next({timeoutMs: 30_000})) as { registered?: string[] } | null;
     need(await announce.wait(30_000));
@@ -321,19 +320,16 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
 
     const interactions = need(await call.getInput('interactions'));
     for (const interaction of history) need(await interactions.put(interaction));
-    need(await interactions.putFinal(question));
-    need(await interactions.drainAndClose());
+    need(await interactions.finalize(question));
 
     // Closed empty, so the backend applies its own default request config.
     const config = need(await call.getInput('config'));
-    need(await config.putNullFinal());
-    need(await config.drainAndClose());
+    need(await config.finalize());
 
     const definitions = need(getToolDefinitions(registry, toolNames, request.portSchemas ?? {}));
     const tools = need(await call.getInput('tools'));
     for (const definition of definitions) need(await tools.put(definition));
-    need(await tools.putNullFinal());
-    need(await tools.drainAndClose());
+    need(await tools.finalize());
 
     // Thoughts and interactions are read alongside the text, not after it: all
     // three are written from the one provider stream as it arrives, and reading

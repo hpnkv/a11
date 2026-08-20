@@ -166,10 +166,9 @@ async def read_paths(scale: float) -> list[Result]:
 
     for label in ("object", "chunk"):
         node = _fresh(f"read-{label}")
-        async with node as writer:
-            for _index in range(count - 1):
-                await writer.put_chunk(chunk)
-            await (await writer.put_chunk(chunk, final=True))
+        for _index in range(count - 1):
+            await node.put_chunk(chunk)
+        await node.finalize(chunk, wait=True)
 
         import time as _time
 
@@ -219,10 +218,9 @@ async def read_batching_headroom(scale: float) -> list[Result]:
     from a11.stores.local_chunk_store import LocalChunkStore
 
     node = _fresh("headroom-node")
-    async with node as writer:
-        for _index in range(count - 1):
-            await writer.put_chunk(chunk)
-        await (await writer.put_chunk(chunk, final=True))
+    for _index in range(count - 1):
+        await node.put_chunk(chunk)
+    await node.finalize(chunk, wait=True)
 
     seen = 0
     started = _time.perf_counter_ns()
@@ -322,7 +320,7 @@ async def round_trip(scale: float) -> list[Result]:
     async def produce(n=node, c=count):
         for index in range(c - 1):
             await n.put("token")
-        await n.put_final("token")
+        await n.finalize("token")
 
     async def consume(n=node) -> int:
         seen = 0
@@ -367,10 +365,9 @@ async def reader_fanout(scale: float) -> list[Result]:
     results = []
     for readers in (1, 4, 16):
         node = _fresh(f"fanout-{readers}")
-        async with node as writer:
-            for _index in range(count - 1):
-                await writer.put_chunk(chunk)
-            await (await writer.put_chunk(chunk, final=True))
+        for _index in range(count - 1):
+            await node.put_chunk(chunk)
+        await node.finalize(chunk, wait=True)
 
         async def drain(n=node) -> int:
             seen = 0

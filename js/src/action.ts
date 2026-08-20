@@ -841,7 +841,7 @@ export class Action {
       const node = nodes[index]!;
       for (const autofill of autofills) {
         const stored = autofill === null
-          ? await node.putNullFinal()
+          ? await node.finalize(undefined, { wait: true, close: false })
           : await node.putFragment(new NodeFragment({
               id,
               data: autofill.data,
@@ -850,7 +850,7 @@ export class Action {
             }));
         if (!isOk(stored)) return stored;
       }
-      const closed = await node.drainAndClose();
+      const closed = await node.close();
       if (!isOk(closed)) return closed;
     }
     this.inputAutofillsApplied = true;
@@ -1215,7 +1215,7 @@ export class Action {
       if (!isOk(writable)) { first = firstError(first, writable); continue; }
       if (!writable) continue;
       const closed = isOk(status)
-        ? await node.drainAndClose()
+        ? await node.close()
         : await node.abortWithStatus(status);
       first = firstError(first, closed);
     }
@@ -1244,7 +1244,7 @@ export class Action {
       continued: false,
     }));
     if (!isOk(stored)) return stored;
-    return node.drainAndClose();
+    return node.close();
   }
 
   private async releaseNodesAfterRun(): Promise<Status> {

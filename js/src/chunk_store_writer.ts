@@ -257,11 +257,41 @@ export class ChunkStoreWriter {
   }
 
   /**
+   * Write `chunk` as the final fragment and, unless told not to, close.
+   *
+   * The chunk is enqueued before closure is asked for, and that order is the
+   * whole of the synchronisation: the pump only starts its close once nothing
+   * is outstanding, and admits whatever the bounded buffer held back before
+   * that count reaches zero. So a close requested here cannot overtake the
+   * chunk. With `wait` false the returned promise resolves immediately and both
+   * are left to the pump; a failure is reported rather than dropped, and stays
+   * visible through {@link getStatus}. {@link AsyncNode.finalize} is the entry
+   * point application code wants -- it serializes values for you.
+   */
+  finalize(chunk: Chunk, seq: number | null = null, wait = false, close = true): Promise<Status> {
+    const write = this.enqueueChunk(chunk, seq, true, true);
+    const closed = close ? this.drainAndClose() : Promise.resolve(okStatus());
+    if (wait) {
+      // A close cannot complete before the final chunk is confirmed, and fails
+      // if that write fails, so it is the only promise this needs.
+      return close
+        ? closed
+        : write.confirmation.then((stored) => (isOk(stored) ? okStatus() : stored));
+    }
+    const report = (what: string) => (result: Status | StatusOr<number>) => {
+      if (!isOk(result)) console.warn(`a11: AsyncNode ${what} failed: ${String(result.message)}`);
+    };
+    void write.confirmation.then(report('final write'));
+    if (close) void closed.then(report('close'));
+    return Promise.resolve(okStatus());
+  }
+
+  /**
    * Flush queued chunks and close the backing store to further writes.
    *
-   * This does not append a final fragment. Mark the last write `final` (or use
-   * {@link AsyncNode.putNullFinal}) before draining when readers need a final
-   * sequence number to identify the logical end of the stream.
+   * This does not append a final fragment. Mark the last write `final` (or call
+   * {@link finalize}) when readers need a final sequence number to identify the
+   * logical end of the stream.
    */
   drainAndClose(): Promise<Status> {
     if (this.lifecycle !== 'none') {

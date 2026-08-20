@@ -43,12 +43,10 @@ class EndToEndTest {
 
                 val text = action.getOutput("text_output").orElse { return@handler it }
                 for (token in listOf("active file is ", path ?: "?")) text.put(token)
-                text.putNullFinal()
-                text.drainAndClose()
+                text.finalize()
 
                 val newInteractions = action.getOutput("new_interactions").orElse { return@handler it }
-                newInteractions.putFinal(ok(makeTextMessageInteraction("done", role = Role.ASSISTANT)))
-                newInteractions.drainAndClose()
+                newInteractions.finalize(ok(makeTextMessageInteraction("done", role = Role.ASSISTANT)))
                 Status.ok()
             }
 
@@ -66,8 +64,7 @@ class EndToEndTest {
             clientRegistry.register("get_active_file", getActiveFileSchema) { toolAction ->
                 toolInvoked.set(true)
                 val out = toolAction.getOutput("path").orElse { return@register it }
-                out.putFinal("/src/main.cpp")
-                out.drainAndClose()
+                out.finalize("/src/main.cpp")
                 Status.ok()
             }
             val clientSession = Session(actionRegistry = clientRegistry, id = "session-client")
@@ -80,8 +77,7 @@ class EndToEndTest {
             ok(call.call())
 
             val interactions = ok(call.getInput("interactions"))
-            interactions.putFinal(ok(makeTextMessageInteraction("what's open?")))
-            interactions.drainAndClose()
+            interactions.finalize(ok(makeTextMessageInteraction("what's open?")))
 
             val textOut = ok(call.getOutput("text_output", bindStream = false))
             val reply = StringBuilder()
@@ -115,7 +111,7 @@ class EndToEndTest {
                 val lines = action.getOutput("lines").orElse { return@register it }
                 lines.put("first")
                 lines.put("second")
-                lines.drainAndClose()
+                lines.finalize()
             }
             val serverSession = Session(actionRegistry = serverRegistry, id = "session-drain-server")
             serverSession.addStream(serverStream, StreamMode.ACCEPT)

@@ -34,12 +34,9 @@ async def _run(headers: dict[str, str], read: str = "new_interactions"):
         action.set_header(key, value.encode())
     action = action.run()
 
-    async with (
-        action["interactions"] as interactions,
-        action["config"],
-        action["tools"],
-    ):
-        await interactions.put_final(_user_message())
+    await action["interactions"].finalize(_user_message())
+    await action["config"].finalize()
+    await action["tools"].finalize()
 
     collected = []
     async for value in action[read]:
@@ -69,9 +66,8 @@ async def test_provider_inferred_from_model_prefix(monkeypatch):
         seen["ran"] = True
         await action["new_interactions"].put(Interaction(model="fake"))
         for name in ("event_stream", "text_output", "thoughts"):
-            await action[name].put_null_final()
-            await action[name].drain_and_close()
-        await action["new_interactions"].drain_and_close()
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
 
     module = types.ModuleType("a11.sdk._fake_infer")
     module.fake_handler = fake_handler
@@ -161,9 +157,8 @@ async def test_text_output_and_thoughts_stream_through_router(monkeypatch):
         await action["thoughts"].put("pondering")
         await action["new_interactions"].put(Interaction(model="fake"))
         for name in ("event_stream", "text_output", "thoughts"):
-            await action[name].put_null_final()
-            await action[name].drain_and_close()
-        await action["new_interactions"].drain_and_close()
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
 
     module = types.ModuleType("a11.sdk._fake_stream")
     module.fake_handler = fake_handler

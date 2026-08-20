@@ -416,6 +416,35 @@ TEST(FlowResolve, ALogNamesALevelOrNothing) {
             (std::vector<std::string>{"flow.form.log-format"}));
 }
 
+TEST(FlowResolve, ARaceIsAValueAndWaitingForEveryoneIsNot) {
+  // Which of them won is a number, so it goes where a number goes.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
+                          "  x = call other(a: a)\n  y = call other(a: a)\n"
+                          "  wait first of x, y -> n\n}\n"
+                          "flow other {\n  in a: string\n  out o: string\n"
+                          "  a -> o\n}\n"))
+                  .empty());
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
+                          "  x = call other(a: a)\n  y = call other(a: a)\n"
+                          "  let w = wait first of x, y\n  w -> n\n}\n"
+                          "flow other {\n  in a: string\n  out o: string\n"
+                          "  a -> o\n}\n"))
+                  .empty());
+  // `wait all of` has no winner, so neither form is a value.
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
+                        "  x = call other(a: a)\n  y = call other(a: a)\n"
+                        "  wait all of x, y -> n\n}\n"
+                        "flow other {\n  in a: string\n  out o: string\n"
+                        "  a -> o\n}\n")),
+            (std::vector<std::string>{"flow.form.wait-all-has-no-value"}));
+  EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
+                        "  x = call other(a: a)\n  y = call other(a: a)\n"
+                        "  let w = wait all of x, y\n  w -> n\n}\n"
+                        "flow other {\n  in a: string\n  out o: string\n"
+                        "  a -> o\n}\n")),
+            (std::vector<std::string>{"flow.form.wait-all-has-no-value"}));
+}
+
 TEST(FlowResolve, ALogStageChangesNothingAboutTheStream) {
   // A log is a pass-through, so what the pipeline was carrying it still carries:
   // the shape survives, and so does the proof that there is one value.

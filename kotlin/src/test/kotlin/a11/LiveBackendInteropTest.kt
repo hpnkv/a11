@@ -50,17 +50,14 @@ class LiveBackendInteropTest {
             // would be rejected as a plain object before the provider is reached
             // -- which is exactly what this test exists to catch.
             val interactions = ok(call.getInput("interactions"))
-            interactions.putFinal(ok(makeTextMessageInteraction("hello")))
-            interactions.drainAndClose()
+            interactions.finalize(ok(makeTextMessageInteraction("hello")))
 
             // Closed empty, so the backend applies its own default config.
             val config = ok(call.getInput("config"))
-            config.putNullFinal()
-            config.drainAndClose()
+            config.finalize()
 
             val tools = ok(call.getInput("tools"))
-            tools.putNullFinal()
-            tools.drainAndClose()
+            tools.finalize()
 
             // Drain any streamed text (none expected: ollama is unreachable).
             val textOut = ok(call.getOutput("text_output", bindStream = false))

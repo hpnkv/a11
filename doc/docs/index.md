@@ -17,9 +17,9 @@ from a11.nodes.async_node import AsyncNode
 
 async def main() -> None:
     # A node is an ordered, awaitable stream of values.
-    async with AsyncNode.create("greeting") as node:
-        await node.put("hello")
-        await node.put_final("world")
+    node = AsyncNode.create("greeting")
+    await node.put("hello")
+    await node.finalize("world")  # marks the end of the data, and closes
 
     async for value in node:      # consume it back, in order
         print(value)

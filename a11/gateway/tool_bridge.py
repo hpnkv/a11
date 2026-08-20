@@ -251,8 +251,7 @@ class RemoteToolBridge:
                 "peer tools shadow local ones on this connection: %s",
                 ", ".join(shadowed),
             )
-        await action["ok"].put({"registered": registered}, final=True)
-        await action["ok"].drain_and_close()
+        await action["ok"].finalize({"registered": registered})
 
     def _make_proxy(self, tool: _BridgedTool):
         async def proxy(nested: a11.Action) -> None:
@@ -368,6 +367,9 @@ async def _pump(
 
     ``rename`` re-tags each fragment with the destination port's name, which the
     two differ in when a remote user-facing log lands on the canonical one.
+
+    The copy carries the source's own finality, so the target is closed rather
+    than finalized: a second final sequence would be invalid at the store.
     """
     while True:
         fragment = await src.next_fragment()
@@ -377,5 +379,5 @@ async def _pump(
             fragment.id = rename
         await dst.put_fragment(fragment)
 
-    await dst.drain_and_close()
+    await dst.close()
 

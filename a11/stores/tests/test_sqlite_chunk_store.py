@@ -207,7 +207,7 @@ async def test_backs_an_async_node_and_persists_the_stream(tmp_path):
     async def produce():
         for index in range(3):
             await node.put(f"chunk-{index}".encode())
-        await node.put_final(b"last")
+        await node.finalize(b"last", wait=True)
 
     received = []
 

@@ -23,23 +23,24 @@ open
   v
 writing -- more writes --> writing
   |
-  | put_final, put_null_final, or final=true
+  | finalize(...)                       -- or put(..., final=true)
   v
 final sequence recorded
   |
-  | drain_and_close
+  | the same finalize(), unless close=False
   v
 closed (OK)
 
 open / writing / final recorded -- abort_with_status --> closed (non-OK)
-open / writing ------------------ drain_and_close --> closed without finality
+open / writing ------------------ close() ------------> closed without finality
 ```
 
-The last arrow is legal and sometimes useful for an iterator, but it does not
-invent a complete logical value. Code using `consume()` normally needs an
-explicit final fragment before closure.
+`finalize()` is one call because a producer almost always wants both arrows.
+The last one is legal and sometimes useful for an iterator, but it does not
+invent a complete logical value: code using `consume()` needs an explicit final
+fragment before closure.
 
-## The three different promises a producer makes
+## The four different promises a producer makes
 
 It is easy to treat “write,” “final,” and “close” as synonyms. They answer
 different questions:
@@ -51,7 +52,22 @@ different questions:
 | Final sequence recorded | Readers know which fragment is the logical end of data |
 | Writes closed | No more fragments will arrive; blocked readers can settle with the store status |
 
-A reliable producer usually establishes all four in that order.
+A reliable producer establishes all four, in that order. The last two are what
+`finalize()` does in one call — separately spellable, because they are separate
+promises, but almost never worth spelling separately:
+
+- **finality** is *logical*. An ordered reader learns it the moment the fragment
+  lands, without waiting for closure, which the producer may defer or do for all
+  of its nodes at once. No chunk may carry a `seq` beyond the final one, though
+  chunks may still arrive out of order to fill earlier gaps.
+- **closure** is *lifecycle*. It reports a status and synchronises writers so the
+  store admits nothing more. It implies finality only in the weak sense that a
+  chunk absent at closure can never arrive, which is why a reader can end
+  cleanly on closure alone — and why a reader that needs a *complete* value
+  needs finality too.
+
+An error status at closure after every chunk was delivered is unusual but legal;
+it is the reader's business to check the closure status when it must know.
 
 ## 1. Create or obtain the node
 
@@ -94,32 +110,43 @@ assignment happen once at the node boundary. The same fragment identity is
 offered to the transport, while the WireStream lifecycle governs eventual
 delivery.
 
-## 3. Declare the logical final data
+## 3. Finalise: declare the logical final data
 
-There are three equivalent ways to establish a final sequence:
+`finalize()` establishes the final sequence. It has three shapes, and which one
+a producer wants follows from what it knows:
 
-- write the last value with `final=true`;
-- call `put_final(value)` / `putFinal(value)`;
-- write a normal value and follow it with `put_null_final()` /
-  `putNullFinal()`.
+```python
+await answer.finalize()             # the last value already went out with put()
+await result.finalize(value)        # this value is the last one
+await result.finalize(value, seq=7) # ...and it belongs at this sequence
+```
 
-The null-final form is useful for a unary port whose one visible value was
-already emitted. The marker contains no application value; it only terminates
-the logical sequence.
+With no value it writes a null terminator: a marker carrying no application
+value, which only ends the logical sequence. That is the form for a streaming
+port whose last value is not known until it has been written, and for a unary
+port a caller has nothing to put on. With a value it spends one chunk instead of
+two — a value plus a separate terminator — which is worth having when the
+producer does know which one is last.
 
 !!! important
-    A final fragment does **not** close the writer or backing store. Conversely,
-    closing writes does **not** create a final fragment. Final sequence and
-    terminal store status are independent pieces of state.
+    A final fragment does **not** close the writer or backing store, and closing
+    does **not** create a final fragment. They stay two pieces of state:
+    `finalize()` writes one and requests the other, and
+    `finalize(..., close=False)` writes the first alone — for a producer that
+    marks each of its nodes as it finishes and closes them together later.
 
 Once a store has a final sequence, a conflicting second final sequence or a
 fragment beyond it is invalid. This lets out-of-order transports fill earlier
-gaps while preserving one unambiguous end.
+gaps while preserving one unambiguous end. It is also the one thing to watch
+when converting code: a value already written with `final=true` has recorded
+finality, so what such a producer still needs is `close()`, not another
+`finalize()`.
 
-## 4. Drain and close writes
+## 4. Close writes
 
-`drain_and_close()` / `drainAndClose()` waits for queued writes and closes the
-backing store with an OK status. It is the producer's resource and
+Closure is the second half of `finalize()`, and `close()` on its own when there
+is no final fragment to write. Either way it waits for queued writes and closes
+the backing store with an OK status. It is the producer's resource and
 synchronization barrier:
 
 - future writes are rejected;
@@ -140,25 +167,44 @@ the writer's terminal status; like a failed data tee, it cannot revoke
 confirmations already returned. An aborting action fans its status out over its
 own stream instead.
 
-Closing does **not** append a final fragment. For a complete unary output, use
-this sequence:
+Closing does **not** append a final fragment, which is why `close()` is the
+narrow call. Reach for it in two situations:
+
+- the last write already carried `final=true`, so finality is recorded and only
+  the store lifecycle is left;
+- nothing that arrived can be identified as the last thing — a log, where which
+  line is final is not tractable but "no more are coming" is. A reader gets a
+  clean end; a reader calling `consume()` gets `FAILED_PRECONDITION`, because a
+  clean close is not proof that a whole value was complete.
 
 ```python
-await output.put_final(result)
-await output.drain_and_close()
+await log.put(line)
+await log.close()          # no final fragment exists, and none can be invented
 ```
 
-For a visible value followed by an invisible terminator:
+### Why not waiting is safe
+
+`finalize()` resolves without waiting for the store. The write and the close are
+carried out by the writer's own pump, which is global and outlives the producing
+frame — including the whole scope of an action handler — so a handler can
+finalise its outputs and return. Nothing is silently dropped: a failed write or
+close is logged and stays visible through `get_writer_status()`.
+
+Wait when the producer needs to *know*:
 
 ```python
-await output.put(result)
-await output.put_null_final()
-await output.drain_and_close()
+await output.finalize(result, wait=True)   # store confirmed, node closed
 ```
 
-The Python AsyncNode context manager calls `drain_and_close()` on a clean exit,
-but it deliberately does not choose finality for you. Put the final marker
-inside the block when a whole-value consumer depends on it.
+`wait=True` resolves after the store has confirmed the final chunk and, unless
+`close=False`, closed. `wait_for_buffer_to_drain()` remains the separate
+backpressure checkpoint for a producer pacing itself mid-stream. Two cases want
+`wait=True` specifically: a program about to exit whose store is implemented in
+Python (a store that needs the event loop cannot finish its work once the loop
+is gone), and a test asserting on the store immediately afterwards.
+
+`close()` always waits. Making a closure that marks nothing asynchronous would
+buy nothing, and would cost a caller the one thing it asked for.
 
 ## Reader lifecycle
 
@@ -196,8 +242,9 @@ Choose a read shape that matches the port contract:
   shape.
 
 `consume()` accepts either a value that is itself final, or one continued value
-followed by a null-final marker. A clean store close without either form is not
-proof that a whole value was complete.
+followed by a null-final marker — the two spellings `finalize(value)` and
+`put(value)` + `finalize()` produce. A clean store close without either form is
+not proof that a whole value was complete.
 
 ## Reset and replay
 
@@ -226,6 +273,7 @@ Abort only when the shared stream itself has failed.
 
 An [Action lifecycle](action.md) maps each schema port to an AsyncNode. The
 handler decides semantic output finality because only application code knows
-whether the last token or object is complete. Action cleanup can drain and close
-writers, and failure cleanup can abort them, but cleanup cannot safely invent a
-final application value.
+whether the last token or object is complete: that is what `finalize()` in a
+handler says. Action cleanup closes writers the handler left open, and failure
+cleanup aborts them, but cleanup cannot safely invent a final application
+value.

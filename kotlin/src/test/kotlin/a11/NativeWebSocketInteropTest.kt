@@ -141,8 +141,7 @@ asyncio.run(main())
             ).valueOrThrow()
             register.call().valueOrThrow()
             val tools = register.getInput("tools").valueOrThrow()
-            tools.putNullFinal()
-            tools.drainAndClose()
+            tools.finalize()
             val response = withTimeout(15_000) {
                 register.getOutput("ok", bindStream = false).valueOrThrow().next(timeoutMs = 10_000)
             }

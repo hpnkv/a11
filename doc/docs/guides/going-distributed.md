@@ -108,23 +108,23 @@ The `await` admits the value to the node's bounded writer queue, applying
 backpressure. The returned store confirmation does not need to be awaited here:
 the node is drained when this producer finishes.
 
-## 5. Finalize, drain, and close
+## 5. Finalize
 
 Leaving the input loop—by typing `/quit`, sending end-of-file, or unwinding
 through an error—runs this cleanup in a `finally` block:
 
 ```python
 async def finish(outgoing: a11.AsyncNode) -> None:
-    await outgoing.put_null_final()
-    await outgoing.drain_and_close()
+    await outgoing.finalize(wait=True)
 ```
 
-`put_null_final()` appends a final marker without adding a visible chat
+With no value, `finalize()` appends a final marker without adding a visible chat
 message. The peer's `async for` sees that marker as end-of-stream and reaches
-its quit announcement. `drain_and_close()` then flushes anything still queued,
-closes the store with an OK status, and prevents later writes. Keeping the
-final marker and the close in this order guarantees that the peer reads every
-accepted message before it reports the departure.
+its quit announcement. The same call then flushes anything still queued, closes
+the store with an OK status, and prevents later writes — in that order, which
+guarantees the peer reads every accepted message before it reports the
+departure. `wait=True` because this is a program on its way out: it should not
+exit before the store has both.
 
 ## 6. Put the program together
 
@@ -169,8 +169,7 @@ async def send(outgoing: a11.AsyncNode, sender: str) -> None:
 
 
 async def finish(outgoing: a11.AsyncNode) -> None:
-    await outgoing.put_null_final()
-    await outgoing.drain_and_close()
+    await outgoing.finalize(wait=True)
 
 
 async def chat(role: str) -> None:

@@ -53,10 +53,12 @@ export interface AsyncNodeOptions {
  * agent can expose tokens, audio frames, tool events, or a unary result through
  * one protocol.
  *
- * Mark the logical end explicitly with {@link putFinal} or
- * {@link putNullFinal}. Afterwards, {@link drainAndClose} waits for buffered
- * work and closes storage. Failures should use {@link abortWithStatus} so local
- * and remote readers see why the sequence ended.
+ * End the sequence with {@link finalize}: it marks the logical end of the data
+ * and closes storage. Finality and closure remain two distinct facts -- see the
+ * AsyncNode lifecycle guide -- and {@link close} is the rarer half on its own,
+ * for a producer that cannot say which chunk was last. Failures should use
+ * {@link abortWithStatus} so local and remote readers see why the sequence
+ * ended.
  */
 export class AsyncNode {
   /** Ordered storage shared by the node's reader and writer. */
@@ -264,14 +266,55 @@ export class AsyncNode {
     }
   }
 
-  /** Write the last application value and establish the final sequence. */
-  putFinal(value: unknown, seq: number | null = null, mimetype = ''): Promise<StatusOr<number>> {
-    return this.put(value, { seq, final: true, mimetype });
-  }
-
-  /** Establish a final sequence with an explicit null marker and no value. */
-  putNullFinal(seq: number | null = null): Promise<StatusOr<number>> {
-    return this.putChunk(makeNullChunk(), seq, true);
+  /**
+   * End the sequence: mark the logical end of the data, and close the writer.
+   *
+   * The one call an ordinary producer needs. `value` is written as the final
+   * fragment; omitting it (or passing `null`/`undefined`) writes a null
+   * terminator instead, which is the form to use once the last visible value
+   * has already gone out with {@link put}. Unless `close` is `false` the writer
+   * is closed too, so readers waiting for data that can no longer arrive are
+   * released and a peer's mirror of the node closes as well.
+   *
+   * It does not wait: the write and the close are carried out by the writer's
+   * own pump, so a producer can finalise and move on. Nothing is swallowed -- a
+   * failed write or close is reported through {@link getWriterStatus}. Pass
+   * `wait: true` to resolve only once the store has confirmed both.
+   */
+  async finalize(
+    value?: unknown,
+    options: { seq?: number | null; mimetype?: string; wait?: boolean; close?: boolean } = {},
+  ): Promise<Status> {
+    try {
+      if (typeof options !== 'object' || options === null) {
+        return invalidArgumentError('AsyncNode finalize options must be an object.');
+      }
+      const close = options.close ?? true;
+      const wait = options.wait ?? false;
+      let seq = options.seq ?? null;
+      let chunk: Chunk;
+      if (value === undefined || value === null) {
+        if (options.mimetype) return invalidArgumentError('mimetype cannot be supplied without a value.');
+        chunk = makeNullChunk();
+      } else if (value instanceof NodeFragment) {
+        if (seq !== null || options.mimetype) {
+          return invalidArgumentError('seq and mimetype are carried by a NodeFragment and cannot be supplied separately.');
+        }
+        if (!(value.data instanceof Chunk)) return unimplementedError('AsyncNode writers do not resolve NodeRef payloads.');
+        chunk = value.data;
+        seq = value.seq;
+      } else if (value instanceof Chunk) {
+        if (options.mimetype) return invalidArgumentError('mimetype cannot be supplied with a raw Chunk.');
+        chunk = value;
+      } else {
+        const encoded = await this.registry.toChunk(value, options.mimetype ?? '');
+        if (!isOk(encoded)) return encoded;
+        chunk = encoded;
+      }
+      return this.writerInternal.finalize(chunk, seq, wait, close);
+    } catch (error) {
+      return statusFromUnknown(error, 'Finalizing an AsyncNode raised an exception.');
+    }
   }
 
   /** Read the next raw fragment, or `null` at the clean end of sequence. */
@@ -446,12 +489,13 @@ export class AsyncNode {
   /** Await outstanding writes without closing or adding a final marker. */
   waitForBufferToDrain(): Promise<Status> { return this.writerInternal.waitForBufferToDrain(); }
   /**
-   * Flush queued writes and close the writer without adding a final fragment.
+   * Flush queued writes and close the writer, marking nothing final.
    *
-   * Call {@link putFinal} or {@link putNullFinal} first when readers must
-   * synchronise on a definite end-of-stream sequence.
+   * The specialised half of {@link finalize}: closure without finality, for a
+   * producer that cannot say which chunk was the last one -- a log, say -- but
+   * can say that no more are coming. Closing always drains.
    */
-  drainAndClose(): Promise<Status> { return this.writerInternal.drainAndClose(); }
+  close(): Promise<Status> { return this.writerInternal.drainAndClose(); }
   /** Fail the producing half so readers observe a structured terminal error. */
   abortWithStatus(status: Status): Promise<Status> { return this.writerInternal.abortWithStatus(status); }
   /** Tee stored writes to a transport; `send` admission is not peer delivery. */

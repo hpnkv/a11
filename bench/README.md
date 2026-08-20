@@ -29,7 +29,13 @@ The core on its own, with no Python and no binding:
 cmake -S . -B build/ctests -DA11_BUILD_BENCH=ON
 cmake --build build/ctests --target a11_bench -j 10
 ./build/ctests/cpp/bench/a11_bench --json bench/runs/native.json
+./build/ctests/cpp/bench/a11_bench --suite flow --only pipe_stages   # one row
 ```
+
+`--only` runs the rows whose name contains a substring, which is what
+attributing a process-wide counter to one operation needs: `A11_POOL_STATS=1`
+counts fibres and thread wakes for the whole process, so a per-operation figure
+is two runs of *one* row at different scales and a division of the differences.
 
 All three runners emit the same record shape and use the same benchmark names,
 so the tables line up and `--baseline` diffs across them.
@@ -216,6 +222,16 @@ Per transport (`in-process`, `websocket`, `sse`):
 | `flow_run[steps=N]` | per-additional-step cost |
 | `pipe_values` items/s | the streaming path through `\|` |
 | `flows_in_flight` | concurrent whole flows |
+
+The native runner has the same names plus four rows the Python one cannot have,
+because they are about the runtime rather than the language: `pipe_stages` (the
+cost of stage *n*, which is what says whether a pipeline paces itself or runs
+value by value), `pipe_prefilled` (the same pipeline over a stream that is
+already there, which is where a stage sees several values at once),
+`for_each_call[parallel=N]`, and a native `action_direct` baseline. **Read the two
+tables together**: the difference between them is the host bridge, and per value
+that is most of the cost — see "the cost of a Python-hosted flow *is* the
+crossing" in `FINDINGS.md`.
 
 ### `workload` — the calls people actually make
 

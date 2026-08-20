@@ -88,7 +88,10 @@ TEST(AudioActionsTest, TranscribeAudioRejectsAnUnresolvableModel) {
   ASSERT_TRUE(EnsureAudioTypesRegistered().ok());
   auto action =
       *Action::Create(TranscribeAudioSchema(), "tr", TranscribeAudioHandler());
-  ASSERT_TRUE((*action->GetInput("audio", false))->PutNullFinal().Await().ok());
+  ASSERT_TRUE((*action->GetInput("audio", false))
+                  ->Finalize({.wait = true, .close = false})
+                  .Await()
+                  .ok());
   // An *absent* model is no longer an error -- it means the default shorthand,
   // which would download. A model that is neither a shorthand nor a file still
   // is, and needs no network to reject.
@@ -115,7 +118,7 @@ TEST(AudioActionsTest, CaptureTranscriptionRejectsAnUnresolvableModel) {
   auto action = *Action::Create(CaptureTranscriptionSchema(), "t",
                                 CaptureTranscriptionHandler());
   ASSERT_TRUE((*action->GetInput("capture_options", false))
-                  ->PutNullFinal()
+                  ->Finalize({.wait = true, .close = false})
                   .Await()
                   .ok());
   // Raw tagged JSON rather than the registry's typed path, as elsewhere in
@@ -130,7 +133,7 @@ TEST(AudioActionsTest, CaptureTranscriptionRejectsAnUnresolvableModel) {
                   .Await()
                   .ok());
   ASSERT_TRUE((*action->GetInput("control_events", false))
-                  ->PutNullFinal()
+                  ->Finalize({.wait = true, .close = false})
                   .Await()
                   .ok());
   ASSERT_TRUE(action->Run().ok());

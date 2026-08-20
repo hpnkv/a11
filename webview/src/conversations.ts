@@ -107,8 +107,7 @@ export async function fetchConversation(
   const call = need(Action.create(GET_CONVERSATION_SCHEMA, { session, stream, nodeMap: session.getNodeMap() }));
   need(await call.call());
   const idInput = need(await call.getInput('id'));
-  need(await idInput.putFinal(id));
-  need(await idInput.drainAndClose());
+  need(await idInput.finalize(id));
 
   const output = need(await call.getOutput('interactions', false));
   const interactions: Interaction[] = [];

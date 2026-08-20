@@ -74,8 +74,8 @@ bool OpensStatementWord(std::string_view canonical) {
 /// Recursive descent over one token stream, collecting what it cannot read.
 ///
 /// The shape follows `a11/flow/parser.py` method for method, so the two can be
-/// read side by side while the Python one is still the reference. What differs is
-/// the failure path: every `raise` there is a [Report] and a recovery here.
+/// read side by side while the Python one is still the reference. What differs
+/// is the failure path: every `raise` there is a [Report] and a recovery here.
 class ParserImpl {
  public:
   ParserImpl(std::string_view source, absl::Span<const Token> tokens,
@@ -126,8 +126,8 @@ class ParserImpl {
 
   /// The token at `offset` as a keyword, or `""` if it is not a word.
   ///
-  /// A word written in one case throughout reads as its lower-case self, so `FOR`
-  /// and `for` are the same keyword and `For` is a name.
+  /// A word written in one case throughout reads as its lower-case self, so
+  /// `FOR` and `for` are the same keyword and `For` is a name.
   std::string Keyword(size_t offset = 0) const {
     const Token& token = offset == 0 ? Current() : Peek(offset);
     if (!token.IsWord()) return "";
@@ -243,9 +243,9 @@ class ParserImpl {
 
   /// Step to the end of the statement being read, and past it.
   ///
-  /// The recovery point of the whole grammar, and it is the right one because the
-  /// language is one statement per line: whatever went wrong, the next line is a
-  /// statement again, so a mistake costs its own line and nothing more.
+  /// The recovery point of the whole grammar, and it is the right one because
+  /// the language is one statement per line: whatever went wrong, the next line
+  /// is a statement again, so a mistake costs its own line and nothing more.
   void Recover() {
     while (!Current().EndsStatement()) Advance();
     if (At(TokenKind::kNewline)) SkipNewlines();
@@ -293,8 +293,8 @@ class ParserImpl {
         continue;
       }
       if (!ExpectWord("flow")) {
-        // Not a declaration at all. The line is skipped rather than read as one,
-        // so a stray statement outside a flow costs one diagnostic.
+        // Not a declaration at all. The line is skipped rather than read as
+        // one, so a stray statement outside a flow costs one diagnostic.
         Recover();
         if (position_ == before) Advance();
         continue;
@@ -312,9 +312,9 @@ class ParserImpl {
 
   /// `struct Name { describe ".."  field: type modifiers ".." ... }`.
   ///
-  /// The body is fields and nothing else: a shape has no statements, so anything
-  /// that is not a field is one diagnostic and one skipped line rather than a
-  /// statement parse that would go badly wrong.
+  /// The body is fields and nothing else: a shape has no statements, so
+  /// anything that is not a field is one diagnostic and one skipped line rather
+  /// than a statement parse that would go badly wrong.
   syntax::DtoDeclarationPtr ParseDto(const Token& keyword) {
     auto declaration = Make<syntax::DtoDeclaration>(keyword);
     declaration->name = ExpectName("a struct name");
@@ -545,8 +545,8 @@ class ParserImpl {
     const std::string outer_flow = flow_name_;
     flow_name_ = declaration->name.text;
     if (!Expect(TokenKind::kLeftBrace)) {
-      // Nothing to read the body out of. Give up on this declaration rather than
-      // read the rest of the file as its statements.
+      // Nothing to read the body out of. Give up on this declaration rather
+      // than read the rest of the file as its statements.
       Recover();
       flow_name_ = outer_flow;
       return declaration;
@@ -590,13 +590,13 @@ class ParserImpl {
     port->type = ParseType();
 
     // `stream` and `required` are what the port is like, not what its type is,
-    // so they follow the type and may be written in either order. A port carries
-    // one value unless it says otherwise, because most do.
+    // so they follow the type and may be written in either order. A port
+    // carries one value unless it says otherwise, because most do.
     const std::string written = vocabulary::Canonical(port->type.name);
     if (!port->type.quoted && port->type.parameters.empty() &&
         vocabulary::PortModifierWords().contains(written)) {
-      // These used to come first. Say so, rather than report the type after them
-      // as a statement that has no business being here.
+      // These used to come first. Say so, rather than report the type after
+      // them as a statement that has no business being here.
       Report("flow.form.port-modifier-order",
              absl::StrCat(Quoted(port->type.name),
                           " follows the type: write '", port->name.text,
@@ -634,19 +634,19 @@ class ParserImpl {
   /// A declaration's description: a string after it, or a string on a line of
   /// its own under it.
   ///
-  /// The second spelling is there because a description is prose, and prose that
-  /// says anything runs past the width of the declaration it belongs to -- with
-  /// `"""` all the more so. It is unambiguous because the string has to be *alone*
-  /// on its line: `"hello" -> out` is a statement, since something follows the
-  /// string, and a line holding nothing but a string is not a statement in this
-  /// language at all.
+  /// The second spelling is there because a description is prose, and prose
+  /// that says anything runs past the width of the declaration it belongs to --
+  /// with `"""` all the more so. It is unambiguous because the string has to be
+  /// *alone* on its line: `"hello" -> out` is a statement, since something
+  /// follows the string, and a line holding nothing but a string is not a
+  /// statement in this language at all.
   std::string ParseDescription() {
     std::string value;
     if (At(TokenKind::kString)) value = ParseStringRun();
     // Then every following line that holds nothing but strings. Prose that says
-    // anything outgrows one line, and a lone string on a line is not a statement
-    // in this language -- so a paragraph written as a stack of them is one
-    // description, and there is nothing else it could be.
+    // anything outgrows one line, and a lone string on a line is not a
+    // statement in this language -- so a paragraph written as a stack of them
+    // is one description, and there is nothing else it could be.
     while (true) {
       size_t offset = 0;
       while (Peek(offset).kind == TokenKind::kNewline) ++offset;
@@ -689,8 +689,8 @@ class ParserImpl {
   ///
   /// The name may be dotted, which is how a type registered in a serialisation
   /// registry is written -- `a11.sdk.AudioBuffer` -- and the brackets are how a
-  /// generic one says what it holds: `list[a11.NodeFragment]`. A quoted name is a
-  /// mimetype.
+  /// generic one says what it holds: `list[a11.NodeFragment]`. A quoted name is
+  /// a mimetype.
   syntax::TypeExpression ParseType() {
     syntax::TypeExpression type;
     type.location = syntax::LocationOf(Current());
@@ -721,9 +721,10 @@ class ParserImpl {
 
   /// `T[]` -- the same type `list[T]` names, having eaten the brackets.
   ///
-  /// Sugar rather than a second spelling in the tree: everything downstream sees
-  /// a `list`, so nothing but the formatter has to know both ways of writing it.
-  /// `sugared` is what tells the formatter to write it back the way it was.
+  /// Sugar rather than a second spelling in the tree: everything downstream
+  /// sees a `list`, so nothing but the formatter has to know both ways of
+  /// writing it. `sugared` is what tells the formatter to write it back the way
+  /// it was.
   syntax::TypeExpression ArrayOf(syntax::TypeExpression element) {
     Advance();
     const Token& closing = Advance();
@@ -791,12 +792,12 @@ class ParserImpl {
 
   /// Whether the `{` here opens a block of statements rather than a record.
   ///
-  /// Both begin the same way and both are statements: `{"a": 1} -> out` writes a
-  /// record to a port, and `{ "one" -> out }` is a block that writes a string.
-  /// What tells them apart is what follows the first key: a record's keys are
-  /// strings followed by `:`, and a spread is only ever a record's. Everything
-  /// else opens statements. `{}` is the empty record, because somebody writes
-  /// that and nobody writes an empty block.
+  /// Both begin the same way and both are statements: `{"a": 1} -> out` writes
+  /// a record to a port, and `{ "one" -> out }` is a block that writes a
+  /// string. What tells them apart is what follows the first key: a record's
+  /// keys are strings followed by `:`, and a spread is only ever a record's.
+  /// Everything else opens statements. `{}` is the empty record, because
+  /// somebody writes that and nobody writes an empty block.
   bool OpensBlock() const {
     if (!At(TokenKind::kLeftBrace)) return false;
     switch (Peek().kind) {
@@ -841,7 +842,8 @@ class ParserImpl {
       const std::string word = Keyword();
       if (OpensStatement(word)) {
         if (word == "run" || word == "call" || word == "try") {
-          // `try { ... }` is a block; `try run ..` and `try call ..` are a call.
+          // `try { ... }` is a block; `try run ..` and `try call ..` are a
+          // call.
           if (word == "try" && Peek().kind == TokenKind::kLeftBrace) {
             Advance();
             return ParseBlockStatement(keyword, /*tolerant=*/true);
@@ -874,11 +876,36 @@ class ParserImpl {
         }
         if (word == "wait") {
           Advance();
-          auto wait = Make<syntax::Wait>(keyword);
-          wait->subject = ParseReference();
+          // `wait first of a, b` holds for whichever finishes first and lets
+          // the others carry on; `wait all of a, b` is the plural of the plain
+          // form. Anything else is one subject, which is what most waits are.
+          const bool of = (AtWord("first") || AtWord("all")) &&
+                          Peek().IsWord() &&
+                          vocabulary::Canonical(Peek().text) == "of";
+          syntax::NodePtr held;
+          syntax::Wait* wait = nullptr;
+          if (of) {
+            held = ParseWaitOf(keyword);
+            wait = static_cast<syntax::Wait*>(held.get());
+          } else {
+            auto one = Make<syntax::Wait>(keyword);
+            one->subject = ParseReference();
+            wait = one.get();
+            held = std::move(one);
+          }
           if (AcceptWord("timeout")) wait->timeout = ExpectDuration();
+          // `wait first of a, b -> n` writes the winner's number, exactly as a
+          // pipe writes a value. Only a race has one to write.
+          if (ContinuesWith(TokenKind::kArrow)) SkipNewlines();
+          if (AcceptToken(TokenKind::kArrow)) {
+            wait->targets.push_back(ParseReference());
+            while (AcceptToken(TokenKind::kComma)) {
+              SkipNewlines();
+              wait->targets.push_back(ParseReference());
+            }
+          }
           wait->after = ParseAfter();
-          return wait;
+          return held;
         }
         if (word == "drain") {
           Advance();
@@ -939,8 +966,8 @@ class ParserImpl {
           bind->value = ParseStatement();
         } else if (At(TokenKind::kLeftBrace) ||
                    (AtWord("try") && Peek().kind == TokenKind::kLeftBrace)) {
-          // Bound, so a `{` here is a block whatever it holds: a record bound to
-          // a name is not a statement this language has.
+          // Bound, so a `{` here is a block whatever it holds: a record bound
+          // to a name is not a statement this language has.
           const Token& opener = Current();
           const bool tolerant = AcceptWord("try");
           bind->value = ParseBlockStatement(opener, tolerant);
@@ -982,15 +1009,41 @@ class ParserImpl {
     return token.IsWord() && token.text == word;
   }
 
+  /// `first of a, b` / `all of a, b`, with `wait` already read.
+  ///
+  /// One routine because a race is written in two places -- at the head of a
+  /// statement, and where a value is expected -- and the two must not drift.
+  syntax::NodePtr ParseWaitOf(const Token& keyword) {
+    auto wait = Make<syntax::Wait>(keyword);
+    const bool first = AtWord("first");
+    Advance();  // `first` or `all`
+    Advance();  // `of`
+    wait->race = first;
+    wait->subjects.push_back(ParseReference());
+    while (AcceptToken(TokenKind::kComma)) {
+      SkipNewlines();
+      wait->subjects.push_back(ParseReference());
+    }
+    if (wait->subjects.size() < 2) {
+      Report("flow.form.wait-of-one",
+             absl::StrCat("'wait ", first ? "first" : "all",
+                          " of' waits on several subjects; with one, write "
+                          "'wait ", first ? "first" : "all",
+                          "'s subject on its own."),
+             keyword, Severity::kWarning, Family::kForm);
+    }
+    return wait;
+  }
+
   /// `skip pipeline`, `skip n reference` for the first `n`, `skip a, b, c` for
   /// several subjects, `skip act` for every output of a call, or `skip o1, o2
   /// of act` / `skip (o1, o2) of act` for some of them.
   ///
-  /// The counted form takes a reference rather than a pipeline because the count
-  /// belongs to the node: it is the node's first `n` values that go unread, for
-  /// every reader of it, which is not something a pipeline of one reader's own
-  /// could say. It stays single-subject: there is no one node a count over a
-  /// list of them would belong to.
+  /// The counted form takes a reference rather than a pipeline because the
+  /// count belongs to the node: it is the node's first `n` values that go
+  /// unread, for every reader of it, which is not something a pipeline of one
+  /// reader's own could say. It stays single-subject: there is no one node a
+  /// count over a list of them would belong to.
   NodePtr ParseSkip(const Token& keyword) {
     auto skip = Make<syntax::Skip>(keyword);
     if (At(TokenKind::kNumber)) {
@@ -1293,6 +1346,41 @@ class ParserImpl {
     return branch;
   }
 
+  /// A literal, where an expression must not be read.
+  ///
+  /// `fold 0 as total` needs the `0` without letting the expression parser
+  /// reach the `as`, which it would read as a cast. So this is the one place
+  /// that takes a value straight from a token.
+  std::optional<syntax::Constant> AcceptLiteral() {
+    switch (Current().kind) {
+      case TokenKind::kNumber: {
+        const Token& token = Advance();
+        return token.is_integer
+                   ? syntax::Constant::Integer(
+                         static_cast<long long>(token.number))
+                   : syntax::Constant::Double(token.number);
+      }
+      case TokenKind::kString:
+        return syntax::Constant::String(std::string(Advance().string_value));
+      case TokenKind::kDuration:
+        return syntax::Constant::Duration(Advance().duration);
+      default:
+        break;
+    }
+    if (Current().IsWord()) {
+      const std::string word = Keyword();
+      if (word == "true" || word == "false") {
+        Advance();
+        return syntax::Constant::Bool(word == "true");
+      }
+      if (word == "null") {
+        Advance();
+        return syntax::Constant::Null();
+      }
+    }
+    return std::nullopt;
+  }
+
   /// A whole number of something: `parallel 2`, `max 6`.
   int ExpectCount() {
     if (!At(TokenKind::kNumber)) {
@@ -1320,8 +1408,8 @@ class ParserImpl {
     call->tolerant = AcceptWord("try");
     // The verb is the dispatch: `run` binds the handler registered here, `call`
     // puts the action on the stream this flow is attached to. A11 itself draws
-    // the line in the same place, between `Action::Run` and `Action::Call`, so a
-    // flow says it the way everything else does.
+    // the line in the same place, between `Action::Run` and `Action::Call`, so
+    // a flow says it the way everything else does.
     const std::string mode = Keyword();
     if (!ExpectWord("run", "call")) {
       call->modifiers = Make<syntax::CallModifiers>(Current());
@@ -1360,9 +1448,9 @@ class ParserImpl {
 
   /// Whether a line break is followed by a modifier for this call.
   ///
-  /// Modifiers read well on a line of their own, so a break before one continues
-  /// the call -- unless what follows looks like a statement in its own right,
-  /// which is what a port called `timeout` left of a `->` is.
+  /// Modifiers read well on a line of their own, so a break before one
+  /// continues the call -- unless what follows looks like a statement in its
+  /// own right, which is what a port called `timeout` left of a `->` is.
   bool ContinuesWithModifier() const {
     size_t offset = 0;
     while (Peek(offset).kind == TokenKind::kNewline) ++offset;
@@ -1464,7 +1552,7 @@ class ParserImpl {
       }
       if (AcceptToken(TokenKind::kPipe)) {
         SkipNewlines();
-        pipeline->stages.push_back(ParseStage());
+        pipeline->stages.push_back(ParseStage(AcceptWord("try")));
         continue;
       }
       if (AtBareStage()) {
@@ -1510,9 +1598,11 @@ class ParserImpl {
     }
   }
 
-  syntax::StagePtr ParseStage() {
+  /// One stage, and whether a `try` stood before its name.
+  syntax::StagePtr ParseStage(bool tolerant = false) {
     const Token& keyword = Current();
     auto stage = Make<syntax::Stage>(keyword);
+    stage->tolerant = tolerant;
     if (!Current().IsWord()) {
       ReportHere("flow.syntax.unexpected",
                  absl::StrCat("Expected a stage name, found ", Found(), "."));
@@ -1564,9 +1654,26 @@ class ParserImpl {
         stage->argument = ParseExpression();
         break;
       case vocabulary::StageArgument::kStream:
-        // A stream rather than a value: `then` reads this one and then that one,
-        // so its argument is whatever a pipeline may start with.
+        // A stream rather than a value: `then` reads this one and then that
+        // one, so its argument is whatever a pipeline may start with.
         stage->argument = ParsePostfix();
+        break;
+      case vocabulary::StageArgument::kOptionalExpression:
+        // `| sum` is the values themselves and `| sum it.price` one field of
+        // each. Nothing follows a stage but another stage, a destination or the
+        // end of the statement, so what tells them apart is what *cannot* start
+        // an expression.
+        if (StageArgumentFollows()) stage->argument = ParseExpression();
+        break;
+      case vocabulary::StageArgument::kSortKey:
+        if (AcceptWord("by")) stage->argument = ParseExpression();
+        if (AcceptWord("desc")) stage->descending = true;
+        break;
+      case vocabulary::StageArgument::kFold:
+        ParseFoldArgument(*stage);
+        break;
+      case vocabulary::StageArgument::kDuration:
+        stage->duration = ExpectDuration();
         break;
       case vocabulary::StageArgument::kLog:
       case vocabulary::StageArgument::kLogFormat:
@@ -1575,7 +1682,110 @@ class ParserImpl {
                          /*in_stage=*/true);
         break;
     }
+    ParseStageTail(*stage, keyword);
     return stage;
+  }
+
+  /// Whether an optional stage argument was written, rather than the stage
+  /// ending here.
+  bool StageArgumentFollows() const {
+    switch (Current().kind) {
+      case TokenKind::kNewline:
+      case TokenKind::kEnd:
+      case TokenKind::kRightBrace:
+      case TokenKind::kRightParen:
+      case TokenKind::kArrow:
+      case TokenKind::kComma:
+      case TokenKind::kPipe:
+        return false;
+      default:
+        // A clause word belongs to the tail, not to the argument.
+        return !(Current().IsWord() &&
+                 vocabulary::ClauseWords().contains(Keyword()));
+    }
+  }
+
+  /// `fold LITERAL as NAME, EXPRESSION`.
+  ///
+  /// The start is a literal rather than an expression on purpose: `0 as total`
+  /// read as an expression is a cast of `0` to a type called `total`, and the
+  /// language would have to decide which of the two was meant. A literal cannot
+  /// be a cast, so this is unambiguous by construction.
+  void ParseFoldArgument(syntax::Stage& stage) {
+    if (const std::optional<syntax::Constant> start = AcceptLiteral()) {
+      stage.start = *start;
+    } else {
+      Report("flow.form.fold-start",
+             absl::StrCat("'fold' starts from a literal -- a number, a string, "
+                          "a duration, true, false or null -- and found ",
+                          Found(), "."),
+             Current(), Severity::kError, Family::kForm);
+    }
+    if (!AcceptWord("as")) {
+      Report("flow.form.fold-name",
+             absl::StrCat("'fold' names what it carries: "
+                          "`fold 0 as total, total + it`. Found ",
+                          Found(), "."),
+             Current(), Severity::kError, Family::kForm);
+      return;
+    }
+    stage.carried = ExpectName("a name for what the fold carries");
+    if (!Expect(TokenKind::kComma,
+                "',' and the expression that folds one value in")) {
+      return;
+    }
+    SkipNewlines();
+    stage.argument = ParseExpression();
+  }
+
+  /// `[parallel n [unordered]] [into ref]`, in either order, after a stage.
+  void ParseStageTail(syntax::Stage& stage, const Token& keyword) {
+    while (Current().IsWord()) {
+      const std::string word = Keyword();
+      if (word == "parallel") {
+        Advance();
+        stage.parallel = ExpectCount();
+        continue;
+      }
+      if (word == "unordered") {
+        Advance();
+        stage.ordered = false;
+        continue;
+      }
+      if (word == "into") {
+        Advance();
+        stage.failures = ParseReference();
+        continue;
+      }
+      break;
+    }
+    if (stage.parallel > 1 &&
+        !vocabulary::ParallelStages().contains(stage.name)) {
+      Report("flow.form.stage-not-parallel",
+             absl::StrCat("'", stage.name,
+                          "' reads the whole stream, so there is nothing for "
+                          "'parallel' to run at once. It goes on a stage that "
+                          "reshapes each value, like 'map'."),
+             keyword, Severity::kError, Family::kForm);
+      stage.parallel = 1;
+    }
+    if (!stage.ordered && stage.parallel <= 1) {
+      Report("flow.form.unordered-without-parallel",
+             absl::StrCat("'unordered' says a parallel stage may finish its "
+                          "values in any order, so it needs 'parallel n'. "
+                          "Without it, '", stage.name,
+                          "' sees one value at a time and the order is the "
+                          "one it was given."),
+             keyword, Severity::kWarning, Family::kForm);
+      stage.ordered = true;
+    }
+    if (stage.failures != nullptr && !stage.tolerant) {
+      Report("flow.form.into-without-try",
+             absl::StrCat("'into' says where a *tolerated* failure goes, so "
+                          "the stage has to be a 'try': "
+                          "`try ", stage.name, " ... into failures`."),
+             keyword, Severity::kError, Family::kForm);
+    }
   }
 
   static std::vector<std::string> SortedStages() {
@@ -1684,8 +1894,8 @@ class ParserImpl {
   ///
   /// The only arithmetic the language has, and it is here for durations -- "how
   /// long did that take", "is this older than the deadline" -- which a
-  /// composition cannot express any other way. `-` needs its spaces: `a-b` is one
-  /// name, because an action is called `text-upper`.
+  /// composition cannot express any other way. `-` needs its spaces: `a-b` is
+  /// one name, because an action is called `text-upper`.
   NodePtr ParseAdditive() {
     NodePtr left = ParseCast();
     while (At(TokenKind::kPlus) || At(TokenKind::kMinus)) {
@@ -1714,10 +1924,10 @@ class ParserImpl {
 
   /// Turns off `Tag{...}` for as long as it is in scope.
   ///
-  /// A `{` opens a block, not a value, in an `if` condition and a `for`'s source,
-  /// for the reason Go forbids the same thing in the same places: `if x.y {` has
-  /// to keep meaning what it looks like. Brackets of any kind turn it back on, so
-  /// `if (x as T{a: 1}).ok { }` is still available.
+  /// A `{` opens a block, not a value, in an `if` condition and a `for`'s
+  /// source, for the reason Go forbids the same thing in the same places: `if
+  /// x.y {` has to keep meaning what it looks like. Brackets of any kind turn
+  /// it back on, so `if (x as T{a: 1}).ok { }` is still available.
   class BlockHeader {
    public:
     explicit BlockHeader(ParserImpl* parser)
@@ -1777,9 +1987,9 @@ class ParserImpl {
         node = std::move(index);
         continue;
       }
-      // `a11.sdk.Interaction{...}`: a value of a named type, written the way the
-      // type's own fields read. A generic one is spelled with `as`, where the
-      // brackets cannot be mistaken for an index.
+      // `a11.sdk.Interaction{...}`: a value of a named type, written the way
+      // the type's own fields read. A generic one is spelled with `as`, where
+      // the brackets cannot be mistaken for an index.
       if (At(TokenKind::kLeftBrace) && brace_literals_) {
         std::optional<std::string> name = syntax::DottedName(node.get());
         if (!name.has_value()) return node;
@@ -1805,6 +2015,18 @@ class ParserImpl {
       auto outcome = Make<syntax::Outcome>(token);
       outcome->subject = ParseReference();
       return outcome;
+    }
+    // `wait first of a, b` where a value is expected: the number of whichever
+    // won. Read here as well as at the head of a statement, because a race is
+    // both -- a barrier, and which of them it was -- and `let n = wait first
+    // of a, b` should not have to be written some other way. Only the `of`
+    // forms; a bare `wait` in an expression is a name, as it always was.
+    if (AtWord("wait") && Peek().IsWord() &&
+        (vocabulary::Canonical(Peek().text) == "first" ||
+         vocabulary::Canonical(Peek().text) == "all") &&
+        Peek(2).IsWord() && vocabulary::Canonical(Peek(2).text) == "of") {
+      Advance();
+      return ParseWaitOf(token);
     }
     if (At(TokenKind::kString)) {
       auto literal = Make<syntax::Literal>(token);
@@ -1883,18 +2105,21 @@ class ParserImpl {
       }
       if (word == "null") return Make<syntax::Literal>(token);
       if (word == "it") return Make<syntax::It>(token);
-      // `zip(a, b)` reads several streams in step. Spelled like a function and
-      // parsed apart from one, because its arguments are streams: see
-      // [syntax::Zip].
-      if (word == "zip" && At(TokenKind::kLeftParen)) {
+      // `zip(a, b)` reads several streams in step and `interleave(a, b)` reads
+      // them at once. Both are spelled like a function and parsed apart from
+      // one, because their arguments are streams: see [syntax::Zip].
+      if ((word == "zip" || word == "interleave") &&
+          At(TokenKind::kLeftParen)) {
         auto zip = Make<syntax::Zip>(token);
+        zip->name = word;
         Advance();
         const Bracketed brackets(this);
         SkipNewlines();
         while (!At(TokenKind::kRightParen)) {
           if (At(TokenKind::kEnd) || At(TokenKind::kRightBrace)) {
             ReportHere("flow.syntax.unclosed",
-                       "Call to 'zip' is missing its closing ')'.");
+                       absl::StrCat("Call to '", word,
+                                    "' is missing its closing ')'."));
             return zip;
           }
           const size_t before = position_;
@@ -1910,8 +2135,10 @@ class ParserImpl {
         Expect(TokenKind::kRightParen);
         if (zip->sources.empty()) {
           Report("flow.form.zip-empty",
-                 "'zip' reads streams in step, so it takes at least one.", token,
-                 Severity::kError, Family::kForm);
+                 absl::StrCat("'", word,
+                              "' reads several streams as one, so it takes at "
+                              "least one."),
+                 token, Severity::kError, Family::kForm);
         }
         return zip;
       }
@@ -1969,10 +2196,10 @@ class ParserImpl {
 
   /// `...expr` -- what it holds, spread into the literal being written.
   ///
-  /// The operand is a postfix expression rather than a whole one, so `...a.b` is
-  /// the spread of `a.b` and `...a + b` is not a spread of a sum: an arithmetic
-  /// expression is never a thing with parts to spread, and reading it that way
-  /// only postpones the diagnostic.
+  /// The operand is a postfix expression rather than a whole one, so `...a.b`
+  /// is the spread of `a.b` and `...a + b` is not a spread of a sum: an
+  /// arithmetic expression is never a thing with parts to spread, and reading
+  /// it that way only postpones the diagnostic.
   NodePtr ParseSpread() {
     const Token& dots = Advance();
     auto spread = Make<syntax::Spread>(dots);

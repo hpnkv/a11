@@ -269,7 +269,9 @@ ActionHandler MakeListAudioInputsHandler() {
         ABSL_RETURN_IF_ERROR(PutJson<DeviceInfo>(*out, inputs[i], last));
       }
       if (inputs.empty()) {
-        ABSL_RETURN_IF_ERROR(out->PutNullFinal().Await().status());
+        // The framework closes the writer; this only marks the logical end.
+        ABSL_RETURN_IF_ERROR(
+            out->Finalize({.wait = true, .close = false}).Await().status());
       }
       return absl::OkStatus();
     });
@@ -371,9 +373,9 @@ ActionHandler MakeCaptureAudioHandler() {
       // Graceful finish: mark logical end, then release the writers.
       ABSL_RETURN_IF_ERROR(PutJson<AudioCaptureEvent>(
           *events_out, AudioCaptureEvent::Stopped(), /*final=*/true));
-      ABSL_RETURN_IF_ERROR(events_out->DrainAndClose().Await().status());
-      ABSL_RETURN_IF_ERROR(audio_out->PutNullFinal().Await().status());
-      ABSL_RETURN_IF_ERROR(audio_out->DrainAndClose().Await().status());
+      ABSL_RETURN_IF_ERROR(events_out->Close().Await().status());
+      ABSL_RETURN_IF_ERROR(
+          audio_out->Finalize({.wait = true}).Await().status());
 
       return absl::OkStatus();
     });
@@ -445,19 +447,14 @@ ActionHandler MakeCaptureTranscriptionHandler() {
         if (piece.has_value()) {
           return WriteTask(pieces_out->PutChunk(TextChunk(*piece)));
         }
-        // The terminal call sequences two writer operations, so it takes a
-        // fiber; it runs once per action, not once per piece.
-        return a11::SubmitTask([pieces_out]() -> absl::Status {
-          ABSL_RETURN_IF_ERROR(pieces_out->PutNullFinal().Await().status());
-          return pieces_out->DrainAndClose().Await().status();
-        });
+        return pieces_out->Finalize({.wait = true});
       };
       OnRecognitionDone on_done = [events_out]() -> a11::Task {
         return a11::SubmitTask([events_out]() -> absl::Status {
           ABSL_RETURN_IF_ERROR(PutJson<TranscriptionEvent>(
               *events_out, TranscriptionEvent::InferenceStopped(),
               /*final=*/true));
-          return events_out->DrainAndClose().Await().status();
+          return events_out->Close().Await().status();
         });
       };
 
@@ -551,17 +548,14 @@ ActionHandler MakeTranscribeAudioHandler() {
         if (piece.has_value()) {
           return WriteTask(pieces_out->PutChunk(TextChunk(*piece)));
         }
-        return a11::SubmitTask([pieces_out]() -> absl::Status {
-          ABSL_RETURN_IF_ERROR(pieces_out->PutNullFinal().Await().status());
-          return pieces_out->DrainAndClose().Await().status();
-        });
+        return pieces_out->Finalize({.wait = true});
       };
       OnRecognitionDone on_done = [events_out]() -> a11::Task {
         return a11::SubmitTask([events_out]() -> absl::Status {
           ABSL_RETURN_IF_ERROR(PutJson<TranscriptionEvent>(
               *events_out, TranscriptionEvent::InferenceStopped(),
               /*final=*/true));
-          return events_out->DrainAndClose().Await().status();
+          return events_out->Close().Await().status();
         });
       };
 

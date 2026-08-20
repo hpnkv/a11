@@ -143,8 +143,7 @@ need(registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) =
     if (isStatus(blobs)) return await refuse(action, blobs, onLog);
     blobs.forEach((blob, index) => recolour(blob, colors[index]));
     const result = need(await action.getOutput('recoloured'));
-    need(await result.putFinal(blobs.length));
-    need(await result.drainAndClose());
+    need(await result.finalize(blobs.length));
     return okStatus();
 }));
 ```
@@ -198,7 +197,7 @@ const announce = makeCall(connection, REGISTER_TOOLS_SCHEMA);
 need(await announce.call());
 const tools = need(await announce.getInput('tools'));
 for (const schema of schemas) need(await tools.put(describeTool(schema)));
-need(await tools.putNullFinal());
+need(await tools.finalize());
 ```
 
 `describeTool` sends the *port* description, and flags the log port:

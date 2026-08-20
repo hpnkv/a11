@@ -793,7 +793,7 @@ export class Session {
         if (!isOk(writable)) return writable;
         if (!writable) return seq;
         const applied = isOk(decoded.status)
-          ? await mirror.drainAndClose()
+          ? await mirror.close()
           : await mirror.abortWithStatus(decoded.status);
         if (!isOk(applied)) return applied;
         return seq;

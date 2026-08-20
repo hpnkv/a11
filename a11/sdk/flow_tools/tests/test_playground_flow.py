@@ -97,7 +97,7 @@ async def wired():
         stopping.set()
         await emitting
         for port in ("audio", "events"):
-            await action[port].drain_and_close()
+            await action[port].finalize()
 
     mine = ActionRegistry()
     mine.register(
@@ -129,7 +129,7 @@ async def wired():
         # Once the microphone really has stopped, one last thing nobody wants.
         await (await action["transcription_pieces"].put("never mind"))
         for port in ("transcription_pieces", "events"):
-            await action[port].drain_and_close()
+            await action[port].finalize()
 
     async def fake_llm(action: Action) -> None:
         """Answer, and hand back an interaction shaped the way a backend's is.
@@ -152,7 +152,7 @@ async def wired():
         answer = f"a stack a scheduler can park (#{len(heard['turns'])})."
         for word in ("a stack ", answer[len("a stack ") :]):
             await (await action["text_output"].put(word))
-        await action["text_output"].drain_and_close()
+        await action["text_output"].finalize()
         await (
             await action["new_interactions"].put(
                 Interaction(
@@ -171,8 +171,10 @@ async def wired():
                 final=True,
             )
         )
-        for port in ("new_interactions", "thoughts", "event_stream"):
-            await action[port].drain_and_close()
+        # `new_interactions` marked its own last value final above.
+        await action["new_interactions"].close()
+        for port in ("thoughts", "event_stream"):
+            await action[port].finalize()
 
     theirs = ActionRegistry()
     theirs.register(
@@ -243,26 +245,20 @@ async def test_the_first_full_sentence_becomes_the_question(
     # dispatched, because the flow reads it to the end before the new question.
     history = client.node_map.get("first-turn-history")
     history.attach_stream(stream)
-    await history.put_null_final()
+    await history.finalize()
 
     # Every input port of the call, including the ones it has nothing for: one
     # that is neither written nor closed is one the handler waits on.
-    async with (
-        call["source"] as source,
-        call["inputs"] as inputs,
-        call["flow"] as which,
-        call["input_streams"] as streamed,
-    ):
-        await source.put_final(playground.FLOW_SOURCE)
-        await inputs.put_final(
-            {
-                "asr": {"model": "fake.bin"},
-                "device": {},
-                "history": history.get_id(),
-            }
-        )
-        await which.put_null_final()
-        await streamed.put_null_final()
+    await call["source"].finalize(playground.FLOW_SOURCE)
+    await call["inputs"].finalize(
+        {
+            "asr": {"model": "fake.bin"},
+            "device": {},
+            "history": history.get_id(),
+        }
+    )
+    await call["flow"].finalize()
+    await call["input_streams"].finalize()
 
     # Read off the published nodes rather than out of `result`: this is the
     # client watching the answer being written.

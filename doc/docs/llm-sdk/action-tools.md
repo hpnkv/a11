@@ -36,8 +36,7 @@ LOOK_UP_ORDER = a11.ActionSchema(
 async def look_up_order(action: a11.Action) -> None:
     order_id = await action["order_id"].consume()
     result = await orders.fetch_status(order_id)  # Your application service.
-    await action["status"].put_final(result)
-    await action["status"].drain_and_close()
+    await action["status"].finalize(result)
 ```
 
 Descriptions matter: they tell the model when the tool is relevant and what a

@@ -163,11 +163,11 @@ async function writeOutputs(
       const value = outputs[port.name];
       const values =
         value === undefined || value === null ? [] : port.unary ? [value] : Array.isArray(value) ? value : [value];
-      for (const [index, item] of values.entries()) {
-        const put = await node.put(item, { final: index === values.length - 1 });
+      for (const item of values) {
+        const put = await node.put(item);
         if (!isOk(put)) return put;
       }
-      return node.drainAndClose();
+      return node.finalize();
     }),
   );
   return written.find((status) => !isOk(status)) ?? okStatus();

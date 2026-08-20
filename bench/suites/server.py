@@ -149,8 +149,7 @@ class Client:
     async def echo(self, payload: str = "payload") -> None:
         call = self._call(ECHO)
         await call.call()
-        async with call["text"] as port:
-            await port.put_final(payload)
+        await call["text"].finalize(payload)
         await call["out"].consume(str)
         await call.wait(_WAIT)
 
@@ -161,10 +160,10 @@ class Client:
         )
         call = self._call(SINK)
         await call.call()
-        async with call["data"] as port:
-            for _index in range(count - 1):
-                await port.put_chunk(chunk)
-            await port.put_chunk(chunk, final=True)
+        port = call["data"]
+        for _index in range(count - 1):
+            await port.put_chunk(chunk)
+        await port.finalize(chunk)
         report = await call["report"].consume(dict)
         await call.wait(_WAIT)
         return int(report.get("bytes", 0))
@@ -173,8 +172,7 @@ class Client:
         """Ask the server to stream `count` chunks of `size` back."""
         call = self._call(SOURCE)
         await call.call()
-        async with call["request"] as port:
-            await port.put_final({"count": count, "size": size})
+        await call["request"].finalize({"count": count, "size": size})
         total = 0
         port = call["data"]
         while True:
@@ -194,8 +192,9 @@ class Client:
         """Server-side write-and-read-back; no payload crosses the wire."""
         call = self._call(STORE)
         await call.call()
-        async with call["request"] as port:
-            await port.put_final({"count": count, "size": size, "batch": batch})
+        await call["request"].finalize(
+            {"count": count, "size": size, "batch": batch}
+        )
         report = await call["report"].consume(dict)
         await call.wait(_WAIT)
         return int(report.get("read", 0))

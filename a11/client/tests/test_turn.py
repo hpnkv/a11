@@ -127,8 +127,7 @@ _ECHO_SCHEMA = a11.ActionSchema(
 
 async def _echo(action: a11.Action) -> None:
     text = await action["text"].consume(str)
-    async with action["result"] as result:
-        await result.put_final({"echoed": text})
+    await action["result"].finalize({"echoed": text})
     await action.log(_LOG)
 
 

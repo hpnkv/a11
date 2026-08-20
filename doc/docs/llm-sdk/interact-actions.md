@@ -37,19 +37,19 @@ tool_definitions = runner.get_tool_definitions(registry, allowed)
 ## Feed the turn and tools
 
 ```python
-async with (
-    interact["interactions"] as interactions,
-    interact["config"],  # Closing an empty config port accepts defaults.
-    interact["tools"] as tools,
-):
-    for previous in history:
-        await interactions.put(previous)
-    await interactions.put_final(question)
+interactions = interact["interactions"]
+for previous in history:
+    await interactions.put(previous)
+await interactions.finalize(question)
 
-    for definition in tool_definitions:
-        await tools.put(definition)
-    # A null final marks the end of this finite list of tool definitions.
-    await tools.put_null_final()
+# Finalizing an empty config port accepts the backend's defaults.
+await interact["config"].finalize()
+
+tools = interact["tools"]
+for definition in tool_definitions:
+    await tools.put(definition)
+# With no value, finalize() marks the end of this finite list of definitions.
+await tools.finalize()
 ```
 
 The handler sends those definitions to the chosen provider. If the model calls

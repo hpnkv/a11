@@ -110,10 +110,10 @@ async def _announce(registry: a11.ActionRegistry, *descriptors: dict) -> dict:
         bridge._register_tools_handler
     )
     action.run()
-    async with action["tools"] as tools:
-        for descriptor in descriptors:
-            await tools.put(descriptor)
-        await tools.put_null_final()
+    tools = action["tools"]
+    for descriptor in descriptors:
+        await tools.put(descriptor)
+    await tools.finalize()
     return await action["ok"].consume(dict)
 
 

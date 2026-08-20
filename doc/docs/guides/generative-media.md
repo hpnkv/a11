@@ -121,8 +121,10 @@ Both ports are closed however the handler ends:
 
 ```python
 finally:
-    await progress.drain_and_close()
-    await image_out.drain_and_close()
+    # Closed rather than finalized: `progress` has no last event worth marking,
+    # and `image_out` marked its own PNG final -- or failed before it had one.
+    await progress.close()
+    await image_out.close()
 ```
 
 An output port nobody closes leaves its reader waiting for a stream that has

@@ -129,18 +129,19 @@ operations—for example, read a user turn, start a model request, and emit toke
 as they arrive.
 
 The handler owns the semantic data contract of every output. In particular, it
-must write a final value or null-final marker when a consumer needs a complete
-logical result:
+must mark the logical end of one when a consumer needs a complete logical
+result, which is what `finalize()` does:
 
 ```python
 async def summarize(action: a11.Action) -> None:
     request = await action["request"].consume()
     result = await build_summary(request)
-    await action["summary"].put_final(result)
+    await action["summary"].finalize(result)
 ```
 
-Action cleanup drains writable outputs on success, but it does **not** invent
-final data. Only the handler knows whether its last token, object, or event is a
+The handler need not wait for that write: the writer's pump completes it and the
+closure after the handler has returned. Action cleanup closes writable outputs
+the handler left open, but it does **not** invent final data. Only the handler knows whether its last token, object, or event is a
 complete value. On failure, cleanup aborts output nodes so readers receive the
 structured error instead of mistaking partial data for success.
 

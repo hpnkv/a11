@@ -17,21 +17,25 @@
 namespace a11::flow::vocabulary {
 namespace {
 
-// Stages in the order a listing reads best: what shortens a stream, what reshapes
-// each value, what reduces it to one, what encodes it.
+// Stages in the order a listing reads best: what shortens a stream, what
+// reshapes each value, what reduces it to one, what encodes it.
 constexpr std::array kStageOrder = {
-    std::string_view("first"),  std::string_view("last"),
-    std::string_view("drop"),   std::string_view("truncate"),
-    std::string_view("batch"),  std::string_view("group"),
-    std::string_view("where"),  std::string_view("map"),
-    std::string_view("match"),  std::string_view("distinct"),
-    std::string_view("then"),   std::string_view("log"),
+    std::string_view("first"),   std::string_view("last"),
+    std::string_view("drop"),    std::string_view("truncate"),
+    std::string_view("batch"),   std::string_view("flatten"),
+    std::string_view("group"),   std::string_view("sort"),
+    std::string_view("where"),   std::string_view("map"),
+    std::string_view("match"),   std::string_view("distinct"),
+    std::string_view("then"),    std::string_view("log"),
     std::string_view("logf"),
-    std::string_view("mime"),   std::string_view("strformat"),
-    std::string_view("chunk"),  std::string_view("collect"),
-    std::string_view("count"),  std::string_view("join"),
-    std::string_view("text"),   std::string_view("json"),
-    std::string_view("packb"),
+    std::string_view("mime"),    std::string_view("strformat"),
+    std::string_view("chunk"),   std::string_view("collect"),
+    std::string_view("count"),   std::string_view("sum"),
+    std::string_view("min"),     std::string_view("max"),
+    std::string_view("avg"),     std::string_view("fold"),
+    std::string_view("join"),    std::string_view("text"),
+    std::string_view("json"),    std::string_view("packb"),
+    std::string_view("timeout"), std::string_view("pace"),
 };
 
 const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
@@ -56,6 +60,15 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"collect", StageArgument::kNone},
           {"count", StageArgument::kNone},
           {"distinct", StageArgument::kNone},
+          {"flatten", StageArgument::kNone},
+          {"sum", StageArgument::kOptionalExpression},
+          {"min", StageArgument::kOptionalExpression},
+          {"max", StageArgument::kOptionalExpression},
+          {"avg", StageArgument::kOptionalExpression},
+          {"sort", StageArgument::kSortKey},
+          {"fold", StageArgument::kFold},
+          {"timeout", StageArgument::kDuration},
+          {"pace", StageArgument::kDuration},
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
@@ -64,13 +77,13 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
 }
 
 // What each stage does, as reference. Accuracy is from `Scope::ProduceStage` in
-// `runtime.cc`, which is the one implementation of every one of these; where the
-// two disagree the runtime is right and this is a bug.
+// `runtime.cc`, which is the one implementation of every one of these; where
+// the two disagree the runtime is right and this is a bug.
 //
 // House style, since a table of 19 of these only reads well if they agree:
-// present tense, "the stream" for the whole and "each value" for one of them, no
-// second person, and the caveat last rather than buried. `--` is never written in
-// text a reader sees: a colon or an em dash instead.
+// present tense, "the stream" for the whole and "each value" for one of them,
+// no second person, and the caveat last rather than buried. `--` is never
+// written in text a reader sees: a colon or an em dash instead.
 const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"first",
@@ -203,6 +216,66 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "Reads to the end and yields exactly one integer. Nothing is decoded to "
         "count it, so counting a stream of pages costs nothing per page.",
         "pages | count -> how_many"}},
+      {"sum",
+       {"The values added together, as one value.",
+        "an expression over each value, or nothing for the values themselves",
+        "Reads to the end and yields exactly one value. Numbers add as numbers "
+        "and durations as durations; a stream with nothing in it sums to 0. "
+        "`| sum it.price` is the shorthand for `| map it.price | sum`.",
+        "orders | sum it.price -> revenue"}},
+      {"min",
+       {"The smallest value of the stream.",
+        "an expression over each value, or nothing for the values themselves",
+        "Reads to the end and yields exactly one value, compared the way `<` "
+        "compares them. An empty stream yields nothing rather than a zero, "
+        "because the smallest of no values is not a value.",
+        "samples | min it.latency -> fastest"}},
+      {"max",
+       {"The largest value of the stream.",
+        "an expression over each value, or nothing for the values themselves",
+        "The counterpart of `min`, and the same about an empty stream.",
+        "samples | max it.latency -> slowest"}},
+      {"avg",
+       {"The mean of the stream's values.",
+        "an expression over each value, or nothing for the values themselves",
+        "Reads to the end and yields exactly one number; an empty stream "
+        "yields nothing. Durations average as durations, which is what makes "
+        "`| avg it.elapsed` the useful form.",
+        "runs | avg it.elapsed -> typical"}},
+      {"fold",
+       {"The stream folded into one value, carrying what has been seen so far.",
+        "a literal to start from, a name for what it carries, an expression",
+        "Written `fold 0 as total, total + it`: the name is bound to what the "
+        "last pass produced and `it` to the value in hand. The general form of "
+        "`sum`, `min` and `max`, for the shape none of them is.",
+        "orders | fold 0 as total, total + it.price -> revenue"}},
+      {"sort",
+       {"The stream in order.", "optionally `by` an expression, and `desc`",
+        "Reads the whole stream to find out what the order is, so nothing "
+        "comes out until it ends. `by` names what to compare (`sort by "
+        "it.score`) and `desc` reverses it; values compare as `<` does.",
+        "hits | sort by it.score desc | first 10 -> best"}},
+      {"flatten",
+       {"Each list of the stream, as its own values.", "",
+        "The inverse of `batch`: a stream of lists becomes a stream of what "
+        "they held, in order. A value that is not a list goes through as "
+        "itself, so a mixed stream is flattened rather than refused.",
+        "pages | map it.lines | flatten -> lines"}},
+      {"timeout",
+       {"Fails the pipeline when the stream goes quiet for too long.",
+        "how long a gap is too long",
+        "The gap *between* values, not the total: a stream that keeps arriving "
+        "runs for as long as it likes, and one that stops for longer than this "
+        "ends the flow with `deadline_exceeded`. A whole-step budget is "
+        "`wait ... timeout` instead.",
+        "tokens | timeout 30s -> answer"}},
+      {"pace",
+       {"Slows the stream to at most one value per interval.",
+        "the least time between two values",
+        "Nothing is dropped: the values are spaced out and whoever produces "
+        "them is held back behind the buffer, which is what makes this a rate "
+        "limit rather than a sample. What it costs is latency, on purpose.",
+        "requests | pace 100ms -> to_api"}},
       {"join",
        {"Every value of the stream as text, concatenated into one string.",
         "a separator string, or nothing for none",
@@ -231,8 +304,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   return *table;
 }
 
-// The fixed function set, as reference. Same house style as [StageDocs], and the
-// same rule about accuracy: `Call` in `values.cc` is the implementation.
+// The fixed function set, as reference. Same house style as [StageDocs], and
+// the same rule about accuracy: `Call` in `values.cc` is the implementation.
 const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"len",
@@ -747,13 +820,39 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "is for: the statements outside it are not waiting on the question.",
         "if ok { page.text -> body } else { \"\" -> body }"}},
       {"parallel",
-       {"How many passes of a `for` run at a time.",
+       {"How many passes of a `for`, or values of a stage, run at a time.",
         "a count",
-        "Without it the passes run one after another. The number is a ceiling "
-        "rather than a target, and it bounds the passes rather than the work "
-        "inside one: a pass waiting on a step it dispatched is still one of the "
-        "`n`.",
+        "Without it they run one after another. The number is a ceiling rather "
+        "than a target, and it bounds the passes rather than the work inside "
+        "one: a pass waiting on a step it dispatched is still one of the `n`. "
+        "On a stage it says how many values may be in hand at once, and what "
+        "follows still reads them in order.",
         "for hit in search.hits parallel 2 { .. }"}},
+      {"unordered",
+       {"Lets a parallel stage publish its values as they finish.", "",
+        "A parallel stage otherwise puts the stream back in the order it read "
+        "it, which is what makes `parallel` safe to add to a pipeline nobody "
+        "else changed. This gives that up for whatever it saves, so it is "
+        "worth writing only where the consumer does not care.",
+        "urls | map fetch(it) parallel 8 unordered -> bodies"}},
+      {"by",
+       {"What to compare, where a stage orders values.", "an expression, with "
+        "`it` bound to the value",
+        "Only `sort` takes one. Without it the values compare as themselves, "
+        "which is what a stream of numbers or of text wants.",
+        "hits | sort by it.score desc -> ranked"}},
+      {"desc",
+       {"Reverses the order a `sort` puts values in.", "",
+        "Largest first, by the same comparison `>` uses. Ascending is the "
+        "default and has no word of its own.",
+        "hits | sort by it.score desc -> ranked"}},
+      {"into",
+       {"Where a `try` stage sends a value it could not do.", "a node or an "
+        "out-port",
+        "The failure arrives as a status record, the same shape `status x` "
+        "yields, so a stream of failures is an ordinary stream. Without it a "
+        "tolerated failure is logged at warning and the value is dropped.",
+        "docs | try map parse(it) into bad -> good"}},
       {"max",
        {"The most passes a `repeat` may make.",
         "a count",
@@ -842,6 +941,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SourceDocs() {
         "source has, and it is a stream like any other, so `wait`, `drain`, "
         "`| first n` and `| count` all work on one.",
         "for url, body in zip(urls, bodies) { .. }"}},
+      {"interleave",
+       {"Reads several streams at once, as one stream of their values.",
+        "two or more streams",
+        "Each value goes on as it arrives, so a fast stream is not held behind "
+        "a slow one and the order between the sources is whatever the values "
+        "did. `zip` is the other shape: one tuple per round, in step. A source "
+        "that ends well is simply done; one that ends with an error ends the "
+        "stream with that status.",
+        "interleave(tokens, progress) -> events"}},
   };
   return *table;
 }
@@ -1030,8 +1138,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
 
 // The codes are Abseil's, and so are these meanings. The value of documenting
 // them here is the pairs a reader confuses: `permission_denied` against
-// `unauthenticated`, `failed_precondition` against `invalid_argument`, and which
-// of them a *flow* itself can raise.
+// `unauthenticated`, `failed_precondition` against `invalid_argument`, and
+// which of them a *flow* itself can raise.
 const absl::flat_hash_map<std::string_view, WordDoc>& LogLevelDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"debug",
@@ -1501,13 +1609,20 @@ constexpr std::array kStatementOrder = {
     std::string_view("while"),  std::string_view("nodes"),
 };
 
-// `else` continues an `if`; `parallel` and `max` say how wide a loop runs;
-// `of` ties a `skip`'s output names to the call they belong to.
+// `else` continues an `if`; `parallel` and `max` say how wide a loop or a stage
+// runs and `unordered` gives up the order a parallel stage otherwise keeps;
+// `of` ties a `skip`'s output names to the call they belong to, and a `wait
+// first of` to its candidates; `by` and `desc` say how to `sort`; `into` says
+// where a `try` stage sends what it could not do.
 constexpr std::array kClauseOrder = {
     std::string_view("else"),
     std::string_view("parallel"),
+    std::string_view("unordered"),
     std::string_view("max"),
     std::string_view("of"),
+    std::string_view("by"),
+    std::string_view("desc"),
+    std::string_view("into"),
 };
 
 // As a flow is written, top to bottom. `struct` sits beside `flow` because it
@@ -1602,6 +1717,14 @@ std::string_view StageArgumentName(StageArgument argument) {
       return "string";
     case StageArgument::kOptionalString:
       return "string?";
+    case StageArgument::kOptionalExpression:
+      return "expr?";
+    case StageArgument::kSortKey:
+      return "sort-key";
+    case StageArgument::kFold:
+      return "fold";
+    case StageArgument::kDuration:
+      return "duration";
     case StageArgument::kStream:
       return "stream";
     case StageArgument::kLog:
@@ -1814,13 +1937,27 @@ const absl::flat_hash_set<std::string_view>& BareStages() {
 }
 
 const absl::flat_hash_set<std::string_view>& ReducingStages() {
-  static const auto* words = MakeSet({"collect", "count", "join"});
+  static const auto* words = MakeSet({"collect", "count", "join", "sum", "min",
+                                      "max", "avg", "fold"});
   return *words;
 }
 
 const absl::flat_hash_set<std::string_view>& PositionalStages() {
   static const auto* words =
-      MakeSet({"first", "last", "drop", "batch", "group", "distinct", "count"});
+      MakeSet({"first", "last", "drop", "batch", "group", "distinct", "count",
+               "sort", "flatten"});
+  return *words;
+}
+
+const absl::flat_hash_set<std::string_view>& ParallelStages() {
+  // Every stage that reshapes or judges one value on its own, and nothing that
+  // gathers, orders or counts: `| collect parallel 8` has one value to make and
+  // `| sort parallel 8` has an order to keep, so both would be asking for
+  // workers with nothing to do. `flatten` is here because each list is cut on
+  // its own; `pace` and `timeout` are not, because both are about *when*.
+  static const auto* words =
+      MakeSet({"map", "where", "at", "truncate", "match", "mime", "flatten",
+               "text", "json", "packb", "strformat", "chunk"});
   return *words;
 }
 
@@ -1895,10 +2032,11 @@ absl::Span<const std::string_view> OrderedModifiers() {
 }
 
 const absl::flat_hash_set<std::string_view>& SourceWords() {
-  // `status x` reads an outcome and `zip(a, b)` reads several streams in step.
+  // `status x` reads an outcome, `zip(a, b)` reads several streams in step, and
+  // `interleave(a, b)` reads several as one, in the order values arrive.
   // Both stand where a pipeline's source does and nowhere else, which is what
   // makes them source words rather than statements or functions.
-  static const auto* words = MakeSet({"status", "zip"});
+  static const auto* words = MakeSet({"status", "zip", "interleave"});
   return *words;
 }
 

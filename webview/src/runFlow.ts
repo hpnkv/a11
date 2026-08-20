@@ -132,8 +132,7 @@ export async function runFlow(
     // A port this end writes has to reach the other end.
     need(node.attachStream(stream));
     for (const value of values) need(await node.put(value));
-    need(await node.putNullFinal());
-    need(await node.drainAndClose());
+    need(await node.finalize());
   }
 
   // Every input port of the *call*, including the ones there is nothing for: an
@@ -141,9 +140,7 @@ export async function runFlow(
   // no deadline on this call it would wait for good.
   const write = async (port: string, value: unknown | null): Promise<void> => {
     const node = need(await call.getInput(port));
-    if (value === null) need(await node.putNullFinal());
-    else need(await node.putFinal(value));
-    need(await node.drainAndClose());
+    need(await node.finalize(value ?? undefined));
   };
   // `input_streams` is how the gateway knows to leave those ports open for the
   // writes above rather than closing them empty before the flow reads them.

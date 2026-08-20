@@ -187,7 +187,7 @@ def test_overloads_do_not_change_runtime_dispatch() -> None:
 @pytest.mark.asyncio
 async def test_allow_none_still_decides_the_runtime_result() -> None:
     empty = a11.AsyncNode.create("empty-node")
-    await empty.drain_and_close()
+    await empty.close()
 
     assert await empty.consume(allow_none=True) is None
     with pytest.raises(StatusException) as raised:
@@ -195,6 +195,5 @@ async def test_allow_none_still_decides_the_runtime_result() -> None:
     assert raised.value.status.code == StatusCode.FAILED_PRECONDITION
 
     whole = a11.AsyncNode.create("whole-node")
-    await whole.put_final("only")
-    await whole.drain_and_close()
+    await whole.finalize("only", wait=True)
     assert await whole.consume(obj_type=str) == "only"

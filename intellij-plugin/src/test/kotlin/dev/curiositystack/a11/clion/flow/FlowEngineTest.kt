@@ -33,7 +33,9 @@ class FlowEngineTest {
     @Test
     fun `a flow with a mistake in it comes back as diagnostics`() {
         val payload = engine().check(
-            "flow t {\n  in q: string\n  out a: string\n  q | flatten -> a\n}\n",
+            // A stage the language does not have. (`flatten` stood here until
+            // the language gained it, on 2026-08-20.)
+            "flow t {\n  in q: string\n  out a: string\n  q | shuffle -> a\n}\n",
         )
         assertNotNull(payload)
         assertEquals("flow.diagnostics/v1", payload!!["format"])

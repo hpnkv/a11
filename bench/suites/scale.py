@@ -300,8 +300,7 @@ def _call(item: _Session, schema):
 async def _one_rpc(item: _Session) -> None:
     call = _call(item, peer_mod.ECHO)
     await call.call()
-    async with call["text"] as port:
-        await port.put_final("ping")
+    await call["text"].finalize("ping")
     await call["out"].consume(str)
     await call.wait(_OP_TIMEOUT)
 
@@ -309,14 +308,12 @@ async def _one_rpc(item: _Session) -> None:
 async def _one_bulk(item: _Session, payload: bytes) -> None:
     call = _call(item, peer_mod.SINK)
     await call.call()
-    async with call["data"] as port:
-        await port.put_chunk(
-            types.Chunk(
-                data=payload,
-                metadata=types.ChunkMetadata(mimetype="application/octet-stream"),
-            ),
-            final=True,
+    await call["data"].finalize(
+        types.Chunk(
+            data=payload,
+            metadata=types.ChunkMetadata(mimetype="application/octet-stream"),
         )
+    )
     await call["report"].consume(dict)
     await call.wait(_OP_TIMEOUT)
 
@@ -324,8 +321,7 @@ async def _one_bulk(item: _Session, payload: bytes) -> None:
 async def _one_compute(item: _Session, rounds: int) -> None:
     call = _call(item, peer_mod.COMPUTE)
     await call.call()
-    async with call["request"] as port:
-        await port.put_final({"rounds": rounds, "size": 4096})
+    await call["request"].finalize({"rounds": rounds, "size": 4096})
     await call["report"].consume(dict)
     await call.wait(_OP_TIMEOUT)
 

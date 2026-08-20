@@ -80,13 +80,12 @@ said = session.node_map.get(flow_tools.flow_output_node_id(call.get_id(), "said"
 words = session.node_map.get(flow_tools.flow_input_node_id(call.get_id(), "words"))
 words.attach_stream(stream)
 
-await call["input_streams"].put_final(["words"])  # this port is mine to fill
-await call["source"].put_final(SOURCE)  # and close `inputs`, `flow`
+await call["input_streams"].finalize(["words"])  # this port is mine to fill
+await call["source"].finalize(SOURCE)  # and finalize `inputs`, `flow`
 
 await (await words.put("one"))  # the flow reads it now
 print(await said.next_object())  # and answers before the port ends
-await (await words.put_null_final())  # the caller owns the close
-await words.drain_and_close()
+await words.finalize()  # the caller owns the close
 ```
 
 A port is filled one way or the other — a value in `inputs`, or a node you write —

@@ -232,6 +232,7 @@
                     "start": 1613
                   },
                   "kind": "wait",
+                  "race": false,
                   "subject": {
                     "at": {
                       "column": 12,
@@ -242,6 +243,8 @@
                     "kind": "name",
                     "name": "page"
                   },
+                  "subjects": [],
+                  "targets": [],
                   "timeout": null
                 },
                 {
@@ -373,9 +376,13 @@
                           "line": 49,
                           "start": 1763
                         },
+                        "into": null,
                         "kind": "stage",
                         "name": "map",
-                        "takes": "expr"
+                        "ordered": true,
+                        "parallel": 1,
+                        "takes": "expr",
+                        "try": false
                       }
                     ]
                   },
@@ -438,9 +445,13 @@
                           "line": 52,
                           "start": 2006
                         },
+                        "into": null,
                         "kind": "stage",
                         "name": "truncate",
-                        "takes": "number"
+                        "ordered": true,
+                        "parallel": 1,
+                        "takes": "number",
+                        "try": false
                       },
                       {
                         "arg": {
@@ -478,9 +489,13 @@
                           "line": 52,
                           "start": 2021
                         },
+                        "into": null,
                         "kind": "stage",
                         "name": "where",
-                        "takes": "expr"
+                        "ordered": true,
+                        "parallel": 1,
+                        "takes": "expr",
+                        "try": false
                       },
                       {
                         "arg": {
@@ -504,9 +519,13 @@
                           "line": 52,
                           "start": 2038
                         },
+                        "into": null,
                         "kind": "stage",
                         "name": "log",
-                        "takes": "log"
+                        "ordered": true,
+                        "parallel": 1,
+                        "takes": "log",
+                        "try": false
                       }
                     ]
                   },
@@ -908,9 +927,13 @@
                   "line": 69,
                   "start": 2577
                 },
+                "into": null,
                 "kind": "stage",
                 "name": "chunk",
-                "takes": "number"
+                "ordered": true,
+                "parallel": 1,
+                "takes": "number",
+                "try": false
               }
             ]
           },
@@ -966,9 +989,13 @@
                   "line": 73,
                   "start": 2766
                 },
+                "into": null,
                 "kind": "stage",
                 "name": "count",
-                "takes": "none"
+                "ordered": true,
+                "parallel": 1,
+                "takes": "none",
+                "try": false
               }
             ]
           }
@@ -1349,9 +1376,13 @@
                   "line": 94,
                   "start": 3604
                 },
+                "into": null,
                 "kind": "stage",
                 "name": "match",
-                "takes": "string"
+                "ordered": true,
+                "parallel": 1,
+                "takes": "string",
+                "try": false
               },
               {
                 "arg": {
@@ -1379,9 +1410,13 @@
                   "line": 94,
                   "start": 3627
                 },
+                "into": null,
                 "kind": "stage",
                 "name": "map",
-                "takes": "expr"
+                "ordered": true,
+                "parallel": 1,
+                "takes": "expr",
+                "try": false
               }
             ]
           },

@@ -92,19 +92,16 @@ async def test_llm_runs_a_command_through_the_shell_tool():
     )
 
     tools = get_tool_definitions(registry, ["shell_execute"])
-    async with (
-        action["interactions"] as interactions,
-        action["tools"] as tool_port,
-        action["config"] as config,
-    ):
-        await interactions.put_final(
-            make_text_message_interaction(
-                user_prompt, system_prompt=system_prompt, role=Role.USER
-            )
+    await action["interactions"].finalize(
+        make_text_message_interaction(
+            user_prompt, system_prompt=system_prompt, role=Role.USER
         )
-        for tool in tools:
-            await tool_port.put(tool)
-        await config.put_final(CreateChatConfig())
+    )
+    tool_port = action["tools"]
+    for tool in tools:
+        await tool_port.put(tool)
+    await tool_port.finalize()
+    await action["config"].finalize(CreateChatConfig())
 
     # Drain the streaming outputs (as raw fragments, to avoid imposing a type)
     # so the handler never blocks on a full buffer, and drive to completion.

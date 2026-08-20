@@ -70,8 +70,7 @@ def _echo_handler(inputs: int, outputs: int):
         for index in range(1, inputs):
             await action[f"in{index}"].consume(str)
         for index in range(outputs):
-            async with action[f"out{index}"] as port:
-                await port.put_final(text)
+            await action[f"out{index}"].finalize(text)
 
     return handle
 
@@ -86,8 +85,7 @@ async def _call_local(schema, handler, inputs: int, outputs: int) -> str:
     call = a11.Action(schema, handler=handler)
     call.run()
     for index in range(inputs):
-        async with call[f"in{index}"] as port:
-            await port.put_final("payload")
+        await call[f"in{index}"].finalize("payload")
     result = await call["out0"].consume(str)
     for index in range(1, outputs):
         await call[f"out{index}"].consume(str)
@@ -99,8 +97,7 @@ async def _call_local_partial(schema, handler, inputs: int, outputs: int) -> str
     """Feed one input and read one output of a wide schema."""
     call = a11.Action(schema, handler=handler)
     call.run()
-    async with call["in0"] as port:
-        await port.put_final("payload")
+    await call["in0"].finalize("payload")
     result = await call["out0"].consume(str)
     await call.wait(_WAIT)
     return result
@@ -111,8 +108,7 @@ def _one_port_handler():
 
     async def handle(action: a11.Action) -> None:
         text = await action["in0"].consume(str)
-        async with action["out0"] as port:
-            await port.put_final(text)
+        await action["out0"].finalize(text)
 
     return handle
 
@@ -216,8 +212,7 @@ async def _call_remote(session, stream, schema, inputs, outputs) -> str:
     )
     await call.call()
     for index in range(inputs):
-        async with call[f"in{index}"] as port:
-            await port.put_final("payload")
+        await call[f"in{index}"].finalize("payload")
     result = await call["out0"].consume(str)
     for index in range(1, outputs):
         await call[f"out{index}"].consume(str)

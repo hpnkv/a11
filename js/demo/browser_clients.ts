@@ -85,7 +85,7 @@ class EchoDemo {
       }));
       need(await action.call());
       const input = need(await action.getInput('input'));
-      need(await input.putFinal(text));
+      need(await input.finalize(text));
       need(await action.waitForDispatch(10_000));
       need(await action.wait(30_000));
       const output = need(await action.getOutput('output', false));

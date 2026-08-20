@@ -2,6 +2,7 @@
 
 import asyncio
 import pathlib
+import time
 
 import pytest
 import pytest_asyncio
@@ -2535,8 +2536,7 @@ async def test_a_flow_reads_a_value_written_after_it_started(registry):
         node = running.inputs[name]
         if name == "once":
             await (await node.put("solo"))
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
     assert await asyncio.wait_for(running.collect(), timeout=10) == {
         "said": ["solo"]
     }
@@ -2551,8 +2551,7 @@ async def test_an_open_port_is_the_callers_to_close(registry):
         await asyncio.wait_for(running.wait(), timeout=0.5)
 
     for node in running.inputs.values():
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
     assert await asyncio.wait_for(running.collect(), timeout=10) == {"said": []}
 
 
@@ -2578,8 +2577,7 @@ async def test_a_value_written_to_an_open_port_keeps_its_own_mimetype(
             "hi", mimetype="application/x-msgpack"
         )
     )
-    await (await running.inputs["values"].put_null_final())
-    await running.inputs["values"].drain_and_close()
+    await running.inputs["values"].finalize()
     # The caller's encoding, not one this end chose: a port written as a node
     # carries the chunk it was given.
     assert await asyncio.wait_for(running.collect(), timeout=10) == {
@@ -2645,3 +2643,241 @@ async def test_publishing_before_the_flow_starts_loses_nothing(registry):
         "said": "immediately"
     }
     assert "published-early#said" in stream.node_ids()
+
+
+# --- The six shapes this pass added ------------------------------------------
+#
+# The C++ tests cover each of these against the native bridge; these are the
+# same shapes as a *caller* writes them, through the bindings, because that is
+# where a value is a Python object and the host bridge is in the way.
+
+
+@pytest.mark.asyncio
+async def test_aggregations_reduce_a_stream_to_one_value(registry):
+    outputs = await run_flow(
+        """
+        flow totals {
+          in  prices:   number stream required
+          out revenue:  number
+          out dearest:  number
+          out typical:  number
+          prices | sum -> revenue
+          prices | max -> dearest
+          prices | avg -> typical
+        }
+        """,
+        registry,
+        prices=[2, 4, 6],
+    )
+    assert outputs["revenue"] == 12
+    assert outputs["dearest"] == 6
+    assert outputs["typical"] == 4
+
+
+@pytest.mark.asyncio
+async def test_an_aggregation_may_read_one_field_of_each_value(registry):
+    outputs = await run_flow(
+        """
+        flow revenue {
+          in  orders: json stream required
+          out total:  number
+          orders | sum it.price -> total
+        }
+        """,
+        registry,
+        orders=[{"price": 1.5}, {"price": 2.5}],
+    )
+    assert outputs["total"] == 4.0
+
+
+@pytest.mark.asyncio
+async def test_a_fold_carries_what_the_last_value_produced(registry):
+    outputs = await run_flow(
+        """
+        flow folded {
+          in  steps: number stream required
+          out total: number
+          steps | fold 0 as so_far, so_far + it -> total
+        }
+        """,
+        registry,
+        steps=[1, 2, 3, 4],
+    )
+    assert outputs["total"] == 10
+
+
+@pytest.mark.asyncio
+async def test_sort_orders_the_stream_and_is_stable(registry):
+    outputs = await run_flow(
+        """
+        flow ranked {
+          in  hits: json stream required
+          out best: json stream
+          hits | sort by it.score desc -> best
+        }
+        """,
+        registry,
+        hits=[
+            {"id": "a", "score": 1},
+            {"id": "b", "score": 9},
+            {"id": "c", "score": 1},
+        ],
+    )
+    # `b` first for its score; `a` before `c` because they tie and that is the
+    # order they were written in.
+    assert [hit["id"] for hit in outputs["best"]] == ["b", "a", "c"]
+
+
+@pytest.mark.asyncio
+async def test_flatten_is_the_inverse_of_batch(registry):
+    outputs = await run_flow(
+        """
+        flow spread {
+          in  words: string stream required
+          out out:   string stream
+          words | batch 2 | flatten -> out
+        }
+        """,
+        registry,
+        words=["a", "b", "c"],
+    )
+    assert outputs["out"] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_interleave_reads_several_streams_as_one(registry):
+    outputs = await run_flow(
+        """
+        flow merged {
+          in  fast: string stream required
+          in  slow: string stream required
+          out all:  string stream
+          interleave(fast, slow) -> all
+        }
+        """,
+        registry,
+        fast=["a", "b"],
+        slow=["c"],
+    )
+    # Every value once. The order *between* the sources is whatever arrived
+    # first, which is the point of asking for an interleave.
+    assert sorted(outputs["all"]) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_wait_first_of_yields_which_one_won(registry):
+    outputs = await run_flow(
+        """
+        flow raced {
+          in  text: string required
+          out won:  int stream
+          a = run text-upper(text: text)
+          b = run text-upper(text: text)
+          wait first of a, b -> won
+        }
+        """,
+        registry,
+        text="hi",
+    )
+    # Which one it is depends on the scheduler; that it is one of the two,
+    # counted from zero, is what the flow was told.
+    assert outputs["won"] in ([0], [1])
+
+
+@pytest.mark.asyncio
+async def test_a_try_stage_routes_the_values_it_could_not_do(registry):
+    outputs = await run_flow(
+        """
+        struct Order {
+          id: string required
+        }
+
+        flow routed {
+          in  docs: json stream required
+          out good: json stream
+          out bad:  json stream
+          docs | try map it as Order into bad -> good
+        }
+        """,
+        registry,
+        docs=[{"id": "a"}, {}, {"id": "b"}],
+    )
+    assert len(outputs["good"]) == 2
+    # A failure arrives as a status record, so a failure stream is an ordinary
+    # stream a caller reads like any other.
+    assert len(outputs["bad"]) == 1
+    assert outputs["bad"][0]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_parallel_stage_still_delivers_the_order_it_was_given(registry):
+    outputs = await run_flow(
+        """
+        flow wide {
+          in  words: string stream required
+          out out:   string stream
+          words | map upper(it) parallel 4 -> out
+        }
+        """,
+        registry,
+        words=["a", "b", "c", "d", "e"],
+    )
+    assert outputs["out"] == ["A", "B", "C", "D", "E"]
+
+
+@pytest.mark.asyncio
+async def test_pace_spaces_values_out_without_dropping_any(registry):
+    started = time.monotonic()
+    outputs = await run_flow(
+        """
+        flow paced {
+          in  words: string stream required
+          out out:   string stream
+          words | pace 20ms -> out
+        }
+        """,
+        registry,
+        words=["a", "b", "c"],
+    )
+    assert outputs["out"] == ["a", "b", "c"]
+    # Two gaps of 20ms is the floor; the ceiling is whatever the machine was
+    # doing, which is not this test's business.
+    assert time.monotonic() - started >= 0.035
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_stage_lets_a_live_stream_through(registry):
+    outputs = await run_flow(
+        """
+        flow watched {
+          in  words: string stream required
+          out out:   string stream
+          words | timeout 5s -> out
+        }
+        """,
+        registry,
+        words=["a", "b"],
+    )
+    assert outputs["out"] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_stage_fails_when_the_stream_goes_quiet(registry):
+    """The port is left open, so nothing more is coming and the gap runs out."""
+    program = flow.loads(
+        """
+        flow watched {
+          in  words: string stream required
+          out out:   string stream
+          words | timeout 100ms -> out
+        }
+        """,
+        "quiet.flow",
+    )
+    program.register_all(registry)
+    running = await runtime.start(
+        program.main, registry=registry, open_inputs=("words",)
+    )
+    with pytest.raises(StatusException) as raised:
+        await asyncio.wait_for(running.wait(), timeout=10)
+    assert raised.value.status.code == StatusCode.DEADLINE_EXCEEDED

@@ -51,6 +51,27 @@ class WireStream;
 namespace a11::nodes {
 
 /**
+ * @brief How an `AsyncNode::Finalize()` call ends the stream.
+ *
+ * The defaults are the ordinary case: mark the logical end, close the writer,
+ * and let the writer's pump carry both out after the producer has moved on.
+ */
+struct FinalizeOptions {
+  /// Whether to resolve only once the store confirmed the write and, if
+  /// `close` is set, closed. Leave it false to hand both to the writer's pump.
+  bool wait = false;
+  /// Whether to close the writer after the final chunk. Clear it to finalise
+  /// now and close later -- a producer closing several nodes at once, say.
+  bool close = true;
+  /// Explicit sequence number for the final chunk; assigned in order when
+  /// omitted.
+  std::optional<std::uint32_t> seq;
+  /// MIME type selecting the encoding of a typed value. Ignored by the
+  /// no-value and raw-chunk overloads.
+  std::string_view mimetype = {};
+};
+
+/**
  * @brief An asynchronous, ordered stream of chunks read from and written
  * to A11.
  *
@@ -60,9 +81,13 @@ namespace a11::nodes {
  * resolves once the backing store accepts the chunk. During the same flush,
  * the writer attempts to enqueue the batch on attached `net::WireStream`s;
  * this is not a remote-delivery acknowledgement, and a later tee failure
- * cannot revoke the current batch's store confirmation. A null final chunk
- * marks the logical end of the data. The producer closes the writer separately
- * with DrainAndClose().
+ * cannot revoke the current batch's store confirmation.
+ *
+ * A producer ends a node with Finalize(): it marks the logical end of the data
+ * and, by default, closes the writer. Finality and closure remain two distinct
+ * facts -- see the AsyncNode lifecycle guide -- and Finalize() writes one and
+ * requests the other in the order readers expect. Close() is the rarer half on
+ * its own, for a producer that cannot say which chunk was last.
  *
  * Instances are always heap-allocated and shared via `Create`; the class
  * is non-copyable and derives from `enable_shared_from_this`.
@@ -255,12 +280,62 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   }
 
   /**
-   * @brief Close the stream with an explicit null terminator (no value).
-   * @param seq Optional explicit sequence number for the terminator.
-   * @return An awaitable that resolves to the stored sequence number.
+   * @brief End the stream with an explicit null terminator (no value).
+   *
+   * The ordinary way to finish a node: it marks the logical end of the data so
+   * ordered readers stop immediately, and -- unless `options.close` is cleared
+   * -- closes the writer so the backing store admits nothing more.
+   *
+   * With `options.wait` left false the returned awaitable is already resolved
+   * and both the write and the close proceed on the writer's pump, which is
+   * safe after the producing frame is gone. Nothing is silently dropped: a
+   * failed write or close is logged, and remains visible through
+   * GetWriterStatus(). Set `options.wait` when the producer must know the store
+   * accepted the end of the stream before continuing.
+   *
+   * @param options How to end the stream; the defaults finalise and close
+   *   without waiting.
+   * @return An awaitable that resolves once the requested work is done, or
+   *   immediately when not waiting.
    */
-  a11::Future<std::uint32_t> PutNullFinal(
-      std::optional<std::uint32_t> seq = std::nullopt);
+  a11::Task Finalize(FinalizeOptions options = {});
+
+  /**
+   * @brief End the stream with a raw chunk as its final data.
+   * @param chunk The last chunk of the stream.
+   * @param options How to end the stream; `options.mimetype` is ignored, since
+   *   the chunk carries its own.
+   * @return An awaitable resolving as described by Finalize(FinalizeOptions).
+   */
+  a11::Task Finalize(data::Chunk chunk, FinalizeOptions options = {});
+
+  /**
+   * @brief Serialize `value` as the stream's final data, then end the stream.
+   *
+   * The unary case -- a node that carries one result -- and the streaming case
+   * where the producer knows which value is the last one and can save
+   * transmitting a separate terminator for it.
+   *
+   * @tparam T The type of the value being written.
+   * @param value The value to encode and write as final.
+   * @param options How to end the stream.
+   * @return An awaitable resolving as described by Finalize(FinalizeOptions),
+   *   or a failed awaitable if serialization fails.
+   */
+  template <typename T>
+  a11::Task Finalize(const T& value, FinalizeOptions options = {}) {
+    std::shared_ptr<data::SerializationRegistry> registry;
+    {
+      thread::MutexLock lock(&mu_);
+      registry = serialization_registry_;
+    }
+    absl::StatusOr<data::Chunk> chunk =
+        registry->ToChunk<T>(value, options.mimetype);
+    if (!chunk.ok()) {
+      return a11::FailedTask(chunk.status());
+    }
+    return Finalize(std::move(*chunk), options);
+  }
 
   /**
    * @brief Read the next raw fragment.
@@ -350,13 +425,16 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   a11::Task WaitForBufferToDrain();
 
   /**
-   * @brief Flush all buffered chunks and close the writer.
+   * @brief Flush all buffered chunks and close the writer, without finality.
    *
-   * This is a storage-lifecycle operation, not an end-of-data marker. It does
-   * not append a final fragment or choose a final sequence number. A producer
-   * should first call PutChunk(..., final=true) or PutNullFinal() so readers
-   * can synchronise on the logical end of the node, then call DrainAndClose()
-   * to wait for persistence and release the writer.
+   * The specialised half of Finalize(): a storage-lifecycle operation and not
+   * an end-of-data marker. It appends no fragment and chooses no final
+   * sequence number, so an ordered reader learns only that nothing more can
+   * arrive -- which is all a producer that cannot say which chunk was last,
+   * such as a log, is able to promise. Prefer Finalize() everywhere else.
+   *
+   * Closing always drains: making a closure with nothing to mark asynchronous
+   * would buy nothing, so this awaitable resolves when the store is closed.
    *
    * Attached streams learn of the closure: the writer follows the last teed
    * batch with a closure marker, so a peer holding a mirror of this node closes
@@ -364,7 +442,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return An awaitable that resolves once every produced chunk has been
    *   flushed and the backing store is closed to further writes.
    */
-  a11::Task DrainAndClose();
+  a11::Task Close();
 
   /**
    * @brief Fail the stream with an error status.
@@ -379,8 +457,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    *
    * `WireStream::Send()` confirms local transport admission, not receipt by
    * the remote agent. A send failure stops later writes but cannot revoke the
-   * current batch's store confirmations. DrainAndClose() also tees a closure
-   * marker to every attached stream.
+   * current batch's store confirmations. Closing the writer also tees a
+   * closure marker to every attached stream.
    * @param stream The transport to attach; kept alive for the node's
    *   lifetime.
    * @return OK, or an error status on failure.

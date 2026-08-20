@@ -302,8 +302,8 @@ def test_transcribe_audio_deadline_already_passed() -> None:
         registry = _registry()
         action = registry.make_action(actions.TRANSCRIBE_AUDIO)
         action.set_header("x-a11-deadline", b"1")  # 1 ms since epoch: long past
-        await action.get_input("asr_options").put_null_final()
-        await action.get_input("audio").put_null_final()
+        await action.get_input("asr_options").finalize()
+        await action.get_input("audio").finalize()
         action.run_in_background()
         try:
             await action.wait()

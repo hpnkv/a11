@@ -48,4 +48,4 @@ async def split_lines(action: a11.Action) -> None:
             if stripped := line.strip():
                 await lines.put(stripped)
     finally:
-        await lines.drain_and_close()
+        await lines.finalize()

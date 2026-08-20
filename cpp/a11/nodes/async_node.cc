@@ -6,8 +6,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -29,6 +31,24 @@ std::shared_ptr<data::SerializationRegistry> GlobalRegistryPointer() {
   return std::shared_ptr<data::SerializationRegistry>(
       &data::GlobalSerializationRegistry(),
       [](data::SerializationRegistry*) {});
+}
+
+/// The terminator Finalize() writes when the producer has no last value.
+data::Chunk NullChunk() {
+  return data::Chunk{
+      .metadata = data::ChunkMetadata{.mimetype = "application/octet-stream"}};
+}
+
+// A producer that does not wait is not a producer that does not care. Nobody
+// holds the awaitable, so a rejected write or a store that refuses to close
+// would otherwise be visible only to whoever thinks to read GetWriterStatus().
+template <typename T>
+void LogIfFailed(a11::Future<T> pending, std::string_view what) {
+  pending.OnReady([what](const absl::StatusOr<T>& result) {
+    if (!result.ok()) {
+      LOG(WARNING) << "AsyncNode " << what << " failed: " << result.status();
+    }
+  });
 }
 
 }  // namespace
@@ -249,12 +269,51 @@ a11::Future<std::uint32_t> AsyncNode::PutFragment(data::NodeFragment fragment) {
   return PutChunk(std::move(**chunk), fragment.seq, !fragment.continued);
 }
 
-a11::Future<std::uint32_t> AsyncNode::PutNullFinal(
-    std::optional<std::uint32_t> seq) {
-  return PutChunk(data::Chunk{.metadata =
-                                  data::ChunkMetadata{
-                                      .mimetype = "application/octet-stream"}},
-                  seq, true);
+a11::Task AsyncNode::Finalize(FinalizeOptions options) {
+  return Finalize(NullChunk(), options);
+}
+
+a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> output = writer();
+  if (!output.ok()) {
+    return a11::FailedTask(output.status());
+  }
+
+  // The final chunk is enqueued before closure is asked for, and that order is
+  // the whole of the synchronisation: the writer's state machine only starts
+  // its close once nothing is outstanding, and admits whatever its bounded
+  // buffer held back before that count reaches zero. So a close requested here
+  // cannot overtake the chunk, even one still waiting for admission.
+  stores::ChunkStoreWrite write =
+      (*output)->EnqueueChunk(std::move(chunk), options.seq, /*final=*/true,
+                              /*ensure_started=*/!options.wait);
+  a11::Task closed =
+      options.close ? (*output)->DrainAndClose() : a11::ReadyTask();
+
+  if (!options.wait) {
+    LogIfFailed(std::move(write.confirmation), "final write");
+    if (options.close) {
+      LogIfFailed(std::move(closed), "close");
+    }
+    return a11::ReadyTask();
+  }
+
+  // Flushing here rather than on the pump is what lets a store that answers
+  // inline confirm in this frame; see ChunkStoreWriter::PutChunk.
+  (*output)->Flush();
+  if (options.close) {
+    // A close cannot complete before the final chunk is confirmed, and fails
+    // if that write fails, so it is the only awaitable this needs.
+    return closed;
+  }
+  return a11::Then(std::move(write.confirmation),
+                   [](const absl::StatusOr<std::uint32_t>& stored)
+                       -> absl::StatusOr<a11::Unit> {
+                     if (!stored.ok()) {
+                       return stored.status();
+                     }
+                     return a11::Unit{};
+                   });
 }
 
 a11::Future<std::vector<std::optional<data::NodeFragment>>>
@@ -313,7 +372,7 @@ a11::Task AsyncNode::WaitForBufferToDrain() {
   return writer != nullptr ? writer->WaitForBufferToDrain() : a11::ReadyTask();
 }
 
-a11::Task AsyncNode::DrainAndClose() {
+a11::Task AsyncNode::Close() {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> output = writer();
   return output.ok() ? (*output)->DrainAndClose()
                      : a11::FailedTask(output.status());

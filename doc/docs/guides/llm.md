@@ -72,17 +72,14 @@ user_turn = Interaction(
                            "content": [{"type": "text", "text": "Hi!"}]})],
 )
 
-async with (
-    interact["interactions"] as interactions,
-    interact["config"],
-    interact["tools"] as tools,
-):
-    await interactions.put_final(user_turn)   # marks the input turn final
-    await tools.put_null_final()              # "no tools this time"
+await interact["interactions"].finalize(user_turn)  # the input turn, ended
+await interact["config"].finalize()   # empty: the backend's own defaults
+await interact["tools"].finalize()    # empty: "no tools this time"
 ```
 
-Closing each port (the `async with` exit) tells the handler that side is
-complete.
+`finalize()` on each port is what tells the handler that side is complete: it
+marks the end of the data and closes the port. A port left open is a port the
+handler waits on.
 
 ## Collect the result
 
@@ -135,13 +132,9 @@ async def ask(text: str) -> None:
         content=[a11.to_chunk({"role": "user",
                                "content": [{"type": "text", "text": text}]})],
     )
-    async with (
-        interact["interactions"] as interactions,
-        interact["config"],
-        interact["tools"] as tools,
-    ):
-        await interactions.put_final(user_turn)
-        await tools.put_null_final()
+    await interact["interactions"].finalize(user_turn)
+    await interact["config"].finalize()
+    await interact["tools"].finalize()
 
     async for _ in interact["new_interactions"]:
         pass

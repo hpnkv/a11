@@ -91,8 +91,7 @@ async def _get_info(action: a11.Action):
     path = ""
     async for value in action["path"]:
         path = value
-    await action["result"].put(f"listing of {path}", final=True)
-    await action["result"].drain_and_close()
+    await action["result"].finalize(f"listing of {path}")
 
 
 _TOOL_DEF = {
@@ -136,19 +135,16 @@ async def _run(rounds, monkeypatch, *, read="text_output"):
 
     reader = asyncio.create_task(pump())
 
-    async with (
-        action["interactions"] as interactions,
-        action["config"],
-        action["tools"] as tools,
-    ):
-        await interactions.put_final(
-            Interaction(
-                role=Role.USER,
-                content=[a11.to_chunk({"role": "user", "content": "hi"})],
-            )
+    await action["interactions"].finalize(
+        Interaction(
+            role=Role.USER,
+            content=[a11.to_chunk({"role": "user", "content": "hi"})],
         )
-        await tools.put(_TOOL_DEF)
-        await tools.put_null_final()
+    )
+    await action["config"].finalize()
+    tools = action["tools"]
+    await tools.put(_TOOL_DEF)
+    await tools.finalize()
 
     new_interactions = []
     async for interaction in action["new_interactions"]:

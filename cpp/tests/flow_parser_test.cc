@@ -194,8 +194,8 @@ TEST(FlowParser, LogAndLogfReadTheSameTailAsAStatementAndAsAStage) {
   EXPECT_FALSE(logged->tail.has_format);
   ASSERT_EQ(logged->tail.arguments.size(), 1u);
 
-  // The two stages: `log` with nothing written, and `logf` with a format and two
-  // values to fill it.
+  // The two stages: `log` with nothing written, and `logf` with a format and
+  // two values to fill it.
   const auto* pipe = As<syntax::Pipe>(flow.body[1].get());
   ASSERT_NE(pipe, nullptr);
   ASSERT_EQ(pipe->pipeline->stages.size(), 2u);
@@ -220,9 +220,9 @@ TEST(FlowParser, LogAndLogfReadTheSameTailAsAStatementAndAsAStage) {
 
 TEST(FlowParser, LogIsStillANameWhereTheGrammarWantsOne) {
   // Making a word open a statement makes it a keyword *there* and nowhere else.
-  // A port called `log`, a pipeline sourced from it, and a step bound to the name
-  // all still read as they did, because a statement word followed by `->`, `|`,
-  // `=`, `<-`, `.` or `[` is a name.
+  // A port called `log`, a pipeline sourced from it, and a step bound to the
+  // name all still read as they did, because a statement word followed by `->`,
+  // `|`, `=`, `<-`, `.` or `[` is a name.
   const ParseResult result = Parse(
       "flow f {\n"
       "  in a: string stream\n"
@@ -391,7 +391,8 @@ TEST(FlowParser, ADescriptionMayStandOnTheLineBelowWhatItDescribes) {
 }
 
 TEST(FlowParser, AStringWithSomethingAfterItIsAStatementAndNotADescription) {
-  // What makes the form above unambiguous: a description is *alone* on its line.
+  // What makes the form above unambiguous: a description is *alone* on its
+  // line.
   const ParseResult result = Parse(
       "flow f {\n"
       "  in  a: string\n"
@@ -447,8 +448,8 @@ TEST(FlowParser, KeywordsMayBeShoutedAndMixedCaseIsAName) {
 }
 
 TEST(FlowParser, AProblemCostsItsOwnLineAndNothingMore) {
-  // The property the whole recovering design exists for: a mistake in the middle
-  // of a flow does not hide what is around it.
+  // The property the whole recovering design exists for: a mistake in the
+  // middle of a flow does not hide what is around it.
   const ParseResult result = Parse(
       "flow f {\n"
       "  in  a: string\n"
@@ -507,6 +508,22 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
        "Expected 'run' or 'call', found '5'."},
       {"flow f { in a: string\n a | first -> b }",
        "flow.form.stage-argument", "Expected a count for 'first'"},
+      // The tail a stage may carry, and what each part of it needs.
+      {"flow f { in w: string stream\n out o: string stream\n"
+       " w | collect parallel 4 -> o }",
+       "flow.form.stage-not-parallel", "nothing for 'parallel' to run at once"},
+      {"flow f { in w: string stream\n out o: string stream\n"
+       " w | map it unordered -> o }",
+       "flow.form.unordered-without-parallel", "needs 'parallel n'"},
+      {"flow f { in w: string stream\n out o: string stream\n out b: json "
+       "stream\n w | map it into b -> o }",
+       "flow.form.into-without-try", "has to be a 'try'"},
+      {"flow f { in w: number stream\n out o: number\n"
+       " w | fold it as total, total + it -> o }",
+       "flow.form.fold-start", "starts from a literal"},
+      {"flow f { in w: number stream\n out o: number\n"
+       " w | fold 0, it -> o }",
+       "flow.form.fold-name", "names what it carries"},
       {"flow f { header \"x-a\" default a }", "flow.syntax.constant-required",
        "Expected a constant value."},
       {"# nothing here\n", "flow.syntax.unexpected",
@@ -665,8 +682,8 @@ std::string ReadFile(const std::filesystem::path& path) {
 
 TEST(FlowSyntaxJson, MatchesTheGoldenEveryLanguageReads) {
   // `testdata/flow/syntax.json` is the syntax format pinned against one small
-  // flow, in the same spirit as `testdata/flow/codes.json`: the C++ owns it, and
-  // a frontend in another language reads it back to check its own decoder.
+  // flow, in the same spirit as `testdata/flow/codes.json`: the C++ owns it,
+  // and a frontend in another language reads it back to check its own decoder.
   // Regenerate with
   //
   //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test \
@@ -854,8 +871,8 @@ TEST(FlowParser, AFileMayDeclareOnlyShapes) {
 TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
   // Both are statements and both begin with `{`. A record's keys are strings
   // followed by `:`, and a spread is only ever a record's; anything else opens
-  // statements. Getting this wrong turns `{"a": 1} -> out` into a block, which is
-  // how the values tests found it.
+  // statements. Getting this wrong turns `{"a": 1} -> out` into a block, which
+  // is how the values tests found it.
   const auto kind = [](std::string_view source) {
     const ParseResult result = Parse(source);
     if (result.flows.empty() || result.flows.front()->body.empty()) return "none";
@@ -866,8 +883,8 @@ TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
   EXPECT_STREQ(kind("flow f {\n  in i: json\n  out o: json\n"
                     "  {…i, \"a\": 1} -> o\n}\n"),
                "pipe");
-  // A block whose first statement writes a string starts the same way and is not
-  // a record, because no `:` follows.
+  // A block whose first statement writes a string starts the same way and is
+  // not a record, because no `:` follows.
   EXPECT_STREQ(kind("flow f {\n  out o: string\n  { \"one\" -> o }\n}\n"),
                "block");
   EXPECT_STREQ(kind("flow f {\n  out o: string\n  { skip o }\n}\n"), "block");

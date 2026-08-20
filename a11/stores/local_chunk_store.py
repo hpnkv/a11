@@ -115,7 +115,7 @@ class LocalChunkStore(_native.ChunkStore):
         This records whether production completed or failed, but it does not
         mark any fragment as the final data value. Producers that need semantic
         finality should write a fragment with ``continued=False`` first (most
-        commonly through ``AsyncNode.put_final`` or ``put_null_final``).
+        commonly through ``AsyncNode.finalize``, which does both).
         """
         returned = await self._impl.close_writes_with_status(
             status, return_status_if_already_closed

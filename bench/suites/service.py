@@ -48,8 +48,7 @@ _ECHO = a11.ActionSchema(
 
 async def _echo(action: a11.Action) -> None:
     text = await action["text"].consume(str)
-    async with action["out"] as port:
-        await port.put_final(text)
+    await action["out"].finalize(text)
 
 
 def _registry() -> a11.ActionRegistry:
@@ -125,8 +124,7 @@ async def _echo_call(session, stream) -> str:
         .bind_stream(stream)
     )
     await call.call()
-    async with call["text"] as port:
-        await port.put_final("payload")
+    await call["text"].finalize("payload")
     result = await call["out"].consume(str)
     await call.wait(_WAIT)
     return result

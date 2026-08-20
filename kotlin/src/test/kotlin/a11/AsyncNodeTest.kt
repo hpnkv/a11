@@ -24,30 +24,30 @@ class AsyncNodeTest {
     @Test
     fun consumeAcceptsBothSpellingsOfASingleValue() = runBlocking {
         val asFinal = ok(AsyncNode.create("consume-final"))
-        ok(asFinal.putFinal("value"))
+        assertTrue(asFinal.finalize("value").isOk)
         assertEquals("value", ok(asFinal.consume()))
 
         val thenNull = ok(AsyncNode.create("consume-then-null"))
         ok(thenNull.put("value"))
-        ok(thenNull.putNullFinal())
+        assertTrue(thenNull.finalize().isOk)
         assertEquals("value", ok(thenNull.consume()))
     }
 
     @Test
     fun consumeReadsANodeHoldingNoValueAsNone() = runBlocking {
         val closedEmpty = ok(AsyncNode.create("consume-closed-empty"))
-        closedEmpty.drainAndClose()
+        closedEmpty.close()
         assertNull(ok(closedEmpty.consume(allowNone = true)))
 
         val nullOnly = ok(AsyncNode.create("consume-null-only"))
-        ok(nullOnly.putNullFinal())
+        assertTrue(nullOnly.finalize().isOk)
         assertNull(ok(nullOnly.consume(allowNone = true)))
     }
 
     @Test
     fun consumeStillRefusesAnEmptyNodeWhenAValueIsRequired() = runBlocking {
         val nullOnly = ok(AsyncNode.create("consume-null-only-strict"))
-        ok(nullOnly.putNullFinal())
+        assertTrue(nullOnly.finalize().isOk)
 
         val refused = nullOnly.consume()
 
@@ -59,7 +59,7 @@ class AsyncNodeTest {
         val node = ok(AsyncNode.create("iterate-null"))
         ok(node.put("first"))
         ok(node.put("second"))
-        ok(node.putNullFinal())
+        assertTrue(node.finalize().isOk)
 
         val values = mutableListOf<Any?>()
         while (true) {
@@ -81,7 +81,7 @@ class AsyncNodeTest {
         node.attachStream(sink)
         ok(node.put("only"))
 
-        assertTrue(node.drainAndClose().isOk)
+        assertTrue(node.close().isOk)
 
         val fragments = sink.sent.flatMap { it.nodeFragments }
         assertEquals(2, fragments.size)
@@ -92,7 +92,7 @@ class AsyncNodeTest {
         assertTrue(!fragments[1].continued)
         assertTrue(statusFromChunk(marker).isOk)
         // Closing twice must not repeat the marker.
-        assertTrue(node.drainAndClose().isOk)
+        assertTrue(node.close().isOk)
         assertEquals(2, sink.sent.flatMap { it.nodeFragments }.size)
     }
 

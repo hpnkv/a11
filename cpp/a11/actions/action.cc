@@ -505,7 +505,7 @@ absl::Status Action::CloseUnwrittenOutput(
     return absl::OkStatus();
   }
   if (status.ok()) {
-    return node->DrainAndClose().Await().status();
+    return node->Close().Await().status();
   }
   return node->AbortWithStatus(status).Await().status();
 }
@@ -1496,9 +1496,10 @@ absl::Status Action::ApplyInputAutofills() {
     fills.push_back([node = nodes[index],
                      entry = &work[index]]() -> absl::Status {
       for (const std::optional<data::NodeFragment>& autofill : entry->second) {
-        // A missing fragment is a null final marker, mirroring PutNullFinal.
+        // A missing fragment is a null final marker, mirroring Finalize().
         if (!autofill.has_value()) {
-          ABSL_RETURN_IF_ERROR(node->PutNullFinal().Await().status());
+          ABSL_RETURN_IF_ERROR(
+              node->Finalize({.wait = true, .close = false}).Await().status());
           continue;
         }
         data::NodeFragment fragment = *autofill;
@@ -1506,7 +1507,7 @@ absl::Status Action::ApplyInputAutofills() {
         ABSL_RETURN_IF_ERROR(
             node->PutFragment(std::move(fragment)).Await().status());
       }
-      return node->DrainAndClose().Await().status();
+      return node->Close().Await().status();
     });
   }
   ABSL_RETURN_IF_ERROR(a11::RunAllToCompletion(std::move(fills)));
@@ -1533,7 +1534,7 @@ std::vector<data::NodeFragment> Action::CollectAutofillFragments() const {
       if (autofill.has_value()) {
         fragment = *autofill;
       } else {
-        // A missing fragment is a null final marker, mirroring PutNullFinal.
+        // A missing fragment is a null final marker, mirroring Finalize().
         fragment.data = data::Chunk{
             .metadata = data::ChunkMetadata{
                 .mimetype = std::string("application/octet-stream")}};
@@ -1728,7 +1729,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     const std::shared_ptr<nodes::AsyncNode>& node = ordered[index];
     const absl::Status writer_status = node->GetWriterStatus();
     if (status.ok() && *writable[index]) {
-      closes.push_back(node->DrainAndClose());
+      closes.push_back(node->Close());
     } else if (!status.ok() && (*writable[index] || !writer_status.ok())) {
       // A graceful close can fail while leaving the backing store open. The
       // failure pass must retry that writer with the Action's terminal status
@@ -1790,7 +1791,7 @@ absl::Status Action::CommunicateStatus(const absl::Status& status) {
   if (!stored.ok()) {
     return stored.status();
   }
-  return (*node)->DrainAndClose().Await().status();
+  return (*node)->Close().Await().status();
 }
 
 absl::Status Action::AbortInputs(const absl::Status& status) {

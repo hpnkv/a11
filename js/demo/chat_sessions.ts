@@ -189,8 +189,7 @@ class ChatDemo {
       const call = makeCall(connection, GET_CONVERSATION_SCHEMA);
       need(await call.call());
       const idInput = need(await call.getInput('id'));
-      need(await idInput.putFinal(id));
-      need(await idInput.drainAndClose());
+      need(await idInput.finalize(id));
 
       const restored: Interaction[] = [];
       const node = need(await call.getOutput('interactions', false));

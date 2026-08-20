@@ -963,7 +963,7 @@ void BindActions(py::module_& module) {
       // Every port accessor releases the GIL, because asking for a port is not
       // the lookup it looks like. A port materialises on use, and a port of an
       // action that has already finished is closed on the way out:
-      // Action::GetOutput awaits IsWritable and DrainAndClose to hand back the
+      // Action::GetOutput awaits IsWritable and Close() to hand back the
       // terminal state its reader expects. Those awaits park on a fibre, and
       // the work they wait for can need the GIL -- a store writer's completion
       // resolves a Python future through call_soon_threadsafe. Holding the GIL
@@ -1193,8 +1193,7 @@ Examples:
 
     ```python
     lookup = action.make_nested("find_customer")
-    await lookup["email"].put_final(request.email)
-    await lookup["email"].drain_and_close()
+    await lookup["email"].finalize(request.email)
     await lookup.call()
     customer = await lookup["customer"].consume(obj_type=Customer)
     ```

@@ -59,12 +59,6 @@ _STEP_TYPES = frozenset(
 _MODEL_STEP_TYPES = frozenset({"model_output", "function_call", "thought"})
 
 
-async def _close_stream(node: a11.AsyncNode) -> None:
-    """Terminate a streaming output node and flush it to its store."""
-    await node.put_null_final()
-    await node.drain_and_close()
-
-
 def _content_to_steps(content: Any) -> list[dict[str, Any]]:
     """Normalize an interaction's content into a list of Interactions steps.
 
@@ -549,7 +543,9 @@ class ActionCallAdapter:
             node = a11.AsyncNode.create("node")
             for idx, value in enumerate(value_list):
                 await node.put(value, final=idx == len(value_list) - 1)
-            await node.drain_and_close()
+            # Closed, not finalized: the last put above already marked finality
+            # (and an empty argument list has nothing to mark).
+            await node.close()
 
             final_encountered = False
             fragments = []
@@ -666,7 +662,7 @@ def _decode_action_output_fragments(
     values: dict[str, Any] = {}
     for field_name, field_fragments in grouped.items():
         # A null chunk is an end-of-stream marker, not a value: an action that
-        # ends an output with `put_null_final` (or reports "nothing here" on an
+        # ends an output with `finalize()` (or reports "nothing here" on an
         # optional port) must not make the whole tool result undecodable.
         chunks = [fragment.get_chunk() for fragment in field_fragments]
         decoded = [
@@ -1070,10 +1066,10 @@ async def interact_with_gemini(action: a11.Action):
         raise Status(code=StatusCode.INTERNAL, message=tb).to_exception() from e
 
     else:
-        await _close_stream(action["event_stream"])
-        await _close_stream(action["text_output"])
-        await _close_stream(action["thoughts"])
-        await _close_stream(action["new_interactions"])
+        await action["event_stream"].finalize()
+        await action["text_output"].finalize()
+        await action["thoughts"].finalize()
+        await action["new_interactions"].finalize()
 
     finally:
         pass

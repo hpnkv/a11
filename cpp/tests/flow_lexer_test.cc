@@ -19,7 +19,8 @@
 namespace a11::flow {
 namespace {
 
-/// Every token as `kind:text`, which is how the Python lexer's output reads too.
+/// Every token as `kind:text`, which is how the Python lexer's output reads
+/// too.
 std::vector<std::string> Dump(std::string_view source,
                               LexOptions options = {}) {
   std::vector<std::string> out;
@@ -188,8 +189,8 @@ TEST(FlowLexer, LinesAndColumnsAreOneBased) {
 TEST(FlowLexer, ReadsEveryPunctuationTheGrammarUses) {
   EXPECT_EQ(Dump("{}()[]:,|=.<><=>===!=+-|->"),
             (std::vector<std::string>{
-                // A colon's kind is spelled ":" and so is its text, which is why
-                // this one reads as three of them.
+                // A colon's kind is spelled ":" and so is its text, which is
+                // why this one reads as three of them.
                 "{:{", "}:}", "(:(", "):)", "[:[", "]:]", ":::", ",:,", "|:|",
                 "=:=", ".:.", "<:<", ">:>", "<=:<=", ">=:>=", "==:==", "!=:!=",
                 "+:+", "-:-", "|:|", "->:->"}));
@@ -220,7 +221,8 @@ TEST(FlowLexer, KindNamesRoundTrip) {
   }
 }
 
-// --- the vocabulary -----------------------------------------------------------
+// --- the vocabulary
+// -----------------------------------------------------------
 
 TEST(FlowVocabulary, CanonicalFollowsTheCompilersCasingRule) {
   EXPECT_EQ(vocabulary::Canonical("for"), "for");
@@ -341,7 +343,7 @@ TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
   EXPECT_EQ(vocabulary::Documentation(vocabulary::WordRole::kSymbol, "run"),
             nullptr);
   // And a word the language does not have is documented nowhere.
-  EXPECT_EQ(vocabulary::AnyDocumentation("flatten"), nullptr);
+  EXPECT_EQ(vocabulary::AnyDocumentation("shuffle"), nullptr);
 }
 
 TEST(FlowVocabulary, EveryRoleHasItsOwnNameAndItsOwnWords) {
@@ -371,7 +373,9 @@ TEST(FlowVocabulary, EveryStageSaysWhatItTakes) {
             vocabulary::StageArgument::kStream);
   EXPECT_EQ(vocabulary::StageTakes("collect"),
             vocabulary::StageArgument::kNone);
-  EXPECT_FALSE(vocabulary::StageTakes("flatten").has_value());
+  // A word that reads like a stage and is not one: the language says so rather
+  // than guessing. (`flatten` used to stand here, and is now a stage.)
+  EXPECT_FALSE(vocabulary::StageTakes("shuffle").has_value());
 }
 
 TEST(FlowVocabulary, TheStagesTheSequenceChecksReasonAboutAreStages) {

@@ -73,8 +73,22 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
       return " \"text\"";
     case vocabulary::StageArgument::kOptionalString:
       return " [\"text\"]";
+    case vocabulary::StageArgument::kOptionalExpression:
+      return " [expr]";
+    case vocabulary::StageArgument::kSortKey:
+      return " [by expr] [desc]";
+    case vocabulary::StageArgument::kFold:
+      return " start as name, expr";
+    case vocabulary::StageArgument::kDuration:
+      // Not a concrete `30s`: the two stages that take one want very different
+      // numbers, and a hint that reads as a default is a hint that gets kept.
+      return " duration";
     case vocabulary::StageArgument::kStream:
       return " source";
+    case vocabulary::StageArgument::kLog:
+      return " [level] [expr]";
+    case vocabulary::StageArgument::kLogFormat:
+      return " [level] \"fmt\" [arg, ...]";
   }
   return "";
 }
@@ -85,9 +99,9 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
 ///
 /// A name the *document* bound gets its text from the plan it was resolved to,
 /// beside where this is called; this is only for the fixed vocabulary. `kField`
-/// is deliberately absent: a field proposal may be a status's `code` or a shape's
-/// own field of the same name, and answering with the status text for the latter
-/// would be confidently wrong.
+/// is deliberately absent: a field proposal may be a status's `code` or a
+/// shape's own field of the same name, and answering with the status text for
+/// the latter would be confidently wrong.
 std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
   switch (kind) {
     case ProposalKind::kStatement:
@@ -127,9 +141,9 @@ std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
 /// Everything that may be written at one offset in one document.
 ///
 /// Written as a class because every decision needs the same four things -- the
-/// tokens, the statement the caret is in, the tree and the resolved names -- and
-/// threading those through twenty free functions would say less about the rules
-/// than it cost.
+/// tokens, the statement the caret is in, the tree and the resolved names --
+/// and threading those through twenty free functions would say less about the
+/// rules than it cost.
 class Completer {
  public:
   Completer(std::string_view source, size_t offset,
@@ -174,15 +188,16 @@ class Completer {
  private:
   // -- position ---------------------------------------------------------------
 
-  /// Find the caret: which token it is in, what word it is part-way through, and
-  /// which tokens count as being *before* it.
+  /// Find the caret: which token it is in, what word it is part-way through,
+  /// and which tokens count as being *before* it.
   void Locate() {
     cut_ = 0;
-    // No partial word means one that starts *at the caret* and is empty, which is
-    // what `prefix_start` has to say: a frontend replaces `[prefix_start, caret)`
-    // with what it inserts. Left at zero, that range was the whole document up to
-    // the caret -- so taking any proposal at a position where nothing had been
-    // typed yet, which is most of them, deleted the file in front of it.
+    // No partial word means one that starts *at the caret* and is empty, which
+    // is what `prefix_start` has to say: a frontend replaces `[prefix_start,
+    // caret)` with what it inserts. Left at zero, that range was the whole
+    // document up to the caret -- so taking any proposal at a position where
+    // nothing had been typed yet, which is most of them, deleted the file in
+    // front of it.
     prefix_start_ = offset_;
     for (size_t index = 0; index < tokens_.size(); ++index) {
       const Token& token = tokens_[index];
@@ -215,8 +230,8 @@ class Completer {
         --cut_;
       }
       // A comment and a string both run to the end of their line, so the caret
-      // sitting at the end of one is the caret being *in* one -- somebody typing
-      // prose, where the language's words are noise.
+      // sitting at the end of one is the caret being *in* one -- somebody
+      // typing prose, where the language's words are noise.
       if ((last.kind == TokenKind::kComment ||
            last.kind == TokenKind::kString) &&
           last.end == offset_) {
@@ -270,7 +285,8 @@ class Completer {
     return &tokens_[line_[line_.size() - 1 - back]];
   }
 
-  /// The canonical form of the word before the caret, or empty if it is not one.
+  /// The canonical form of the word before the caret, or empty if it is not
+  /// one.
   std::string PreviousWord(size_t back = 0) const {
     const Token* token = Previous(back);
     if (token == nullptr || !token->IsWord()) return "";
@@ -322,9 +338,9 @@ class Completer {
 
   /// The action a `run`/`call` on this line names, or empty.
   ///
-  /// Read off the tokens rather than the resolved plan on purpose: the statement
-  /// the caret is in is usually half-written, and the word after `run` is there
-  /// long before the step it belongs to resolves to anything.
+  /// Read off the tokens rather than the resolved plan on purpose: the
+  /// statement the caret is in is usually half-written, and the word after
+  /// `run` is there long before the step it belongs to resolves to anything.
   std::string CalledAction() const {
     for (size_t at = 0; at + 1 < line_.size(); ++at) {
       const Token& word = tokens_[line_[at]];
@@ -469,9 +485,9 @@ class Completer {
 
   /// Every name bound above the caret that a predicate accepts.
   ///
-  /// Above the caret, because a flow reads top to bottom even though it does not
-  /// *run* that way: offering a step's name on the line before the step exists
-  /// would be offering to write something that cannot resolve.
+  /// Above the caret, because a flow reads top to bottom even though it does
+  /// not *run* that way: offering a step's name on the line before the step
+  /// exists would be offering to write something that cannot resolve.
   template <typename Predicate>
   void AddNames(Predicate accept) {
     if (flow_ == nullptr) return;
@@ -562,9 +578,9 @@ class Completer {
       ProposeStatement();
       return;
     }
-    // A word standing alone at the head of a statement is a pipeline source, and
-    // the two stages that may be written without a `|` are what may join it to
-    // something else.
+    // A word standing alone at the head of a statement is a pipeline source,
+    // and the two stages that may be written without a `|` are what may join it
+    // to something else.
     if (Previous() != nullptr && Previous()->IsWord() && line_.size() == 1) {
       for (const std::string_view stage : vocabulary::Stages()) {
         if (!vocabulary::BareStages().contains(stage)) continue;
@@ -637,8 +653,9 @@ class Completer {
     if (open_braces_.empty()) return false;
     const size_t brace = open_braces_.back();
     if (brace == 0 || !tokens_[brace - 1].IsWord()) return false;
-    // The dotted tag of `a11.sdk.AudioBuffer{` is several tokens; walk back over
-    // them so a registered type's fields are offered the way a shape's are.
+    // The dotted tag of `a11.sdk.AudioBuffer{` is several tokens; walk back
+    // over them so a registered type's fields are offered the way a shape's
+    // are.
     size_t start = brace - 1;
     while (start >= 2 && tokens_[start - 1].kind == TokenKind::kDot &&
            tokens_[start - 2].IsWord()) {
@@ -721,11 +738,11 @@ class Completer {
         Add("id", ProposalKind::kField);
         return;
       default:
-        // A port or a variable carries whatever the producer sent, and there are
-        // two ways the file can have said what that is: a pattern named the
+        // A port or a variable carries whatever the producer sent, and there
+        // are two ways the file can have said what that is: a pattern named the
         // fields, or the port was declared with a `struct`. Where it said
-        // neither, nothing here knows and guessing would offer a name that is not
-        // there.
+        // neither, nothing here knows and guessing would offer a name that is
+        // not there.
         if (AddPatternFields(symbol->pattern)) return;
         AddShapeFields(ShapeOfSymbol(*symbol));
         return;
@@ -766,9 +783,9 @@ class Completer {
 
   /// The fields a `match` pattern names.
   ///
-  /// The one place the language knows the fields of a value nobody declared: they
-  /// are written in the pattern that made it. A positional pattern names nothing,
-  /// so there is nothing to offer for one.
+  /// The one place the language knows the fields of a value nobody declared:
+  /// they are written in the pattern that made it. A positional pattern names
+  /// nothing, so there is nothing to offer for one.
   bool AddPatternFields(const std::string& text) {
     if (text.empty()) return false;
     const pattern::Compiled compiled = pattern::Compile(text);
@@ -798,7 +815,8 @@ class Completer {
       if (vocabulary::Canonical(tokens_[index].text) != "match") continue;
       if (tokens_[index + 1].kind != TokenKind::kString) return "";
       // The *value*, not the slice: `text` still has its quotes round it, and a
-      // stray quote after a `rest` hole makes the pattern one nothing can follow.
+      // stray quote after a `rest` hole makes the pattern one nothing can
+      // follow.
       return tokens_[index + 1].string_value;
     }
     return "";
@@ -816,7 +834,8 @@ class Completer {
     AddCallPorts(syntax::PortDirection::kOutput);
   }
 
-  /// What has a status: what `wait`, `status`, `cancel`, `drain` and `after` name.
+  /// What has a status: what `wait`, `status`, `cancel`, `drain` and `after`
+  /// name.
   void ProposeSubjects() {
     AddNames([](const Symbol& symbol) {
       switch (symbol.kind) {
@@ -926,7 +945,8 @@ class Completer {
       return false;  // a value: the expression rules have it
     }
     if (!LineHas(TokenKind::kRightParen)) return false;
-    // After the arguments: the modifiers, and the operand of the one just given.
+    // After the arguments: the modifiers, and the operand of the one just
+    // given.
     if (previous == "via") {
       AddNames([](const Symbol& symbol) {
         return symbol.kind == SymbolKind::kNodeMap;
@@ -971,10 +991,10 @@ class Completer {
       // An argument is a name and a colon; writing the colon is writing what
       // the grammar requires, not guessing what the author meant.
       proposal.insert = absl::StrCat(name, ": ");
-      // Both, and in that order. `(required)` used to *replace* the description,
-      // so the ports that have to be written were the ones the list said least
-      // about -- which is backwards: what a port is for is the question, and
-      // whether it is required is the aside.
+      // Both, and in that order. `(required)` used to *replace* the
+      // description, so the ports that have to be written were the ones the
+      // list said least about -- which is backwards: what a port is for is the
+      // question, and whether it is required is the aside.
       if (required) absl::StrAppend(&proposal.tail, " (required)");
       if (!description.empty()) {
         if (required) absl::StrAppend(&proposal.tail, " —");
@@ -1026,8 +1046,15 @@ class Completer {
       AddLogLevels();
       return false;
     }
-    if (previous == "wait" || previous == "drain" || previous == "cancel" ||
-        previous == "status") {
+    if (previous == "wait") {
+      // `wait first of a, b` and `wait all of a, b` share the position with the
+      // single subject, so both the words and the subjects are offered.
+      Add("first", ProposalKind::kModifier, " of ");
+      Add("all", ProposalKind::kModifier, " of ");
+      ProposeSubjects();
+      return true;
+    }
+    if (previous == "drain" || previous == "cancel" || previous == "status") {
       ProposeSubjects();
       return true;
     }
@@ -1058,7 +1085,8 @@ class Completer {
     return false;
   }
 
-  /// Where a value is wanted: the functions, the constants, and what is readable.
+  /// Where a value is wanted: the functions, the constants, and what is
+  /// readable.
   bool ProposeExpression() {
     const Token* previous = Previous();
     if (previous == nullptr) return false;
@@ -1081,16 +1109,29 @@ class Completer {
       default:
         break;
     }
-    // A stage that takes an expression is looking at a value, and so is the only
-    // place `it` means anything.
+    // A stage that takes an expression is looking at a value, and so is the
+    // only place `it` means anything.
     bool in_stage = false;
     const std::string word = PreviousWord();
     if (!word.empty()) {
       const auto stage = vocabulary::StageTakes(word);
       if (stage.has_value() &&
-          *stage == vocabulary::StageArgument::kExpression) {
+          (*stage == vocabulary::StageArgument::kExpression ||
+           *stage == vocabulary::StageArgument::kOptionalExpression ||
+           *stage == vocabulary::StageArgument::kFold)) {
         // Only where the word is being used as a stage: `where` after a `|`, or
         // bare with an operand to come.
+        in_stage = true;
+        value_wanted = true;
+      }
+      // `sort` is followed by its own two words before any expression, and
+      // `by` is what puts a value after it.
+      if (stage.has_value() &&
+          *stage == vocabulary::StageArgument::kSortKey) {
+        Add("by", ProposalKind::kModifier);
+        Add("desc", ProposalKind::kModifier);
+      }
+      if (word == "by") {
         in_stage = true;
         value_wanted = true;
       }
@@ -1167,8 +1208,8 @@ class Completer {
       // The declarations that open a line. `flow` opens a file rather than a
       // statement in one, and the rest of them stand in the middle of a
       // declaration they cannot begin: `as` and `default` belong to a header,
-      // `stream` and `required` to a port, and `node` to the name being bound to
-      // it.
+      // `stream` and `required` to a port, and `node` to the name being bound
+      // to it.
       if (declaration == "flow" || declaration == "as" ||
           declaration == "default" || declaration == "stream" ||
           declaration == "required" || declaration == "node") {

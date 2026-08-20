@@ -39,25 +39,10 @@ async def _send(
     on the call it waits for good. Callers of a remote action own that, the way
     the LLM tool runner does for a model's.
     """
-    async with (
-        call["source"] as source_port,
-        call["inputs"] as inputs_port,
-        call["input_streams"] as streams_port,
-        call["flow"] as flow_port,
-    ):
-        await source_port.put_final(source)
-        if inputs is None:
-            await inputs_port.put_null_final()
-        else:
-            await inputs_port.put_final(inputs)
-        if input_streams is None:
-            await streams_port.put_null_final()
-        else:
-            await streams_port.put_final(input_streams)
-        if flow is None:
-            await flow_port.put_null_final()
-        else:
-            await flow_port.put_final(flow)
+    await call["source"].finalize(source)
+    await call["inputs"].finalize(inputs)
+    await call["input_streams"].finalize(input_streams)
+    await call["flow"].finalize(flow)
 
 
 def _registry(
@@ -174,8 +159,7 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
 
     async def my_ping(action: a11.Action) -> None:
         word = await action["input"].consume(str, allow_none=True)
-        await (await action["output"].put(f"the client answered {word!r}"))
-        await action["output"].drain_and_close()
+        await action["output"].finalize(f"the client answered {word!r}")
 
     # The gateway has its own `__ping` with a real handler. `call` still goes
     # to the peer, which is the whole point of saying it.
@@ -227,7 +211,7 @@ async def _echo(action: a11.Action) -> None:
     """Answer each value as it arrives, so a reply proves the input arrived."""
     async for value in action["text"]:
         await (await action["echoed"].put(str(value).upper()))
-    await action["echoed"].drain_and_close()
+    await action["echoed"].finalize()
 
 
 #: A flow whose ports are one of each: a stream, and one value.
@@ -316,8 +300,7 @@ async def test_a_port_named_on_input_streams_takes_values_as_it_runs(
     # way. The close is the caller's: nothing else ends either port.
     await (await once.put("solo"))
     for node in (words, once):
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
 
     result = await asyncio.wait_for(call["result"].next_object(), timeout=30)
     await asyncio.wait_for(call.wait(), timeout=30)
@@ -355,8 +338,7 @@ async def test_a_streamed_port_does_not_lose_a_value_written_early(
     # Written and closed before the gateway has even been told which flow to run.
     for node, value in ((words, "early"), (once, "also early")):
         await (await node.put(value))
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
 
     await _send(call, STREAMED_BOTH_WAYS, input_streams=["words", "once"])
 
@@ -398,8 +380,7 @@ async def test_a_streamed_port_the_caller_never_closes_keeps_it_waiting(
         await asyncio.wait_for(call.wait(), timeout=0.5)
 
     for node in (words, once):
-        await (await node.put_null_final())
-        await node.drain_and_close()
+        await node.finalize()
     await asyncio.wait_for(call.wait(), timeout=30)
 
     serving.cancel()
@@ -433,7 +414,7 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
         for index in range(count):
             await asyncio.sleep(0.05)
             await (await action["tick"].put(f"tick-{index}"))
-        await action["tick"].drain_and_close()
+        await action["tick"].finalize()
 
     registry = _registry(tmp_path)
     registry.register("__slow", slow, emit)
@@ -595,8 +576,7 @@ async def test_a_client_can_run_two_flows_over_one_connection(
         .bind_stream(client_stream)
     )
     await call.call()
-    async with call["input"] as port:
-        await port.put_final("three")
+    await call["input"].finalize("three")
     assert [str(value) async for value in call["output"]] == ["three"]
     await asyncio.wait_for(call.wait(), timeout=30)
 

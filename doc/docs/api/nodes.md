@@ -7,9 +7,11 @@ action ports and across the network. See
 ## AsyncNode
 
 Create a stream with [`create`][a11.nodes.async_node.AsyncNode.create], produce
-it with [`put`][a11.nodes.async_node.AsyncNode.put] and
-[`put_final`][a11.nodes.async_node.AsyncNode.put_final], then finish the writer
-with [`drain_and_close`][a11.nodes.async_node.AsyncNode.drain_and_close]. A
+it with [`put`][a11.nodes.async_node.AsyncNode.put], and end it with
+[`finalize`][a11.nodes.async_node.AsyncNode.finalize], which marks the logical
+end of the data and closes the writer.
+[`close`][a11.nodes.async_node.AsyncNode.close] is the rarer half on its own,
+for a producer that cannot say which chunk was last. A
 consumer can follow the stream with
 [`next`][a11.nodes.async_node.AsyncNode.next] or async iteration, while
 [`consume`][a11.nodes.async_node.AsyncNode.consume] validates the common case

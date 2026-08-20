@@ -189,7 +189,7 @@ absl::Status PutBody(const std::shared_ptr<Action>& action,
     ABSL_RETURN_IF_ERROR(
         node->PutChunk(std::move(chunk), std::nullopt, false).Await().status());
   }
-  return node->PutNullFinal().Await().status();
+  return node->Finalize({.wait = true, .close = false}).Await().status();
 }
 
 /// A ready-to-run make_http_request with every input port fed. Every port is
@@ -525,8 +525,7 @@ TEST(HttpActionsTest, StreamsARequestBodyWithoutAContentLength) {
                     .Await()
                     .ok());
   }
-  ASSERT_TRUE(body->PutNullFinal().Await().ok());
-  ASSERT_TRUE(body->DrainAndClose().Await().ok());
+  ASSERT_TRUE(body->Finalize({.wait = true}).Await().ok());
 
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
       << action->Wait(kPatience).Await().status();

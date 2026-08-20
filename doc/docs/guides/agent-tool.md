@@ -26,10 +26,10 @@ string instead of a real API call:
 ```python
 async def get_weather(action):
     location = await action["location"].consume()
-    # This handler is the sole writer of `report`: mark the value final, then
-    # seal the port so the caller sees a complete, OK-terminated result.
-    await action["report"].put_final(f"It is 22°C and sunny in {location}.")
-    await action["report"].drain_and_close()
+    # This handler is the sole writer of `report`: `finalize` marks the value
+    # final and seals the port, so the caller sees a complete, OK-terminated
+    # result.
+    await action["report"].finalize(f"It is 22°C and sunny in {location}.")
 ```
 
 Its schema names the ports and describes them; the descriptions are what the
@@ -91,15 +91,13 @@ user_turn = Interaction(
         {"type": "text", "text": "What's the weather in Paris?"}]})],
 )
 
-async with (
-    interact["interactions"] as interactions,
-    interact["config"],
-    interact["tools"] as tools,
-):
-    await interactions.put_final(user_turn)
-    for tool in tool_definitions:
-        await tools.put(tool)
-    await tools.put_null_final()
+await interact["interactions"].finalize(user_turn)
+# `config` is finalized empty: the backend applies its own defaults.
+await interact["config"].finalize()
+tools = interact["tools"]
+for tool in tool_definitions:
+    await tools.put(tool)
+await tools.finalize()
 ```
 
 When the model decides to call `get_weather`, `interact_with_llm` dispatches the

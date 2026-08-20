@@ -79,7 +79,7 @@ async def registry(toy_actions):
         seen["model"] = action.get_header(LlmHeaders.MODEL.value, decode=True)
         for word in ("as far as ", "I can tell."):
             await (await action["text_output"].put(word))
-        await action["text_output"].drain_and_close()
+        await action["text_output"].finalize()
         # What a real one hands back for the next turn to carry.
         await (
             await action["new_interactions"].put(
@@ -98,15 +98,17 @@ async def registry(toy_actions):
                 final=True,
             )
         )
-        for port in ("new_interactions", "thoughts", "event_stream"):
-            await action[port].drain_and_close()
+        # `new_interactions` marked its own last value final above.
+        await action["new_interactions"].close()
+        for port in ("thoughts", "event_stream"):
+            await action[port].finalize()
 
     async def fake_shell(action: Action) -> None:
         seen["command"] = await action["command"].consume(str, allow_none=True)
         await action["parameters"].consume(dict, allow_none=True)
         for line in (" M cpp/a11/flow/parser.cc", "?? scripts/", ""):
             await (await action["output_lines"].put(line))
-        await action["output_lines"].drain_and_close()
+        await action["output_lines"].finalize()
 
     async def fake_mic(action: Action) -> None:
         await action["options"].consume(dict, allow_none=True)
@@ -114,7 +116,7 @@ async def registry(toy_actions):
         # Held open until the caller says stop, as the real one is.
         seen["stop"] = await action["control_events"].next_object()
         for port in ("audio", "events"):
-            await action[port].drain_and_close()
+            await action[port].finalize()
 
     async def fake_asr(action: Action) -> None:
         await action["asr_options"].consume(dict, allow_none=True)
@@ -123,7 +125,7 @@ async def registry(toy_actions):
         for piece in ("a note about", "fibers.", "and one about", "nodes."):
             await (await action["transcription_pieces"].put(piece))
         for port in ("transcription_pieces", "events"):
-            await action[port].drain_and_close()
+            await action[port].finalize()
 
     #: The gateway's actions, and who pretends to be each of them.
     served = (

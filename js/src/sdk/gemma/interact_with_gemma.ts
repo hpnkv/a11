@@ -523,11 +523,6 @@ registerInteractionNormalizer(Backend.GEMMA, gemmaToNormalized);
 
 // --- Handler -----------------------------------------------------------------
 
-async function closeStream(node: AsyncNode): Promise<void> {
-  await node.putNullFinal();
-  await node.drainAndClose();
-}
-
 /** Run a browser Gemma interaction, streaming its reply. Never throws. */
 export async function interactWithGemma(action: Action): Promise<Status> {
   const eventNodeResult = await action.getOutput('event_stream', false);
@@ -648,12 +643,13 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     const put = await newInteractionsNode.put(assistant, { final: true });
     if (!isOk(put)) return put;
 
-    // Close every output cleanly so a reader's stream terminates.
+    // End every output cleanly so a reader's stream terminates.
     await eventNode.put({ type: 'done' });
-    await eventNode.drainAndClose();
-    await closeStream(thoughtsNode);
-    await textNode.drainAndClose();
-    await newInteractionsNode.drainAndClose();
+    await eventNode.finalize();
+    await thoughtsNode.finalize();
+    await textNode.finalize();
+    // `new_interactions` marked its own last value final above.
+    await newInteractionsNode.close();
     return okStatus();
   } catch (error) {
     return statusFromUnknown(error, 'interact_with_gemma raised an exception.');

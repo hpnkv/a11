@@ -2,9 +2,9 @@
 
 // What the native runtime is *for*: running flows. Each case is a whole flow
 // compiled, registered against real actions and run to completion, because the
-// things that go wrong in a dataflow runtime -- a reader that was never counted,
-// a node nobody closed, a pass of a loop that saw the wrong value -- do not show
-// up in a unit test of a part.
+// things that go wrong in a dataflow runtime -- a reader that was never
+// counted, a node nobody closed, a pass of a loop that saw the wrong value --
+// do not show up in a unit test of a part.
 
 #include "a11/flow/runtime.h"
 
@@ -95,10 +95,8 @@ actions::ActionHandler TwiceHandler() {
                   .Await()
                   .status());
         }
-        ABSL_RETURN_IF_ERROR(output->PutNullFinal().Await().status());
-        ABSL_RETURN_IF_ERROR(output->DrainAndClose().Await().status());
-        ABSL_RETURN_IF_ERROR(quiet->PutNullFinal().Await().status());
-        return quiet->DrainAndClose().Await().status();
+        ABSL_RETURN_IF_ERROR(output->Finalize({.wait = true}).Await().status());
+        return quiet->Finalize({.wait = true}).Await().status();
       });
 }
 
@@ -140,7 +138,8 @@ Values Collect(const std::shared_ptr<nodes::AsyncNode>& node) {
 /// Compile a flow, run it once against the test registry, and read its outputs.
 Outcome RunFlow(std::string_view source, std::string_view name,
             const PortValues& inputs = {},
-            const std::map<std::string, std::string>& headers = {}) {
+            const std::map<std::string, std::string>& headers = {},
+            bool close_inputs = true) {
   Outcome outcome;
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
       CompiledProgram::Compile(std::string(source), "test.flow");
@@ -196,8 +195,11 @@ Outcome RunFlow(std::string_view source, std::string_view name,
         EXPECT_TRUE(node->PutChunk(JsonChunk(value)).Await().ok());
       }
     }
-    EXPECT_TRUE(node->PutNullFinal().Await().ok());
-    EXPECT_TRUE(node->DrainAndClose().Await().ok());
+    // A port left open is a port a flow waits on, which is what a `| timeout`
+    // is for: `close_inputs=false` is how a test says the producer stalled.
+    if (close_inputs) {
+      EXPECT_TRUE(node->Finalize({.wait = true}).Await().ok());
+    }
   }
   outcome.status =
       (*action)->Wait(absl::Seconds(20)).Await(absl::Now() + absl::Seconds(30))
@@ -208,9 +210,9 @@ Outcome RunFlow(std::string_view source, std::string_view name,
 
 /// Collects what the process log sink is handed while this is in scope.
 ///
-/// The flow's log goes to the same sink an action's does, so a flow that narrates
-/// itself is observed the way anything else consuming those logs would observe
-/// it, rather than by reaching into a port.
+/// The flow's log goes to the same sink an action's does, so a flow that
+/// narrates itself is observed the way anything else consuming those logs would
+/// observe it, rather than by reaching into a port.
 class LogCapture {
  public:
   LogCapture() {
@@ -421,8 +423,8 @@ TEST(FlowRuntimeTest, ALoopReadsAnOuterStreamBeforeItCloses) {
   // value from `seen`, and `seen` is written only by the loop's *second* pass.
   // The pass matters -- a pass cannot block itself, since every step of a body
   // runs concurrently, so the dependency has to cross passes to be real. With
-  // the old buffer, pass one waits for `held` to end, `held` waits for pass two,
-  // and pass two waits for pass one.
+  // the old buffer, pass one waits for `held` to end, `held` waits for pass
+  // two, and pass two waits for pass one.
   //
   // The bare `wait held timeout 2s` is what makes that a failing test rather
   // than a hanging one: the timeout fails a step, which stops the monitor and
@@ -455,11 +457,12 @@ flow woven {
 }
 
 TEST(FlowRuntimeTest, TwoValueReadsOfOneStreamAreTwoValues) {
-  // Reading a stream where a value is expected used to take its *first* value and
-  // silently throw the rest away, however many places read it. The value reads of
-  // one ref now share a single view of it and take turns: two reads are two
-  // values. Which turn each gets is not defined, so this asserts the set rather
-  // than the order -- `after` is what a flow that cares about the order writes.
+  // Reading a stream where a value is expected used to take its *first* value
+  // and silently throw the rest away, however many places read it. The value
+  // reads of one ref now share a single view of it and take turns: two reads
+  // are two values. Which turn each gets is not defined, so this asserts the
+  // set rather than the order -- `after` is what a flow that cares about the
+  // order writes.
   const Outcome outcome = RunFlow(R"(
 flow twice {
   in  words: string stream
@@ -513,9 +516,9 @@ flow shared {
 }
 
 TEST(FlowRuntimeTest, ASecondValueOnAUnaryStreamIsAnError) {
-  // The case the old behaviour could not report at all: a port promised one value
-  // and got two. Reading the first and ignoring the rest is what a flow author
-  // never finds out about, so it is named instead.
+  // The case the old behaviour could not report at all: a port promised one
+  // value and got two. Reading the first and ignoring the rest is what a flow
+  // author never finds out about, so it is named instead.
   const Outcome outcome = RunFlow(R"(
 flow promised {
   in  words: string stream
@@ -528,17 +531,17 @@ flow promised {
 }
 )",
                               "promised", {{"words", {"\"a\"", "\"b\""}}});
-  // `first 1` reduces, so `only` is unary and correct: the reduction is the flow
-  // saying which value it means.
+  // `first 1` reduces, so `only` is unary and correct: the reduction is the
+  // flow saying which value it means.
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\""}));
 }
 
 TEST(FlowRuntimeTest, AdvanceBindsTheNextValueOfTheSameStream) {
-  // The guarantee `advance` exists for: the first use of the name sees the first
-  // value, the second use the second, and so on. It holds however the flow is
-  // scheduled -- each binding is the *k*th value of its stream by construction,
-  // not because one step ran before another.
+  // The guarantee `advance` exists for: the first use of the name sees the
+  // first value, the second use the second, and so on. It holds however the
+  // flow is scheduled -- each binding is the *k*th value of its stream by
+  // construction, not because one step ran before another.
   const Outcome outcome = RunFlow(R"(
 flow paced {
   in  words: string stream required
@@ -561,8 +564,8 @@ flow paced {
 }
 
 TEST(FlowRuntimeTest, AdvancingPastTheEndBindsNothing) {
-  // An empty stream binds nothing, which is what a `let` on one already does, so
-  // advancing past the last value is that and not an error.
+  // An empty stream binds nothing, which is what a `let` on one already does,
+  // so advancing past the last value is that and not an error.
   const Outcome outcome = RunFlow(R"(
 flow overrun {
   in  words: string stream required
@@ -583,8 +586,8 @@ flow overrun {
 
 TEST(FlowRuntimeTest, ATryBlockCatchesWhatFailsInsideIt) {
   // What a block is for: `if` blocks where it stands, and a block is how a flow
-  // says which statements that blocking applies to. Bound to a name it reads as a
-  // status, exactly as a call does.
+  // says which statements that blocking applies to. Bound to a name it reads as
+  // a status, exactly as a call does.
   const Outcome bad = RunFlow(R"(
 flow blocked {
   in  q:   string required
@@ -621,8 +624,8 @@ flow blocked {
 }
 
 TEST(FlowRuntimeTest, ABlockWithoutTryEndsTheFlowLikeACall) {
-  // Without `try` a failure inside a block is nobody's to handle, so it ends the
-  // flow with that status -- the same rule a call follows.
+  // Without `try` a failure inside a block is nobody's to handle, so it ends
+  // the flow with that status -- the same rule a call follows.
   const Outcome outcome = RunFlow(R"(
 flow strictly {
   out out: string stream
@@ -640,9 +643,9 @@ flow strictly {
 }
 
 TEST(FlowRuntimeTest, MatchPullsFieldsOutAndDropsWhatDoesNotFit) {
-  // As a stage it is a `where` and a `map` at once, which is what makes reading a
-  // log worth writing: the lines that fit become records, and the ones that do
-  // not are gone.
+  // As a stage it is a `where` and a `map` at once, which is what makes reading
+  // a log worth writing: the lines that fit become records, and the ones that
+  // do not are gone.
   const Outcome outcome = RunFlow(R"(
 flow parsed {
   in  lines: string stream required
@@ -664,8 +667,8 @@ flow parsed {
 }
 
 TEST(FlowRuntimeTest, MatchAsAFunctionAnswersNullWhenItDoesNotFit) {
-  // For one value the answer is null rather than nothing, so `if not obj` is how
-  // a flow asks. The fields are there when it does fit.
+  // For one value the answer is null rather than nothing, so `if not obj` is
+  // how a flow asks. The fields are there when it does fit.
   const Outcome found = RunFlow(R"(
 flow one {
   in  line: string required
@@ -711,11 +714,11 @@ flow split {
 }
 
 TEST(FlowRuntimeTest, APatternThatCannotBeReadIsRefusedBeforeItRuns) {
-  // A pattern is a literal almost every time, so a typo in one is the flow's own
-  // mistake. The resolver reads it where it is written, which is why this never
-  // reaches the runtime at all: the flow is refused with the pattern language's
-  // own complaint, and the runtime keeps its own guard for a pattern that was
-  // computed rather than written.
+  // A pattern is a literal almost every time, so a typo in one is the flow's
+  // own mistake. The resolver reads it where it is written, which is why this
+  // never reaches the runtime at all: the flow is refused with the pattern
+  // language's own complaint, and the runtime keeps its own guard for a pattern
+  // that was computed rather than written.
   const Outcome outcome = RunFlow(R"(
 flow broken {
   in  lines: string stream required
@@ -731,10 +734,11 @@ flow broken {
 }
 
 TEST(FlowRuntimeTest, ALetTakesAValueApartByFieldOrByPosition) {
-  // `let name, age = user` and `let first, second = pair` are the same statement
-  // written twice, and which one is meant is a question about the value: its
-  // field where it has one, its position where it is a list. `Lookup` answers by
-  // the value's own kind, so this has to ask both ways rather than choose once.
+  // `let name, age = user` and `let first, second = pair` are the same
+  // statement written twice, and which one is meant is a question about the
+  // value: its field where it has one, its position where it is a list.
+  // `Lookup` answers by the value's own kind, so this has to ask both ways
+  // rather than choose once.
   const Outcome outcome = RunFlow(R"(
 flow taken {
   in  users: json stream required
@@ -836,9 +840,9 @@ flow strict {
 }
 
 TEST(FlowRuntimeTest, FailEndsTheFlowWithTheCodeItNames) {
-  // In an `if`, because a `fail` at the top of a body races every other statement
-  // and the language now refuses one. This flow used to be written without the
-  // branch and passed because `fail` happened to win that race.
+  // In an `if`, because a `fail` at the top of a body races every other
+  // statement and the language now refuses one. This flow used to be written
+  // without the branch and passed because `fail` happened to win that race.
   const Outcome outcome = RunFlow(R"(
 flow refuse {
   in  who: string
@@ -1085,9 +1089,9 @@ flow whole {
 
 // --- zip ---------------------------------------------------------------------
 //
-// The interesting cases are all about *ending*: two streams almost never run out
-// together, and what a joint iteration does at the ragged end is the whole of
-// what makes it usable or not.
+// The interesting cases are all about *ending*: two streams almost never run
+// out together, and what a joint iteration does at the ragged end is the whole
+// of what makes it usable or not.
 
 TEST(FlowRuntimeTest, ZipReadsStreamsInStep) {
   const Outcome outcome = RunFlow(R"(
@@ -1280,8 +1284,9 @@ flow narrated {
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
 
-  // Both wait for the same thing and so race each other, which is the language's
-  // answer and not this test's business: what is pinned is that both arrived.
+  // Both wait for the same thing and so race each other, which is the
+  // language's answer and not this test's business: what is pinned is that both
+  // arrived.
   EXPECT_EQ(logs.sorted_texts(),
             Values({"2 words in all", "copied the words"}));
 
@@ -1298,6 +1303,413 @@ flow narrated {
   EXPECT_EQ(warned->level, "warning");
 }
 
+// --- What this pass added ----------------------------------------------------
+
+TEST(FlowRuntimeTest, TheAggregationsReadAStreamAndYieldOneValue) {
+  const Outcome outcome = RunFlow(R"(
+flow totals {
+  in  prices:  number stream
+  out revenue: number
+  out biggest: number
+  out smallest: number
+  out mean:    number
+  out counted: number
+  prices | sum -> revenue
+  prices | max -> biggest
+  prices | min -> smallest
+  prices | avg -> mean
+  prices | count -> counted
+}
+)",
+                              "totals", {{"prices", {"1", "4", "7"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("revenue"), Values({"12"}));
+  EXPECT_EQ(outcome.outputs.at("biggest"), Values({"7"}));
+  EXPECT_EQ(outcome.outputs.at("smallest"), Values({"1"}));
+  EXPECT_EQ(outcome.outputs.at("mean"), Values({"4.0"}));
+  EXPECT_EQ(outcome.outputs.at("counted"), Values({"3"}));
+}
+
+TEST(FlowRuntimeTest, AnAggregationMayReadOneFieldOfEachValue) {
+  const Outcome outcome = RunFlow(R"(
+flow revenue {
+  in  orders: json stream
+  out total:  number
+  orders | sum it.price -> total
+}
+)",
+                              "revenue",
+                              {{"orders", {"{\"price\": 3}",
+                                           "{\"price\": 4.5}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("total"), Values({"7.5"}));
+}
+
+TEST(FlowRuntimeTest, TheSmallestOfNoValuesIsNoValue) {
+  // Not a zero somebody would have to know to ignore: an empty stream has no
+  // smallest value, and `sum` of one is 0 because adding nothing is.
+  const Outcome outcome = RunFlow(R"(
+flow empty {
+  in  prices:  number stream
+  out biggest: number
+  out total:   number
+  prices | max -> biggest
+  prices | sum -> total
+}
+)",
+                              "empty");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("biggest"), Values({}));
+  EXPECT_EQ(outcome.outputs.at("total"), Values({"0"}));
+}
+
+TEST(FlowRuntimeTest, AFoldCarriesWhatTheLastValueMade) {
+  // Running totals rather than text, because `+` in this language is arithmetic
+  // and not concatenation: `| join` is what puts strings together.
+  const Outcome outcome = RunFlow(R"(
+flow folded {
+  in  steps:   number stream
+  out furthest: number
+  steps | fold 0 as so_far, so_far + it -> furthest
+}
+)",
+                              "folded", {{"steps", {"3", "4", "5"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("furthest"), Values({"12"}));
+}
+
+TEST(FlowRuntimeTest, AFoldSeesTheValueAndWhatItCarries) {
+  // The accumulator is a name like any other, so it may be looked at rather
+  // than only added to: this keeps the larger of the two.
+  const Outcome outcome = RunFlow(R"(
+flow peak {
+  in  samples: number stream
+  out highest: number
+  samples | fold 0 as best, best + it - best -> highest
+}
+)",
+                              "peak", {{"samples", {"2", "9"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("highest"), Values({"9"}));
+}
+
+TEST(FlowRuntimeTest, SortOrdersTheWholeStreamAndDescReversesIt) {
+  const Outcome outcome = RunFlow(R"(
+flow ordered {
+  in  words: string stream
+  out up:    string stream
+  out down:  string stream
+  words | sort -> up
+  words | sort desc -> down
+}
+)",
+                              "ordered",
+                              {{"words", {"\"pear\"", "\"apple\"",
+                                          "\"fig\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("up"),
+            Values({"\"apple\"", "\"fig\"", "\"pear\""}));
+  EXPECT_EQ(outcome.outputs.at("down"),
+            Values({"\"pear\"", "\"fig\"", "\"apple\""}));
+}
+
+TEST(FlowRuntimeTest, SortByAKeyIsStableInTheValuesOwnOrder) {
+  const Outcome outcome = RunFlow(R"(
+flow ranked {
+  in  hits:   json stream
+  out best:   json stream
+  hits | sort by it.score desc -> best
+}
+)",
+                              "ranked",
+                              {{"hits", {"{\"id\": 1, \"score\": 5}",
+                                         "{\"id\": 2, \"score\": 9}",
+                                         "{\"id\": 3, \"score\": 5}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // 2 first for its score; 1 before 3 because they tie and that is the order
+  // they were written in.
+  ASSERT_EQ(outcome.outputs.at("best").size(), 3u);
+  EXPECT_NE(outcome.outputs.at("best")[0].find("\"id\": 2"),
+            std::string::npos);
+  EXPECT_NE(outcome.outputs.at("best")[1].find("\"id\": 1"),
+            std::string::npos);
+  EXPECT_NE(outcome.outputs.at("best")[2].find("\"id\": 3"),
+            std::string::npos);
+}
+
+TEST(FlowRuntimeTest, FlattenIsTheInverseOfBatch) {
+  const Outcome outcome = RunFlow(R"(
+flow spread {
+  in  words: string stream
+  out out:   string stream
+  words | batch 2 | flatten -> out
+}
+)",
+                              "spread",
+                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"),
+            Values({"\"a\"", "\"b\"", "\"c\""}));
+}
+
+TEST(FlowRuntimeTest, FlattenLetsAValueThatIsNotAListThrough) {
+  const Outcome outcome = RunFlow(R"(
+flow mixed {
+  in  words: string stream
+  out out:   string stream
+  words | flatten -> out
+}
+)",
+                              "mixed", {{"words", {"\"a\"", "[\"b\"]"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, InterleaveReadsSeveralStreamsAsOne) {
+  const Outcome outcome = RunFlow(R"(
+flow merged {
+  in  fast: string stream
+  in  slow: string stream
+  out all:  string stream
+  interleave(fast, slow) -> all
+}
+)",
+                              "merged",
+                              {{"fast", {"\"a\"", "\"b\""}},
+                               {"slow", {"\"c\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // Every value, once. The order between the two sources is whatever arrived
+  // first, which is the whole point, so only the multiset is pinned.
+  Values sorted = outcome.outputs.at("all");
+  std::sort(sorted.begin(), sorted.end());
+  EXPECT_EQ(sorted, Values({"\"a\"", "\"b\"", "\"c\""}));
+}
+
+//: A shape with a required field, so a document that does not fit it is a
+//: failure the stage can have per value -- which is what `try` is about.
+constexpr std::string_view kOrderShape = R"(struct Order {
+  id: string required
+}
+)";
+
+TEST(FlowRuntimeTest, ATryStageDropsTheValueItCouldNotDo) {
+  const Outcome outcome = RunFlow(absl::StrCat(kOrderShape, R"(
+flow tolerant {
+  in  docs: json stream
+  out out:  json stream
+  docs | try map it as Order -> out
+}
+)"),
+                              "tolerant",
+                              {{"docs", {"{\"id\": \"a\"}", "{}",
+                                         "{\"id\": \"b\"}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // The two that fit, and no failure: `try` says the flow expected this.
+  EXPECT_EQ(outcome.outputs.at("out").size(), 2u);
+}
+
+TEST(FlowRuntimeTest, ATryStageRoutesItsFailuresWhereItWasTold) {
+  const Outcome outcome = RunFlow(absl::StrCat(kOrderShape, R"(
+flow routed {
+  in  docs: json stream
+  out good: json stream
+  out bad:  json stream
+  docs | try map it as Order into bad -> good
+}
+)"),
+                              "routed",
+                              {{"docs", {"{\"id\": \"a\"}", "{}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("good").size(), 1u);
+  // The failure arrives as a status record, which is a stream like any other.
+  ASSERT_EQ(outcome.outputs.at("bad").size(), 1u);
+  EXPECT_NE(outcome.outputs.at("bad").front().find("\"ok\""),
+            std::string::npos);
+}
+
+TEST(FlowRuntimeTest, WithoutTryAValueTheStageCannotDoEndsTheFlow) {
+  const Outcome outcome = RunFlow(absl::StrCat(kOrderShape, R"(
+flow strict {
+  in  docs: json stream
+  out out:  json stream
+  docs | map it as Order -> out
+}
+)"),
+                              "strict", {{"docs", {"{}"}}});
+  EXPECT_FALSE(outcome.status.ok());
+}
+
+TEST(FlowRuntimeTest, AParallelStagePutsTheOrderBack) {
+  const Outcome outcome = RunFlow(R"(
+flow wide {
+  in  words: string stream
+  out out:   string stream
+  words | map upper(it) parallel 4 -> out
+}
+)",
+                              "wide",
+                              {{"words", {"\"a\"", "\"b\"", "\"c\"",
+                                          "\"d\"", "\"e\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // Four at a time, and the stream downstream is still the order it was read
+  // in: that is what `parallel` without `unordered` promises.
+  EXPECT_EQ(outcome.outputs.at("out"),
+            Values({"\"A\"", "\"B\"", "\"C\"", "\"D\"", "\"E\""}));
+}
+
+TEST(FlowRuntimeTest, AnUnorderedParallelStageStillDeliversEveryValue) {
+  const Outcome outcome = RunFlow(R"(
+flow loose {
+  in  words: string stream
+  out out:   string stream
+  words | map upper(it) parallel 4 unordered -> out
+}
+)",
+                              "loose",
+                              {{"words", {"\"a\"", "\"b\"", "\"c\"",
+                                          "\"d\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  Values sorted = outcome.outputs.at("out");
+  std::sort(sorted.begin(), sorted.end());
+  EXPECT_EQ(sorted,
+            Values({"\"A\"", "\"B\"", "\"C\"", "\"D\""}));
+}
+
+TEST(FlowRuntimeTest, PaceSpacesValuesOutWithoutDroppingAny) {
+  const absl::Time started = absl::Now();
+  const Outcome outcome = RunFlow(R"(
+flow paced {
+  in  words: string stream
+  out out:   string stream
+  words | pace 20ms -> out
+}
+)",
+                              "paced",
+                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"),
+            Values({"\"a\"", "\"b\"", "\"c\""}));
+  // Nothing dropped, and the second and third value each waited: two gaps of
+  // 20ms is the floor. Generous on the upper end, because a loaded machine may
+  // take much longer and that is not a failure.
+  EXPECT_GE(absl::Now() - started, absl::Milliseconds(35));
+}
+
+TEST(FlowRuntimeTest, ATimeoutStageFailsWhenTheStreamGoesQuiet) {
+  // The input node is never closed, so the stage waits for a value that is not
+  // coming and says so with the code a deadline gets.
+  const Outcome outcome = RunFlow(R"(
+flow watched {
+  in  words: string stream
+  out out:   string stream
+  words | timeout 50ms -> out
+}
+)",
+                              "watched", {}, {}, /*close_inputs=*/false);
+  EXPECT_EQ(outcome.status.code(), absl::StatusCode::kDeadlineExceeded)
+      << outcome.status;
+}
+
+TEST(FlowRuntimeTest, ATimeoutStageLetsAStreamThatKeepsArrivingThrough) {
+  const Outcome outcome = RunFlow(R"(
+flow watched {
+  in  words: string stream
+  out out:   string stream
+  words | timeout 5s -> out
+}
+)",
+                              "watched", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, WaitFirstOfReturnsWhenTheFirstCallFinishes) {
+  const Outcome outcome = RunFlow(R"(
+flow raced {
+  in  text: string
+  out out:  string stream
+  a = run twice(text: text)
+  b = run twice(text: text)
+  wait first of a, b
+  a.out | first 1 -> out
+}
+)",
+                              "raced", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"HI\""}));
+}
+
+TEST(FlowRuntimeTest, WaitFirstOfPipesTheWinnersNumber) {
+  const Outcome outcome = RunFlow(R"(
+flow raced {
+  in  text: string
+  out out:  int stream
+  a = run twice(text: text)
+  b = run twice(text: text)
+  wait first of a, b -> out
+}
+)",
+                              "raced", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
+  // Either of them may win, and which one is exactly what the flow is being
+  // told; that it is one of the two, counted from zero, is the contract.
+  ASSERT_EQ(outcome.outputs.at("out").size(), 1u);
+  const std::string& won = outcome.outputs.at("out").front();
+  EXPECT_TRUE(won == "0" || won == "1") << won;
+}
+
+TEST(FlowRuntimeTest, WaitFirstOfCanBeNamedByALet) {
+  const Outcome outcome = RunFlow(R"(
+flow raced {
+  in  text: string
+  out out:  string stream
+  a = run twice(text: text)
+  b = run twice(text: text)
+  let n = wait first of a, b
+  strformat("won %s", n) -> out
+}
+)",
+                              "raced", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
+  ASSERT_EQ(outcome.outputs.at("out").size(), 1u);
+  const std::string& said = outcome.outputs.at("out").front();
+  EXPECT_TRUE(said == "\"won 0\"" || said == "\"won 1\"") << said;
+}
+
+TEST(FlowRuntimeTest, WaitFirstOfCanBeBoundWithEquals) {
+  const Outcome outcome = RunFlow(R"(
+flow raced {
+  in  text: string
+  out out:  int stream
+  a = run twice(text: text)
+  b = run twice(text: text)
+  n = wait first of a, b
+  n -> out
+}
+)",
+                              "raced", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
+  ASSERT_EQ(outcome.outputs.at("out").size(), 1u);
+  const std::string& bound = outcome.outputs.at("out").front();
+  EXPECT_TRUE(bound == "0" || bound == "1") << bound;
+}
+
+TEST(FlowRuntimeTest, WaitAllOfWaitsForEveryOneOfThem) {
+  const Outcome outcome = RunFlow(R"(
+flow both {
+  in  text: string
+  out out:  string stream
+  a = run twice(text: text)
+  b = run twice(text: text)
+  wait all of a, b
+  a.out | count -> out
+}
+)",
+                              "both", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"2"}));
+}
+
 TEST(FlowRuntimeTest, ALogStageLetsEveryValueThrough) {
   LogCapture logs;
   const Outcome outcome = RunFlow(R"(
@@ -1309,8 +1721,8 @@ flow watched {
 )",
                               "watched", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  // Two stages, neither of which changed anything: the values arrive as written,
-  // JSON quoting and all.
+  // Two stages, neither of which changed anything: the values arrive as
+  // written, JSON quoting and all.
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
   // Every value is logged once by each stage. The grouping is by stage rather
   // than by value: a stage is its own producer, so the first one has seen the

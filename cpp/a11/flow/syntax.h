@@ -21,15 +21,17 @@ namespace a11::flow::syntax {
 
 /// Where a piece of syntax starts, reduced to what every reader of it needs.
 ///
-/// The span of the *token* the construct began at, not of the whole construct --
-/// the same thing `a11/flow/syntax.py` keeps, and what a diagnostic wants to point
-/// at. A frontend that needs the full extent of a statement has the token stream.
+/// The span of the *token* the construct began at, not of the whole construct
+/// -- the same thing `a11/flow/syntax.py` keeps, and what a diagnostic wants to
+/// point at. A frontend that needs the full extent of a statement has the token
+/// stream.
 ///
-/// A node carries this rather than the [Token] it was made from, because the AST
-/// outlives the token stream: a token borrows the source text, and a tree that
-/// borrowed it could not be handed across a language boundary or kept while the
-/// document changed underneath. Offsets are bytes, so an editor can edit with
-/// them; line and column count code points, as everything in the language does.
+/// A node carries this rather than the [Token] it was made from, because the
+/// AST outlives the token stream: a token borrows the source text, and a tree
+/// that borrowed it could not be handed across a language boundary or kept
+/// while the document changed underneath. Offsets are bytes, so an editor can
+/// edit with them; line and column count code points, as everything in the
+/// language does.
 struct Location {
   size_t start = 0;
   size_t end = 0;
@@ -43,9 +45,9 @@ Location LocationOf(const Token& token);
 /// A name as written, and where it was written.
 ///
 /// Used wherever the grammar takes a bare name rather than an expression -- a
-/// step's `after`, a `via`, a loop variable. The Python reference keeps these as
-/// plain strings and so cannot point at one; a resolver reporting "nothing binds
-/// this" has to, so the position travels with the word.
+/// step's `after`, a `via`, a loop variable. The Python reference keeps these
+/// as plain strings and so cannot point at one; a resolver reporting "nothing
+/// binds this" has to, so the position travels with the word.
 struct Word {
   std::string text;
   Location location;
@@ -246,8 +248,8 @@ struct ListLiteral : NodeOf<NodeKind::kListLiteral> {
 ///
 /// A pair whose value is a [Spread] is one: its key is empty and means nothing,
 /// and it contributes every pair of what it holds at the point it is written.
-/// Later pairs win, so `{...it, "tags": [..]}` overrides and `{"tags": [..], ...it}`
-/// does not.
+/// Later pairs win, so `{...it, "tags": [..]}` overrides and `{"tags": [..],
+/// ...it}` does not.
 struct ObjectLiteral : NodeOf<NodeKind::kObjectLiteral> {
   std::vector<std::pair<std::string, NodePtr>> pairs;
 };
@@ -278,13 +280,20 @@ struct Builtin : NodeOf<NodeKind::kBuiltin> {
   std::vector<NodePtr> args;
 };
 
-/// `zip(a, b, c)` -- several streams read in step, as one stream of tuples.
+/// Several streams read as one: `zip(a, b, c)`, `interleave(a, b, c)`.
 ///
-/// Not a [Builtin], though it is spelled like one: a builtin takes *values* and
-/// this takes *streams*, so it stands only where a pipeline's source does and
-/// the resolver has to resolve each argument as a reference rather than evaluate
-/// it. Keeping the two apart is what stops `len(zip(a, b))` from looking legal.
+/// Not a [Builtin], though both are spelled like one: a builtin takes *values*
+/// and these take *streams*, so they stand only where a pipeline's source does
+/// and the resolver has to resolve each argument as a reference rather than
+/// evaluate it. Keeping the two apart is what stops `len(zip(a, b))` from
+/// looking legal.
+///
+/// One node for both because the difference is what the runtime does with the
+/// sources, not what the source *is*: `zip` reads them in step and yields a
+/// tuple per round, `interleave` reads them at once and yields each value as it
+/// arrives. `name` is which was written.
 struct Zip : NodeOf<NodeKind::kZip> {
+  std::string name = "zip";
   std::vector<NodePtr> sources;
 };
 
@@ -313,8 +322,8 @@ struct Binary : NodeOf<NodeKind::kBinary> {
 ///
 /// One struct for the statement and the stage because they take the same thing:
 /// `log warning it.error` reads the same at the top of an `if` and after a `|`,
-/// and one shape is what keeps them from drifting into two dialects. `format` is
-/// empty for a `log` and holds the format for a `logf`; `arguments` is what
+/// and one shape is what keeps them from drifting into two dialects. `format`
+/// is empty for a `log` and holds the format for a `logf`; `arguments` is what
 /// fills it, and for a `log` holds at most the one value to log.
 struct LogTail {
   /// The level as written, or empty for the default. See
@@ -331,8 +340,9 @@ struct LogTail {
 /// One `| name arg` stage of a pipeline.
 ///
 /// `takes` says which of the argument fields is the one that was filled, and is
-/// read from the vocabulary rather than decided here: the stage table is the one
-/// table, and a stage the language does not have is a diagnostic, not a shape.
+/// read from the vocabulary rather than decided here: the stage table is the
+/// one table, and a stage the language does not have is a diagnostic, not a
+/// shape.
 struct Stage : NodeOf<NodeKind::kStage> {
   std::string name;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
@@ -341,9 +351,35 @@ struct Stage : NodeOf<NodeKind::kStage> {
   bool is_integer = false;
   /// `kString`/`kOptionalString`: the text, with escapes resolved.
   std::string text;
-  /// `kExpression`: the expression, with `it` bound. `kStream`: the stream to
-  /// read next.
+  /// `kExpression`/`kOptionalExpression`: the expression, with `it` bound.
+  /// `kSortKey`: the `by` key, or null for the values themselves. `kFold`: the
+  /// fold expression, with the carried name and `it` bound. `kStream`: the
+  /// stream to read next.
   NodePtr argument;
+  /// `kDuration`: how long `timeout` waits, or `pace` spaces values out by.
+  absl::Duration duration;
+  /// `kSortKey`: whether `desc` was written.
+  bool descending = false;
+  /// `kFold`: the literal to start from and the name bound to what the last
+  /// value produced. A literal rather than an expression, because
+  /// `fold 0 as total` would otherwise read as a cast of `0` to a type.
+  Constant start;
+  Word carried;
+  /// `try map ...`: a value this stage cannot do is dropped rather than ending
+  /// the pipeline. Written before the stage name, as `try run` is before a
+  /// call.
+  bool tolerant = false;
+  /// `into ref`: where a tolerated failure goes, as a status record. Null when
+  /// the failures are only logged.
+  NodePtr failures;
+  /// `parallel n`: how many values this stage may be working on at once. One
+  /// means the stage sees them one at a time, which is the default.
+  int parallel = 1;
+  /// Whether the values leave in the order they arrived. True unless
+  /// `unordered` was written: a parallel stage finishes its values out of
+  /// order and puts them back in order on the way out, so everything after it
+  /// reads the stream the author wrote.
+  bool ordered = true;
   /// `kLog`/`kLogFormat`: what was written after the stage name. The same shape
   /// the statement of the same name carries.
   LogTail log;
@@ -361,8 +397,8 @@ using PipelinePtr = std::unique_ptr<Pipeline>;
 
 /// `status subject` -- the status of a call, a node, or a barrier.
 ///
-/// Reading one is a synchronisation point: the subject has to be finished before
-/// there is a status to report.
+/// Reading one is a synchronisation point: the subject has to be finished
+/// before there is a status to report.
 struct Outcome : NodeOf<NodeKind::kOutcome> {
   NodePtr subject;
 };
@@ -432,9 +468,10 @@ struct Bind : NodeOf<NodeKind::kBind> {
 /// scanning the left margin sees it. It reads as one, too: `let code = ...`.
 struct Let : NodeOf<NodeKind::kLet> {
   /// One name is the value; several take it apart -- `let name, age = user` by
-  /// field, `let first, second = pair` by position. Which of the two is meant is
-  /// a question about the value rather than about the text, so it is answered
-  /// where the value is: by name, and by position where there is no such field.
+  /// field, `let first, second = pair` by position. Which of the two is meant
+  /// is a question about the value rather than about the text, so it is
+  /// answered where the value is: by name, and by position where there is no
+  /// such field.
   std::vector<Word> names;
   PipelinePtr pipeline;
 
@@ -447,12 +484,12 @@ struct Let : NodeOf<NodeKind::kLet> {
 
 /// `[try] { ... }` -- a block of statements that runs as one thing.
 ///
-/// Everything in a flow's body runs at once, which is the point of it; a block is
-/// how a flow says "these together, and *this* is what came of them". Inside it
-/// the ordinary rules hold, so its own statements are concurrent with each other
-/// and a condition in it blocks only what is in it. Bound to a name it reads as a
-/// status, exactly as a call does, and `try` is what says a failure inside is the
-/// flow's to handle rather than the end of it.
+/// Everything in a flow's body runs at once, which is the point of it; a block
+/// is how a flow says "these together, and *this* is what came of them". Inside
+/// it the ordinary rules hold, so its own statements are concurrent with each
+/// other and a condition in it blocks only what is in it. Bound to a name it
+/// reads as a status, exactly as a call does, and `try` is what says a failure
+/// inside is the flow's to handle rather than the end of it.
 struct Block : NodeOf<NodeKind::kBlock> {
   bool tolerant = false;
   std::vector<NodePtr> body;
@@ -505,11 +542,29 @@ struct Skip : NodeOf<NodeKind::kSkip> {
   std::optional<long long> count;
 };
 
-/// `wait subject` -- hold until a call, or a node this flow writes, is finished.
+/// `wait subject` -- hold until a call, or a node this flow writes, is
+/// finished.
+///
+/// `wait first of a, b` holds until the *first* of several is finished and lets
+/// the others carry on; `wait all of a, b` is the plural of the singular form
+/// and holds for every one of them. `subject` is what a single wait names, and
+/// `subjects` what the `of` forms do, so a reader of the tree does not have to
+/// treat the common case as a list of one.
 struct Wait : NodeOf<NodeKind::kWait> {
   NodePtr subject;
+  std::vector<NodePtr> subjects;
+  /// Whether the first to finish is enough. False for `wait all of`, and for
+  /// the single-subject form where there is nothing to race.
+  bool race = false;
   std::optional<absl::Duration> timeout;
   std::vector<Word> after;
+  /// `wait first of a, b -> n`: where the winner's number goes.
+  ///
+  /// A race *is* a value -- which of them won, counted from zero -- so it is
+  /// written where a value is written: piped to a destination here, named by a
+  /// `let`, or bound with `=`. The same node stands in all three places, and a
+  /// statement with no targets is the barrier on its own.
+  std::vector<NodePtr> targets;
 };
 
 /// `drain target` -- hold until a node's writers are done and its buffer has
@@ -542,9 +597,9 @@ struct Log : NodeOf<NodeKind::kLog> {
 /// `for name[, name...] in pipeline [parallel n] { ... }`.
 ///
 /// Several names take the value apart by position -- `for url, title in
-/// zip(urls, titles)` -- which is what makes `zip` worth having: the alternative
-/// is one name and `it[0]` everywhere, and a tuple whose parts have names reads
-/// like the two streams it came from.
+/// zip(urls, titles)` -- which is what makes `zip` worth having: the
+/// alternative is one name and `it[0]` everywhere, and a tuple whose parts have
+/// names reads like the two streams it came from.
 struct ForEach : NodeOf<NodeKind::kForEach> {
   std::vector<Word> variables;
   PipelinePtr pipeline;
@@ -563,8 +618,8 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// Empty where the repeat carries nothing.
   Word variable;
   NodePtr start;
-  /// `max n`, where one was written. Nothing means no bound: the loop runs until
-  /// its `until`/`while` says to stop.
+  /// `max n`, where one was written. Nothing means no bound: the loop runs
+  /// until its `until`/`while` says to stop.
   ///
   /// There used to be a default of 16 here, which meant a `repeat` whose
   /// condition never held stopped after sixteen passes and reported *success*.
@@ -694,8 +749,8 @@ using FieldDeclarationPtr = std::unique_ptr<FieldDeclaration>;
 /// One `struct name { ... }` declaration: a shape a port may be typed with.
 ///
 /// A sibling of [FlowDeclaration] rather than something inside one, because a
-/// shape is not a flow's private business: two flows in a file describe the same
-/// records, and a caller reading the file wants the type once.
+/// shape is not a flow's private business: two flows in a file describe the
+/// same records, and a caller reading the file wants the type once.
 struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
   Word name;
   std::string description;
@@ -717,18 +772,18 @@ std::optional<Constant> ConstantValue(const Node* node);
 /// One place that knows the shape of the tree, so a pass that only cares about
 /// *some* node kind -- which types a body names, where a symbol is declared --
 /// says so and lets this find them, rather than restating the grammar. A pass
-/// that needs to treat each kind differently still switches on the kind; this is
-/// for the ones that do not.
+/// that needs to treat each kind differently still switches on the kind; this
+/// is for the ones that do not.
 ///
-/// Only the tree: a [TypeExpression] is a value on a node rather than a node, and
-/// is reached through the node that holds it.
+/// Only the tree: a [TypeExpression] is a value on a node rather than a node,
+/// and is reached through the node that holds it.
 void VisitChildren(const Node& node,
                    const std::function<void(const Node&)>& visit);
 
 /// `a11.sdk.AudioBuffer` for a chain of plain names, or `nullopt`.
 ///
-/// A tag is the only thing on the left of a `{` that means a type, and it arrives
-/// as the same `Name`/`Attr` chain any other dotted reference does.
+/// A tag is the only thing on the left of a `{` that means a type, and it
+/// arrives as the same `Name`/`Attr` chain any other dotted reference does.
 std::optional<std::string> DottedName(const Node* node);
 
 }  // namespace a11::flow::syntax

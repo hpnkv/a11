@@ -222,16 +222,12 @@ async def _one_turn(
         call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed)
     await call.call()
 
-    async with (
-        call["interactions"] as interactions,
-        call["tools"] as tools_port,
-        call["config"] as config,
-    ):
-        await interactions.put_final(question)
-        for tool in tools or []:
-            await tools_port.put(tool)
-        await tools_port.put_null_final()
-        await config.put_null_final()
+    await call["interactions"].finalize(question)
+    tools_port = call["tools"]
+    for tool in tools or []:
+        await tools_port.put(tool)
+    await tools_port.finalize()
+    await call["config"].finalize()
 
     text: list[str] = []
     produced: list[Interaction] = []
@@ -284,8 +280,7 @@ async def test_a_turn_is_recorded_and_read_back_after_a_reload(
     # And the conversation itself, which is the reload.
     reading = connected.action(conversation_actions.GET_CONVERSATION_SCHEMA)
     await reading.call()
-    async with reading["id"] as ident:
-        await ident.put_final(question.id)
+    await reading["id"].finalize(question.id)
     restored = [interaction async for interaction in reading["interactions"]]
     await asyncio.wait_for(reading.wait(), timeout=_TIMEOUT)
     assert [i.id for i in restored] == [
@@ -332,8 +327,7 @@ async def test_deep_research_plans_investigates_and_synthesises(
     research.set_header(LlmHeaders.PROVIDER.value, b"ollama")
     research.set_header(LlmHeaders.MODEL.value, b"fake")
     await research.call()
-    async with research["topic"] as topic:
-        await topic.put_final("fibers and nodes")
+    await research["topic"].finalize("fibers and nodes")
 
     report: list[str] = []
     plan: list[str] = []
@@ -434,8 +428,7 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
         ids = [int(value) async for value in action["ids"]]
         colors = [str(value) async for value in action["colors"]]
         ran.append((ids, colors))
-        await action["recoloured"].put(len(ids), final=True)
-        await action["recoloured"].drain_and_close()
+        await action["recoloured"].finalize(len(ids))
 
     def reply(asked: str) -> list[ollama.ChatResponse]:
         if "recoloured" in asked:
@@ -451,11 +444,11 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
     # The handshake: the page describes what it serves, once per connection.
     announce = connected.action(REGISTER_TOOLS_SCHEMA)
     await announce.call()
-    async with announce["tools"] as tools:
-        # One descriptor per value, and a null to end them: the port carries a
-        # stream of tools, not one list of them.
-        await tools.put(describe_tool(SET_COLOR_SCHEMA))
-        await tools.put_null_final()
+    # One descriptor per value, and finalize to end them: the port carries a
+    # stream of tools, not one list of them.
+    tools = announce["tools"]
+    await tools.put(describe_tool(SET_COLOR_SCHEMA))
+    await tools.finalize()
     acknowledged = await asyncio.wait_for(
         announce["ok"].next_object(), timeout=_TIMEOUT
     )

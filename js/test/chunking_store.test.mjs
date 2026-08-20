@@ -144,22 +144,55 @@ test('AsyncNode streams typed values through shared reader/writer pumps', async 
   const node = await AsyncNode.create('node-stream');
   assert.equal(isOk(node), true);
   assert.equal(isOk(await node.put('first')), true);
-  assert.equal(isOk(await node.putFinal({ answer: 42 })), true);
-  assert.equal(isOk(await node.drainAndClose()), true);
+  assert.equal(isOk(await node.finalize({ answer: 42 }, { wait: true })), true);
 
   assert.equal(await node.next(), 'first');
   assert.deepEqual(await node.next(), { answer: 42 });
   assert.equal(await node.next(), null);
 });
 
+test('AsyncNode finalize ends a stream without waiting for the store', async () => {
+  // The ordinary producer's ending: one call, and nothing awaited for it. The
+  // write and the closure are the writer pump's work.
+  const node = await AsyncNode.create('finalize-async');
+  assert.equal(isOk(await node.put('token')), true);
+  assert.equal(isOk(await node.finalize()), true);
+
+  assert.equal(await node.next(), 'token');
+  assert.equal(await node.next(), null);
+  assert.equal(await node.isWritable(), false);
+});
+
+test('AsyncNode finalize can leave the writer open, and close ends it', async () => {
+  // Finality and closure are still two facts; `close: false` writes only one.
+  const node = await AsyncNode.create('finalize-open');
+  assert.equal(isOk(await node.finalize(undefined, { wait: true, close: false })), true);
+  assert.equal(node.writer.isWritable(), true);
+  assert.equal(await node.next(), null);
+  assert.equal(isOk(await node.close()), true);
+  assert.equal(node.writer.isWritable(), false);
+});
+
+test('AsyncNode close ends a stream that has no final value', async () => {
+  // The specialised half: a log can say "no more", not "this was the last".
+  const node = await AsyncNode.create('close-only');
+  assert.equal(isOk(await node.put('line')), true);
+  assert.equal(isOk(await node.close()), true);
+  assert.equal(await node.next(), 'line');
+  assert.equal(await node.next(), null);
+  const refused = await node.consume();
+  assert.equal(isOk(refused), false);
+  assert.equal(refused.code, StatusCode.FAILED_PRECONDITION);
+});
+
 test('AsyncNode consume accepts both spellings of a single value', async () => {
   const asFinal = await AsyncNode.create('consume-final');
-  assert.equal(isOk(await asFinal.putFinal({ value: 1 })), true);
+  assert.equal(isOk(await asFinal.finalize({ value: 1 }, { wait: true })), true);
   assert.deepEqual(await asFinal.consume(), { value: 1 });
 
   const thenNull = await AsyncNode.create('consume-then-null');
   assert.equal(isOk(await thenNull.put({ value: 2 })), true);
-  assert.equal(isOk(await thenNull.putNullFinal()), true);
+  assert.equal(isOk(await thenNull.finalize(undefined, { wait: true })), true);
   assert.deepEqual(await thenNull.consume(), { value: 2 });
 });
 
@@ -169,15 +202,15 @@ test('AsyncNode consume reads a node holding no value as none', async () => {
   // all or a bare null final, and both must read back the same -- this is how a
   // unary `config` port arrives when the caller wants the backend's defaults.
   const closedEmpty = await AsyncNode.create('consume-closed-empty');
-  assert.equal(isOk(await closedEmpty.drainAndClose()), true);
+  assert.equal(isOk(await closedEmpty.close()), true);
   assert.equal(await closedEmpty.consume({ allowNone: true }), null);
 
   const nullOnly = await AsyncNode.create('consume-null-only');
-  assert.equal(isOk(await nullOnly.putNullFinal()), true);
+  assert.equal(isOk(await nullOnly.finalize(undefined, { wait: true })), true);
   assert.equal(await nullOnly.consume({ allowNone: true }), null);
 
   const strict = await AsyncNode.create('consume-null-only-strict');
-  assert.equal(isOk(await strict.putNullFinal()), true);
+  assert.equal(isOk(await strict.finalize(undefined, { wait: true })), true);
   const refused = await strict.consume();
   assert.equal(isOk(refused), false);
   assert.equal(refused.code, StatusCode.FAILED_PRECONDITION);
@@ -187,7 +220,7 @@ test('AsyncNode iteration skips a null marker rather than failing', async () => 
   const node = await AsyncNode.create('iterate-null');
   assert.equal(isOk(await node.put('first')), true);
   assert.equal(isOk(await node.put('second')), true);
-  assert.equal(isOk(await node.putNullFinal()), true);
+  assert.equal(isOk(await node.finalize(undefined, { wait: true })), true);
 
   const values = [];
   for (;;) {

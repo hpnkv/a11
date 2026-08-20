@@ -246,8 +246,7 @@ export class A11ChatSession {
         need(await register.call());
         const tools = need(await register.getInput('tools'));
         for (const descriptor of descriptors) need(await tools.put(descriptor));
-        need(await tools.putNullFinal());
-        need(await tools.drainAndClose());
+        need(await tools.finalize());
         const ok = need(await register.getOutput('ok', false));
         await ok.next({timeoutMs: 10_000});
         await register.wait(10_000);
@@ -436,19 +435,16 @@ export class A11ChatSession {
         );
         const interactions = need(await call.getInput('interactions'));
         for (const interaction of this.history) need(await interactions.put(interaction));
-        need(await interactions.putFinal(userInteraction));
-        need(await interactions.drainAndClose());
+        need(await interactions.finalize(userInteraction));
 
         // Closed empty, so each backend applies its own default request config.
         const config = need(await call.getInput('config'));
-        need(await config.putNullFinal());
-        need(await config.drainAndClose());
+        need(await config.finalize());
 
         const toolDefs = applyPortSchemas(need(getToolDefinitions(registry, this.toolNames)), this.descriptors);
         const toolsNode = need(await call.getInput('tools'));
         for (const def of toolDefs) need(await toolsNode.put(def));
-        need(await toolsNode.putNullFinal());
-        need(await toolsNode.drainAndClose());
+        need(await toolsNode.finalize());
 
         // Read thoughts concurrently so the "thinking" affordance streams live —
         // and started before the text reader, so that a turn which thinks before

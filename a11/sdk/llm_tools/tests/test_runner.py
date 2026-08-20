@@ -33,8 +33,7 @@ _ECHO_SCHEMA = ActionSchema(
 
 async def _echo(action: a11.Action) -> None:
     word = await action["word"].consume(str)
-    await action["echoed"].put(word)
-    await action["echoed"].drain_and_close()
+    await action["echoed"].finalize(word)
     # Narration: no port declares it and nothing here closes it.
     await action.log(f"Echoed `{word}`.")
     # And one the runner must leave out, because it is A11's own bookkeeping
@@ -136,18 +135,15 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, patterns)
     host.run()
 
-    async with host["tools"] as tools:
-        await tools.put_final(
-            {
-                "name": "caller_tool",
-                "description": "A tool the caller serves itself.",
-                "input_schema": {"type": "object", "properties": {}},
-            }
-        )
-    async with host["interactions"] as interactions:
-        await interactions.put_null_final()
-    async with host["config"] as config:
-        await config.put_null_final()
+    await host["tools"].finalize(
+        {
+            "name": "caller_tool",
+            "description": "A tool the caller serves itself.",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    )
+    await host["interactions"].finalize()
+    await host["config"].finalize()
     await host.wait()
 
     assert [tool["name"] for tool in collected[0]] == expected

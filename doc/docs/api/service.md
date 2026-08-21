@@ -29,3 +29,60 @@ retains the source when a gateway multiplexes clients.
 ## SessionOptions
 
 ::: a11.service.session.SessionOptions
+
+## Serving
+
+A [`Service`][a11.service.service.Service] owns no sockets, so binding it to
+listeners is a separate sentence:
+[`serving`][a11.service.serving.serving] takes a service and any number of
+listener factories, yields the live listeners, and on the way out stops them in
+reverse before draining the service — so nothing new arrives while it is
+finishing what it has.
+
+```python
+async with serving(service, websocket(ws_options), http_sse("0.0.0.0", 8012)):
+    await stop.wait()
+```
+
+One service behind every listener is the point: a caller's session, the registry
+it dispatches against and the concurrency it shares are the same whichever
+endpoint it arrived on.
+
+::: a11.service.serving.serving
+
+::: a11.service.serving.websocket
+
+::: a11.service.serving.http_sse
+
+::: a11.service.serving.webrtc
+
+## `a11 serve`
+
+The command form of the above: name a module holding an
+[`ActionRegistry`][a11.actions.registry.ActionRegistry] and it is served on the
+transports you ask for.
+
+```sh
+a11 serve mypkg.actions                       # REGISTRY over WebSocket
+a11 serve mypkg.actions:TOOLS --ws --sse      # a named registry, two endpoints
+a11 serve ./examples/demo/main.py             # a file, nothing installed
+a11 serve mypkg.actions --webrtc \
+    --webrtc-signalling-server wss://a11.services/ice \
+    --webrtc-signalling-identity demoserver
+```
+
+The target names a module either as an import path (`pkg.subpkg.module`) or as a
+path to a `.py` file, with an optional `:SYMBOL` defaulting to `REGISTRY`. A
+`.py` suffix, a path separator, a leading `.`/`~`, or a file that is simply
+there means a path; anything else is imported the ordinary way. A file is loaded
+under its own stem rather than as `__main__`, so its `if __name__ ==
+"__main__":` block stays asleep, and its directory joins `sys.path` so sibling
+imports resolve. Each transport has its own flag group (`--ws-host`, `--sse-port`,
+`--webrtc-signalling-server`, …); `--h11`/`--h2c`/`--h2` and `--cert`/`--privkey`
+are shared by every HTTP-based endpoint. HTTP/1.1 is the default, because that
+is what an RFC 6455 WebSocket client speaks; SSE runs over it too, spending a
+second connection on its outbound direction because an HTTP/1.1 connection
+carries one request and the event stream has it. `SIGINT` and `SIGTERM` are
+clean shutdowns.
+
+::: a11.cli.commands.serve

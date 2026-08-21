@@ -13,11 +13,13 @@ from a11.cli.app import Command
 from a11.cli.commands.chat import CHAT_COMMAND
 from a11.cli.commands.flow import FLOW_COMMAND
 from a11.cli.commands.gateway import GATEWAY_COMMAND
+from a11.cli.commands.serve import SERVE_COMMAND
 
 COMMANDS: list[Command] = [
     CHAT_COMMAND,
     FLOW_COMMAND,
     GATEWAY_COMMAND,
+    SERVE_COMMAND,
 ]
 
 __all__ = ["COMMANDS"]

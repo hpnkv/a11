@@ -373,6 +373,10 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
   /**
    * @brief Creates a WebRTC server that accepts peer connections.
    *
+   * Registers `identity` on an in-process signalling service. The overload
+   * below is the general one; this is the convenience for the case where the
+   * peers are negotiating through a service in this process.
+   *
    * @param identity Local identity this server listens as.
    * @param signalling Signalling service used to negotiate with peers.
    * @param on_stream Callback invoked with each accepted stream.
@@ -385,6 +389,32 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
       OnWebRtcStream on_stream, WebRtcConfiguration configuration = {},
       WireStreamOptions stream_options = {});
 
+  /**
+   * @brief Creates a WebRTC server negotiating over an explicit transport.
+   *
+   * Prefer this overload when the peers are reached across a network through a
+   * *remote* signalling server rather than a service in this process: connect a
+   * WebSocketSignallingClient to it and hand the client over here. The server
+   * listens as whatever identity the transport registered under, so there is no
+   * separate identity to keep in step.
+   *
+   * The mirror of WebRtcWireStream::CreateClient's transport overload, and the
+   * one that makes an agent behind a signalling rendezvous reachable at all.
+   *
+   * @param signalling Connected signalling transport; its identity is the
+   *        server's. The server takes over its message callback, and closes it
+   *        when stopped -- it is the server's rendezvous, not a side channel the
+   *        caller keeps using.
+   * @param on_stream Callback invoked with each accepted stream.
+   * @param configuration ICE and fragmentation settings.
+   * @param stream_options Transport-level WireStreamOptions per stream.
+   * @return The running server, or an error status.
+   */
+  static absl::StatusOr<std::shared_ptr<WebRtcWireServer>> Create(
+      std::shared_ptr<SignallingTransport> signalling, OnWebRtcStream on_stream,
+      WebRtcConfiguration configuration = {},
+      WireStreamOptions stream_options = {});
+
   ~WebRtcWireServer();
 
   /** Stops the server and stops accepting new peer connections. */
@@ -395,8 +425,9 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
   [[nodiscard]] bool running() const;
   /** @return The number of peers still completing negotiation. */
   [[nodiscard]] size_t pending_peer_count() const;
-  /** @return The signalling endpoint the server negotiates over. */
-  [[nodiscard]] std::shared_ptr<SignallingEndpoint> signalling_endpoint() const;
+  /** @return The signalling transport the server negotiates over. */
+  [[nodiscard]] std::shared_ptr<SignallingTransport> signalling_endpoint()
+      const;
 
  private:
   struct State;

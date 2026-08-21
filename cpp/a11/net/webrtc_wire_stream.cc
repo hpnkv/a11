@@ -865,20 +865,20 @@ absl::Status ServerPeerStatus(
 }  // namespace
 
 struct WebRtcWireServer::State {
-  State(std::string value_identity,
-        std::shared_ptr<SignallingService> value_signalling,
-        OnWebRtcStream stream_callback, WebRtcConfiguration value_configuration,
+  State(std::string value_identity, OnWebRtcStream stream_callback,
+        WebRtcConfiguration value_configuration,
         WireStreamOptions value_stream_options)
       : identity(std::move(value_identity)),
-        signalling(std::move(value_signalling)),
         on_stream(std::move(stream_callback)),
         configuration(std::move(value_configuration)),
         stream_options(value_stream_options) {}
 
   mutable thread::Mutex mu;
   const std::string identity;
-  const std::shared_ptr<SignallingService> signalling;
-  std::shared_ptr<SignallingEndpoint> endpoint ABSL_GUARDED_BY(mu);
+  // A transport, not an endpoint: an in-process service's endpoint is one, and
+  // so is a signalling client connected to a remote rendezvous. Everything
+  // after registration only ever sends and receives.
+  std::shared_ptr<SignallingTransport> endpoint ABSL_GUARDED_BY(mu);
   const OnWebRtcStream on_stream;
   const WebRtcConfiguration configuration;
   const WireStreamOptions stream_options;
@@ -896,31 +896,52 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
     return absl::InvalidArgumentError(
         "WebRTC signalling service must not be null");
   }
+  // Registered with a callback that does nothing, then replaced below by the
+  // transport overload's own. Nothing can be delivered in between: a message
+  // for this identity could not have been addressed before it existed.
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<SignallingEndpoint> endpoint,
+      signalling->Connect(std::move(identity),
+                          [](SignallingMessage) { return a11::ReadyTask(); }));
+  return Create(std::move(endpoint), std::move(on_stream),
+                std::move(configuration), stream_options);
+}
+
+absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
+    std::shared_ptr<SignallingTransport> signalling, OnWebRtcStream on_stream,
+    WebRtcConfiguration configuration, WireStreamOptions stream_options) {
+  if (signalling == nullptr) {
+    return absl::InvalidArgumentError(
+        "WebRTC signalling transport must not be null");
+  }
+  std::string identity = signalling->identity();
+  ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
   if (!on_stream) {
     return absl::InvalidArgumentError("WebRTC on_stream must be callable");
   }
   ABSL_RETURN_IF_ERROR(configuration.Validate());
   ABSL_RETURN_IF_ERROR(stream_options.Validate());
-  auto state = std::make_shared<State>(
-      std::move(identity), std::move(signalling), std::move(on_stream),
-      std::move(configuration), stream_options);
+  auto state =
+      std::make_shared<State>(std::move(identity), std::move(on_stream),
+                              std::move(configuration), stream_options);
   std::weak_ptr<State> weak = state;
   {
-    // Registration makes the callback externally reachable. Keep the state
-    // lock held until endpoint publication so an immediate offer cannot
-    // observe a partially initialized server.
+    // Installing the callback makes the server externally reachable. Keep the
+    // state lock held until the transport is published so an immediate offer
+    // cannot observe a partially initialized server.
     thread::MutexLock lock(&state->mu);
-    ABSL_ASSIGN_OR_RETURN(
-        std::shared_ptr<SignallingEndpoint> endpoint,
-        state->signalling->Connect(state->identity,
-                                   [weak](SignallingMessage message) {
-                                     std::shared_ptr<State> state = weak.lock();
-                                     if (state == nullptr) {
-                                       return a11::ReadyTask();
-                                     }
-                                     return OnSignal(state, std::move(message));
-                                   }));
-    state->endpoint = std::move(endpoint);
+    state->endpoint = signalling;
+    const absl::Status installed =
+        signalling->SetOnMessage([weak](SignallingMessage message) {
+          std::shared_ptr<State> state = weak.lock();
+          if (state == nullptr) {
+            return a11::ReadyTask();
+          }
+          return OnSignal(state, std::move(message));
+        });
+    if (!installed.ok()) {
+      return installed;
+    }
   }
 
   struct MakeSharedEnabler final : WebRtcWireServer {
@@ -1009,7 +1030,7 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
       if (state == nullptr) {
         return;
       }
-      std::shared_ptr<SignallingEndpoint> endpoint;
+      std::shared_ptr<SignallingTransport> endpoint;
       std::string identity;
       {
         thread::MutexLock lock(&state->mu);
@@ -1035,7 +1056,7 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
           if (state == nullptr) {
             return;
           }
-          std::shared_ptr<SignallingEndpoint> endpoint;
+          std::shared_ptr<SignallingTransport> endpoint;
           std::string identity;
           {
             thread::MutexLock lock(&state->mu);
@@ -1079,7 +1100,7 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
       if (state == nullptr || context == nullptr || channel == nullptr) {
         return;
       }
-      std::shared_ptr<SignallingEndpoint> endpoint;
+      std::shared_ptr<SignallingTransport> endpoint;
       OnWebRtcStream callback;
       WebRtcConfiguration configuration;
       WireStreamOptions options;
@@ -1225,7 +1246,7 @@ void WebRtcWireServer::ReportPeerError(const std::shared_ptr<State>& state,
     status = absl::UnknownError("WebRTC peer failed");
   }
   std::shared_ptr<ServerPeerContext> context;
-  std::shared_ptr<SignallingEndpoint> endpoint;
+  std::shared_ptr<SignallingTransport> endpoint;
   std::string identity;
   {
     thread::MutexLock lock(&state->mu);
@@ -1273,7 +1294,7 @@ void WebRtcWireServer::ReportPeerError(const std::shared_ptr<State>& state,
 
 absl::Status WebRtcWireServer::Stop() {
   absl::flat_hash_map<std::string, std::shared_ptr<ServerPeerContext>> peers;
-  std::shared_ptr<SignallingEndpoint> endpoint;
+  std::shared_ptr<SignallingTransport> endpoint;
   {
     thread::MutexLock lock(&state_->mu);
     if (!state_->running) {
@@ -1323,7 +1344,7 @@ size_t WebRtcWireServer::pending_peer_count() const {
   return state_->peers.size();
 }
 
-std::shared_ptr<SignallingEndpoint> WebRtcWireServer::signalling_endpoint()
+std::shared_ptr<SignallingTransport> WebRtcWireServer::signalling_endpoint()
     const {
   thread::MutexLock lock(&state_->mu);
   return state_->endpoint;

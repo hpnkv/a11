@@ -245,3 +245,69 @@ async def test_webrtc_wire_stream_exchanges_fragmented_messages():
     finally:
         server.stop()
         signalling.stop()
+
+
+@pytest.mark.asyncio
+async def test_webrtc_server_accepts_peers_through_a_remote_signalling_server():
+    """A server reachable through a signalling server it dialled out to.
+
+    The deployment the in-process `SignallingService` cannot describe: the
+    serving process is behind NAT and registers with a rendezvous rather than
+    hosting one, so its signalling is a *transport* it connected as a client.
+    The `WebSocketSignallingServer` here stands in for that rendezvous.
+    """
+    rendezvous = SignallingService.create()
+    signalling_server = WebSocketSignallingServer.create(rendezvous)
+    url = f"ws://127.0.0.1:{signalling_server.port}"
+    accepted_future = asyncio.get_running_loop().create_future()
+
+    async def on_stream(stream):
+        accepted = WireStreamWithRecv(stream)
+        await accepted.accept()
+        accepted_future.set_result(accepted)
+
+    server_signalling = await asyncio.wait_for(
+        WebSocketSignallingClient.connect(url, "remote-server"), timeout=10
+    )
+    # No identity argument: the server listens as whatever the transport
+    # registered under, so the two cannot drift apart.
+    server = WebRtcWireServer.create(server_signalling, on_stream)
+    client_signalling = None
+    try:
+        assert server.identity == "remote-server"
+
+        client_signalling = await asyncio.wait_for(
+            WebSocketSignallingClient.connect(url, "remote-client"), timeout=10
+        )
+        client = WireStreamWithRecv(
+            WebRtcWireStream.create_client("remote-server", client_signalling)
+        )
+        await asyncio.wait_for(client.start(), timeout=20)
+        accepted = await asyncio.wait_for(accepted_future, timeout=20)
+
+        message = _message(b"through-a-rendezvous")
+        client.send(message)
+        assert await asyncio.wait_for(accepted.receive(), timeout=20) == message
+
+        accepted.send(_message(b"reply"))
+        assert await asyncio.wait_for(client.receive(), timeout=20) == _message(
+            b"reply"
+        )
+
+        client.half_close()
+        accepted.half_close()
+        await asyncio.wait_for(
+            asyncio.gather(
+                client.drain_outgoing_messages(),
+                accepted.drain_outgoing_messages(),
+            ),
+            timeout=20,
+        )
+    finally:
+        # Stopping the server closes the transport it took over, so that one is
+        # not closed here.
+        server.stop()
+        if client_signalling is not None:
+            client_signalling.close()
+        signalling_server.stop()
+        rendezvous.stop()

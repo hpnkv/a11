@@ -1083,6 +1083,54 @@ class ActionRegistry:
         Create an empty action registry.
         """
 
+    def action(
+        self,
+        fn: typing.Callable[..., typing.Any] | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        output: typing.Any = "output",
+        headers: collections.abc.Mapping[str, ActionHeaderSchema] | None = None,
+    ) -> typing.Callable[..., typing.Any]:
+        """
+        Register a function as an Action, deriving both halves from it.
+
+        The decorator form of
+        [`action_from_callable`][a11.actions.annotated.action_from_callable]: the
+        schema and the handler are built from the function's annotations and
+        registered here, so the whole Action is the function and its signature.
+
+        ```python
+        registry = ActionRegistry()
+
+        @registry.action
+        async def summarise(
+            document: str,
+            style: Annotated[str | None, a11.InputPort(description="Tone.")] = None,
+        ) -> str:
+            # The docstring becomes the Action's description.
+            return await model.summarise(document, style or "neutral")
+        ```
+
+        The function comes back unchanged, so it stays directly callable and
+        testable; what was derived from it is on ``fn.action_schema`` and
+        ``fn.action_handler``.
+
+        Args:
+            fn: The function to bind, when used bare as ``@registry.action``.
+            name: Action name to register under; defaults to ``fn.__name__``.
+            description: Action description; defaults to ``fn``'s docstring.
+            output: Where ``fn``'s own result goes -- a port name, or an
+                [`OutputPort`][a11.actions.annotated.OutputPort] to say more about
+                that port. Ignored by a function that declares `OutputPort`
+                parameters, which has no such result.
+            headers: Extra header schemas to merge into the Action's, for headers
+                the function does not itself take a parameter for.
+
+        Returns:
+            ``fn`` itself, or the decorator that will take it.
+        """
+
     def copy(self, clear_autofills: bool = True) -> ActionRegistry:
         """
         Return a copy of the registry, optionally clearing autofills.
@@ -4040,6 +4088,14 @@ class HttpSseOptions:
         """
         Validate the options, raising on error.
         """
+
+    @property
+    def accept_streamed_outbound(self) -> bool:
+        """
+        Server-side: whether a streamed outbound request body is accepted and advertised. Clearing it leaves clients with POST-per-message, which over HTTP/1.1 costs a connection per message.
+        """
+    @accept_streamed_outbound.setter
+    def accept_streamed_outbound(self, arg0: bool) -> None: ...
 
     @property
     def connect_endpoint(self) -> str:
@@ -7399,6 +7455,7 @@ class WebRtcConfiguration:
 
 class WebRtcWireServer:
     @staticmethod
+    @typing.overload
     def create(
         identity: str,
         signalling: SignallingService,
@@ -7407,7 +7464,18 @@ class WebRtcWireServer:
         stream_options: WireStreamOptions = ...,
     ) -> WebRtcWireServer:
         """
-        Create a WebRTC server that accepts peer connections and invokes the async on_stream callback with each new WebRtcWireStream.
+        Create a WebRTC server that accepts peer connections and invokes the async on_stream callback with each new WebRtcWireStream, negotiating over a signalling service shared within this process.
+        """
+    @staticmethod
+    @typing.overload
+    def create(
+        signalling: SignallingTransport,
+        on_stream: typing.Any,
+        configuration: WebRtcConfiguration = ...,
+        stream_options: WireStreamOptions = ...,
+    ) -> WebRtcWireServer:
+        """
+        Create a WebRTC server that accepts peer connections over an explicit signalling transport (e.g. a WebSocket signalling client). Prefer this overload when peers reach this agent through a remote signalling server rather than a service in this process: the server listens as the identity the transport registered under, takes over its message callback, and closes it when stopped.
         """
 
     def __enter__(self) -> WebRtcWireServer: ...
@@ -7436,7 +7504,7 @@ class WebRtcWireServer:
         """
 
     @property
-    def signalling_endpoint(self) -> SignallingEndpoint:
+    def signalling_endpoint(self) -> SignallingTransport:
         """
         Signalling endpoint the server negotiates over.
         """

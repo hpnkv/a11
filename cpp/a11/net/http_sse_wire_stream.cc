@@ -724,8 +724,23 @@ a11::Task HttpSseClientWireStream::OpenTransport() {
     self->SetId(*stream_id);
     // The outbound stream is opened before the inbound loop starts, so a send
     // issued the moment Start() resolves already has somewhere to go.
-    if (options.outbound == SseOutboundDelivery::kStream) {
+    const std::shared_ptr<Http2Client> connected = self->client();
+    const bool prefer_stream =
+        options.outbound == SseOutboundDelivery::kStream ||
+        (connected != nullptr && !connected->multiplexed());
+    if (prefer_stream) {
       ABSL_RETURN_IF_ERROR(self->OpenOutboundStream(head.headers));
+    }
+    if (connected != nullptr && !connected->multiplexed()) {
+      thread::MutexLock lock(&self->client_state_->mu);
+      if (self->client_state_->outbound == SseOutboundDelivery::kPost) {
+        // Still POST, so every message will take a connection of its own -- and
+        // two fresh connections race their handshakes, which would hand the
+        // server an order the sender never chose. One at a time is what restores
+        // it, at a round trip per message. The streamed body above is how to
+        // have both, and is why this is the fallback rather than the norm.
+        self->client_state_->max_posts_in_flight = 1;
+      }
     }
     self->MarkHttpHeadersReady(head.headers);
     a11::Schedule([self]() { ReceiveSseLoop(std::move(self)); });
@@ -888,15 +903,31 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
 absl::Status HttpSseClientWireStream::TransmitAsPost(std::string payload) {
   std::shared_ptr<Http2Client> client;
   std::string endpoint;
-  std::string scheme;
+  ParsedUrl url;
   {
     thread::MutexLock lock(&client_state_->mu);
     client = client_state_->client;
     endpoint = client_state_->message_endpoint;
-    scheme = client_state_->url.scheme;
+    url = client_state_->url;
   }
   if (client == nullptr) {
     return absl::UnavailableError("SSE HTTP client is not connected");
+  }
+  std::string scheme = url.scheme;
+  // One connection, one request: the event stream is already on the connect
+  // connection and will outlive every message, so over HTTP/1.1 this POST needs
+  // a connection of its own. It is dropped when the request completes, which is
+  // the cost of POST-per-message on HTTP/1.1 -- and why a non-multiplexed
+  // connection prefers the streamed body, reaching this path only against a
+  // server that will not take one, and for the abort that overtakes it.
+  std::shared_ptr<Http2Client> post_client;
+  if (!client->multiplexed()) {
+    const HttpSseOptions post_options = options();
+    ABSL_ASSIGN_OR_RETURN(
+        post_client,
+        Http2Client::Connect(url.host, url.port, post_options.http2_options)
+            .Await(post_options.stream_options.deadline));
+    client = post_client;
   }
   ABSL_ASSIGN_OR_RETURN(std::string path,
                         FormatMessageEndpoint(std::move(endpoint), GetId()));
@@ -1145,9 +1176,11 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
   SetHttpHeader(&headers, "cache-control", "no-cache");
   // Both outbound modes reach the same endpoint, so what a client may do with it
   // has to be said here. A client that only knows POST ignores the field.
-  SetHttpHeader(&headers, std::string(kSseOutboundModesHeader),
-                absl::StrCat(kSseOutboundPostToken, ", ",
-                             kSseOutboundStreamToken));
+  SetHttpHeader(
+      &headers, std::string(kSseOutboundModesHeader),
+      options().accept_streamed_outbound
+          ? absl::StrCat(kSseOutboundPostToken, ", ", kSseOutboundStreamToken)
+          : std::string(kSseOutboundPostToken));
   absl::Status status = response->SendHeaders(200, headers);
   if (!status.ok()) {
     return a11::FailedTask(status);

@@ -67,6 +67,37 @@ def http_sse(
     return bind
 
 
+def webrtc(
+    signalling: net.SignallingTransport,
+    configuration: net.WebRtcConfiguration | None = None,
+    stream_options: net.WireStreamOptions | None = None,
+) -> Listener:
+    """A WebRTC listener bound to the service.
+
+    Unlike the HTTP listeners this one does not open a port: peers find it
+    through ``signalling``, and the server listens as whatever identity that
+    transport registered under. Pass a
+    [`WebSocketSignallingClient`][a11.net.signalling.WebSocketSignallingClient]
+    connected to a signalling server to be reachable through it, or an endpoint
+    of an in-process
+    [`SignallingService`][a11.net.signalling.SignallingService] to be reachable
+    within this process.
+
+    The server closes the transport when it is stopped, which `serving` does on
+    the way out along with every other listener.
+    """
+
+    def bind(service: Service):
+        return net.WebRtcWireServer.create(
+            signalling,
+            service.accept,
+            configuration or net.WebRtcConfiguration(),
+            stream_options or net.WireStreamOptions(),
+        )
+
+    return bind
+
+
 @contextlib.asynccontextmanager
 async def serving(
     service: Service,
@@ -102,4 +133,4 @@ async def serving(
         await service.aclose(timeout=drain_timeout)
 
 
-__all__ = ["Listener", "http_sse", "serving", "websocket"]
+__all__ = ["Listener", "http_sse", "serving", "webrtc", "websocket"]

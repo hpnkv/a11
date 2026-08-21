@@ -308,11 +308,52 @@ using PayloadType = typename Payload<T>::type;
 // marshalled back to their asyncio loop.
 class PythonLoop {
  public:
+  /**
+   * The loop to marshal onto, resolved now.
+   *
+   * The running loop, else whatever the policy holds -- including a loop it
+   * invents on the spot. For a caller that is *itself* created from async code
+   * (a Session, a server, a transport callback) that is right and cheap: the
+   * loop it was made on is the loop it will be used from.
+   */
   static absl::StatusOr<std::shared_ptr<PythonLoop>> Capture();
+
+  /**
+   * The loop running on this thread, or null when there is none.
+   *
+   * Never fails: "no loop here" is an answer rather than an error, which is
+   * what lets an owner defer the question instead of guessing (see Resolve).
+   * A loop found this way is also remembered process-wide.
+   */
+  static std::shared_ptr<PythonLoop> CaptureRunning();
+
+  /** Remember the running loop, if there is one, and nothing else. */
+  static void NoteRunningLoop();
+
+  /**
+   * The loop to marshal onto, resolved as late as possible.
+   *
+   * For work whose owner was created before any loop existed -- an action
+   * handler registered at import time is the ordinary case -- and which is now
+   * actually being invoked. Tries, in order: the loop running on this thread;
+   * the last loop A11 was used from, if it is still open; and whatever the
+   * policy already holds. It will not invent a loop: one nobody runs is
+   * indistinguishable from a hang, so an unanswerable question fails here
+   * instead, saying what to do about it.
+   *
+   * A process running several loops is unaffected, because an owner created
+   * inside one captures it there and never reaches this. Only an owner created
+   * outside every loop gets here, and such an owner has no loop it belongs to
+   * for A11 to get wrong.
+   */
+  static absl::StatusOr<std::shared_ptr<PythonLoop>> Resolve();
 
   PythonLoop(const PythonLoop&) = delete;
   PythonLoop& operator=(const PythonLoop&) = delete;
   ~PythonLoop();
+
+  /** Whether the loop is closed, so nothing posted to it will ever run. */
+  bool IsClosed() const;
 
   class Cancellation;
   absl::StatusOr<std::shared_ptr<Cancellation>> Schedule(
@@ -320,6 +361,10 @@ class PythonLoop {
 
  private:
   explicit PythonLoop(PyObject* absl_nonnull loop) : loop_(loop) {}
+
+  static std::shared_ptr<PythonLoop> Adopt(py::object loop);
+  static void Remember(const std::shared_ptr<PythonLoop>& loop);
+  static std::shared_ptr<PythonLoop> Remembered();
 
   PyObject* absl_nullable loop_ = nullptr;
 };

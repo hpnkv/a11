@@ -44,9 +44,7 @@ flow plan-research {
     },
     config: {}
   )
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
+  skip thoughts, event_stream, new_interactions of llm
 
   # The plan arrives as text, and the briefs are its lines. `join ""` puts the
   # streamed pieces back together, and `split_lines` makes them a stream again
@@ -92,9 +90,7 @@ flow investigate {
     },
     config: {}
   )
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
+  skip thoughts, event_stream, new_interactions of llm
 
   llm.text_output | join "" -> report
 
@@ -144,9 +140,7 @@ flow synthesise-findings {
     },
     config: {}
   )
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
+  skip thoughts, event_stream, new_interactions of llm
 
   # Not joined: the caller gets the report as the model writes it.
   llm.text_output -> report

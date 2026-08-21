@@ -21,17 +21,15 @@ decorated form.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
 import pathlib
-import signal
-from typing import Iterator
 
 from absl import logging
 
 from a11 import net
 from a11.cli import console as console_module
 from a11.cli.app import Command
+from a11.cli.signals import stop_on_signals
 from a11.gateway import config, conversations, daemon
 
 
@@ -150,36 +148,6 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
 
 
-@contextlib.contextmanager
-def _stop_on_signals() -> Iterator[asyncio.Event]:
-    """An event set by ``SIGINT``/``SIGTERM``, so a signal is a clean shutdown.
-
-    Installing these matters for more than tidiness: the native runtime installs
-    Abseil's failure-signal handler, which treats a plain ``SIGTERM`` as a crash
-    and dumps a stack trace before the process dies with the server still
-    listening. Handling the signal on the loop takes those two back, and the
-    handlers are removed again on the way out so nothing outlives the command.
-
-    It is also what makes ``a11 gateway stop`` work at all, since that sends
-    SIGTERM and expects a clean exit.
-    """
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-    installed: list[signal.Signals] = []
-    for number in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(number, stop.set)
-            installed.append(number)
-        except NotImplementedError:
-            # Not a POSIX loop; the KeyboardInterrupt path in `cli.app` remains.
-            pass
-    try:
-        yield stop
-    finally:
-        for number in installed:
-            loop.remove_signal_handler(number)
-
-
 def _websocket_options(url: str) -> net.WebSocketServerOptions:
     """Server options for one ``ws://host:port/path`` endpoint."""
     from a11.net import http as net_http
@@ -245,7 +213,7 @@ async def _serve(args: argparse.Namespace) -> int:
         logging.info(
             "[gateway] conversations in %s", settings.conversation_store_root
         )
-        with daemon.recorded(settings, served), _stop_on_signals() as stop:
+        with daemon.recorded(settings, served), stop_on_signals() as stop:
             await stop.wait()
         logging.info("[gateway] stopping")
     return 0

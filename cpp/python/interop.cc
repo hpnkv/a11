@@ -10,8 +10,10 @@
 
 #include <Python.h>
 #include <pythread.h>
+#include <absl/base/no_destructor.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/synchronization/mutex.h>
 #include <absl/time/time.h>
 #include <nlohmann/json.hpp>
 #include <pybind11/pybind11.h>
@@ -31,6 +33,24 @@ namespace {
 // DeferredPythonRefs: a destructor cannot take the GIL safely, because it may run
 // on a pool worker and no check can close the race against finalization.)
 
+// The last event loop A11 was seen running on, for an owner that could not
+// capture one when it was created.
+//
+// Deliberately never destroyed and never released: a strong reference held for
+// the life of the process cannot be retired at the wrong moment, and one loop
+// object outliving the interpreter costs nothing. `absl::Mutex` rather than
+// `thread::Mutex` for the same reason as DeferredPythonRefs -- this is reachable
+// with the GIL held, and a fibre-aware mutex wants a scheduler.
+absl::Mutex& RememberedLoopMutex() {
+  static absl::NoDestructor<absl::Mutex> mutex;
+  return *mutex;
+}
+
+std::shared_ptr<PythonLoop>& RememberedLoop() {
+  static absl::NoDestructor<std::shared_ptr<PythonLoop>> loop;
+  return *loop;
+}
+
 absl::StatusCode CanonicalStatusCode(int value) {
   if (value < static_cast<int>(absl::StatusCode::kOk) ||
       value > static_cast<int>(absl::StatusCode::kUnauthenticated)) {
@@ -41,24 +61,61 @@ absl::StatusCode CanonicalStatusCode(int value) {
 
 }  // namespace
 
+std::shared_ptr<PythonLoop> PythonLoop::Adopt(py::object loop) {
+  struct MakeSharedEnabler final : PythonLoop {
+    explicit MakeSharedEnabler(PyObject* loop) : PythonLoop(loop) {}
+  };
+
+  return std::make_shared<MakeSharedEnabler>(loop.release().ptr());
+}
+
+void PythonLoop::Remember(const std::shared_ptr<PythonLoop>& loop) {
+  if (loop == nullptr) {
+    return;
+  }
+  // Callers hold the GIL, so nothing inside this section may reach for it: the
+  // assignment copies a shared_ptr and, at most, retires the previous loop's
+  // reference, which only queues. Taking the GIL under this lock would deadlock
+  // against a thread holding the GIL and waiting here.
+  absl::MutexLock lock(&RememberedLoopMutex());
+  RememberedLoop() = loop;
+}
+
+std::shared_ptr<PythonLoop> PythonLoop::Remembered() {
+  absl::MutexLock lock(&RememberedLoopMutex());
+  return RememberedLoop();
+}
+
+std::shared_ptr<PythonLoop> PythonLoop::CaptureRunning() {
+  py::gil_scoped_acquire acquire;
+  py::object running;
+  try {
+    running = py::module_::import("asyncio").attr("get_running_loop")();
+  } catch (const py::error_already_set&) {
+    PyErr_Clear();
+    return nullptr;
+  } catch (...) {
+    return nullptr;
+  }
+  std::shared_ptr<PythonLoop> loop = Adopt(std::move(running));
+  Remember(loop);
+  return loop;
+}
+
+void PythonLoop::NoteRunningLoop() {
+  (void)CaptureRunning();
+}
+
 absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Capture() {
+  if (std::shared_ptr<PythonLoop> running = CaptureRunning();
+      running != nullptr) {
+    return running;
+  }
   py::gil_scoped_acquire acquire;
   try {
-    py::module_ asyncio = py::module_::import("asyncio");
-    py::object loop;
-    try {
-      loop = asyncio.attr("get_running_loop")();
-    } catch (const py::error_already_set&) {
-      PyErr_Clear();
-      loop = asyncio.attr("get_event_loop_policy")().attr("get_event_loop")();
-    }
-    PyObject* owned = loop.release().ptr();
-
-    struct MakeSharedEnabler final : PythonLoop {
-      explicit MakeSharedEnabler(PyObject* loop) : PythonLoop(loop) {}
-    };
-
-    return std::make_shared<MakeSharedEnabler>(owned);
+    return Adopt(py::module_::import("asyncio")
+                     .attr("get_event_loop_policy")()
+                     .attr("get_event_loop")());
   } catch (py::error_already_set& error) {
     return StatusFromPythonException(error);
   } catch (const std::exception& error) {
@@ -66,6 +123,53 @@ absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Capture() {
   } catch (...) {
     return absl::FailedPreconditionError(
         "Unable to capture a Python asyncio event loop");
+  }
+}
+
+absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Resolve() {
+  if (std::shared_ptr<PythonLoop> running = CaptureRunning();
+      running != nullptr) {
+    return running;
+  }
+  if (std::shared_ptr<PythonLoop> remembered = Remembered();
+      remembered != nullptr && !remembered->IsClosed()) {
+    return remembered;
+  }
+  py::gil_scoped_acquire acquire;
+  try {
+    py::object probed =
+        py::module_::import("a11._asyncio").attr("_resolve_event_loop")();
+    if (probed.is_none()) {
+      return absl::FailedPreconditionError(
+          "No asyncio event loop to run this Python callback on. A11 posts a "
+          "handler to the loop it is used from, so one has to be running (or "
+          "set with asyncio.set_event_loop) by the time the handler is "
+          "invoked.");
+    }
+    std::shared_ptr<PythonLoop> loop = Adopt(std::move(probed));
+    Remember(loop);
+    return loop;
+  } catch (py::error_already_set& error) {
+    return StatusFromPythonException(error);
+  } catch (const std::exception& error) {
+    return absl::FailedPreconditionError(error.what());
+  } catch (...) {
+    return absl::FailedPreconditionError(
+        "Unable to resolve a Python asyncio event loop");
+  }
+}
+
+bool PythonLoop::IsClosed() const {
+  py::gil_scoped_acquire acquire;
+  try {
+    return py::reinterpret_borrow<py::object>(loop_)
+        .attr("is_closed")()
+        .cast<bool>();
+  } catch (const py::error_already_set&) {
+    PyErr_Clear();
+    return true;
+  } catch (...) {
+    return true;
   }
 }
 

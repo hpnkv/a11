@@ -1039,6 +1039,12 @@ void BindHttp(py::module_& module) {
                      "The endpoint path template used to post messages.")
       .def_readwrite("outbound", &net::HttpSseOptions::outbound,
                      "Client-side outbound delivery method.")
+      .def_readwrite("accept_streamed_outbound",
+                     &net::HttpSseOptions::accept_streamed_outbound,
+                     "Server-side: whether a streamed outbound request body is "
+                     "accepted and advertised. Clearing it leaves clients with "
+                     "POST-per-message, which over HTTP/1.1 costs a connection "
+                     "per message.")
       .def_readwrite("max_concurrent_posts",
                      &net::HttpSseOptions::max_concurrent_posts,
                      "Outbound POSTs kept in flight at once; 1 restores "

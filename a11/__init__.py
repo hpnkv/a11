@@ -33,6 +33,10 @@ from .actions import (
     ActionRegistry,
     ActionSchema,
     ActionSettings,
+    Header,
+    InputPort,
+    OutputPort,
+    action_from_callable,
 )
 from .actions.action import DEFAULT_HEADERS as DEFAULT_ACTION_HEADERS
 from .data.types import (
@@ -72,6 +76,7 @@ from .net.http_sse_wire_stream import (
     HttpSseServer,
     HttpSseServerWireStream,
     HttpSseWireStream,
+    SseOutboundDelivery,
 )
 from .net.in_process_wire_stream import (
     InProcessWireStream,

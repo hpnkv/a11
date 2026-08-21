@@ -321,14 +321,15 @@ class PythonActionCallback {
     if (PyCallable_Check(callable.ptr()) == 0) {
       return absl::InvalidArgumentError("action callback must be callable");
     }
+    // Deliberately CaptureRunning() rather than Capture(): registering a
+    // handler is ordinary module-level Python, where there is often no loop at
+    // all, and Capture() would answer that with one it invented and nobody
+    // runs -- so every dispatch posted to it waited for good. A handler
+    // registered outside a loop leaves this null and asks the question again
+    // when it is actually invoked; see EnsureLoop.
     std::shared_ptr<PythonLoop> loop;
     if (needs_loop) {
-      absl::StatusOr<std::shared_ptr<PythonLoop>> captured =
-          PythonLoop::Capture();
-      if (!captured.ok()) {
-        return captured.status();
-      }
-      loop = std::move(*captured);
+      loop = PythonLoop::CaptureRunning();
     }
 
     struct MakeSharedEnabler final : PythonActionCallback {
@@ -349,8 +350,12 @@ class PythonActionCallback {
 
   a11::Task CallAsync(std::shared_ptr<actions::Action> action) const {
     py::gil_scoped_acquire acquire;
+    absl::StatusOr<std::shared_ptr<PythonLoop>> loop = EnsureLoop();
+    if (!loop.ok()) {
+      return a11::FailedTask(loop.status());
+    }
     py::function callable = py::reinterpret_borrow<py::function>(callable_);
-    return CallPythonAsync<a11::Unit>(loop_, callable, std::move(action));
+    return CallPythonAsync<a11::Unit>(*loop, callable, std::move(action));
   }
 
   absl::Status CallSync(std::shared_ptr<actions::Action> action) const {
@@ -379,10 +384,36 @@ class PythonActionCallback {
 
  private:
   PythonActionCallback(PyObject* callable, std::shared_ptr<PythonLoop> loop)
-      : callable_(callable), loop_(std::move(loop)) {}
+      : callable_(callable),
+        loop_(std::move(loop)),
+        captured_running_(loop_ != nullptr) {}
+
+  /**
+   * The loop to post this invocation to, resolved on first use.
+   *
+   * The GIL is the lock: every caller holds it across the whole call, so the
+   * cached answer needs no other guard. A loop captured while it was running is
+   * trusted for good, which keeps the ordinary case -- registration from inside
+   * a loop -- at exactly its old cost. One resolved later is re-checked, so a
+   * process that runs a second `asyncio.run` does not keep posting into the
+   * first loop's grave.
+   */
+  absl::StatusOr<std::shared_ptr<PythonLoop>> EnsureLoop() const {
+    if (loop_ != nullptr && (captured_running_ || !loop_->IsClosed())) {
+      return loop_;
+    }
+    absl::StatusOr<std::shared_ptr<PythonLoop>> resolved =
+        PythonLoop::Resolve();
+    if (!resolved.ok()) {
+      return resolved.status();
+    }
+    loop_ = *std::move(resolved);
+    return loop_;
+  }
 
   PyObject* callable_ = nullptr;
-  std::shared_ptr<PythonLoop> loop_;
+  mutable std::shared_ptr<PythonLoop> loop_;
+  bool captured_running_ = false;
 };
 
 struct AsyncPythonActionHandler {
@@ -1156,7 +1187,15 @@ Examples:
           py::arg("action_name"), py::arg("propagate_io") = true,
           py::arg("forward_headers") = true)
       .def(
-          "run", [](actions::Action& self) { return ValueOrThrow(self.Run()); },
+          "run",
+          [](actions::Action& self) {
+            // Starting an action is the last moment before its handler is
+            // invoked that is certain to be Python on the loop's own thread, so
+            // it is where a handler registered before any loop existed gets one
+            // to post to (see PythonLoop::Resolve).
+            PythonLoop::NoteRunningLoop();
+            return ValueOrThrow(self.Run());
+          },
           R"doc(Run the action's handler and return the running action. The Python layer also exposes the native entry point as `run_in_background`.
 
 Examples:
@@ -1178,6 +1217,9 @@ Examples:
                   a11::FailedFuture<std::shared_ptr<actions::Action>>(
                       converted.status()));
             }
+            // As in `run`, and before the GIL goes: a dispatched action's
+            // handler may be a Python one registered outside any loop.
+            PythonLoop::NoteRunningLoop();
             // Without the GIL: this starts work and can park in the
             // fibre scheduler before returning a future, and it runs on
             // the event-loop thread. Holding the GIL across it deadlocks

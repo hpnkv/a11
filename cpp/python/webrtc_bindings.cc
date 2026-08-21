@@ -588,8 +588,34 @@ void BindWebRtc(py::module_& module) {
                 std::move(configuration), stream_options));
           },
           "Create a WebRTC server that accepts peer connections and invokes "
-          "the async on_stream callback with each new WebRtcWireStream.",
+          "the async on_stream callback with each new WebRtcWireStream, "
+          "negotiating over a signalling service shared within this process.",
           py::arg("identity"), py::arg("signalling"), py::arg("on_stream"),
+          py::arg("configuration") = net::WebRtcConfiguration{},
+          py::arg("stream_options") = net::WireStreamOptions{})
+      .def_static(
+          "create",
+          [](std::shared_ptr<net::SignallingTransport> signalling,
+             const py::object& on_stream,
+             net::WebRtcConfiguration configuration,
+             net::WireStreamOptions stream_options) {
+            std::shared_ptr<PythonSignallingCallback> callback = ValueOrThrow(
+                PythonSignallingCallback::Create(on_stream, "on_stream"));
+            return ValueOrThrow(net::WebRtcWireServer::Create(
+                std::move(signalling),
+                [callback = std::move(callback)](
+                    std::shared_ptr<net::WebRtcWireStream> stream) {
+                  return callback->Call(std::move(stream));
+                },
+                std::move(configuration), stream_options));
+          },
+          "Create a WebRTC server that accepts peer connections over an "
+          "explicit signalling transport (e.g. a WebSocket signalling client). "
+          "Prefer this overload when peers reach this agent through a remote "
+          "signalling server rather than a service in this process: the server "
+          "listens as the identity the transport registered under, takes over "
+          "its message callback, and closes it when stopped.",
+          py::arg("signalling"), py::arg("on_stream"),
           py::arg("configuration") = net::WebRtcConfiguration{},
           py::arg("stream_options") = net::WireStreamOptions{})
       .def(

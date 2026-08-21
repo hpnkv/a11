@@ -29,6 +29,24 @@ correctly configured action without repeating the schema.
 
 ::: a11.actions.registry.ActionRegistry
 
+## Actions from annotations
+
+The FastAPI trade: write the function whose parameters are the values it
+actually wants, and let the annotations decide the wire shape.
+[`action_from_callable`][a11.actions.annotated.action_from_callable] returns the
+schema and handler; `ActionRegistry.action` is the same thing as a decorator
+that registers them.
+
+::: a11.actions.annotated
+
+::: a11.actions.annotated.action_from_callable
+
+::: a11.actions.annotated.InputPort
+
+::: a11.actions.annotated.OutputPort
+
+::: a11.actions.annotated.Header
+
 ## Schemas
 
 ::: a11.actions.action.ActionSchema

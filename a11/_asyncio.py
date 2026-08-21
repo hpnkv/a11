@@ -1,8 +1,35 @@
 """Private asyncio coordination used by the native extension."""
 
 import asyncio
+import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+
+def _resolve_event_loop() -> asyncio.AbstractEventLoop | None:
+    """A loop native code may post work to, or ``None`` if there is none.
+
+    Never creates one. That is the whole point: `asyncio.get_event_loop`'s
+    habit of conjuring a loop for a thread that has none is what used to hand
+    A11 a loop nobody would ever run, so work posted to it waited for good. The
+    deprecation warning is exactly the signal that a loop was invented rather
+    than found, so it is promoted to an error and read as "no loop" -- which is
+    also what newer Pythons raise there of their own accord.
+
+    A loop that has already been closed is no better than none, since nothing
+    posted to it can run.
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+    except (RuntimeError, DeprecationWarning):
+        return None
+    return None if loop.is_closed() else loop
 
 
 class _NativeFuture(asyncio.Future[Any]):

@@ -1,0 +1,37 @@
+flow {
+  describe "Ask a model the question given on the command line."
+
+  out exit_code: integer "0 when the model answered, 1 when it did not."
+
+  nodes scratch
+  answer = node() in scratch
+  answered = node() in scratch
+
+  let question = argv | drop 1 | first 1
+
+  secret = run env_get(names: "ANTHROPIC_API_KEY") via scratch
+  skip secret.missing
+
+  let api_key = secret.values | first 1 | map it.ANTHROPIC_API_KEY
+
+  llm = run interact_with_llm(
+    interactions: a11.sdk.Interaction{
+      role: "user",
+      content: [to_chunk({role: "user", content: [{type: "text", text: question}]})]
+    },
+    config: {}
+  ) with "x-a11-llm-provider": "claude", "x-a11-llm-model": "claude-sonnet-4-5", "x-a11-llm-api-key": default(api_key, "")
+    via scratch
+
+  skip event_stream, thoughts, new_interactions of llm
+
+  llm.text_output -> answer
+
+  o = run write_stdout(content: answer | map strformat("%s", it)) via scratch
+  skip o.bytes_written
+
+  # Whether anything came back, so the program is usable in a shell `if`.
+  answer | count -> answered
+  answered where it > 0 | map 0 -> exit_code
+  answered where it == 0 | map 1 -> exit_code
+}

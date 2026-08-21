@@ -16,6 +16,13 @@ from .action import (
     status_from_chunk,
     status_to_chunk,
 )
+from .annotated import (
+    DEFAULT_OUTPUT_NAME,
+    Header,
+    InputPort,
+    OutputPort,
+    action_from_callable,
+)
 from .registry import ActionRegistry
 
 __all__ = [
@@ -24,6 +31,7 @@ __all__ = [
     "ACTION_STATUS_OUTPUT",
     "CANCEL_ACTION_HEADER",
     "CANCEL_ACTION_NAME",
+    "DEFAULT_OUTPUT_NAME",
     "Action",
     "ActionHandler",
     "ActionHeaderSchema",
@@ -31,7 +39,11 @@ __all__ = [
     "ActionRegistry",
     "ActionSchema",
     "ActionSettings",
+    "Header",
+    "InputPort",
     "NativeActionHandler",
+    "OutputPort",
+    "action_from_callable",
     "is_close_status_chunk",
     "is_status_chunk",
     "status_from_chunk",

@@ -18,5 +18,7 @@ CMakeUserPresets.json
 # Untracked now; keep a stray local checkout out of git's way.
 tools/vcpkg/
 
+intellij-plugin/
+
 vscode-plugin/dist/
 vscode-plugin/node_modules/

@@ -2,9 +2,9 @@
 
 /**
  * @file
- * @brief WireStream transport over HTTP/2 Server-Sent Events.
+ * @brief WireStream transport over HTTP Server-Sent Events.
  *
- * An HttpSseWireStream carries A11 WireMessage traffic over an HTTP/2 channel:
+ * An HttpSseWireStream carries A11 WireMessage traffic over an HTTP channel:
  * the server streams messages back as Server-Sent Events while the client
  * posts outgoing messages to a companion endpoint. Pick this transport when
  * only ordinary HTTP is available -- it is a firewall- and proxy-friendly
@@ -13,6 +13,16 @@
  * them. Delivery carries no global ordering guarantee but is synchronised on
  * closure -- a reader observes every delivered message before the stream
  * completes.
+ *
+ * ## HTTP/2 and HTTP/1.1
+ *
+ * Over HTTP/2 the event stream and the outbound direction are streams on one
+ * connection. HTTP/1.1 has no multiplexing and an A11 client connection carries
+ * a single request, so the outbound direction needs a connection of its own:
+ * either one for all of it (a streamed request body, which a non-multiplexed
+ * connection prefers whenever the server advertises it) or one per message
+ * (POST delivery, the interop fallback). Nothing about the protocol changes --
+ * only how many sockets it takes.
  */
 
 #ifndef A11_NET_HTTP_SSE_WIRE_STREAM_H_
@@ -120,6 +130,12 @@ struct HttpSseOptions {
       std::string(kDefaultSseMessageEndpoint);  ///< Outbound endpoint template.
   /// Client-side outbound delivery method; servers accept either.
   SseOutboundDelivery outbound = SseOutboundDelivery::kPost;
+  /// Server-side: whether a streamed outbound request body is accepted, and so
+  /// advertised in kSseOutboundModesHeader. Clearing it leaves clients with
+  /// POST-per-message -- which is what an intermediary that will not carry a
+  /// long-lived request body forces, and over HTTP/1.1 costs a connection per
+  /// message.
+  bool accept_streamed_outbound = true;
   /// Outbound POSTs a client keeps in flight at once (kPost only). One restores
   /// the strictly serialised behaviour; the bound is what stops a fast producer
   /// from spending every stream on the HTTP/2 connection at once.

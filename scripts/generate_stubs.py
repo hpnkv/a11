@@ -405,6 +405,13 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         "http2_options(self, arg0: ...)": (
             "http2_options(self, arg0: Http2Options)"
         ),
+        # Same cause as http2_options above: a listener's options struct is
+        # bound before the type of one of its members, so pybind bakes the raw
+        # C++ name into the signature and stubgen cannot resolve it.
+        "describe(self) -> ...": "describe(self) -> DescribeEndpointOptions",
+        "describe(self, arg0: ...)": (
+            "describe(self, arg0: DescribeEndpointOptions)"
+        ),
     }
     for old, new in replacements.items():
         stub = stub.replace(old, new)

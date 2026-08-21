@@ -45,6 +45,20 @@ def _args(target: str = "unused", **overrides) -> argparse.Namespace:
     return parsed
 
 
+def _own(registry) -> list[str]:
+    """The actions a served module registered, without A11's own builtins.
+
+    Every registry answers for `__list_actions__` and friends whether or not
+    anybody installed them, so they show up in a listing and are not what these
+    tests are about.
+    """
+    return [
+        name
+        for name in registry.list_registered_actions()
+        if not name.startswith("__")
+    ]
+
+
 def _module(tmp_path: Path, name: str, source: str) -> None:
     """Write an importable module and put its directory on the path."""
     (tmp_path / f"{name}.py").write_text(textwrap.dedent(source))
@@ -79,7 +93,7 @@ def test_the_default_symbol_is_registry(tmp_path: Path) -> None:
     registry, module_path, symbol = resolve_registry("serve_default")
     assert module_path == "serve_default"
     assert symbol == "REGISTRY"
-    assert registry.list_registered_actions() == ["shout"]
+    assert _own(registry) == ["shout"]
 
 
 def test_a_named_symbol_is_read_after_the_colon(tmp_path: Path) -> None:
@@ -87,7 +101,7 @@ def test_a_named_symbol_is_read_after_the_colon(tmp_path: Path) -> None:
 
     registry, _, symbol = resolve_registry("serve_named:TOOLS")
     assert symbol == "TOOLS"
-    assert registry.list_registered_actions() == ["whisper"]
+    assert _own(registry) == ["whisper"]
 
 
 def test_an_unimportable_module_says_so() -> None:
@@ -199,7 +213,7 @@ def test_a_file_path_is_loaded_and_its_registry_read(tmp_path: Path) -> None:
     registry, label, symbol = resolve_registry(str(path))
     assert label == str(path)
     assert symbol == "REGISTRY"
-    assert registry.list_registered_actions() == ["shout"]
+    assert _own(registry) == ["shout"]
 
 
 def test_a_file_path_takes_a_symbol_too(tmp_path: Path) -> None:
@@ -207,7 +221,7 @@ def test_a_file_path_takes_a_symbol_too(tmp_path: Path) -> None:
 
     registry, _, symbol = resolve_registry(f"{path}:TOOLS")
     assert symbol == "TOOLS"
-    assert registry.list_registered_actions() == ["whisper"]
+    assert _own(registry) == ["whisper"]
 
 
 def test_a_served_file_does_not_run_its_own_entry_point(tmp_path: Path) -> None:
@@ -257,7 +271,7 @@ def test_a_served_file_can_import_its_siblings(tmp_path: Path) -> None:
     )
 
     registry, _, _ = resolve_registry(str(path))
-    assert registry.list_registered_actions() == ["shout"]
+    assert _own(registry) == ["shout"]
 
 
 def test_a_missing_file_says_so(tmp_path: Path) -> None:

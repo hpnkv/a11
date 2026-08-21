@@ -1,6 +1,7 @@
 // Copyright 2026 The A11 Authors.
 
 #include "a11/net/http_sse_wire_stream.h"
+#include "a11/net/server_headers.h"
 
 #include <atomic>
 #include <filesystem>
@@ -65,10 +66,8 @@ OnDone RecordDone(const std::shared_ptr<SseRecorder>& recorder) {
 
 TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
   HttpSseOptions options;
-  options.cors_allow_origin = "*";
-  options.cors_allow_methods = "*";
-  options.cors_allow_headers = "*";
-  options.cors_expose_headers = "x-a11-stream-id";
+  options.headers.cors.allow_methods = "*";
+  options.headers.cors.allow_headers = "*";
   auto server = HttpSseServer::Create("127.0.0.1", 0, {}, options);
   ASSERT_TRUE(server.ok()) << server.status();
 
@@ -89,11 +88,104 @@ TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
   EXPECT_EQ(GetHttpHeader(response->head.headers,
                           "access-control-allow-headers"),
             "*");
+  // Exposed by default, and it has to be: a browser reads its stream id off the
+  // connect response, and a header it may not read is one it did not receive.
   EXPECT_EQ(GetHttpHeader(response->head.headers,
                           "access-control-expose-headers"),
-            "x-a11-stream-id");
+            "x-a11-stream-id, x-a11-outbound");
+  // What an A11 server says about itself on every reply.
+  EXPECT_EQ(GetHttpHeader(response->head.headers, "server"), "a11");
+  EXPECT_EQ(GetHttpHeader(response->head.headers, "x-content-type-options"),
+            "nosniff");
   EXPECT_TRUE((*client)->Close().ok());
   EXPECT_TRUE((*server)->Stop().ok());
+}
+
+TEST(HttpSseWireStreamTest, AdmitsBrowsersWithoutBeingConfigured) {
+  // The default is permissive on purpose: the whole reason this transport
+  // exists is that a page cannot open a socket, and a default that refused
+  // pages would put a configuration step in front of every one of them.
+  const HttpSseOptions options;
+  EXPECT_TRUE(options.headers.cors.enabled);
+  EXPECT_EQ(options.headers.cors.allow_origin, "*");
+  EXPECT_EQ(options.headers.server, "a11");
+  EXPECT_TRUE(options.Validate().ok());
+}
+
+TEST(HttpSseWireStreamTest, ACorsPolicyCanBeNarrowedOrTurnedOff) {
+  HttpSseOptions narrowed;
+  narrowed.headers.cors.allow_origin = "https://example.test";
+  ASSERT_TRUE(narrowed.Validate().ok());
+  const HttpHeaders headers = CorsHeaders(narrowed.headers.cors);
+  EXPECT_EQ(GetHttpHeader(headers, "access-control-allow-origin"),
+            "https://example.test");
+  // One origin named means the answer differs per origin, and a cache that did
+  // not know that would hand the wrong one out.
+  EXPECT_EQ(GetHttpHeader(headers, "vary"), "Origin");
+
+  HttpSseOptions off;
+  off.headers.cors.enabled = false;
+  ASSERT_TRUE(off.Validate().ok());
+  EXPECT_TRUE(CorsHeaders(off.headers.cors).empty());
+
+  // Enabled with nothing to allow is the one incoherent combination.
+  HttpSseOptions contradictory;
+  contradictory.headers.cors.allow_origin = "";
+  EXPECT_EQ(contradictory.Validate().code(),
+            absl::StatusCode::kInvalidArgument);
+}
+
+TEST(ServerHeadersTest, StatesHowEachKindOfReplyMayBeCached) {
+  const ServerHeaderOptions options;
+
+  HttpHeaders stream;
+  ApplyServerHeaders(options, CachePolicy::kStream, &stream);
+  EXPECT_EQ(GetHttpHeader(stream, "cache-control"), "no-store");
+  // Not standard, and worth sending: nginx buffers a proxied response by
+  // default, which for an event stream means the client sees nothing until the
+  // buffer fills.
+  EXPECT_EQ(GetHttpHeader(stream, "x-accel-buffering"), "no");
+
+  HttpHeaders document;
+  ApplyServerHeaders(options, CachePolicy::kVolatile, &document);
+  EXPECT_EQ(GetHttpHeader(document, "cache-control"), "no-cache");
+
+  HttpHeaders unset;
+  ApplyServerHeaders(options, CachePolicy::kUnset, &unset);
+  EXPECT_FALSE(GetHttpHeader(unset, "cache-control").has_value());
+}
+
+TEST(ServerHeadersTest, NeverOverridesWhatARouteAlreadySaid) {
+  const ServerHeaderOptions options;
+  HttpHeaders headers{{"content-type", "text/event-stream"},
+                      {"cache-control", "max-age=1"},
+                      {"Server", "something-else"}};
+  ApplyServerHeaders(options, CachePolicy::kStream, &headers);
+  EXPECT_EQ(GetHttpHeader(headers, "cache-control"), "max-age=1");
+  EXPECT_EQ(GetHttpHeader(headers, "content-type"), "text/event-stream");
+
+  // `Server` was already there in another case. Header names are
+  // case-insensitive, so adding a second would be sending the header twice with
+  // two different values -- counted rather than looked up, because
+  // GetHttpHeader matches the stored name exactly and would not find this one.
+  int servers = 0;
+  for (const auto& [name, value] : headers) {
+    if (absl::EqualsIgnoreCase(name, "server")) {
+      ++servers;
+      EXPECT_EQ(value, "something-else");
+    }
+  }
+  EXPECT_EQ(servers, 1);
+}
+
+TEST(ServerHeadersTest, RefusesAValueThatWouldSplitTheHeaderBlock) {
+  ServerHeaderOptions options;
+  options.cors.allow_origin = "*\r\nx-injected: yes";
+  EXPECT_EQ(options.Validate().code(), absl::StatusCode::kInvalidArgument);
+
+  ServerHeaderOptions named;
+  named.server = "a11\r\n";
+  EXPECT_EQ(named.Validate().code(), absl::StatusCode::kInvalidArgument);
 }
 
 TEST(HttpSseWireStreamTest, ExchangesWireMessagesOverHttp2Sse) {

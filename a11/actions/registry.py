@@ -3,15 +3,64 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from a11 import _native
 from a11.actions.action import ActionHeaderSchema
 from a11.actions.annotated import DEFAULT_OUTPUT_NAME, action_from_callable
+from a11.actions.describe import fill_json_schemas
 
 from a11._native import ActionRegistry
 
+if TYPE_CHECKING:
+    # Stub-only names: `ActionHandler` and `NativeActionHandler` are aliases the
+    # generated stub package declares, not runtime attributes of the extension.
+    # `from __future__ import annotations` keeps the signature below from
+    # needing them at run time, and the generated stub resolves them.
+    from a11._native import ActionHandler, ActionSchema, NativeActionHandler
+
 ActionRegistry.__module__ = __name__
+
+_native_register = ActionRegistry.register
+
+
+# The generated stub renders an attached method's annotations verbatim, so these
+# stay spelled the way the native signature spelled them -- names the stub
+# package can resolve -- rather than as `Any`.
+def _register(
+    self: ActionRegistry,
+    action_name: str,
+    schema: ActionSchema,
+    handler: ActionHandler | NativeActionHandler | None = None,
+) -> None:
+    """Register an action with a schema and optional async handler.
+
+    Examples:
+        Publish an application handler under its schema name:
+
+        ```python
+        registry.register("summarise", SUMMARISE, summarise)
+        ```
+
+        Or the schema alone, which says the action lives on a peer and is to be
+        reached with a flow's `call` rather than run here:
+
+        ```python
+        registry.register("shell_execute", SHELL_EXECUTE)
+        ```
+
+    Each port carrying a `typeinfo` also gets a `json_schema` derived from it on
+    the way in, because only Python can read a Python type. That happens here
+    rather than when the action is described, so the answer a peer gets over the
+    wire -- built by the native describer, which sees only what is on the schema
+    -- is the same document a local caller gets. See
+    [a11.actions.describe][a11.actions.describe].
+    """
+    fill_json_schemas(schema)
+    return _native_register(self, action_name, schema, handler)
+
+
+ActionRegistry.register = _register
 
 
 # The generated stub renders an attached method's annotations verbatim, so this

@@ -96,11 +96,16 @@ asyncio.run(main())
             false
         }
 
-    // Mirrors the CLion plugin's REGISTER_TOOLS_SCHEMA + announceTools() flow.
-    private val registerToolsSchema = ActionSchema(
-        name = "__register_tools__",
-        inputs = linkedMapOf("tools" to ActionPortSchema("tools", "application/json", required = true)),
-        outputs = linkedMapOf("ok" to ActionPortSchema("ok", "application/json", required = true)),
+    // The caller's half of `__list_actions__`. Spelled here rather than taken
+    // from the builtin table on purpose: a client needs it to build the call
+    // before it has asked anything, and a copy that had drifted from the
+    // gateway's is exactly what this test should catch.
+    private val listActionsSchema = ActionSchema(
+        name = LIST_ACTIONS_NAME,
+        inputs = linkedMapOf("request" to ActionPortSchema("request", JSON_MIMETYPE, unary = true)),
+        outputs = linkedMapOf(
+            "actions" to ActionPortSchema("actions", JSON_MIMETYPE, required = true, unary = true),
+        ),
     )
 
     @Test
@@ -129,23 +134,40 @@ asyncio.run(main())
                 }
             }
 
-            // Exactly the plugin's ensureConnected()/announceTools() sequence.
+            // The plugin's ensureConnected(), and then the thing that replaced
+            // its announce handshake: asking the gateway what it serves.
             val stream = ok(WebSocketWireStream.connect("ws://127.0.0.1:$port/a11"))
             val session = Session(actionRegistry = ActionRegistry(), id = "plugin-flow")
             val added = session.addStream(stream, StreamMode.START)
             assertTrue(added.isOk, "addStream failed: $added")
 
-            val register = Action.create(
-                registerToolsSchema,
+            val ask = Action.create(
+                listActionsSchema,
                 ActionCreateOptions(session = session, stream = stream),
             ).valueOrThrow()
-            register.call().valueOrThrow()
-            val tools = register.getInput("tools").valueOrThrow()
-            tools.finalize()
+            ask.call().valueOrThrow()
+            ask.getInput("request").valueOrThrow().finalize()
             val response = withTimeout(15_000) {
-                register.getOutput("ok", bindStream = false).valueOrThrow().next(timeoutMs = 10_000)
+                ask.getOutput("actions", bindStream = false).valueOrThrow().next(timeoutMs = 10_000)
             }
-            assertNotNull(response, "__register_tools__ produced no 'ok' output")
+            assertNotNull(response, "__list_actions__ produced no 'actions' output")
+
+            // And that this side can read what that side wrote. A document the
+            // Kotlin reader cannot parse is the failure mode the four
+            // hand-copied handshake schemas used to produce.
+            val document = response as Map<*, *>
+            assertEquals(SCHEMA_DOCUMENT_FORMAT, document["format"])
+            val entries = ok(schemasInDocument(document))
+            assertTrue(entries.isNotEmpty(), "the gateway described no actions")
+            for (entry in entries) {
+                val schema = ok(schemaFromJson(entry))
+                assertTrue(schema.name.isNotEmpty())
+            }
+            // The gateway serves the flow tools, so at least one is nameable.
+            assertTrue(
+                entries.any { it["name"] == "flow_run" },
+                "expected flow_run among ${entries.map { it["name"] }}",
+            )
         } finally {
             process.destroyForcibly()
         }

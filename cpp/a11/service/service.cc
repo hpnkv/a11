@@ -17,6 +17,7 @@
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
+#include "a11/actions/describe.h"
 #include "a11/actions/registry.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
@@ -206,6 +207,42 @@ absl::Status Service::SetOnConnection(OnServiceConnection on_connection) {
   thread::MutexLock lock(&state_->mu);
   state_->on_connection = std::move(on_connection);
   return absl::OkStatus();
+}
+
+absl::StatusOr<std::string> Service::Describe(std::string_view name,
+                                              std::string_view query) const {
+  std::shared_ptr<actions::ActionRegistry> registry = GetActionRegistry();
+  if (registry == nullptr) {
+    return absl::FailedPreconditionError(
+        "This service has no action registry to describe");
+  }
+  ABSL_ASSIGN_OR_RETURN(const actions::SchemaQuery request,
+                        actions::ParseSchemaQueryString(query));
+  if (name.empty()) {
+    return actions::RegistryToJsonText(*registry, request);
+  }
+  // A named action is looked up rather than filtered, so an unknown one is a
+  // NotFound -- and so a 404 -- rather than an empty list that reads as "this
+  // service serves nothing".
+  ABSL_ASSIGN_OR_RETURN(const actions::ActionSchema schema,
+                        registry->GetSchema(name));
+  const bool runnable = registry->GetHandler(name).ok();
+  // The item route describes every port, including the ones a caller cannot
+  // write: somebody asking about one action by name is inspecting it.
+  return actions::SchemaToJsonText(schema, runnable,
+                                     actions::PortView::kAll);
+}
+
+net::DescribeActionsHandler Service::DescribeHandler() {
+  std::weak_ptr<Service> weak = shared_from_this();
+  return [weak](std::string_view name,
+                std::string_view query) -> absl::StatusOr<std::string> {
+    std::shared_ptr<Service> service = weak.lock();
+    if (service == nullptr) {
+      return absl::UnavailableError("This service is no longer running");
+    }
+    return service->Describe(name, query);
+  };
 }
 
 a11::Task Service::Serve(std::shared_ptr<net::WireStream> stream,

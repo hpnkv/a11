@@ -1,0 +1,167 @@
+// Copyright 2026 The A11 Authors.
+
+/**
+ * @file
+ * @brief An ::a11::actions::ActionSchema in JSON, which is how one travels.
+ *
+ * **There is one concept here, in two representations.** An `ActionSchema` is
+ * the live object: it holds a `typeinfo`, which is an opaque language handle
+ * this layer never dereferences, and `autofills`, which are receiver-owned
+ * default *values*. Neither can cross a wire -- one is a pointer, and the other
+ * is deliberately kept at home (`ActionRegistry::Copy` clears them for exactly
+ * that reason). So a schema that has to reach another process is written as
+ * text, and this file is where that text is written and read.
+ *
+ * The document is `a11.actions/v1`: a `format` tag and an `actions` array. Each
+ * entry is one schema, with `typeinfo` replaced by the port's `json_schema` --
+ * a field that now lives *on* the schema, so the two representations agree --
+ * and `autofills` replaced by an `autofilled` flag, because the values stay
+ * home but their existence is worth stating.
+ *
+ * One field in an entry is **not** part of the schema, and cannot be:
+ * `runnable`, which says whether the side answering holds a handler. The same
+ * schema is runnable here and schema-only there, and that difference is what
+ * Flow reads to choose `run` over `call`. It is the registry's annotation on a
+ * schema rather than a property of one.
+ *
+ * **Why one document.** Describing an action used to be done four times over,
+ * and the four disagreed: a port was `{name, unary}` to the tool bridge,
+ * `{port, stream}` to the flow catalogue's producer, `{name, unary, schema}` to
+ * the IntelliJ plugin, and a JSON Schema property to whatever a model was
+ * shown. Two of them shared a word -- both were called a tool's "schema" -- and
+ * confusing them yielded a proxy with no inputs at all, a runtime failure a
+ * long way from its cause. The shape here is a superset of
+ * ::a11::flow::catalogue's `ActionInfo`, which was the best of the four and
+ * already had a codec: same port keys, same omit-when-default conventions.
+ *
+ * A `user_facing` flag, which marked an output as narration, is deliberately
+ * absent. Narration travels on the reserved log port, which every action has
+ * and no schema declares, so a port that had to say it was narration was
+ * working around the absence of that. The flag is read and dropped.
+ *
+ * @warning
+ *   `unary` is always written explicitly, never omitted when false. The two
+ *   port structs disagree on its default -- ::a11::actions::ActionPortSchema
+ *   says `false`, ::a11::flow::catalogue::PortInfo says `true` -- so a reader
+ *   that filled in a default would silently turn every streaming port into a
+ *   unary one, or the reverse, depending on which side it was standing on.
+ */
+
+#ifndef A11_ACTIONS_DESCRIBE_H_
+#define A11_ACTIONS_DESCRIBE_H_
+
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <absl/status/statusor.h>
+#include <nlohmann/json_fwd.hpp>
+
+#include "a11/actions/schema.h"
+
+namespace a11::actions {
+
+class ActionRegistry;
+
+/** @brief The `format` field of the schema document. */
+inline constexpr std::string_view kSchemaDocumentFormat = "a11.actions/v1";
+
+/**
+ * @brief Which ports a written schema includes.
+ *
+ * @c kCallable omits inputs the receiver autofills, because a caller cannot
+ * write them: an autofilled input must be empty when the default is applied, so
+ * offering it to a model or a flow only invites a call that fails. @c kAll keeps
+ * them, flagged, for a reader that is inspecting rather than calling.
+ */
+enum class PortView {
+  kCallable,  ///< What a caller may write. The default.
+  kAll,       ///< Everything the schema declares, autofills flagged.
+};
+
+/**
+ * @brief Which schemas to write, and how much of each.
+ *
+ * The wire form of @c __list_actions__'s request port, and of the query string
+ * on `GET /actions`.
+ */
+struct SchemaQuery {
+  /// Full-match name patterns; empty matches every name.
+  std::vector<std::string> names;
+  /// Exact names, in addition to @c names; empty adds nothing.
+  std::vector<std::string> exact;
+  PortView ports = PortView::kCallable;
+  /// Include the `__`-prefixed reserved actions, discovery's own included.
+  bool include_reserved = false;
+  /// Omit actions registered for their schema alone, which live on a peer.
+  bool runnable_only = false;
+};
+
+/**
+ * @brief Parses a @c SchemaQuery from the request port's JSON.
+ *
+ * An empty or null document is the default request, not an error: asking "what
+ * do you serve" with no qualification is the common case.
+ */
+absl::StatusOr<SchemaQuery> ParseSchemaQuery(std::string_view encoded);
+
+/**
+ * @brief Parses a @c SchemaQuery from a URL query string.
+ * @param query The part after `?`, without it. May be empty.
+ */
+absl::StatusOr<SchemaQuery> ParseSchemaQueryString(std::string_view query);
+
+/** @brief Whether @p name matches @p query's name filters. */
+bool SchemaQueryAccepts(const SchemaQuery& query, std::string_view name);
+
+/**
+ * @brief One schema as an `actions` entry.
+ * @param schema The action's interface.
+ * @param runnable Whether this side holds a handler for it. The registry's
+ *        annotation on the schema, not part of the schema itself.
+ * @param ports Which ports to include.
+ */
+nlohmann::json SchemaToJson(const ActionSchema& schema, bool runnable,
+                            PortView ports = PortView::kCallable);
+
+/** @brief A whole document: every schema in @p registry that @p query accepts. */
+nlohmann::json RegistryToJson(const ActionRegistry& registry,
+                              const SchemaQuery& query);
+
+/** @brief RegistryToJson as text, or why it could not be encoded. */
+absl::StatusOr<std::string> RegistryToJsonText(const ActionRegistry& registry,
+                                               const SchemaQuery& query);
+
+/** @brief One schema as a whole document, for a route that answers with one. */
+absl::StatusOr<std::string> SchemaToJsonText(
+    const ActionSchema& schema, bool runnable,
+    PortView ports = PortView::kCallable);
+
+/**
+ * @brief The schema an `actions` entry was written from.
+ *
+ * The exact inverse of SchemaToJson, for a side that has to *call* what it was
+ * told about: a tool bridge registering a reverse-dispatch proxy, or a flow run
+ * against a peer registering the peer's actions for their schemas alone. What
+ * cannot survive the trip comes back empty -- a @c typeinfo is a local handle,
+ * and autofills are receiver-owned defaults that deliberately never travel.
+ *
+ * @param entry One entry from a document's `actions` array.
+ */
+absl::StatusOr<ActionSchema> SchemaFromJson(const nlohmann::json& entry);
+
+/** @brief SchemaFromJson, parsing @p encoded first. */
+absl::StatusOr<ActionSchema> SchemaFromJsonText(std::string_view encoded);
+
+/**
+ * @brief The `actions` entries of @p document, or why there are none to read.
+ *
+ * Accepts a bare array too, so a caller need not care whether it was handed a
+ * whole document or just its entries.
+ */
+absl::StatusOr<std::vector<nlohmann::json>> SchemasInDocument(
+    const nlohmann::json& document);
+
+}  // namespace a11::actions
+
+#endif  // A11_ACTIONS_DESCRIBE_H_

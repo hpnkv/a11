@@ -154,9 +154,34 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
             if (request.method != "CONNECT" ||
                 request.protocol != "websocket" ||
                 request.path != active->options.path) {
+              // A cross-origin preflight, for the routes below. A page that
+              // cannot preflight cannot read the answer either.
+              if (IsPreflight(active->options.headers.cors, request.method)) {
+                HttpHeaders preflight;
+                ApplyServerHeaders(active->options.headers,
+                                   CachePolicy::kUnset, &preflight);
+                absl::Status status =
+                    response->SendResponse(204, std::move(preflight));
+                return status.ok() ? a11::ReadyTask()
+                                   : a11::FailedTask(status);
+              }
+              // Discovery over plain HTTP, before the 404: whoever has the port
+              // number can ask what is on it without speaking A11 first.
+              HttpHeaders described;
+              ApplyServerHeaders(active->options.headers,
+                                 CachePolicy::kVolatile, &described);
+              if (std::optional<a11::Task> answered = TryDescribeOverHttp(
+                      active->options.describe, request, response,
+                      std::move(described));
+                  answered.has_value()) {
+                return std::move(*answered);
+              }
+              HttpHeaders headers{
+                  {"content-type", "text/plain; charset=utf-8"}};
+              ApplyServerHeaders(active->options.headers, CachePolicy::kUnset,
+                                 &headers);
               absl::Status status = response->SendResponse(
-                  404, {{"content-type", "text/plain; charset=utf-8"}},
-                  "WebSocket endpoint not found");
+                  404, std::move(headers), "WebSocket endpoint not found");
               return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
             }
             absl::StatusOr<std::shared_ptr<WebSocketWireStream>> stream =

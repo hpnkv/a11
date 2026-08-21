@@ -19,6 +19,7 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/match.h>

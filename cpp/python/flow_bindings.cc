@@ -23,6 +23,7 @@
 #include "a11/actions/schema.h"
 #include "a11/data/types.h"
 #include "a11/net/wire_stream.h"
+#include "a11/service/session.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
@@ -1123,7 +1124,8 @@ merges over the embedded snapshot itself.
          bool allow_run, bool allow_net, bool allow_local_net,
          const std::vector<std::string>& allow_env, bool unrestricted,
          std::optional<double> timeout_seconds, bool standard_streams,
-         const py::object& registry)
+         const py::object& registry, const py::object& session,
+         const py::object& dispatch_stream)
           -> py::typing::Dict<py::str, py::object> {
         namespace sdk_flow = a11::sdk::flow;
 
@@ -1160,6 +1162,22 @@ merges over the embedded snapshot itself.
           how.registry = registry.cast<std::shared_ptr<actions::ActionRegistry>>();
         }
         how.standard_streams = standard_streams;
+        // Where a `call` step goes, when it is to leave this process. Both or
+        // neither: a stream with no session would dispatch calls whose replies
+        // nothing routes back, which looks exactly like a hang.
+        if (!session.is_none()) {
+          how.session = session.cast<std::shared_ptr<service::Session>>();
+        }
+        if (!dispatch_stream.is_none()) {
+          how.dispatch_stream =
+              dispatch_stream.cast<std::shared_ptr<net::WireStream>>();
+        }
+        if ((how.dispatch_stream == nullptr) != (how.session == nullptr)) {
+          ThrowStatus(absl::InvalidArgumentError(
+              "session and dispatch_stream go together: a stream with no "
+              "session dispatches calls whose replies nothing routes back, and "
+              "a session with no stream has nowhere to dispatch them"));
+        }
         // The same bridge `make_handler` installs. Without it the program runs
         // against A11's own registry, which is keyed by `typeid` and so knows
         // nothing about a type declared in Python -- so a flow saying
@@ -1206,6 +1224,10 @@ merges over the embedded snapshot itself.
       // registers ActionRegistry -- so a typed default fails at import. The cast
       // happens at call time instead, when the type is certainly known.
       py::arg("registry") = py::none(),
+      // Same reason as `registry` above: Session and WireStream are registered
+      // by other Bind* functions, so these are cast at call time.
+      py::arg("session") = py::none(),
+      py::arg("dispatch_stream") = py::none(),
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
@@ -1219,6 +1241,12 @@ registered are never replaced by the standard library's.
 What the program may *do* is the arguments here and nothing the file can say --
 ``roots``, ``allow_write``, ``allow_run``, ``allow_net``, ``allow_env`` -- for
 the same reason they are command-line flags in the CLI.
+
+Pass ``session`` and ``dispatch_stream`` together and the program's ``call``
+steps are dispatched at that peer while its ``run`` steps stay here. The peer's
+actions still have to be in ``registry`` for their schemas -- registered without
+handlers, which is how "this one lives on the peer" is spelled -- because the
+resolver looks a name up before it decides anything.
 )doc");
 
   flow.def(

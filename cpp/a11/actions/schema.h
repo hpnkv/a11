@@ -73,6 +73,18 @@ struct ActionPortSchema {
   /// Input-default fragments; an autofilled input must otherwise be empty.
   std::vector<std::optional<data::NodeFragment>> autofills{};
 
+  /**
+   * @brief JSON Schema for the port's payload, as text. Empty when unknown.
+   *
+   * The describable half of @c typeinfo. A binding holds a live type handle it
+   * alone can interpret; this is what it can say about that type to somebody
+   * else -- a peer asking what this side serves, a model being shown a tool. It
+   * is a plain string because the actions layer must be able to forward it
+   * without understanding it, and because a descriptor that crossed a wire has
+   * no type handle left to derive it from.
+   */
+  std::string json_schema;
+
   /// Owning, opaque type handle installed by a language binding. The actions
   /// layer retains but never dereferences it. Empty when no type is bound.
   std::shared_ptr<void> typeinfo{nullptr};

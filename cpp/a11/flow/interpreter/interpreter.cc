@@ -28,6 +28,7 @@
 #include "a11/flow/syntax.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "a11/service/session.h"
 #include "sdk/flow/actions/flow_actions.h"
 #include "sdk/flow/actions/policy.h"
 #include "sdk/flow/actions/system_actions.h"
@@ -212,6 +213,10 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   // interpreter's, and the runtime's is a different type with the same name.
   ::a11::flow::RunOptions how;
   how.bridge = options.bridge;
+  // Where `call` steps go. Given to the handler rather than to the action
+  // below, because a locally-run action that holds a stream ends that stream
+  // when it finishes -- so the stream belongs to the calls, not to the flow.
+  how.dispatch_stream = options.dispatch_stream;
   ABSL_ASSIGN_OR_RETURN(const actions::ActionHandler handler,
                         MakeEntryHandler(program, std::move(how)));
 
@@ -221,12 +226,23 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   FlowPlan named = entry->plan;
   named.name = "main";
   ABSL_ASSIGN_OR_RETURN(const actions::ActionSchema schema, FlowSchema(named));
-  ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::NodeMap> node_map,
-                        nodes::NodeMap::Create());
+  // The session's node map when there is a session, because that is what routes
+  // a dispatched call's reply fragments back. A program with no peer keeps a map
+  // of its own, which is all it ever needed.
+  std::shared_ptr<nodes::NodeMap> node_map;
+  if (options.session != nullptr) {
+    node_map = options.session->GetNodeMap();
+  }
+  if (node_map == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(node_map, nodes::NodeMap::Create());
+  }
+  // The action itself is bound to the session but *not* to the stream: it is run
+  // here, and an action that holds a stream ends it on finishing. Its `call`
+  // steps have the stream, through the handler above.
   ABSL_ASSIGN_OR_RETURN(
       const std::shared_ptr<actions::Action> action,
       actions::Action::Create(schema, "main", handler, node_map, nullptr,
-                              nullptr, registry));
+                              options.session, registry));
 
   if (options.timeout.has_value()) {
     ABSL_RETURN_IF_ERROR((action)->SetHeader(

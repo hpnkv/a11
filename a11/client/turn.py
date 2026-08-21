@@ -55,9 +55,10 @@ class TurnConfig:
     model: str
     api_key: str = ""
     base_url: str = ""
-    #: Regex patterns for the gateway-side actions this turn may use. A client
-    #: that serves its own tools announces them instead (see
-    #: `GatewayConnection.announce_tools`) and leaves this empty.
+    #: Regex patterns naming the actions this turn may use -- the gateway's
+    #: own, and any the gateway discovers on this session. A client that serves
+    #: its own tools just registers them and names them here; the gateway asks
+    #: what the session serves and proxies the answer.
     allowed_actions: str = ""
     #: Applied last, so a user-supplied header wins over the defaults above.
     extra_headers: Sequence[tuple[str, str]] = ()

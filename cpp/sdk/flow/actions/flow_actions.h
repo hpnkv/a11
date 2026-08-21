@@ -45,6 +45,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 
 #include "a11/actions/registry.h"
 #include "sdk/flow/actions/policy.h"

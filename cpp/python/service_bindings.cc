@@ -943,6 +943,28 @@ Examples:
           "interrupting any stream.",
           py::arg("action_registry"))
       .def(
+          "describe",
+          [](const std::shared_ptr<service::Service>& self,
+             std::string_view name, std::string_view query) {
+            // Takes the registry's mutex, so the GIL goes.
+            return ValueOrThrow(
+                WithoutGil([&] { return self->Describe(name, query); }));
+          },
+          "Describe this service's actions as an a11.actions/v1 JSON document. "
+          "With a name, describes that one action or raises NOT_FOUND. `query` "
+          "carries the same filters as the HTTP endpoint's query string.",
+          py::arg("name") = "", py::arg("query") = "")
+      .def(
+          "expose_descriptors_on",
+          [](const std::shared_ptr<service::Service>& self,
+             net::DescribeEndpointOptions& options) {
+            options.handler = self->DescribeHandler();
+          },
+          "Point a listener's `describe` options at this service, so its "
+          "transport answers GET /actions from the same describer the "
+          "__list_actions__ builtin uses.",
+          py::arg("options"))
+      .def(
           "stop_accepting",
           [](const std::shared_ptr<service::Service>& self) {
             ThrowIfNotOk(self->StopAccepting());

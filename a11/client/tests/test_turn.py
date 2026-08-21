@@ -131,31 +131,22 @@ async def _echo(action: a11.Action) -> None:
     await action.log(_LOG)
 
 
-def _descriptor() -> dict:
-    return {
-        "name": "client_echo",
-        "description": _ECHO_SCHEMA.description,
-        "inputs": [
-            {
-                "name": "text",
-                "type": "application/json",
-                "unary": True,
-                "required": True,
-            }
-        ],
-        # No output is flagged `user_facing`: this client narrates through
-        # `Action.log`, so there is no port to declare and none to flag.
-        "outputs": [{"name": "result", "type": "application/json"}],
-        # "$" means the `result` port *is* the whole tool result, rather than a
-        # field of an object wrapping it.
-        "output_to_json_field": {"result": "$"},
-    }
-
-
 @pytest.mark.asyncio
 async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """A tool that lives here, called by a model over there, announced nowhere.
+
+    Registering it is the whole of the client's part. The gateway asks this
+    session what it serves -- `__list_actions__`, which every peer answers --
+    and proxies what comes back, so the model's call reverse-dispatches to the
+    handler below.
+
+    This test used to announce a *descriptor* and also pass that same descriptor
+    where `run_turn` wants tool *definitions*, which are a different document
+    for a different port. It worked only because the fake backend ignores what
+    it is shown. There is one document now, and it is derived rather than sent.
+    """
     fake = _FakeOllama(_rounds())
     monkeypatch.setattr(ollama_mod, "get_ollama_client", lambda *a, **k: fake)
 
@@ -173,7 +164,6 @@ async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
 
     reducer = PresentationReducer()
     async with embedded_gateway(settings, registry=registry) as connection:
-        await connection.announce_tools([_descriptor()])
         new_interactions = await run_turn(
             connection,
             [],
@@ -188,12 +178,12 @@ async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
                     )
                 ],
             ),
-            [_descriptor()],
+            (),
             TurnConfig(
                 provider="ollama",
                 model="fake",
-                # Announcing a tool is not enough: the header gates what the
-                # model may see, bridged tools included.
+                # Serving a tool is not enough: the header gates what the model
+                # may see, discovered tools included.
                 allowed_actions="client_echo",
             ),
             reducer,

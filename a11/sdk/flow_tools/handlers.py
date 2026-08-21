@@ -30,6 +30,7 @@ from typing import Any
 from absl import logging
 
 import a11
+from a11.actions import describe
 from a11.flow import loads as compile_flows
 from a11.flow.diagnostics import FlowSyntaxError
 from a11.flow.plan import Program
@@ -131,6 +132,14 @@ def describe_composable_actions(
 ) -> list[dict[str, Any]]:
     """The actions a flow may name, each with its ports and its verb.
 
+    A thin projection of the written schema
+    ([a11.actions.describe][a11.actions.describe]) into the words a flow uses.
+    It used to build its own port shape -- ``{port, type, stream}`` where the
+    tool bridge said ``{name, type, unary}`` -- which made three vocabularies
+    for one idea. The document is now shared; only the spelling is local, and
+    only because a flow declares `stream` rather than `unary` and a flow step
+    names an `action` rather than a `name`.
+
     The ports are the point: an action's *output* port names are what a pipe
     needs on the left of a ``->``, and a tool definition carries only inputs.
 
@@ -146,53 +155,44 @@ def describe_composable_actions(
     logs through :meth:`a11.actions.action.Action.log`, whose port is not in the
     schema, so there is nothing here to hide.
     """
+    document = describe.registry_to_json(
+        registry, {"names": list(patterns)} if patterns else None
+    )
     described: list[dict[str, Any]] = []
-    for name in sorted(registry.list_registered_actions()):
+    for entry in describe.schemas_in_document(document):
+        name = entry.get("name", "")
+        # The flow tools themselves: a flow composing `flow_run` would be asking
+        # the gateway to run the flow it is already running.
         if name in FLOW_TOOL_NAMES:
             continue
-        if patterns and not action_name_matches_allowed(name, patterns):
-            continue
-        schema = registry.get_schema(name)
         described.append(
             {
-                "action": schema.name,
-                "description": schema.description,
-                "runnable": _has_handler(registry, name),
+                "action": name,
+                "description": entry.get("description", ""),
+                "runnable": entry.get("runnable", False),
                 "inputs": [
-                    _describe_port(port)
-                    for port in schema.inputs.values()
-                    if not port.autofills
+                    _describe_port(port) for port in entry.get("inputs", ())
                 ],
                 "outputs": [
-                    _describe_port(port) for port in schema.outputs.values()
+                    _describe_port(port) for port in entry.get("outputs", ())
                 ],
             }
         )
     return described
 
 
-def _has_handler(registry: Any, name: str) -> bool:
-    """Whether the registry can run this action, or only describe it.
-
-    The registry reports a schema-only registration as an *error* rather than
-    as ``None``, so asking is how it is found out -- the same way
-    [a11.flow.runtime][]'s resolver asks.
-    """
-    try:
-        return registry.get_handler(name) is not None
-    except StatusException:
-        return False
-
-
-def _describe_port(port: Any) -> dict[str, Any]:
-    """One port, in the terms a flow declares one in."""
-    described: dict[str, Any] = {"port": port.name, "type": port.type}
-    if not port.unary:
+def _describe_port(port: dict[str, Any]) -> dict[str, Any]:
+    """One described port, in the terms a flow declares one in."""
+    described: dict[str, Any] = {
+        "port": port.get("name", ""),
+        "type": port.get("type", ""),
+    }
+    if not port.get("unary", False):
         described["stream"] = True
-    if port.required:
+    if port.get("required"):
         described["required"] = True
-    if port.description:
-        described["description"] = port.description
+    if port.get("description"):
+        described["description"] = port["description"]
     return described
 
 

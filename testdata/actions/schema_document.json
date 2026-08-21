@@ -1,0 +1,105 @@
+{
+  "all_ports": {
+    "actions": [
+      {
+        "description": "Run a shell command.",
+        "inputs": [
+          {
+            "description": "The command to run.",
+            "json_schema": {
+              "type": "string"
+            },
+            "name": "command",
+            "required": true,
+            "type": "text/plain",
+            "unary": true
+          },
+          {
+            "json_schema": {
+              "type": "object"
+            },
+            "name": "parameters",
+            "type": "application/json",
+            "unary": true
+          }
+        ],
+        "name": "shell_execute",
+        "output_to_json_field": {
+          "status": "$"
+        },
+        "outputs": [
+          {
+            "json_schema": {
+              "type": "string"
+            },
+            "name": "output_lines",
+            "type": "text/plain",
+            "unary": false
+          },
+          {
+            "json_schema": {
+              "type": "object"
+            },
+            "name": "status",
+            "type": "application/json",
+            "unary": true
+          }
+        ],
+        "runnable": false
+      }
+    ],
+    "format": "a11.actions/v1"
+  },
+  "callable": {
+    "actions": [
+      {
+        "description": "Run a shell command.",
+        "inputs": [
+          {
+            "description": "The command to run.",
+            "json_schema": {
+              "type": "string"
+            },
+            "name": "command",
+            "required": true,
+            "type": "text/plain",
+            "unary": true
+          },
+          {
+            "json_schema": {
+              "type": "object"
+            },
+            "name": "parameters",
+            "type": "application/json",
+            "unary": true
+          }
+        ],
+        "name": "shell_execute",
+        "output_to_json_field": {
+          "status": "$"
+        },
+        "outputs": [
+          {
+            "json_schema": {
+              "type": "string"
+            },
+            "name": "output_lines",
+            "type": "text/plain",
+            "unary": false
+          },
+          {
+            "json_schema": {
+              "type": "object"
+            },
+            "name": "status",
+            "type": "application/json",
+            "unary": true
+          }
+        ],
+        "runnable": false
+      }
+    ],
+    "format": "a11.actions/v1"
+  },
+  "comment": "One a11.actions/v1 document, written by the native writer, that every language's reader and writer is checked against. The shape lives in cpp/a11/actions/describe.h; this is how the four implementations are kept from drifting, the way testdata/serial_tags.json does for the type tags."
+}

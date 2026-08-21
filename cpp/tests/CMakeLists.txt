@@ -5,6 +5,7 @@ add_executable(a11_core_test
   json_codec_test.cc
   msgpack_writer_encoding_test.cc
   string_codec_test.cc
+  uuid_test.cc
   future_test.cc
   http1_codec_test.cc
   http1_connection_test.cc
@@ -28,6 +29,7 @@ add_executable(a11_core_test
   async_node_test.cc
   action_test.cc
   action_log_test.cc
+  actions_describe_test.cc
   exception_boundary_test.cc
   service_test.cc
   session_test.cc
@@ -45,7 +47,8 @@ add_executable(a11_core_test
 target_link_libraries(
   a11_core_test PRIVATE a11::concurrency a11::data a11::net a11::nodes
                         a11::stores a11::actions a11::service a11::obs
-                        GTest::gtest_main a11::allocator)
+                        GTest::gtest_main a11::allocator
+                        nlohmann_json::nlohmann_json)
 add_test(NAME a11_core_test COMMAND a11_core_test)
 
 # The Flow language. Its own executable because a11::flow_lang links nothing but

@@ -1,6 +1,8 @@
 set(A11_ACTIONS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/action.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/builtins.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/describe.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/log.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/registry.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/schema.cc

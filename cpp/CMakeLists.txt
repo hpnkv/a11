@@ -1302,7 +1302,10 @@ target_link_libraries(
         # implementation detail carried only in the build interface for now, so
         # it stays out of the exported/installed package. The full relocatable
         # install + OTLP story lands in a later phase.
-        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings)
+        # nlohmann for a11/actions/describe.cc, which builds the a11.actions/v1
+        # document. Private, and the public header includes only json_fwd.hpp,
+        # so describing an action costs a consumer no nlohmann dependency.
+        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
 
 add_library(a11_service STATIC ${A11_SERVICE_SOURCES})
 add_library(a11::service ALIAS a11_service)
@@ -1439,8 +1442,10 @@ if (A11_BUILD_FLOW_ACTIONS)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
     target_link_libraries(
             a11_flow_interpreter_lib
+            # a11::service for the session a program is given when its `call`
+            # steps are to reach a peer.
             PUBLIC a11::flow_runtime a11::flow_lang a11::flow_actions
-            a11::actions a11::concurrency a11::data a11::nodes
+            a11::actions a11::concurrency a11::data a11::nodes a11::service
             $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
             $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
             PRIVATE

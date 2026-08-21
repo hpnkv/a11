@@ -205,7 +205,7 @@ function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
 
 /**
  * Build an `ActionRegistry` populated with every IDE tool, plus the ordered
- * list of tool descriptors (for the `__register_tools__` announcement).
+ * list of the tool schemas the host declared.
  */
 export function buildIdeToolRegistry(
   descriptors: ActionDescriptor[],

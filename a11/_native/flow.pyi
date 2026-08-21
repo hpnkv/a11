@@ -323,6 +323,8 @@ def run_program(
     timeout_seconds: typing.SupportsFloat | None = None,
     standard_streams: bool = True,
     registry: typing.Any | None = None,
+    session: typing.Any | None = None,
+    dispatch_stream: typing.Any | None = None,
 ) -> dict[str, typing.Any]:
     """
     Run a Flow program's entry flow, and return what it did.
@@ -338,6 +340,12 @@ def run_program(
     What the program may *do* is the arguments here and nothing the file can say --
     ``roots``, ``allow_write``, ``allow_run``, ``allow_net``, ``allow_env`` -- for
     the same reason they are command-line flags in the CLI.
+
+    Pass ``session`` and ``dispatch_stream`` together and the program's ``call``
+    steps are dispatched at that peer while its ``run`` steps stay here. The peer's
+    actions still have to be in ``registry`` for their schemas -- registered without
+    handlers, which is how "this one lives on the peer" is spelled -- because the
+    resolver looks a name up before it decides anything.
     """
 
 def scan(paths: collections.abc.Sequence[str]) -> dict[str, typing.Any]:

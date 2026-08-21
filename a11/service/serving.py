@@ -43,10 +43,25 @@ from a11.service.service import Service
 Listener = Callable[[Service], Any]
 
 
-def websocket(options: net.WebSocketServerOptions) -> Listener:
-    """A WebSocket listener bound to the service."""
+def websocket(
+    options: net.WebSocketServerOptions,
+    *,
+    expose_descriptors: bool = True,
+) -> Listener:
+    """A WebSocket listener bound to the service.
+
+    Args:
+        options: Where to listen, and how to frame accepted streams.
+        expose_descriptors: Also answer ``GET /actions`` on this port. A
+            WebSocket client can ask ``__list_actions__`` over the stream it
+            already has; this is for whoever has the port number and no A11
+            client -- a `curl`, a health check, a person. Pass False to leave
+            the port answering nothing but the upgrade.
+    """
 
     def bind(service: Service):
+        if expose_descriptors:
+            service.expose_descriptors_on(options.describe)
         return net.WebSocketWireServer.create(service.accept, options)
 
     return bind
@@ -56,12 +71,27 @@ def http_sse(
     bind_address: str,
     port: int,
     options: net.HttpSseOptions | None = None,
+    *,
+    expose_descriptors: bool = True,
 ) -> Listener:
-    """An HTTP SSE listener bound to the service."""
+    """An HTTP SSE listener bound to the service.
+
+    Args:
+        bind_address: Local address to listen on.
+        port: Port to listen on; 0 requests an ephemeral one.
+        options: Endpoint paths and transport tuning.
+        expose_descriptors: Also answer ``GET /actions``. On by default: an HTTP
+            service is a thing people read with a browser, and the document is
+            the same one ``__list_actions__`` returns because the same describer
+            produces both.
+    """
 
     def bind(service: Service):
+        resolved = options or net.HttpSseOptions()
+        if expose_descriptors:
+            service.expose_descriptors_on(resolved.describe)
         return net.HttpSseServer.create(
-            bind_address, port, service.accept, options or net.HttpSseOptions()
+            bind_address, port, service.accept, resolved
         )
 
     return bind

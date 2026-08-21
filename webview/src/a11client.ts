@@ -7,7 +7,7 @@
  *
  * On first use it opens the socket, builds the IDE-tool registry (so the
  * gateway can reverse-dispatch tool calls), announces the tools via
- * `__register_tools__`, and then calls `interact_with_llm` and streams the reply
+ * its own registry, and then calls `interact_with_llm` and streams the reply
  * off `text_output` / `thoughts` / `new_interactions`.
  *
  * Tools come from both ends. The IDE's own are announced and served here; the
@@ -30,9 +30,7 @@
 
 import {
     Action,
-    ActionPortSchema,
     ActionRegistry,
-    ActionSchema,
     INTERACT_WITH_LLM_SCHEMA,
     LlmHeaders,
     Session,
@@ -70,14 +68,6 @@ const need = <T>(value: T | Status): T => {
  */
 const isTimeout = (error: unknown): boolean =>
     error instanceof Error && error.message.startsWith(`${StatusCode[StatusCode.DEADLINE_EXCEEDED]}:`);
-
-/** Reserved backend control action used to announce the plugin's IDE tools. */
-const REGISTER_TOOLS_SCHEMA = new ActionSchema({
-    name: '__register_tools__',
-    description: 'Announce IDE tool schemas for reverse dispatch.',
-    inputs: {tools: new ActionPortSchema({name: 'tools', type: 'application/json', required: true})},
-    outputs: {ok: new ActionPortSchema({name: 'ok', type: 'application/json', required: true})},
-});
 
 /**
  * The model is an assistant sitting inside an IDE, and the tools are how it
@@ -215,11 +205,17 @@ export class A11ChatSession {
     }
 
     private async connect(): Promise<void> {
-        // Announce the tools whole, run logs included. The gateway is what keeps a
-        // log away from the model — its tool runner reads that port and files it
-        // under the tool call instead of forwarding it into the tool result — and
-        // that is deliberate: a log the gateway never receives is a log a reopened
-        // conversation cannot show.
+        // The registry below is the whole of it: the gateway asks this session
+        // what it serves, over `__list_actions__`, and proxies what comes back.
+        // Nothing is announced, and so nothing can be announced wrongly — this
+        // used to push a hand-written descriptor document whose schema was
+        // copied into four languages.
+        //
+        // Run logs still reach the gateway, on the reserved log port of the
+        // action it dispatched. That is deliberate: its tool runner files a log
+        // under the tool call rather than forwarding it into the tool result,
+        // and a log the gateway never receives is a log a reopened conversation
+        // cannot show.
         const descriptors = await listActions();
         const {registry, toolNames} = buildIdeToolRegistry(descriptors, (run) => {
             this.ranTool = true;
@@ -229,27 +225,11 @@ export class A11ChatSession {
         const stream = need(WebSocketWireStream.connect(this.config.url));
         // Surface a failed handshake here rather than as a later opaque error.
         need(await session.addStream(stream, StreamMode.START));
-        await this.announceTools(session, stream, descriptors);
         this.registry = registry;
         this.descriptors = descriptors;
         this.toolNames = toolNames;
         this.session = session;
         this.stream = stream;
-    }
-
-    private async announceTools(session: Session, stream: WireStream, descriptors: ActionDescriptor[]): Promise<void> {
-        const register = need(Action.create(REGISTER_TOOLS_SCHEMA, {
-            session,
-            stream,
-            nodeMap: session.getNodeMap(),
-        }));
-        need(await register.call());
-        const tools = need(await register.getInput('tools'));
-        for (const descriptor of descriptors) need(await tools.put(descriptor));
-        need(await tools.finalize());
-        const ok = need(await register.getOutput('ok', false));
-        await ok.next({timeoutMs: 10_000});
-        await register.wait(10_000);
     }
 
     /**
@@ -314,10 +294,10 @@ export class A11ChatSession {
      * back is the same values collected, for a caller that wants them at the end.
      *
      * Connecting first is not only about the socket: a flow saying
-     * `call get_active_file` is compiled against the schemas this side announced
-     * with `__register_tools__`, which is where the port names on both sides of a
-     * pipe come from. Without that handshake the gateway refuses the flow with
-     * `NOT_FOUND` rather than dispatching anything.
+     * `call get_active_file` is compiled against the schemas the gateway got by
+     * asking this session what it serves, which is where the port names on both
+     * sides of a pipe come from. Until it has asked, the gateway refuses the
+     * flow with `NOT_FOUND` rather than dispatching anything.
      */
     async runFlow(
         name: string,

@@ -1,7 +1,7 @@
 /**
  * What the four guide demos that talk to `a11.demos.web_demos_server` all need:
  * a WebSocket session, the backend toolbar (provider, model, key, base URL), one
- * chat turn against `interact_with_llm`, the `__register_tools__` handshake, and
+ * chat turn against `interact_with_llm`, the registry a page serves, and
  * a few DOM helpers.
  *
  * It is one module rather than four copies because the demos differ in what they
@@ -156,9 +156,11 @@ export function webSocketUrl(url: string): string {
  * Open a session to the demo server over one WebSocket.
  *
  * `registry` is what the *page* serves: an empty one for a demo that only calls
- * out, and a populated one for the demo whose actions the model calls back into
- * (see [announceTools]). It is bound to the session before the stream is
- * attached, so an inbound call cannot arrive before there is a handler for it.
+ * out, and a populated one for the demo whose actions the model calls back into.
+ * It is bound to the session before the stream is attached, so an inbound call
+ * cannot arrive before there is a handler for it -- and so that the backend,
+ * which asks this session what it serves over `__list_actions__`, gets the
+ * right answer whenever it asks. There is nothing to announce.
  */
 export async function connect(url: string, registry = new ActionRegistry()): Promise<Connection> {
     const session = need(Session.create({actionRegistry: registry, noStreamTimeoutMs: null}));
@@ -201,72 +203,6 @@ export async function drainPort(action: Action, port: string): Promise<void> {
     } catch {
         // A port the page does not use must never fail the turn it belongs to.
     }
-}
-
-// --- Announcing the page's own actions ---------------------------------------
-
-/** The reserved action a peer announces its own tools with, once per connection. */
-export const REGISTER_TOOLS_SCHEMA = new ActionSchema({
-    name: '__register_tools__',
-    description: "Announce the caller's tool schemas for reverse dispatch.",
-    inputs: {tools: new ActionPortSchema({name: 'tools', type: 'application/json', required: true})},
-    outputs: {ok: new ActionPortSchema({name: 'ok', type: 'application/json', required: true})},
-});
-
-/** One port, as the backend's tool bridge reads it back. */
-function describePort(port: ActionPortSchema, userFacing = false): Record<string, unknown> {
-    const described: Record<string, unknown> = {
-        name: port.name,
-        type: port.type,
-        description: port.description,
-        required: port.required,
-        unary: port.unary,
-    };
-    if (userFacing) described.user_facing = true;
-    return described;
-}
-
-/**
- * An `ActionSchema` as a descriptor the backend can rebuild a callable proxy
- * from. This is the *port* description, not the JSON-Schema tool definition the
- * model is shown: two documents, two ports, and sending one where the other
- * belongs yields a proxy with no inputs at all.
- */
-export function describeTool(schema: ActionSchema): Record<string, unknown> {
-    return {
-        name: schema.name,
-        description: schema.description,
-        inputs: [...schema.inputs.values()].map((port) => describePort(port)),
-        // Nothing is flagged: narration goes through `action.log()`, whose port is
-        // not in the schema. The backend finds it in the same place on every
-        // action, keeps it away from the model, and files it under the call — so a
-        // replayed conversation still shows what a tool did rather than only that
-        // it ran.
-        outputs: [...schema.outputs.values()].map((port) => describePort(port)),
-    };
-}
-
-/**
- * Tell the backend which actions this page serves, so the model's calls to them
- * are dispatched back down this same socket.
- *
- * Once per connection, before the first turn: the backend registers a proxy per
- * descriptor on this connection's own registry, and a turn that has not been
- * through this handshake has nothing to call.
- */
-export async function announceTools(
-    connection: Connection,
-    schemas: readonly ActionSchema[],
-): Promise<string[]> {
-    const announce = makeCall(connection, REGISTER_TOOLS_SCHEMA);
-    need(await announce.call());
-    const tools = need(await announce.getInput('tools'));
-    for (const schema of schemas) need(await tools.put(describeTool(schema)));
-    need(await tools.finalize());
-    const ok = need(await announce.getOutput('ok', false));
-    const acknowledged = need(await ok.next({timeoutMs: 30_000})) as { registered?: string[] } | null;
-    need(await announce.wait(30_000));
-    return acknowledged?.registered ?? [];
 }
 
 // --- One chat turn -----------------------------------------------------------

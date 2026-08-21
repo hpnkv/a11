@@ -1,5 +1,10 @@
 import { Action, type ActionHandler, type ActionSessionContext } from './action.js';
 import {
+  getBuiltinAction,
+  isBuiltinAction,
+  builtinActionNames,
+} from './action_builtins.js';
+import {
   CANCEL_ACTION_NAME,
   ActionHeaderSchema,
   ActionPortSchema,
@@ -46,6 +51,7 @@ function cloneSchema(
         description: port.description,
         required: port.required,
         unary: port.unary,
+        jsonSchema: port.jsonSchema,
         autofills: clearAutofills
           ? []
           : port.autofills.map((fragment) =>
@@ -60,6 +66,7 @@ function cloneSchema(
         description: port.description,
         required: port.required,
         unary: port.unary,
+        jsonSchema: port.jsonSchema,
         autofills: clearAutofills
           ? []
           : port.autofills.map((fragment) =>
@@ -117,6 +124,14 @@ export class ActionRegistry {
       if (actionName === CANCEL_ACTION_NAME) {
         return invalidArgumentError('The cancel Action name is reserved.');
       }
+      if (isBuiltinAction(actionName)) {
+        // Refused rather than shadowed. These are what a peer is asked with,
+        // and an application that could replace one could make itself
+        // undiscoverable -- which is what this mechanism exists to end.
+        return invalidArgumentError(
+          `'${actionName}' is a builtin action and cannot be re-registered.`,
+        );
+      }
       if (!(schema instanceof ActionSchema)) {
         return invalidArgumentError('schema must be an ActionSchema.');
       }
@@ -144,6 +159,13 @@ export class ActionRegistry {
     try {
       const validName = validateName(actionName);
       if (!isOk(validName)) return validName;
+      if (isBuiltinAction(actionName)) {
+        // InvalidArgument, not NotFound: "you cannot" and "it is not there" are
+        // different answers, and this one is the first.
+        return invalidArgumentError(
+          `'${actionName}' is a builtin action and cannot be unregistered.`,
+        );
+      }
       if (!this.registrations.delete(actionName)) {
         return notFoundError(`Action '${actionName}' is not registered.`);
       }
@@ -155,7 +177,10 @@ export class ActionRegistry {
 
   isRegistered(actionName: string): boolean {
     try {
-      return isOk(validateName(actionName)) && this.registrations.has(actionName);
+      if (!isOk(validateName(actionName))) return false;
+      // The builtins are not entries here; they are what every registry answers
+      // for even when it holds nothing. See ./action_builtins.js.
+      return isBuiltinAction(actionName) || this.registrations.has(actionName);
     } catch {
       return false;
     }
@@ -168,6 +193,8 @@ export class ActionRegistry {
       if (!isOk(validName)) return validName;
       const registration = this.registrations.get(actionName);
       if (registration === undefined) {
+        const builtin = getBuiltinAction(actionName);
+        if (builtin !== undefined) return cloneSchema(builtin.schema);
         return notFoundError(`Action '${actionName}' is not registered.`);
       }
       return cloneSchema(registration.schema);
@@ -183,6 +210,8 @@ export class ActionRegistry {
       if (!isOk(validName)) return validName;
       const registration = this.registrations.get(actionName);
       if (registration === undefined) {
+        const builtin = getBuiltinAction(actionName);
+        if (builtin !== undefined) return builtin.handler;
         return notFoundError(`Action '${actionName}' is not registered.`);
       }
       return registration.handler ?? notFoundError(
@@ -202,14 +231,19 @@ export class ActionRegistry {
       const validName = validateName(actionName);
       if (!isOk(validName)) return validName;
       const registration = this.registrations.get(actionName);
-      if (registration === undefined) {
+      const builtin =
+        registration === undefined ? getBuiltinAction(actionName) : undefined;
+      if (registration === undefined && builtin === undefined) {
         return notFoundError(`Action '${actionName}' is not registered.`);
       }
-      const schema = cloneSchema(registration.schema);
+      const schema = cloneSchema(
+        registration !== undefined ? registration.schema : builtin!.schema,
+      );
       if (!isOk(schema)) return schema;
       return Action.create(schema, {
         id: options.id,
-        handler: registration.handler,
+        handler:
+          registration !== undefined ? registration.handler : builtin!.handler,
         nodeMap: options.nodeMap,
         stream: options.stream,
         session: options.session,
@@ -234,7 +268,13 @@ export class ActionRegistry {
   /** Snapshot registered names in insertion order. */
   listRegisteredActions(): string[] {
     try {
-      return [...this.registrations.keys()];
+      const builtins = builtinActionNames();
+      const own = [...this.registrations.keys()].filter(
+        (name) => !builtins.includes(name),
+      );
+      // `register` refuses a builtin's name, so nothing can collide -- but a
+      // duplicate in a listing survives a long time before anybody notices.
+      return [...builtins, ...own];
     } catch {
       return [];
     }

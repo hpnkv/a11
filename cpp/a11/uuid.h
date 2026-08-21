@@ -46,6 +46,32 @@ std::uint64_t RandomUint64();
  */
 std::string NewUuid();
 
+/**
+ * @brief
+ *   Generate a short random identifier as lowercase hexadecimal.
+ *
+ * Where `NewUuid()` names something a human may have to correlate across
+ * systems, this names something that only has to be unique inside one -- an
+ * action, and through it every node id derived from it. Twelve digits is 48
+ * random bits: a one-in-a-million chance of a collision needs some 24 000 live
+ * ids in one keyspace, far above what a session holds. Eight digits is 32 bits
+ * and reaches the same odds at ninety-two, which is why the minimum here is not
+ * the minimum you should ask for.
+ *
+ * Every character is a hex digit, so the result is always a valid
+ * ::a11::data::ValidateName name and contains neither `-` nor `#` -- which
+ * matters because a node id is `<action id>#<port>` and every parser of one
+ * splits at the single `#`.
+ *
+ * Not cryptographically secure, for the same reason `NewUuid()` is not.
+ *
+ * @param hex_digits
+ *   Length of the result, clamped to [8, 16].
+ * @return
+ *   A freshly generated identifier of @p hex_digits characters.
+ */
+std::string NewShortId(int hex_digits = 12);
+
 }  // namespace a11
 
 #endif  // A11_UUID_H_

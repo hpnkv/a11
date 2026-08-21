@@ -43,6 +43,7 @@
 #include "a11/actions/registry.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/describe_endpoint.h"
 #include "a11/net/wire_stream.h"
 #include "a11/service/session.h"
 
@@ -134,6 +135,28 @@ class Service : public std::enable_shared_from_this<Service> {
       std::shared_ptr<actions::ActionRegistry> action_registry);
   /** @brief Replace the per-connection hook. Affects connections from now on. */
   absl::Status SetOnConnection(OnServiceConnection on_connection);
+
+  /**
+   * @brief Describes this service's actions, for `GET /actions`.
+   *
+   * The same describer the `__list_actions__` builtin runs, so the endpoint and
+   * the action cannot answer differently -- which is the point of routing the
+   * HTTP route back here rather than giving a transport a registry of its own.
+   *
+   * @param name One action to describe, or empty for the whole collection.
+   * @param query URL query string, without the `?`, carrying the filters.
+   * @return The `a11.actions/v1` document, or NotFound for an unknown name.
+   */
+  absl::StatusOr<std::string> Describe(std::string_view name,
+                                       std::string_view query) const;
+
+  /**
+   * @brief A net::DescribeActionsHandler bound to this service.
+   *
+   * Holds a weak reference, so installing it on a listener does not keep the
+   * service alive past its own shutdown.
+   */
+  [[nodiscard]] net::DescribeActionsHandler DescribeHandler();
 
   // --- the sole join point with a transport ------------------------------
 

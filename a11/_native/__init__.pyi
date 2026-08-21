@@ -59,6 +59,7 @@ __all__: list[str] = [
     "CANCEL_ACTION_NAME",
     "CANDIDATE",
     "CLOSE_STATUS_ATTRIBUTE",
+    "CachePolicy",
     "ChannelFramingOptions",
     "Chunk",
     "ChunkMetadata",
@@ -67,6 +68,7 @@ __all__: list[str] = [
     "ChunkStoreReaderOptions",
     "ChunkStoreWriter",
     "ChunkStoreWriterOptions",
+    "CorsOptions",
     "DEFAULT_ASR_MODEL",
     "DEFAULT_LOG_LEVEL",
     "DEFAULT_MAX_CONCURRENT_NESTED_ACTIONS",
@@ -74,6 +76,7 @@ __all__: list[str] = [
     "DEFAULT_SSE_MESSAGE_ENDPOINT",
     "DEFAULT_VAD_MODEL",
     "DESCRIPTION",
+    "DescribeEndpointOptions",
     "DownloadOptions",
     "Duration",
     "EMPTY_WIRE_MESSAGE_SIZE",
@@ -141,6 +144,7 @@ __all__: list[str] = [
     "SSE_STREAM_ID_HEADER",
     "START",
     "SerializationRegistry",
+    "ServerHeaderOptions",
     "Service",
     "ServiceOptions",
     "Session",
@@ -190,6 +194,7 @@ __all__: list[str] = [
     "audio_buffer_to_msgpack",
     "audio_device_info",
     "audio_model_cache_dir",
+    "builtin_action_names",
     "create_in_process_wire_stream_pair",
     "default_audio_input_device",
     "default_redis_client",
@@ -221,11 +226,14 @@ __all__: list[str] = [
     "parse_url",
     "register_audio_actions",
     "register_http_actions",
+    "registry_to_json",
     "release_deferred_python_refs",
     "reset_default_redis_client",
     "resolve_asr_model",
     "resolve_url_reference",
     "resolve_vad_model",
+    "schema_from_json",
+    "schema_to_json",
     "set_action_log_sink",
     "set_default_redis_client",
     "set_log_sink",
@@ -999,6 +1007,7 @@ class ActionPortSchema:
         unary: bool = False,
         autofills: typing.Any | None = None,
         typeinfo: type | None = None,
+        json_schema: str = "",
     ) -> None:
         """
         Create a validated port schema.
@@ -1032,6 +1041,14 @@ class ActionPortSchema:
         """
     @description.setter
     def description(self, arg0: str) -> None: ...
+
+    @property
+    def json_schema(self) -> str:
+        """
+        JSON Schema for the port's payload, as text. The describable half of `typeinfo`: what this side can say about the type to a peer or a model, which a descriptor that crossed a wire has no type handle left to derive.
+        """
+    @json_schema.setter
+    def json_schema(self, arg0: str) -> None: ...
 
     @property
     def name(self) -> str:
@@ -1200,6 +1217,20 @@ class ActionRegistry:
             ```python
             registry.register("summarise", SUMMARISE, summarise)
             ```
+
+            Or the schema alone, which says the action lives on a peer and is to be
+            reached with a flow's `call` rather than run here:
+
+            ```python
+            registry.register("shell_execute", SHELL_EXECUTE)
+            ```
+
+        Each port carrying a `typeinfo` also gets a `json_schema` derived from it on
+        the way in, because only Python can read a Python type. That happens here
+        rather than when the action is described, so the answer a peer gets over the
+        wire -- built by the native describer, which sees only what is on the schema
+        -- is the same document a local caller gets. See
+        [a11.actions.describe][a11.actions.describe].
         """
 
     def register_sync(
@@ -2348,6 +2379,36 @@ class AudioSubscription:
         Sample rate, in hertz, of every delivered buffer.
         """
 
+class CachePolicy:
+    """
+    Members:
+
+    STREAM : A live stream: never cached, and not to be buffered.
+
+    VOLATILE : A document that may change at any time: revalidate before reuse.
+
+    UNSET : Say nothing about caching.
+    """
+
+    STREAM: typing.ClassVar[CachePolicy]
+    UNSET: typing.ClassVar[CachePolicy]
+    VOLATILE: typing.ClassVar[CachePolicy]
+    __members__: typing.ClassVar[dict[str, CachePolicy]]
+    def __eq__(self, other: object) -> bool: ...
+    def __getstate__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
+    def __int__(self) -> int: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
+    def __str__(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def value(self) -> int: ...
+
 class ChannelFramingOptions:
     def __init__(self) -> None:
         """
@@ -3108,6 +3169,85 @@ class ChunkStoreWriterOptions:
         """
     @sticky_mimetype.setter
     def sticky_mimetype(self, arg0: bool) -> None: ...
+
+class CorsOptions:
+    def __init__(self) -> None:
+        """
+        Construct permissive cross-origin options.
+        """
+
+    def validate(self) -> None:
+        """
+        Validate the options, raising on error.
+        """
+
+    @property
+    def allow_headers(self) -> str:
+        """
+        Access-Control-Allow-Headers.
+        """
+    @allow_headers.setter
+    def allow_headers(self, arg0: str) -> None: ...
+
+    @property
+    def allow_methods(self) -> str:
+        """
+        Access-Control-Allow-Methods.
+        """
+    @allow_methods.setter
+    def allow_methods(self, arg0: str) -> None: ...
+
+    @property
+    def allow_origin(self) -> str:
+        """
+        Access-Control-Allow-Origin; '*' admits any page.
+        """
+    @allow_origin.setter
+    def allow_origin(self, arg0: str) -> None: ...
+
+    @property
+    def enabled(self) -> bool:
+        """
+        Whether cross-origin headers are sent at all.
+        """
+    @enabled.setter
+    def enabled(self, arg0: bool) -> None: ...
+
+    @property
+    def expose_headers(self) -> str:
+        """
+        Access-Control-Expose-Headers: what a page may read.
+        """
+    @expose_headers.setter
+    def expose_headers(self, arg0: str) -> None: ...
+
+    @property
+    def max_age_seconds(self) -> int:
+        """
+        Access-Control-Max-Age in seconds; 0 omits it.
+        """
+    @max_age_seconds.setter
+    def max_age_seconds(self, arg0: typing.SupportsInt) -> None: ...
+
+class DescribeEndpointOptions:
+    def __init__(self) -> None:
+        """
+        Construct default (disabled) describe options.
+        """
+
+    @property
+    def enabled(self) -> bool:
+        """
+        Whether this server answers discovery over HTTP. Turned on by Service.expose_descriptors_on.
+        """
+
+    @property
+    def path(self) -> str:
+        """
+        Path the action descriptors are served on.
+        """
+    @path.setter
+    def path(self, arg0: str) -> None: ...
 
 class DownloadOptions:
     def __init__(self) -> None:
@@ -4106,36 +4246,20 @@ class HttpSseOptions:
     def connect_endpoint(self, arg0: str) -> None: ...
 
     @property
-    def cors_allow_headers(self) -> str:
+    def describe(self) -> DescribeEndpointOptions:
         """
-        Value for Access-Control-Allow-Headers.
+        Server-side GET /actions. Point it at a service with Service.expose_descriptors_on.
         """
-    @cors_allow_headers.setter
-    def cors_allow_headers(self, arg0: str) -> None: ...
+    @describe.setter
+    def describe(self, arg0: DescribeEndpointOptions) -> None: ...
 
     @property
-    def cors_allow_methods(self) -> str:
+    def headers(self) -> ServerHeaderOptions:
         """
-        Value for Access-Control-Allow-Methods.
+        Server-side response-header policy: the Server header, cross-origin access, and the cache hints a reply carries. See a11.net.ServerHeaderOptions.
         """
-    @cors_allow_methods.setter
-    def cors_allow_methods(self, arg0: str) -> None: ...
-
-    @property
-    def cors_allow_origin(self) -> str:
-        """
-        Value for Access-Control-Allow-Origin; empty disables CORS.
-        """
-    @cors_allow_origin.setter
-    def cors_allow_origin(self, arg0: str) -> None: ...
-
-    @property
-    def cors_expose_headers(self) -> str:
-        """
-        Value for Access-Control-Expose-Headers.
-        """
-    @cors_expose_headers.setter
-    def cors_expose_headers(self, arg0: str) -> None: ...
+    @headers.setter
+    def headers(self, arg0: ServerHeaderOptions) -> None: ...
 
     @property
     def http2_options(self) -> Http2Options:
@@ -5822,6 +5946,41 @@ class SerializationRegistry:
         Number of registered serializers.
         """
 
+class ServerHeaderOptions:
+    def __init__(self) -> None:
+        """
+        Construct default server response-header options.
+        """
+
+    def validate(self) -> None:
+        """
+        Validate the options, raising on error.
+        """
+
+    @property
+    def cors(self) -> CorsOptions:
+        """
+        Cross-origin policy. Permissive by default, because a browser is a first-class A11 client.
+        """
+    @cors.setter
+    def cors(self, arg0: CorsOptions) -> None: ...
+
+    @property
+    def nosniff(self) -> bool:
+        """
+        Send X-Content-Type-Options: nosniff.
+        """
+    @nosniff.setter
+    def nosniff(self, arg0: bool) -> None: ...
+
+    @property
+    def server(self) -> str:
+        """
+        Value of the Server header; empty sends none.
+        """
+    @server.setter
+    def server(self, arg0: str) -> None: ...
+
 class Service:
     async def __aenter__(self) -> "Service": ...
     async def __aexit__(self, *exc_info) -> None: ...
@@ -5875,6 +6034,11 @@ class Service:
         Attach another transport to an existing session.
         """
 
+    def describe(self, name: str = "", query: str = "") -> str:
+        """
+        Describe this service's actions as an a11.actions/v1 JSON document. With a name, describes that one action or raises NOT_FOUND. `query` carries the same filters as the HTTP endpoint's query string.
+        """
+
     async def drain(self, timeout: Duration | None = None) -> None:
         """
         Await the completion of every session currently being served.
@@ -5886,6 +6050,11 @@ class Service:
             StatusException: ``DEADLINE_EXCEEDED`` when sessions remain after
                 ``timeout``; they are left running, so follow with `abort` if
                 they must go.
+        """
+
+    def expose_descriptors_on(self, options: DescribeEndpointOptions) -> None:
+        """
+        Point a listener's `describe` options at this service, so its transport answers GET /actions from the same describer the __list_actions__ builtin uses.
         """
 
     def get_session(self, session_id: str) -> Session:
@@ -7609,6 +7778,14 @@ class WebSocketServerOptions:
     def bind_address(self, arg0: str) -> None: ...
 
     @property
+    def describe(self) -> DescribeEndpointOptions:
+        """
+        Server-side GET /actions on this same port, for whoever has the port number but not an A11 client. Point it at a service with Service.expose_descriptors_on.
+        """
+    @describe.setter
+    def describe(self, arg0: DescribeEndpointOptions) -> None: ...
+
+    @property
     def enable_tls(self) -> bool:
         """
         Whether TLS is enabled (mirrors http2_options.tls.enabled).
@@ -7623,6 +7800,14 @@ class WebSocketServerOptions:
         """
     @framing.setter
     def framing(self, arg0: ChannelFramingOptions) -> None: ...
+
+    @property
+    def headers(self) -> ServerHeaderOptions:
+        """
+        Response-header policy for this port's HTTP surface: the Server header, cross-origin access and cache hints. A 404 and a GET /actions are ordinary HTTP responses even on a port whose business is upgrades.
+        """
+    @headers.setter
+    def headers(self, arg0: ServerHeaderOptions) -> None: ...
 
     @property
     def http2_options(self) -> Http2Options:
@@ -8980,6 +9165,11 @@ def audio_model_cache_dir() -> str:
     The directory shorthand models are cached in.
     """
 
+def builtin_action_names() -> list[str]:
+    """
+    The names of the actions every registry answers for, sorted.
+    """
+
 def create_in_process_wire_stream_pair(
     options: WireStreamOptions | None = None,
     first_options: WireStreamOptions | None = None,
@@ -9175,6 +9365,13 @@ def register_http_actions(registry: ActionRegistry | None) -> None:
     Register make_http_request and web-fetch on `registry`.
     """
 
+def registry_to_json(
+    registry: ActionRegistry, request: typing.Any | None = None
+) -> str:
+    """
+    Describe every action in the registry as one a11.actions/v1 JSON document. `request` is the same object __list_actions__ takes on its `request` port: a mapping, a list of patterns, or None.
+    """
+
 def release_deferred_python_refs() -> None:
     """
     Release Python references that native destructors queued instead of dropping.
@@ -9212,6 +9409,18 @@ def resolve_vad_model(
 ) -> asyncio.Future[str]:
     """
     Resolve a VAD model shorthand or path to a local file, downloading it if needed. An empty spec resolves to an empty path. Awaitable.
+    """
+
+def schema_from_json(described: str) -> ActionSchema:
+    """
+    Rebuild an ActionSchema from one described action, for a side that has to call what it was told about. A port's `typeinfo` and an input's autofills do not travel and come back empty.
+    """
+
+def schema_to_json(
+    schema: ActionSchema, runnable: bool = True, all_ports: bool = False
+) -> str:
+    """
+    Describe one action schema as an a11.actions/v1 JSON document. With all_ports=True the description keeps inputs the receiver autofills, flagged, which a caller cannot write but a reader may want to see.
     """
 
 def set_action_log_sink(callback: typing.Any) -> None:

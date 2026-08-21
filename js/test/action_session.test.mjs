@@ -138,7 +138,13 @@ test('ActionRegistry copies schemas and can clear autofills', () => {
   const copiedSchema = copy.getSchema('registered');
   assert.equal(isOk(copiedSchema), true);
   assert.equal(copiedSchema.inputs.get('input').autofills.length, 0);
-  assert.deepEqual(registry.listRegisteredActions(), ['registered']);
+  // Every registry also answers for A11's own builtins, which are not
+  // entries in it -- so what the caller put there is what is checked.
+  assert.deepEqual(
+    registry.listRegisteredActions().filter((name) => !name.startsWith('__')),
+    ['registered'],
+  );
+  assert.equal(registry.isRegistered('__list_actions__'), true);
 });
 
 test('sessions call an Action with streaming input and output', async () => {

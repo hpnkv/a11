@@ -1,22 +1,24 @@
 # Copyright 2026 The A11 Authors.
 
-"""The gateway's liveness action, shared by the server and its clients.
+"""The liveness action, now a builtin every A11 peer answers.
 
-Both sides need this schema -- the gateway to serve it, a client to probe with it
--- and neither should have to import the other's module to get it. It lives on
-its own so a client can probe without dragging in the shell and audio SDKs that
-`a11.gateway.app` pulls in.
+A ping is how a client tells "an A11 peer is listening here" apart from
+"something is listening here". The distinction matters because anything at all
+can hold the port, and a peer that completes a TCP handshake but does not speak
+A11 would otherwise be joined and then hang on the first real call.
 
-A ping is how a client tells "a gateway is listening here" apart from "something
-is listening here". The distinction matters because anything at all can hold the
-port, and a peer that completes a TCP handshake but does not speak A11 would
-otherwise be joined and then hang on the first real call.
+It used to be registered by `a11.gateway.app` and by nothing else, which meant
+:meth:`a11.client.connection.GatewayConnection.probe` failed against every A11
+service that was not *this* gateway -- an `a11 serve`, an IDE plugin, a demo. It
+is now one of the actions a registry answers for whether or not anybody
+installed it (see `cpp/a11/actions/builtins.h`), so the probe works against any
+peer.
+
+The name and the schema are unchanged, because four languages' clients probe
+with them. This module stays as the place they are spelled in Python.
 """
 
 from __future__ import annotations
-
-import logging
-from typing import cast
 
 from a11 import actions
 
@@ -49,17 +51,4 @@ PING_SCHEMA = actions.ActionSchema(
 )
 
 
-async def ping(action: actions.Action) -> None:
-    """Echo the single value on ``input`` back on ``output``."""
-    stream_str = "<no stream>"
-    if action.get_stream():
-        stream_str = str(action.get_stream().get_id())
-
-    logging.info(f"[{stream_str}] running ping on stream {stream_str}")
-    ping_value = cast(str, await action["input"].consume(str))
-    await action["output"].finalize(ping_value)
-
-    logging.info(f"[{stream_str}] ping complete")
-
-
-__all__ = ["PING_ACTION", "PING_SCHEMA", "ping"]
+__all__ = ["PING_ACTION", "PING_SCHEMA"]

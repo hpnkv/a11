@@ -4,7 +4,6 @@ from a11 import actions
 from a11 import net
 from a11.gateway import conversations
 from a11.gateway.config import GatewayConfig
-from a11.gateway.ping import PING_SCHEMA, ping
 from a11.gateway import conversation_actions
 from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk import bash, flow_tools
@@ -17,9 +16,10 @@ def _make_action_registry(
     config: GatewayConfig,
     conversation_store: conversations.ConversationStore,
 ):
+    # No __ping here any more: it is a builtin every registry answers for,
+    # which is what makes a probe work against any A11 peer rather than only
+    # against this gateway. See a11/gateway/ping.py.
     registry = actions.ActionRegistry()
-
-    registry.register(PING_SCHEMA.name, PING_SCHEMA, ping)
 
     conversation_actions.install(registry, conversation_store)
 

@@ -2,6 +2,7 @@
 
 #include "a11/uuid.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -30,6 +31,15 @@ std::string NewUuid() {
       static_cast<std::uint16_t>(high >> 16U), static_cast<std::uint16_t>(high),
       static_cast<std::uint16_t>(low >> 48U),
       low & UINT64_C(0x0000ffffffffffff));
+}
+
+std::string NewShortId(int hex_digits) {
+  hex_digits = std::clamp(hex_digits, 8, 16);
+  const std::uint64_t value =
+      hex_digits == 16 ? RandomUint64()
+                       : RandomUint64() >> (64U - 4U * static_cast<unsigned>(
+                                                        hex_digits));
+  return absl::StrFormat("%0*x", hex_digits, value);
 }
 
 }  // namespace a11

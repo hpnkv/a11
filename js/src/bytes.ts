@@ -167,14 +167,27 @@ export function copyByteMap(values: ReadonlyMap<string, Uint8Array>): ByteMap {
   );
 }
 
-/** Generate a validated-name-friendly id for actions, nodes, sessions, or streams. */
+/** Hex digits in a generated id: 48 random bits, matching C++ `NewShortId`. */
+const ID_HEX_DIGITS = 12;
+
+/**
+ * Generate a validated-name-friendly id for actions, nodes, sessions, or streams.
+ *
+ * Twelve hex digits, as `a11::NewShortId` produces on the native side. Every
+ * character is a hex digit, so a node id stays `<action id>#<port>` with exactly
+ * one `#` for the session to split on.
+ */
 export function randomId(prefix: string): string {
   try {
-    const value = globalThis.crypto?.randomUUID?.();
-    if (value !== undefined) return `${prefix}${value.replaceAll('-', '')}`;
+    if (globalThis.crypto?.getRandomValues !== undefined) {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(ID_HEX_DIGITS / 2));
+      return prefix + [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
   } catch {
     // The deterministic fallback below still produces a valid A11 name.
   }
-  const random = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(16);
-  return `${prefix}${Date.now().toString(16)}${random}`;
+  // Low bits of the clock, then randomness, trimmed to the same width.
+  const random = Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, '0');
+  const clock = (Date.now() & 0xffffff).toString(16).padStart(6, '0');
+  return `${prefix}${clock}${random}`;
 }

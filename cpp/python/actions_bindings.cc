@@ -15,6 +15,7 @@
 #include <Python.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
@@ -25,6 +26,8 @@
 #include <pybind11_abseil/status_casters.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/builtins.h"
+#include "a11/actions/describe.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
@@ -273,6 +276,22 @@ std::vector<std::optional<data::NodeFragment>> ActionAutofillsFromPython(
     }
   }
   return result;
+}
+
+/**
+ * A describe request as text, from whatever Python handed over.
+ *
+ * A string is already the document. Anything else goes through `json.dumps`
+ * rather than being walked here: the request is small, its shape is the one
+ * `__list_actions__` documents, and Python's own encoder is the thing that
+ * agrees with what a caller wrote.
+ */
+std::string DescribeRequestToJson(const py::object& request) {
+  if (request.is_none()) return {};
+  if (py::isinstance<py::str>(request)) return request.cast<std::string>();
+  return py::module_::import("json")
+      .attr("dumps")(request)
+      .cast<std::string>();
 }
 
 template <typename T>
@@ -563,7 +582,8 @@ void BindActions(py::module_& module) {
       .def(py::init([](std::string name, std::string type,
                        std::string description, bool required, bool unary,
                        const py::object& autofills,
-                       const py::typing::Optional<py::type>& typeinfo) {
+                       const py::typing::Optional<py::type>& typeinfo,
+                       std::string json_schema) {
              return ValidateSchema(actions::ActionPortSchema{
                  .name = std::move(name),
                  .type = std::move(type),
@@ -571,12 +591,13 @@ void BindActions(py::module_& module) {
                  .required = required,
                  .unary = unary,
                  .autofills = ActionAutofillsFromPython(autofills),
+                 .json_schema = std::move(json_schema),
                  .typeinfo = PortSchemaTypeInfoFromPython(typeinfo)});
            }),
            "Create a validated port schema.", py::arg("name"), py::arg("type"),
            py::arg("description") = "", py::arg("required") = false,
            py::arg("unary") = false, py::arg("autofills") = std::nullopt,
-           py::arg("typeinfo") = py::none())
+           py::arg("typeinfo") = py::none(), py::arg("json_schema") = "")
       .def_readwrite("name", &actions::ActionPortSchema::name,
                      "The port's name.")
       .def_readwrite("type", &actions::ActionPortSchema::type,
@@ -587,6 +608,11 @@ void BindActions(py::module_& module) {
                      "Whether the port must be provided.")
       .def_readwrite("unary", &actions::ActionPortSchema::unary,
                      "Whether the port carries a single value.")
+      .def_readwrite("json_schema", &actions::ActionPortSchema::json_schema,
+                     "JSON Schema for the port's payload, as text. The"
+                     " describable half of `typeinfo`: what this side can say"
+                     " about the type to a peer or a model, which a descriptor"
+                     " that crossed a wire has no type handle left to derive.")
       .def_property(
           "typeinfo",
           [](const actions::ActionPortSchema& schema)
@@ -1465,6 +1491,50 @@ Examples:
       .def("copy", &actions::ActionRegistry::Copy,
            "Return a copy of the registry, optionally clearing autofills.",
            py::arg("clear_autofills") = true);
+
+  module.def(
+      "registry_to_json",
+      [](const std::shared_ptr<actions::ActionRegistry>& registry,
+         const py::object& request) {
+        const std::string encoded = DescribeRequestToJson(request);
+        // Takes the registry's mutex, so the GIL is released across the call and
+        // taken again to convert the result. See interop.h's WithoutGil.
+        return ValueOrThrow(WithoutGil([&]() -> absl::StatusOr<std::string> {
+          ABSL_ASSIGN_OR_RETURN(const actions::SchemaQuery parsed,
+                                actions::ParseSchemaQuery(encoded));
+          return actions::RegistryToJsonText(*registry, parsed);
+        }));
+      },
+      "Describe every action in the registry as one a11.actions/v1 JSON "
+      "document. `request` is the same object __list_actions__ takes on its "
+      "`request` port: a mapping, a list of patterns, or None.",
+      py::arg("registry"), py::arg("request") = py::none());
+  module.def(
+      "schema_to_json",
+      [](const actions::ActionSchema& schema, bool runnable, bool all_ports) {
+        return ValueOrThrow(actions::SchemaToJsonText(
+            schema, runnable,
+            all_ports ? actions::PortView::kAll
+                      : actions::PortView::kCallable));
+      },
+      "Describe one action schema as an a11.actions/v1 JSON document. With "
+      "all_ports=True the description keeps inputs the receiver autofills, "
+      "flagged, which a caller cannot write but a reader may want to see.",
+      py::arg("schema"), py::arg("runnable") = true,
+      py::arg("all_ports") = false);
+  module.def(
+      "schema_from_json",
+      [](const std::string& described) {
+        return ValueOrThrow(actions::SchemaFromJsonText(described));
+      },
+      "Rebuild an ActionSchema from one described action, for a side that has "
+      "to call what it was told about. A port's `typeinfo` and an input's "
+      "autofills do not travel and come back empty.",
+      py::arg("described"));
+  module.def(
+      "builtin_action_names",
+      []() { return actions::BuiltinActionNames(); },
+      "The names of the actions every registry answers for, sorted.");
 
   module.def(
       "status_to_chunk",

@@ -13,7 +13,10 @@
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 
+#include <algorithm>
+
 #include "a11/actions/action.h"
+#include "a11/actions/builtins.h"
 #include "a11/actions/schema.h"
 #include "a11/data/types.h"
 #include "thread/boost_primitives.h"
@@ -26,6 +29,14 @@ absl::Status ActionRegistry::Register(std::string action_name,
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_name));
   if (action_name == kCancelActionName) {
     return absl::InvalidArgumentError("The cancel action name is reserved");
+  }
+  if (IsBuiltinAction(action_name)) {
+    // Refused rather than shadowed. These are what a peer is asked with, and an
+    // application that could replace one could make itself undiscoverable --
+    // which is the situation this whole mechanism exists to end.
+    return absl::InvalidArgumentError(
+        absl::StrCat("'", action_name,
+                     "' is a builtin action and cannot be re-registered"));
   }
   ABSL_RETURN_IF_ERROR(schema.Validate());
   if (schema.name != action_name) {
@@ -54,6 +65,12 @@ absl::Status ActionRegistry::RegisterSync(std::string action_name,
 
 absl::Status ActionRegistry::Unregister(std::string_view action_name) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_name));
+  if (IsBuiltinAction(action_name)) {
+    // InvalidArgument, not NotFound: "you cannot" and "it is not there" are
+    // different answers, and this one is the first.
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", action_name, "' is a builtin action and cannot be unregistered"));
+  }
   thread::MutexLock lock(&mu_);
   if (schemas_.find(std::string(action_name)) == schemas_.end()) {
     return absl::NotFoundError(
@@ -68,6 +85,9 @@ bool ActionRegistry::IsRegistered(std::string_view action_name) const {
   if (!data::ValidateName(action_name).ok()) {
     return false;
   }
+  if (IsBuiltinAction(action_name)) {
+    return true;
+  }
   thread::MutexLock lock(&mu_);
   return schemas_.find(std::string(action_name)) != schemas_.end();
 }
@@ -75,26 +95,42 @@ bool ActionRegistry::IsRegistered(std::string_view action_name) const {
 absl::StatusOr<ActionSchema> ActionRegistry::GetSchema(
     std::string_view action_name) const {
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_name));
-  thread::MutexLock lock(&mu_);
-  const auto found = schemas_.find(action_name);
-  if (found == schemas_.end()) {
-    return absl::NotFoundError(
-        absl::StrCat("Action '", action_name, "' is not registered"));
+  {
+    thread::MutexLock lock(&mu_);
+    const auto found = schemas_.find(action_name);
+    if (found != schemas_.end()) {
+      return found->second;
+    }
   }
-  return found->second;
+  // The builtins are not entries here; they are what every registry answers for
+  // even when it holds nothing. See a11/actions/builtins.h.
+  if (const BuiltinAction* absl_nullable builtin =
+          GetBuiltinAction(action_name);
+      builtin != nullptr) {
+    return builtin->schema;
+  }
+  return absl::NotFoundError(
+      absl::StrCat("Action '", action_name, "' is not registered"));
 }
 
 absl::StatusOr<ActionHandler> ActionRegistry::GetHandler(
     std::string_view action_name) const {
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_name));
-  thread::MutexLock lock(&mu_);
-  const auto found = handlers_.find(action_name);
-  if (found != handlers_.end()) {
-    return found->second;
+  {
+    thread::MutexLock lock(&mu_);
+    const auto found = handlers_.find(action_name);
+    if (found != handlers_.end()) {
+      return found->second;
+    }
+    if (schemas_.find(action_name) != schemas_.end()) {
+      return absl::NotFoundError(absl::StrCat(
+          "Action '", action_name, "' is registered without a handler"));
+    }
   }
-  if (schemas_.find(action_name) != schemas_.end()) {
-    return absl::NotFoundError(absl::StrCat(
-        "Action '", action_name, "' is registered without a handler"));
+  if (const BuiltinAction* absl_nullable builtin =
+          GetBuiltinAction(action_name);
+      builtin != nullptr) {
+    return builtin->handler;
   }
   return absl::NotFoundError(
       absl::StrCat("Action '", action_name, "' is not registered"));
@@ -114,6 +150,13 @@ absl::StatusOr<std::shared_ptr<Action>> ActionRegistry::MakeAction(
       handler = found->second;
     }
   }
+  if (!handler) {
+    if (const BuiltinAction* absl_nullable builtin =
+            GetBuiltinAction(action_name);
+        builtin != nullptr) {
+      handler = builtin->handler;
+    }
+  }
   return Action::Create(std::move(schema), std::move(action_id),
                         std::move(handler), std::move(node_map),
                         std::move(stream), std::move(session),
@@ -128,11 +171,18 @@ absl::StatusOr<data::ActionMessage> ActionRegistry::MakeActionMessage(
 }
 
 std::vector<std::string> ActionRegistry::ListRegisteredActions() const {
+  const std::vector<std::string>& builtins = BuiltinActionNames();
+  std::vector<std::string> result = builtins;
   thread::MutexLock lock(&mu_);
-  std::vector<std::string> result;
-  result.reserve(schemas_.size());
+  result.reserve(result.size() + schemas_.size());
   for (const auto& [name, unused] : schemas_) {
     (void)unused;
+    // Register() refuses a builtin's name, so nothing here can collide -- but
+    // the check is cheap and a duplicate in a listing is the kind of thing that
+    // survives a long time before anybody notices.
+    if (std::find(builtins.begin(), builtins.end(), name) != builtins.end()) {
+      continue;
+    }
     result.push_back(name);
   }
   return result;

@@ -117,40 +117,32 @@ class ChatUI:
         # the model to use them. The Actions themselves are registered on the
         # connection's session registry, because the gateway reverse-dispatches
         # the model's calls back to *this* process to run them.
-        # Two different documents, for two different ports. The definitions are
-        # the JSON-Schema tool descriptions the *model* is shown; the descriptors
-        # are the port schemas the gateway rebuilds a callable proxy from.
-        # Announcing the wrong one gives a proxy with no inputs, and every tool
-        # call fails with "unexpected input".
-        self._tool_definitions: list[dict] = []
-        self._tool_descriptors: list[dict] = []
         self._tool_names: list[str] = []
         self._system_prompt = ""
-        self._tools_announced = False
         if shell_tools:
             self._enable_shell_tools()
 
     def _enable_shell_tools(self) -> None:
-        """Prepare this side's shell tools, to be announced once connected.
+        """Register this side's shell tools, for the gateway to find.
 
         They are the client's tools, not the gateway's: `a11 chat` exists to run
         commands in the user's own shell and working directory, and a gateway --
         which may be shared, or in a container -- is the wrong place for that.
-        So nothing asks the gateway for its `shell_*` actions; these are
-        announced over the bridge and run here.
+        So nothing asks the gateway for its `shell_*` actions; these run here.
+
+        Registering them is the whole of it. The gateway asks this session what
+        it serves, over `__list_actions__`, and proxies what comes back -- so
+        there is nothing to announce and, more to the point, nothing to announce
+        *wrongly*. This used to keep two parallel lists -- the port schemas the
+        gateway rebuilds a proxy from, and the JSON-Schema definitions the model
+        is shown -- because the two were confusable and sending one where the
+        other was wanted produced a tool with no inputs at all.
         """
-        from a11.gateway.tool_bridge import describe_tool
         from a11.sdk import bash
-        from a11.sdk.llm_tools.runner import get_tool_definitions
 
         registry = self._connection.session.action_registry
         bash.register(registry)
-        names = [schema.name for schema, _ in bash.SHELL_ACTIONS]
-        self._tool_names = names
-        self._tool_definitions = get_tool_definitions(registry, names)
-        self._tool_descriptors = [
-            describe_tool(registry.get_schema(name)) for name in names
-        ]
+        self._tool_names = [schema.name for schema, _ in bash.SHELL_ACTIONS]
         # Chat now runs inside a Session, so shells are scoped to it and the
         # per-session cap is the one the model should be told about.
         self._system_prompt = bash.get_system_prompt()
@@ -173,11 +165,9 @@ class ChatUI:
         if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
         self._report_missing_sdk()
-        # Announced once per connection: the gateway registers a proxy per tool
-        # and reverse-dispatches the model's calls back here to run them.
-        if self._tool_descriptors and not self._tools_announced:
-            await self._connection.announce_tools(self._tool_descriptors)
-            self._tools_announced = True
+        # Nothing to announce: the gateway asks this session what it serves the
+        # first time a turn needs tools, and reverse-dispatches the model's calls
+        # back here to run them.
         if self._voice_enabled:
             await self._prepare_voice()
 
@@ -351,7 +341,11 @@ class ChatUI:
                 self._connection,
                 self._history,
                 user_interaction,
-                self._tool_definitions,
+                # Nothing pushed: `allowed_actions` names this side's tools, and
+                # the gateway discovers their schemas by asking this session. A
+                # definition sent here would be a second description of the same
+                # tools, which is the thing that used to go wrong.
+                (),
                 config,
                 reducer,
             )

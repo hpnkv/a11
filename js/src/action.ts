@@ -82,6 +82,13 @@ export interface ActionRegistryLike {
   getSchema(actionName: string): StatusOr<ActionSchema>;
   /** Return its local handler, if this process can execute it. */
   getHandler(actionName: string): StatusOr<ActionHandler>;
+  /**
+   * Every name this registry answers for.
+   *
+   * Needed by `__list_actions__`, which is a builtin handler holding no
+   * registry of its own and so has to ask the one its action came from.
+   */
+  listRegisteredActions(): string[];
 }
 
 /** Session operations an Action needs for dispatch and lifetime tracking. */

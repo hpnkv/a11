@@ -1029,6 +1029,9 @@ void BindHttp(py::module_& module) {
 
   py::class_<net::HttpSseOptions>(module, "HttpSseOptions")
       .def(py::init<>(), "Construct default HTTP SSE wire stream options.")
+      .def_readwrite("describe", &net::HttpSseOptions::describe,
+                     "Server-side GET /actions. Point it at a service with "
+                     "Service.expose_descriptors_on.")
       .def_readwrite("stream_options", &net::HttpSseOptions::stream_options,
                      "The underlying wire stream options.")
       .def_readwrite("http2_options", &net::HttpSseOptions::http2_options,
@@ -1049,18 +1052,10 @@ void BindHttp(py::module_& module) {
                      &net::HttpSseOptions::max_concurrent_posts,
                      "Outbound POSTs kept in flight at once; 1 restores "
                      "strictly serialised delivery.")
-      .def_readwrite(
-          "cors_allow_origin", &net::HttpSseOptions::cors_allow_origin,
-          "Value for Access-Control-Allow-Origin; empty disables CORS.")
-      .def_readwrite("cors_allow_methods",
-                     &net::HttpSseOptions::cors_allow_methods,
-                     "Value for Access-Control-Allow-Methods.")
-      .def_readwrite("cors_allow_headers",
-                     &net::HttpSseOptions::cors_allow_headers,
-                     "Value for Access-Control-Allow-Headers.")
-      .def_readwrite("cors_expose_headers",
-                     &net::HttpSseOptions::cors_expose_headers,
-                     "Value for Access-Control-Expose-Headers.")
+      .def_readwrite("headers", &net::HttpSseOptions::headers,
+                     "Server-side response-header policy: the Server header, "
+                     "cross-origin access, and the cache hints a reply "
+                     "carries. See a11.net.ServerHeaderOptions.")
       .def(
           "validate",
           [](const net::HttpSseOptions& options) {

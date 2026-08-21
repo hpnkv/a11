@@ -678,6 +678,8 @@ def run_program(
     timeout_seconds: float | None = None,
     standard_streams: bool = True,
     registry: Any = None,
+    session: Any = None,
+    dispatch_stream: Any = None,
 ) -> dict[str, Any]:
     """Run a Flow program's entry flow — the `flow { ... }` with no name.
 
@@ -766,6 +768,8 @@ def run_program(
         timeout_seconds=timeout_seconds,
         standard_streams=standard_streams,
         registry=registry,
+        session=session,
+        dispatch_stream=dispatch_stream,
     )
 
 

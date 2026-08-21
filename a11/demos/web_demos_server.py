@@ -12,8 +12,8 @@ Run with ``python -m a11.demos.web_demos_server``. It serves, on
   ``deep_research.flow`` beside this file.
 * ``text_to_image``, when [a11.demos.text_to_image][a11.demos.text_to_image] can
   reach a Stable Diffusion checkpoint.
-* ``__register_tools__`` — the handshake a page uses to announce actions *it*
-  serves, so the model's tool calls run in the page (see
+* `__list_actions__` — which every A11 peer answers, and which is how this
+  server learns what a page serves without the page announcing anything.
   [a11.gateway.tool_bridge][a11.gateway.tool_bridge]).
 
 This is a trimmed `a11 gateway`: the same conversation store, the same tool

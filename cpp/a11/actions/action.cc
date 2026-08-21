@@ -50,7 +50,36 @@
 namespace a11::actions {
 namespace {
 
+/** How many times a generated id is retried against a session's live ones. */
+constexpr int kActionIdAttempts = 4;
+
 std::string NewActionId() {
+  return a11::NewShortId();
+}
+
+/**
+ * @brief An id for a fresh action, unused by @p session if one is given.
+ *
+ * The generator's 48 bits already make a collision improbable; a session knows
+ * which ids are live and can make it impossible, so where that knowledge is at
+ * hand it is used. It usually is not -- an action built without a session has
+ * nothing to check against, and does not need one, because the id only has to
+ * be unique among the ids it will meet.
+ *
+ * Four collisions in a row is not luck, it is a session holding an implausible
+ * number of live actions, so the last resort is a full UUID: longer than anyone
+ * wanted, and certainly free.
+ */
+std::string NewActionId(const std::shared_ptr<service::Session>& session) {
+  if (session == nullptr) {
+    return NewActionId();
+  }
+  for (int attempt = 0; attempt < kActionIdAttempts; ++attempt) {
+    std::string candidate = NewActionId();
+    if (!session->GetAction(candidate).ok()) {
+      return candidate;
+    }
+  }
   return a11::NewUuid();
 }
 
@@ -149,7 +178,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Create(
     size_t max_concurrent_nested_actions) {
   ABSL_RETURN_IF_ERROR(schema.Validate());
   if (action_id.empty()) {
-    action_id = NewActionId();
+    action_id = NewActionId(session);
   }
   ABSL_RETURN_IF_ERROR(data::ValidateName(action_id));
   if (node_map == nullptr && session != nullptr) {

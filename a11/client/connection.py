@@ -128,40 +128,11 @@ class GatewayConnection:
         await asyncio.wait_for(self._ping(), timeout=bound)
 
     async def _ping(self) -> None:
-        call = self._action(PING_ACTION, PING_SCHEMA)
+        call = self.action(PING_ACTION, PING_SCHEMA)
         await call.call()
         await call["input"].finalize("probe")
         await call["output"].consume(str)
         await call.wait(PROBE_CALL_TIMEOUT)
-
-    async def announce_tools(self, definitions: Sequence[dict]) -> None:
-        """Tell the gateway which tools this client serves.
-
-        The gateway registers a proxy per definition and reverse-dispatches the
-        model's calls back over this same stream, so the tools run *here* -- in
-        the user's shell, cwd and environment. See
-        [a11.gateway.tool_bridge][a11.gateway.tool_bridge].
-        """
-        if not definitions:
-            return
-        from a11.gateway.tool_bridge import (
-            REGISTER_TOOLS_ACTION,
-            REGISTER_TOOLS_SCHEMA,
-        )
-
-        call = self._action(REGISTER_TOOLS_ACTION, REGISTER_TOOLS_SCHEMA)
-        await call.call()
-        tools = call["tools"]
-        for definition in definitions:
-            await tools.put(definition)
-        await tools.finalize()
-        acknowledged = await call["ok"].consume(dict)
-        await call.wait(timing.Duration.seconds(10))
-        logging.info(
-            "announced %d tool(s) to the gateway: %s",
-            len(definitions),
-            ", ".join(acknowledged.get("registered", [])),
-        )
 
     async def aclose(self) -> None:
         """Half-close the stream, after letting queued messages go out.
@@ -177,8 +148,12 @@ class GatewayConnection:
         with contextlib.suppress(Exception):
             await self.stream.drain_outgoing_messages()
 
-    def _action(self, name: str, schema: a11.ActionSchema | None = None):
-        """Build a call on this connection's session and stream."""
+    def action(self, name: str, schema: a11.ActionSchema | None = None):
+        """Build a call on this connection's session and stream.
+
+        The one way to address the peer: bound to this session's node map so its
+        replies route back, and to this stream so the call goes out on it.
+        """
         resolved = schema if schema is not None else self._registry.get_schema(
             name
         )

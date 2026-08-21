@@ -24,6 +24,26 @@ from a11.service.session import Session
 from a11.status import StatusCode, StatusException
 
 
+#: An action the *client* serves, for the reverse-dispatch tests. Its name is an
+#: ordinary one on purpose: A11's own `__`-prefixed actions are answered by every
+#: registry and cannot be re-registered, so they cannot stand in for "a tool the
+#: peer owns" -- which is what these tests need.
+_CLIENT_TOOL = a11.ActionSchema(
+    name="ask_the_human",
+    description="Put a question to whoever is running the client.",
+    inputs={
+        "input": a11.ActionPortSchema(
+            name="input", type="text/plain", typeinfo=str
+        )
+    },
+    outputs={
+        "output": a11.ActionPortSchema(
+            name="output", type="text/plain", typeinfo=str
+        )
+    },
+)
+
+
 async def _send(
     call: a11.Action,
     source: str,
@@ -144,27 +164,32 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
 ):
     """`run` is the gateway's, `call` is the client's -- in one composition.
 
-    The flow runs on the gateway, and says `call __ping`, so the action is
-    dispatched back down the stream the flow arrived on and served by the
+    The flow runs on the gateway, and says `call ask_the_human`, so the action
+    is dispatched back down the stream the flow arrived on and served by the
     *client's* handler. That is what lets a composition running over there use
     a microphone or a shell over here, and it is the reason `flow_run` hands
     the composition its stream: a `call` step's reply fragments route through
     it, and without one the call never returns.
+
+    The two sides register the same name differently, which is the contract:
+    the gateway holds its *schema* alone, so the step resolves and means "not
+    here"; the client holds the handler, so the work happens there. Answering
+    in the client's own words is what proves whose handler ran.
     """
+    gateway_registry = _registry(tmp_path)
+    gateway_registry.register(_CLIENT_TOOL.name, _CLIENT_TOOL)
     gateway = gateway_app.A11Gateway(
-        conversations.ConversationStore(tmp_path), _registry(tmp_path)
+        conversations.ConversationStore(tmp_path), gateway_registry
     )
     server_stream, client_stream = net.create_in_process_wire_stream_pair()
     serving = asyncio.create_task(gateway.handle_stream(server_stream))
 
-    async def my_ping(action: a11.Action) -> None:
+    async def answer(action: a11.Action) -> None:
         word = await action["input"].consume(str, allow_none=True)
         await action["output"].finalize(f"the client answered {word!r}")
 
-    # The gateway has its own `__ping` with a real handler. `call` still goes
-    # to the peer, which is the whole point of saying it.
     mine = a11.ActionRegistry()
-    mine.register(PING_SCHEMA.name, PING_SCHEMA, my_ping)
+    mine.register(_CLIENT_TOOL.name, _CLIENT_TOOL, answer)
     client = Session(action_registry=mine)
     await client.add_stream(client_stream, mode="start")
 
@@ -174,7 +199,9 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
         .bind_session(client)
         .bind_stream(client_stream)
     )
-    call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"__ping")
+    call.set_header(
+        LlmHeaders.ALLOWED_LLM_ACTIONS.value, _CLIENT_TOOL.name.encode()
+    )
     await call.call()
     await _send(
         call,
@@ -182,7 +209,7 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
         flow ask-the-client {
           in  word: string required
           out said: string stream
-          theirs = call __ping(input: word)
+          theirs = call ask_the_human(input: word)
           theirs.output -> said
         }
         """,
@@ -492,7 +519,9 @@ async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
     serving = asyncio.create_task(gateway.handle_stream(server_stream))
 
     here = a11.ActionRegistry()
-    here.register(PING_SCHEMA.name, PING_SCHEMA)
+    # Nothing to register: `__ping` is a builtin every registry answers for, so
+    # the schema a `call` step needs is already here. It used to be registered
+    # by hand, schema-only, to say "the work is the gateway's".
     client = Session(action_registry=here)
     await client.add_stream(client_stream, mode="start")
 
@@ -542,7 +571,9 @@ async def test_a_client_can_run_two_flows_over_one_connection(
     serving = asyncio.create_task(gateway.handle_stream(server_stream))
 
     here = a11.ActionRegistry()
-    here.register(PING_SCHEMA.name, PING_SCHEMA)
+    # Nothing to register: `__ping` is a builtin every registry answers for, so
+    # the schema a `call` step needs is already here. It used to be registered
+    # by hand, schema-only, to say "the work is the gateway's".
     client = Session(action_registry=here)
     await client.add_stream(client_stream, mode="start")
 

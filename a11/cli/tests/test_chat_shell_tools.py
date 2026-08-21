@@ -36,17 +36,16 @@ def _connection() -> GatewayConnection:
 def test_shell_tools_are_on_by_default():
     connection = _connection()
     ui = ChatUI(_provider(), "some-model", connection, shell_tools=True)
-    assert [t["name"] for t in ui._tool_definitions] == [
-        "shell_start",
-        "shell_execute",
-        "shell_list",
-        "shell_exit",
-    ]
-    # The Actions are registered on the *connection's* registry, because the
-    # gateway dispatches the model's calls back to this process to run them.
-    assert connection.session.action_registry.is_registered("shell_execute")
-    # The header names exactly what was announced: it gates every tool the model
-    # may see, bridged ones included.
+    # Registering them is the whole of the client's part. The Actions go on the
+    # *connection's* registry, and the gateway asks that session what it serves
+    # and dispatches the model's calls back to this process to run them. There
+    # is no schema list and no definition list here any more, because there
+    # is nothing to announce -- and so nothing to announce wrongly.
+    registry = connection.session.action_registry
+    for name in ("shell_start", "shell_execute", "shell_list", "shell_exit"):
+        assert registry.is_registered(name), name
+    # The header names exactly these: it gates every tool the model may see,
+    # discovered ones included.
     assert ui._tool_names == [
         "shell_start",
         "shell_execute",
@@ -59,7 +58,6 @@ def test_shell_tools_are_on_by_default():
 def test_shell_tools_can_be_disabled():
     connection = _connection()
     ui = ChatUI(_provider(), "some-model", connection, shell_tools=False)
-    assert ui._tool_definitions == []
     assert ui._tool_names == []
     assert ui._system_prompt == ""
     assert not connection.session.action_registry.is_registered("shell_execute")

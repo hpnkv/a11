@@ -25,7 +25,6 @@ import a11
 from a11 import net, timing
 from a11.demos import web_demos_server as demos
 from a11.gateway import conversation_actions, conversations
-from a11.gateway.tool_bridge import REGISTER_TOOLS_SCHEMA, describe_tool
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import Interaction, LlmHeaders, Role
 from a11.service.serving import serving, websocket
@@ -441,20 +440,9 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
     mine.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, set_color)
     connected = await peer(mine)
 
-    # The handshake: the page describes what it serves, once per connection.
-    announce = connected.action(REGISTER_TOOLS_SCHEMA)
-    await announce.call()
-    # One descriptor per value, and finalize to end them: the port carries a
-    # stream of tools, not one list of them.
-    tools = announce["tools"]
-    await tools.put(describe_tool(SET_COLOR_SCHEMA))
-    await tools.finalize()
-    acknowledged = await asyncio.wait_for(
-        announce["ok"].next_object(), timeout=_TIMEOUT
-    )
-    await asyncio.wait_for(announce.wait(), timeout=_TIMEOUT)
-    assert acknowledged["registered"] == ["set_color"]
-
+    # Nothing is announced: the page registered `set_color` on the registry it
+    # gave its session, and the server asks that session what it serves the
+    # first time a turn needs tools. This is the whole of a page's part.
     answer, _ = await _one_turn(
         connected, _user("make blob 2 red"), allowed=b"set_color"
     )

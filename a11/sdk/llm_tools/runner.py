@@ -10,6 +10,7 @@ from a11 import _native
 from a11._native import NodeFragment
 
 import a11
+from a11.actions import describe
 from a11.status import Status, StatusCode, StatusException
 
 from a11.sdk.llm import (
@@ -21,37 +22,65 @@ from a11.sdk.llm import (
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
 
 
+def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
+    """The model's view of one action, from its `a11.actions/v1` entry.
+
+    A *derivation*, not a second document. It used to be that a tool reached a
+    model one way (a JSON-Schema definition, built from a port's live Python
+    `typeinfo`) and reached a proxy builder another (a written schema), the two
+    were both called a tool's "schema", and announcing one where the other was
+    wanted produced a proxy with no inputs at all. A written schema carries each
+    port's `json_schema`, so the model's view can be computed from the same
+    document -- including for an action on a peer, whose Python types were never
+    here to derive from.
+    """
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for port in entry.get("inputs", ()):
+        name = port.get("name")
+        if not name or port.get("autofilled"):
+            # An autofilled input is the receiver's own: the runtime requires it
+            # empty before applying the default, so a model writing it fails.
+            continue
+        # `{"type": "object"}` where the port stated no type, which is what the
+        # adapter has always shown for an untyped port.
+        schema = port.get("json_schema") or {"type": "object"}
+        if not port.get("unary", False):
+            schema = {"type": "array", "items": schema}
+            if port.get("required"):
+                schema["minItems"] = 1
+        properties[name] = schema
+        if port.get("required"):
+            required.append(name)
+
+    input_schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        input_schema["required"] = required
+    return {
+        "name": entry.get("name", ""),
+        "description": entry.get("description", ""),
+        "input_schema": input_schema,
+    }
+
+
 def get_tool_definitions(
     registry: a11.ActionRegistry | None,
     allowed_actions: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    if registry is None:
+    """What the model is shown, for each of ``allowed_actions`` registered here.
+
+    Built by describing the registry and deriving each definition, so the
+    document a model sees and the document a peer is told cannot drift.
+    """
+    if registry is None or not allowed_actions:
         return []
-
-    allowed_actions = allowed_actions or []
-
-    definitions: list[dict[str, Any]] = []
-
-    for name in allowed_actions:
-        schema: a11.ActionSchema | None = None
-
-        try:
-            schema = registry.get_schema(name)
-        except StatusException as exc:
-            if exc.status.code == StatusCode.NOT_FOUND:
-                continue
-
-        schema: a11.ActionSchema
-        adapter = ToolAdapter(schema)
-        definitions.append(
-            {
-                "name": schema.name,
-                "description": schema.description,
-                "input_schema": adapter.input_schema,
-            }
-        )
-
-    return definitions
+    document = describe.registry_to_json(
+        registry, {"exact": list(allowed_actions)}
+    )
+    return [
+        definition_from_schema(entry)
+        for entry in describe.schemas_in_document(document)
+    ]
 
 
 async def collect_tools(
@@ -71,6 +100,13 @@ async def collect_tools(
     A registry action can only be *called* if it matches the same patterns
     (:func:`execute_actions_from_interaction` checks them again at call time),
     so this widens what the model is shown as far as the caller allowed.
+
+    Between the two, the peer is *asked*. If a tool bridge is bound to this
+    session and has not asked yet, it calls `__list_actions__` on the caller and
+    registers a proxy per answer -- so the caller's own tools reach the model
+    without the caller announcing anything. This is the moment to ask rather
+    than at connection time: the session is certainly pumping by now, and a
+    connection that never chats never pays for it.
     """
     deadline = deadline if deadline is not None else a11.get_deadline(action)
     allowed_patterns = get_allowed_llm_action_patterns(action)
@@ -88,16 +124,44 @@ async def collect_tools(
     if registry is None:
         return tools
 
+    await _ask_the_peer(action)
+
     requested = {tool["name"] for tool in tools}
     local = sorted(
         name
         for name in registry.list_registered_actions()
         if name not in requested
         and name != action.get_schema().name
+        # A11's own actions are not tools. This one rule replaces the exclusion
+        # list each discovery workaround used to keep for itself.
+        and not describe.is_reserved_action(name)
         and action_name_matches_allowed(name, allowed_patterns)
     )
     tools.extend(get_tool_definitions(registry, local))
     return tools
+
+
+async def _ask_the_peer(action: a11.Action) -> None:
+    """Have this connection's tool bridge discover the caller's tools, once.
+
+    Imported here rather than at module scope: the SDK must not depend on the
+    gateway, and a client running `interact_with_llm` locally has no bridge at
+    all. A missing bridge is the ordinary case, not a failure.
+    """
+    try:
+        from a11.gateway.tool_bridge import RemoteToolBridge
+    except ImportError:
+        return
+    bridge = RemoteToolBridge.of(action.get_session())
+    if bridge is None:
+        return
+    discovered = await bridge.discover()
+    if discovered:
+        logging.info(
+            "the caller serves %d tool(s): %s",
+            len(discovered),
+            ", ".join(discovered),
+        )
 
 
 @dataclasses.dataclass(frozen=True)

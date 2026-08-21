@@ -183,37 +183,36 @@ const stream = need(WebSocketWireStream.connect(serverUrl));
 need(await session.addStream(stream, StreamMode.START));
 ```
 
-## 4. The handshake
+## 4. Nothing to announce
 
-The backend cannot dispatch to an action it has never heard of. Once per
-connection the page announces its schemas on the reserved `__register_tools__`
-action, and the backend's
-`a11.gateway.tool_bridge.RemoteToolBridge` registers a proxy
-per descriptor — on *this connection's own* registry copy, because these actions
-belong to one page:
+The backend cannot dispatch to an action it has never heard of — so it asks. Every
+A11 peer answers `__list_actions__`, a page included, and
+`a11.gateway.tool_bridge.RemoteToolBridge` calls it the first time a turn needs
+tools and registers a reverse-dispatch proxy per schema that comes back. The
+proxies go on *this connection's own* registry copy, because these actions belong
+to one page.
 
-```ts
-const announce = makeCall(connection, REGISTER_TOOLS_SCHEMA);
-need(await announce.call());
-const tools = need(await announce.getInput('tools'));
-for (const schema of schemas) need(await tools.put(describeTool(schema)));
-need(await tools.finalize());
-```
-
-`describeTool` sends the *port* description, and flags the log port:
+Which means the page's part is the registry it already built:
 
 ```ts
-outputs: [...schema.outputs.values()].map((port) =>
-    describePort(port)),
+const connection = await connect(serverUrl, pageRegistry(scene, log));
 ```
 
-!!! danger "Two documents, one word"
+That is the whole of it. The answer is an `a11.actions/v1` document — one
+`ActionSchema` per entry, written as JSON, with each port's `json_schema` carried
+along so the model can be shown the real argument types.
 
-    The descriptor above is not the JSON-Schema tool definition the model is
-    shown. They go on different ports of different actions, and sending the
-    definition where the descriptor belongs yields a proxy with no inputs at all
-    — the model's arguments then have nowhere to land and every call fails with
-    "unexpected input".
+!!! note "This used to be a handshake"
+
+    A page announced its tools on a reserved `__register_tools__` action, sending
+    a hand-built *port descriptor* per tool. That document was not the JSON-Schema
+    tool definition the model is shown, the two shared a word, and sending one
+    where the other belonged produced a proxy with no inputs at all — the model's
+    arguments had nowhere to land and every call failed with "unexpected input".
+
+    Both are gone. There is one document now, the schema in JSON, and the
+    definition the model sees is *derived* from it rather than sent alongside.
+    The `__register_tools__` action no longer exists.
 
 ## 5. The turn
 

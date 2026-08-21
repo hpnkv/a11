@@ -2,7 +2,8 @@
  * "The model calls back into the page" guide demo.
  *
  * The page draws a few blobs on a canvas and serves three actions over them. It
- * announces those actions with `__register_tools__`, and from then on the model's
+ * serves those actions on its own session's registry -- the backend asks what is
+ * there rather than being told -- and from then on the model's
  * tool calls are dispatched back down the same WebSocket and run *here* — the
  * backend never touches the canvas, and the model sees three ordinary A11
  * actions.
@@ -32,7 +33,6 @@ import {
   DEFAULT_SERVER_URL,
   addBubble,
   addLine,
-  announceTools,
   connect,
   need,
   runTurn,
@@ -477,15 +477,15 @@ class BrowserToolsDemo {
   private connection: Connection | null = null;
 
   /**
-   * The session, with the page's own registry bound to it *before* the stream is
-   * attached, and the tools announced once it is up.
+   * The session, with the page's own registry bound to it *before* the stream
+   * is attached -- which is the whole of it. The backend asks this session what
+   * it serves, so there is nothing to announce.
    */
   private async connected(): Promise<Connection> {
     if (this.connection !== null) return this.connection;
     const registry = pageRegistry(this.scene, (text) => addLine(this.log, text));
     const connection = await connect(this.backend.server.value.trim() || DEFAULT_SERVER_URL, registry);
-    const registered = await announceTools(connection, PAGE_TOOLS);
-    addLine(this.log, `announced: ${registered.join(', ')}`, 'done');
+    addLine(this.log, `serving: ${PAGE_TOOLS.map((one) => one.name).join(', ')}`, 'done');
     this.connection = connection;
     return connection;
   }

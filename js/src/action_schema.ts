@@ -54,6 +54,15 @@ export interface ActionPortSchemaOptions {
   unary?: boolean;
   /** Default input fragments; an autofilled input must otherwise be empty. */
   autofills?: readonly (NodeFragment | null)[];
+  /**
+   * JSON Schema for the port's payload, as text. Empty when unknown.
+   *
+   * The describable half of a port's type. A TypeScript type does not survive
+   * to runtime, so unlike Python this side has nothing to derive one from --
+   * but it carries and forwards whatever a peer sent, which is what lets a
+   * model be shown a remote tool's real argument types.
+   */
+  jsonSchema?: string;
 }
 
 /**
@@ -72,6 +81,7 @@ export class ActionPortSchema {
   required: boolean;
   unary: boolean;
   autofills: Array<NodeFragment | null>;
+  jsonSchema: string;
 
   constructor(options: ActionPortSchemaOptions) {
     this.name = options.name;
@@ -80,6 +90,7 @@ export class ActionPortSchema {
     this.required = options.required ?? false;
     this.unary = options.unary ?? false;
     this.autofills = [...(options.autofills ?? [])];
+    this.jsonSchema = options.jsonSchema ?? '';
   }
 
   static create(

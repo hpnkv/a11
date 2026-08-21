@@ -227,13 +227,7 @@ absl::Status HttpSseOptions::Validate() const {
     return absl::InvalidArgumentError(
         "max_concurrent_posts must admit at least one outbound POST");
   }
-  for (const auto* value : {&cors_allow_origin, &cors_allow_methods,
-                            &cors_allow_headers, &cors_expose_headers}) {
-    if (value->find_first_of("\r\n") != std::string::npos) {
-      return absl::InvalidArgumentError(
-          "CORS option values must not contain newlines");
-    }
-  }
+  ABSL_RETURN_IF_ERROR(headers.Validate());
   return absl::OkStatus();
 }
 
@@ -1173,7 +1167,10 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
   HttpHeaders headers = GetHttpResponseHeaders().value_or(HttpHeaders{});
   SetHttpHeader(&headers, std::string(kSseStreamIdHeader), GetId());
   SetHttpHeader(&headers, "content-type", "text/event-stream");
-  SetHttpHeader(&headers, "cache-control", "no-cache");
+  // `cache-control` is not set here: the response-header policy has already
+  // supplied `no-store` for a stream, which is stricter than the `no-cache`
+  // this line used to hardcode. A session's messages should not be written to
+  // anybody's disk on the way past.
   // Both outbound modes reach the same endpoint, so what a client may do with it
   // has to be said here. A client that only knows POST ignores the field.
   SetHttpHeader(
@@ -1261,24 +1258,14 @@ struct HttpSseServer::State {
 
 namespace {
 
-HttpHeaders CorsHeaders(const HttpSseOptions& options) {
+/// The headers every reply from this server carries, for a given kind of reply.
+///
+/// One place, so a route added later cannot quietly omit them. See
+/// a11/net/server_headers.h.
+HttpHeaders ServerHeaders(const HttpSseOptions& options,
+                          CachePolicy cache = CachePolicy::kUnset) {
   HttpHeaders headers;
-  if (!options.cors_allow_origin.empty()) {
-    SetHttpHeader(&headers, "access-control-allow-origin",
-                  options.cors_allow_origin);
-  }
-  if (!options.cors_allow_methods.empty()) {
-    SetHttpHeader(&headers, "access-control-allow-methods",
-                  options.cors_allow_methods);
-  }
-  if (!options.cors_allow_headers.empty()) {
-    SetHttpHeader(&headers, "access-control-allow-headers",
-                  options.cors_allow_headers);
-  }
-  if (!options.cors_expose_headers.empty()) {
-    SetHttpHeader(&headers, "access-control-expose-headers",
-                  options.cors_expose_headers);
-  }
+  ApplyServerHeaders(options.headers, cache, &headers);
   return headers;
 }
 
@@ -1387,11 +1374,22 @@ a11::Task HttpSseServer::HandleRequest(
     const std::shared_ptr<State>& state, HttpRequest request,
     std::shared_ptr<Http2ResponseWriter> response) {
   const std::string path = PathWithoutQuery(request.path);
-  if (!state->options.cors_allow_origin.empty() &&
-      request.method == "OPTIONS" &&
-      (path == state->options.connect_endpoint ||
+  std::string described;
+  const bool is_describe =
+      MatchDescribePath(path, state->options.describe, &described);
+  if (IsPreflight(state->options.headers.cors, request.method) &&
+      (path == state->options.connect_endpoint || is_describe ||
        MatchMessagePath(path, state->options.message_endpoint).ok())) {
-    return StatusTask(response->SendResponse(204, CorsHeaders(state->options)));
+    return StatusTask(
+        response->SendResponse(204, ServerHeaders(state->options)));
+  }
+  if (is_describe) {
+    if (std::optional<a11::Task> answered = TryDescribeOverHttp(
+            state->options.describe, request, response,
+            ServerHeaders(state->options, CachePolicy::kVolatile));
+        answered.has_value()) {
+      return std::move(*answered);
+    }
   }
   if (request.method == "POST" && path == state->options.connect_endpoint) {
     return HandleConnect(state, std::move(request), std::move(response));
@@ -1412,7 +1410,7 @@ a11::Task HttpSseServer::HandleRequest(
   }
   return SendHttpStatus(response,
                         absl::NotFoundError("No matching SSE endpoint"),
-                        CorsHeaders(state->options));
+                        ServerHeaders(state->options));
 }
 
 a11::Task HttpSseServer::HandleConnect(
@@ -1425,7 +1423,7 @@ a11::Task HttpSseServer::HandleConnect(
         InProcessWireStream::CreatePair(state->options.stream_options);
     if (!pair.ok()) {
       return SendHttpStatus(response, pair.status(),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1435,7 +1433,8 @@ a11::Task HttpSseServer::HandleConnect(
     {
       thread::MutexLock lock(&base_state->mu);
       base_state->request_headers = request.headers;
-      base_state->response_headers = CorsHeaders(state->options);
+      base_state->response_headers =
+          ServerHeaders(state->options, CachePolicy::kStream);
     }
     std::weak_ptr<State> weak = state;
     auto remove = [weak](std::string stream_id) {
@@ -1478,7 +1477,7 @@ a11::Task HttpSseServer::HandleConnect(
     if (stopped) {
       return SendHttpStatus(response,
                             absl::UnavailableError("SSE server stopped"),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1489,7 +1488,7 @@ a11::Task HttpSseServer::HandleConnect(
         return response->headers_sent()
                    ? callback_status
                    : SendHttpStatus(response, callback_status,
-                                    CorsHeaders(state->options))
+                                    ServerHeaders(state->options))
                          .Await()
                          .status();
       }
@@ -1504,7 +1503,7 @@ a11::Task HttpSseServer::HandleConnect(
       return response->headers_sent()
                  ? accepted
                  : SendHttpStatus(response, accepted,
-                                  CorsHeaders(state->options))
+                                  ServerHeaders(state->options))
                        .Await()
                        .status();
     }
@@ -1531,7 +1530,7 @@ a11::Task HttpSseServer::HandleMessage(
       return SendHttpStatus(response,
                             absl::NotFoundError(absl::StrCat(
                                 "No active SSE stream has ID ", stream_id)),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1540,7 +1539,7 @@ a11::Task HttpSseServer::HandleMessage(
       const absl::Status status =
           absl::OutOfRangeError("Incoming SSE JSON WireMessage is too large");
       stream->FailTransport(status);
-      return SendHttpStatus(response, status, CorsHeaders(state->options))
+      return SendHttpStatus(response, status, ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1549,7 +1548,7 @@ a11::Task HttpSseServer::HandleMessage(
     if (!message.ok()) {
       stream->FailTransport(message.status());
       return SendHttpStatus(response, message.status(),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1558,7 +1557,7 @@ a11::Task HttpSseServer::HandleMessage(
     if (!tunneled.ok()) {
       stream->FailTransport(tunneled.status());
       return SendHttpStatus(response, tunneled.status(),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1569,11 +1568,11 @@ a11::Task HttpSseServer::HandleMessage(
         stream->ReceiveTransportMessage(std::move(*message)).Await().status();
     if (!received.ok()) {
       stream->FailTransport(received);
-      return SendHttpStatus(response, received, CorsHeaders(state->options))
+      return SendHttpStatus(response, received, ServerHeaders(state->options))
           .Await()
           .status();
     }
-    return response->SendResponse(204, CorsHeaders(state->options));
+    return response->SendResponse(204, ServerHeaders(state->options));
   });
 }
 
@@ -1596,7 +1595,7 @@ a11::Task HttpSseServer::HandleMessageStream(
       return SendHttpStatus(response,
                             absl::NotFoundError(absl::StrCat(
                                 "No active SSE stream has ID ", stream_id)),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1608,7 +1607,7 @@ a11::Task HttpSseServer::HandleMessageStream(
     if (!tunneled.ok()) {
       stream->FailTransport(tunneled.status());
       return SendHttpStatus(response, tunneled.status(),
-                            CorsHeaders(state->options))
+                            ServerHeaders(state->options))
           .Await()
           .status();
     }
@@ -1617,7 +1616,7 @@ a11::Task HttpSseServer::HandleMessageStream(
     // body ends, because a finished response would close the stream the body is
     // still arriving on.
     ABSL_RETURN_IF_ERROR(
-        response->SendHeaders(200, CorsHeaders(state->options)));
+        response->SendHeaders(200, ServerHeaders(state->options)));
 
     const size_t message_limit =
         state->options.stream_options.max_single_message_size;

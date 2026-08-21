@@ -50,6 +50,7 @@ import sys
 from typing import Any, Sequence
 
 from a11 import timing
+from a11.cli import durations
 from a11.cli.app import Command
 from a11.flow import diagnostics as diag
 
@@ -500,32 +501,9 @@ def _input_value(text: str) -> Any:
         return text
 
 
-def _duration_seconds(text: str) -> float:
-    """A duration written the way a flow writes one, as seconds.
-
-    Read with the language's **own lexer** rather than a second parser here, so
-    `--timeout` accepts exactly what a duration literal in a `.flow` file takes
-    and exactly what `a11-flow-run --timeout` takes. A CLI flag that agreed
-    with neither is how `--timeout 30s` came to be rejected by the frontend that
-    claims to be the same interpreter.
-
-    A bare number is seconds, which is the one form the lexer reads as a number
-    rather than a duration. Consecutive durations add up, so `1m30s` is ninety
-    seconds -- the compound form the C++ parser also takes.
-    """
-    from a11._native import flow as native
-
-    read = native.tokenize(text)
-    tokens = [one for one in read["tokens"] if one["kind"] != "end"]
-    if not read["diagnostics"] and tokens:
-        if all(one["kind"] == "duration" for one in tokens):
-            return sum(one["value"].float_seconds() for one in tokens)
-        if len(tokens) == 1 and tokens[0]["kind"] == "number":
-            return float(tokens[0]["value"])
-    raise argparse.ArgumentTypeError(
-        f"{text!r} is not a duration; write one as 30s, 250ms, 1m30s, or a"
-        " number of seconds"
-    )
+#: Moved to [a11.cli.durations][a11.cli.durations] when `a11 discover` became a
+#: second command needing the same `--timeout`.
+_duration_seconds = durations.duration_seconds
 
 
 def _program_registry(allow_llm: bool) -> Any:
@@ -557,9 +535,10 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
     """Run a file's ``flow { ... }`` as a program, and exit as it did.
 
     The same interpreter ``a11-flow-run`` is, so a program behaves identically
-    whichever started it. What this adds is the registry: with ``--allow-llm`` a
-    program can put a question to a model, which a standalone binary cannot do
-    because the provider SDKs are Python.
+    whichever started it. What this adds is two things a standalone binary
+    cannot do: a registry, so ``--allow-llm`` lets a program put a question to a
+    model through the Python provider SDKs; and ``--peer``, so a program's
+    ``call`` steps reach a gateway while its ``run`` steps stay here.
 
     !!! important "In a thread, and it has to be"
 
@@ -568,9 +547,41 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
         *this* thread's, it cannot run while the call is blocking it, and the
         program waits forever on its own handler. So the call goes to a thread
         and the CLI's loop stays free to serve it.
+
+        `--peer` needs the same thing for the same reason, one step further out:
+        the peer's replies arrive on this loop, and a program blocking it would
+        be waiting for an answer only it could let in.
     """
     from a11 import flow as flow_api
     from a11.status import StatusException
+
+    connection = None
+    registry = _program_registry(args.allow_llm)
+    if args.peer:
+        from a11.client import discovery
+        from a11.client.connection import GatewayConnection
+
+        timeout = (
+            None
+            if args.timeout is None
+            else timing.Duration.seconds(args.timeout)
+        )
+        try:
+            connection = await GatewayConnection.connect(
+                args.peer, timeout=timeout
+            )
+            installed = await discovery.install_peer_actions(
+                connection, registry, timeout=timeout
+            )
+        except (StatusException, OSError, TimeoutError) as error:
+            if connection is not None:
+                await connection.aclose()
+            print(f"{args.peer}: {error}", file=sys.stderr)
+            return 1
+        print(
+            f"{args.peer}: {len(installed)} action(s) available to call",
+            file=sys.stderr,
+        )
 
     try:
         outcome = await asyncio.to_thread(
@@ -586,7 +597,9 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
             allow_env=args.allow_env or (),
             unrestricted=args.unrestricted,
             timeout_seconds=args.timeout,
-            registry=_program_registry(args.allow_llm),
+            registry=registry,
+            session=connection.session if connection else None,
+            dispatch_stream=connection.stream if connection else None,
         )
     except StatusException as error:
         print(f"{name}: {error.status.message}", file=sys.stderr)
@@ -594,6 +607,9 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
     except Exception as error:  # noqa: BLE001 - the program's failure is a result
         print(f"{name}: {error}", file=sys.stderr)
         return 1
+    finally:
+        if connection is not None:
+            await connection.aclose()
 
     # Warnings after the program's own output, on stderr, so piping a program's
     # stdout somewhere is not polluted by what the compiler thought.
@@ -612,6 +628,57 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
         )
         return 0
     return int(outcome.get("exit_code", 0))
+
+
+async def _invoke_at_peer(
+    args: argparse.Namespace,
+    program: Any,
+    wanted: str,
+    inputs: dict[str, Any],
+    timeout: timing.Duration | None,
+) -> dict[str, Any]:
+    """Run one flow here, with its ``call`` steps dispatched at a peer.
+
+    Two things have to be true for a `call` to reach the peer, and discovery is
+    what makes the first one true:
+
+    1. **The name has to resolve.** Flow's resolver looks the action up in the
+       registry before it decides anything, so a peer-only action must be
+       registered here -- with its schema and *no handler*, which is exactly how
+       "this lives on the peer, say `call`" is spelled. That is what
+       `install_peer_actions` does with what `__list_actions__` came back with.
+    2. **The stream has to be the dispatch stream, not the flow's own.** A
+       locally-run action that holds a stream ends that stream when it finishes,
+       so passing `stream=` would work once and then leave the session unable to
+       dispatch anything. `dispatch_stream=` gives the stream to the `call`
+       steps only, which is the whole distinction.
+    """
+    from a11.client import discovery
+    from a11.client.connection import GatewayConnection
+
+    connection = await GatewayConnection.connect(args.peer, timeout=timeout)
+    try:
+        registry = _program_registry(args.allow_llm)
+        installed = await discovery.install_peer_actions(
+            connection, registry, timeout=timeout
+        )
+        # Worth saying on stderr: a flow whose `call` fails NOT_FOUND is
+        # otherwise indistinguishable from a peer that served nothing.
+        print(
+            f"{args.peer}: {len(installed)} action(s) available to call",
+            file=sys.stderr,
+        )
+        program.register_all(registry)
+        return await program[wanted].invoke(
+            inputs,
+            timeout=timeout,
+            registry=registry,
+            session=connection.session,
+            node_map=connection.session.node_map,
+            dispatch_stream=connection.stream,
+        )
+    finally:
+        await connection.aclose()
 
 
 async def _run_run(args: argparse.Namespace) -> int:
@@ -670,9 +737,17 @@ async def _run_run(args: argparse.Namespace) -> int:
         None if args.timeout is None else timing.Duration.seconds(args.timeout)
     )
     try:
-        produced = await program[wanted].invoke(inputs, timeout=timeout)
+        if args.peer:
+            produced = await _invoke_at_peer(
+                args, program, wanted, inputs, timeout
+            )
+        else:
+            produced = await program[wanted].invoke(inputs, timeout=timeout)
     except StatusException as error:
         print(f"{wanted}: {error.status.message}", file=sys.stderr)
+        return 1
+    except (OSError, TimeoutError) as error:
+        print(f"{args.peer}: {error}", file=sys.stderr)
         return 1
 
     if args.format in ("json", "sarif"):
@@ -945,9 +1020,13 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         help="Run a flow here and print what its ports produced.",
         description=(
             "Compiles the file, runs one of its flows in this process, and prints"
-            " each output port. Everything the flow calls has to be registered"
-            " here, so this runs a composition of the actions the CLI itself has:"
-            " it is for trying a flow out, not for dispatching one at a gateway."
+            " each output port.\n\n"
+            "Without --peer, everything the flow calls has to be registered"
+            " here, so it runs a composition of the actions the CLI itself has:"
+            " that is for trying a flow out. With --peer, the flow's `call`"
+            " steps are dispatched at that peer -- its actions are discovered"
+            " and registered for their schemas, so a composition can be written"
+            " here and run against a gateway."
         ),
     )
     run.add_argument(
@@ -958,6 +1037,16 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     run.add_argument(
         "--flow",
         help="Which flow to run. The first one declared, by default.",
+    )
+    run.add_argument(
+        "--peer",
+        metavar="URL",
+        help=(
+            "Dispatch this flow's `call` steps at an A11 peer, such as"
+            " ws://127.0.0.1:8011/a11. Its actions are discovered and"
+            " registered here for their schemas, so `call` resolves and goes"
+            " out on the stream; `run` steps still run locally."
+        ),
     )
     run.add_argument(
         "--input",

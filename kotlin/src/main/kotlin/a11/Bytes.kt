@@ -77,5 +77,18 @@ fun normalizeByteMap(
     return Ok(result)
 }
 
-/** Generate a validated-name-friendly id for actions, nodes, sessions, or streams. */
-fun randomId(prefix: String): String = "$prefix${UUID.randomUUID().toString().replace("-", "")}"
+/** Hex digits in a generated id: 48 random bits, matching C++ `NewShortId`. */
+private const val ID_HEX_DIGITS = 12
+
+/**
+ * Generate a validated-name-friendly id for actions, nodes, sessions, or streams.
+ *
+ * Twelve hex digits, as [a11.uuid.NewShortId] produces on the native side. Every
+ * character is a hex digit, so a node id stays `<action id>#<port>` with exactly
+ * one `#` for [Session] to split on.
+ */
+fun randomId(prefix: String): String {
+    val uuid = UUID.randomUUID()
+    val value = uuid.mostSignificantBits ushr (64 - 4 * ID_HEX_DIGITS)
+    return prefix + String.format("%0${ID_HEX_DIGITS}x", value)
+}

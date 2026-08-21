@@ -41,8 +41,10 @@
 
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/describe_endpoint.h"
 #include "a11/net/http2.h"
 #include "a11/net/in_process_wire_stream.h"
+#include "a11/net/server_headers.h"
 #include "a11/net/wire_stream.h"
 
 namespace a11::net {
@@ -130,6 +132,9 @@ struct HttpSseOptions {
       std::string(kDefaultSseMessageEndpoint);  ///< Outbound endpoint template.
   /// Client-side outbound delivery method; servers accept either.
   SseOutboundDelivery outbound = SseOutboundDelivery::kPost;
+  /// Server-side: `GET /actions`, when something above filled in the handler.
+  /// See a11/net/describe_endpoint.h for why this is a callback.
+  DescribeEndpointOptions describe;
   /// Server-side: whether a streamed outbound request body is accepted, and so
   /// advertised in kSseOutboundModesHeader. Clearing it leaves clients with
   /// POST-per-message -- which is what an intermediary that will not carry a
@@ -140,10 +145,11 @@ struct HttpSseOptions {
   /// the strictly serialised behaviour; the bound is what stops a fast producer
   /// from spending every stream on the HTTP/2 connection at once.
   size_t max_concurrent_posts = 16;
-  std::string cors_allow_origin;    ///< Access-Control-Allow-Origin value.
-  std::string cors_allow_methods;   ///< Access-Control-Allow-Methods value.
-  std::string cors_allow_headers;   ///< Access-Control-Allow-Headers value.
-  std::string cors_expose_headers;  ///< Access-Control-Expose-Headers value.
+  /// Server-side response-header policy: the `Server` header, cross-origin
+  /// access, and the hints that tell a client and its intermediaries how to
+  /// treat a reply. Permissive by default, because a browser is a first-class
+  /// A11 client. See a11/net/server_headers.h.
+  ServerHeaderOptions headers;
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;

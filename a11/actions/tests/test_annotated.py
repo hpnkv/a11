@@ -485,7 +485,13 @@ async def test_the_registry_decorator_takes_arguments():
     async def shout(text: str) -> str:
         return text.upper()
 
-    assert registry.list_registered_actions() == ["upper-case"]
+    # Membership, not the whole list: every registry also answers for A11's own
+    # builtins (`__list_actions__` and friends), which are not entries in it.
+    listed = registry.list_registered_actions()
+    assert "upper-case" in listed
+    assert [name for name in listed if not name.startswith("__")] == [
+        "upper-case"
+    ]
     schema = registry.get_schema("upper-case")
     assert schema.description == "Shout."
     assert set(schema.outputs) == {"shouted"}

@@ -27,6 +27,12 @@ class ActionRegistry : ActionRegistryLike {
     fun register(actionName: String, schema: ActionSchema, handler: ActionHandler? = null): Status {
         validateName(actionName).let { if (!it.isOk) return it }
         if (actionName == CANCEL_ACTION_NAME) return invalidArgument("The cancel Action name is reserved.")
+        // Refused rather than shadowed. These are what a peer is asked with, and
+        // an application that could replace one could make itself
+        // undiscoverable -- which is what this mechanism exists to end.
+        if (isBuiltinAction(actionName)) {
+            return invalidArgument("'$actionName' is a builtin action and cannot be re-registered.")
+        }
         schema.validate().let { if (!it.isOk) return it }
         if (schema.name != actionName) return invalidArgument("Registry Action name does not match schema name.")
         registrations[actionName] = Registration(schema.copy(), handler)
@@ -35,28 +41,43 @@ class ActionRegistry : ActionRegistryLike {
 
     fun unregister(actionName: String): Status {
         validateName(actionName).let { if (!it.isOk) return it }
+        // InvalidArgument, not NotFound: "you cannot" and "it is not there" are
+        // different answers, and this one is the first.
+        if (isBuiltinAction(actionName)) {
+            return invalidArgument("'$actionName' is a builtin action and cannot be unregistered.")
+        }
         return if (registrations.remove(actionName) != null) Status.ok()
         else notFound("Action '$actionName' is not registered.")
     }
 
-    fun isRegistered(actionName: String): Boolean = registrations.containsKey(actionName)
+    // The builtins are not entries here; they are what every registry answers
+    // for even when it holds nothing. See ActionBuiltins.kt.
+    fun isRegistered(actionName: String): Boolean =
+        isBuiltinAction(actionName) || registrations.containsKey(actionName)
 
     override fun getSchema(actionName: String): StatusOr<ActionSchema> {
         validateName(actionName).let { if (!it.isOk) return it }
-        val reg = registrations[actionName] ?: return notFound("Action '$actionName' is not registered.")
+        val reg = registrations[actionName]
+            ?: return getBuiltinAction(actionName)?.let { Ok(it.schema.copy()) }
+                ?: notFound("Action '$actionName' is not registered.")
         return Ok(reg.schema.copy())
     }
 
     override fun getHandler(actionName: String): StatusOr<ActionHandler> {
         validateName(actionName).let { if (!it.isOk) return it }
-        val reg = registrations[actionName] ?: return notFound("Action '$actionName' is not registered.")
+        val reg = registrations[actionName]
+            ?: return getBuiltinAction(actionName)?.let { Ok(it.handler) }
+                ?: notFound("Action '$actionName' is not registered.")
         return reg.handler?.let { Ok(it) } ?: notFound("Action '$actionName' is registered without a handler.")
     }
 
     /** Instantiate a configurable action bound to this registry. */
     fun makeAction(actionName: String, options: MakeActionOptions = MakeActionOptions()): StatusOr<Action> {
         validateName(actionName).let { if (!it.isOk) return it }
-        val reg = registrations[actionName] ?: return notFound("Action '$actionName' is not registered.")
+        val builtin = if (registrations.containsKey(actionName)) null else getBuiltinAction(actionName)
+        val reg = registrations[actionName]
+            ?: builtin?.let { Registration(it.schema, it.handler) }
+            ?: return notFound("Action '$actionName' is not registered.")
         return Action.create(reg.schema.copy(), ActionCreateOptions(
             id = options.id,
             handler = reg.handler,
@@ -67,5 +88,10 @@ class ActionRegistry : ActionRegistryLike {
         ))
     }
 
-    fun listRegisteredActions(): List<String> = registrations.keys.toList()
+    fun listRegisteredActions(): List<String> {
+        val builtins = builtinActionNames()
+        // `register` refuses a builtin's name, so nothing can collide -- but a
+        // duplicate in a listing survives a long time before anybody notices.
+        return builtins + registrations.keys.filter { it !in builtins }
+    }
 }

@@ -63,10 +63,10 @@ async def serve(
     options = a11.HttpSseOptions()
     options.connect_endpoint = "/demos/echo/connect"
     options.message_endpoint = "/demos/echo/streams/{id}/message"
-    options.cors_allow_origin = "*"
-    options.cors_allow_methods = "*"
-    options.cors_allow_headers = "*"
-    options.cors_expose_headers = "x-a11-stream-id"
+    # Nothing to say about cross-origin access any more: it is permissive by
+    # default, and A11's own response headers -- including the `x-a11-stream-id`
+    # this page reads -- are exposed by default, because the SSE transport does
+    # not work without them.
     if certificate:
         http2_options = options.http2_options
         tls_options = http2_options.tls

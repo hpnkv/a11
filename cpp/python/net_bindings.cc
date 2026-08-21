@@ -24,6 +24,7 @@
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/describe_endpoint.h"
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/net/websocket_wire_stream.h"
 #include "a11/net/wire_stream.h"
@@ -461,6 +462,63 @@ py::typing::Optional<py::capsule> VoidPointer(void* pointer, const char* name) {
 }  // namespace
 
 void BindNet(py::module_& module) {
+  // First because more than one listener's options carry one. Note that being
+  // first is *not* enough to make the member's annotation resolve: pybind bakes
+  // the raw C++ name into a property's signature here regardless, exactly as it
+  // does for `http2_options`, and `scripts/generate_stubs.py` maps both back.
+  py::class_<net::DescribeEndpointOptions>(module, "DescribeEndpointOptions")
+      .def(py::init<>(), "Construct default (disabled) describe options.")
+      .def_readwrite("path", &net::DescribeEndpointOptions::path,
+                     "Path the action descriptors are served on.")
+      .def_property_readonly("enabled", &net::DescribeEndpointOptions::Enabled,
+                             "Whether this server answers discovery over HTTP. "
+                             "Turned on by Service.expose_descriptors_on.");
+
+  py::enum_<net::CachePolicy>(module, "CachePolicy")
+      .value("STREAM", net::CachePolicy::kStream,
+             "A live stream: never cached, and not to be buffered.")
+      .value("VOLATILE", net::CachePolicy::kVolatile,
+             "A document that may change at any time: revalidate before reuse.")
+      .value("UNSET", net::CachePolicy::kUnset,
+             "Say nothing about caching.");
+
+  py::class_<net::CorsOptions>(module, "CorsOptions")
+      .def(py::init<>(), "Construct permissive cross-origin options.")
+      .def_readwrite("enabled", &net::CorsOptions::enabled,
+                     "Whether cross-origin headers are sent at all.")
+      .def_readwrite("allow_origin", &net::CorsOptions::allow_origin,
+                     "Access-Control-Allow-Origin; '*' admits any page.")
+      .def_readwrite("allow_methods", &net::CorsOptions::allow_methods,
+                     "Access-Control-Allow-Methods.")
+      .def_readwrite("allow_headers", &net::CorsOptions::allow_headers,
+                     "Access-Control-Allow-Headers.")
+      .def_readwrite("expose_headers", &net::CorsOptions::expose_headers,
+                     "Access-Control-Expose-Headers: what a page may read.")
+      .def_readwrite("max_age_seconds", &net::CorsOptions::max_age_seconds,
+                     "Access-Control-Max-Age in seconds; 0 omits it.")
+      .def(
+          "validate",
+          [](const net::CorsOptions& options) {
+            CheckStatus(options.Validate());
+          },
+          "Validate the options, raising on error.");
+
+  py::class_<net::ServerHeaderOptions>(module, "ServerHeaderOptions")
+      .def(py::init<>(), "Construct default server response-header options.")
+      .def_readwrite("server", &net::ServerHeaderOptions::server,
+                     "Value of the Server header; empty sends none.")
+      .def_readwrite("cors", &net::ServerHeaderOptions::cors,
+                     "Cross-origin policy. Permissive by default, because a "
+                     "browser is a first-class A11 client.")
+      .def_readwrite("nosniff", &net::ServerHeaderOptions::nosniff,
+                     "Send X-Content-Type-Options: nosniff.")
+      .def(
+          "validate",
+          [](const net::ServerHeaderOptions& options) {
+            CheckStatus(options.Validate());
+          },
+          "Validate the options, raising on error.");
+
   py::class_<net::WireStreamOptions>(module, "WireStreamOptions")
       .def(py::init(
                [](const py::typing::Optional<py::int_>&
@@ -930,6 +988,15 @@ Examples:
                      &net::WebSocketServerOptions::stream_options,
                      "Default WireStreamOptions applied to each accepted "
                      "stream.")
+      .def_readwrite("describe", &net::WebSocketServerOptions::describe,
+                     "Server-side GET /actions on this same port, for whoever "
+                     "has the port number but not an A11 client. Point it at a "
+                     "service with Service.expose_descriptors_on.")
+      .def_readwrite("headers", &net::WebSocketServerOptions::headers,
+                     "Response-header policy for this port's HTTP surface: the "
+                     "Server header, cross-origin access and cache hints. A 404 "
+                     "and a GET /actions are ordinary HTTP responses even on a "
+                     "port whose business is upgrades.")
       .def_readwrite("framing", &net::WebSocketServerOptions::framing,
                      "Channel framing options for accepted streams.")
       .def_readwrite("http2_options",

@@ -24,6 +24,7 @@
 #include "a11/actions/registry.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/values.h"
+#include "a11/net/wire_stream.h"
 #include "sdk/flow/actions/policy.h"
 
 namespace a11::flow::interpreter {
@@ -67,6 +68,29 @@ struct RunOptions {
    * programs need host-defined types or chunk conversions.
    */
   std::shared_ptr<HostBridge> bridge;
+
+  /**
+   * Where the program's `call` steps go, when they are to leave this process.
+   *
+   * Null -- the default -- means a program composes what this process serves,
+   * and a `call` naming something with no handler here fails saying so. Given a
+   * stream, `call` steps are dispatched on it while `run` steps stay local,
+   * which is the same split a named flow gets from
+   * ::a11::flow::RunOptions::dispatch_stream.
+   *
+   * The peer's actions still have to be registered in @c registry for their
+   * schemas, because the resolver looks a name up before it decides anything.
+   */
+  std::shared_ptr<net::WireStream> dispatch_stream;
+
+  /**
+   * The session the dispatch stream belongs to.
+   *
+   * Required alongside @c dispatch_stream and useless without it: a dispatched
+   * call's reply fragments are routed by the session's node map, so a program
+   * given a stream and no session would send its calls and never hear back.
+   */
+  std::shared_ptr<service::Session> session;
 };
 
 /// What came of it.

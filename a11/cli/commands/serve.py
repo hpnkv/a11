@@ -54,7 +54,8 @@ because that is what an RFC 6455 WebSocket client speaks, so a browser and
 
 SSE runs on HTTP/1.1 too, at the cost of a second connection: a connection
 carries one request and the event stream has it, so the outbound direction gets
-one of its own. See [a11.net.http_sse_wire_stream][].
+one of its own. See
+[`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream].
 """
 
 from __future__ import annotations
@@ -376,7 +377,8 @@ def http2_options(args: argparse.Namespace) -> net.Http2Options:
     HTTP/1.1 is the default for both transports. WebSocket needs it for RFC
     6455; SSE runs over it by giving its outbound direction a connection of its
     own, since an HTTP/1.1 connection carries one request and the event stream
-    has it. See [a11.net.http_sse_wire_stream][].
+    has it. See
+    [`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream].
 
     Raises:
         ServeError: For a combination that cannot be served: ``--h2`` without a

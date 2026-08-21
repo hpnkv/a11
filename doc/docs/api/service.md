@@ -30,9 +30,22 @@ retains the source when a gateway multiplexes clients.
 
 ::: a11.service.session.SessionOptions
 
+## Service
+
+A [`Service`][a11.service.service.Service] is the action registry plus the
+sessions serving it. [`accept`][a11.service.service.Service.accept] is shaped to
+be a transport's on-stream callback, which is what lets one service stand behind
+several listeners — or behind none, when the stream is in-process.
+[`aclose`][a11.service.service.Service.aclose] is the graceful shutdown: stop
+accepting, then wait for what is in flight.
+
+::: a11.service.service.Service
+
+::: a11.service.service.ServiceOptions
+
 ## Serving
 
-A [`Service`][a11.service.service.Service] owns no sockets, so binding it to
+A service owns no sockets, so binding it to
 listeners is a separate sentence:
 [`serving`][a11.service.serving.serving] takes a service and any number of
 listener factories, yields the live listeners, and on the way out stops them in

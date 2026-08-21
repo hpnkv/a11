@@ -60,3 +60,5 @@ that registers them.
 ## Header helpers
 
 ::: a11.actions.action.DefaultHeaders
+
+::: a11.actions.action.DEFAULT_HEADERS

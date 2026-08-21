@@ -37,12 +37,8 @@ namespace {
 
 /// One open document, and the version the client last told us about.
 ///
-/// The offset arithmetic lives in [TextIndex] rather than here. It used to live
-/// here, and that was the bug: the JSON protocol had no conversion at all, so the
-/// IntelliJ plugin read byte offsets as if they were the UTF-16 offsets its
-/// document buffer is indexed by, and everything after the first non-ASCII
-/// character in a file was coloured in the wrong place. One conversion, both
-/// protocols.
+/// TextIndex converts between UTF-8 byte offsets and the protocol's UTF-16
+/// positions.
 class Document : public TextIndex {
  public:
   Document() = default;
@@ -66,9 +62,7 @@ constexpr std::array kTokenTypes = {
     std::string_view("enumMember"), std::string_view("operator"),
     std::string_view("namespace"), std::string_view("property"),
     std::string_view("variable"),
-    // A port is the flow's interface, and `parameter` is the standard type
-    // every theme already distinguishes -- usually by italicising it, which is
-    // the distinction being asked for.
+    // Ports use the standard semantic-token type for parameters.
     std::string_view("parameter"),
 };
 
@@ -123,9 +117,7 @@ int TokenTypeOf(SemanticKind kind) {
 
 /// The delta-encoded token data the protocol asks for.
 ///
-/// A token may not span a line in this encoding, and two things in this language
-/// do -- a `"""` string and nothing else, in practice -- so one that does is cut
-/// at each break rather than dropped.
+/// Splits multiline tokens at line boundaries as required by the protocol.
 nlohmann::json SemanticTokenData(const Document& document) {
   const LexResult lexed =
       Lex(document.Text(), LexOptions{.keep_comments = true});

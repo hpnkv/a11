@@ -4,35 +4,13 @@
  * @file
  * @brief A11's one libuv loop, and how to get work onto it.
  *
- * One loop, one thread, process-wide. Everything that touches a uvw handle runs
- * on that thread; fibres reach it through Post() or RunOnUv() and communicate
- * back through A11 Futures, so nothing ever blocks the loop.
+ * A process-wide thread owns every uvw handle. Fibres submit work through
+ * Post() or RunOnUv() and receive results through A11 Futures.
  *
- * This used to live inside the HTTP transport, which is where it grew up and no
- * longer where it belongs: an event loop is not an HTTP concept, and the Flow
- * standard library needs the same loop for the same reasons -- watching a
- * directory, accepting a connection, resolving a name. Two loops would mean two
- * threads and, worse, two answers to "which thread owns this handle". So it is
- * here, above nothing and below everything that does I/O.
- *
- * ### Ordering is a protocol requirement
- *
- * Post() takes an @c order_key, and passing the right one is not a nicety. Work
- * sharing a key runs in the order it was posted; work with different keys may
- * be interleaved. A later header write or Finish landing ahead of the data
- * writes already posted for the same socket corrupts a framed protocol -- it
- * fails as truncated or interleaved frames, not as a fairness complaint. Pass
- * the connection for anything touching one socket.
- *
- * ### Fair draining
- *
- * Drain() takes one item per key per round rather than strict FIFO, because an
- * entry's *cost* is its transfer: sixteen 64 KiB writes queued by one
- * connection made a 64-byte write on another wait behind all sixteen. That is
- * the 5.5-7.1x small-request starvation in `bench/FINDINGS.md` item 0b, which
- * reproduced at 9-18% host utilisation and so was never contention for the CPU.
- * `A11_UV_FAIR=0` restores FIFO as the control the claim is measured against,
- * and `A11_UV_DRAIN_STATS=1` reports the distribution at exit.
+ * Work sharing an @c order_key runs in posting order; use the connection as the
+ * key for operations on one socket. Drain() alternates between keys so a busy
+ * connection does not hold up unrelated work. `A11_UV_FAIR=0` selects FIFO
+ * draining, and `A11_UV_DRAIN_STATS=1` reports queue statistics at exit.
  */
 
 #ifndef A11_UV_LOOP_H_
@@ -82,17 +60,10 @@ inline absl::Status UvError(int code, std::string_view operation) {
 class UvExecutor {
  public:
   static UvExecutor& Instance() {
-    // Process-global I/O schedulers intentionally live until process exit.
+    // The process-wide I/O scheduler lives until process exit.
     static absl::NoDestructor<UvExecutor> executor;
-    // Waited for *outside* the static's guard, and that is not a nicety.
-    //
-    // `thread::CondVar` is fibre-aware, so waiting for the loop thread yields
-    // the fibre. A constructor that yielded would leave the guard held while
-    // another fibre *on the same thread* entered here -- and libc++ sees one
-    // thread re-entering a guard it already holds as a cyclic initialiser, so
-    // it aborts with "recursive initialization". Measured at a few percent of
-    // runs of any program with a deadline and two actions, once the deadline
-    // watcher started reaching for this from a fibre.
+    // Wait outside the static initialization guard because the fibre-aware wait
+    // may yield and allow another fibre to enter Instance().
     executor->EnsureStarted();
     return *executor;
   }
@@ -102,18 +73,9 @@ class UvExecutor {
    *
    * @param work  What to run on the loop.
    * @param order_key
-   *   What this work must stay ordered against. Work sharing a key runs in the
-   *   order it was posted; work with different keys may be interleaved by
-   *   Drain(). Pass the *connection* for anything touching one socket; leave it
-   *   null for work with no per-connection ordering requirement (accepting a
-   *   connection, resolving a client address, stopping a server).
-   *
-   * **Ordering within a key is a protocol requirement, not a nicety.** A later
-   * header write or Finish has to land behind the data writes already posted on
-   * the same connection, or a framed protocol is corrupted -- and both the posted
-   * write path (PostWrite) and the awaited path (RunOnUv) reach the same socket,
-   * so both must carry the same key. Getting that wrong is not a fairness bug, it
-   * is a wire bug: it fails as truncated or interleaved frames.
+   *   Ordering group for the work. Pass the connection for operations on one
+   *   socket so headers, data, and completion remain ordered. Leave it null
+   *   when no per-connection ordering is required.
    */
   absl::Status Post(std::function<void()> work,
                     const void* order_key = nullptr) {
@@ -169,8 +131,7 @@ class UvExecutor {
     }
   }
 
-  /// Blocks until the loop thread is up. Idempotent, and safe from any number
-  /// of fibres: see Instance() for why it is not the constructor's job.
+  /// Blocks until the loop thread starts. Safe to call from multiple fibres.
   void EnsureStarted() {
     thread::MutexLock lock(&mu_);
     while (!loop_thread_id_.has_value()) {
@@ -181,21 +142,8 @@ class UvExecutor {
   /**
    * @brief Run everything queued, round-robin across order keys.
    *
-   * Strictly FIFO draining is what let a large write delay a small one: both are
-   * one queue entry, but an entry's *cost* is its transfer, so sixteen 64 KiB
-   * writes queued by one connection made a 64-byte write on another wait behind
-   * all sixteen. That is the mechanism behind the 5.5-7.1x small-request
-   * starvation in `bench/FINDINGS.md` item 0b, which reproduced at 9-18% host
-   * utilisation and so was never contention for the CPU.
-   *
-   * One item per key per round, in first-arrival order of the keys, so a
-   * connection with a backlog yields to every other connection between each of
-   * its own writes. Within a key the order is exactly the order posted, which is
-   * what keeps framing intact.
-   *
-   * Grouping costs one pass over the batch and a small map, once per `uv_async`
-   * wake-up rather than per item, and both single-item and single-key batches --
-   * the overwhelmingly common cases -- skip it entirely.
+   * Runs one item per key per round while preserving posting order within each
+   * key. Single-item and single-key batches skip grouping.
    */
   void Drain() {
     std::deque<Item> batch;
@@ -205,10 +153,7 @@ class UvExecutor {
     }
     if (DrainStatsEnabled()) {
       RecordDrainBatch(batch);
-      // Timed per item, so "the queue is empty" can be told apart from "one item
-      // holds the loop for a long time". Both readings of FINDINGS.md item 0b's
-      // candidate 3 needed answering, and this is the half that answers the
-      // second: measured at 2.6% loop occupancy, so there is nothing to free.
+      // Time each item separately when drain statistics are enabled.
       for (Item& item : batch) {
         const absl::Time started = absl::Now();
         item.work();
@@ -259,14 +204,7 @@ class UvExecutor {
     std::function<void()> work;
   };
 
-  /// A11_UV_DRAIN_STATS=1 reports the batch-size and key-count distribution at
-  /// exit.
-  ///
-  /// This is what says whether fair draining can matter at all: if the loop is
-  /// woken promptly enough that a batch is almost always one item, there is
-  /// nothing to reorder and the queue is not where a delay comes from. Answering
-  /// that is the difference between "fairness did not help" and "fairness had
-  /// nothing to work with".
+  /// A11_UV_DRAIN_STATS=1 reports batch and key-count statistics at exit.
   static bool DrainStatsEnabled() {
     static const bool on = [] {
       const char* setting = std::getenv("A11_UV_DRAIN_STATS");
@@ -275,12 +213,7 @@ class UvExecutor {
     return on;
   }
 
-  /// How long one queued item held the loop thread.
-  ///
-  /// The loop is single-threaded, so this *is* the delay every other connection
-  /// sees: an item taking 500us is 500us in which no other socket can be served.
-  /// Bucketed rather than averaged, because the question is whether a *tail*
-  /// exists, not what the mean is.
+  /// Record how long one queued item held the loop thread.
   static void RecordItemDuration(std::int64_t nanos) {
     struct Buckets {
       std::atomic<std::uint64_t> under_10us{0};
@@ -384,12 +317,7 @@ class UvExecutor {
                                                  std::memory_order_relaxed)) {}
   }
 
-  /// A11_UV_FAIR=0 restores strictly FIFO draining.
-  ///
-  /// Kept as the control the fairness claim is measured against, in the same
-  /// spirit as the pool's dials: the starvation this fixes is a ratio between two
-  /// client populations, so the only honest way to quote a number for it is to run
-  /// both policies in one binary.
+  /// A11_UV_FAIR=0 selects strictly FIFO draining.
   static bool FairDraining() {
     static const bool fair = [] {
       const char* setting = std::getenv("A11_UV_FAIR");
@@ -411,6 +339,7 @@ class UvExecutor {
 /**
  * @brief Run @p operation on the loop thread and wait for its result.
  *
+ * @param operation Work to execute on the loop thread.
  * @param order_key  See UvExecutor::Post. **Pass the connection whenever the
  *   operation touches one**, or its awaited work can be reordered ahead of writes
  *   posted for the same socket. `HttpTransport::RunOnUvForConnection` supplies it

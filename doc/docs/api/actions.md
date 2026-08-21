@@ -1,41 +1,69 @@
 # Actions
 
 An [`Action`][a11.actions.action.Action] is a named, schema-described unit of
-work whose typed ports are [nodes](nodes.md). Actions compose and stream.
+work whose typed input and output ports are [nodes](nodes.md). Actions stream inputs
+and outputs and can execute locally or over remote sessions.
 
-## Action
+## Defining and Running Actions
 
-Bind local work with
-[`bind_handler`][a11.actions.action.Action.bind_handler] and start it with
-[`run`][a11.actions.action.Action.run]. Input and output ports are live
-[`AsyncNode`][a11.nodes.async_node.AsyncNode] objects throughout the run;
-[`wait`][a11.actions.action.Action.wait] is the terminal status boundary.
-Inside a handler, `make_nested` on
-[`Action`][a11.actions.action.Action] preserves parent context and
-[`call`][a11.actions.action.Action.call]
-dispatches the child. Bind a [`Session`][a11.service.session.Session] first with
-[`bind_session`][a11.actions.action.Action.bind_session] to make that dispatch
-remote, and use [`cancel`][a11.actions.action.Action.cancel] when the caller no
-longer needs the result.
+### Defining with Schemas
+
+Actions declare typed ports via [`ActionSchema`][a11.actions.action.ActionSchema] and
+bind execution handlers:
+
+```python
+import a11
+
+SCHEMA = a11.ActionSchema(
+    name="transform_text",
+    description="Transforms input text to uppercase.",
+    inputs={"text": a11.ActionPortSchema(name="text", type="text/plain", typeinfo=str, required=True)},
+    outputs={"result": a11.ActionPortSchema(name="result", type="text/plain", typeinfo=str, required=True)},
+)
+
+async def handler(action: a11.Action) -> None:
+    text = await action["text"].consume()
+    await action["result"].finalize(text.upper())
+
+# Run locally
+action = a11.Action(SCHEMA).bind_handler(handler).run()
+await action["text"].finalize("hello world")
+result = await action["result"].consume()  # "HELLO WORLD"
+await action.wait()
+```
+
+### Defining with Type Annotations
+
+Declare action handlers directly with typed signatures:
+
+```python
+from a11.actions import ActionRegistry
+
+registry = ActionRegistry()
+
+@registry.action(name="summarize")
+async def summarize(prompt: str) -> str:
+    return f"Summary: {prompt[:50]}..."
+```
 
 ::: a11.actions.action.Action
 
 ## ActionRegistry
 
-[`register`][a11.actions.registry.ActionRegistry.register] publishes an async
-handler under a schema name;
-[`make_action`][a11.actions.registry.ActionRegistry.make_action] then creates a
-correctly configured action without repeating the schema.
+[`ActionRegistry`][a11.actions.registry.ActionRegistry] manages action schemas and
+handlers, supporting both local execution and dispatch through networked services:
+
+```python
+registry = ActionRegistry()
+registry.register("transform_text", SCHEMA, handler)
+
+# Construct configured actions
+action = registry.make_action("transform_text")
+```
 
 ::: a11.actions.registry.ActionRegistry
 
 ## Actions from annotations
-
-The FastAPI trade: write the function whose parameters are the values it
-actually wants, and let the annotations decide the wire shape.
-[`action_from_callable`][a11.actions.annotated.action_from_callable] returns the
-schema and handler; `ActionRegistry.action` is the same thing as a decorator
-that registers them.
 
 ::: a11.actions.annotated
 

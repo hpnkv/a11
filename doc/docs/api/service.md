@@ -1,43 +1,48 @@
-# Sessions
+# Sessions and Services
 
-A [`Session`][a11.service.session.Session] is the connection-scoped runtime:
-it multiplexes [wire streams](net.md), dispatches inbound
-[action](actions.md) calls, and manages their lifetimes. It is the object you
-build a server or client agent around.
+A [`Session`][a11.service.session.Session] manages connection-scoped state:
+multiplexing [wire streams](net.md), dispatching inbound [actions](actions.md), and
+tracking streaming node fragments.
 
-## Session
+A [`Service`][a11.service.service.Service] manages an action registry across multiple
+sessions, allowing one service instance to power multiple listeners and protocols.
 
-Attach a transport with [`add_stream`][a11.service.session.Session.add_stream]
-and route outbound messages with [`send`][a11.service.session.Session.send].
-[`half_close`][a11.service.session.Session.half_close] begins an orderly
-shutdown; await [`done`][a11.service.session.Session.done] when every stream and
-dispatched action must have released its state. Use
-[`abort`][a11.service.session.Session.abort] for a failed connection so the
-peer receives a structured reason.
+## Using Session and Service
+
+```python
+import a11
+from a11.actions import ActionRegistry
+from a11.service.serving import serving, websocket
+
+# 1. Register application actions
+registry = ActionRegistry()
+
+@registry.action(name="greet")
+async def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+# 2. Create the service with the registry
+service = a11.Service(action_registry=registry)
+
+# 3. Serve over listeners with automatic graceful shutdown
+async def run_server():
+    async with serving(service, websocket(port=8080)):
+        print("Server running on ws://localhost:8080")
+        await asyncio.Event().wait()
+```
 
 ::: a11.service.session.Session
 
 ## SessionWithRecv
 
-[`receive`][a11.service.session.SessionWithRecv.receive] is the pull-style flow
-for one transport, while
-[`receive_with_stream_id`][a11.service.session.SessionWithRecv.receive_with_stream_id]
-retains the source when a gateway multiplexes clients.
+[`SessionWithRecv`][a11.service.session.SessionWithRecv] provides explicit pull-based
+message reception for applications managing custom event loops or multiplexed transports:
 
 ::: a11.service.session.SessionWithRecv
-
-## SessionOptions
 
 ::: a11.service.session.SessionOptions
 
 ## Service
-
-A [`Service`][a11.service.service.Service] is the action registry plus the
-sessions serving it. [`accept`][a11.service.service.Service.accept] is shaped to
-be a transport's on-stream callback, which is what lets one service stand behind
-several listeners — or behind none, when the stream is in-process.
-[`aclose`][a11.service.service.Service.aclose] is the graceful shutdown: stop
-accepting, then wait for what is in flight.
 
 ::: a11.service.service.Service
 
@@ -45,21 +50,13 @@ accepting, then wait for what is in flight.
 
 ## Serving
 
-A service owns no sockets, so binding it to
-listeners is a separate sentence:
-[`serving`][a11.service.serving.serving] takes a service and any number of
-listener factories, yields the live listeners, and on the way out stops them in
-reverse before draining the service — so nothing new arrives while it is
-finishing what it has.
+[`serving`][a11.service.serving.serving] binds a service to multiple transport listeners,
+yielding the active listeners and performing ordered teardown upon exit:
 
 ```python
 async with serving(service, websocket(ws_options), http_sse("0.0.0.0", 8012)):
-    await stop.wait()
+    await shutdown_event.wait()
 ```
-
-One service behind every listener is the point: a caller's session, the registry
-it dispatches against and the concurrency it shares are the same whichever
-endpoint it arrived on.
 
 ::: a11.service.serving.serving
 
@@ -69,11 +66,9 @@ endpoint it arrived on.
 
 ::: a11.service.serving.webrtc
 
-## `a11 serve`
+## CLI: `a11 serve`
 
-The command form of the above: name a module holding an
-[`ActionRegistry`][a11.actions.registry.ActionRegistry] and it is served on the
-transports you ask for.
+The CLI command serves an action module over configured transports:
 
 ```sh
 a11 serve mypkg.actions                       # REGISTRY over WebSocket
@@ -83,19 +78,5 @@ a11 serve mypkg.actions --webrtc \
     --webrtc-signalling-server wss://a11.services/ice \
     --webrtc-signalling-identity demoserver
 ```
-
-The target names a module either as an import path (`pkg.subpkg.module`) or as a
-path to a `.py` file, with an optional `:SYMBOL` defaulting to `REGISTRY`. A
-`.py` suffix, a path separator, a leading `.`/`~`, or a file that is simply
-there means a path; anything else is imported the ordinary way. A file is loaded
-under its own stem rather than as `__main__`, so its `if __name__ ==
-"__main__":` block stays asleep, and its directory joins `sys.path` so sibling
-imports resolve. Each transport has its own flag group (`--ws-host`, `--sse-port`,
-`--webrtc-signalling-server`, …); `--h11`/`--h2c`/`--h2` and `--cert`/`--privkey`
-are shared by every HTTP-based endpoint. HTTP/1.1 is the default, because that
-is what an RFC 6455 WebSocket client speaks; SSE runs over it too, spending a
-second connection on its outbound direction because an HTTP/1.1 connection
-carries one request and the event stream has it. `SIGINT` and `SIGTERM` are
-clean shutdowns.
 
 ::: a11.cli.commands.serve

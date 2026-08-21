@@ -37,12 +37,8 @@ namespace a11 {
  *   Re-entry bookkeeping for a pump that may be driven from any thread.
  *
  * Lives in the pump's own state and is read and written only under the pump's
- * mutex -- the same one passed to DriveInline(). It is deliberately *not* a
- * marker of which thread or fibre is driving: this work can suspend (a store
- * write tees to an attached stream, and WireStream::Send parks on the peer's
- * fibre-aware mutex), and a suspended fibre resumes on whichever thread picks
- * it up, so anything keyed to a thread would release the wrong entry and could
- * leave a pump marked busy for good. A count cannot.
+ * mutex -- the same one passed to DriveInline(). It tracks re-entrant drive
+ * depth across executing threads and fibers.
  */
 struct InlinePumpState {
   /// Live DriveInline() calls for this pump, across all threads.

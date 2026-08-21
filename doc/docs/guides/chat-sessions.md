@@ -5,8 +5,8 @@ get right: the conversation. One action answers with any provider, the page keep
 the conversation as the model's own objects rather than as a transcript, and
 reloading the page continues it.
 
-Nothing here is specific to one model vendor. The page picks Ollama, Claude or
-Gemini from a dropdown, and what changes is a header.
+The session design is provider-agnostic: Ollama, Claude, and Gemini use
+the same interface, configured via headers.
 
 !!! note "Before you start"
 
@@ -86,11 +86,9 @@ those instead.
 
 ## 1. One action, every provider
 
-The old way to support two model vendors was two actions: a schema and a handler
-per provider, and a client that picked between them.
-[`interact_with_llm`](../llm-sdk/interactions.md) replaces that. Which provider
-answers, which model, with which key and at which base URL are four *headers*, so
-one registration serves all of them and the choice belongs to the caller:
+[`interact_with_llm`](../llm-sdk/interactions.md) uses one action schema for all
+supported model providers. The provider, model, key, and base URL are headers,
+so one registration serves them and the caller selects the backend:
 
 ```python
 from a11.sdk.llm import LlmHeaders

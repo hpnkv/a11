@@ -4,7 +4,7 @@
  * @file
  * @brief Bounded packetisation and reassembly for binary channel transports.
  *
- * WebSocket and WebRTC channels use this Action Engine-compatible format so a
+ * WebSocket and WebRTC channels use this shared format so a
  * large WireMessage cannot monopolise a channel or exceed transport limits.
  */
 
@@ -24,7 +24,7 @@
 
 namespace a11::net {
 
-/// Packet shapes in the Action Engine byte-chunking wire format.
+/// Packet shapes in the A11 byte-chunking wire format.
 enum class BytePacketType : std::uint8_t {
   kCompleteBytes = 0x00,
   kByteChunk = 0x01,
@@ -70,16 +70,14 @@ struct ByteChunkingOptions {
   absl::Status Validate() const;
 };
 
-/// Split bytes into Action Engine packets with fixed little-endian suffixes.
+/// Split bytes into A11 packets with fixed little-endian suffixes.
 absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
     std::string_view bytes, std::uint64_t transient_id, size_t packet_size);
 /**
  * @brief Split bytes the caller owns, reusing the buffer when it fits a packet.
  *
- * A message small enough to travel as one packet becomes that packet by having
- * nine bytes appended to it -- all of the metadata is a suffix -- so a caller
- * that owns the encoded bytes and is finished with them need not copy anything.
- * The multi-packet case is identical to SplitBytesIntoPackets.
+ * Appends metadata to the owned buffer when the message fits one packet. The
+ * multi-packet result matches SplitBytesIntoPackets.
  */
 absl::StatusOr<std::vector<std::string>> SplitOwnedBytesIntoPackets(
     std::string bytes, std::uint64_t transient_id, size_t packet_size);
@@ -88,11 +86,7 @@ absl::StatusOr<BytePacket> ParseBytePacket(std::string_view packet);
 /**
  * @brief Parse one packet, reusing its buffer as the payload.
  *
- * The same parse as ParseBytePacket, for a caller that owns the packet and does
- * not need it afterwards. All of the metadata is a suffix, so the payload is
- * the packet with its tail cut off: truncating in place moves no bytes at all,
- * where the view-taking overload copies the whole payload out. On a receive
- * path that is one copy of every message that arrives.
+ * Removes the metadata suffix in place and returns the remaining owned payload.
  */
 absl::StatusOr<BytePacket> ParseOwnedBytePacket(std::string packet);
 

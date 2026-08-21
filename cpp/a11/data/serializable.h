@@ -141,14 +141,11 @@ concept MsgpackSerializable = serializable_internal::HasSerialTag<T> &&
 template <typename T>
 concept Serializable = JsonSerializable<T> || MsgpackSerializable<T>;
 
-/** @brief Returns the language-agnostic type tag registered for @c T. */
 /**
  * @brief Whether @c T publishes a serialisation tag.
  *
- * The public spelling of the internal requirement, for the code that has to
- * *ask* rather than insist -- AsyncNode::NextObject takes the no-encoding fast
- * path only for a type that can be identified by tag, and falls back to bytes
- * for everything else.
+ * AsyncNode::NextObject uses this to select tagged object decoding when the
+ * type supports it.
  */
 template <typename T>
 concept HasSerialTypeTag = serializable_internal::HasSerialTag<T>;

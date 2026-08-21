@@ -29,25 +29,19 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
                                          thread::TreeOptions tree_options = {});
 
 /**
- * @brief
- *   Continue with @p transform once @p future completes, taking a fibre only if
- *   there is actually something to wait for.
+ * @brief Continue with @p transform when @p future completes or the deadline
+ * expires.
  *
- * The shape every "wait for this, then report it" API has. Already-finished is
- * the common case and costs no worker, no scheduler hop and -- through a
- * language binding -- no event-loop turn, which together are two orders of
- * magnitude of what a fibre whose result has to be marshalled back costs. The
- * unfinished case takes a fibre because it has a deadline to honour.
- *
- * Prefer Then() when there is no deadline; it never needs a fibre at all.
+ * A ready future is transformed inline; otherwise a fibre waits until
+ * @p deadline. Use Then() when the operation has no deadline.
  *
  * @param future
  *   The operation to continue from.
  * @param deadline
  *   How long the fibre may wait when @p future is not already complete.
  * @param transform
- *   Called with @p future's result once it has one. Runs inline on the caller's
- *   thread in the ready case, so it must not block.
+ *   Called with @p future's result. Runs inline in the ready case and must not
+ *   block.
  */
 template <typename T, typename Fn>
 auto ThenAfterWaiting(Future<T> future, absl::Time deadline, Fn transform)

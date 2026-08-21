@@ -20,9 +20,8 @@ application/json;type=a11.sdk.Interaction
 ```
 
 The seven JSON-native shapes (`object`, `array`, `integer`, `number`, `string`,
-`boolean`, `null`) never carry a parameter — writing `;type=object` on an object
-says nothing a parser did not already know. Nothing inside the payload names a
-type either: a serialized value is ordinary JSON or MessagePack.
+`boolean`, `null`) need no `type` parameter. Serialized values remain ordinary
+JSON or MessagePack; type information belongs in chunk metadata.
 
 ## Quick start
 
@@ -86,12 +85,11 @@ A value at the top of a chunk keeps its Python type, because the chunk's `type`
 parameter names it: `bytes` come back as `bytes`, a `set` as a `set`, a
 `datetime` as a `datetime`.
 
-Values *nested inside* schemaless data do not. A dictionary is serialized as a
-JSON object, so `{"payload": b"\xff"}` reads back as `{"payload": "/w=="}` —
-what JSON can say about it, and nothing more. Nesting keeps its fidelity when a
-schema names it: a Pydantic model's `bytes` field, or a `list[Chunk]`, is
-rebuilt from the annotation. Declare a model for structured payloads rather
-than relying on a bare dictionary to carry Python types.
+Nested values in schemaless data follow the representation's types. For
+example, `{"payload": b"\xff"}` reads back from JSON as
+`{"payload": "/w=="}`. A schema preserves richer nested types: annotations
+such as a Pydantic model's `bytes` field or `list[Chunk]` direct reconstruction.
+Use a model when a structured payload must retain those types.
 
 ## Selecting and matching MIME types
 

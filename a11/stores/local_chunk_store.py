@@ -14,18 +14,12 @@ class LocalChunkStore(_native.ChunkStore):
     The small forwarding layer keeps Python overrides virtual when a subclass is
     passed back into native readers, writers, nodes, or sessions.
 
-    When nothing is overridden the layer is pure cost, and handed to a native
-    reader or writer it is expensive cost: every fragment they fetch or persist
-    would come back through the interpreter and take an event-loop turn. So an
-    instance of exactly this class points native code at the store underneath
-    (see [native_chunk_store][a11.stores.chunk_store.native_chunk_store]),
-    while a subclass keeps the forwarding layer and its overrides.
+    An instance of this class exposes its underlying native store directly to
+    native readers and writers. Subclasses retain the forwarding layer so their
+    Python overrides remain active.
     """
 
-    # No per-instance dict: a store is a small object held in quantity, one per
-    # node, and the dict is about a third of what an empty one costs. A subclass
-    # that adds attributes and declares no __slots__ of its own still gets a
-    # dict, as usual.
+    # Instances are held per node; subclasses may add a dict when needed.
     __slots__ = ("_impl", "_status", NATIVE_STORE_ATTRIBUTE)
 
     def __init__(self, node_id: types.NameString):

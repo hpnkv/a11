@@ -264,8 +264,8 @@ about neighbours is exactly the question a boundary hides: a pattern spanning
 two lines is invisible to a `batch` whenever the boundary falls between them, so
 roughly one match in `N` goes missing and nothing says so. A window holds `N`
 values and no more, so one over a stream that never ends costs nothing that
-grows — and a stream shorter than `N` yields nothing at all, which is the
-deliberate difference from `batch`, whose last list may be short.
+grows — and a stream shorter than `N` yields nothing at all, whereas `batch`
+may emit a shorter final list.
 
 `interleave(a, b, ...)` is the other kind of fan-in. Where `zip` reads its
 sources *in step* and gives a tuple per round, this reads them at once and gives
@@ -404,10 +404,10 @@ a value by number, and `%%` for a literal percent. `| strformat "fmt"` is the
 one-value shorthand for `| map strformat("fmt", it)`, which is nearly every use
 of it.
 
-printf rather than a Python template deliberately: `str.format` reads
-attributes, so `{0.__class__.__init__.__globals__}` would be a way out of the
-sandbox, and flow templates can come from a model. A printf conversion has
-nowhere to walk to. A conversion with no value behind it is left as written
+Flow uses printf-style conversions rather than Python template strings:
+`str.format` reads attributes, which could escape sandboxing when formatting
+untrusted expressions. A printf conversion operates strictly on supplied values
+without attribute access. A conversion with no value behind it is left as written
 rather than raising, because a visible `%3$s` in a log line is easier to
 diagnose than a flow that died formatting one.
 
@@ -727,52 +727,38 @@ noticed is indistinguishable from one that finished. It takes the code and
 message a `fail` takes, and waits for nothing for the same reason, so it belongs
 in an `if` or a loop body or carries an `after`.
 
-Only a node this flow **writes** can be aborted by it. Aborting one it merely
-reads would be telling somebody else's producer how their stream ended.
+Only a node this flow **writes** can be aborted by it.
 
-The two half-endings the node API has — final without closing, and closing
-without finality — are deliberately absent. Both exist for a producer that
-cannot say which chunk was last; a flow always can, which is what its writer
-count already encodes. Offering them would let a flow leave a node closed but
-not final, and a reader consuming *that* gets `failed_precondition`.
+Flow unifies node completion into full endings (`drain` or `abort`): marking a node
+final also closes its writer to ensure consistent reader semantics.
 
 ### Ending a step early
 
-`cancel x` aborts a step, and the run then ends `cancelled` — which is right
-when something has gone wrong, and is the only thing the *language* offers.
+`cancel x` aborts a step, ending the run with status `cancelled`.
 
-Asking a step to *finish* is deliberately not a language construct. It is a
-convention of the standard library, where every action treats
-`{"command": "stop"}` on its control port as its stream having ended, so its
-ports close normally and a reader sees the end of a stream rather than a
-failure. A flow says it by writing to that port:
-
+To request that a step finish gracefully rather than cancelling, send a stop command
+following standard action conventions:
 ```a11flow
 if tick.number == 3 { {"command": "stop"} -> clock.control_events }
 ```
 
-Spelling it out rather than giving it a keyword keeps the compiler free of one
-library's habits: `control_events` is not a word this language knows, and a
-compiler that knew it would have to know the next such convention too.
+Standard library actions treat `{"command": "stop"}` on their control port as
+an end of input, closing their ports normally so downstream readers observe a
+clean stream termination.
 
-Neither is what a stage does. `| first n` and a `for`'s `until` stop *reading*
-and leave the producer alone on purpose: a step feeding a node that nobody drains
-would stall, and a `first 3` must not be able to wedge what it reads from. So an
-endless step is ended by its control port, by `cancel`, or by its deadline, and
-by nothing else. `cancel` waits for nothing, so it belongs in an `if` or a loop
-body or carries an `after`; at the top of a body it races every other statement
-and is refused there.
+Stage limits (`| first n` and `for` with `until`) stop reading while leaving
+the upstream producer undisturbed. An active step terminates via its control
+port, `cancel`, or an assigned deadline. `cancel` evaluates immediately, so it
+belongs within a conditional, loop body, or `after` clause.
 
 
-## What a flow deliberately cannot do
+## Flow boundaries and sandbox limits
 
 Beyond `+` and `-` there is no arithmetic, no way to define a function, and no way to call out to
-code. An expression reads values, compares them, takes them apart with `.field`
-and `[i]`, and builds new ones — with a fixed set of functions (`len`, `lower`,
-`join`, `merge`, `default`, and a handful more). That is the whole of it, which is
-what makes accepting a flow from somewhere else and running it a reasonable thing
-to do: it can only call the actions it names, and it can only move their streams
-around.
+arbitrary host code. An expression reads values, compares them, accesses fields via `.field`
+and `[i]`, and constructs new records using built-in functions (`len`, `lower`,
+`join`, `merge`, `default`, etc.). A flow operates strictly by orchestrating declared
+action streams within these sandbox boundaries.
 
 ## The tables, as data
 

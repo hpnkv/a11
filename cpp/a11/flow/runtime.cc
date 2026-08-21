@@ -54,14 +54,8 @@ using graph::RefKind;
 using graph::StepId;
 using graph::StepKind;
 
-/// The stack every fiber of a flow gets.
-///
-/// A11's pooled fiber stacks are hundreds of bytes, which is right for a fiber
-/// that moves a buffer around and far too small for one of these: any of them
-/// can reach the [HostBridge], and on the Python path that means an interpreter
-/// frame chain -- a pydantic model validating a nested document is not one
-/// frame. Sized for that rather than for the pump, because a flow has tens of
-/// fibers and not thousands.
+/// Stack size for Flow fibers that may enter a host interpreter through
+/// [HostBridge].
 constexpr size_t kStackSize = 256 * 1024;
 
 thread::TreeOptions StackOptions() {
@@ -198,12 +192,7 @@ std::string BaseMimetype(std::string_view mimetype) {
   return std::string(absl::StripAsciiWhitespace(base));
 }
 
-/// Whether `name` matches `pattern`, where `*` stands for any run of
-/// characters.
-///
-/// The whole of the globbing `mime` and `forward headers` need, and small
-/// enough to be obviously right: a pattern is a sequence of literals separated
-/// by stars.
+/// Whether `name` matches a pattern whose `*` spans any characters.
 bool Matches(std::string_view name, std::string_view pattern) {
   const std::vector<std::string_view> parts = absl::StrSplit(pattern, '*');
   if (parts.size() == 1) return name == pattern;
@@ -229,62 +218,27 @@ bool MatchesFolded(std::string_view name, std::string_view pattern) {
 
 // --- The monitor -------------------------------------------------------------
 
-/// Everything one run waits on, and the one way to give up on all of it.
+/// Coordinates every wait in one run and wakes them together on cancellation.
 ///
-/// A single lock and a single condition variable for the whole run. Coarse on
-/// purpose: a flow has tens of steps rather than millions of operations, and
-/// what matters far more than contention is that every wait in the runtime can
-/// be woken at once when the run is over -- a pump waiting for a reader that
-/// will never come is a hung flow, and this is what makes that impossible.
-///
-/// Blocking work -- a node read, a node write, waiting for an action, anything
-/// that reaches the host -- happens with the lock released.
+/// Blocking node, action, and host operations run with the monitor lock
+/// released.
 class Monitor {
  public:
   thread::Mutex& mu() ABSL_LOCK_RETURNED(mu_) { return mu_; }
 
-  /// Wake every waiter, because something they may be waiting for has changed.
+  /// Wake every parked waiter after shared state changes.
   ///
-  /// **Skipped when nothing is parked**, which is most of the time on a moving
-  /// pipeline: a producer filling a queue whose reader is still draining the
-  /// last batch, a reader taking the second of eight buffered values. The wake
-  /// is a broadcast on one condition variable shared by the whole run, so each
-  /// one that lands costs a fibre schedule *per parked fibre* and, when that
-  /// fibre is on a sleeping worker, a thread wake with it -- 16 of them per
-  /// value through a one-stage pipe, measured, which was most of what a value
-  /// cost.
-  ///
-  /// Safe without the lock because of where the count is kept: a waiter
-  /// increments it *while holding the lock* and before it evaluates its
-  /// predicate, and a producer reads it after releasing the same lock. So a
-  /// waiter that could still park has already been counted by the time the
-  /// producer looks, and one that has not been counted yet has not evaluated
-  /// its predicate either -- it will see the change instead of waiting for it.
-  /// Relaxed ordering is enough for exactly that reason: the mutex, not the
-  /// atomic, is what orders the two.
+  /// Waiters increment the count under the monitor lock before testing their
+  /// predicate. The mutex provides ordering; the count only avoids empty
+  /// broadcasts and therefore uses relaxed atomic access.
   void Wake() {
     if (waiters_.load(std::memory_order_relaxed) > 0) cv_.SignalAll();
   }
 
-  /// One thing to wait on, woken without waking everything else.
+  /// A per-object condition registered for cancellation by the monitor.
   ///
-  /// The monitor's own condition variable is shared by every wait in the run,
-  /// which is what makes giving up on a run possible -- and what makes a moving
-  /// pipeline expensive: a broadcast schedules *every* parked fibre, and a
-  /// `for` running sixteen passes wide parks tens of them. Measured at 43 extra
-  /// thread wakes per pass at `parallel 16`, which is why that used to be
-  /// slower per pass than running the passes one at a time.
-  ///
-  /// A Condition is a condition variable of its own for one object -- a bus, a
-  /// buffer, a destination -- registered with the monitor so that [Stop] still
-  /// wakes it. Waiting on one is therefore exactly as interruptible as waiting
-  /// on the monitor, and waking one reaches only the fibres parked on *that*
-  /// object.
-  ///
-  /// Mixing the two is safe in one direction only: a waiter may move to a
-  /// Condition once *every* waker of its predicate wakes that Condition, and
-  /// [Monitor::Wake] deliberately keeps waking the shared variable so that a
-  /// site nobody has looked at yet is still correct.
+  /// Use one after every mutation of its predicate has been wired to wake it.
+  /// Stop still wakes all registered conditions.
   class Condition {
    public:
     explicit Condition(Monitor& monitor) : monitor_(&monitor) {
@@ -499,9 +453,7 @@ class Group {
   }
 
   void Finish(const absl::Status& status) {
-    // Signalled with the lock still held, on purpose: [Join] wakes holding it,
-    // and a signal sent after releasing would touch this group's condition
-    // variable after the last waiter had already returned and destroyed it.
+    // Signal under the lock so Join cannot destroy the condition first.
     thread::MutexLock lock(&monitor_->mu());
     ++done_;
     // A cancellation is not a reason. Everything else in the group is cancelled
@@ -536,14 +488,8 @@ class Reader {
   /// A non-ok status is the producer's failure, relayed to every reader.
   virtual absl::StatusOr<ItemPtr> Next() = 0;
 
-  /// Append what is *already there*, up to `limit`, and nothing at the end.
-  ///
-  /// The batched counterpart to [Next], with the same latency: it waits only
-  /// when nothing is ready, so a reader that asks for eight and finds one gets
-  /// one rather than waiting for seven more. That is what makes a batch safe on
-  /// a live stream -- a stage does not hold a token back hoping for company --
-  /// and what it buys is the handover, which costs a lock and a broadcast per
-  /// call rather than per value.
+  /// Append up to `limit` currently available items, waiting only when none is
+  /// ready.
   ///
   /// Appending nothing means the stream has ended, as a null item does for
   /// [Next].
@@ -616,13 +562,9 @@ struct Slot {
   bool dropped = false;
 };
 
-/// What a producer publishes values with.
+/// Publishes one item or an existing batch to a stream consumer.
 ///
-/// Two entry points rather than one, because a producer often already has
-/// several values in hand -- a node read returns whatever the store had
-/// buffered -- and publishing them together costs one lock and one wake instead
-/// of one of each per value. A sink with no batch path runs `One` in a loop, so
-/// a producer may always use [Many] and never has to ask.
+/// Sinks without a batch path apply the single-item callback to each value.
 class Sink {
  public:
   using OneFn = absl::FunctionRef<absl::Status(ItemPtr)>;
@@ -755,8 +697,7 @@ class BusReader : public Reader {
       }
       if (!room) ABSL_RETURN_IF_ERROR(slot_->error);
     }
-    // One wake for the batch: the producer waits for room in the slot, and how
-    // much room appeared is not something it distinguishes.
+    // One wake is sufficient because the producer only tests whether room exists.
     if (room) bus_->moved().Wake();
     return absl::OkStatus();
   }
@@ -789,20 +730,14 @@ absl::StatusOr<ReaderPtr> Bus::Take() {
 }
 
 absl::Status Bus::Pump() {
-  // Nothing is read before something asks for it. Reading can *act* -- ending a
-  // node, waiting on a call -- and a step held back by `after` must not have
-  // its reads run ahead of it.
+  // Start production on the first read so effects respect `after` ordering.
   {
     thread::MutexLock lock(&monitor_->mu());
     ABSL_RETURN_IF_ERROR(monitor_->Wait(moved_, [this] { return wanted_; }));
   }
   absl::Status error;
-  // Room for one more, which is what the depth means: a producer already over
-  // it stops until a reader has taken something, whether it publishes one value
-  // or a batch. Publishing a batch can therefore overshoot the depth by the
-  // size of the batch, and that is deliberate -- the values are already in
-  // hand, and holding them back would cost a round of parking to save memory a
-  // reader is about to take anyway.
+  // Batches may exceed the queue depth once admitted; the next batch waits
+  // until every live reader has room.
   const auto room = [this] {
     for (const std::unique_ptr<Slot>& slot : slots_) {
       if (!slot->dropped && slot->items.size() >= kQueueDepth) return false;
@@ -893,44 +828,20 @@ class Lazy {
   absl::StatusOr<ItemPtr> result_;
 };
 
-/// A stream buffered once and replayed to every reader.
+/// Incrementally buffers a stream and replays it to each nested reader.
 ///
-/// What a ref read inside a loop or a branch becomes. The buffer is filled by a
-/// single reader of the underlying stream, and each pass iterates the buffer,
-/// so every pass sees the same values.
-///
-/// **It grows while it is read.** The buffer used to read its source to the
-/// *end* before handing out a single value, which made a loop that reads
-/// anything from outside it wait for that stream to finish -- and, since the
-/// buffer is one reader among the others, made every later statement reading
-/// the same ref wait with it. A `for` over one node whose body reads another
-/// could not begin until the second was closed, which is not something anything
-/// in the source says. A reader now waits for the *item it is asking for* and
-/// no further.
-///
-/// What is not fixed here, because it is what replaying means: the whole stream
-/// is held in memory once, for as long as the body that reads it runs. That is
-/// the price of every pass seeing the same values, and it is the reason only
-/// refs a nested body actually reads are buffered at all.
+/// Loops and branches use this for outer refs so every pass sees the same
+/// values as they arrive. The buffer retains the stream for the body's lifetime.
 class Buffer {
  public:
-  /// The items, and whether there are more coming. Held behind a shared pointer
-  /// so that a reader cannot outlive what it reads: the buffer belongs to a
-  /// [Scope] and a reader of it is handed to whatever is nested inside that
-  /// scope, which is a lifetime the type should not have to be reasoned about.
-  /// The previous buffer copied its items into every reader, so it had no such
-  /// question to answer; incremental delivery means the reader looks at the
-  /// buffer's own storage, and this is what keeps that safe.
+  /// Shared storage retained by readers that outlive the creating scope.
   class State {
    public:
     explicit State(Monitor& monitor) : monitor_(&monitor), grew_(monitor) {}
 
     /// The item at `index`, once it is there; a null item at the end.
     ///
-    /// A failure arrives *after* the items that did, which is what a
-    /// [BusReader] does with a slot's error: a pass that had read three of five
-    /// values saw three values and then a failure, rather than the failure
-    /// alone.
+    /// Return buffered items before reporting the source's terminal failure.
     absl::StatusOr<ItemPtr> At(size_t index) {
       thread::MutexLock lock(&monitor_->mu());
       ABSL_RETURN_IF_ERROR(monitor_->Wait(
@@ -1009,20 +920,10 @@ class Buffer {
   ReaderPtr source_;
 };
 
-/// The one view of a stream that every *value* read of it shares.
+/// Shared cursor for expressions that consume values from a stream.
 ///
-/// **Why a value read is not just a read of the first value.** `let a = x` and
-/// `let b = x` are two values of `x`, not two names for its first: they take
-/// turns on one view of the stream. Which of them gets which is not defined,
-/// and `advance` and `after` are how a flow that cares says so. Reading the
-/// first value twice was the old behaviour, and it silently discarded
-/// everything else `x` had.
-///
-/// **A provably unary stream is different**, and is the case worth being strict
-/// about: there is one value, so every reader of it sees that one value, and a
-/// *second* value arriving is a fact about the flow that nothing else would
-/// ever report. It is read once, kept, and the stream is then required to be
-/// over.
+/// General streams advance once per value read. Unary streams cache their one
+/// value for every reader and report an error if another value arrives.
 class ValueCursor {
  public:
   ValueCursor(HostBridge& bridge, ReaderPtr reader, bool unary,
@@ -1030,14 +931,10 @@ class ValueCursor {
       : bridge_(&bridge), reader_(std::move(reader)), unary_(unary),
         label_(std::move(label)) {}
 
-  /// The next value, or the kept one for a unary stream.
+  /// Return the next value, or the cached value for a unary stream.
   ///
-  /// One reader at a time, the way [Lazy] does it: the turn is taken under the
-  /// monitor and the *read* happens outside it, because reading waits on the
-  /// monitor itself and holding it across that is a fibre deadlocking on its
-  /// own lock. Two steps reading this stream for a value at the same moment
-  /// therefore take turns, and get two different values rather than the same
-  /// one twice.
+  /// Readers reserve a turn under the monitor lock and perform the blocking
+  /// read after releasing it.
   absl::StatusOr<Value> Next(Monitor& monitor) {
     {
       thread::MutexLock lock(&monitor.mu());
@@ -1067,10 +964,7 @@ class ValueCursor {
       ABSL_ASSIGN_OR_RETURN(value, item->Read(bridge_));
     }
     if (!unary_ || item == nullptr) return value;
-    // One value was promised, so a second is an error naming what promised it:
-    // the port said so by not saying `stream`, or the pipeline said so by
-    // reducing. Reading to the end is what finds out, and for a stream of one
-    // that is one more read.
+    // Confirm that a stream declared unary ends after its first value.
     ABSL_ASSIGN_OR_RETURN(const ItemPtr extra, reader_->Next());
     if (extra != nullptr) {
       return absl::InvalidArgumentError(absl::StrCat(
@@ -1135,7 +1029,7 @@ class Destination {
               bool tolerant)
       : monitor_(&monitor), turn_(monitor), label_(std::move(label)),
         open_(std::move(open)), writers_(writers), tolerant_(tolerant) {
-    // Nothing here will write it, so nothing here is holding it open.
+    // A destination with no writers starts complete.
     if (writers_ <= 0) finished_ = true;
   }
 
@@ -1166,16 +1060,10 @@ class Destination {
     return WriteRange(absl::MakeConstSpan(&item, 1), bridge);
   }
 
-  /// Append a batch, in order, as one visit to the node.
+  /// Append a batch in order after the writer queue admits it.
   ///
-  /// **Admission, not confirmation.** A writer's queue is bounded, so awaiting
-  /// admission is the backpressure a pipe needs -- it stops a producer that is
-  /// ahead of the store -- while awaiting each value's *store confirmation*
-  /// also stopped it for the store's own round trip, one value at a time, which
-  /// is a stage that cannot run ahead of its own writes at all. The
-  /// confirmations are still collected: the writer's status carries a failure
-  /// to the next write, and closing the destination drains every one of them,
-  /// so a failed write still fails the flow with the status it failed with.
+  /// Admission provides backpressure. Closing the destination drains pending
+  /// confirmations and reports any store failure.
   absl::Status WriteMany(std::vector<ItemPtr>& items,
                          HostBridge* absl_nonnull bridge) {
     const absl::Status written = WriteRange(items, bridge);
@@ -1191,12 +1079,8 @@ class Destination {
     absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> writer =
         node->writer();
     ABSL_RETURN_IF_ERROR(writer.status());
-    // One writer at a time, so two steps sharing a destination append whole
-    // values rather than interleaving halves of two.
-    // Everything the host has to encode, encoded in one crossing: a stage that
-    // computed its values (a `map`, a literal) has no chunk to re-use, and
-    // asking the host per value is what a value used to cost. Order and error
-    // attribution are unchanged -- each value keeps its own outcome.
+    // Serialize writers so shared destinations append complete values. Encode
+    // computed batches in one host crossing where supported.
     std::vector<absl::StatusOr<data::Chunk>> encoded;
     if (items.size() > 1) {
       std::vector<const Value*> values;
@@ -1403,15 +1287,10 @@ class CallHandle {
     monitor_->Wake();
   }
 
-  /// Whether the call has finished, asked rather than waited for.
+  /// Whether the call has finished. Requires the run's lock.
   ///
-  /// REQUIRES: the run's lock is held. What `wait first of` races on: a fibre
-  /// per candidate would have to be woken when the race is over, and the only
-  /// thing that wakes a fibre parked on a condition is giving up on the run.
-  ///
-  /// The annotation is deliberately absent: the lock this needs is the run's
-  /// one, held by the caller over a set of *several* handles, which is a shape
-  /// the analysis cannot see through a pointer per handle.
+  /// The caller holds one monitor lock while checking several handles, which
+  /// the thread-safety analysis cannot express through their pointers.
   bool finished() const ABSL_NO_THREAD_SAFETY_ANALYSIS { return done_; }
 
   void SetError(absl::Status error) {
@@ -1547,20 +1426,10 @@ class Scope {
   /// Read a node as items, each keeping the producer's own chunk.
   absl::Status ReadNode(const NodePtr& node, bool tolerant, const Sink& sink);
 
-  /// Run a per-value stage on several values at once.
+  /// Run a per-value stage with the requested fixed concurrency.
   ///
-  /// `parallel n` on a stage the author knows is worth it: a `map` whose
-  /// expression reaches the host, a `chunk` of something large. n fibres take
-  /// turns *reading* -- a reader is one cursor and cannot be shared -- and then
-  /// work on their own value, so what overlaps is the body and not the stream.
-  ///
-  /// **Order is put back by default.** Each value is numbered as it is read,
-  /// and a worker with a result waits for the values before it to be published
-  /// before publishing its own, so everything downstream reads the order the
-  /// author wrote. `unordered` skips the waiting, which is worth it only where
-  /// the consumer genuinely does not care. Nothing here is a fibre per value:
-  /// the fibres are the width the author asked for, and they are the only ones
-  /// this runtime creates on purpose.
+  /// Workers serialize reads from the shared cursor and process values
+  /// concurrently. Results retain input order unless the stage is `unordered`.
   absl::Status InParallel(
       const graph::Stage& stage, Reader& source, const Sink& sink,
       absl::FunctionRef<absl::Status(const ItemPtr&, std::vector<ItemPtr>&)>
@@ -1671,16 +1540,10 @@ class Runner {
     return made;
   }
 
-  /// Who reads and writes what in one body, worked out once per run.
+  /// Return the cached read/write analysis for one body.
   ///
-  /// [graph::Analyse] is a pure function of the graph, which does not change
-  /// while a flow runs, and it builds half a dozen hash tables. A `for` makes a
-  /// Scope per pass and every Scope needs the answer for its body, so a loop
-  /// over a thousand values used to analyse its body a thousand times.
-  ///
-  /// Computed outside the lock: two passes racing to be first both compute it
-  /// and agree, which costs one wasted analysis and no correctness -- and the
-  /// alternative is holding the run's one mutex across the work.
+  /// Analysis runs outside the monitor lock. Concurrent first callers may
+  /// compute the same immutable result before one cache entry wins.
   const graph::Analysis& AnalysisOf(BodyId body) {
     {
       thread::MutexLock lock(&monitor_.mu());

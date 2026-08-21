@@ -7,9 +7,9 @@ A `Service` is what a peer can call, decoupled from where it listens. Hand
 sessions on this service; hand it an in-process stream and there is no server at
 all.
 
-There is deliberately no ``serve_forever``: a service owns no sockets, so
-"forever" is not its concept. The application owns its listeners and decides when
-to stop -- see [a11.service.serving][a11.service.serving] for the small helper
+A `Service` coordinates active sessions and dispatches actions without
+managing socket lifecycles directly. The application owns its listeners and decides when
+to stop -- see [a11.service.serving][a11.service.serving] for the helper
 that binds the two together.
 
 Examples:

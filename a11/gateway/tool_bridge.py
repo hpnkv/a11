@@ -23,11 +23,9 @@ dispatched mirrors back like any other output, and the proxy re-emits it through
 :meth:`a11.actions.action.Action.log` on the local action, which is where the
 tool runner reads it.
 
-A descriptor may also flag an output ``user_facing``, which is how a client that
-declares its own narration port says so. Such a port is not part of the local
-schema -- there is nothing to declare, the log port is not a schema port -- and
-its values are re-emitted through ``log()`` as well, so both kinds of client end
-up in one place. Retained for clients that have not moved to ``log()``.
+A descriptor may flag an output ``user_facing``. The bridge re-emits values from
+that client-defined narration port through ``log()`` alongside reserved log-port
+records.
 """
 
 from __future__ import annotations

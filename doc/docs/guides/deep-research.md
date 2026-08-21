@@ -165,9 +165,7 @@ every investigation would show up in the
 
 The planner answers with one brief per line, and the fan-out needs those lines as
 a *stream*. Flow has `split`, but a list is one value: `for` iterates a stream,
-so a list-valued expression is a single pass. There is deliberately no stage that
-explodes a list — the language composes actions rather than growing a string
-library — so the missing primitive is supplied the way everything else is, as an
+so a list-valued expression is a single pass. List flattening is supplied as an
 action:
 
 ```python

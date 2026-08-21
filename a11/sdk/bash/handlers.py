@@ -63,10 +63,10 @@ async def _write_all_final(node: a11.AsyncNode, values: list[str]) -> None:
 
     For a producer that has its whole sequence in hand. Finality is what tells
     a whole-value consumer that the sequence ran to its end rather than being
-    cut short; the null terminator ``finalize()`` would write says the same
-    thing, but it is deliberately avoided on these ports -- the LLM-tool runner
-    collects every emitted fragment, and a trailing null (octet-stream) chunk
-    would then reach output decoders that cannot deserialize it. So the last
+    cut short; the null terminator ``finalize()`` would write is avoided on these
+    ports: the LLM-tool runner collects every emitted fragment, and a trailing
+    null (octet-stream) chunk would reach output decoders that cannot deserialize
+    it. So the last
     value carries finality and the node is only closed.
     """
     for index, value in enumerate(values):

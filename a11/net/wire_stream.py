@@ -16,7 +16,7 @@ number). Everything above it -- ``AsyncNode``
 mirroring, [Session][a11.service.session.Session] multiplexing, remote action
 dispatch -- is written against this one interface, so the concrete transport is
 a pluggable detail. A11 ships several implementations (in-process,
-WebSocket/HTTP2, HTTP SSE, WebRTC), and `WireStream` is a deliberate
+WebSocket/HTTP2, HTTP SSE, WebRTC), and `WireStream` is an
 **extension point**: implement it to carry A11 traffic over a transport of your
 own.
 

@@ -1146,24 +1146,11 @@ std::string Pygments() {
       });
 }
 
-/// The TextMate grammar VSCode reads, with `@NAME@` where a word list goes.
+/// TextMate fallback highlighting with generated `@NAME@` word lists.
 ///
-/// **What this is for, and what it is not.** A VSCode extension with a language
-/// server gets its real colours from *semantic tokens* -- the language's own
-/// judgement about every token, the same `flow.tokens/v1` the IntelliJ plugin
-/// draws from -- so this is what colours a `.flow` in the moment before the
-/// server has answered, what colours one when no `a11-flow` binary exists for the
-/// platform, and what colours a fragment inside a string. That is a real job and
-/// a limited one: words, strings, numbers and marks.
-///
-/// So it deliberately does not try to be a parser. A TextMate grammar has
-/// begin/end contexts and no name resolution, and a grammar that guessed at the
-/// difference between a port and a node would be a second, worse implementation
-/// of something the server does properly. Where a distinction needs the resolver,
-/// this leaves the word plain and the semantic tokens paint over it.
-///
-/// The `@KEYWORDS@` lists carry both spellings, since every keyword may be
-/// written in lower case or shouted.
+/// It colours lexical forms before semantic tokens arrive and where the
+/// language server is unavailable. Resolver-dependent words remain plain for
+/// semantic highlighting. Keyword lists include lower- and upper-case forms.
 constexpr std::string_view kVsCodeTemplate = R"JSON({
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "A11 Flow",

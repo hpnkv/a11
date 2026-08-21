@@ -74,7 +74,7 @@ user_turn = Interaction(
 
 await interact["interactions"].finalize(user_turn)  # the input turn, ended
 await interact["config"].finalize()   # empty: the backend's own defaults
-await interact["tools"].finalize()    # empty: "no tools this time"
+await interact["tools"].finalize()    # close without tool definitions
 ```
 
 `finalize()` on each port is what tells the handler that side is complete: it

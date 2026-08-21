@@ -8,11 +8,6 @@ it on the ``a11.native`` logger, so the whole of `logging` applies to native
 output: levels, `logging.config.dictConfig`, pytest's ``caplog``, a JSON
 formatter, a file handler. There is no second logging system to configure.
 
-A `logging.Filter` reaches native records the same way it reaches any other:
-on a handler, or on the ``a11.native`` logger itself. Python does not consult
-an ancestor logger's filters for a record that merely propagates through it,
-so one attached to ``a11`` will not see them.
-
 Importing `a11` reads the level from the surrounding process rather than
 choosing one, in this order:
 

@@ -804,11 +804,7 @@ class _AsyncNodeProtocol:
             self, fragment, mimetype_patterns, obj_type
         )
 
-    #: How many fragments an iteration asks for per await. Every await costs an
-    #: event-loop turn -- tens of microseconds -- so reading one value at a
-    #: time caps a drain at a few thousand a second no matter how fast the
-    #: store is. `next_fragments` returns only what is already buffered, so
-    #: asking for a batch never delays a value that has not arrived yet.
+    #: Buffered fragments requested per iteration await.
     ITER_BATCH = 64
 
     async def iter_fragments(

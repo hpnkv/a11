@@ -787,9 +787,9 @@ def _make_handler(fn: Callable[..., Any], plan: _Plan) -> ActionHandler:
     handler.__name__ = getattr(fn, "__name__", "handler")
     handler.__qualname__ = getattr(fn, "__qualname__", handler.__name__)
     handler.__doc__ = fn.__doc__
-    # Deliberately no ``__wrapped__``: it would make ``inspect.signature``
-    # report the bound function's parameters, and the runtime reads the
-    # handler's own signature to decide how to call it.
+    # No ``__wrapped__`` is set: this ensures ``inspect.signature`` reports
+    # the handler wrapper's own signature rather than the underlying function's,
+    # which the runtime reads to decide invocation arguments.
     return handler
 
 

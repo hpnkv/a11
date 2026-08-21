@@ -731,8 +731,8 @@ def run_program(
             the platform can.
         allow_net: Whether it may reach the network. Loopback, private and
             link-local addresses stay refused unless `allow_local_net`.
-        allow_local_net: Also allow those. Say it deliberately —
-            `169.254.169.254` is a cloud instance's credentials.
+        allow_local_net: Also allow loopback, private, and link-local
+            addresses (e.g. cloud metadata services).
         allow_env: Environment variables it may read.
         unrestricted: No filesystem sandbox at all. For a file you wrote.
         timeout_seconds: A bound on the whole run, applied as the deadline

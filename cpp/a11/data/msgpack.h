@@ -35,29 +35,21 @@ class MsgpackWriter {
   /**
    * @brief Encode into a caller-supplied buffer, appending to what is there.
    *
-   * @p target must outlive the writer. This is what lets a nested record be
-   * encoded into a reused scratch buffer, or straight onto the end of a parent
-   * record, rather than into a fresh string per level; see PackRecord().
+   * @p target must outlive the writer. Nested records can use this constructor
+   * to append to a parent or reused scratch buffer; see PackRecord().
    */
   explicit MsgpackWriter(std::string* absl_nonnull target)
       : bytes_(target) {}
 
-  // Holds a pointer into its own member in the owning case, so copying or
-  // moving one would leave the pointer behind. Nothing needs to.
+  // Copying or moving would invalidate bytes_ when it points to owned_.
   MsgpackWriter(const MsgpackWriter&) = delete;
   MsgpackWriter& operator=(const MsgpackWriter&) = delete;
 
   /// Append a JSON-compatible field to the encoded record.
   absl::Status Pack(const nlohmann::json& value);
 
-  // The typed field writers below encode directly into the buffer, producing
-  // byte-for-byte what Pack() produces for the equivalent JSON value -- the
-  // same MessagePack size classes, chosen the same way -- without building a
-  // `nlohmann::json` or the intermediate `std::string` that `Pack` gets back
-  // from `PackMsgpack`. On the wire path that mattered: every field cost an
-  // allocation and two copies of its own encoding, and A11's records nest three
-  // deep, so a payload was allocated and copied about nine times on its way out.
-  // `MsgpackWriterEncodingTest` pins the equivalence.
+  // Typed field writers encode directly into the buffer and match Pack()'s
+  // MessagePack representation. MsgpackWriterEncodingTest pins equivalence.
 
   /// Append a MessagePack nil.
   void PackNil();
@@ -80,11 +72,8 @@ class MsgpackWriter {
    * @brief
    *   Append a nested record as one binary field, encoded by @p encode.
    *
-   * @p encode is handed a writer over a pooled scratch buffer, so a nested
-   * record costs no allocation of its own after the pool has warmed. The result
-   * is embedded exactly as building the child with its own writer and packing
-   * `Binary(child)` would: one binary field, the same size class, the same
-   * bytes.
+   * @p encode receives a writer over a pooled scratch buffer. The encoded
+   * record is appended as one MessagePack binary field.
    */
   absl::Status PackRecord(
       absl::FunctionRef<absl::Status(MsgpackWriter* absl_nonnull)> encode);
@@ -120,13 +109,6 @@ class MsgpackReader {
   /**
    * @brief
    *   Read the next field as MessagePack binary without copying its payload.
-   *
-   * Read() materialises a @c nlohmann::json, which for a binary field means
-   * allocating a vector and copying the bytes into it; callers then copy a
-   * second time to get a @c Bytes. A11's records nest -- a WireMessage holds
-   * binary fragments, a fragment holds a binary chunk, a chunk holds a binary
-   * payload -- so a single 4 KiB fragment was copied several times on the way
-   * in, and decode ran at a flat ~130 MiB/s against encode's 2+ GiB/s.
    *
    * The returned view points into the buffer this reader was constructed over,
    * which must outlive it.

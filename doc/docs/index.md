@@ -1,9 +1,9 @@
 # A11
 
 A11 is a concurrent **action** and **streaming** runtime for building AI agents
-— including distributed ones that span processes and machines. The public API
-is Python; the runtime underneath it is a C++20 engine bound with pybind11, so
-you get native throughput and cooperative concurrency without leaving Python.
+— including distributed ones that span processes and machines. Use it through
+the Python API or link its C++20 libraries directly. The Python bindings reuse
+the native runtime types and expose their cooperative concurrency model.
 
 You describe your agent as a set of **Actions** — named, typed, asynchronous
 operations — that read from and write to **Nodes**, A11's ordered streams of
@@ -36,11 +36,11 @@ asyncio.run(main())
 - **Composable actions.** An [`Action`][a11.actions.action.Action] is a unit of
   work with a schema. Actions nest and call one another, which is how you build
   an agent out of smaller, testable pieces.
-- **Distribution is a transport swap.** The same agent runs in one process or
-  across a network by choosing a
+- **Stable transport interface.** Run the same action and node code in one
+  process or across a network by choosing a
   [`WireStream`][a11.net.wire_stream.WireStream] — in-process, WebSocket,
   HTTP SSE, or WebRTC. Your action code does not change.
-- **Pluggable everywhere it matters.** Storage
+- **Explicit extension points.** Storage
   ([`ChunkStore`][a11.stores.chunk_store.ChunkStore]) and transport
   ([`WireStream`][a11.net.wire_stream.WireStream]) are explicit extension
   points — swap in your own without touching agent logic.
@@ -56,4 +56,4 @@ asyncio.run(main())
 - [Examples](examples.md) — a hands-on tour from a single node to a
   networked, tool-using agent, one small step at a time.
 - [Python API](api/nodes.md) — reference for every public type.
-- [C++ internals](cpp.md) — the native runtime, for contributors.
+- [C++ API](cpp.md) — reference for the native libraries.

@@ -1,19 +1,14 @@
-# A11 C++ runtime
+# A11 C++ API
 
-This is the reference for A11's **native C++ runtime** — the layer that actually
-runs actions, moves streamed data, and multiplexes network transports. It is
-implemented in C++20 under `cpp/a11/` and exposed to Python with pybind11.
-
-Application developers do not need this layer: the **Python API is the public
-contract**, and everything here is bound one-to-one into it. These pages are for
-**contributors to the runtime itself** and for anyone who wants to understand
-what happens beneath the Python surface. Where a class has a Python counterpart,
-its behaviour is identical — the Python docstrings and this reference describe
-the same object.
+Use the C++20 libraries to build actions, stream data through nodes, connect
+peers, and embed A11 directly in a native application. The components under
+`cpp/a11/` are independently linkable, so an application can depend on the
+layers it uses. Python binds the same runtime objects with pybind11 and follows
+the same behavioural contract.
 
 ## How the pieces fit together
 
-A11 is a small stack of layers, each written against the one below it:
+A11 is a stack of independently linkable components:
 
 - **concurrency** — the fiber-aware task/future primitives (`a11::Task`,
   executors, schedulers) every asynchronous operation is built on. Awaitables
@@ -47,5 +42,6 @@ A11 is a small stack of layers, each written against the one below it:
 - Actions and dispatch: `a11::actions::Action`, `a11::actions::ActionRegistry`.
 - Networking: `a11::net::WireStream`, `a11::service::Session`.
 
-For task-oriented walkthroughs and the Python API, see the
-[main A11 documentation](../index.html).
+For task-oriented walkthroughs shared by the language APIs, see the
+[main A11 documentation](../index.html). Build and linking instructions are in
+[`BUILDING.md`](https://github.com/hpnkv/a11/blob/main/BUILDING.md).

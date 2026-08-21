@@ -69,9 +69,7 @@ void KeepFirstError(absl::Status candidate, absl::Status* first) {
   }
 }
 
-// Records an action's outcome on its span: OTel status + description from the
-// absl::Status message, plus an `error.type` attribute holding the canonical
-// upper-case status code (e.g. "INVALID_ARGUMENT") on failure.
+// Records the status and canonical error code on an action span.
 void RecordSpanOutcome(obs::Span& span, const absl::Status& status) {
   span.SetStatus(status);
   if (!status.ok()) {
@@ -194,8 +192,7 @@ Action::Action(ActionSchema schema, std::string id, ActionHandler handler,
                std::shared_ptr<ActionRegistry> registry,
                std::shared_ptr<ActionLimiter> nested_limiter)
     : schema_(std::move(schema)),
-      // Guarded on the way in; see
-      // actions/internal/exception_guarded_handlers.h.
+      // Guarded at adoption; see actions/internal/exception_guarded_handlers.h.
       handler_(internal::GuardHandler(std::move(handler))),
       id_(std::move(id)),
       node_map_(std::move(node_map)),
@@ -562,16 +559,13 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
   if (chunk.metadata->mimetype.empty()) {
     chunk.metadata->mimetype = std::string(data::kBytesMimetype);
   }
-  // A status chunk on an ordinary node is a lifecycle marker rather than a
-  // value, and a peer receiving one aborts the node it arrived on. Logging one
-  // would therefore tear down the log port instead of filling it.
+  // A status chunk would abort the log port instead of becoming a log value.
   if (data::IsStatusChunk(chunk)) {
     return absl::InvalidArgumentError(
         "Cannot log a status chunk; log its message instead");
   }
   chunk.metadata->timestamp = absl::Now();
-  // The caller's map first, then the named options, so an explicit level wins
-  // over a "level" the same caller also put in the map.
+  // Named options override matching entries in the metadata map.
   if (options.metadata != nullptr) {
     for (const auto& [key, value] : *options.metadata) {
       ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(key, value));
@@ -604,9 +598,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
   bool readable = false;
   {
     thread::MutexLock lock(&mu_);
-    // Only a running handler has a log port worth writing to: before Run
-    // there is nothing to close it, and on the calling side of a Call the port
-    // belongs to the peer that is executing the action.
+    // A log port belongs to the running handler, including for remote calls.
     if (mode_ != Mode::kRun) {
       return absl::FailedPreconditionError(
           "Only a running Action may log; a caller logs on its own action");
@@ -615,9 +607,8 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     action_id = id_;
     claimed = log_claimed_;
     finished = outputs_finished_;
-    // Nothing reads a local log port nobody claimed, so materialising it
-    // would buffer every line of a narrating action for the length of the run
-    // and then throw them away. A peer is always a reader: it mirrors the node.
+    // Avoid buffering an unclaimed local log port. Peers mirror the node and
+    // therefore count as readers.
     readable = claimed || stream_ != nullptr || !session_.expired();
     const auto found = output_ids_.find(std::string(kActionLogOutput));
     if (found != output_ids_.end()) {
@@ -631,9 +622,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     return absl::OkStatus();
   }
 
-  // From here on nothing is returned to the handler. A log that could not be
-  // written is a fault in the logging, not in the action, and the action is
-  // entitled to have narrated itself without that becoming its outcome.
+  // Log delivery failures are reported without changing the action outcome.
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node = GetNode(node_id);
   if (!node.ok()) {
     LOG(WARNING) << "Could not open the log port of action " << action_name
@@ -653,10 +642,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     finished_now = outputs_finished_;
     final_status = outputs_final_status_;
   }
-  // The node was created after the action published its terminal state, so
-  // FinishOutputNodes did not see it and nothing else will close it. Same
-  // handshake as GetOutput, and the same reason: a reader of an unclosed node
-  // waits forever.
+  // Close a log node created after FinishOutputNodes published the outcome.
   if (finished_now) {
     (void)CloseUnwrittenOutput(*node, final_status);
     return absl::OkStatus();
@@ -1205,8 +1191,8 @@ absl::Status Action::StartActionSpan(Mode mode) {
     headers = headers_;
     name = schema_.name;
   }
-  // Call is always a client span; a nested run is internal to its parent; a
-  // root run driven from an inbound wire message is the server span.
+  // Calls are client spans, nested runs are internal spans, and root runs are
+  // server spans.
   const obs::SpanKind kind = mode == Mode::kCall ? obs::SpanKind::kClient
                              : parent != nullptr ? obs::SpanKind::kInternal
                                                  : obs::SpanKind::kServer;
@@ -1214,8 +1200,7 @@ absl::Status Action::StartActionSpan(Mode mode) {
 
   obs::Span span;
   if (parent != nullptr) {
-    // In-process parentage: continue the parent's live span regardless of
-    // whether the reserved headers were forwarded to this child.
+    // Continue an in-process parent's live span without consulting headers.
     span = parent->MakeChildSpan(name, kind);
   } else {
     absl::StatusOr<std::optional<obs::TraceContext>> context =

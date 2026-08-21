@@ -215,11 +215,10 @@ class Action : public std::enable_shared_from_this<Action> {
   /**
    * @brief Logs @p value on the reserved ::kActionLogOutput port.
    *
-   * The object is turned into a ::a11::data::Chunk the way
-   * ::a11::nodes::AsyncNode::Put would, with one deliberate difference: a
-   * string, a @c std::string_view, a string literal or a @c const @c char* is
-   * ::a11::data::kTextMimetype rather than ::a11::data::kBytesMimetype, because
-   * a log is text unless the caller says otherwise. @p options carries the
+   * The object is converted into a ::a11::data::Chunk similar to
+   * ::a11::nodes::AsyncNode::Put, mapping string types (@c std::string,
+   * @c std::string_view, string literals, and @c const @c char*) to
+   * ::a11::data::kTextMimetype. @p options carries the
    * level, the media type, the channel, the source location and any extra
    * metadata; see a11::actions::LogOptions. The chunk's timestamp is always
    * set.
@@ -287,9 +286,8 @@ class Action : public std::enable_shared_from_this<Action> {
    * presents the logs itself does not also have them reported twice. Claim
    * before the action runs: logs written earlier have already gone to the sink.
    *
-   * The node's stream is deliberately not bound. On the calling side a bound
-   * output tees what it receives straight back to the peer, which corrupts the
-   * connection for every later call on it.
+   * The node's stream is not bound: on the calling side, binding an output
+   * would echo received fragments back to the peer.
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetLogNode();
 

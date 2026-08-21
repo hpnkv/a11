@@ -1,13 +1,12 @@
 # Getting the faster allocator
 
-Replacing the C library's `malloc` makes A11's native server about **25% faster**
-for no change to A11's own code. That is measured, not estimated — on the
-reference Linux box the server benchmark went from 15.7k to 19.8k operations per
-second at 256 concurrent clients, and per-operation CPU fell from 286 µs to
-234 µs.
+Replacing the C library's `malloc` improved A11's native server throughput by
+about **25%** on the reference Linux benchmark: from 15.7k to 19.8k operations
+per second at 256 concurrent clients, while per-operation CPU fell from 286 µs
+to 234 µs.
 
-A11 takes that win for you wherever it can. There is one case where it cannot,
-and this page is mostly about being clear on which case you are in.
+A11 enables the allocator for its executables and CLI. Applications embedding
+A11 in another process must preload it before startup.
 
 ## What you get for free
 
@@ -77,7 +76,7 @@ This asks the dynamic loader whether the allocator's symbols resolve in this
 process. Trust it over the environment variable, because there is a case where
 the variable is set and the allocator is not loaded — see below.
 
-## Things that will surprise you otherwise
+## Platform considerations
 
 **macOS System Integrity Protection strips `DYLD_INSERT_LIBRARIES`** from signed
 interpreters. A Homebrew or `uv`-managed Python normally keeps it; the system
@@ -88,9 +87,8 @@ uses, not CPython's own object allocator. A workload that spends its time in
 Python will see little of it; one that pushes data through sessions, nodes and
 stores will see most of it.
 
-**It is off under sanitizers, deliberately.** ASan and TSan supply their own
-allocators in order to detect exactly the kind of bug this would be papering
-over.
+**It is disabled under sanitizers.** ASan and TSan supply their own
+allocators to track memory errors and thread safety issues.
 
 **To turn it off entirely**, set `A11_NO_ALLOCATOR_PRELOAD=1`. That also stops the
 `a11` command from re-executing itself, which is occasionally useful when

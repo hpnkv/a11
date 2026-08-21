@@ -1594,10 +1594,8 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
     }
   }
   if (field.has_pattern && held.IsTextlike()) {
-    // ECMA-262, which is the dialect JSONSchema's `pattern` is in -- so a
-    // pattern written here and one written in a schema mean the same thing.
-    // std::regex reports a bad pattern by throwing and offers no way to ask
-    // first, so this check lives in the flow language's own exception boundary.
+    // JSON Schema patterns use ECMA-262. Compile them through Flow's exception
+    // boundary because std::regex reports invalid patterns by throwing.
     absl::StatusOr<std::regex> pattern =
         internal::CompilePattern(field.pattern);
     if (!pattern.ok()) {
@@ -1651,8 +1649,7 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
                                   const CoerceContext& context) {
   if (value.kind() != Value::Kind::kObject &&
       value.kind() != Value::Kind::kHost) {
-    // A shape is a record. Anything else is not a partially-filled one, and
-    // guessing which field a bare value was meant for would be inventing data.
+    // Shapes accept records; a bare value cannot identify its target field.
     return absl::InvalidArgumentError(absl::StrCat(
         shape.name, " is a record of ", absl::StrJoin(shape.FieldNames(), ", "),
         ", and this is ", value.IsNull() ? "nothing" : AsText(value), "."));
@@ -1665,9 +1662,7 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
     const Value* given = FieldOf(value, field.name, scratch);
     if (given == nullptr || given->IsNull()) {
       if (field.has_default) {
-        // A default is a value of the field like any other, so it goes through
-        // the same checks -- a default that would not validate is a mistake
-        // worth hearing about the first time it is used.
+        // Validate defaults through the same field constraints as input values.
         ABSL_ASSIGN_OR_RETURN(
             Value made,
             CoerceField(field, OfConstant(field.default_value), context,
@@ -1680,8 +1675,7 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
             absl::StrCat(shape.name, " requires '", field.name,
                          "', and this does not give it."));
       }
-      // Not required and no default: simply absent, which is what lets a flow
-      // ask `if not thing.field`.
+      // Optional fields without defaults remain absent.
       continue;
     }
     ABSL_ASSIGN_OR_RETURN(

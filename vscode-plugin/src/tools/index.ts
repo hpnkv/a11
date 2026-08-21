@@ -2,10 +2,8 @@
  * The tools this editor exposes to the model.
  *
  * The same ten names, the same descriptions and the same coordinate conventions as
- * `IdeTools.kt` in the JetBrains plugin, written against VSCode's APIs. Not shared
- * with that file, and deliberately: it is Kotlin against the IntelliJ platform,
- * and there is no version of "reuse" here that is not either running a JVM inside
- * an extension or pretending two editors have one API. What *is* shared is the
+ * `IdeTools.kt` in the JetBrains plugin, implemented in TypeScript against VS Code APIs.
+ * What is shared is the tool schema, name list, and parameter conventions.
  * thing worth sharing — the descriptor JSON, which is the contract the model and
  * the UI both read, and which this file is the single source of on this side.
  *

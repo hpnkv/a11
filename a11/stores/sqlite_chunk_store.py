@@ -7,7 +7,7 @@ fragments survive the process. It needs no server, unlike
 the natural choice for a single machine that wants its node streams to outlive a
 restart.
 
-The layout under a storage root is deliberately plain::
+The layout under a storage root is straightforward::
 
     ./store.sqlite
     ./blobs/939f2184-db19-4dd0-b949-bb31c5eadcf8

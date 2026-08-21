@@ -1015,8 +1015,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "--allow-local-net",
         action="store_true",
         help=(
-            "Also allow those. Say it deliberately: 169.254.169.254 is a cloud"
-            " instance's credentials."
+            "Also allow loopback, private, and link-local network addresses."
         ),
     )
     run.add_argument(

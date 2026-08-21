@@ -260,7 +260,7 @@
 
 - Docs live in `doc/` and build to `doc/site` via `doc/build.sh` (see
   `doc/README.md`): MkDocs Material + `mkdocstrings` for the Python API and
-  guides, Doxygen + doxygen-awesome-css for the C++ internals. The Python site
+  guides, Doxygen + doxygen-awesome-css for the C++ API. The Python site
   is static — `griffe` reads `a11/` and the `a11/_native/` stubs, so no native
   build is needed to generate it. CI builds and deploys it
   (`.github/workflows/docs.yml`).

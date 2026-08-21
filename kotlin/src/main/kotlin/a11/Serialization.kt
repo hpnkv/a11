@@ -123,9 +123,9 @@ private class RegisteredCodec(val codec: SerializationCodec, val parsed: ParsedM
 /**
  * Encode [value] as a JSON- or MessagePack-ready tree.
  *
- * Nothing here is tagged. A [ByteArray] becomes base64 (or, in MessagePack, real
- * bytes), an [java.time.Instant] becomes an ISO string — exactly what the format
- * can say, and no more. Recovering the original type is the reader's job, and it
+ * Encodes values using standard wire representations: a [ByteArray] becomes
+ * base64 (or, in MessagePack, real bytes), and an [java.time.Instant] becomes
+ * an ISO string. Recovering the original type is the reader's job, and it
  * does that from the chunk's `;type=`.
  */
 private fun toWire(value: Any?, binary: Boolean): StatusOr<Any?> {

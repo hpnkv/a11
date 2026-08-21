@@ -1,8 +1,7 @@
 # Why A11
 
-A11 is small at its core: a handful of ideas compose into everything from a
-one-process helper to a fleet of networked agents. This page is the mental model
-to hold while you read the rest of the docs.
+A11 builds one-process helpers and networked agents from the same actions,
+streams, storage, and transport interfaces.
 
 ## One toolkit in every language
 
@@ -15,10 +14,9 @@ applications in the languages that fit each environment, over one protocol.
 
 A11 is built for work that waits — on a model, a tool, a peer, a human. Every
 operation that could block is a coroutine you `await`, and the runtime schedules
-thousands of them cooperatively. You write straight-line `async def` code;
-A11 keeps the machine busy.
+thousands of them cooperatively while blocking I/O yields to other work.
 
-Two conveniences make this pleasant:
+The public API exposes completion and stream termination directly:
 
 - **Completion is an event.** An [`Action`][a11.actions.action.Action] and a
   [`Session`][a11.service.session.Session] each expose a `done` you can
@@ -34,9 +32,8 @@ The unit of data in A11 is the **chunk**, and the unit of state is the
 **node** — an [`AsyncNode`][a11.nodes.async_node.AsyncNode], which is a single
 ordered sequence of chunks with a writer end and a reader end.
 
-This is deliberate. An agent rarely has its whole answer at once; it has the
-*next* token, the *next* audio frame, the *next* tool call. Nodes make that the
-natural shape:
+Agents typically generate answers incrementally—token by token, frame by
+frame, or tool call by tool call. Nodes match this streaming pattern directly:
 
 - **Produce incrementally** with `put()`, and end with `finalize()`. Each write
   returns a future that completes when the backing store accepts the chunk.
@@ -50,14 +47,13 @@ natural shape:
 
 Actions are built from nodes: an [`Action`][a11.actions.action.Action]'s typed
 input and output **ports** are nodes, so calling an action is really wiring
-streams together. A handler can start emitting into an output port before it has
-finished reading its inputs — which is exactly what streaming an LLM response
-through a pipeline of actions looks like.
+streams together. A handler can emit output before it has finished reading its
+inputs, allowing the next action to consume incremental results immediately.
 
 ## Two extension points: storage and transport
 
-Most of A11 is fixed machinery. Two interfaces are deliberately left open,
-because they are where real deployments differ.
+Storage and transport are configurable extension points designed for
+customization across deployment environments.
 
 ### ChunkStore — where stream data lives
 
@@ -91,9 +87,8 @@ pick at the edge:
   peer-to-peer data channels, with NAT traversal via
   [signalling](api/net.md).
 
-Because the interface is stable, making an agent distributed is a transport
-swap — and you can implement `WireStream` yourself to carry A11 traffic over a
-transport we don't ship.
+Action and node code use the same interface for local and network transports.
+Implement `WireStream` to carry A11 traffic over another transport.
 
 ## Sessions tie it together
 

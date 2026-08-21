@@ -4,24 +4,10 @@
  * @file
  * @brief The only place A11 hands text or bytes to nlohmann, or asks for them.
  *
- * nlohmann reports failure by throwing, and A11 is compiled `-fno-exceptions`,
- * where its `JSON_NOEXCEPTION` fallback is `std::abort()`. That is the right
- * answer for a mistake in A11's own code -- a `get<int>` on a value the code
- * just checked was a string is a bug, and aborting on it is what the CHECKs
- * elsewhere in this tree already do -- but it is the wrong answer for anything
- * whose failure depends on *input*. A truncated JSON document arriving over a
- * socket must become an error status, not a crash.
- *
- * These four functions are that dividing line: every conversion between a
- * `nlohmann::json` and text or MessagePack goes through them, and each returns
- * a Status. Two of them use nlohmann's own non-throwing overloads and need no
- * exceptions at all; the two that have no non-throwing form are the reason
- * json_codec.cc is compiled with exceptions.
- *
- * Building and reading a `nlohmann::json` value is *not* routed through here.
- * Those are ordinary in-process operations whose failures are programming
- * mistakes, and wrapping every field access would trade a readable codec for an
- * unreadable one to guard against bugs a test finds faster.
+ * These functions convert untrusted JSON and MessagePack input into status
+ * errors. `json_codec.cc` enables exceptions for the nlohmann operations that
+ * have no non-throwing overload; other A11 translation units remain
+ * `-fno-exceptions`.
  */
 
 #ifndef A11_JSON_CODEC_H_
@@ -38,6 +24,7 @@ namespace a11 {
 /**
  * @brief Parses JSON text, or explains why it is not JSON.
  *
+ * @param encoded JSON text to parse.
  * @param what Names the document in the error, e.g. "WireMessage JSON".
  */
 absl::StatusOr<nlohmann::json> ParseJson(std::string_view encoded,

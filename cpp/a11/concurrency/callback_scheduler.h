@@ -44,9 +44,7 @@ class CallbackScheduler {
   const size_t max_concurrent_turns_;
   thread::Mutex mu_;
   std::deque<absl::AnyInvocable<void() &&>> callbacks_ ABSL_GUARDED_BY(mu_);
-  /// Turns in flight. A count rather than a flag: a turn that suspends is still
-  /// in flight but is no longer draining, so one flag cannot express the state
-  /// the queue is actually in.
+  /// Turns in flight, including suspended turns that are not draining.
   size_t active_turns_ ABSL_GUARDED_BY(mu_) = 0;
 };
 

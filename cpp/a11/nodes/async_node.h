@@ -383,32 +383,32 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   }
 
   /**
-   * @brief Read the next raw fragment.
-   * @param timeout How long to wait for a fragment.
-   * @return An awaitable that resolves to the next fragment, or nullopt at
-   *   end of stream.
-   */
-  /**
    * @brief Read up to `limit` fragments in a single await.
    *
    * The batched counterpart to NextFragment(), with the same end-of-stream
    * marker: a trailing empty optional. It returns whatever is already
    * buffered and waits only when nothing is, so it never trades latency for
    * throughput on a live stream. See ChunkStoreReader::NextMany().
+   * @param limit Maximum number of fragments to return.
+   * @param timeout How long to wait when no fragments are buffered.
    */
   a11::Future<std::vector<std::optional<data::NodeFragment>>> NextFragments(
       size_t limit, absl::Duration timeout = absl::InfiniteDuration());
 
+  /**
+   * @brief Read the next raw fragment.
+   * @param timeout How long to wait for a fragment.
+   * @return An awaitable that resolves to the next fragment, or nullopt at
+   *   end of stream.
+   */
   a11::Future<std::optional<data::NodeFragment>> NextFragment(
       absl::Duration timeout = absl::InfiniteDuration());
 
   /**
    * @brief Read the next fragment without producing bytes for it.
    *
-   * NextFragment() materialises a chunk that is carrying a value, so that every
-   * caller sees the bytes it has always seen. This one does not, and exists for
-   * the one caller that wants the value rather than its encoding:
-   * NextObject<T>(). Anything else should use NextFragment().
+   * Preserves an in-process object for NextObject<T>(); use NextFragment() when
+   * the caller needs materialized bytes.
    */
   a11::Future<std::optional<data::NodeFragment>> NextFragmentRaw(
       absl::Duration timeout = absl::InfiniteDuration());

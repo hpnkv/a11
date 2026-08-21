@@ -164,10 +164,7 @@ def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
     for field_name in described.get("order", list(fields)):
         field = fields[field_name]
         annotation = _field_type(field, shapes)
-        # Validation already happened in C++, against the one implementation of
-        # what a shape means. The model is how Python holds the result, so its
-        # own constraints stay out of the way: a field that is not required is
-        # optional here, and everything else is carried as the plan described it.
+        # The model reflects the native plan; optional fields accept None.
         if not field.get("required", False):
             annotation = annotation | None if annotation is not Any else Any
             default = field.get("default", None)
@@ -378,14 +375,8 @@ def _syntax_error(
 ) -> FlowSyntaxError:
     """The first error in ``source``, as the exception a compiler raises.
 
-    Built from the diagnostic rather than from the refusal's text: the parser
-    and the resolver already say where and why, in one place, and re-deriving a
-    position by parsing a message would be a second opinion about the first.
-
-    Which diagnostic is *the* one is the refusal's decision, not this
-    function's: two problems can share a position, and the compiler refused on
-    one of them. Matching its message picks that one instead of whichever sorts
-    first.
+    Uses the diagnostic matching the compiler error when several problems share
+    a source position.
     """
     errors = [
         found

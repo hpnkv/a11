@@ -479,20 +479,11 @@ class SerializationRegistry:
         self._tag_to_type: dict[str, type] = {}
         self._known_by_tag: dict[str, type] = {}
         self._next_order = 0
-        # Resolution is pure over (type, mimetype) between mutations, and it
-        # dominates the cost of `to_chunk`: an `isinstance` against every
-        # registration, a sort, then parsing and reformatting the mimetype --
-        # none of which depends on the payload, and all of it far dearer than
-        # the MessagePack encode it wraps. Anything that changes what
-        # resolution would answer clears this.
+        # Cache serializer resolution until a registration changes it.
         self._resolution_cache: dict[
             tuple[type, str], tuple[_SerializerRegistration, str]
         ] = {}
-        # The same idea for reading. `from_chunk` asked
-        # `_registration_matches` -- an `fnmatch` per call -- once for every
-        # registration, which profiled at 56 regex matches and 60% of the
-        # function for one small MessagePack decode. Which registrations a
-        # selector matches depends only on the selector.
+        # Cache deserializers by selector until a registration changes them.
         self._format_cache: dict[
             _Mimetype, list[_DeserializerRegistration]
         ] = {}
@@ -1310,9 +1301,9 @@ def _pydantic_values(model: pydantic.BaseModel) -> dict[str, Any]:
 def _to_wire(value: Any, *, binary: bool) -> Any:
     """Encode ``value`` as a JSON- or MessagePack-ready tree.
 
-    Nothing here is tagged.  A `bytes` becomes base64 (or, in MessagePack, real
-    bytes), a `datetime` becomes an ISO string, a `set` becomes an array --
-    exactly what the format can say, and no more.  Recovering the Python type
+    Encodes standard Python types: a `bytes` becomes base64 (or, in MessagePack,
+    real bytes), a `datetime` becomes an ISO string, a `set` becomes an array.
+    Recovering the Python type
     is the reader's job, and it does that from the chunk's ``;type=`` or the
     caller's ``obj_type``.
     """

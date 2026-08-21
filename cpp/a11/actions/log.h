@@ -4,15 +4,10 @@
  * @file
  * @brief Log levels, log-chunk metadata and the process-wide action log sink.
  *
- * An a11::actions::Action narrates what it is doing through
- * a11::actions::Action::Log, which turns the object it is handed into a
- * ::a11::data::Chunk on the reserved ::a11::actions::kActionLogOutput port.
- * This header holds the vocabulary shared by everything that writes or reads a
- * chunk: the levels, the metadata keys, the a11::actions::LogOptions a caller
- * passes, and the a11::actions::ActionLogSink that decides where a log the
- * process itself consumes ends up. The default sink writes to Abseil's log,
- * which is what carries an action's logs into the host language's own logging
- * (see @c cpp/python/logging_bindings.cc).
+ * Action::Log writes a ::a11::data::Chunk to the reserved
+ * ::a11::actions::kActionLogOutput port. This header defines its levels,
+ * metadata, options, and process-wide sink. The default sink forwards records
+ * to Abseil logging.
  */
 
 #ifndef A11_ACTIONS_LOG_H_
@@ -34,11 +29,8 @@ namespace a11::actions {
 /**
  * @brief Severity of a log chunk.
  *
- * The five levels every host language A11 binds to agrees on. Abseil has no
- * debug level and its fatal level aborts the process, so LogLevelToSeverity
- * folds ::kDebug onto @c INFO and ::kCritical onto @c ERROR; the level written
- * to the chunk stays exact either way, so a sink that can tell them apart
- * still can.
+ * Log chunks preserve all five levels. LogLevelToSeverity maps ::kDebug to
+ * @c INFO and ::kCritical to @c ERROR when forwarding them to Abseil.
  */
 enum class LogLevel {
   kDebug,
@@ -67,24 +59,20 @@ absl::StatusOr<LogLevel> ParseLogLevel(std::string_view name);
 /**
  * @brief Metadata attribute naming the log's level.
  *
- * The log-chunk attributes are unprefixed, unlike ::a11::data::kCloseAttribute,
- * because they only ever appear on the reserved log port: there is no user
- * metadata on that port to collide with, and a consumer in another language
- * reads them as the plain words they are.
+ * Log attributes use unprefixed names on the reserved log port.
  */
 inline constexpr std::string_view kLogLevelAttribute = "level";
 /**
  * @brief Metadata attribute marking a log not meant for an end user.
  *
- * Written as @c "true" or @c "false"; absent means false. Lets a consumer show
- * a user what an action is doing without also showing it A11's own bookkeeping.
+ * Written as @c "true" or @c "false"; absent means false. Consumers can use
+ * it to filter framework bookkeeping.
  */
 inline constexpr std::string_view kLogInternalAttribute = "internal";
 /**
  * @brief Metadata attribute naming the log's logical channel.
  *
- * A free-form label a consumer can filter on, so one action can narrate several
- * unrelated things without a node per thing.
+ * A free-form label consumers can use to filter related messages.
  */
 inline constexpr std::string_view kLogChannelAttribute = "channel";
 /** @brief Metadata attribute naming the source file the log came from. */
@@ -100,13 +88,8 @@ inline constexpr std::string_view kLogInternalFalse = "false";
 /**
  * @brief Everything about a log other than the object being logged.
  *
- * Every field is optional. @c metadata is merged onto the chunk first and the
- * named fields after it, so an explicit @c level wins over a @c "level" the
- * caller also put in the map.
- *
- * The string fields are views: a LogOptions is built at the call and consumed
- * before Log returns, and copying a channel name per log line is a cost a
- * narrating action pays on every message.
+ * Every field is optional. Named fields override matching entries in
+ * @c metadata. String fields are borrowed for the duration of Action::Log.
  */
 struct LogOptions {
   /// Level name; empty is ::kDefaultLogLevel. See ParseLogLevel.
@@ -114,10 +97,8 @@ struct LogOptions {
   /**
    * @brief Media type hint for the serializer.
    *
-   * Empty asks Action::Log for the default, which -- unlike
-   * ::a11::nodes::AsyncNode::Put -- is ::a11::data::kTextMimetype for anything
-   * string-like. A log is text far more often than it is bytes, and a caller
-   * who wanted the bytes reading of a @c std::string says so here.
+   * Empty uses ::a11::data::kTextMimetype for string-like values. Set an
+   * explicit media type to serialize a @c std::string as bytes.
    */
   std::string_view mimetype{};
   /// Logical channel; see ::kLogChannelAttribute.
@@ -135,8 +116,8 @@ struct LogOptions {
 /**
  * @brief One log as a sink sees it.
  *
- * A view over a chunk that has already been written, plus the action it came
- * from. Nothing here is owned; a sink that keeps a log must copy it.
+ * A borrowed view of a written chunk and its source action. A sink must copy
+ * fields it retains beyond the call.
  */
 struct LogRecord {
   std::string_view action_name{};
@@ -156,12 +137,8 @@ struct LogRecord {
 /**
  * @brief What the process does with a log it consumes itself.
  *
- * One slot per process rather than one per language: a host language replaces
- * the sink instead of adding a second consumer, because two consumers of one
- * log stream is one log line reported twice.
- *
- * A sink must not block and must not fail: it runs on whichever thread called
- * Action::Log, inside the handler's own frame.
+ * One sink is installed per process. It runs on the thread that called
+ * Action::Log and must not block or fail.
  */
 using ActionLogSink = std::function<void(const LogRecord&)>;
 
@@ -180,10 +157,8 @@ void ReportLog(const LogRecord& record);
 /**
  * @brief Whether a log payload of @p mimetype reads as text.
  *
- * Text and JSON do; a sink that writes a log as a line of characters can print
- * those as themselves. Anything else is bytes, and a log line is not the place
- * to render a blob -- see LogText, which describes it instead. Shared so the
- * sinks in every language make the same call.
+ * Text and JSON payloads are textual. LogText describes other payloads instead
+ * of rendering their bytes.
  */
 [[nodiscard]] bool IsTextualLogMimetype(std::string_view mimetype);
 
@@ -196,10 +171,7 @@ void ReportLog(const LogRecord& record);
 /**
  * @brief Reads a LogRecord back out of a log chunk.
  *
- * The inverse of what Action::Log writes: the shape a consumer on the far end
- * of a wire needs, so every language reads the metadata the same way. Unknown
- * attributes and a missing level are not errors; the level falls back to
- * ::kDefaultLogLevel.
+ * Unknown attributes are ignored. A missing level uses ::kDefaultLogLevel.
  */
 [[nodiscard]] LogRecord LogRecordFromChunk(const data::Chunk& chunk,
                                            std::string_view action_name = {},

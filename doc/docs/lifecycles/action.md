@@ -38,7 +38,7 @@ configured
 configured / queued / running / called -- cancel or failure --> cleanup --> done
 ```
 
-Remote calls expose two deliberate milestones:
+Remote calls expose two lifecycle milestones:
 
 1. **dispatch status** — did the peer accept and start handling this action?
 2. **completion status** — did the action and its output-writer cleanup
@@ -215,7 +215,7 @@ nested concurrency limits, but it does not copy the parent's port mappings.
 
 By default, headers under the reserved `x-a11-*` prefix flow into nested work.
 That keeps deadlines, tracing context, tool policy, and user-log routing
-connected across an agent plan. Forward only deliberate application headers;
+connected across an agent plan. Forward only intended application headers;
 credentials and tenant metadata should follow explicit security policy.
 
 A child call is still an independent one-shot Action with its own id, status,

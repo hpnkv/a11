@@ -120,9 +120,8 @@ class Running:
 
         Returns the node id of each published port, which is what a peer needs
         to read it: `NodeMap.get(id)` on the other side of the stream is the
-        same node. The *action* is deliberately not bound to the stream -- one
-        that is run locally and holds a stream ends it when it finishes, and
-        the session would then be unable to dispatch anything else.
+        same node. The action is not bound to the stream, preventing local
+        action completion from closing the session transport.
         """
         published: dict[str, str] = {}
         for name in self.outputs if names is None else names:
@@ -176,33 +175,19 @@ async def start(
     publish_to: Any = None,
     **keyword_inputs: Any,
 ) -> Running:
-    """Start ``flow``, feed it its inputs, and hand back its live ports.
+    """Start ``flow`` and return its live input and output ports.
 
-    The streaming entry point, and what [invoke][a11.flow.runtime.invoke] is
-    built on. Everything is running when this returns: the inputs given here
-    have been written and closed, and each output node is filling as the flow
-    produces values. The caller reads the nodes, and calls
-    [Running.wait][a11.flow.runtime.Running.wait] when it wants the flow's
-    status.
+    Provided inputs are written and closed before this returns. Read outputs
+    from ``Running.outputs``, then await
+    [Running.wait][a11.flow.runtime.Running.wait] for the final status.
 
-    ``open_inputs`` names input ports this does **not** write and does **not**
-    close. They come back on [Running.inputs][a11.flow.runtime.Running] live,
-    and whoever asked for them owns ending them: a flow reading a port nobody
-    closes waits for it, bounded only by ``timeout``. A port fed this way keeps
-    each value's own chunk and mimetype, which a value written here cannot
-    promise -- and a peer can fill one by id, because the port's node is
-    ``<action_id>#<port>`` in the session's node map. One value or a hundred is
-    the same mechanism either way: a `one` port is a stream that carries one.
+    Ports named by ``open_inputs`` remain available through ``Running.inputs``;
+    their writer must close them. Their node ids are ``<action_id>#<port>``, so
+    a peer can stream chunks with their original media types into the flow.
 
-    ``action_id`` names the flow's action, which fixes every port's node id at
-    ``<action_id>#<port>`` -- what a caller that means to reach them from a peer
-    wants, so both ends can work the ids out.
-
-    ``publish_to`` mirrors every output to that stream *before* the flow
-    starts, which [Running.publish][a11.flow.runtime.Running.publish] cannot:
-    attaching a stream does not replay what the writer already flushed, so a
-    value produced between starting the flow and a later publish would reach a
-    collected result and nothing else.
+    ``publish_to`` attaches an output stream before execution, ensuring it sees
+    values produced immediately after startup. Use ``action_id`` when peers
+    need deterministic port node ids.
 
     See [invoke][a11.flow.runtime.invoke] for ``stream`` against
     ``dispatch_stream``.
@@ -237,21 +222,19 @@ async def start(
             " or by whoever holds the node."
         )
 
-    # Created before the flow starts, so a reader that subscribes later still
-    # sees the stream from its beginning.
+    # Create outputs before execution so later readers see the full stream.
     outputs = {
         name: action.get_output(name, bind_stream=False)
         for name in flow.outputs
     }
-    # The same, for the ports somebody else is filling: the node exists before
-    # the flow reads it, so a value written early is waiting rather than lost.
+    # Create open inputs before execution so early writes are retained.
     opened = {
         name: action.get_input(name, bind_stream=False)
         for name in sorted(left_open)
     }
     running = Running(flow, action, outputs, timeout, inputs=opened)
     if publish_to is not None:
-        # Before the flow runs, on purpose: see the docstring.
+        # Attach before execution so the stream receives every output.
         running.publish(publish_to)
 
     action.run()

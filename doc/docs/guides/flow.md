@@ -11,21 +11,14 @@ missing is forty lines saying how they connect — and written in Python, those
 forty lines are a commit, a review, a release and a restart of whatever they run
 on.
 
-[Flow](../api/flow.md) is those forty lines as **text**. It compiles at runtime,
-from a string, wherever it lands: nothing is deployed, and whoever wrote it does
-not have to be a person. This page builds the composition above one statement at a
-time.
+[Flow](../api/flow.md) expresses those connections as text that the runtime
+compiles wherever it is dispatched. This page builds the composition one
+statement at a time.
 
-Two things about it are worth saying before the first line, because they are the
-reason it is a flow rather than code:
-
-* **A tool-calling model could not do this at all.** `capture_audio` produces
-  `a11.sdk.AudioBuffer` values 256 frames at a time — well over a hundred a
-  second at any usual sample rate. There is no version of an LLM tool loop where
-  those pass through the model.
-* **Nothing in the middle is read by anybody.** The buffers go from one step's
-  output port to the next step's input port inside the runtime, and so do the
-  transcript fragments. What crosses the wire is one sentence and one answer.
+The composition keeps high-rate audio and transcript fragments inside the
+runtime. Buffers pass directly from each step's output port to the next input
+port; only the completed sentence and model response cross the external
+boundary.
 
 ## The interface
 
@@ -108,9 +101,8 @@ the session's node map and the peer that dispatched the flow neither sees them n
 receives their fragments. Transcription fragments are for this flow; the client
 gets the sentence.
 
-There is deliberately no `try` here. Nothing in this flow reads a transcription
-failure, and a `try` whose status nobody looks at turns a loud failure into a
-silent one — the flow would carry on with no sentences and no reason given.
+Without a reader for transcription errors, omitting `try` allows unhandled
+errors to propagate immediately to the caller rather than failing silently.
 
 ## The first full sentence
 
@@ -167,10 +159,9 @@ should close when there is a sentence, and not before.
   } -> asked
 ```
 
-`node(history)` **attaches** to a node somebody else owns, by the id that came in
-on the `history` port. That is how a flow reads a stream it did not make. Each
-interaction arrives as the type it was written as, and nothing here takes one
-apart, so nothing here can lose a field of one.
+`node(history)` **attaches** to an existing node by the id provided
+on the `history` port, reading an external stream. Each interaction arrives
+as the type it was written as and preserves its structured payload.
 
 `TYPE{...}` builds a value of a named type — the sentence becomes an
 `a11.sdk.Interaction`, validated into the type, so a field that will not fit is an
@@ -258,41 +249,23 @@ a11 gateway run                     # the other end
 python scripts/flow_playground.py   # --check_only compiles without a microphone
 ```
 
-Nothing about the gateway changed to make that work. It was already serving these
-actions; the composition arrived as an argument.
+The gateway already serves these actions; the composition arrives as an
+argument.
 
 ## ...including by a model
 
-A model with three tools and a task that needs all three calls them one at a
-time and reads every intermediate result on the way. It pays for each of them
-twice — once to read it, once to quote it into the next call — and the values it
-copies are only as accurate as its copying.
+[`a11.sdk.flow_tools`](../llm-sdk/flow-skill.md) exposes three tools to a model:
+`flow_actions` lists composable actions and their ports, `flow_check` compiles a
+flow without running it, and `flow_run` executes it.
 
-[`a11.sdk.flow_tools`](../llm-sdk/flow-skill.md) hands it the alternative as
-three more tools: `flow_actions` says what may be composed and what each action's
-ports are called, `flow_check` compiles a flow without running it, and `flow_run`
-runs one. `flow_tools.get_system_prompt()` is the text that teaches it when to
-bother.
-
-The point is not that a model can write Flow. It is what the model then stops
-having to do. Chaining ports programmatically means the intermediate values never
-enter the context: the transcript fragments, the fetched pages, the file listings.
-A model that composes instead of orchestrating spends its turn on the part that
-needed a model — deciding *what* to build — rather than on copying one tool's
-output into the next tool's input, which is work it is expensive at and not
-especially good at.
-
-That is also the honest reason this particular flow exists. Two of the three
-things it does are ones a tool loop cannot reach:
-
-* **impossible**: raw audio buffers are not something a model deals in;
-* **impractical**: they arrive faster than a hundred a second, and a transcript
-  in fragments is not much better;
-* **and cheap anyway**: the model in this composition reads exactly one sentence.
+Once dispatched, the runtime pipes intermediate values between actions. Large
+or high-rate values such as audio buffers, fetched pages, and transcript
+fragments stay out of the model context. In this example, the model receives one
+completed sentence and the caller receives the streamed answer.
 
 ## Four shapes worth knowing about
 
-Nothing above needs them, and once a composition is real it usually does.
+The following patterns cover common extensions to a composition.
 
 **Work on several values at once.** A `map` whose expression is expensive — a
 coercion, a round trip through the host — may say how many values it may have in
@@ -356,8 +329,7 @@ arrives rather than what it is.
 ## Where to go from here
 
 The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,
-`try`/`wait`/`fail`, `log`/`logf`, `match`, `strformat`, and what a flow
-deliberately cannot do
+`try`/`wait`/`fail`, `log`/`logf`, `match`, `strformat`, and sandbox limits
 — is in the [Flow language reference](../api/flow.md), and `a11.flow.REFERENCE` is
 the same thing sized for a prompt.
 

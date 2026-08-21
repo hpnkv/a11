@@ -4,9 +4,9 @@ package a11
  * Minimal JSON reader/writer over Kotlin `Any?` trees.
  *
  * Object keys preserve insertion order (LinkedHashMap); numbers decode to [Long]
- * when integral and in range, otherwise [Double]. This is deliberately small: it
- * only needs to interoperate with the JSON A11 chunk codec, whose value shapes
- * are objects, arrays, strings, integers, numbers, booleans, and null.
+ * when integral and in range, otherwise [Double]. Designed to interoperate
+ * with the JSON A11 chunk codec, supporting objects, arrays, strings,
+ * integers, numbers, booleans, and null.
  */
 object A11Json {
 

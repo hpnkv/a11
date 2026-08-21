@@ -1,9 +1,10 @@
-# C++ internals
+# C++ API
 
-A11's runtime is implemented in C++20 under `cpp/a11/` and bound to Python with
-pybind11. Application developers never need this layer — the [Python
-API](api/nodes.md) is the contract. It is documented for **contributors** to the
-runtime itself.
+Use A11's C++20 libraries to embed actions, streams, storage, and transports in
+a native application. The `core`, `data`, `concurrency`, `stores`, `net`,
+`nodes`, `actions`, and `service` components are independently linkable, so an
+application can select the layers it needs. The Python bindings reuse these
+runtime types and follow the same behavioural contract.
 
 The C++ reference is generated with Doxygen and shipped alongside this site:
 
@@ -11,7 +12,7 @@ The C++ reference is generated with Doxygen and shipped alongside this site:
 
 - :material-language-cpp: **[Browse the C++ API reference →](cpp/index.html)**
 
-    Classes, files, and call/collaboration graphs for the native
+    Classes, files, and call/collaboration graphs for the
     `core`, `data`, `concurrency`, `stores`, `net`, `nodes`, `actions`, and
     `service` components.
 

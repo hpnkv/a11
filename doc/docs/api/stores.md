@@ -1,9 +1,7 @@
 # Stores
 
 A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] is the ordered log behind a
-node, and a deliberate
-[extension point](../principles.md#chunkstore-where-stream-data-lives) for custom
-storage. Readers and writers are its cursors.
+node and an extension point for custom storage. Readers and writers are its cursors.
 
 ## ChunkStore
 

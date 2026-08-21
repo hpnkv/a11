@@ -129,10 +129,8 @@ class TypedChunkObject final : public ChunkObject {
  * @brief Takes the value out of @p chunk, if it is carrying one of type @c T.
  *
  * Returns nullopt when the chunk holds bytes instead, or holds a value of some
- * other type -- in which case the caller decodes as it always did. The value is
- * **copied**, deliberately: a chunk is replayed to every reader of a node, and
- * one copy per consumer is both correct and far cheaper than the encode and
- * decode it replaces.
+ * other type. The value is copied to each reader, allowing multiple consumers
+ * to read the in-process object directly without repeated serialization.
  */
 template <typename T>
 std::optional<T> TryTakeObject(const Chunk& chunk, std::string_view tag) {

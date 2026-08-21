@@ -32,7 +32,7 @@ enum class ChannelEndpointRole { kClient, kServer, kEither };
 struct ChannelFramingOptions {
   // Serialized byte packets never exceed split_size. Complete messages carry
   // a small suffix; larger messages use length-suffixed first chunks followed
-  // by ordinary chunks, matching Action Engine's byte-chunking protocol.
+  // by ordinary chunks in A11's byte-chunking protocol.
   size_t split_size = 64 * 1024;     ///< Maximum encoded channel packet size.
   size_t max_pending_messages = 64;  ///< Incomplete inbound message limit.
   size_t max_pending_bytes = 64 * 1024 * 1024;  ///< Pending inbound byte limit.
@@ -45,7 +45,7 @@ struct ChannelFramingOptions {
  * @brief Shared WireStream lifecycle and framing for binary channels.
  *
  * WebRTC data channels and WebSocket channels supply a small BinaryChannel
- * adapter; this class supplies Action Engine packetisation, bounded reassembly,
+ * adapter; this class supplies A11 packetisation, bounded reassembly,
  * backpressure, deadlines, half-close, and abort semantics. External channel
  * callbacks are handed into A11's scheduler before protocol or application
  * work runs.

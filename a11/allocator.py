@@ -177,8 +177,7 @@ def reexec_with_preload(argv: list[str] | None = None) -> None:
     already attempted, suppressed, not bundled, or no preload mechanism. When it
     does act it replaces the process image, so it does not return at all.
 
-    Only for A11's own entry points. A library has no business re-executing an
-    interpreter it did not start, which is why nothing here runs on import.
+    Only invoked by A11 CLI entry points during process startup.
     """
     if is_active() or os.environ.get(PRELOAD_GUARD_ENV):
         return

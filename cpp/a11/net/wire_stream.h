@@ -9,7 +9,7 @@
  * Everything above it -- AsyncNode mirroring, Session multiplexing, remote
  * action dispatch -- is written against this one interface, so the concrete
  * transport (in-process, WebSocket/HTTP2, HTTP SSE, WebRTC) is a pluggable
- * detail and a deliberate extension point.
+ * detail and an extension point for custom transports.
  */
 
 #ifndef A11_NET_WIRE_STREAM_H_
@@ -81,8 +81,8 @@ using OnDone = std::function<a11::Task()>;
  * impose it above the transport (an AsyncNode/ChunkStore log, which *is*
  * ordered by sequence number, is the usual way).
  *
- * Implement this interface to carry A11 traffic over a transport A11 does not
- * ship; the runtime treats every implementation identically.
+ * Implement this interface to carry A11 traffic over custom transports;
+ * the runtime treats every implementation identically.
  *
  * @headerfile a11/net/wire_stream.h
  */

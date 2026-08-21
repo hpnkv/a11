@@ -207,21 +207,15 @@ std::pair<std::string, size_t> DottedAround(
   return {name, first};
 }
 
-/// One word of the language written out as reference.
+/// Formats docstrings in Markdown using bold text, code spans, and paragraph
+/// breaks for compatibility across editor renderers.
 ///
-/// Deliberately plain Markdown: a bold run, a code span and blank lines between
-/// paragraphs. That is the subset every consumer renders, and a fenced code block
-/// would come out as literal backticks in the IntelliJ popup, so the example is a
-/// code span on its own line instead.
-/// The tables a word at a position of this kind may be documented in, in the
-/// order they are tried.
+/// Returns the candidate word roles for a given semantic kind, in priority order.
 ///
-/// More than one per kind, because the highlighter folds several word sets into
-/// one kind and is right to: `kStatementKeyword` covers the statements, the
-/// source words and the clauses, and `kDeclarationKeyword` covers the
-/// declarations and -- past a port's or a field's `:` -- the port and field
-/// modifiers. Trying them in the highlighter's own order (`SemanticKindOf` in
-/// `highlight.cc`) is what keeps the answer the one the position actually means.
+/// `kStatementKeyword` covers statements, source words, and clauses, while
+/// `kDeclarationKeyword` covers declarations and port/field modifiers.
+/// This function tries kinds in the highlighter's own order (`SemanticKindOf` in
+/// `highlight.cc`) to determine the position's role.
 ///
 /// Empty for the kinds that are never a word of the language: an identifier, a
 /// member, a comment. Those fall through to the last resort in [Describe].

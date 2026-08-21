@@ -57,13 +57,8 @@ enum class TurnRelayType { kUdp, kTcp, kTls };
 /**
  * @brief The MTU a WebRTC association uses until something better is confirmed.
  *
- * 1280 is the IPv6 minimum link MTU, so it is the largest value that needs no
- * evidence: every conforming path carries it. RFC 8261 §5 names it as the safe
- * fallback when SCTP cannot discover the path MTU, and libdatachannel's
- * `RTC_DEFAULT_MTU` is the same number for the same reason (pinned by a
- * static_assert in webrtc_wire_stream.cc, so the two cannot diverge silently).
- *
- * Everything above this has to be earned by a probe -- see PathMtuOptions.
+ * The 1280-byte value follows the IPv6 minimum link MTU and RFC 8261's SCTP
+ * fallback. Path MTU discovery may confirm a larger value.
  */
 inline constexpr size_t kWebRtcBaseMtu = 1280;
 
@@ -106,33 +101,9 @@ struct WebRtcConfiguration {
   /**
    * @brief Network MTU SCTP builds packets to, in bytes. Absent = 1280.
    *
-   * **The single largest performance knob this transport has, and the default is
-   * the slowest safe value.** libdatachannel disables SCTP path MTU discovery
-   * (usrsctp does not implement it) and falls back to RFC 8261's safe 1280 --
-   * the IPv6 minimum -- so every message is fragmented into 1172-byte DATA
-   * chunks whatever the path could actually carry. A 64 KiB message becomes ~57
-   * chunks, each its own DTLS record in its own datagram.
-   *
-   * Raising it is worth about 3x, measured on the bare data channel with no A11
-   * in it (`wire/stream_throughput[raw-webrtc,64K]`, loopback):
-   *
-   * | mtu  | Linux MiB/s | macOS MiB/s |
-   * |------|-------------|-------------|
-   * | 1280 | 131         | 55.5        |
-   * | 1500 | 150         | 65.1        |
-   * | 2048 | 205         | 87.5        |
-   * | 4096 | **368**     | **164**     |
-   *
-   * **Set it too high and large messages stop arriving at all, silently.** Above
-   * about 4 KiB on both reference machines every message that needs more than
-   * one chunk stopped being delivered while 64-byte messages kept flowing --
-   * so the failure looks like a transport that works until a payload gets big,
-   * and no error says why. The value must fit what the path can carry
-   * end to end; there is no discovery to fall back on.
-   *
-   * Leave it absent for a peer reached over the internet or a browser, where
-   * 1280 is the only value that is safe without measuring. Raise it for a
-   * co-located, datacentre or loopback peer whose path MTU is known.
+   * The 1280-byte default follows RFC 8261 and works without path information.
+   * Set a larger value only for a path whose MTU is known; an oversized value
+   * can prevent fragmented messages from arriving.
    */
   std::optional<size_t> mtu;
   bool enable_ice_udp_mux =
@@ -143,57 +114,28 @@ struct WebRtcConfiguration {
   std::optional<std::pair<std::uint16_t, std::uint16_t>> preferred_port_range;
   std::optional<std::string>
       bind_address;  ///< Optional local candidate address.
-  // A stream stripes A11 packets across several data channels on one peer
-  // connection so slow per-channel acknowledgement round-trips overlap. This
-  // is an internal detail: the WireStream still behaves as one ordered,
-  // reliable channel. A dialing client opens and maintains `desired_channels`;
-  // an accepting server admits at most `max_channels` per peer.
+  // Stripe packets across data channels while preserving one reliable
+  // WireStream. Clients maintain `desired_channels`; servers admit at most
+  // `max_channels` per peer.
   size_t desired_channels = 8;  ///< Data channels a client opens and replenishes.
   size_t max_channels = 8;      ///< Data channels a server admits per peer.
 
   /**
    * @brief Discover the path MTU by probing, instead of assuming `mtu`.
    *
-   * On by default, and safe by construction. A probe channel is opened only when
-   * the peer advertised `a11-pmtud/1` over signalling, so a peer that predates
-   * this -- or a browser that has not been updated -- simply keeps the configured
-   * value. Nothing is ever sent at a size the path has not acknowledged: the
-   * association's MTU is one value, so application traffic is held for the
-   * round trip of each probe above the confirmed size.
-   *
-   * This is what turns `mtu` from a knob that has to be guessed into a floor:
-   * leave `mtu` unset and let the search find the truth, or set it to pin a path
-   * you already know.
-   *
-   * On by default, and it neither touches the stream nor trusts a single packet.
-   *
-   * A probe is a padded SCTP HEARTBEAT (RFC 8899 §4.1 with RFC 4820 padding)
-   * written straight to the wire. It carries no user data, is never retransmitted,
-   * needs no channel, needs nothing from the peer beyond conforming SCTP (browsers
-   * included), and needs **no MTU change to send** -- the path MTU caps packets
-   * built from the send queues, and a probe is not one. So probing changes nothing
-   * about fragmentation or bundling and holds nothing back.
-   *
-   * A candidate is confirmed on a *burst* of probes in flight together, not on one.
-   * A single acknowledged probe does not prove a size usable: measured on the bare
-   * data channel, a 64 KiB stream runs at 173 MiB/s at MTU 4096 and not at all at
-   * 4256, while one probe at 4256 is acknowledged -- one IP-fragmented datagram
-   * reassembles where a stream of them does not. Only a confirmed size is applied,
-   * and a run of transport send failures walks a bad one back to the base.
-   *
-   * Each side discovers its own send direction, since an MTU bounds what a sender
-   * emits.
+   * Discovery starts from `mtu` and raises it only after a burst of padded SCTP
+   * HEARTBEAT probes is acknowledged. Application traffic waits while testing a
+   * candidate above the confirmed size. Each peer discovers its own send path;
+   * peers without discovery support keep the configured MTU.
    */
   bool path_mtu_discovery = true;
   /// Bounds and timers for the search. @see internal::PathMtuOptions
   size_t max_discovered_mtu = 9216;
   /// How long one probe has to be acknowledged before it counts as lost.
   absl::Duration probe_timeout = absl::Milliseconds(500);
-  /// How long after converging before searching upward again, which is what
-  /// notices a path that grew.
+  /// Delay before searching upward again after convergence.
   absl::Duration path_mtu_raise_interval = absl::Seconds(600);
-  /// How long before retrying a search that could not start because the SCTP
-  /// association was not up yet. @see internal::PathMtuOptions::startup_retry
+  /// Delay before retrying while the SCTP association is unavailable.
   absl::Duration path_mtu_startup_retry = absl::Milliseconds(250);
 
   /** @return OK if the configuration is internally consistent. */

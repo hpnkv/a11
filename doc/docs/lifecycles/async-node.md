@@ -35,39 +35,35 @@ open / writing / final recorded -- abort_with_status --> closed (non-OK)
 open / writing ------------------ close() ------------> closed without finality
 ```
 
-`finalize()` is one call because a producer almost always wants both arrows.
-The last one is legal and sometimes useful for an iterator, but it does not
-invent a complete logical value: code using `consume()` needs an explicit final
-fragment before closure.
+`finalize()` combines marking the final sequence and closing the stream.
+Producers generating streams where individual chunks lack a natural terminal boundary
+can use `close()` to signal stream completion without writing a final chunk,
+though readers expecting a unary value with `consume()` require an explicit final sequence.
 
-## The four different promises a producer makes
+## Producer State Transitions
 
-It is easy to treat “write,” “final,” and “close” as synonyms. They answer
-different questions:
+Producer operations follow four explicit milestones:
 
-| Transition | Promise to the rest of the application |
+| Transition | Semantics |
 | --- | --- |
-| Write admitted | The bounded writer accepted this fragment for processing |
-| Write confirmed | The backing store accepted the fragment; the writer attempted or queued attached sends |
-| Final sequence recorded | Readers know which fragment is the logical end of data |
-| Writes closed | No more fragments will arrive; blocked readers can settle with the store status |
+| **Write Admitted** | The bounded writer accepts the fragment into its processing queue |
+| **Write Confirmed** | The backing store writes the fragment to persistent/in-memory storage |
+| **Final Sequence Recorded** | Readers receive the logical end-of-stream boundary |
+| **Writes Closed** | The store rejects further writes and waiting readers complete |
 
-A reliable producer establishes all four, in that order. The last two are what
-`finalize()` does in one call — separately spellable, because they are separate
-promises, but almost never worth spelling separately:
+`finalize()` records the final sequence and closes writes in a single operation:
 
-- **finality** is *logical*. An ordered reader learns it the moment the fragment
-  lands, without waiting for closure, which the producer may defer or do for all
-  of its nodes at once. No chunk may carry a `seq` beyond the final one, though
-  chunks may still arrive out of order to fill earlier gaps.
-- **closure** is *lifecycle*. It reports a status and synchronises writers so the
-  store admits nothing more. It implies finality only in the weak sense that a
-  chunk absent at closure can never arrive, which is why a reader can end
-  cleanly on closure alone — and why a reader that needs a *complete* value
-  needs finality too.
+- **Finality**: Declares the logical end of data. Readers recognize the final item immediately, even before the store closes.
+- **Closure**: Closes the writer, flushes pending queues, and informs attached wire transports.
 
-An error status at closure after every chunk was delivered is unusual but legal;
-it is the reader's business to check the closure status when it must know.
+```python
+# Finalize and close immediately
+await node.finalize("final_result")
+
+# Or mark finality now and close later across batch operations
+await node.finalize("final_result", close=False)
+await node.close()
+```
 
 ## 1. Create or obtain the node
 
@@ -182,29 +178,17 @@ await log.put(line)
 await log.close()          # no final fragment exists, and none can be invented
 ```
 
-### Why not waiting is safe
+### Asynchronous Completion and Waiting
 
-`finalize()` resolves without waiting for the store. The write and the close are
-carried out by the writer's own pump, which is global and outlives the producing
-frame — including the whole scope of an action handler — so a handler can
-finalise its outputs and return. Nothing is silently dropped: a failed write or
-close is logged and stays visible through `get_writer_status()`.
+By default, `finalize()` returns once the final chunk is admitted to the writer queue, allowing the writer's background pump to finish writing and closing while execution proceeds.
 
-Wait when the producer needs to *know*:
+To block until the final chunk is confirmed and the store is closed, pass `wait=True`:
 
 ```python
-await output.finalize(result, wait=True)   # store confirmed, node closed
+await output.finalize(result, wait=True)   # Confirmed by store and closed
 ```
 
-`wait=True` resolves after the store has confirmed the final chunk and, unless
-`close=False`, closed. `wait_for_buffer_to_drain()` remains the separate
-backpressure checkpoint for a producer pacing itself mid-stream. Two cases want
-`wait=True` specifically: a program about to exit whose store is implemented in
-Python (a store that needs the event loop cannot finish its work once the loop
-is gone), and a test asserting on the store immediately afterwards.
-
-`close()` always waits. Making a closure that marks nothing asynchronous would
-buy nothing, and would cost a caller the one thing it asked for.
+Use `wait=True` when executing during application shutdown or inside test assertions where immediate store consistency is required. `close()` always awaits store completion.
 
 ## Reader lifecycle
 

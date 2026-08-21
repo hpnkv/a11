@@ -106,7 +106,7 @@ async def serving(
 ) -> AsyncIterator[list[Any]]:
     """Bind ``listeners`` to ``service``, yield them, then shut everything down.
 
-    Teardown is deliberately ordered: listeners are stopped first, in reverse, so
+    Teardown is ordered: listeners are stopped first (in reverse order), so
     that no new connection can arrive while the service is draining the ones it
     already has.
 

@@ -710,8 +710,7 @@ class Completer {
     if (symbol == nullptr) return;
     switch (symbol->kind) {
       case SymbolKind::kCall: {
-        // What a call has: its ports, and how it went. Outputs first, because
-        // reading one is what a step after it is for.
+        // Offer outputs before inputs, followed by the call status.
         const FlowPlan* target = FlowNamed(symbol->action);
         if (target != nullptr) {
           for (const PortPlan& port : target->ports) {
@@ -733,16 +732,11 @@ class Completer {
         }
         return;
       case SymbolKind::kNode:
-        // A node's id is the one thing about it that is a value: what an action
-        // told where to write is told.
+        // Nodes expose their destination id as a value.
         Add("id", ProposalKind::kField);
         return;
       default:
-        // A port or a variable carries whatever the producer sent, and there
-        // are two ways the file can have said what that is: a pattern named the
-        // fields, or the port was declared with a `struct`. Where it said
-        // neither, nothing here knows and guessing would offer a name that is
-        // not there.
+        // Infer fields only from a match pattern or declared struct.
         if (AddPatternFields(symbol->pattern)) return;
         AddShapeFields(ShapeOfSymbol(*symbol));
         return;
@@ -800,12 +794,9 @@ class Completer {
     return any;
   }
 
-  /// The pattern of the nearest `match` stage before the caret on this line.
+  /// Return the nearest preceding `match` pattern on the caret's line.
   ///
-  /// What `it.` is looking at inside a `map` or a `where` that follows one:
-  /// `lines | match "{level:word}: {rest:rest}" | map it.` knows `level` and
-  /// `rest`. Read off the tokens rather than the tree because the line being
-  /// typed is usually half-written, which is exactly when this is wanted.
+  /// Token scanning supports incomplete `map it.` and `where it.` expressions.
   std::string PatternBeforeCaret() const {
     const size_t first = line_.empty() ? 0 : line_.front();
     for (size_t at = cut_; at > first; --at) {

@@ -79,25 +79,41 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Stream a model's reply through that same node abstraction — `interact_with_llm`
-is just an action whose `text_output` port carries tokens as they arrive:
+Stream a model's reply through an `interact_with_llm` action. Write the user
+turn to its input and read tokens from `text_output` as they arrive:
 
 ```python
+import asyncio
+import os
+
 import a11
 from a11.sdk.interact_with_llm import INTERACT_WITH_LLM_SCHEMA, interact_with_llm
-from a11.sdk.llm import LlmHeaders
+from a11.sdk.llm import Interaction, LlmHeaders, Role
 
-interact = (
-    a11.Action(INTERACT_WITH_LLM_SCHEMA)
-    .bind_handler(interact_with_llm)
-    .set_header(LlmHeaders.PROVIDER.value, "gemini")
-    .set_header(LlmHeaders.MODEL.value, "gemini-3.5-flash")
-    .run()
-)
 
-# ...then, inside your async code, feed the conversation in and stream the reply:
-async for chunk in interact["text_output"]:   # tokens as the model emits them
-    print(chunk, end="", flush=True)
+async def ask(text: str) -> None:
+    interact = (
+        a11.Action(INTERACT_WITH_LLM_SCHEMA)
+        .bind_handler(interact_with_llm)
+        .set_header(LlmHeaders.PROVIDER.value, "gemini")
+        .set_header(LlmHeaders.MODEL.value, "gemini-3.5-flash")
+        .set_header(LlmHeaders.API_KEY.value, os.environ["GEMINI_API_KEY"])
+        .run()
+    )
+
+    user_turn = Interaction(
+        role=Role.USER,
+        content=[a11.to_chunk({"role": "user", "content": [{"type": "text", "text": text}]})],
+    )
+    await interact["interactions"].finalize(user_turn)
+    await interact["config"].finalize()
+    await interact["tools"].finalize()
+
+    async for chunk in interact["text_output"]:
+        print(chunk, end="", flush=True)
+
+
+asyncio.run(ask("Explain backpressure in one sentence."))
 ```
 
 The [guides](https://hpnkv.github.io/a11/guides/streaming.html) build these up

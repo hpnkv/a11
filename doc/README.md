@@ -8,7 +8,7 @@ The hosted documentation is built from three generators into one site:
   `a11/` package and the `a11/_native/` stubs. griffe reads these
   **statically**, so building the docs does *not* require the compiled native
   extension.
-- **C++ internals** — [Doxygen](https://www.doxygen.nl/) themed with
+- **C++ API** — [Doxygen](https://www.doxygen.nl/) themed with
   [doxygen-awesome-css](https://github.com/jothepro/doxygen-awesome-css), over
   `cpp/a11/`. Output is written into `site/cpp` so the whole set deploys as one
   artifact.

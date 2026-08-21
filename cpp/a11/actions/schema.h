@@ -73,13 +73,8 @@ struct ActionPortSchema {
   /// Input-default fragments; an autofilled input must otherwise be empty.
   std::vector<std::optional<data::NodeFragment>> autofills{};
 
-  /// Opaque, owning language-binding type handle (e.g. a Python type object).
-  /// The a11::actions layer stays language-agnostic: it only holds the handle
-  /// and never dereferences it. Ownership is real -- the binding that populates
-  /// it installs a custom deleter (which reacquires its runtime's lock as
-  /// needed), so the referent is kept alive for exactly as long as any copy of
-  /// this schema, instead of being a borrowed pointer that can dangle once the
-  /// caller drops its own reference. Empty when the port has no bound type.
+  /// Owning, opaque type handle installed by a language binding. The actions
+  /// layer retains but never dereferences it. Empty when no type is bound.
   std::shared_ptr<void> typeinfo{nullptr};
 
   /** @brief Validates the port schema. */

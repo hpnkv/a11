@@ -9,7 +9,7 @@ readers pull from, keyed by sequence number and by arrival order. Everything
 above it -- nodes, readers, writers, actions -- is written against this
 interface, so the *storage backend* is a pluggable detail.
 
-`ChunkStore` is therefore a deliberate **extension point**. The default
+`ChunkStore` is an **extension point** for custom storage. The default
 [LocalChunkStore][a11.stores.local_chunk_store.LocalChunkStore] keeps data in
 memory, but
 you can implement the interface (or subclass ``LocalChunkStore``) to persist a

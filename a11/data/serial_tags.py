@@ -9,18 +9,8 @@ model's fields say what they hold, and schemaless data is just data. A value
 the format already describes (an object, an array, a string) carries no tag at
 all, so a bare ``application/json`` is a complete description.
 
-The tag is what a peer in another language matches on, so the same class must
-carry the same tag in every implementation — this module is that table for
-Python, and its siblings hold the identical strings:
-
-  * C++ — ``cpp/a11/data/serial_tags.h`` (returned by the ``A11SerialTag`` ADL
-    customization point).
-  * TypeScript — ``js/src/serial_tags.ts``.
-  * Kotlin — ``kotlin/src/main/kotlin/a11/SerialTags.kt``.
-
-`testdata/serial_tags.json` holds the same table once more, and each language's
-test suite asserts its own constants against it — so a tag added or renamed in
-one language and forgotten in another fails a test rather than a conversation.
+Peers match the same class tag in every language. This Python table and the C++,
+TypeScript, and Kotlin tables are checked against `testdata/serial_tags.json`.
 
 Conventions:
 

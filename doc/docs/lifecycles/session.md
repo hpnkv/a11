@@ -213,7 +213,7 @@ queue. Use `receive()` for a single multiplexed message loop or
 source transport. A missing result means the session is fully finished; a
 non-OK status reports abort/deadline failure.
 
-Pull reception deliberately replaces automatic dispatch. The receive loop can
+Pull reception replaces automatic dispatch. The receive loop can
 inspect, proxy, or explicitly pass each result to `dispatch_wire_message` /
 `dispatchWireMessage`. This makes ownership visible and avoids applying the
 same action or node fragment twice.

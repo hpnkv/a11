@@ -60,9 +60,9 @@ export type OnWireDone = () => void | Status | Promise<void | Status>;
 /**
  * Message-oriented transport shared by sessions, actions, and node mirroring.
  *
- * A wire stream is bidirectional and deliberately does not promise global
- * message ordering. Ordered application data travels as sequenced
- * {@link NodeFragment}s above this layer. The lifecycle does promise a closure
+ * A wire stream is a bidirectional transport without global message ordering
+ * guarantees. Sequenced {@link NodeFragment} streams provide application-level
+ * ordering above this layer. The lifecycle does promise a closure
  * barrier: messages accepted before a half-close are observed before the peer
  * is told that direction has ended.
  *

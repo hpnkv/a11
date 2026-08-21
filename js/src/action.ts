@@ -902,9 +902,8 @@ export class Action {
   /**
    * Log a formatted line: `%s` is replaced by each argument in turn.
    *
-   * Deliberately not a full format language -- `absl::StrFormat`'s specifiers are
-   * C++'s, and a flow's `logf` is `strformat`'s. `%s` is what all three agree on,
-   * and `%%` is a literal per cent.
+   * Uses positional `%s` replacements and `%%` for literal percent signs across
+   * language runtimes.
    */
   async logf(format: string, ...args: unknown[]): Promise<Status> {
     let index = 0;
@@ -939,9 +938,8 @@ export class Action {
    * presents the logs itself does not also have them reported twice. Claim before
    * the action runs: logs written earlier have already gone to the sink.
    *
-   * The stream is deliberately not bound. On the calling side a bound output tees
-   * what it receives straight back to the peer, which corrupts the connection for
-   * every later call on it.
+   * The stream is not bound: on the calling side, binding an output would echo
+   * received fragments back to the peer.
    */
   async getLogNode(): Promise<StatusOr<AsyncNode>> {
     this.logClaimed = true;

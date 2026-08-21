@@ -1,11 +1,8 @@
 # Checking flows from a toolchain
 
-A flow is text, which means the things you want to do to text apply to it: check
-it in CI, annotate a pull request with what is wrong, highlight it in an editor,
-format it before committing. `a11 flow` is the one command all of that goes
-through, and its machine-readable output is a documented contract — so a new
-editor or a new CI step is a consumer of a format, not another implementation of
-the language.
+Use `a11 flow` to check, format, inspect, and run Flow source from CI or an
+editor. Its versioned machine-readable formats let integrations consume the
+native language tooling directly.
 
 ```sh
 a11 flow check my.flow                       # for a person
@@ -99,9 +96,9 @@ is read in them too. The conversion is the language's — a frontend that did it
 itself would be re-deriving something the service already knows how to do, and
 would be the second implementation of it.
 
-Two fields are deliberately *not* offsets into the document and never converted: a
-diagnostic's `line` and `column` (1-based, and a column counts code points), and a
-completion proposal's `caret`, which counts into the text that proposal inserts.
+Two fields represent distinct coordinate systems rather than document offsets: a
+diagnostic's `line` and `column` (1-based, code-point count), and a completion
+proposal's `caret` (offset into the inserted proposal text).
 
 ## The formats
 
@@ -182,7 +179,7 @@ highlighter is making.
 }
 ```
 
-The kinds are the distinctions a reader makes rather than the ones a parser makes:
+The kinds describe semantic roles used by readers and editors:
 `stage`, `builtin`, `type`, `status-code`, `member`, `action-name`, `node-map-name`,
 `flow-name`, `declaration-keyword`, `statement-keyword`, `modifier-keyword`,
 `constant`, `word-operator`, `port-name`, `identifier`, `comment`, `string`,
@@ -192,14 +189,10 @@ no lexer of its own — the same call decides that a word after a `|` is a stage
 that one past a port's `:` is a type, and that `join` is a function only where it
 is called.
 
-`port-name` is the one that needs **name resolution** rather than the token
-stream: whether `sources` is a port of the flow or a node of its own cannot be
-told by looking at neighbouring words, and it is worth telling because a port is
-the flow's interface and a node is local plumbing. Every other kind is decided
-lexically, which is what lets an editor's lexer run on every keystroke; this one
-is a second pass applied on top. The IntelliJ plugin renders it italic in
-whatever colour identifiers already are — a slant rather than a hue, because a
-port is not a different *kind* of name, just one that crosses the boundary.
+`port-name` requires name resolution because neighbouring tokens cannot
+distinguish a flow port from a local node. Other kinds are lexical, so an editor
+can apply them before resolution completes. The IntelliJ plugin renders resolved
+ports with the identifier colour and italic emphasis.
 
 `lexical` is the lexer's own name for the token (`word`, `->`, `{`), beside what it
 *means*. A client that only colours wants `kind`; one that has to drive a lexer of
@@ -472,8 +465,7 @@ registry knows what it holds and not where the text that put it there was
 written.
 
 Reading Python, C++ and TypeScript. It is a tolerant textual read rather than a
-parser for three languages, and it is deliberately happy to come away with less
-than everything:
+full compiler frontend, extracting available structural declarations:
 
 * A schema written as a **constructor call with literal arguments** — the Python
   and TypeScript shape — comes back whole: name, description, and every port with
@@ -603,17 +595,16 @@ flow.request({"method": "check", "source": source})   # the service, relayed
 `diagnostics.Diagnostic.from_payload` turns any diagnostic in one of those back into
 an object, which is how the CLI renders text and SARIF from the same values.
 
-## What is native and what is not
+## Native language services
 
 The language is C++: the lexer, the highlighter, the parser, the resolver, the
 inspector, the formatter, the completion and the runtime. `a11 flow`, `a11-flow`,
 the Python API and the IntelliJ plugin are frontends over it, and these formats are
 the contract between them.
 
-Nothing about the language is implemented twice. `a11.flow.loads` compiles through
-the same parser and resolver `a11 flow check` reads, and hands back the graph the
-native runtime walks — so what `a11 flow describe` prints, what `check` refuses and
-what `run` executes cannot disagree about what a file means.
+`a11.flow.loads`, `a11 flow check`, `a11 flow describe`, and the runtime use the
+same native parser and resolver. The resulting graph is the source for
+diagnostics, descriptions, and execution.
 
 ## Editors
 

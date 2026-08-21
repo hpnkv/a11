@@ -13,12 +13,8 @@
 
 namespace a11::exception_guard::internal {
 
-// Compiled without exceptions, like the rest of A11: naming an exception type
-// and reading what() need no more than the type's declaration. Only the frame
-// that *catches* needs them, and that is the wrapper in guard_impl.h, which the
-// boundary translation units instantiate -- so this file takes the Failure trait
-// from exception_guard_failure.h and must not include guard_impl.h, whose `try`
-// blocks some compilers reject at parse time even uninstantiated.
+// This no-exceptions translation unit uses the Failure trait without including
+// exception_guard_impl.h, whose wrappers are instantiated at throwing boundaries.
 
 absl::Status Raised(const std::exception& error, std::string_view what) {
   return absl::UnknownError(absl::StrCat(what, " raised: ", error.what()));
@@ -29,10 +25,10 @@ absl::Status RaisedUnknown(std::string_view what) {
       absl::StrCat(what, " raised a non-standard exception"));
 }
 
+/// @cond INTERNAL
 void Failure<void>::From(absl::Status status) {
-  // A void callback's caller had nowhere to return this to before either; the
-  // log is what the sites this replaces already did.
   LOG(ERROR) << status.message();
 }
+/// @endcond
 
 }  // namespace a11::exception_guard::internal

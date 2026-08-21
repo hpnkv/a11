@@ -3,7 +3,7 @@
 """A single long-lived ``bash`` process A11 can run commands in.
 
 ``BashShell`` owns one ``bash`` subprocess and exposes an async, streaming
-:meth:`BashShell.execute`. It is deliberately the *only* place that knows how
+:meth:`BashShell.execute`. It is the centralized location that manages how
 the shell process is launched and signalled, so a future kernel-level sandbox
 can wrap :meth:`BashShell._spawn` (the one call that starts the process) without
 touching the streaming/termination protocol layered on top -- mirroring the

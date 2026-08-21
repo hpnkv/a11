@@ -119,12 +119,8 @@ struct ChunkMetadata {
  * ### Identity, without RTTI
  *
  * tag() is the serialisation tag -- `a11.sdk.AudioBuffer` -- and it is what a
- * consumer compares before casting. Deliberately *not* `std::type_info`: RTTI
- * identity across the translation units linked into one shared object has
- * already broken here once, as a `bad any cast` from a `std::any` in this same
- * position. The tag table is a compile-time constant that four languages
- * already agree on, so comparing it is both cheaper and sound where comparing
- * type identity is not.
+ * consumer compares before casting. Types are identified by wire tag rather than
+ * `std::type_info` to ensure sound matching across dynamic library boundaries.
  *
  * ### Immutability
  *

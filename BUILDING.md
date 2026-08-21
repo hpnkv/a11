@@ -25,12 +25,11 @@ Python protocols: awaitables and async iteration, subclass-friendly callback
 adaptation, object serialization, and Pydantic-compatible validation, JSON,
 copy, and schema methods.
 
-`LocalChunkStore` is a deliberately thin forwarding adapter around the native
-in-memory store. Keeping that virtual Python boundary lets applications
-subclass it for custom stores and fault injection while all storage and
-synchronization remain native. Python serializer/deserializer callbacks remain
-in `a11.data.serialization`; the chunks they consume and produce are native
-binary values.
+`LocalChunkStore` forwards to the native in-memory store through a virtual
+Python boundary. Applications can subclass it for custom stores and fault
+injection while storage and synchronization remain native. Python serializer
+and deserializer callbacks live in `a11.data.serialization`; they consume and
+produce native chunks.
 
 Import from the ordinary public modules (`a11`, `a11.actions`,
 `a11.data.types`, and so on). Synchronous and asynchronous native failures
@@ -39,8 +38,8 @@ cross the boundary as
 
 ## Prerequisites
 
-A11 does **not** take its C++ libraries from the system package manager. From
-Homebrew (or apt/dnf/...) you install only the *tools*:
+A11 builds its C++ libraries into a dedicated dependency prefix. Use Homebrew
+(or apt/dnf/...) to install the build tools:
 
 - Python 3.11 or newer and [uv](https://docs.astral.sh/uv/);
 - CMake 3.28 or newer, Ninja, a C++20 compiler, Git, `pkg-config`, `curl`, Make,

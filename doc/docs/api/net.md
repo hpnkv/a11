@@ -1,21 +1,33 @@
 # Transports
 
-A [`WireStream`][a11.net.wire_stream.WireStream] is A11's pluggable transport —
-a bidirectional, unordered channel between two endpoints. Choosing an
-implementation is how an agent goes from in-process to networked; see
-[Principles](../principles.md#wirestream-how-bytes-move-between-peers).
+A [`WireStream`][a11.net.wire_stream.WireStream] is A11's transport abstraction:
+a bidirectional, message channel connecting two peers. Concrete implementations
+support in-process channels, WebSocket, HTTP SSE, and WebRTC data channels.
 
-## WireStream
+## Using WireStreams
 
-[`start`][a11.net.wire_stream.WireStream.start] and
-[`accept`][a11.net.wire_stream.WireStream.accept] install callbacks on the
-initiating and responding sides. [`send`][a11.net.wire_stream.WireStream.send]
-admits a message into the bounded outgoing path;
-[`half_close`][a11.net.wire_stream.WireStream.half_close] queues the local end
-marker; and
-[`drain_outgoing_messages`][a11.net.wire_stream.WireStream.drain_outgoing_messages]
-is the delivery barrier. [`abort`][a11.net.wire_stream.WireStream.abort]
-terminates a failed exchange with a structured status.
+WireStreams connect endpoints, deliver serialized frames, and handle independent
+bidirectional shutdowns:
+
+```python
+import a11
+
+# Create an in-process connected pair for testing or local routing
+client_stream, server_stream = a11.create_in_process_wire_stream_pair()
+
+# Start or accept streams with message and completion handlers
+async def on_message(msg):
+    if msg is None:
+        print("Peer closed write direction")
+        return
+    print("Received:", msg)
+
+async def on_done(status):
+    print("Stream finished:", status)
+
+await server_stream.accept(on_message, on_done)
+await client_stream.start(on_message, on_done)
+```
 
 ::: a11.net.wire_stream.WireStream
 
@@ -27,11 +39,15 @@ terminates a failed exchange with a structured status.
 
 ::: a11.net.in_process_wire_stream.create_in_process_wire_stream_pair
 
-Use
-[`create_in_process_wire_stream_pair`][a11.net.in_process_wire_stream.create_in_process_wire_stream_pair]
-to test both endpoints without opening a socket.
-
 ## WebSocket
+
+```python
+# Connect to a WebSocket endpoint
+stream = a11.WebSocketWireStream.connect("ws://127.0.0.1:8080/ws")
+
+# Or run a WebSocket listener
+server = a11.WebSocketWireServer.create(accept_callback, port=8080)
+```
 
 ::: a11.net.websocket_wire_stream.WebSocketWireStream
 
@@ -51,14 +67,7 @@ to test both endpoints without opening a socket.
 
 ## Signalling
 
-Signalling is the out-of-band handshake WebRTC peers use to find each other and
-exchange connection details.
-
-For a service,
-[`WebSocketSignallingServer.create`][a11.net.signalling.WebSocketSignallingServer.create]
-starts the endpoint and
-[`stop`][a11.net.signalling.WebSocketSignallingServer.stop] ends acceptance
-during shutdown.
+Signalling provides out-of-band coordination for WebRTC peer connections:
 
 ::: a11.net.signalling.WebSocketSignallingServer
 
@@ -66,10 +75,7 @@ during shutdown.
 
 ::: a11.net.signalling.SignallingService
 
-## HTTP/2 primitives
-
-Low-level building blocks under the WebSocket and SSE transports; most agents
-use them only indirectly.
+## HTTP/2 Primitives
 
 ::: a11.net.http2.Http2Client
 

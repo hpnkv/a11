@@ -182,9 +182,10 @@ function canonicalJsonTag(value: unknown): string | null {
 /**
  * Encode `value` as a JSON- or MessagePack-ready tree.
  *
- * Nothing here is tagged. A `Uint8Array` becomes base64 (or, in MessagePack,
- * real bytes), a `Date` becomes an ISO string, a `Set` becomes an array —
- * exactly what the format can say, and no more. Recovering the original type is
+ * Encodes JavaScript values using standard wire representations: a
+ * `Uint8Array` becomes base64 (or, in MessagePack, real bytes), a `Date`
+ * becomes an ISO string, and a `Set` becomes an array. Recovering the original
+ * type is
  * the reader's job, and it does that from the chunk's `;type=`.
  */
 function toWire(

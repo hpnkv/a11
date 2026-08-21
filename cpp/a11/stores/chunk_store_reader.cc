@@ -379,13 +379,13 @@ struct ChunkStoreReader::State
   /**
    * @brief Record a completed fetch, in order.
    *
-   * With several reads outstanding they can land in any order, so a result is
-   * parked in `arrived` until it is the one at `position`. Only then is it
-   * applied -- which is what preserves ordered delivery now that the old
-   * "one fetch at a time" serialisation is gone. Errors wait their turn too: a
-   * NotFound at position+2 is not end-of-stream while position is still
-   * outstanding.
+   * Completed reads wait in `arrived` until their position is next. Errors
+   * follow the same ordering, so a later NotFound cannot end the stream while
+   * an earlier read remains outstanding.
    *
+   * @param arrived_position Arrival-order position of this fetch.
+   * @param generation Fetch generation used to reject stale completions.
+   * @param result Completed fragment or fetch error.
    * @param inline_drive
    *   True when the fetch resolved without waiting and DriveOnce() is still on
    *   the stack; then this reports back whether to keep driving instead of

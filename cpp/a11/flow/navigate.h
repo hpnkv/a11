@@ -19,18 +19,12 @@ namespace a11::flow {
 /// Moving around a document: what is under the caret, what the file declares,
 /// and where a name was bound.
 ///
-/// **Why this is in the language and not in each editor.** Deciding that the
-/// word under the caret is a stage rather than a port, or that `hit` was bound
-/// by the `for` three lines up, is name resolution -- the same judgement the
-/// resolver makes for diagnostics and the completer makes for proposals. An
-/// editor that worked it out for itself would be a third copy of it. `HoverText`
-/// used to live in the LSP adapter for exactly the reason things end up in
-/// adapters: it was small when it was written. It is here now.
+/// Navigation uses the parser and resolver so hover, completion, diagnostics,
+/// and editor integrations assign the same role and binding to each name.
 
 /// What a thing *is*, which is what an editor turns into an icon.
 ///
-/// The names travel in `flow.symbols/v1` and `flow.hover/v1`, so a kind without
-/// one would be a hole in the format.
+/// Serialized in `flow.symbols/v1` and `flow.hover/v1`.
 enum class SymbolClass {
   kFlow,
   kDto,
@@ -64,9 +58,7 @@ struct DocumentSymbol {
 
 /// Every symbol a document declares, nested as it is written.
 ///
-/// The flows and the shapes at the top; a flow's ports, headers, node maps and
-/// bound steps under it; a shape's fields under it. That is what a
-/// "go to symbol" list is, and it is also the outline an editor shows.
+/// Top-level flows and shapes contain their ports, fields, and local bindings.
 std::vector<DocumentSymbol> Symbols(std::string_view source);
 
 /// What is at one offset, described.
@@ -92,10 +84,7 @@ struct Description {
   /// Where it was declared, when it was declared in *another* file and something
   /// read that file: an action or a type the catalogue carries an origin for.
   ///
-  /// Kept apart from [definition] rather than folded into it because the two
-  /// answer differently: a definition is a range in the document that was passed
-  /// in, and this is a path a host has to open. A frontend that treated them as
-  /// one would put the caret at line 12 of the wrong file.
+  /// Separate from [definition], which always refers to the current document.
   std::optional<catalogue::Origin> origin;
 };
 
@@ -107,20 +96,12 @@ Description Describe(
 /// An action, written out as the Markdown a reader wants to see: what it does,
 /// then every port it has.
 ///
-/// Shared with completion rather than kept here, because the description an
-/// editor shows beside a half-typed `interact_with_llm` and the one it shows
-/// when the caret is on the finished word are the same question asked twice. A
-/// second copy of this is how the two came to disagree.
+/// Shared by hover and completion.
 std::string ActionMarkdown(const catalogue::ActionInfo& action);
 
 /// One port, written out as the Markdown a reader wants beside its name.
 ///
-/// What the popup next to a half-typed argument shows. A completion list has one
-/// line per item and a port's description is prose, so the line carries a summary
-/// and this carries the whole of it -- which is the same split `ActionMarkdown`
-/// makes, and the reason both are here rather than in the completer: the answer to
-/// "what is this port for" should not depend on whether the caret is on the word
-/// or one character before it.
+/// Used by hover and completion to show the same full port description.
 std::string PortMarkdown(std::string_view name, std::string_view type,
                          bool required, bool unary,
                          std::string_view description);
@@ -146,10 +127,7 @@ std::string WordMarkdown(std::string_view name, vocabulary::WordRole role);
 
 /// A pipeline stage, written out as reference.
 ///
-/// [WordMarkdown] with the role fixed. Kept as a name of its own because the
-/// completer asks for a stage's text in several places, and because it is the
-/// pair of [BuiltinMarkdown]: a word can be both a stage and a function and they
-/// do different things, so whichever the caret is on is the one that answers.
+/// Uses the stage role when a word also has a built-in function meaning.
 std::string StageMarkdown(std::string_view name);
 
 /// A built-in function, the same way.

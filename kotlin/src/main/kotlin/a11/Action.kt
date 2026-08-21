@@ -177,9 +177,8 @@ class Action private constructor(
     /**
      * Log a formatted line: `%s` is replaced by each argument in turn.
      *
-     * Deliberately not a full format language -- `absl::StrFormat`'s specifiers
-     * are C++'s, and a flow's `logf` is `strformat`'s. `%s` is what all three
-     * agree on, and `%%` is a literal per cent.
+     * Uses positional `%s` replacements and `%%` for literal percent signs across
+     * language runtimes.
      */
     suspend fun logf(format: String, vararg args: Any?): Status = logfWith(LogOptions(), format, *args)
 
@@ -218,9 +217,8 @@ class Action private constructor(
      * presents the logs itself does not also have them reported twice. Claim
      * before the action runs: logs written earlier have already gone to the sink.
      *
-     * The stream is deliberately not bound. On the calling side a bound output tees
-     * what it receives straight back to the peer, which corrupts the connection
-     * for every later call on it.
+     * The stream is not bound: on the calling side, binding an output would echo
+     * received fragments back to the peer.
      */
     suspend fun getLogNode(): StatusOr<AsyncNode> {
         logClaimed = true

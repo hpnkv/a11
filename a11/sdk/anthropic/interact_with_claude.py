@@ -473,9 +473,7 @@ def _decode_action_output_fragments(
 
     values: dict[str, Any] = {}
     for field_name, field_fragments in grouped.items():
-        # A null chunk is an end-of-stream marker, not a value: an action that
-        # ends an output with `finalize()` (or reports "nothing here" on an
-        # optional port) must not make the whole tool result undecodable.
+        # Null chunks close a stream and do not contribute a result value.
         chunks = [fragment.get_chunk() for fragment in field_fragments]
         decoded = [
             a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
@@ -497,10 +495,7 @@ async def _build_tool_results_from_outputs(
     for tool_use_id, fragments in executed.outputs.items():
         failure = executed.error_message(tool_use_id)
         if failure is not None:
-            # Told to the model rather than raised past it: a failed tool
-            # is something it can react to — retry differently, or say
-            # what went wrong — and the calls that worked still deserve
-            # their answers.
+            # Return each tool failure to the model alongside successful calls.
             tool_results.append(
                 {
                     "type": "tool_result",

@@ -70,6 +70,28 @@ enum class StageArgument {
 };
 
 /// Every pipeline stage, in the order they read best in a listing.
+/**
+ * @brief One port the entry flow gets without declaring it.
+ *
+ * `flow { ... }` is a program, and a program is handed its arguments. Rather
+ * than make every file write the same two `in` lines, the language declares
+ * them -- so `argv` resolves, completes and formats like any other port, and an
+ * interpreter knows exactly what it is expected to supply.
+ */
+struct EntryPort {
+  std::string_view name;
+  std::string_view type;
+  /// Whether it carries one value rather than a stream.
+  bool unary;
+  std::string_view description;
+};
+
+/// The ports the entry flow has without declaring them, in declaration order.
+///
+/// One table, read by the resolver that installs them, by completion so they
+/// are offered, and by anything documenting what a program may expect.
+absl::Span<const EntryPort> EntryPorts();
+
 absl::Span<const std::string_view> Stages();
 
 /// What a stage takes, or `nullopt` if the name is not a stage.

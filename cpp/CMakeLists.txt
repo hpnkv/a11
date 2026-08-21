@@ -34,6 +34,9 @@ option(A11_BUILD_FLOW_TOOL "Build the standalone a11-flow language tool"
         ${A11_FLOW_TOOL_DEFAULT})
 option(A11_BUILD_BENCH "Build the native benchmark binary a11_bench" OFF)
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
+option(A11_BUILD_FLOW_ACTIONS
+        "Build the Flow standard library of Actions (files, time, processes)"
+        ON)
 option(A11_BUILD_WEBRTC "Build WebRTC wire streams and signalling" ON)
 option(A11_BUILD_REDIS "Build the Redis client and Redis ChunkStore" ON)
 option(A11_BUILD_SQLITE "Build the SQLite ChunkStore" ON)
@@ -385,11 +388,15 @@ if (NOT A11_FIBER_SPINLOCK STREQUAL "BOOST_FIBERS_SPINLOCK_TTAS_ADAPTIVE_FUTEX"
 endif ()
 add_compile_definitions(${A11_FIBER_SPINLOCK})
 
-if (A11_BUILD_HTTP OR A11_BUILD_REDIS)
-    find_package(uvw CONFIG REQUIRED NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
-    a11_require_static_target(uvw::uvw)
-    a11_require_static_target(uvw::uv_a)
-endif ()
+# libuv, for A11's one event loop. Found unconditionally, and no longer under
+# `if (A11_BUILD_HTTP OR A11_BUILD_REDIS)`: HTTP is where the loop grew up, not
+# what needs it. A clock, a directory watch and a listening socket all want the
+# same loop, so a build with HTTP off but the Flow standard library on would
+# otherwise have to grow a second implementation of every timer behind a build
+# flag -- which is two things to keep correct and one of them never exercised.
+find_package(uvw CONFIG REQUIRED NO_DEFAULT_PATH PATHS ${CMAKE_PREFIX_PATH})
+a11_require_static_target(uvw::uvw)
+a11_require_static_target(uvw::uv_a)
 
 # The process allocator for A11's own executables.
 #
@@ -999,6 +1006,9 @@ endif ()
 if (A11_BUILD_HTTP)
     add_subdirectory(sdk/http)
 endif ()
+if (A11_BUILD_FLOW_ACTIONS)
+    add_subdirectory(sdk/flow)
+endif ()
 if (A11_BUILD_BENCH)
     add_subdirectory(bench)
 endif ()
@@ -1218,6 +1228,27 @@ if (A11_BUILD_SQLITE)
     target_link_libraries(a11_stores PRIVATE a11::sqlite3)
 endif ()
 
+# A11's one libuv loop. Header-only, and its own target because an event loop is
+# not an HTTP concept: a11_net was simply where it grew up, and the Flow standard
+# library needs the same loop for watching a directory and accepting a
+# connection. Two loops would mean two threads and two answers to "which thread
+# owns this handle". Unconditional, so anything that wants a timer or a
+# descriptor can simply have one.
+add_library(a11_uv INTERFACE)
+add_library(a11::uv ALIAS a11_uv)
+set_target_properties(a11_uv PROPERTIES EXPORT_NAME uv)
+target_include_directories(
+        a11_uv INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+        a11_uv INTERFACE a11::concurrency uvw::uvw
+        $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
+        $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+        $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+        $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+        $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>)
+
 add_library(a11_net STATIC ${A11_NET_SOURCES})
 if (A11_BUILD_HTTP)
     target_sources(a11_net PRIVATE ${A11_NET_HTTP_SOURCES})
@@ -1239,7 +1270,7 @@ if (A11_BUILD_WEBRTC)
     target_link_libraries(a11_net PUBLIC LibDataChannel::LibDataChannel)
 endif ()
 if (A11_BUILD_HTTP)
-    target_link_libraries(a11_net PRIVATE a11::nghttp2 uvw::uvw $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
+    target_link_libraries(a11_net PRIVATE a11::nghttp2 uvw::uvw a11::uv $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
             OpenSSL::SSL OpenSSL::Crypto)
 endif ()
 # ChunkStoreWriter tees persisted fragments through this transport interface.
@@ -1358,6 +1389,80 @@ if (A11_BUILD_HTTP)
             $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
             $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
             nlohmann_json::nlohmann_json a11::warnings)
+endif ()
+
+if (A11_BUILD_FLOW_ACTIONS)
+    # The Flow standard library. Above a11::actions because that is what it
+    # produces, and above nothing else: a host that wants `read_file` should not
+    # link the flow engine to get it, which is also why the duration parser in
+    # options.cc is its own rather than the runtime's.
+    add_library(a11_flow_actions STATIC ${A11_FLOW_ACTIONS_SOURCES})
+    add_library(a11::flow_actions ALIAS a11_flow_actions)
+    set_target_properties(a11_flow_actions PROPERTIES EXPORT_NAME flow_actions)
+    target_include_directories(
+            a11_flow_actions PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_flow_actions
+            PUBLIC a11::actions a11::concurrency a11::core a11::data a11::nodes
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            PRIVATE
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            nlohmann_json::nlohmann_json a11::warnings)
+    # The loop. Unconditional: a deadline, a directory watch and a listening
+    # socket all want it, and an action that has it only in some builds is an
+    # action with two implementations, one of which nothing ever runs.
+    target_link_libraries(a11_flow_actions PRIVATE a11::uv)
+endif ()
+
+if (A11_BUILD_FLOW_ACTIONS)
+    # The interpreter: a11-flow-run, which runs a .flow file as a program.
+    #
+    # A separate binary from a11-flow, and deliberately so: that one is the
+    # language's own tool and links nothing but a11::flow_lang, which is the
+    # proof the language needs no runtime to be checked, formatted or described.
+    # Running a file needs the runtime, the actions layer and the standard
+    # library, so it is its own executable rather than a heavier a11-flow.
+    # The interpreter itself, as a library: the CLI below and the Python binding
+    # both call it, so a program behaves identically whichever started it.
+    add_library(a11_flow_interpreter_lib STATIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/a11/flow/interpreter/interpreter.cc)
+    add_library(a11::flow_interpreter_lib ALIAS a11_flow_interpreter_lib)
+    set_target_properties(
+            a11_flow_interpreter_lib PROPERTIES EXPORT_NAME flow_interpreter_lib)
+    target_include_directories(
+            a11_flow_interpreter_lib PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(
+            a11_flow_interpreter_lib
+            PUBLIC a11::flow_runtime a11::flow_lang a11::flow_actions
+            a11::actions a11::concurrency a11::data a11::nodes
+            $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+            $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+            PRIVATE
+            $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+            $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
+            a11::warnings)
+    a11_disallow_exceptions(a11_flow_interpreter_lib)
+
+    add_executable(a11_flow_interpreter
+            ${CMAKE_CURRENT_SOURCE_DIR}/a11/flow/interpreter/main.cc)
+    add_executable(a11::flow_interpreter ALIAS a11_flow_interpreter)
+    set_target_properties(
+            a11_flow_interpreter PROPERTIES
+            OUTPUT_NAME a11-flow-run EXPORT_NAME flow_interpreter)
+    target_link_libraries(
+            a11_flow_interpreter
+            PRIVATE a11::flow_interpreter_lib a11::flow_runtime a11::flow_lang
+            a11::flow_actions a11::actions a11::concurrency a11::data
+            a11::nodes a11::stores absl::status absl::statusor absl::strings
+            absl::time nlohmann_json::nlohmann_json a11::warnings
+            a11::allocator)
+    a11_disallow_exceptions(a11_flow_interpreter)
 endif ()
 
 if (A11_BUILD_PYTHON)
@@ -1539,6 +1644,10 @@ if (A11_BUILD_PYTHON)
     if (A11_BUILD_HTTP)
         target_link_libraries(a11_python PRIVATE a11::http_actions)
     endif ()
+    if (A11_BUILD_FLOW_ACTIONS)
+        # The interpreter, so `a11.flow.run_program` is the same code the CLI is.
+        target_link_libraries(a11_python PRIVATE a11::flow_interpreter_lib)
+    endif ()
 
     # pybind11_abseil's status caster imports this extension by its canonical
     # package path. Keep direct-CMake outputs beside the source package and
@@ -1637,6 +1746,12 @@ endif ()
 if (A11_BUILD_HTTP)
     a11_disallow_exceptions(a11_http_actions)
 endif ()
+if (A11_BUILD_FLOW_ACTIONS)
+    # Nothing here throws, which is worth stating for a library made of
+    # std::filesystem and nlohmann calls: both have throwing overloads that are
+    # the default, and -fno-exceptions is what stops one being reached for.
+    a11_disallow_exceptions(a11_flow_actions)
+endif ()
 
 # The boundaries, each with the throwing code it calls.
 a11_allow_exceptions(
@@ -1700,6 +1815,13 @@ endif ()
 if (A11_BUILD_HTTP)
     list(APPEND A11_INSTALL_TARGETS a11_http_actions)
 endif ()
+if (A11_BUILD_FLOW_ACTIONS)
+    # Not the interpreter library: it links a11_flow_runtime, which is not in
+    # the export set, and nothing outside this build consumes it -- the CLI and
+    # the Python module are both built here.
+    list(APPEND A11_INSTALL_TARGETS a11_flow_actions)
+endif ()
+list(APPEND A11_INSTALL_TARGETS a11_uv)
 if (A11_BUILD_FLOW_TOOL)
     list(APPEND A11_INSTALL_TARGETS a11_flow_tool)
 endif ()

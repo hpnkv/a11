@@ -1,0 +1,25 @@
+# `wc -l`, as a data program.
+#
+#   a11-flow-run wc.flow < some-file
+#
+# Nothing here holds the input. `read_stdin` streams it, `count` reduces it, and
+# the only value that reaches the end is the number -- so this costs the same
+# memory for a ten-byte file and a ten-gigabyte one.
+
+flow {
+  describe "Count the lines on standard input."
+
+  nodes scratch
+  total = node() in scratch
+
+  input = run read_stdin() via scratch
+  skip input.bytes  # `lines` is the half this program wants
+  skip input.is_tty
+
+  input.lines | count -> total
+
+  out = run write_stdout(
+    content: total | map strformat("%d\n", it)
+  ) via scratch
+  skip out.bytes_written
+}

@@ -2,6 +2,7 @@ add_executable(a11_core_test
   byte_chunking_test.cc
   data_json_test.cc
   data_types_test.cc
+  json_codec_test.cc
   msgpack_writer_encoding_test.cc
   string_codec_test.cc
   future_test.cc
@@ -110,6 +111,19 @@ if (A11_BUILD_HTTP)
                                   a11::data a11::net a11::nodes a11::stores
                                   GTest::gtest_main)
   add_test(NAME a11_http_actions_test COMMAND a11_http_actions_test)
+endif ()
+
+if (A11_BUILD_FLOW_ACTIONS)
+  # The Flow standard library. Its own executable for the same reason the HTTP
+  # one has its own: a focused link line is the proof that these actions sit on
+  # top of a11::actions and drag nothing else in with them.
+  add_executable(a11_flow_actions_test
+    flow_actions_test.cc)
+  target_link_libraries(
+    a11_flow_actions_test PRIVATE a11::flow_actions a11::actions
+                                  a11::concurrency a11::data a11::nodes
+                                  a11::stores GTest::gtest_main)
+  add_test(NAME a11_flow_actions_test COMMAND a11_flow_actions_test)
 endif ()
 
 if (A11_BUILD_AUDIO)

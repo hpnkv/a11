@@ -44,12 +44,46 @@ absl::StatusOr<nlohmann::json> ParseJson(std::string_view encoded,
                                          std::string_view what);
 
 /**
+ * @brief Whether @p text is valid UTF-8.
+ *
+ * Public because the answer has to be available *before* nlohmann is asked. See
+ * DumpJson for why asking nlohmann is not safe.
+ */
+bool IsValidUtf8(std::string_view text);
+
+/**
+ * @brief The first string inside @p value that is not valid UTF-8, or nullptr.
+ *
+ * Recursive: the strings that come from outside are not only at the top level.
+ * A response header's value and a directory entry's name are both fields of a
+ * record, and both are exactly where something outside this process can put
+ * arbitrary bytes.
+ */
+const nlohmann::json* FindUnencodableString(const nlohmann::json& value);
+
+/**
  * @brief Serializes @p value, rejecting strings that are not valid UTF-8.
  *
  * Strict on purpose: JSON is defined over text, and a chunk holding arbitrary
  * bytes has to be encoded (base64, as `data/json.cc` does) rather than smuggled
  * into a string field where a peer's parser would reject it. This is the one
  * caller of nlohmann that wants the error rather than a replacement character.
+ *
+ * ### Why it checks rather than only catching
+ *
+ * nlohmann turns its `throw` into `std::abort()` in every translation unit
+ * compiled `-fno-exceptions`, and most of A11 is. This file is compiled with
+ * exceptions on so that the `try` below means something -- but `dump()` is a
+ * template, and *whichever instantiation the linker keeps* decides whether a
+ * bad string raises or aborts. An aborting one from another TU is a legal
+ * choice, and it was the one being made: a `read_file` over a binary file
+ * killed the process with no output at all.
+ *
+ * So the strings are checked here, where the answer depends on the bytes rather
+ * than on how something was compiled, and the `try` stays as a second line for
+ * everything else `dump()` can object to. A unit test cannot cover the
+ * difference: test binaries are built with exceptions on, so the version under
+ * test is the one that throws while the shipped library is the one that aborts.
  */
 absl::StatusOr<std::string> DumpJson(const nlohmann::json& value,
                                      std::string_view what);

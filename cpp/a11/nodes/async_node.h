@@ -37,6 +37,7 @@
 
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
+#include "a11/data/serializable.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "a11/stores/chunk_store.h"
@@ -263,6 +264,50 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return An awaitable that resolves to the stored sequence number, or a
    *   failed future if serialization fails.
    */
+  /**
+   * @brief Write a typed value **without encoding it**.
+   *
+   * The local fast path. Put() encodes on the way in and NextObject() decodes
+   * on the way out, and for a value that never leaves this process both are
+   * waste -- decode especially, being the dearer half by an order of magnitude.
+   * This admits a chunk carrying the value itself; the bytes are produced only
+   * if something actually needs them, which is a peer, a persisting store, or a
+   * reader asking for a chunk rather than a value.
+   *
+   * A reader calling NextObject<T>() with the same @c T gets a copy of the
+   * value, having encoded and decoded nothing.
+   *
+   * Two obligations, and both are already true of anything put in a store:
+   *
+   *   * **The value must not change afterwards.** A node replays its fragments
+   *     to every reader, including readers that attach later, so a mutable value
+   *     was never sound here. Consumers are handed copies, so nothing they do
+   *     can reach back.
+   *   * **@p mimetype is stated rather than derived.** Put() lets the registry
+   *     choose it; here the caller says it, because a chunk whose mimetype
+   *     differed from the one its bytes would have had would be filtered
+   *     differently by `| mime` depending on whether anybody had asked for the
+   *     bytes yet. Pass what Put() would have produced.
+   *
+   * @tparam T Type of the value. Its serialisation tag identifies it to
+   *   readers, so it must have one.
+   */
+  template <typename T>
+    requires data::HasSerialTypeTag<T>
+  a11::Future<std::uint32_t> PutObject(
+      T value, std::string_view mimetype,
+      std::optional<std::uint32_t> seq = std::nullopt, bool final = false) {
+    std::shared_ptr<data::SerializationRegistry> registry;
+    {
+      thread::MutexLock lock(&mu_);
+      registry = serialization_registry_;
+    }
+    return PutChunk(data::MakeChunkObject<T>(
+                        std::move(value), data::SerialTypeTag<T>(),
+                        std::string(mimetype), registry),
+                    seq, final);
+  }
+
   template <typename T>
   a11::Future<std::uint32_t> Put(
       const T& value, std::optional<std::uint32_t> seq = std::nullopt,
@@ -358,6 +403,17 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
       absl::Duration timeout = absl::InfiniteDuration());
 
   /**
+   * @brief Read the next fragment without producing bytes for it.
+   *
+   * NextFragment() materialises a chunk that is carrying a value, so that every
+   * caller sees the bytes it has always seen. This one does not, and exists for
+   * the one caller that wants the value rather than its encoding:
+   * NextObject<T>(). Anything else should use NextFragment().
+   */
+  a11::Future<std::optional<data::NodeFragment>> NextFragmentRaw(
+      absl::Duration timeout = absl::InfiniteDuration());
+
+  /**
    * @brief Read the next raw chunk.
    * @param timeout How long to wait for a chunk.
    * @return An awaitable that resolves to the next chunk, or nullopt at end
@@ -384,8 +440,11 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
         [self = std::move(self), timeout,
          mimetype_patterns = std::move(
              mimetype_patterns)]() mutable -> absl::StatusOr<std::optional<T>> {
+          // Raw, so a chunk carrying a value still is one when it gets here.
+          // NextFragment() would have materialised it, which is right for every
+          // caller that wants bytes and is exactly what this one does not.
           absl::StatusOr<std::optional<data::NodeFragment>> fragment =
-              self->NextFragment(timeout).Await();
+              self->NextFragmentRaw(timeout).Await();
           if (!fragment.ok()) {
             return fragment.status();
           }
@@ -395,6 +454,37 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
           absl::StatusOr<const data::Chunk*> chunk = (*fragment)->GetChunk();
           if (!chunk.ok()) {
             return chunk.status();
+          }
+          // The fast path: the producer put a T and this reader wants a T, so
+          // nothing was encoded and nothing is decoded. Guarded by the tag, not
+          // by type identity -- see a11::data::ChunkObject.
+          if ((*chunk)->HasObject()) {
+            // `if constexpr`, because NextObject is instantiated for types with
+            // no tag at all -- a JSON-native value, a bare string -- and those
+            // simply have no fast path to take.
+            if constexpr (data::HasSerialTypeTag<T>) {
+              if (std::optional<T> taken = data::TryTakeObject<T>(
+                      **chunk, data::SerialTypeTag<T>());
+                  taken.has_value()) {
+                return taken;
+              }
+            }
+            // Carrying something else. Fall through to the bytes, which means
+            // producing them now: a reader asking for a different type than the
+            // producer wrote is exactly when the wire format earns its keep.
+            data::Chunk materialised = **chunk;
+            ABSL_RETURN_IF_ERROR(materialised.Materialize());
+            std::shared_ptr<data::SerializationRegistry> registry;
+            {
+              thread::MutexLock lock(&self->mu_);
+              registry = self->serialization_registry_;
+            }
+            absl::StatusOr<T> value =
+                registry->FromChunk<T>(materialised, mimetype_patterns);
+            if (!value.ok()) {
+              return value.status();
+            }
+            return std::optional<T>(std::move(*value));
           }
           if ((*chunk)->IsNull()) {
             if ((*fragment)->continued) {

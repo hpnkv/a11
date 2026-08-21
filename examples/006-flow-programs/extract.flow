@@ -1,0 +1,73 @@
+# A state machine: print the lines between two markers.
+#
+#   a11-flow-run extract.flow -- BEGIN END < some-file
+#
+# `sed -n '/BEGIN/,/END/p'`, roughly, and the point is what it needs that a
+# filter does not. Whether a line should be printed is not a fact about the
+# line: `keep1` in the middle of a block and `keep1` outside one are the same
+# text and want opposite answers. What decides is what came *before* it, which
+# means the program has a state and the state changes as the stream goes past.
+#
+# `| scan` is that. It is written exactly as `fold` is and carries state the
+# same way; the difference is that `fold` yields one value when the stream ends
+# and `scan` yields one per value as it arrives. So the state is available *at
+# every line*, which is what makes a state machine expressible.
+#
+# The two constructs that look like they should do this cannot, and it is worth
+# knowing why before reaching for them:
+#
+#   * `repeat` carries a value from pass to pass, but each pass reads its stream
+#     from the beginning, so pass two sees line one again.
+#   * `for` walks a stream one value at a time, but carries nothing between
+#     passes, so the block cannot know what the last line was.
+#
+# It costs one record of state and nothing per line, so this runs in constant
+# memory over an input of any size.
+
+flow {
+  describe "Print the lines between two markers, and say how many."
+
+  out exit_code: integer "0 when a block was found, 1 when none was."
+
+  nodes scratch
+  opener = node() in scratch
+  closer = node() in scratch
+  body = node() in scratch
+  found = node() in scratch
+
+  argv | drop 1 | first 1 -> opener
+  argv | drop 2 | first 1 -> closer
+
+  input = run read_stdin() via scratch
+  skip input.bytes
+  skip input.is_tty
+
+  # `for` twice, nested, is how both markers reach the expression: each outer
+  # value is materialised for its block, so `from` and `to` are strings while
+  # `it` is a line.
+  for from in opener {
+    for to in closer {
+      input.lines
+        # The state is the record. `inside` is true for the marker line itself
+        # and for everything after it until the closer, and `line` carries the
+        # line along so the stage after this one still has it -- a `scan` yields
+        # the *state*, so anything the next stage needs has to be in it.
+        | scan {"inside": false, "line": ""} as at,
+          {"inside": starts-with(it, from)
+            or (at.inside and not starts-with(it, to)),
+            "line": it}
+        # The markers themselves are not the body. The closer never has
+        # `inside` set, so only the opener needs saying.
+        | where it.inside and not starts-with(it.line, from)
+        | map it.line
+        -> body
+    }
+  }
+
+  out = run write_stdout(content: body | map strformat("%s\n", it)) via scratch
+  skip out.bytes_written
+
+  body | count -> found
+  found where it > 0 | map 0 -> exit_code
+  found where it == 0 | map 1 -> exit_code
+}

@@ -326,13 +326,37 @@ AsyncNode::NextFragments(size_t limit, absl::Duration timeout) {
   return (*input)->NextMany(limit, timeout);
 }
 
-a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
+a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragmentRaw(
     absl::Duration timeout) {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> input = reader();
   if (!input.ok()) {
     return a11::FailedFuture<std::optional<data::NodeFragment>>(input.status());
   }
   return (*input)->Next(timeout);
+}
+
+a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
+    absl::Duration timeout) {
+  // Materialised here, which is what keeps the local fast path invisible to
+  // every existing caller: a fragment leaving this node has its bytes, exactly
+  // as it did before a chunk could carry a value instead. `Then`, not `Submit`,
+  // for the reason NextChunk gives -- there is nothing to wait for beyond the
+  // read itself, so there is no fibre to spend.
+  return a11::Then(
+      NextFragmentRaw(timeout),
+      [](const absl::StatusOr<std::optional<data::NodeFragment>>& fragment)
+          -> absl::StatusOr<std::optional<data::NodeFragment>> {
+        if (!fragment.ok() || !fragment->has_value()) {
+          return fragment;
+        }
+        std::optional<data::NodeFragment> materialised = *fragment;
+        absl::StatusOr<data::Chunk*> chunk = materialised->GetChunk();
+        if (!chunk.ok()) {
+          return materialised;  // a NodeRef, which has no bytes to produce
+        }
+        ABSL_RETURN_IF_ERROR((*chunk)->Materialize());
+        return materialised;
+      });
 }
 
 a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(

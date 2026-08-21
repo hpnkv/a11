@@ -60,8 +60,11 @@ class CompiledProgram {
   /// The flows in the order they were declared.
   const std::vector<ResolvedFlow>& flows() const { return resolved_.flows; }
 
-  /// The flow of this name, or `nullptr`.
+  /// The flow of this name, or `nullptr`. Never the entry flow.
   const ResolvedFlow* absl_nullable Flow(std::string_view name) const;
+
+  /// The file's entry point -- `flow { ... }` -- or `nullptr`.
+  const ResolvedFlow* absl_nullable Entry() const;
 
  private:
   CompiledProgram() = default;
@@ -104,6 +107,16 @@ struct RunOptions {
 absl::StatusOr<actions::ActionHandler> MakeHandler(
     std::shared_ptr<const CompiledProgram> program, std::string_view flow,
     RunOptions options = {});
+
+/**
+ * @brief The action handler that runs the program's entry flow.
+ *
+ * A separate function rather than `MakeHandler(program, "")`, because the entry
+ * flow is reached by being the entry flow and not by having an empty name --
+ * the same reason Program::Entry() exists. What an interpreter calls.
+ */
+absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
+    std::shared_ptr<const CompiledProgram> program, RunOptions options = {});
 
 }  // namespace a11::flow
 

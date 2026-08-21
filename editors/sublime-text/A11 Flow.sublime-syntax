@@ -229,9 +229,9 @@ contexts:
   statement-keywords:
     - match: |-
         (?x) \b (
-          let|advance|skip|wait|drain|cancel|fail|log|logf|if|for
-          |repeat|until|while|else|LET|ADVANCE|SKIP|WAIT|DRAIN|CANCEL
-          |FAIL|LOG|LOGF|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
+          let|advance|skip|wait|drain|abort|cancel|fail|log|logf|if
+          |for|repeat|until|while|else|LET|ADVANCE|SKIP|WAIT|DRAIN
+          |ABORT|CANCEL|FAIL|LOG|LOGF|IF|FOR|REPEAT|UNTIL|WHILE|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
     - match: '\b(parallel|unordered|max|of|by|desc|into|PARALLEL|UNORDERED|MAX|OF|BY|DESC|INTO){{kw_boundary}}'
@@ -291,13 +291,14 @@ contexts:
       push:
         - match: |-
             (?x) \b (
-              first|last|drop|truncate|batch|flatten|group|sort|where
-              |map|match|distinct|then|log|logf|mime|strformat|chunk
-              |collect|count|sum|min|max|avg|fold|join|text|json|packb
-              |timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|FLATTEN
-              |GROUP|SORT|WHERE|MAP|MATCH|DISTINCT|THEN|LOG|LOGF|MIME
-              |STRFORMAT|CHUNK|COLLECT|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN
-              |TEXT|JSON|PACKB|TIMEOUT|PACE
+              first|last|drop|truncate|batch|window|flatten|group|sort
+              |where|map|scan|match|distinct|then|log|logf|mime
+              |strformat|chunk|collect|count|sum|min|max|avg|fold|join
+              |text|json|packb|timeout|pace|FIRST|LAST|DROP|TRUNCATE
+              |BATCH|WINDOW|FLATTEN|GROUP|SORT|WHERE|MAP|SCAN|MATCH
+              |DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT
+              |COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT
+              |PACE
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true

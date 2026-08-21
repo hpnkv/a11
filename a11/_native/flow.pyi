@@ -20,6 +20,7 @@ __all__: list[str] = [
     "FlowPlan",
     "Program",
     "check",
+    "check_program",
     "codes",
     "compile",
     "complete",
@@ -28,6 +29,7 @@ __all__: list[str] = [
     "parse",
     "plan",
     "request",
+    "run_program",
     "scan",
     "stages",
     "strformat",
@@ -174,6 +176,17 @@ class Program:
         """
 
     @property
+    def has_entry(self) -> bool:
+        """
+        Whether the file declares a `flow { ... }` -- a program.
+
+        A bool rather than the flow itself, because an entry flow is deliberately
+        unaddressable: it has no name, so there is no `program["..."]` that reaches it and
+        nothing can `run` or `call` it. What a caller does with this is decide whether to
+        run the file with `run_program` or to pick one of `names`.
+        """
+
+    @property
     def main(self) -> FlowPlan:
         """
         The first flow declared, which is the one a file is usually about.
@@ -182,7 +195,7 @@ class Program:
     @property
     def names(self) -> list[str]:
         """
-        Every flow's name, in the order the file declares them.
+        Every named flow, in the order the file declares them. The entry flow -- `flow { ... }` -- is not here: it has no name, and it is run rather than called.
         """
 
     @property
@@ -198,6 +211,13 @@ def check(source: str, source_name: str = "-") -> dict[str, typing.Any]:
 
     This is the whole of what ``a11 flow check`` and an editor need. ``flow.compile``
     is the same engine with a strict door on it, for actually running one.
+    """
+
+def check_program(source: str, source_name: str = "") -> str:
+    """
+    What a program's entry flow is, compiling it and running nothing.
+
+    Raises if the source will not compile or declares no ``flow { ... }``.
     """
 
 def codes() -> list[dict[str, typing.Any]]:
@@ -286,6 +306,38 @@ def request(request: dict[str, typing.Any]) -> dict[str, typing.Any]:
     function here as well; this is for a frontend that is *relaying* -- a server, a
     plugin, a test of the protocol -- and would otherwise have to keep its own table
     of which method means which call.
+    """
+
+def run_program(
+    source: str,
+    source_name: str = "",
+    *,
+    arguments: collections.abc.Sequence[str] = [],
+    roots: collections.abc.Sequence[str] = [],
+    allow_write: bool = False,
+    allow_run: bool = False,
+    allow_net: bool = False,
+    allow_local_net: bool = False,
+    allow_env: collections.abc.Sequence[str] = [],
+    unrestricted: bool = False,
+    timeout_seconds: typing.SupportsFloat | None = None,
+    standard_streams: bool = True,
+    registry: typing.Any | None = None,
+) -> dict[str, typing.Any]:
+    """
+    Run a Flow program's entry flow, and return what it did.
+
+    The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
+    -- so a program behaves identically whichever started it.
+
+    Pass a ``registry`` that already holds your own actions and the program can call
+    them: a process that registered ``interact_with_llm`` can run a file that asks a
+    model, with no subprocess and nothing about the file changed. Names you
+    registered are never replaced by the standard library's.
+
+    What the program may *do* is the arguments here and nothing the file can say --
+    ``roots``, ``allow_write``, ``allow_run``, ``allow_net``, ``allow_env`` -- for
+    the same reason they are command-line flags in the CLI.
     """
 
 def scan(paths: collections.abc.Sequence[str]) -> dict[str, typing.Any]:

@@ -1,0 +1,43 @@
+# Copy a file, one chunk at a time.
+#
+#   a11-flow-run --allow-write copy.flow -- from.bin to.bin
+#
+# The point of this one is what it does *not* do: `read_file`'s bytes go
+# straight into `write_file`'s content, so a file larger than memory costs one
+# chunk at a time. A port write does not return until the store has taken the
+# chunk, so the reader is held behind the writer without either of them saying
+# anything about it.
+#
+# `write_file` is atomic: the content goes to a temporary beside the
+# destination and is renamed into place at the end, so an interrupted copy
+# leaves the destination as it was rather than half-written.
+
+flow {
+  describe "Copy one file to another, streaming."
+
+  out copied: integer "How many bytes were written."
+
+  nodes scratch
+  from = node() in scratch
+  to = node() in scratch
+
+  argv | drop 1 | first 1 -> from
+  argv | drop 2 | first 1 -> to
+
+  # `omit` rather than `skip`: skipping drains a port the action still produced,
+  # and for a binary file `text` and `lines` cannot be produced at all -- they
+  # are text, and a file is bytes. Omitting closes them before anything is read,
+  # which is both cheaper and the only thing that is *correct* here.
+  source = run read_file(
+    path: from,
+    options: {"omit": ["text", "lines", "info"]}
+  ) via scratch
+
+  target = run write_file(
+    path: to,
+    content: source.bytes,
+    options: {"omit": ["resolved", "info"]}
+  ) via scratch
+
+  target.bytes_written -> copied
+}

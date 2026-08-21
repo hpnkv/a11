@@ -252,6 +252,21 @@ pages | map it.lines | flatten -> lines
 A value that is not a list goes through as itself, so a mixed stream is
 flattened rather than refused.
 
+`| window N` is `batch` with the lists overlapping: one list of the last `N`
+values per value, once `N` have arrived.
+
+```a11flow
+lines | window 2 | where contains(join(it, "\n"), needle) -> hits
+```
+
+It exists because `batch` has to put a boundary *somewhere*, and a question
+about neighbours is exactly the question a boundary hides: a pattern spanning
+two lines is invisible to a `batch` whenever the boundary falls between them, so
+roughly one match in `N` goes missing and nothing says so. A window holds `N`
+values and no more, so one over a stream that never ends costs nothing that
+grows — and a stream shorter than `N` yields nothing at all, which is the
+deliberate difference from `batch`, whose last list may be short.
+
 `interleave(a, b, ...)` is the other kind of fan-in. Where `zip` reads its
 sources *in step* and gives a tuple per round, this reads them at once and gives
 each value as it arrives, so a fast stream is not held behind a slow one:
@@ -291,7 +306,42 @@ orders | fold 0 as total, total + it.price -> revenue
 The name is bound to what the last value produced and `it` to the value in hand.
 The starting value is a literal, not an expression: `fold 0 as total` read as an
 expression would be a cast of `0` to a type called `total`, and the language
-should not have to guess which was meant.
+should not have to guess which was meant. A **record** literal is allowed, and a
+state worth carrying usually is one; the ambiguity does not arise there, because
+`{ .. }` is read by its braces before `as` is looked at.
+
+### Carrying state along a stream
+
+`| scan` is written exactly as `fold` is, and the difference is where the values
+go: `fold` yields one when the stream ends, `scan` yields one per value as it
+arrives.
+
+```a11flow
+lines | scan 0 as n, n + 1 -> numbered
+```
+
+That is what a state machine is — a state carried forward and read at every step
+— and it is the only way to write one over a stream. The two constructs that
+look like they should do it cannot: `repeat` carries state across passes but
+reads its stream from the start on *every* pass, and `for` walks a stream one
+value at a time but carries nothing between passes. `scan` is the one that does
+both, and it holds one value of state rather than the stream.
+
+With a record start it is a state machine in the ordinary sense:
+
+```a11flow
+lines
+  | scan {"inside": false, "line": ""} as s,
+      {"inside": starts-with(it, "BEGIN") or (s.inside and not starts-with(it, "END")),
+       "line": it}
+  | where it.inside and not starts-with(it.line, "BEGIN")
+  | map it.line
+  -> body
+```
+
+The cost is one value of state and nothing per value of the stream, so this runs
+in constant memory over an input of any size — which is the property that makes
+it worth having as a stage rather than an action.
 
 `| sort` puts a stream in order:
 
@@ -588,6 +638,21 @@ value the pattern does not fit and the function answers null. Where the pattern
 is written out, the fields are known: `it.name` is completed and a typo is
 reported.
 
+`try` also goes in front of a **pipe**, and there it means the failure arriving
+from the source — or refused by the destination — is a value rather than the end
+of the flow:
+
+```a11flow
+moved = try findings -> seen
+status moved | map it.message -> why
+```
+
+Bind it and read it. Unbound, a tolerated pipe that failed leaves its destination
+closed early and every reader of it sees an ordinary end of stream, with nothing
+saying why — so the language reports that. This is a different thing from `try`
+on a *stage*: a stage fails once per value and carries on, which is why it has
+`into` for the ones it dropped, while a pipe fails once and stops.
+
 A `[s =] [try] { ... }` block runs its statements as one step. Everything in a
 flow's body runs at once, which is the point of it; a block is how a flow says
 "these together, and *this* is what came of them". Reading a value blocks where
@@ -603,6 +668,100 @@ the same outer value. The buffer grows while it is read, so a pass waits for the
 value it asks for and not for the stream to finish — a loop reading a stream
 that is still open is not held up by it, and neither is anything written after
 the loop.
+
+A loop may be **named**, and then it reads as its own outcome — the same shape
+`s = try { .. }` has:
+
+```a11flow
+taken = node()
+done = for line in input.lines { line -> taken }
+drain taken after done
+```
+
+That last line is what a flow could not say before. The node was already ended
+when the loop finished — a loop counts as one writer of an outer node for as
+long as it runs, so the last `Release` closes it — but nothing in the *text*
+said so, and a program whose finished state has to be inferred from writer
+counting is a program that reads as unfinished. `for` and `repeat` also take an
+`after`, because a loop is a step like any other.
+
+A `for` takes `until`/`while` too, and it means what it means in a `repeat`:
+asked at the tail of a pass, so the body always runs at least once and the value
+that ended the loop was seen.
+
+```a11flow
+for line in input.lines {
+  line -> seen
+  until line == "quit"
+}
+```
+
+That is how a loop over a stream stops before the stream does. It stops
+*reading*, exactly as `| first n` does, and like `first n` it does not cancel
+whatever was producing — see below. It cannot be written with `parallel`: the
+question is about the pass that just finished, and with several in flight there
+is no such pass, so which values were seen would depend on scheduling. `<-`
+stays a `repeat`'s, because a `for` takes its value from its stream and has
+nothing to hand the next pass.
+
+`advance` is the other way to walk a stream, and it is *not* a loop: its offset
+is worked out while the file is compiled, so it reads the first, second and third
+value where it is written out three times, and advancing a name bound outside a
+loop is refused rather than binding the same value on every pass.
+
+### Ending a stream, and ending it badly
+
+`drain node` writes both of the two facts that end a stream: the node is marked
+**final**, so an ordered reader stops, and its writer is **closed**, so the store
+admits nothing more. Then it reads what is left, and its name binds the outcome.
+
+`abort node` is the other ending:
+
+```a11flow
+if not status page.ok { abort findings unavailable "the source went away" }
+```
+
+The difference is what a *reader* is told. Both end the stream; only this one
+says it went wrong, and without it a stream cut short by something the flow
+noticed is indistinguishable from one that finished. It takes the code and
+message a `fail` takes, and waits for nothing for the same reason, so it belongs
+in an `if` or a loop body or carries an `after`.
+
+Only a node this flow **writes** can be aborted by it. Aborting one it merely
+reads would be telling somebody else's producer how their stream ended.
+
+The two half-endings the node API has — final without closing, and closing
+without finality — are deliberately absent. Both exist for a producer that
+cannot say which chunk was last; a flow always can, which is what its writer
+count already encodes. Offering them would let a flow leave a node closed but
+not final, and a reader consuming *that* gets `failed_precondition`.
+
+### Ending a step early
+
+`cancel x` aborts a step, and the run then ends `cancelled` — which is right
+when something has gone wrong, and is the only thing the *language* offers.
+
+Asking a step to *finish* is deliberately not a language construct. It is a
+convention of the standard library, where every action treats
+`{"command": "stop"}` on its control port as its stream having ended, so its
+ports close normally and a reader sees the end of a stream rather than a
+failure. A flow says it by writing to that port:
+
+```a11flow
+if tick.number == 3 { {"command": "stop"} -> clock.control_events }
+```
+
+Spelling it out rather than giving it a keyword keeps the compiler free of one
+library's habits: `control_events` is not a word this language knows, and a
+compiler that knew it would have to know the next such convention too.
+
+Neither is what a stage does. `| first n` and a `for`'s `until` stop *reading*
+and leave the producer alone on purpose: a step feeding a node that nobody drains
+would stall, and a `first 3` must not be able to wedge what it reads from. So an
+endless step is ended by its control port, by `cancel`, or by its deadline, and
+by nothing else. `cancel` waits for nothing, so it belongs in an `if` or a loop
+body or carries an `after`; at the top of a body it races every other statement
+and is refused there.
 
 
 ## What a flow deliberately cannot do
@@ -666,6 +825,50 @@ the whole composition, which is what makes one reviewable before it is run.
 ## Running one
 
 ::: a11.flow.runtime
+
+## Running a program
+
+A file with a `flow { ... }` is a program, and running one is a different call
+from running a flow: it gets `argv`, a policy, this process's standard streams,
+and its exit code is a result rather than an exception.
+
+```sh
+a11 flow run greet.flow -- Helena
+a11 flow run --root /var/log --timeout 30s watch.flow -- /var/log/system.log
+```
+
+`a11 flow run` and the standalone `a11-flow-run` are the **same interpreter**, so
+a program behaves identically whichever started it. What differs is what the host
+can offer it, and that is the entire reason the Python one exists: a program may
+only call actions that exist where it runs, the binary has exactly the Flow
+standard library, and this process has whatever Python has.
+
+```sh
+a11 flow run ask.flow --allow-llm --allow-net \
+    --allow-env ANTHROPIC_API_KEY -- "why is the sky blue"
+```
+
+`interact_with_llm` needs a provider SDK and a credential, both of which live in
+Python, so `examples/006-flow-programs/ask.flow` runs this way and no other.
+`--allow-llm` is its own flag and not part of `--allow-net` because **a
+host-registered action is not bounded by the flow policy**: the policy governs
+what the standard library may do and can say nothing about what a Python handler
+does. Offering one is therefore a separate decision, and the default is to offer
+nothing.
+
+From Python directly:
+
+::: a11.flow.run_program
+
+::: a11.flow.check_program
+
+!!! important "Call it off the loop when your actions are `async`"
+
+    `run_program` runs the program to completion, so it blocks the thread it is
+    called on. An `async def` handler needs a loop to drive it, and if that loop
+    is on *this* thread it cannot run while the call is blocking it -- so the
+    program waits forever on its own handler. `await asyncio.to_thread(...)` is
+    the pattern, and it is what `a11 flow run` does.
 
 ## Diagnostics
 

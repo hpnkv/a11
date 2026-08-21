@@ -74,13 +74,22 @@ flow NAME {
            # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
+  abort NODE [CODE] [MESSAGE]              # end a node with a failure
   cancel X                                 # ask X to stop
   fail [CODE] [MESSAGE]                    # end the flow with a status
   log [LEVEL] WHAT                         # write to the flow's own log
   logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
-           # `fail`, `cancel` and `log` wait for nothing, so they go in an
-           # `if` or a loop body, or carry an `after`: at the top of a body
-           # they race every other statement, and are refused there.
+           # `fail`, `cancel`, `abort` and `log` wait for nothing, so they
+           # go in an `if` or a loop body, or carry an `after`: at the top of
+           # a body they race every other statement, and are refused there.
+           # `drain NODE` and `abort NODE` are the two endings a stream can
+           # have: drain marks it final and closes it, which says it is over;
+           # abort says it went wrong. A reader cannot otherwise tell a stream
+           # that finished from one cut short.
+           # `cancel` aborts, and a cancelled run reports `cancelled`. Asking
+           # an action to *finish* instead is not a language construct: it is
+           # `{"command": "stop"} -> X.control_events`, a convention of the
+           # standard library rather than of the language.
            # No port declares the log, nothing drains it, and a flow that
            # never logs pays nothing for it
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
@@ -193,13 +202,22 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
            Either may name another flow of the same file, in any order, and
            needs nothing registered for it: a composition can be factored into
            several flows and still arrive as one text.
-STAGES: first N | last N | drop N | truncate N | batch N | flatten | chunk N |
-        group EXPR | sort [by EXPR] [desc] | then SOURCE | where EXPR |
-        map EXPR | join "sep" | strformat "fmt" | mime "text/*" | collect |
-        count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
-        fold LITERAL as NAME, EXPR | distinct | text | json | packb |
-        timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
+STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
+        chunk N | group EXPR | sort [by EXPR] [desc] | then SOURCE |
+        where EXPR | map EXPR | join "sep" | strformat "fmt" | mime "text/*" |
+        collect | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
+        fold LITERAL as NAME, EXPR | scan LITERAL as NAME, EXPR | distinct |
+        text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
         logf [LEVEL] "fmt" [ARG, ...]
+      try SOURCE -> DEST is the pipe's own form of the same word: a failure
+      arriving from the source, or refused by the destination, becomes a value
+      rather than the end of the flow. Bind it -- `p = try src -> dest` -- and
+      `status p` says how it went; unbound, a failure is silence and the
+      language says so. It differs from `try` on a *stage*: a stage fails once
+      per value and carries on, while a pipe fails once and stops.
+      A loop may be named too: `done = for x in s { .. }` reads as the loop's
+      own outcome, so `drain taken after done` is how a flow says "once the
+      loop is over, that node is over". `for`/`repeat` also take an `after`.
       Any stage may be written `try STAGE` — a value the stage cannot do is
       dropped and logged instead of ending the flow — and a `try` stage may say
       `into DEST` to send those failures somewhere as status records:
@@ -232,6 +250,20 @@ STAGES: first N | last N | drop N | truncate N | batch N | flatten | chunk N |
       `| fold 0 as total, total + it.price` binds `total` to what the last
       value produced and `it` to the value in hand. `+` is arithmetic, not
       concatenation -- `| join` is what puts strings together.
+      scan is fold with the values published as they are computed rather than
+      only the last: one value out per value in, carrying state forward. That
+      is a state machine over a stream, and it is the only way to write one --
+      `repeat` carries state but reads its stream from the start on every pass,
+      and `for` walks a stream but carries nothing between passes.
+      `| scan 0 as n, n + 1` numbers a stream, and the start may be a record
+      when the state has more than one part:
+      `| scan {"in": false} as s, {"in": starts-with(it, "BEGIN") or s.in}`.
+      window N is batch's overlapping form: one list of the last N values per
+      value, once N have arrived. It is what a question about *neighbours*
+      needs — a pattern spanning two lines is invisible to a `batch`, because a
+      boundary falls somewhere and half the matches fall on it. It holds N
+      values and no more, so a window over an endless stream costs nothing that
+      grows, and a stream shorter than N yields nothing.
       sort reads the whole stream (nothing comes out until it ends), compares
       the way `<` does, and is stable: values that tie stay in the order they
       were written. `by` names what to compare and `desc` reverses it.

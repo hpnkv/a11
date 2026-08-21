@@ -338,9 +338,20 @@ orders | sum it.price -> revenue
 hits   | sort by it.score desc | first 10 -> best
 ```
 
-`| fold 0 as total, total + it` is the general form, and `| timeout 30s` and
-`| pace 100ms` are the two stages about *when* a value arrives rather than what
-it is.
+`| fold 0 as total, total + it` is the general form, and `| scan` is that same
+fold with every value it passed through published rather than only the last —
+which is how a stream whose meaning depends on what came before it is written:
+
+```a11flow
+lines | scan 0 as n, n + 1 -> numbered
+```
+
+`| window 2` is `batch` with the lists overlapping, for a question about
+neighbours rather than about groups — a pattern spanning two lines is invisible
+to a `batch`, because a boundary falls somewhere and half the matches fall on it.
+
+`| timeout 30s` and `| pace 100ms` are the two stages about *when* a value
+arrives rather than what it is.
 
 ## Where to go from here
 

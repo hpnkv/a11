@@ -101,17 +101,91 @@ struct ChunkMetadata {
 };
 
 /**
+ * @brief An in-process value a chunk may carry instead of its encoded bytes.
+ *
+ * The thing this exists to remove: a value written to a node and read back in
+ * the same process was encoded on the way in and decoded on the way out, and
+ * both are pure waste when nobody outside the process ever sees the bytes.
+ * Decode is the expensive half -- nested-record decode ran at ~130 MiB/s
+ * against encode's 2+ GiB/s before ReadBinaryView -- so the local path was
+ * paying for a wire format it never used.
+ *
+ * A chunk carrying one of these has **no bytes at all** until somebody needs
+ * them. Chunk::Materialize() is where they come from, and it is called at every
+ * boundary where bytes are genuinely required: a store that persists them, a
+ * stream that sends them, or a reader that asked for a chunk rather than a
+ * value.
+ *
+ * ### Identity, without RTTI
+ *
+ * tag() is the serialisation tag -- `a11.sdk.AudioBuffer` -- and it is what a
+ * consumer compares before casting. Deliberately *not* `std::type_info`: RTTI
+ * identity across the translation units linked into one shared object has
+ * already broken here once, as a `bad any cast` from a `std::any` in this same
+ * position. The tag table is a compile-time constant that four languages
+ * already agree on, so comparing it is both cheaper and sound where comparing
+ * type identity is not.
+ *
+ * ### Immutability
+ *
+ * The held value must not change after it is put here, which is not a new rule:
+ * a mutable value in a ChunkStore was never sound, since a store replays a
+ * fragment to every reader and to readers that attach later. What is new is
+ * that sharing makes the rule load-bearing rather than academic, so the value
+ * is handed out **by copy** on the consuming side -- one copy per consumer that
+ * asks, instead of one encode plus one decode per consumer.
+ */
+class ChunkObject {
+ public:
+  virtual ~ChunkObject() = default;
+
+  /** @brief The serialisation tag of the held type. */
+  [[nodiscard]] virtual std::string_view tag() const = 0;
+  /** @brief The mimetype the value would be encoded as. */
+  [[nodiscard]] virtual std::string_view mimetype() const = 0;
+  /** @brief Encodes the value, for whoever needs bytes after all. */
+  [[nodiscard]] virtual absl::StatusOr<Bytes> Encode() const = 0;
+  /** @brief A size estimate that does not encode anything. */
+  [[nodiscard]] virtual size_t ApproxBytes() const = 0;
+
+  /**
+   * @brief The address of the held value.
+   *
+   * Do not call this. It is dereferenced in exactly one place --
+   * a11::data::TryTakeObject, which compares tag() first -- and a cast without
+   * that comparison is undefined behaviour with a plausible-looking result.
+   */
+  [[nodiscard]] virtual const void* address() const = 0;
+};
+
+/**
  * @brief A unit of data: bytes plus optional descriptive metadata.
  *
  * A chunk holds its payload in @c data with an optional @c metadata
  * describing it. Instead of inline data a chunk may instead carry a @c ref
  * naming another node whose content it stands in for; such a reference must
  * be resolved before the payload is used.
+ *
+ * A third possibility exists and is local to one process: an @c object, whose
+ * bytes have not been produced because nothing has needed them. See
+ * a11::data::ChunkObject, and note the one invariant that matters to everybody
+ * else -- **an object-carrying chunk is not empty**, even though @c data is,
+ * which is why IsEmpty() consults all three fields. A chunk that read as empty
+ * would read as a null stream terminator, and would end a stream that was only
+ * getting started.
  */
 struct Chunk {
   std::optional<ChunkMetadata> metadata{};  ///< Optional payload metadata.
   std::string ref{};  ///< Node id this chunk references, if not inline.
   Bytes data{};       ///< Inline byte payload.
+  /**
+   * The value this chunk stands for, when its bytes have not been produced.
+   *
+   * Never crosses a process boundary: everything that sends, persists or hands
+   * out bytes calls Materialize() first, so a peer and a durable store see
+   * exactly what they saw before this field existed.
+   */
+  std::shared_ptr<const ChunkObject> object{};
 
   /// Estimate memory/wire weight for bounded-buffer accounting.
   [[nodiscard]] size_t ApproxBytes() const;
@@ -119,12 +193,26 @@ struct Chunk {
   [[nodiscard]] std::string DebugString() const;
   /** @brief Returns the metadata mimetype, or empty when unset. */
   [[nodiscard]] std::string GetMimetype() const;
-  /** @brief Whether the chunk carries neither data nor a reference. */
+  /** @brief Whether the chunk carries no data, reference or object. */
   [[nodiscard]] bool IsEmpty() const;
   /** @brief Whether the chunk represents an explicit null value. */
   [[nodiscard]] bool IsNull() const;
   /// Validate that payload, reference, and metadata fields are consistent.
   absl::Status Validate() const;
+
+  /** @brief Whether this chunk is carrying a value rather than bytes. */
+  [[nodiscard]] bool HasObject() const { return object != nullptr; }
+  /**
+   * @brief Produces @c data from @c object, if it has not been produced yet.
+   *
+   * Idempotent, and a no-op on a chunk that already has its bytes. Called at
+   * every boundary where bytes are required -- a persisting store, an attached
+   * stream, a reader asking for a chunk -- which is what keeps @c object an
+   * optimisation rather than a second representation everybody has to know
+   * about. The object is released afterwards, so the bytes become the single
+   * answer once they exist.
+   */
+  absl::Status Materialize();
 
   /** @brief Encodes this chunk as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;

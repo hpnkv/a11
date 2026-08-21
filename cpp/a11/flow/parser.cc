@@ -540,7 +540,16 @@ class ParserImpl {
 
   syntax::FlowDeclarationPtr ParseFlow(const Token& keyword) {
     auto declaration = Make<syntax::FlowDeclaration>(keyword);
-    declaration->name = ParseDottedName("a flow name");
+    // `flow { ... }` -- no name -- is the file's entry point: the statements an
+    // interpreter runs when handed the file. Decided by what follows the
+    // keyword rather than by a second keyword, because "the flow with no name"
+    // is the whole idea and a name is exactly what it does not have.
+    if (At(TokenKind::kLeftBrace)) {
+      declaration->entry = true;
+      declaration->name.location = syntax::LocationOf(keyword);
+    } else {
+      declaration->name = ParseDottedName("a flow name");
+    }
     // The flow a diagnostic is in, for everything reported until this one ends.
     const std::string outer_flow = flow_name_;
     flow_name_ = declaration->name.text;
@@ -555,8 +564,11 @@ class ParserImpl {
     while (!At(TokenKind::kRightBrace)) {
       if (At(TokenKind::kEnd)) {
         ReportHere("flow.syntax.unclosed",
-                   absl::StrCat("Flow ", Quoted(declaration->name.text),
-                                " is missing its closing '}'."));
+                   declaration->entry
+                       ? std::string("The entry flow is missing its closing "
+                                     "'}'.")
+                       : absl::StrCat("Flow ", Quoted(declaration->name.text),
+                                      " is missing its closing '}'."));
         break;
       }
       const size_t before = position_;
@@ -842,11 +854,17 @@ class ParserImpl {
       const std::string word = Keyword();
       if (OpensStatement(word)) {
         if (word == "run" || word == "call" || word == "try") {
-          // `try { ... }` is a block; `try run ..` and `try call ..` are a
-          // call.
+          // `try` fronts three different things, told apart by what follows it:
+          // a `{` opens a block, `run`/`call` a call, and anything else is a
+          // pipe -- `try src -> dest`, where the failure being tolerated is the
+          // source's or the destination's rather than a step's.
           if (word == "try" && Peek().kind == TokenKind::kLeftBrace) {
             Advance();
             return ParseBlockStatement(keyword, /*tolerant=*/true);
+          }
+          if (word == "try" && !NextWordIsCallVerb()) {
+            Advance();
+            return ParsePipeStatement(keyword, /*tolerant=*/true);
           }
           auto statement = Make<syntax::CallStatement>(keyword);
           statement->call = ParseCall();
@@ -925,6 +943,17 @@ class ParserImpl {
           Advance();
           return ParseFail(keyword);
         }
+        if (word == "abort") {
+          Advance();
+          auto abort = Make<syntax::Abort>(keyword);
+          abort->target = ParseReference();
+          // The same tail `fail` takes, because it is the same question: which
+          // status, and what to say about it.
+          if (!AtStatementEnd()) abort->code = ParseExpression();
+          if (!AtStatementEnd()) abort->message = ParseExpression();
+          abort->after = ParseAfter();
+          return abort;
+        }
         if (word == "log" || word == "logf") {
           Advance();
           auto log = Make<syntax::Log>(keyword);
@@ -962,7 +991,19 @@ class ParserImpl {
         Advance();
         if (AtWord("node")) {
           bind->value = ParseNode();
-        } else if (AtWord("wait", "drain")) {
+        } else if (AtWord("wait", "drain") || AtWord("for", "repeat")) {
+          // A loop, bound to a name, reads as its own outcome -- the same thing
+          // a bound `wait`/`drain`/block does, so it takes the same route.
+          //
+          // An arm here rather than a `Peek(1) == '='` test above the keyword
+          // dispatch: that would silently turn `wait = x`, `skip = x` and
+          // `fail = x` into binds, which is why `stop` needed a hand-written
+          // guard when it briefly existed.
+          bind->value = ParseStatement();
+        } else if (AtWord("try") && Peek().kind != TokenKind::kLeftBrace &&
+                   !NextWordIsCallVerb()) {
+          // `p = try src -> dest`: the name reads how the pipe went, which is
+          // the only way a tolerated failure is anything but silence.
           bind->value = ParseStatement();
         } else if (At(TokenKind::kLeftBrace) ||
                    (AtWord("try") && Peek().kind == TokenKind::kLeftBrace)) {
@@ -989,7 +1030,16 @@ class ParserImpl {
 
     if (OpensBlock()) return ParseBlockStatement(keyword, /*tolerant=*/false);
 
+    return ParsePipeStatement(keyword, /*tolerant=*/false);
+  }
+
+  /// `[try] source [| stage ..] -> dest[, dest ..] [after ..]`.
+  ///
+  /// One routine so the plain and the tolerated form cannot drift: `try` in
+  /// front changes what a failure *means* and nothing about the grammar.
+  NodePtr ParsePipeStatement(const Token& keyword, bool tolerant) {
     auto pipe = Make<syntax::Pipe>(keyword);
+    pipe->tolerant = tolerant;
     pipe->pipeline = ParsePipeline();
     if (ContinuesWith(TokenKind::kArrow)) SkipNewlines();
     if (!Expect(TokenKind::kArrow, "'->' and a destination port")) return pipe;
@@ -1000,6 +1050,23 @@ class ParserImpl {
     }
     pipe->after = ParseAfter();
     return pipe;
+  }
+
+  /// Whether the word after this one is `run` or `call`.
+  ///
+  /// What tells `try run foo(..)` from `try foo.out -> dest`. Deliberately not a
+  /// "word followed by `(`" test: `try zip(a, b) -> dest` is a pipe whose source
+  /// is a source word, and that heuristic would read it as a call.
+  bool NextWordIsCallVerb() const {
+    // From 1, because `Peek(0)` is `Current()` -- the `try` itself. `NextWordIs`
+    // starts at 0 and so asks about the current token despite its name, which
+    // is a trap worth not falling into twice.
+    size_t offset = 1;
+    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    const Token& token = Peek(offset);
+    if (!token.IsWord()) return false;
+    const std::string word = vocabulary::Canonical(token.text);
+    return word == "run" || word == "call";
   }
 
   bool NextWordIs(std::string_view word) const {
@@ -1307,6 +1374,7 @@ class ParserImpl {
     }
     if (AcceptWord("parallel")) loop->parallel = ExpectCount();
     loop->body = ParseBlock();
+    loop->after = ParseAfter();
     return loop;
   }
 
@@ -1323,6 +1391,7 @@ class ParserImpl {
     }
     if (AcceptWord("max")) repeat->max_iterations = ExpectCount();
     repeat->body = ParseBlock();
+    repeat->after = ParseAfter();
     return repeat;
   }
 
@@ -1705,31 +1774,56 @@ class ParserImpl {
     }
   }
 
-  /// `fold LITERAL as NAME, EXPRESSION`.
+  /// `fold LITERAL as NAME, EXPRESSION`, and `scan` the same.
   ///
   /// The start is a literal rather than an expression on purpose: `0 as total`
   /// read as an expression is a cast of `0` to a type called `total`, and the
   /// language would have to decide which of the two was meant. A literal cannot
   /// be a cast, so this is unambiguous by construction.
+  ///
+  /// A record literal is a start too, and has to be: `scan` is how a state
+  /// machine is written, and a state worth carrying is rarely one number.
+  /// `{ .. } as name` is not ambiguous the way `0 as name` is -- a record
+  /// literal is read by its braces before `as` is looked at -- so the reason for
+  /// the restriction does not apply to it. It must still fold to a constant,
+  /// which is what keeps it a *starting* value and not a first pass.
   void ParseFoldArgument(syntax::Stage& stage) {
-    if (const std::optional<syntax::Constant> start = AcceptLiteral()) {
+    const std::string spelled(stage.name);
+    if (At(TokenKind::kLeftBrace)) {
+      const Token& brace = Current();
+      const syntax::NodePtr record = ParseObjectLiteral();
+      std::optional<syntax::Constant> folded =
+          record == nullptr ? std::nullopt : syntax::ConstantValue(record.get());
+      if (folded.has_value()) {
+        stage.start = *std::move(folded);
+      } else {
+        Report("flow.form.fold-start",
+               absl::StrCat("'", spelled,
+                            "' starts from a value that is known before the "
+                            "stream is, so the record it starts from cannot "
+                            "read `it` or anything else the stream carries."),
+               brace, Severity::kError, Family::kForm);
+      }
+    } else if (const std::optional<syntax::Constant> start = AcceptLiteral()) {
       stage.start = *start;
     } else {
       Report("flow.form.fold-start",
-             absl::StrCat("'fold' starts from a literal -- a number, a string, "
-                          "a duration, true, false or null -- and found ",
+             absl::StrCat("'", spelled,
+                          "' starts from a literal -- a number, a string, a "
+                          "duration, a record, true, false or null -- and "
+                          "found ",
                           Found(), "."),
              Current(), Severity::kError, Family::kForm);
     }
     if (!AcceptWord("as")) {
       Report("flow.form.fold-name",
-             absl::StrCat("'fold' names what it carries: "
-                          "`fold 0 as total, total + it`. Found ",
-                          Found(), "."),
+             absl::StrCat("'", spelled, "' names what it carries: `", spelled,
+                          " 0 as total, total + it`. Found ", Found(), "."),
              Current(), Severity::kError, Family::kForm);
       return;
     }
-    stage.carried = ExpectName("a name for what the fold carries");
+    stage.carried = ExpectName(absl::StrCat("a name for what the ", spelled,
+                                            " carries"));
     if (!Expect(TokenKind::kComma,
                 "',' and the expression that folds one value in")) {
       return;
@@ -1816,11 +1910,58 @@ class ParserImpl {
     return node;
   }
 
+  /// How many newlines sit between here and the next token that is not one.
+  size_t NewlinesAhead() const {
+    size_t offset = 0;
+    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    return offset;
+  }
+
+  /// Inside brackets, lets a line break sit in the middle of an expression.
+  ///
+  /// A break inside `{ .. }`, `[ .. ]` or `( .. )` ends nothing -- the closing
+  /// bracket is what ends it -- so an operator may begin the next line. Outside
+  /// them a break ends the statement, and must keep doing so: that is what stops
+  /// a `where` on the line below from being read as a continuation of the pipe
+  /// above it.
+  ///
+  /// The asymmetry this removes was a real wart. A break straight after a `,`
+  /// already worked, because the loops that read a comma-separated list skip
+  /// newlines themselves, so `{"a": 1,\n "b": 2}` was fine while
+  /// `{"a": x\n or y}` was `Expected }, found 'or'`. One rule now: inside
+  /// brackets a break is whitespace.
+  ///
+  /// Only ever *consumes* newlines when the token after them is the one asked
+  /// for, so a `}` on the next line is still a `}`.
+  bool WrapsTo(TokenKind kind) {
+    if (brackets_ == 0 || At(kind)) return false;
+    const size_t ahead = NewlinesAhead();
+    if (ahead == 0 || Peek(ahead).kind != kind) return false;
+    SkipNewlines();
+    return true;
+  }
+
+  bool WrapsToWord(std::string_view word) {
+    if (brackets_ == 0 || AtWord(word)) return false;
+    const size_t ahead = NewlinesAhead();
+    if (ahead == 0 || Keyword(ahead) != word) return false;
+    SkipNewlines();
+    return true;
+  }
+
+  bool WrapsToComparison() {
+    if (brackets_ == 0 || IsComparison(Current().kind)) return false;
+    const size_t ahead = NewlinesAhead();
+    if (ahead == 0 || !IsComparison(Peek(ahead).kind)) return false;
+    SkipNewlines();
+    return true;
+  }
+
   NodePtr ParseExpression() { return ParseOr(); }
 
   NodePtr ParseOr() {
     NodePtr left = ParseAnd();
-    while (AtWord("or")) {
+    while (AtWord("or") || WrapsToWord("or")) {
       const Token& op = Advance();
       auto binary = Make<syntax::Binary>(op);
       binary->op = "or";
@@ -1833,7 +1974,7 @@ class ParserImpl {
 
   NodePtr ParseAnd() {
     NodePtr left = ParseNot();
-    while (AtWord("and")) {
+    while (AtWord("and") || WrapsToWord("and")) {
       const Token& op = Advance();
       auto binary = Make<syntax::Binary>(op);
       binary->op = "and";
@@ -1871,7 +2012,7 @@ class ParserImpl {
 
   NodePtr ParseComparison() {
     NodePtr left = ParseAdditive();
-    if (IsComparison(Current().kind)) {
+    if (IsComparison(Current().kind) || WrapsToComparison()) {
       const Token& op = Advance();
       auto binary = Make<syntax::Binary>(op);
       binary->op = std::string(KindName(op.kind));
@@ -1898,7 +2039,8 @@ class ParserImpl {
   /// one name, because an action is called `text-upper`.
   NodePtr ParseAdditive() {
     NodePtr left = ParseCast();
-    while (At(TokenKind::kPlus) || At(TokenKind::kMinus)) {
+    while (At(TokenKind::kPlus) || At(TokenKind::kMinus) ||
+           WrapsTo(TokenKind::kPlus) || WrapsTo(TokenKind::kMinus)) {
       const Token& op = Advance();
       auto binary = Make<syntax::Binary>(op);
       binary->op = std::string(KindName(op.kind));

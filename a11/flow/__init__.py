@@ -36,13 +36,15 @@ page:
 | `skip source` | read a stream to its end and discard the values |
 | `skip n port` | drop a node's first `n` values, for every reader |
 | `s = wait x` | hold until `x` is finished, and say how it went |
-| `drain node` | end a node: its writers are done and its bytes landed |
+| `drain node` | end a node: mark it final and close it |
+| `abort node [code] [msg]` | end a node with a *failure*, so readers see why |
 | `status x` | the same outcome, read where a value is expected |
-| `for v in source [parallel n] { }` | run a block per value |
+| `[name =] for v in source [parallel n] { } [after x]` | run a block per value; the name reads its outcome |
 | `repeat s = start [max n] { }` | run a block repeatedly, carrying a value; say when it stops |
-| `s <- source`, `until e` | what a `repeat` carries, and when it stops |
+| `s <- source`, `until e` | what a `repeat` carries, and when a loop stops |
 | `if e { } else { }` | run one block or the other |
 | `s = try { }` | run a block as one step, and say how it went |
+| `p = try source -> port` | a failing pipe becomes a value, not the flow's end |
 | `cancel x` | ask a called action to stop |
 | `fail [code] [message]` | end the flow with a status: in an `if`, or with an `after` |
 
@@ -175,6 +177,7 @@ statement  := [name "="] call
 skip-target := pipeline
             | name ("," name)* "of" name   # or "(" name ("," name)* [ "of" name ] ")"
             | "cancel" name
+            | "abort" reference [expr [expr]]
             | "fail" [expr [expr]]
             | "log" [level] expr
             | "logf" [level] string [expr ("," expr)*]
@@ -192,7 +195,8 @@ modifier   := "tee" | "via" name | "timeout" duration
             | "forward" "headers" string ("," string)*
 pipeline   := expr (("|" stage) | bare-stage)*
 bare-stage := ("then" source | "where" expr)   # the pipe is optional here
-stage      := "first" n | "drop" n | "truncate" n | "batch" n | "group" expr
+stage      := "first" n | "drop" n | "truncate" n | "batch" n | "window" n
+            | "group" expr | "scan" literal "as" name "," expr
             | "match" pattern
             | "then" source | "where" expr | "map" expr | "join" [string]
             | "strformat" string | "mime" string | "collect" | "count"
@@ -323,7 +327,7 @@ compact enough to put in a prompt.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from a11._native import flow as _flow
@@ -371,13 +375,22 @@ flow NAME {
            # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
+  abort NODE [CODE] [MESSAGE]              # end a node with a failure
   cancel X                                 # ask X to stop
   fail [CODE] [MESSAGE]                    # end the flow with a status
   log [LEVEL] WHAT                         # write to the flow's own log
   logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
-           # `fail`, `cancel` and `log` wait for nothing, so they go in an
-           # `if` or a loop body, or carry an `after`: at the top of a body
-           # they race every other statement, and are refused there.
+           # `fail`, `cancel`, `abort` and `log` wait for nothing, so they
+           # go in an `if` or a loop body, or carry an `after`: at the top of
+           # a body they race every other statement, and are refused there.
+           # `drain NODE` and `abort NODE` are the two endings a stream can
+           # have: drain marks it final and closes it, which says it is over;
+           # abort says it went wrong. A reader cannot otherwise tell a stream
+           # that finished from one cut short.
+           # `cancel` aborts, and a cancelled run reports `cancelled`. Asking
+           # an action to *finish* instead is not a language construct: it is
+           # `{"command": "stop"} -> X.control_events`, a convention of the
+           # standard library rather than of the language.
            # No port declares the log, nothing drains it, and a flow that
            # never logs pays nothing for it
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
@@ -490,13 +503,22 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
            Either may name another flow of the same file, in any order, and
            needs nothing registered for it: a composition can be factored into
            several flows and still arrive as one text.
-STAGES: first N | last N | drop N | truncate N | batch N | flatten | chunk N |
-        group EXPR | sort [by EXPR] [desc] | then SOURCE | where EXPR |
-        map EXPR | join "sep" | strformat "fmt" | mime "text/*" | collect |
-        count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
-        fold LITERAL as NAME, EXPR | distinct | text | json | packb |
-        timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
+STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
+        chunk N | group EXPR | sort [by EXPR] [desc] | then SOURCE |
+        where EXPR | map EXPR | join "sep" | strformat "fmt" | mime "text/*" |
+        collect | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
+        fold LITERAL as NAME, EXPR | scan LITERAL as NAME, EXPR | distinct |
+        text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
         logf [LEVEL] "fmt" [ARG, ...]
+      try SOURCE -> DEST is the pipe's own form of the same word: a failure
+      arriving from the source, or refused by the destination, becomes a value
+      rather than the end of the flow. Bind it -- `p = try src -> dest` -- and
+      `status p` says how it went; unbound, a failure is silence and the
+      language says so. It differs from `try` on a *stage*: a stage fails once
+      per value and carries on, while a pipe fails once and stops.
+      A loop may be named too: `done = for x in s { .. }` reads as the loop's
+      own outcome, so `drain taken after done` is how a flow says "once the
+      loop is over, that node is over". `for`/`repeat` also take an `after`.
       Any stage may be written `try STAGE` — a value the stage cannot do is
       dropped and logged instead of ending the flow — and a `try` stage may say
       `into DEST` to send those failures somewhere as status records:
@@ -529,6 +551,20 @@ STAGES: first N | last N | drop N | truncate N | batch N | flatten | chunk N |
       `| fold 0 as total, total + it.price` binds `total` to what the last
       value produced and `it` to the value in hand. `+` is arithmetic, not
       concatenation -- `| join` is what puts strings together.
+      scan is fold with the values published as they are computed rather than
+      only the last: one value out per value in, carrying state forward. That
+      is a state machine over a stream, and it is the only way to write one --
+      `repeat` carries state but reads its stream from the start on every pass,
+      and `for` walks a stream but carries nothing between passes.
+      `| scan 0 as n, n + 1` numbers a stream, and the start may be a record
+      when the state has more than one part:
+      `| scan {"in": false} as s, {"in": starts-with(it, "BEGIN") or s.in}`.
+      window N is batch's overlapping form: one list of the last N values per
+      value, once N have arrived. It is what a question about *neighbours*
+      needs — a pattern spanning two lines is invisible to a `batch`, because a
+      boundary falls somewhere and half the matches fall on it. It holds N
+      values and no more, so a window over an endless stream costs nothing that
+      grows, and a stream shorter than N yields nothing.
       sort reads the whole stream (nothing comes out until it ends), compares
       the way `<` does, and is stable: values that tie stay in the order they
       were written. `by` names what to compare and `desc` reverses it.
@@ -627,6 +663,120 @@ def register(source: str, registry: Any, source_name: str = "") -> Program:
     return loads(source, source_name).register_all(registry)
 
 
+def run_program(
+    source: str,
+    source_name: str = "",
+    *,
+    arguments: Sequence[str] | None = None,
+    roots: Sequence[str] | None = None,
+    allow_write: bool = False,
+    allow_run: bool = False,
+    allow_net: bool = False,
+    allow_local_net: bool = False,
+    allow_env: Sequence[str] | None = None,
+    unrestricted: bool = False,
+    timeout_seconds: float | None = None,
+    standard_streams: bool = True,
+    registry: Any = None,
+) -> dict[str, Any]:
+    """Run a Flow program's entry flow — the `flow { ... }` with no name.
+
+    The same interpreter `a11-flow-run` is, called in process. One
+    implementation, so a program behaves identically whichever started it.
+
+    The reason to run one from here rather than from a shell is that this
+    process has actions of its own. Hand it a registry that already holds them
+    and the program can call them:
+
+    ```python
+    from a11 import flow
+    from a11.actions import ActionRegistry
+    from a11.sdk import llm_tools
+
+    registry = ActionRegistry()
+    llm_tools.register(registry)                 # interact_with_llm, and friends
+    flow.run_program(source, "summarise.flow", registry=registry,
+                     arguments=["summarise.flow", "notes.txt"])
+    ```
+
+    A name already in `registry` is never replaced by the standard library's: a
+    host that registered its own `read_file` meant its own `read_file`.
+
+    !!! important "Call it off the loop when your actions are `async`"
+
+        This runs the program to completion, so it blocks the thread it is
+        called on. A Python action handler written `async def` has to be driven
+        by an asyncio loop — and if that loop is on *this* thread, it cannot run
+        while this call is blocking it, and the program waits forever on its own
+        handler. So call it in a thread:
+
+        ```python
+        outcome = await asyncio.to_thread(
+            flow.run_program, source, "program.flow", registry=registry
+        )
+        ```
+
+        A program that only uses the standard library needs none of this: those
+        actions are native and take no GIL.
+
+    Args:
+        source: The program's text.
+        source_name: What diagnostics should call it, usually the path.
+        arguments: The program's `argv`. By convention `arguments[0]` is the
+            file, as a C program's is, so what a user passed starts at index 1.
+        roots: Directories the program may reach. Defaults to the working
+            directory.
+        allow_write: Whether it may write, inside those roots.
+        allow_run: Whether it may run programs, confined by the kernel where
+            the platform can.
+        allow_net: Whether it may reach the network. Loopback, private and
+            link-local addresses stay refused unless `allow_local_net`.
+        allow_local_net: Also allow those. Say it deliberately —
+            `169.254.169.254` is a cloud instance's credentials.
+        allow_env: Environment variables it may read.
+        unrestricted: No filesystem sandbox at all. For a file you wrote.
+        timeout_seconds: A bound on the whole run, applied as the deadline
+            header every standard-library action honours.
+        standard_streams: Whether to bind this process's stdin/stdout/stderr.
+            Clear it in a host with no useful standard input, so a program
+            reading it fails rather than waits forever.
+        registry: An [ActionRegistry][a11.actions.ActionRegistry] whose actions
+            the program may call. One is made when omitted.
+
+    Returns:
+        `{"exit_code": int, "diagnostics": [...]}` — the code the program put on
+        an `out exit_code: integer` port (or 0), and whatever the compiler said
+        that was not an error.
+
+    Raises:
+        Exception: When the source will not compile, declares no entry flow, or
+            the program itself failed. What the flow failed with is the message.
+    """
+    return _flow.run_program(
+        source,
+        source_name,
+        arguments=list(arguments or ()),
+        roots=list(roots or ()),
+        allow_write=allow_write,
+        allow_run=allow_run,
+        allow_net=allow_net,
+        allow_local_net=allow_local_net,
+        allow_env=list(allow_env or ()),
+        unrestricted=unrestricted,
+        timeout_seconds=timeout_seconds,
+        standard_streams=standard_streams,
+        registry=registry,
+    )
+
+
+def check_program(source: str, source_name: str = "") -> str:
+    """What a program's entry flow is, compiling it and running nothing.
+
+    Raises if the source will not compile or declares no `flow { ... }`.
+    """
+    return _flow.check_program(source, source_name)
+
+
 def request(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Ask the language one question about one document.
 
@@ -660,5 +810,7 @@ __all__ = [
     "load",
     "loads",
     "register",
+    "check_program",
     "request",
+    "run_program",
 ]

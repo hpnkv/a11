@@ -1,0 +1,60 @@
+# `grep`, but for a pattern that crosses lines.
+#
+#   a11-flow-run span.flow -- "END OF" < build.log
+#
+# The exit code is grep's: 0 when something matched, 1 when nothing did.
+#
+# `grep.flow` asks a question about one line. This asks one about a *place in the
+# file*, which is a different shape: a phrase that runs over a line break is in
+# no single line, so no `where` over lines can find it.
+#
+# `| window n` is the stage for that. It yields one list of the last n lines per
+# line, so consecutive lines are looked at together and every boundary between
+# them is looked *across*. `| batch n` cannot do this, and the way it fails is
+# the reason the stage exists: a batch has to put a boundary somewhere, and a
+# match sitting on one is silently not found -- roughly one in n of them, with
+# nothing to say which.
+#
+# It holds n lines and no more, so this costs the same for a ten-line file and a
+# ten-gigabyte one, exactly as `wc.flow` does.
+
+flow {
+  describe "Print the places where a phrase spans consecutive lines."
+
+  out exit_code: integer "0 when the phrase was found, 1 when it was not."
+
+  nodes scratch
+  wanted = node() in scratch
+  hits = node() in scratch
+  found = node() in scratch
+
+  argv | drop 1 | first 1 -> wanted
+
+  input = run read_stdin() via scratch
+  skip input.bytes
+  skip input.is_tty
+
+  # `for` is how the phrase reaches a per-window expression: the outer value is
+  # materialised for the block, so `needle` is one string and `it` is one window.
+  #
+  # The width is 2 and cannot be an argument: every count in this language is a
+  # literal, so `window width` is not something that can be written. That limit
+  # is recorded in `../../cpp/a11/flow/NOTES.md` rather than worked around here.
+  for needle in wanted {
+    input.lines
+      | window 2
+      | where contains(join(it, "\n"), needle)
+      | map join(it, " / ")
+      -> hits
+  }
+
+  out = run write_stdout(content: hits | map strformat("%s\n", it)) via scratch
+  skip out.bytes_written
+
+  # Two pipelines off a node rather than two `if`s, for the reason grep.flow
+  # gives: a pipeline off a node fans out and sees all of it, where two
+  # conditions reading the node directly would take one value each.
+  hits | count -> found
+  found where it > 0 | map 0 -> exit_code
+  found where it == 0 | map 1 -> exit_code
+}

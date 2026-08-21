@@ -675,6 +675,13 @@ std::string SubjectLabel(std::string_view label) {
 struct Scope {
   absl::flat_hash_map<std::string, size_t> names;
   const Scope* parent = nullptr;
+  /// Whether this scope is the body of a `for` or a `repeat`.
+  ///
+  /// Only `advance` asks, and it has to: its offset is fixed when the file is
+  /// compiled, so advancing a name from *outside* a loop moves nothing and every
+  /// pass sees the same value. Knowing whether a lookup crossed a loop is the
+  /// difference between reporting that and letting it look like it works.
+  bool loop_body = false;
 };
 
 /// The two passes over one flow declaration.
@@ -699,11 +706,38 @@ class FlowResolver {
   void Declare() {
     FlowPlan& plan = resolved_.plan;
     plan.name = declaration_.name.text;
+    plan.entry = declaration_.entry;
     plan.description = declaration_.description;
     plan.location = declaration_.location;
     resolved_.declaration = &declaration_;
 
     absl::flat_hash_set<std::string> seen;
+    if (declaration_.entry) {
+      // The arguments, declared by nobody. Every program of this shape wants
+      // them and a file that had to write the same two `in` lines each time
+      // would be saying what the language already knows. They go in first, so a
+      // file that declares one of them by hand is reported as a duplicate
+      // rather than silently shadowing the real one.
+      for (const vocabulary::EntryPort& argument : vocabulary::EntryPorts()) {
+        const std::string_view name = argument.name;
+        const std::string_view type = argument.type;
+        const bool unary = argument.unary;
+        const std::string_view description = argument.description;
+        PortPlan entry;
+        entry.name = std::string(name);
+        entry.direction = syntax::PortDirection::kInput;
+        entry.declared = std::string(type);
+        entry.type = PortType(syntax::TypeExpression{.name = std::string(type)});
+        entry.unary = unary;
+        entry.required = false;
+        entry.description = std::string(description);
+        entry.location = declaration_.location;
+        seen.insert(absl::StrCat(
+            syntax::PortDirectionName(syntax::PortDirection::kInput), ":",
+            name));
+        plan.ports.push_back(std::move(entry));
+      }
+    }
     for (const syntax::PortDeclarationPtr& port : declaration_.ports) {
       const std::string key = absl::StrCat(
           syntax::PortDirectionName(port->direction), ":", port->name.text);
@@ -984,6 +1018,20 @@ class FlowResolver {
     return index == kNoSymbol ? nullptr : &resolved_.symbols[index];
   }
 
+  /// Whether @p name is declared outside the innermost loop body enclosing
+  /// @p scope. False when there is no loop, and false when the name is the
+  /// loop's own or was declared beside the `advance`.
+  bool DeclaredOutsideTheLoop(const Scope& scope, std::string_view name) const {
+    bool crossed = false;
+    for (const Scope* at = &scope; at != nullptr; at = at->parent) {
+      if (at->names.contains(name)) return crossed;
+      // Read *after* the lookup: a name declared in the loop body is found in
+      // the scope that is the loop body, and that is not a crossing.
+      if (at->loop_body) crossed = true;
+    }
+    return false;
+  }
+
   /// Every name in scope, sorted -- what a message lists as what was available.
   std::string Known(const Scope& scope) const {
     std::vector<std::string> names;
@@ -1118,6 +1166,17 @@ class FlowResolver {
       }
       case NodeKind::kPipe: {
         const auto* pipe = syntax::As<syntax::Pipe>(statement);
+        if (pipe->tolerant && binding_ == 0) {
+          // The same complaint `try run` gets when nothing reads its status,
+          // and it matters more here: a tolerated pipe that failed leaves a
+          // *truncated* stream behind, and its readers see a clean early end.
+          Report("flow.unused.try-pipe",
+                 "'try' lets this pipe fail without ending the flow, and "
+                 "nothing here reads how it went: its destination is then "
+                 "closed early and every reader of it sees an ordinary end of "
+                 "stream. Give it a name and read it with 'status'.",
+                 pipe->location, Severity::kWeakWarning, Family::kUnused);
+        }
         const Ref source = ResolvePipeline(*pipe->pipeline, scope);
         // One `after` for however many targets: the barriers are made once and
         // every pipe of the statement waits for the same ones.
@@ -1139,6 +1198,7 @@ class FlowResolver {
             one.source = source.node;
             one.destination = destination.node;
             one.after = held;
+            one.tolerant = pipe->tolerant;
           }
           steps.push_back(std::move(step));
         }
@@ -1292,6 +1352,39 @@ class FlowResolver {
         steps.push_back(std::move(step));
         return;
       }
+      case NodeKind::kAbort: {
+        const auto* abort = syntax::As<syntax::Abort>(statement);
+        // A destination, not an outcome: only a node this flow writes can be
+        // aborted by it. Aborting one it merely reads would be telling somebody
+        // else's producer how its stream ended.
+        const Ref target = ResolveDestination(abort->target.get(), scope);
+        std::string code_name;
+        const graph::ExprId code =
+            ResolveFailCode(abort->code.get(), scope, &code_name);
+        const graph::ExprId message =
+            abort->message == nullptr
+                ? graph::kNone
+                : ResolveExpression(abort->message.get(), scope, false);
+        StepPlan step;
+        step.kind = "abort";
+        step.label = absl::StrCat("abort ", target.label);
+        step.destination = target.label;
+        step.location = abort->location;
+        graph::StepId made = graph::kNone;
+        if (builder_ != nullptr) {
+          made = NewStep(graph::StepKind::kAbort, step.label, abort->location);
+          graph::Step& one = builder_->step(made);
+          one.destination = target.node;
+          one.code = code;
+          one.code_name = code_name;
+          one.message = message;
+        }
+        step.after = ResolveAfter(abort->after, scope, made);
+        CheckReachedByChoice("flow.form.unconditional-abort", "abort",
+                             abort->after, abort->location);
+        steps.push_back(std::move(step));
+        return;
+      }
       case NodeKind::kFail: {
         const auto* fail = syntax::As<syntax::Fail>(statement);
         std::string code_name;
@@ -1377,6 +1470,7 @@ class FlowResolver {
         }
         Scope inner;
         inner.parent = &scope;
+        inner.loop_body = true;
         // One name is the value; several take it apart by position, each a
         // derived stream over the one the loop binds -- so `for a, b in
         // zip(x, y)` costs the same as reading `it[0]` and `it[1]` would, and
@@ -1400,8 +1494,22 @@ class FlowResolver {
         }
         body_ = outer_body;
         DefineIndex(inner, loop->location, index);
+        // A `for` is a loop, so `until`/`while` may end it. It carries nothing,
+        // which is what `carries_a_value` tells `<-`.
+        LoopState state;
+        state.label = step.label;
+        state.step = made;
+        state.carries_a_value = false;
+        state.parallel = std::max(loop->parallel, 1);
+        loops_.push_back(state);
         step.bodies.push_back(
             ResolveStatements(loop->body, inner, inner_body, true));
+        loops_.pop_back();
+        // After the loop's own NewStep, and that order matters: ResolveAfter
+        // makes `kWait` steps of its own, and ResolveBind names a statement's
+        // *first* step -- so resolving `after` earlier would quietly bind a
+        // named loop to one of those waits instead of to the loop.
+        step.after = ResolveAfter(loop->after, scope, made);
         steps.push_back(std::move(step));
         return;
       }
@@ -1440,7 +1548,8 @@ class FlowResolver {
         }
         Scope inner;
         inner.parent = &scope;
-        RepeatState state;
+        inner.loop_body = true;
+        LoopState state;
         state.label = step.label;
         state.step = made;
         if (!repeat->variable.Empty()) {
@@ -1454,13 +1563,13 @@ class FlowResolver {
           state.has_carry_name = true;
         }
         DefineIndex(inner, repeat->location, index);
-        repeats_.push_back(state);
+        loops_.push_back(state);
         step.bodies.push_back(
             ResolveStatements(repeat->body, inner, inner_body, true));
         // Read before the pop: `until` sets the flag on the entry the body was
         // resolved against, not on the copy pushed in.
-        const bool stopped = repeats_.back().stopped;
-        repeats_.pop_back();
+        const bool stopped = loops_.back().stopped;
+        loops_.pop_back();
         // Nothing ends it. With the old default of `max 16` this was a loop
         // that quietly did sixteen passes and reported success; now that a
         // bound is only ever the author's, a loop with neither is one that runs
@@ -1473,12 +1582,14 @@ class FlowResolver {
                      "with 'max n'."),
                  repeat->location, Severity::kError, Family::kForm);
         }
+        // After the repeat's own NewStep, for the reason the `for` case gives.
+        step.after = ResolveAfter(repeat->after, scope, made);
         steps.push_back(std::move(step));
         return;
       }
       case NodeKind::kCarry: {
         const auto* carry = syntax::As<syntax::Carry>(statement);
-        if (repeats_.empty()) {
+        if (loops_.empty()) {
           Report("flow.barrier.carry-outside-repeat",
                  "'<-' carries a value into the next pass of a 'repeat', and "
                  "there is no repeat here.",
@@ -1486,7 +1597,21 @@ class FlowResolver {
           ResolvePipeline(*carry->pipeline, scope);
           return;
         }
-        RepeatState& state = repeats_.back();
+        LoopState& state = loops_.back();
+        if (!state.carries_a_value) {
+          // A `for` is the innermost loop here. It takes its value from its
+          // stream, so there is nothing for a pass to hand the next one.
+          Report("flow.barrier.carry-outside-repeat",
+                 absl::StrCat(
+                     "'<-' carries a value into the next pass of a 'repeat', "
+                     "and the loop here is ",
+                     state.label,
+                     ", a 'for': every pass takes its value from the stream, "
+                     "so there is nothing for one pass to hand the next."),
+                 carry->location, Severity::kError, Family::kBarrier);
+          ResolvePipeline(*carry->pipeline, scope);
+          return;
+        }
         if (!state.has_carry_name || state.carries != carry->name.text) {
           Report("flow.barrier.wrong-carry",
                  absl::StrCat("This repeat carries ",
@@ -1523,21 +1648,34 @@ class FlowResolver {
       }
       case NodeKind::kUntil: {
         const auto* until = syntax::As<syntax::Until>(statement);
-        if (repeats_.empty()) {
+        if (loops_.empty()) {
           Report("flow.barrier.until-outside-repeat",
-                 "'until'/'while' ends a 'repeat', and there is no repeat "
-                 "here.",
+                 "'until'/'while' ends a loop, and there is no 'repeat' or "
+                 "'for' here.",
                  until->location, Severity::kError, Family::kBarrier);
-        } else if (repeats_.back().stopped) {
+        } else if (loops_.back().stopped) {
           Report("flow.barrier.duplicate-until",
-                 absl::StrCat(repeats_.back().label,
+                 absl::StrCat(loops_.back().label,
                               " already has a stop condition."),
                  until->location, Severity::kError, Family::kBarrier);
+        } else if (loops_.back().parallel > 1) {
+          // The question is asked of the pass that just finished, and with
+          // several in flight there is no such pass -- whichever answered first
+          // would end the loop while others were still running, so which values
+          // were seen would depend on scheduling.
+          Report("flow.barrier.until-parallel",
+                 absl::StrCat(
+                     loops_.back().label,
+                     " runs its passes in parallel, so there is no 'the pass "
+                     "that just finished' for 'until' to ask about. Drop the "
+                     "'parallel', or filter the stream with 'first n' or "
+                     "'where' instead."),
+                 until->location, Severity::kError, Family::kBarrier);
         } else {
-          repeats_.back().stopped = true;
+          loops_.back().stopped = true;
         }
         const graph::StepId owner =
-            repeats_.empty() ? graph::kNone : repeats_.back().step;
+            loops_.empty() ? graph::kNone : loops_.back().step;
         const graph::ExprId condition =
             ResolveExpression(until->condition.get(), scope, false);
         if (builder_ != nullptr && owner != graph::kNone) {
@@ -1761,6 +1899,28 @@ class FlowResolver {
              advance->location);
       return;
     }
+    if (DeclaredOutsideTheLoop(scope, advance->name.text)) {
+      // The trap this exists for. `advance` is resolved to
+      // `source | drop k | first 1` with `k` fixed while the file is compiled,
+      // and a loop body is resolved *once* -- so every pass carries the same
+      // offset, a node replays from its start for each pass, and every pass
+      // binds the same value. Measured: four passes over `a b c d e` bound `a`
+      // four times, silently, and looked like it worked.
+      //
+      // An error rather than a warning because there is no reading of it that
+      // is right, and `for` is the construct that does what this was reaching
+      // for.
+      Report("flow.form.advance-in-loop",
+             absl::StrCat(
+                 Quoted(advance->name.text),
+                 " was bound outside this loop, and 'advance' moves by a fixed "
+                 "step worked out while the file is compiled -- so every pass "
+                 "would bind the same value. Walk the stream with "
+                 "'for x in ", advance->name.text,
+                 "' instead, and end it early with 'until' if it should stop."),
+             advance->location, Severity::kError, Family::kForm);
+      return;
+    }
     // Read before defining: the new symbol shadows this one, and `Define` may
     // move the vector these point into.
     if (held->value_part) {
@@ -1836,7 +1996,20 @@ class FlowResolver {
     const size_t before = steps.size();
     const size_t graph_before =
         builder_ == nullptr ? 0 : builder_->flow().steps.size();
+    // A pipe with several targets is several steps, and a name can only be one
+    // of them -- so refuse it rather than quietly naming the first.
+    if (const auto* piped = syntax::As<syntax::Pipe>(value);
+        piped != nullptr && piped->targets.size() > 1) {
+      Report("flow.form.bind-many-targets",
+             absl::StrCat("This pipe writes ", piped->targets.size(),
+                          " destinations, which is that many steps, so one name "
+                          "cannot stand for it. Write one pipe per destination, "
+                          "or leave it unnamed."),
+             bind->location, Severity::kError, Family::kForm);
+    }
+    ++binding_;
     ResolveStatement(value, scope, steps);
+    --binding_;
     Symbol barrier;
     barrier.kind = SymbolKind::kBarrier;
     barrier.name = bind->name.text;
@@ -1853,6 +2026,14 @@ class FlowResolver {
       barrier.ref = winner != graph::kNone
                         ? winner
                         : builder_->step(graph_before).outcome;
+      if (barrier.ref == graph::kNone &&
+          graph::RecordsOutcome(builder_->step(graph_before).kind)) {
+        // A loop makes its outcome ref only when something names it, unlike a
+        // block, which makes one up front. Lazily, so an unnamed loop's graph
+        // is exactly what it was before loops could be named -- which is what
+        // keeps `testdata/flow/syntax.json` and every plan consumer unchanged.
+        barrier.ref = StatusOfStep(graph_before);
+      }
       barrier.tolerant = builder_->step(graph_before).tolerant;
       builder_->step(graph_before).label = bind->name.text;
     }
@@ -2512,9 +2693,10 @@ class FlowResolver {
     }
     if (vocabulary::PositionalStages().contains(name) || name == "then" ||
         name == "batch" || name == "group") {
-      // `batch` and `group` make lists *of* the values, so what each value is
-      // has not changed; the rest choose among them.
-      return name == "batch" || name == "group" ? "" : carried;
+      // `batch`, `group` and `window` make lists *of* the values, so what each
+      // value is has not changed; the rest choose among them.
+      return name == "batch" || name == "group" || name == "window" ? ""
+                                                                   : carried;
     }
     return "";
   }
@@ -3361,7 +3543,13 @@ class FlowResolver {
   /// See [ResolveStatements] and [CheckReachedByChoice].
   int guarded_ = 0;
 
-  struct RepeatState {
+  /// A loop being resolved, so the statements that belong to one can find it.
+  ///
+  /// `repeat` and `for` share this because they share `until`/`while`: both are
+  /// a body run more than once, and "stop when this holds" means the same thing
+  /// to each. They do not share `<-`, which is why `carries_a_value` is here --
+  /// a `for` gets its value from its stream and has nothing to carry.
+  struct LoopState {
     std::string label;
     /// The graph step it is, so `<-` and `until` can fill it in.
     graph::StepId step = graph::kNone;
@@ -3369,6 +3557,11 @@ class FlowResolver {
     bool has_carry_name = false;
     bool carried = false;
     bool stopped = false;
+    /// False for a `for`. What `<-` checks.
+    bool carries_a_value = true;
+    /// How many passes may run at once, so `until` can refuse to be written on
+    /// a loop where "the pass that just finished" names several passes.
+    int parallel = 1;
   };
 
   const LineIndex& lines_;
@@ -3392,7 +3585,13 @@ class FlowResolver {
   std::vector<StepPlan>* pending_steps_ = nullptr;
   absl::flat_hash_map<std::string, int> labels_;
   std::string node_map_;
-  std::vector<RepeatState> repeats_;
+  /// The loops enclosing the statement being resolved, innermost last.
+  std::vector<LoopState> loops_;
+  /// Whether a statement is being resolved on behalf of a name.
+  ///
+  /// Only a tolerated pipe asks: an unnamed one has nowhere to report its
+  /// failure, and the statement itself cannot otherwise tell.
+  int binding_ = 0;
 };
 
 }  // namespace
@@ -3416,8 +3615,19 @@ std::vector<std::string> FlowPlan::PortNames(
 }
 
 const FlowPlan* absl_nullable Program::Flow(std::string_view name) const {
+  // An empty name matches nothing, so the entry flow cannot be reached here --
+  // which is what makes it unaddressable from a `run` or a `call` rather than
+  // merely undocumented.
+  if (name.empty()) return nullptr;
   for (const FlowPlan& flow : flows) {
-    if (flow.name == name) return &flow;
+    if (!flow.entry && flow.name == name) return &flow;
+  }
+  return nullptr;
+}
+
+const FlowPlan* absl_nullable Program::Entry() const {
+  for (const FlowPlan& flow : flows) {
+    if (flow.entry) return &flow;
   }
   return nullptr;
 }
@@ -3503,8 +3713,13 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
       diagnostic.code = "flow.form.duplicate-flow";
       diagnostic.severity = Severity::kError;
       diagnostic.family = Family::kForm;
-      diagnostic.message = absl::StrCat("Flow ", Quoted(declaration->name.text),
-                                        " is declared twice.");
+      diagnostic.message =
+          declaration->entry
+              ? std::string("A file may declare one entry flow, and this one "
+                            "declares two. A flow that is meant to be called "
+                            "needs a name.")
+              : absl::StrCat("Flow ", Quoted(declaration->name.text),
+                             " is declared twice.");
       diagnostic.range =
           lines.Between(declaration->location.start, declaration->location.end);
       diagnostic.flow = declaration->name.text;

@@ -445,6 +445,224 @@ def test_run_runs_a_flow_and_prints_its_ports(capsys):
     assert "loud: HI, THERE" in capsys.readouterr().out
 
 
+# --- running a program ------------------------------------------------------
+#
+# A file with a `flow { ... }` is a program, and `a11 flow run` puts it through
+# `a11.flow.run_program` -- the same interpreter `a11-flow-run` is. These use
+# `capfd` and not `capsys`: `write_stdout` writes to file descriptor 1, so
+# nothing Python-level ever sees the bytes.
+
+GREETS = """
+flow {
+  describe "Greet whoever is named on the command line."
+  nodes s
+  who = node() in s
+  said = node() in s
+  argv | drop 1 then "world" | first 1 -> who
+  who | map strformat("Hello, %s!\\n", trim(it)) -> said
+  out = run write_stdout(content: said) via s
+  skip out.bytes_written
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("written", "seconds"),
+    [
+        ("30s", 30.0),
+        ("250ms", 0.25),
+        ("1m30s", 90.0),
+        ("2h", 7200.0),
+        ("1.5s", 1.5),
+        # A bare number is seconds -- the one form the language's lexer reads as
+        # a number rather than a duration.
+        ("30", 30.0),
+    ],
+)
+def test_timeout_takes_a_duration_as_a_flow_writes_one(written, seconds):
+    # `--timeout 30s` was rejected by the frontend that claims to be the same
+    # interpreter as `a11-flow-run`, which takes exactly that. It is read with
+    # the language's own lexer so the two cannot drift again.
+    from a11.cli.commands.flow import _duration_seconds
+
+    assert _duration_seconds(written) == pytest.approx(seconds)
+
+
+def test_timeout_that_is_not_a_duration_says_how_to_write_one():
+    import argparse
+
+    from a11.cli.commands.flow import _duration_seconds
+
+    with pytest.raises(argparse.ArgumentTypeError) as refused:
+        _duration_seconds("soon")
+    assert "30s" in str(refused.value)
+
+
+def test_a_deadline_stops_a_program_that_would_not_stop(tmp_path, capfd):
+    # Parsed *and* applied: an endless ticker with a deadline ends, and the
+    # program succeeds, because a deadline is a graceful finish.
+    path = _program(
+        tmp_path,
+        """
+flow {
+  nodes s
+  seen = node() in s
+  clock = run ticker(options: {"every": "20ms"}) via s
+  skip count of clock
+  clock.ticks | map strformat("tick %d\\n", it.number) -> seen
+  o = run write_stdout(content: seen) via s
+  skip o.bytes_written
+}
+""",
+    )
+    assert run("flow", "run", path, "--timeout", "300ms") == 0
+    # Some ticks, and not endless ones.
+    said = capfd.readouterr().out.splitlines()
+    assert said, "the ticker produced nothing at all"
+    assert len(said) < 100, f"the deadline did not stop it: {len(said)} ticks"
+
+
+def _program(tmp_path, source: str, name: str = "p.flow") -> str:
+    path = tmp_path / name
+    path.write_text(source)
+    return str(path)
+
+
+def test_run_runs_a_program_and_passes_it_argv(tmp_path, capfd):
+    path = _program(tmp_path, GREETS)
+    assert run("flow", "run", path, "--", "Helena") == 0
+    assert capfd.readouterr().out == "Hello, Helena!\n"
+
+
+def test_a_program_with_no_arguments_still_runs(tmp_path, capfd):
+    path = _program(tmp_path, GREETS)
+    assert run("flow", "run", path) == 0
+    assert capfd.readouterr().out == "Hello, world!\n"
+
+
+def test_a_programs_exit_code_is_the_commands(tmp_path, capfd):
+    # What makes a program usable in a shell `if`, and the reason this is not
+    # simply "did it throw".
+    path = _program(
+        tmp_path,
+        """
+flow {
+  out exit_code: integer "What it decided."
+  nodes s
+  decided = node() in s
+  argv | first 1 -> decided
+  decided | map 3 -> exit_code
+}
+""",
+    )
+    assert run("flow", "run", path) == 3
+    capfd.readouterr()
+
+
+def test_a_read_outside_the_roots_is_refused(tmp_path, capfd):
+    secret = tmp_path / "outside.txt"
+    secret.write_text("not yours")
+    inside = tmp_path / "in" / "yours.txt"
+    inside.parent.mkdir()
+    inside.write_text("yours")
+    path = _program(
+        tmp_path,
+        """
+flow {
+  nodes s
+  where = node() in s
+  argv | drop 1 | first 1 -> where
+  got = run read_file(path: where) via s
+  skip got.info
+  skip got.lines
+  skip got.bytes
+  out = run write_stdout(content: got.text) via s
+  skip out.bytes_written
+}
+""",
+    )
+    # The same program and the same root: only the path differs, so a pass on
+    # the second would mean the root was never consulted.
+    assert run("flow", "run", path, "--root", str(inside.parent), "--",
+               str(inside)) == 0
+    assert capfd.readouterr().out == "yours"
+    assert run("flow", "run", path, "--root", str(inside.parent), "--",
+               str(secret)) == 1
+    assert "outside" in capfd.readouterr().err.lower()
+
+
+def test_writing_needs_allow_write(tmp_path, capfd):
+    made = tmp_path / "made.txt"
+    path = _program(
+        tmp_path,
+        f"""
+flow {{
+  nodes s
+  out = run write_file(path: "{made}", content: "hi") via s
+  skip out.bytes_written
+}}
+""",
+    )
+    assert run("flow", "run", path, "--root", str(tmp_path)) == 1
+    assert not made.exists()
+    capfd.readouterr()
+    assert run("flow", "run", path, "--root", str(tmp_path),
+               "--allow-write") == 0
+    assert made.read_text() == "hi"
+    capfd.readouterr()
+
+
+def test_a_host_action_is_offered_only_when_asked_for(tmp_path, capfd):
+    # `interact_with_llm` is what running a program from *here* can do that the
+    # standalone binary cannot. It is also not bounded by the flow policy -- a
+    # Python handler does what Python does -- so it needs a flag of its own, and
+    # this is the assertion that it has one.
+    path = _program(
+        tmp_path,
+        """
+flow {
+  nodes s
+  q = node() in s
+  argv | drop 1 | first 1 -> q
+  llm = run interact_with_llm(
+    interactions: q | map a11.sdk.Interaction{role: "user", content: []},
+    config: {}
+  ) via s
+  skip llm.event_stream
+  skip llm.thoughts
+  skip llm.new_interactions
+  o = run write_stdout(content: llm.text_output) via s
+  skip o.bytes_written
+}
+""",
+    )
+    assert run("flow", "run", path, "--", "why") == 1
+    said = capfd.readouterr().err
+    assert "interact_with_llm" in said
+
+
+def test_a_named_flow_can_still_be_run_out_of_a_file_with_a_program(
+    tmp_path, capsys
+):
+    path = _program(
+        tmp_path,
+        "flow shout {\n  in a: string\n  out b: string\n"
+        "  a | map upper(it) -> b\n}\n"
+        "flow {\n  nodes s\n  unused = node() in s\n"
+        "  argv | first 1 -> unused\n  skip unused\n}\n",
+    )
+    assert run("flow", "run", path, "--flow", "shout", "--input", "a=hi") == 0
+    assert "b: HI" in capsys.readouterr().out
+
+
+def test_run_of_a_flow_that_is_not_there_mentions_the_program(tmp_path, capsys):
+    path = _program(tmp_path, GREETS)
+    assert run("flow", "run", path, "--flow", "missing") == 2
+    said = capsys.readouterr().err
+    assert "no flow named" in said
+    assert "does declare a program" in said
+
+
 def test_run_of_a_flow_that_is_not_there_exits_two(capsys):
     assert run("flow", "run", "-", "--flow", "missing",
                stdin="flow t { }\n") == 2

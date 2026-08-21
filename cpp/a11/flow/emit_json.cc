@@ -361,6 +361,14 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["after"] = WordList(cancel->after);
       break;
     }
+    case syntax::NodeKind::kAbort: {
+      const auto* abort = syntax::As<syntax::Abort>(node);
+      value["target"] = NodeJson(abort->target.get());
+      value["code"] = NodeJson(abort->code.get());
+      value["message"] = NodeJson(abort->message.get());
+      value["after"] = WordList(abort->after);
+      break;
+    }
     case syntax::NodeKind::kFail: {
       const auto* fail = syntax::As<syntax::Fail>(node);
       value["code"] = NodeJson(fail->code.get());
@@ -383,6 +391,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["pipeline"] = NodeJson(loop->pipeline.get());
       value["parallel"] = loop->parallel;
       value["body"] = NodeList(loop->body);
+      value["after"] = WordList(loop->after);
       break;
     }
     case syntax::NodeKind::kRepeat: {
@@ -395,6 +404,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
         value["max_iterations"] = *repeat->max_iterations;
       }
       value["body"] = NodeList(repeat->body);
+      value["after"] = WordList(repeat->after);
       break;
     }
     case syntax::NodeKind::kCarry: {
@@ -453,6 +463,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     case syntax::NodeKind::kFlowDeclaration: {
       const auto* flow = syntax::As<syntax::FlowDeclaration>(node);
       value["name"] = flow->name.text;
+      // Emitted even though the empty name implies it: a reader of this JSON
+      // should not have to know that "no name" is how an entry point is
+      // spelled.
+      value["entry"] = flow->entry;
       value["description"] = flow->description;
       nlohmann::json ports = nlohmann::json::array();
       for (const syntax::PortDeclarationPtr& port : flow->ports) {
@@ -1041,6 +1055,7 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
     std::sort(headers.begin(), headers.end());
     flows.push_back(nlohmann::json{
         {"flow", flow.name},
+        {"entry", flow.entry},
         {"description", flow.description},
         {"inputs", inputs},
         {"outputs", outputs},

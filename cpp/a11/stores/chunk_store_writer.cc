@@ -264,6 +264,26 @@ struct ChunkStoreWriter::State
     // completion callback moves it out under mu.
     Batch& batch = *in_flight_batch;
     batch.store_id = std::move(*id);
+
+    // The one place a chunk carrying a value becomes bytes, and the reason the
+    // rest of the system never has to know such a chunk exists: a store that
+    // persists needs them, and a peer needs them, so either of those turns the
+    // value into its encoding here, before anything downstream sees it. An
+    // in-memory store with nobody attached needs neither, which is exactly the
+    // case the value was kept for.
+    if (!batch.streams.empty() || !store->HoldsObjects()) {
+      for (Element& element : batch.elements) {
+        if (const absl::Status materialised = element.chunk.Materialize();
+            !materialised.ok()) {
+          // Reported the same way a store's own failure is, so a value that
+          // cannot be encoded fails the write rather than being dropped.
+          InstallWrite(
+              a11::FailedFuture<std::vector<std::uint32_t>>(materialised),
+              generation);
+          return;
+        }
+      }
+    }
     fragments.reserve(batch.elements.size());
     for (Element& element : batch.elements) {
       data::Chunk chunk =

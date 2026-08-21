@@ -126,7 +126,17 @@ struct StepPlan {
 
 /// One compiled flow: what a caller sees, and what the runtime will do.
 struct FlowPlan {
+  /// Empty for the entry flow, which is the one flow that has no name.
   std::string name;
+  /**
+   * Whether this is the file's entry point, declared `flow { ... }`.
+   *
+   * Its name is empty, and that is not an accident to be worked around: a flow
+   * nothing can name is a flow nothing can `run` or `call`, which is what keeps
+   * a program's entry point from being reachable as a library or from
+   * recursing into itself. Reach it with Program::Entry(), not by name.
+   */
+  bool entry = false;
   std::string description;
   std::vector<PortPlan> ports;
   std::vector<HeaderPlan> headers;
@@ -161,7 +171,12 @@ struct Program {
   /// one -- what a file says about a shape is what the file means by it.
   std::vector<DtoPlan> dtos;
 
+  /// The flow of this name, or `nullptr`. Never returns the entry flow: an
+  /// empty name matches nothing, so a `run`/`call` cannot reach it.
   const FlowPlan* absl_nullable Flow(std::string_view name) const;
+
+  /// The file's entry point, or `nullptr` when it declares none.
+  const FlowPlan* absl_nullable Entry() const;
 
   /// The shape of this name, or `nullptr`.
   const DtoPlan* absl_nullable Dto(std::string_view name) const;

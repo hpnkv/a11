@@ -39,17 +39,27 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.duplicate-carry", Family::kBarrier,
              Severity::kError, "A repeat carries the same name twice."},
     CodeInfo{"flow.barrier.duplicate-until", Family::kBarrier,
-             Severity::kError, "A repeat is given a second stop condition."},
+             Severity::kError, "A loop is given a second stop condition."},
     CodeInfo{"flow.barrier.until-outside-repeat", Family::kBarrier,
              Severity::kError,
-             "An 'until' or 'while' ends a 'repeat', and there is none here."},
+             "An 'until' or 'while' ends a 'repeat' or a 'for', and there is "
+             "neither here."},
+    CodeInfo{"flow.barrier.until-parallel", Family::kBarrier, Severity::kError,
+             "An 'until' is written on a loop whose passes run in parallel, "
+             "where there is no one pass for it to ask about."},
     CodeInfo{"flow.barrier.wrong-carry", Family::kBarrier, Severity::kError,
              "A carry names something other than what its repeat carries."},
+    CodeInfo{"flow.form.advance-in-loop", Family::kForm, Severity::kError,
+             "An 'advance' names a value bound outside the loop, where its "
+             "fixed step would bind the same value on every pass."},
     CodeInfo{"flow.form.bad-number", Family::kForm, Severity::kError,
              "A number the language cannot read."},
     CodeInfo{"flow.form.bad-pattern", Family::kForm, Severity::kError,
              "A 'match' pattern the language cannot read: an unclosed hole, an "
              "unknown kind, or two holes with one name."},
+    CodeInfo{"flow.form.bind-many-targets", Family::kForm, Severity::kError,
+             "A name is given to a pipe that writes several destinations, "
+             "which is several steps."},
     CodeInfo{"flow.form.count-not-positive", Family::kForm, Severity::kWarning,
              "A count that is not a number of anything: 'parallel 0', "
              "'skip -1'."},
@@ -111,6 +121,9 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.form.unbounded-repeat", Family::kForm, Severity::kError,
              "A 'repeat' with no 'until', no 'while' and no 'max': nothing "
              "ends it."},
+    CodeInfo{"flow.form.unconditional-abort", Family::kForm, Severity::kError,
+             "An 'abort' at the top of a flow's body with no 'after': it runs "
+             "at once rather than where it is written."},
     CodeInfo{"flow.form.unconditional-cancel", Family::kForm, Severity::kError,
              "A 'cancel' at the top of a flow's body with no 'after': it runs "
              "at once rather than where it is written."},
@@ -209,6 +222,9 @@ constexpr std::array kCodes = {
              "gets nothing."},
     CodeInfo{"flow.unused.struct", Family::kUnused, Severity::kWeakWarning,
              "A struct no port, cast or other struct in the file names."},
+    CodeInfo{"flow.unused.try-pipe", Family::kUnused, Severity::kWeakWarning,
+             "A 'try' pipe whose outcome nothing reads: a failure truncates "
+             "its destination and every reader sees an ordinary end."},
     CodeInfo{"flow.unused.try-status", Family::kUnused, Severity::kWeakWarning,
              "A 'try' whose status nothing reads: a failure leaves the ports "
              "it feeds silently empty."},

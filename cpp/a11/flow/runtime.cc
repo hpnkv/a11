@@ -1275,6 +1275,19 @@ class Destination {
   /// left waiting.
   absl::Status Release() { return Finish(/*forced=*/false); }
 
+  /// End the node with a failure, so its readers see the error and not an end.
+  ///
+  /// `drain` says the stream is over; this says it went wrong, and the
+  /// difference is the whole point of having it: a reader cannot otherwise tell
+  /// a stream that finished from one cut short by something the flow noticed.
+  ///
+  /// Forced, like End(): whoever was writing it, this is the last word. It also
+  /// marks the node finished, so the ordinary Release() every step does on its
+  /// way out finds nothing left to close.
+  absl::Status Abort(absl::Status reason) {
+    return Finish(/*forced=*/true, std::move(reason));
+  }
+
   absl::Status Finished() {
     thread::MutexLock lock(&monitor_->mu());
     return monitor_->Wait(turn_, [this] { return finished_; });
@@ -1296,7 +1309,7 @@ class Destination {
     turn_.Wake();
   }
 
-  absl::Status Finish(bool forced) {
+  absl::Status Finish(bool forced, absl::Status reason = absl::OkStatus()) {
     ABSL_RETURN_IF_ERROR(Enter());
     bool close = false;
     {
@@ -1318,7 +1331,13 @@ class Destination {
     absl::Status status;
     if (close) {
       absl::StatusOr<NodePtr> node = Node();
-      status = node.ok() ? CloseNode(*node) : node.status();
+      if (!node.ok()) {
+        status = node.status();
+      } else if (reason.ok()) {
+        status = CloseNode(*node);
+      } else {
+        status = (*node)->AbortWithStatus(std::move(reason)).Await().status();
+      }
       {
         thread::MutexLock lock(&monitor_->mu());
         finished_ = true;
@@ -1492,6 +1511,10 @@ class Scope {
 
   absl::Status RunForEach(StepId step);
   absl::Status RunRepeat(StepId step);
+  absl::StatusOr<bool> PassCondition(const graph::Step& one, const Scope& pass);
+  void Record(StepId step, const absl::Status& outcome);
+  absl::StatusOr<absl::Status> ChosenStatus(StepId step);
+  absl::Status AbortNode(StepId step);
   absl::Status RunWait(StepId step);
   absl::Status RunWaitMany(StepId step);
   absl::Status Failure(StepId step);
@@ -2524,6 +2547,34 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     if (group.empty()) return absl::OkStatus();
     return sink.One(Item::Of(Value::List(std::move(group))));
   }
+  if (name == "window") {
+    // The overlapping counterpart of `batch`. `batch` has to put a boundary
+    // somewhere, and a question about neighbours -- a pattern across two lines,
+    // a rise between two readings -- is exactly the question a boundary hides:
+    // half the answers fall on it.
+    if (stage.count <= 0) {
+      return Fail(absl::StrCat("'window ", stage.count,
+                               "' is not a width; a window holds at least one "
+                               "value."));
+    }
+    const size_t width = static_cast<size_t>(stage.count);
+    // A deque of at most `width`, so the cost is the window and not the stream:
+    // one over something endless is what this is for.
+    std::deque<Value> held;
+    return each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      held.push_back(value);
+      if (held.size() < width) {
+        // Nothing yet: a window narrower than it was asked for is not a window,
+        // and a stream shorter than one yields nothing at all. That is the
+        // deliberate difference from `batch`, whose last list may be short.
+        return absl::OkStatus();
+      }
+      if (held.size() > width) held.pop_front();
+      return sink.One(
+          Item::Of(Value::List(std::vector<Value>(held.begin(), held.end()))));
+    });
+  }
   if (name == "chunk") {
     // The other direction from `let`: one value, cut into pieces of a size
     // somebody downstream cares about. An upload wants 64 KiB frames and a
@@ -2671,6 +2722,24 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     }));
     return sink.One(Item::Of(std::move(carried)));
   }
+  if (name == "scan") {
+    // `fold`, with the values published as they are computed rather than only
+    // the last one. Written identically on purpose: the difference between the
+    // two is where the values go, and nothing about how the state is carried.
+    //
+    // This is the shape a state machine has, and the reason it needed a stage
+    // of its own: `repeat` carries state but reads one stream from the start on
+    // every pass, and `for` reads a stream one value at a time but carries
+    // nothing between passes. Neither is a state machine over a stream; this
+    // is.
+    Value carried = Value::Of(stage.start);
+    return each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      ABSL_ASSIGN_OR_RETURN(carried, EvaluateFold(stage, carried, value));
+      // Copied, not moved: the next value needs the state this one produced.
+      return sink.One(Item::Of(carried));
+    });
+  }
   if (name == "sort") {
     // The whole stream, because which value comes first is not knowable until
     // the last one has arrived. Stable, so values that compare equal stay in
@@ -2759,10 +2828,10 @@ absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {
   const graph::Ref& one = graph().refs[ref];
   absl::Status outcome;
   if (one.subject_step != kNone &&
-      graph().steps[one.subject_step].kind == StepKind::kBlock) {
-    // A block's outcome is recorded by the block itself, so reading it is
-    // waiting for the block to be over and then looking. Waiting for a step is
-    // what `after` does, and this is the same wait.
+      graph::RecordsOutcome(graph().steps[one.subject_step].kind)) {
+    // A block's or a loop's outcome is recorded by the step itself, so reading
+    // it is waiting for the step to be over and then looking. Waiting for a
+    // step is what `after` does, and this is the same wait.
     ABSL_RETURN_IF_ERROR(StepDone(one.subject_step));
     for (Scope* at = this; at != nullptr; at = at->parent_) {
       thread::MutexLock lock(&monitor().mu());
@@ -3153,9 +3222,27 @@ absl::Status Scope::Execute(StepId step) {
       batch.reserve(kQueueDepth);
       while (true) {
         batch.clear();
-        ABSL_RETURN_IF_ERROR(reader->NextMany(batch, kQueueDepth));
+        // Both halves under the same `try`, because the author cannot tell which
+        // gave way: a source that aborted and a destination that refused the
+        // write are one event from here -- "this pipe did not finish".
+        //
+        // Tolerated here, at the statement, and not in the reader: a reader's
+        // tolerance is a property of the *ref*, reached through a bus shared by
+        // every reader of it, so putting it there would tolerate for readers
+        // that never said `try`.
+        if (absl::Status read = reader->NextMany(batch, kQueueDepth);
+            !read.ok()) {
+          if (!one.tolerant) return read;
+          Record(step, read);
+          return absl::OkStatus();
+        }
         if (batch.empty()) return absl::OkStatus();
-        ABSL_RETURN_IF_ERROR(destination->WriteMany(batch, &bridge()));
+        if (absl::Status wrote = destination->WriteMany(batch, &bridge());
+            !wrote.ok()) {
+          if (!one.tolerant) return wrote;
+          Record(step, wrote);
+          return absl::OkStatus();
+        }
       }
     }
     case StepKind::kSkip: {
@@ -3198,6 +3285,8 @@ absl::Status Scope::Execute(StepId step) {
     }
     case StepKind::kFail:
       return Failure(step);
+    case StepKind::kAbort:
+      return AbortNode(step);
     case StepKind::kLog:
       return WriteLog(one.log, nullptr);
     case StepKind::kBlock: {
@@ -3207,11 +3296,7 @@ absl::Status Scope::Execute(StepId step) {
       if (one.bodies.empty()) return absl::OkStatus();
       const absl::Status ran =
           Scope(*runner_, one.bodies.front(), this, {}).Run();
-      {
-        thread::MutexLock lock(&monitor().mu());
-        outcomes_[step] = ran;
-      }
-      monitor().Wake();
+      Record(step, ran);
       return one.tolerant ? absl::OkStatus() : ran;
     }
     case StepKind::kIf: {
@@ -3221,9 +3306,16 @@ absl::Status Scope::Execute(StepId step) {
       return Scope(*runner_, body, this, {}).Run();
     }
     case StepKind::kForEach:
-      return RunForEach(step);
-    case StepKind::kRepeat:
-      return RunRepeat(step);
+    case StepKind::kRepeat: {
+      // Recorded so a name bound to the loop can read it, exactly as a block's
+      // is. OK when every pass succeeded, which is what `group.Join()` already
+      // answers -- including for a loop its `until` ended early.
+      const absl::Status ran = one.kind == StepKind::kForEach
+                                   ? RunForEach(step)
+                                   : RunRepeat(step);
+      Record(step, ran);
+      return ran;
+    }
   }
   return Fail(absl::StrCat("Cannot run a ", graph::StepKindName(one.kind), "."));
 }
@@ -3416,6 +3508,17 @@ absl::Status Scope::RunWait(StepId step) {
 
 /// The status a `fail` statement raises.
 absl::Status Scope::Failure(StepId step) {
+  ABSL_ASSIGN_OR_RETURN(const absl::Status chosen, ChosenStatus(step));
+  return chosen;
+}
+
+/// The status a `fail` or an `abort` names, evaluated.
+///
+/// StatusOr of a Status, and the nesting is the point: the outer one is whether
+/// the *expressions* could be read, and the inner one is what the flow asked
+/// for. A `fail` returns the inner one as its own outcome; an `abort` hands it
+/// to a node.
+absl::StatusOr<absl::Status> Scope::ChosenStatus(StepId step) {
   const graph::Step& one = graph().steps[step];
   Value code;
   if (!one.code_name.empty()) {
@@ -3444,6 +3547,14 @@ absl::Status Scope::Failure(StepId step) {
   return Fail(text.empty() ? absl::StrCat(runner_->plan().name, " failed.")
                            : text,
               resolved);
+}
+
+absl::Status Scope::AbortNode(StepId step) {
+  const graph::Step& one = graph().steps[step];
+  ABSL_ASSIGN_OR_RETURN(const absl::Status reason, ChosenStatus(step));
+  ABSL_ASSIGN_OR_RETURN(Destination* destination,
+                        DestinationOf(one.destination));
+  return destination->Abort(reason);
 }
 
 /// Write one entry to the flow's own log.
@@ -3547,6 +3658,45 @@ absl::Status Scope::Logged(const absl::Status& logged) {
               logged.code());
 }
 
+/// Remember how a nested body went, for a name bound to it to read.
+///
+/// A block and a loop both have an outcome of their own rather than a call's, so
+/// both record it here and `StatusItem` reads it back after `StepDone`. One
+/// helper because the two must agree: a reader waiting on the wake this does is
+/// waiting on the same condition either way.
+void Scope::Record(StepId step, const absl::Status& outcome) {
+  {
+    thread::MutexLock lock(&monitor().mu());
+    outcomes_[step] = outcome;
+  }
+  monitor().Wake();
+}
+
+/// Whether a loop's `until`/`while` condition holds of the pass that just ran.
+///
+/// One implementation for `repeat` and `for`, because the condition means the
+/// same thing to both: it is asked at the *tail* of a pass, so the body always
+/// runs at least once however the condition starts out. Each stream the
+/// condition reads was captured inside the pass -- the streams themselves are
+/// gone by the time the question is asked -- which is what the `condition:`
+/// slots hold.
+absl::StatusOr<bool> Scope::PassCondition(const graph::Step& one,
+                                          const Scope& pass) {
+  const graph::Expr& condition = graph().exprs[one.condition];
+  absl::flat_hash_map<const syntax::Node*, Value> bound;
+  for (const auto& [node, ref] : condition.bound) {
+    const auto found = pass.captures().find(absl::StrCat("condition:", ref));
+    bound[node] = found == pass.captures().end() ? Value::Null() : found->second;
+  }
+  EvalContext context;
+  context.bound = &bound;
+  context.bridge = &bridge();
+  context.shapes = &shapes();
+  ABSL_ASSIGN_OR_RETURN(const Value holds,
+                        flow::Evaluate(*condition.node, context));
+  return Truthy(holds);
+}
+
 absl::Status Scope::RunForEach(StepId step) {
   const graph::Step& one = graph().steps[step];
   const BodyId body = one.bodies.front();
@@ -3566,7 +3716,20 @@ absl::Status Scope::RunForEach(StepId step) {
     }
     ++index;
     if (parallel == 1) {
-      ABSL_RETURN_IF_ERROR(Scope(*runner_, body, this, std::move(presets)).Run());
+      // Named rather than a temporary, because an `until` reads what the pass
+      // captured and a temporary's captures are gone by the semicolon.
+      Scope pass(*runner_, body, this, std::move(presets));
+      ABSL_RETURN_IF_ERROR(pass.Run());
+      if (one.condition != kNone) {
+        ABSL_ASSIGN_OR_RETURN(const bool holds, PassCondition(one, pass));
+        if (holds == one.stop_when) {
+          // Stop reading, as `| first n` does. It does not cancel whatever is
+          // producing -- see Reader::Stop for why that is deliberate -- so a
+          // step with more to say still finishes on its own terms.
+          reader->Stop();
+          break;
+        }
+      }
       continue;
     }
     // Admission before the fibre, so a wide `parallel` does not turn a long
@@ -3609,21 +3772,8 @@ absl::Status Scope::RunRepeat(StepId step) {
     Scope pass(*runner_, body, this, std::move(presets));
     ABSL_RETURN_IF_ERROR(pass.Run());
     if (one.condition != kNone) {
-      const graph::Expr& condition = graph().exprs[one.condition];
-      absl::flat_hash_map<const syntax::Node*, Value> bound;
-      for (const auto& [node, ref] : condition.bound) {
-        const auto found =
-            pass.captures().find(absl::StrCat("condition:", ref));
-        bound[node] =
-            found == pass.captures().end() ? Value::Null() : found->second;
-      }
-      EvalContext context;
-      context.bound = &bound;
-      context.bridge = &bridge();
-  context.shapes = &shapes();
-      ABSL_ASSIGN_OR_RETURN(const Value holds,
-                            flow::Evaluate(*condition.node, context));
-      if (Truthy(holds) == one.stop_when) return absl::OkStatus();
+      ABSL_ASSIGN_OR_RETURN(const bool holds, PassCondition(one, pass));
+      if (holds == one.stop_when) return absl::OkStatus();
     }
     if (one.carry_source != kNone) {
       const auto found = pass.captures().find("carry");
@@ -3871,8 +4021,18 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
 
 const ResolvedFlow* absl_nullable CompiledProgram::Flow(
     std::string_view name) const {
+  // As Program::Flow does: an empty name reaches nothing, so the entry flow is
+  // not addressable by a `run` or a `call`.
+  if (name.empty()) return nullptr;
   for (const ResolvedFlow& flow : resolved_.flows) {
-    if (flow.plan.name == name) return &flow;
+    if (!flow.plan.entry && flow.plan.name == name) return &flow;
+  }
+  return nullptr;
+}
+
+const ResolvedFlow* absl_nullable CompiledProgram::Entry() const {
+  for (const ResolvedFlow& flow : resolved_.flows) {
+    if (flow.plan.entry) return &flow;
   }
   return nullptr;
 }
@@ -3959,6 +4119,36 @@ absl::StatusOr<actions::ActionHandler> MakeHandler(
         const ResolvedFlow* one = program->Flow(name);
         if (one == nullptr) {
           return Fail(absl::StrCat("No flow named '", name, "' any more."),
+                      absl::StatusCode::kNotFound);
+        }
+        Runner runner(program, *one, std::move(action), bridge, stream);
+        return runner.Run();
+      });
+}
+
+absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
+    std::shared_ptr<const CompiledProgram> program, RunOptions options) {
+  if (program == nullptr) return Fail("There is no program to run.");
+  if (program->Entry() == nullptr) {
+    return Fail(
+        absl::StrCat(
+            program->source_name().empty() ? "This program" : program->source_name(),
+            " declares no entry flow. A file that is meant to be run declares "
+            "one as `flow { ... }` -- with no name, because an entry point is "
+            "not something anything else calls."),
+        absl::StatusCode::kNotFound);
+  }
+  std::shared_ptr<HostBridge> bridge = options.bridge;
+  if (bridge == nullptr) bridge = NativeHostBridge();
+  return actions::MakeAsyncActionHandler(
+      [program = std::move(program), bridge = std::move(bridge),
+       stream = std::move(options.dispatch_stream)](
+          std::shared_ptr<actions::Action> action) -> absl::Status {
+        // Looked up again rather than captured: the handler outlives this call
+        // and the program is what owns the flow.
+        const ResolvedFlow* one = program->Entry();
+        if (one == nullptr) {
+          return Fail("This program has no entry flow any more.",
                       absl::StatusCode::kNotFound);
         }
         Runner runner(program, *one, std::move(action), bridge, stream);

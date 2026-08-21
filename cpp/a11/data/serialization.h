@@ -76,6 +76,74 @@ inline constexpr std::string_view kBytesMimetype = "application/octet-stream";
  * standard JSON and MessagePack codecs. The process-wide registry from
  * GlobalSerializationRegistry already has them. Not copyable.
  */
+class SerializationRegistry;
+
+/**
+ * @brief The local fast path: a value in a chunk, encoded only if needed.
+ *
+ * MakeChunkObject() builds the chunk a producer puts on a node -- with the
+ * value attached and **no bytes** -- and TryTakeObject() is how a consumer in
+ * the same process gets the value back without either side encoding anything.
+ * A consumer elsewhere, or a store that persists, calls Chunk::Materialize()
+ * and gets exactly the bytes it always got.
+ *
+ * The pair is templated in the *caller's* translation unit, which is what makes
+ * it safe: the value's type is known at both ends, and what crosses between
+ * them is a tag comparison rather than a type identity. See a11::data::ChunkObject.
+ */
+template <typename T>
+class TypedChunkObject final : public ChunkObject {
+ public:
+  TypedChunkObject(T value, std::string tag, std::string mimetype,
+                   std::shared_ptr<const SerializationRegistry> registry)
+      : value_(std::move(value)),
+        tag_(std::move(tag)),
+        mimetype_(std::move(mimetype)),
+        registry_(std::move(registry)) {}
+
+  [[nodiscard]] std::string_view tag() const override { return tag_; }
+  [[nodiscard]] std::string_view mimetype() const override {
+    return mimetype_;
+  }
+  [[nodiscard]] const void* address() const override { return &value_; }
+
+  [[nodiscard]] absl::StatusOr<Bytes> Encode() const override;
+
+  [[nodiscard]] size_t ApproxBytes() const override {
+    // A stand-in, not a measurement: this is called for buffer accounting on
+    // every put, and encoding the value to find its size would be the cost the
+    // whole mechanism exists to avoid. Wrong by a constant factor for a large
+    // value, which the accounting tolerates -- it bounds a buffer, it does not
+    // report a number to anybody.
+    return sizeof(T) + 64;
+  }
+
+ private:
+  const T value_;
+  const std::string tag_;
+  const std::string mimetype_;
+  const std::shared_ptr<const SerializationRegistry> registry_;
+};
+
+/**
+ * @brief Takes the value out of @p chunk, if it is carrying one of type @c T.
+ *
+ * Returns nullopt when the chunk holds bytes instead, or holds a value of some
+ * other type -- in which case the caller decodes as it always did. The value is
+ * **copied**, deliberately: a chunk is replayed to every reader of a node, and
+ * one copy per consumer is both correct and far cheaper than the encode and
+ * decode it replaces.
+ */
+template <typename T>
+std::optional<T> TryTakeObject(const Chunk& chunk, std::string_view tag) {
+  if (chunk.object == nullptr || chunk.object->tag() != tag) {
+    return std::nullopt;
+  }
+  // Sound because the tags matched, and tags are unique per type across four
+  // languages by construction. This is the only cast of address() anywhere.
+  return *static_cast<const T*>(chunk.object->address());
+}
+
 class SerializationRegistry {
  public:
   /**
@@ -289,6 +357,42 @@ class SerializationRegistry {
 
 /** @brief Returns the process-wide registry (defaults pre-installed). */
 SerializationRegistry& GlobalSerializationRegistry();
+
+template <typename T>
+absl::StatusOr<Bytes> TypedChunkObject<T>::Encode() const {
+  if (registry_ == nullptr) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "a chunk carrying a ", tag_,
+        " was asked for its bytes, but no serialization registry came with it"));
+  }
+  ABSL_ASSIGN_OR_RETURN(Chunk encoded, registry_->ToChunk<T>(value_, mimetype_));
+  return std::move(encoded.data);
+}
+
+/**
+ * @brief Builds a chunk carrying @p value, with no bytes produced.
+ *
+ * @param value The value, which must not change afterwards.
+ * @param tag Its serialisation tag, from SerialTypeTag<T>().
+ * @param mimetype The media type it would encode as; the chunk reports this as
+ *        its mimetype, so a consumer selecting on media type sees the same
+ *        thing it would have seen had the bytes been there.
+ * @param registry Used only if somebody asks for the bytes after all.
+ */
+template <typename T>
+Chunk MakeChunkObject(T value, std::string tag, std::string mimetype,
+                      std::shared_ptr<const SerializationRegistry> registry) {
+  Chunk chunk;
+  // The mimetype is set even though the bytes are not: it is what selects a
+  // codec, what a `| mime "text/*"` stage filters on, and what tells a reader
+  // what it is about to get. Leaving it for Materialize() would make an
+  // unmaterialised chunk describe itself differently from a materialised one.
+  chunk.metadata = ChunkMetadata{.mimetype = mimetype};
+  chunk.object = std::make_shared<const TypedChunkObject<T>>(
+      std::move(value), std::move(tag), std::move(mimetype),
+      std::move(registry));
+  return chunk;
+}
 
 }  // namespace a11::data
 

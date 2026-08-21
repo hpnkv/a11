@@ -66,7 +66,12 @@ struct Options {
   long long offset = -1;
   int line = 0;
   int column = 0;
-  std::string target = "sublime";
+  /// Which editor definition `syntax` is about; **every one** when empty, which
+  /// is the default. It used to default to "sublime", so a bare
+  /// `a11-flow syntax` checked one of four targets and printed "up to date" --
+  /// which reads as an answer about all of them, and was how three stale
+  /// definitions got past it.
+  std::string target;
   std::string root = ".";
   std::string protocol = "json";
   /// Which shape `schema` is asked about; every one of them when empty.
@@ -432,7 +437,11 @@ int Describe(const Options& options) {
     }
   }
   for (const FlowPlan& flow : resolved.program.flows) {
-    std::cout << "flow " << flow.name << "\n";
+    // The entry flow has no name, and printing "flow " with nothing after it
+    // would read as a file that forgot one.
+    std::cout << (flow.entry ? "flow (entry point)"
+                             : absl::StrCat("flow ", flow.name))
+              << "\n";
     if (!flow.description.empty()) std::cout << "  " << flow.description << "\n";
     for (const syntax::PortDirection direction :
          {syntax::PortDirection::kInput, syntax::PortDirection::kOutput}) {
@@ -636,13 +645,8 @@ int Scan(const Options& options) {
   return 0;
 }
 
-int Syntax(const Options& options) {
-  SyntaxTarget target = SyntaxTarget::kSublime;
-  if (!SyntaxTargetFromName(options.target, target)) {
-    std::cerr << "No editor definition is generated for " << options.target
-              << "\n";
-    return 2;
-  }
+/// One target: generated, or checked against what is on disk.
+int SyntaxOne(const Options& options, SyntaxTarget target) {
   const std::string generated = GenerateSyntax(target);
   const std::string path =
       absl::StrCat(options.root, "/", SyntaxTargetPath(target));
@@ -670,6 +674,28 @@ int Syntax(const Options& options) {
             << ": out of date -- run `a11 flow syntax --target "
             << SyntaxTargetName(target) << " --generate`\n";
   return 1;
+}
+
+int Syntax(const Options& options) {
+  if (options.target.empty()) {
+    // Every target, and the worst outcome wins: a bare `a11-flow syntax` is a
+    // question about the editor definitions, not about one of them, and a
+    // command that answers for a quarter of them is worse than one that refuses.
+    // Keeps going past the first stale one so a person regenerating gets the
+    // whole list rather than one name at a time.
+    int worst = 0;
+    for (const SyntaxTarget target : SyntaxTargets()) {
+      worst = std::max(worst, SyntaxOne(options, target));
+    }
+    return worst;
+  }
+  SyntaxTarget target = SyntaxTarget::kSublime;
+  if (!SyntaxTargetFromName(options.target, target)) {
+    std::cerr << "No editor definition is generated for " << options.target
+              << "\n";
+    return 2;
+  }
+  return SyntaxOne(options, target);
 }
 
 int Serve(const Options& options) {

@@ -11,7 +11,9 @@ Subcommands:
 * ``describe FILE`` -- the resolved plan: ports, headers, steps, node maps.
 * ``highlight FILE`` -- what each token means, for a syntax highlighter.
 * ``complete FILE`` -- what may be written at a position in it.
-* ``run FILE`` -- run one of its flows here, and print what its ports produced.
+* ``run FILE`` -- run it. A file with a ``flow { ... }`` is a **program**: it runs
+  through the interpreter, with `argv`, a policy, standard streams and an exit
+  code. A file of named flows only runs one of them here and prints its ports.
 * ``serve`` -- answer language requests on standard input, one per line.
 * ``syntax`` -- generate the editor definitions, or check they are current.
 * ``codes`` -- every diagnostic code the language publishes, and what it means.
@@ -28,13 +30,20 @@ in the same envelopes; the formats are the contract between them, which is why t
 are pinned by `testdata/flow/codes.json` and by this module's tests rather than by
 whichever frontend happens to be printing them.
 
-The one thing that is still Python is *running* a flow: ``run`` compiles through
-`a11.flow.loads` and executes the graph `a11/flow/runtime.py` walks.
+Running is the one place the two frontends genuinely differ, and it is why this
+one exists. ``a11 flow run`` on a *program* calls
+[a11.flow.run_program][a11.flow.run_program], which is the same interpreter the
+standalone ``a11-flow-run`` is -- but run from *this* process, so a program may
+also call the actions this process has. ``--allow-llm`` is that: it offers
+`interact_with_llm`, which no standalone binary can provide because the provider
+SDKs and the credentials live in Python. Running a *named* flow stays on the
+Python runtime `a11/flow/runtime.py` walks.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import pathlib
 import sys
@@ -491,14 +500,131 @@ def _input_value(text: str) -> Any:
         return text
 
 
-async def _run_run(args: argparse.Namespace) -> int:
-    """Run one flow of a file, here, and print what its ports produced.
+def _duration_seconds(text: str) -> float:
+    """A duration written the way a flow writes one, as seconds.
 
-    Everything a flow calls has to be registered in *this* process, so what this
-    runs is a composition of actions the CLI itself has -- which is what makes it
-    useful for trying a flow out and for a smoke test in a hook. A flow that calls
-    a gateway's actions belongs on the gateway, dispatched as an action like any
-    other.
+    Read with the language's **own lexer** rather than a second parser here, so
+    `--timeout` accepts exactly what a duration literal in a `.flow` file takes
+    and exactly what `a11-flow-run --timeout` takes. A CLI flag that agreed
+    with neither is how `--timeout 30s` came to be rejected by the frontend that
+    claims to be the same interpreter.
+
+    A bare number is seconds, which is the one form the lexer reads as a number
+    rather than a duration. Consecutive durations add up, so `1m30s` is ninety
+    seconds -- the compound form the C++ parser also takes.
+    """
+    from a11._native import flow as native
+
+    read = native.tokenize(text)
+    tokens = [one for one in read["tokens"] if one["kind"] != "end"]
+    if not read["diagnostics"] and tokens:
+        if all(one["kind"] == "duration" for one in tokens):
+            return sum(one["value"].float_seconds() for one in tokens)
+        if len(tokens) == 1 and tokens[0]["kind"] == "number":
+            return float(tokens[0]["value"])
+    raise argparse.ArgumentTypeError(
+        f"{text!r} is not a duration; write one as 30s, 250ms, 1m30s, or a"
+        " number of seconds"
+    )
+
+
+def _program_registry(allow_llm: bool) -> Any:
+    """The actions this process offers a program, and nothing more.
+
+    Empty unless something was asked for. A host-registered action is **not**
+    governed by the flow policy -- `--allow-net` bounds the standard library's
+    network actions, and can say nothing about what a Python handler does -- so
+    offering one is its own decision and needs its own flag. The alternative,
+    registering whatever happened to be importable, would be a program reaching
+    the network because the CLI could.
+    """
+    from a11.actions import ActionRegistry
+
+    registry = ActionRegistry()
+    if allow_llm:
+        from a11.sdk.interact_with_llm import (
+            INTERACT_WITH_LLM_SCHEMA,
+            interact_with_llm,
+        )
+
+        registry.register(
+            "interact_with_llm", INTERACT_WITH_LLM_SCHEMA, interact_with_llm
+        )
+    return registry
+
+
+async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
+    """Run a file's ``flow { ... }`` as a program, and exit as it did.
+
+    The same interpreter ``a11-flow-run`` is, so a program behaves identically
+    whichever started it. What this adds is the registry: with ``--allow-llm`` a
+    program can put a question to a model, which a standalone binary cannot do
+    because the provider SDKs are Python.
+
+    !!! important "In a thread, and it has to be"
+
+        `run_program` blocks until the program finishes, and `interact_with_llm`
+        is an `async def` handler that needs a loop to drive it. If that loop is
+        *this* thread's, it cannot run while the call is blocking it, and the
+        program waits forever on its own handler. So the call goes to a thread
+        and the CLI's loop stays free to serve it.
+    """
+    from a11 import flow as flow_api
+    from a11.status import StatusException
+
+    try:
+        outcome = await asyncio.to_thread(
+            flow_api.run_program,
+            source,
+            "" if name == _STDIN else name,
+            arguments=[name, *(args.arguments or ())],
+            roots=args.root or (),
+            allow_write=args.allow_write,
+            allow_run=args.allow_run,
+            allow_net=args.allow_net,
+            allow_local_net=args.allow_local_net,
+            allow_env=args.allow_env or (),
+            unrestricted=args.unrestricted,
+            timeout_seconds=args.timeout,
+            registry=_program_registry(args.allow_llm),
+        )
+    except StatusException as error:
+        print(f"{name}: {error.status.message}", file=sys.stderr)
+        return 1
+    except Exception as error:  # noqa: BLE001 - the program's failure is a result
+        print(f"{name}: {error}", file=sys.stderr)
+        return 1
+
+    # Warnings after the program's own output, on stderr, so piping a program's
+    # stdout somewhere is not polluted by what the compiler thought.
+    for diagnostic in outcome.get("diagnostics", ()):
+        message = diagnostic.get("message", "")
+        code = diagnostic.get("code", "")
+        print(f"{name}: {message} [{code}]", file=sys.stderr)
+    if args.format in ("json", "sarif"):
+        _emit(
+            {
+                "format": "flow.program/v1",
+                "source": name,
+                "exit_code": outcome.get("exit_code", 0),
+                "diagnostics": list(outcome.get("diagnostics", ())),
+            }
+        )
+        return 0
+    return int(outcome.get("exit_code", 0))
+
+
+async def _run_run(args: argparse.Namespace) -> int:
+    """Run a file: as a program when it declares one, else one of its flows.
+
+    A file with a `flow { ... }` is a program, and running it means what
+    ``a11-flow-run`` means -- `argv`, a policy, standard streams, an exit code.
+    A file of named flows has no entry point, so one of them is run here and its
+    ports are printed, which is for trying a flow out rather than for dispatching
+    one at a gateway.
+
+    ``--flow`` picks a named flow explicitly, and so is also how to run one *out
+    of* a file that has a program in it.
     """
     from a11 import flow as flow_api
     from a11.flow.diagnostics import FlowSyntaxError
@@ -516,12 +642,18 @@ async def _run_run(args: argparse.Namespace) -> int:
         )
         return 1
 
+    if program.has_entry and not args.flow:
+        return await _run_program(args, source, name)
+
     flows = [plan.name for plan in program]
     wanted = args.flow or (flows[0] if flows else "")
     if wanted not in flows:
         known = ", ".join(flows) or "none"
+        hint = ""
+        if program.has_entry:
+            hint = " It does declare a program, which runs without --flow."
         print(
-            f"{name} has no flow named {wanted!r} (declared: {known})",
+            f"{name} has no flow named {wanted!r} (declared: {known}).{hint}",
             file=sys.stderr,
         )
         return 2
@@ -838,8 +970,84 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     run.add_argument(
         "--timeout",
-        type=float,
-        help="Seconds to wait for the flow before giving up.",
+        type=_duration_seconds,
+        metavar="DURATION",
+        help=(
+            "A bound on the whole run: 30s, 250ms, 1m30s, or a bare number of"
+            " seconds. The same spelling a duration has in a flow, and the same"
+            " `a11-flow-run --timeout` takes."
+        ),
+    )
+    # What a *program* may do. Nothing by default, exactly as `a11-flow-run` has
+    # nothing by default: a capability a file can grant itself is not a
+    # capability anybody granted, so these are flags and never syntax.
+    run.add_argument(
+        "--root",
+        action="append",
+        metavar="DIR",
+        help=(
+            "A directory the program may reach. Repeatable. The working"
+            " directory, when none is given."
+        ),
+    )
+    run.add_argument(
+        "--allow-write",
+        action="store_true",
+        help="Let the program write, inside its roots.",
+    )
+    run.add_argument(
+        "--allow-run",
+        action="store_true",
+        help=(
+            "Let the program run other programs, confined by the kernel where"
+            " the platform can."
+        ),
+    )
+    run.add_argument(
+        "--allow-net",
+        action="store_true",
+        help=(
+            "Let the program reach the network. Loopback, private and"
+            " link-local addresses stay refused unless --allow-local-net."
+        ),
+    )
+    run.add_argument(
+        "--allow-local-net",
+        action="store_true",
+        help=(
+            "Also allow those. Say it deliberately: 169.254.169.254 is a cloud"
+            " instance's credentials."
+        ),
+    )
+    run.add_argument(
+        "--allow-env",
+        action="append",
+        metavar="NAME",
+        help="An environment variable the program may read. Repeatable.",
+    )
+    run.add_argument(
+        "--unrestricted",
+        action="store_true",
+        help="No filesystem sandbox at all. For a file you wrote.",
+    )
+    run.add_argument(
+        "--allow-llm",
+        action="store_true",
+        help=(
+            "Offer the program `interact_with_llm`, so it can put a question to"
+            " a model. This is what running a program from here can do that"
+            " `a11-flow-run` cannot: the provider SDKs and the credentials are"
+            " Python's. Note that a host action is not bounded by --allow-net."
+        ),
+    )
+    run.add_argument(
+        "arguments",
+        nargs="*",
+        metavar="ARG",
+        help=(
+            "The program's own arguments, after a `--`. They arrive on `argv`,"
+            " with the file itself first as a C program's argv[0] is."
+        ),
     )
     _add_format(run)
     run.set_defaults(_flow_handler=_run_run)

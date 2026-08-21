@@ -181,6 +181,22 @@ class ChunkStore {
    *    An awaitable that resolves with the sequence number assigned to the
    *    fragment once the write is accepted.
    */
+  /**
+   * @brief Whether this store can hold a chunk that carries a value.
+   *
+   * A a11::data::ChunkObject is an in-process value whose bytes have not been
+   * produced (see a11::data::Chunk). An in-memory store can keep one as it is,
+   * which is the whole point -- a value written and read back in one process is
+   * then never encoded at all. A store that persists or transmits cannot, so
+   * whoever is about to hand it a fragment calls Chunk::Materialize() first.
+   *
+   * **False by default, deliberately.** A store that gains this ability says
+   * so; a store that has not thought about it gets bytes, which is what it
+   * expected before this existed. The failure mode of the other default would
+   * be a value silently not persisted.
+   */
+  [[nodiscard]] virtual bool HoldsObjects() const { return false; }
+
   virtual a11::Future<std::uint32_t> Put(data::NodeFragment fragment) = 0;
 
   /** @brief

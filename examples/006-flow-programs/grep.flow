@@ -1,0 +1,43 @@
+# `grep`, as a filter: standard input in, matching lines out.
+#
+#   a11-flow-run grep.flow -- warning < build.log
+#   some-command | a11-flow-run grep.flow -- error
+#
+# The exit code is grep's -- 0 when something matched, 1 when nothing did --
+# which is what makes it usable in a shell `if`. A flow chooses its exit code by
+# declaring an `out exit_code: integer` port, and the interpreter reads it.
+
+flow {
+  describe "Print the lines of standard input that contain a word."
+
+  out exit_code: integer "0 when a line matched, 1 when none did."
+
+  nodes scratch
+  wanted = node() in scratch
+  matched = node() in scratch
+  found = node() in scratch
+
+  argv | drop 1 | first 1 -> wanted
+
+  input = run read_stdin() via scratch
+  skip input.bytes
+  skip input.is_tty
+
+  # `for` is how the word reaches a per-line expression: the outer value is
+  # materialised for the block, so `needle` is one string and `it` is one line.
+  for needle in wanted {
+    input.lines where contains(it, needle) -> matched
+  }
+
+  # `matched` is a node, so both of these see all of it. Reading one stream
+  # twice would give each reader half.
+  out = run write_stdout(content: matched | map strformat("%s\n", it)) via scratch
+  skip out.bytes_written
+  matched | count -> found
+
+  # Two pipelines rather than two `if`s: a pipeline off a node fans out and
+  # every reader sees all of it, where two conditions reading the node directly
+  # would take one value each and the second would find the stream over.
+  found where it > 0 | map 0 -> exit_code
+  found where it == 0 | map 1 -> exit_code
+}

@@ -12,9 +12,8 @@
  * protocol state). Everything below those seams -- the single libuv loop, the
  * TLS handshake, encrypt/decrypt, backpressure to the socket -- is shared.
  *
- * This header also hosts the process-global libuv executor and the RunOnUv
- * marshalling helpers, which both connection flavours and the client/server
- * factories rely on.
+ * The process-global libuv executor and the RunOnUv marshalling helpers moved
+ * to a11/uv/loop.h and are re-exported here under their original names.
  */
 
 #ifndef A11_NET_INTERNAL_HTTP_TRANSPORT_H_
@@ -58,14 +57,19 @@
 
 #include "a11/concurrency/future.h"
 #include "a11/net/http2.h"
+#include "a11/uv/loop.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net::internal {
 
-inline absl::Status UvError(int code, std::string_view operation) {
-  return absl::UnavailableError(
-      absl::StrCat(operation, " failed: ", uv_strerror(code)));
-}
+// The loop, the executor and the marshalling helpers now live in a11::uv --
+// an event loop is not an HTTP concept, and the Flow standard library needs the
+// same one. Re-exported under the names this file has always used, so every
+// call site below reads exactly as it did.
+using ::a11::uv::RunOnUv;
+using ::a11::uv::RunStatusOnUv;
+using ::a11::uv::UvError;
+using ::a11::uv::UvExecutor;
 
 inline std::string OpenSslErrorMessage(std::string_view operation) {
   const unsigned long code = ERR_get_error();
@@ -313,346 +317,7 @@ inline bool IsIpAddress(std::string_view host) {
          inet_pton(AF_INET6, value.c_str(), &ipv6) == 1;
 }
 
-// One libuv loop is shared by native HTTP clients and servers. All uvw and
-// protocol mutation is serialized on this thread; fiber callbacks communicate
-// through A11 Futures and never block the loop.
-class UvExecutor {
- public:
-  static UvExecutor& Instance() {
-    // Process-global I/O schedulers intentionally live until process exit.
-    static absl::NoDestructor<UvExecutor> executor;
-    return *executor;
-  }
 
-  /**
-   * @brief Queue work for the loop thread.
-   *
-   * @param work  What to run on the loop.
-   * @param order_key
-   *   What this work must stay ordered against. Work sharing a key runs in the
-   *   order it was posted; work with different keys may be interleaved by
-   *   Drain(). Pass the *connection* for anything touching one socket; leave it
-   *   null for work with no per-connection ordering requirement (accepting a
-   *   connection, resolving a client address, stopping a server).
-   *
-   * **Ordering within a key is a protocol requirement, not a nicety.** A later
-   * header write or Finish has to land behind the data writes already posted on
-   * the same connection, or a framed protocol is corrupted -- and both the posted
-   * write path (PostWrite) and the awaited path (RunOnUv) reach the same socket,
-   * so both must carry the same key. Getting that wrong is not a fairness bug, it
-   * is a wire bug: it fails as truncated or interleaved frames.
-   */
-  absl::Status Post(std::function<void()> work,
-                    const void* order_key = nullptr) {
-    if (!work) {
-      return absl::InvalidArgumentError("uv work must be callable");
-    }
-    {
-      thread::MutexLock lock(&mu_);
-      if (!running_) {
-        return absl::FailedPreconditionError("The A11 libuv loop is stopped");
-      }
-      work_.push_back(Item{.key = order_key, .work = std::move(work)});
-    }
-    const int result = async_->send();
-    if (result != 0) {
-      return UvError(result, "uv_async_send");
-    }
-    return absl::OkStatus();
-  }
-
-  [[nodiscard]] std::shared_ptr<uvw::loop> loop() const { return loop_; }
-
-  [[nodiscard]] bool IsLoopThread() const {
-    thread::MutexLock lock(&mu_);
-    return loop_thread_id_.has_value() &&
-           *loop_thread_id_ == std::this_thread::get_id();
-  }
-
- private:
-  friend class absl::NoDestructor<UvExecutor>;
-
-  UvExecutor() {
-    {
-      loop_ = uvw::loop::create();
-      async_ = loop_->resource<uvw::async_handle>();
-      const int initialized = async_->init();
-      if (initialized != 0) {
-        LOG(FATAL) << "Could not initialize the A11 libuv executor: "
-                   << uv_strerror(initialized);
-      }
-      async_->on<uvw::async_event>(
-          [this](const uvw::async_event&, uvw::async_handle&) { Drain(); });
-      thread_ = std::thread([this]() {
-        {
-          thread::MutexLock lock(&mu_);
-          loop_thread_id_ = std::this_thread::get_id();
-          cv_.SignalAll();
-        }
-        loop_->run();
-        thread::MutexLock lock(&mu_);
-        running_ = false;
-      });
-    }
-    thread::MutexLock lock(&mu_);
-    while (!loop_thread_id_.has_value()) {
-      cv_.Wait(&mu_);
-    }
-  }
-
-  /**
-   * @brief Run everything queued, round-robin across order keys.
-   *
-   * Strictly FIFO draining is what let a large write delay a small one: both are
-   * one queue entry, but an entry's *cost* is its transfer, so sixteen 64 KiB
-   * writes queued by one connection made a 64-byte write on another wait behind
-   * all sixteen. That is the mechanism behind the 5.5-7.1x small-request
-   * starvation in `bench/FINDINGS.md` item 0b, which reproduced at 9-18% host
-   * utilisation and so was never contention for the CPU.
-   *
-   * One item per key per round, in first-arrival order of the keys, so a
-   * connection with a backlog yields to every other connection between each of
-   * its own writes. Within a key the order is exactly the order posted, which is
-   * what keeps framing intact.
-   *
-   * Grouping costs one pass over the batch and a small map, once per `uv_async`
-   * wake-up rather than per item, and both single-item and single-key batches --
-   * the overwhelmingly common cases -- skip it entirely.
-   */
-  void Drain() {
-    std::deque<Item> batch;
-    {
-      thread::MutexLock lock(&mu_);
-      batch.swap(work_);
-    }
-    if (DrainStatsEnabled()) {
-      RecordDrainBatch(batch);
-      // Timed per item, so "the queue is empty" can be told apart from "one item
-      // holds the loop for a long time". Both readings of FINDINGS.md item 0b's
-      // candidate 3 needed answering, and this is the half that answers the
-      // second: measured at 2.6% loop occupancy, so there is nothing to free.
-      for (Item& item : batch) {
-        const absl::Time started = absl::Now();
-        item.work();
-        RecordItemDuration(absl::ToInt64Nanoseconds(absl::Now() - started));
-      }
-      return;
-    }
-    if (batch.size() <= 1 || !FairDraining()) {
-      for (Item& item : batch) {
-        item.work();
-      }
-      return;
-    }
-
-    std::vector<const void*> keys;
-    absl::flat_hash_map<const void*, std::deque<std::function<void()>>> lanes;
-    for (Item& item : batch) {
-      auto [lane, fresh] = lanes.try_emplace(item.key);
-      if (fresh) {
-        keys.push_back(item.key);
-      }
-      lane->second.push_back(std::move(item.work));
-    }
-    if (keys.size() == 1) {
-      for (std::function<void()>& work : lanes.begin()->second) {
-        work();
-      }
-      return;
-    }
-    size_t remaining = batch.size();
-    while (remaining > 0) {
-      for (const void* key : keys) {
-        std::deque<std::function<void()>>& lane = lanes.at(key);
-        if (lane.empty()) {
-          continue;
-        }
-        std::function<void()> work = std::move(lane.front());
-        lane.pop_front();
-        --remaining;
-        work();
-      }
-    }
-  }
-
-  struct Item {
-    /// What this work must stay ordered against; null means "only other nulls".
-    const void* key = nullptr;
-    std::function<void()> work;
-  };
-
-  /// A11_UV_DRAIN_STATS=1 reports the batch-size and key-count distribution at
-  /// exit.
-  ///
-  /// This is what says whether fair draining can matter at all: if the loop is
-  /// woken promptly enough that a batch is almost always one item, there is
-  /// nothing to reorder and the queue is not where a delay comes from. Answering
-  /// that is the difference between "fairness did not help" and "fairness had
-  /// nothing to work with".
-  static bool DrainStatsEnabled() {
-    static const bool on = [] {
-      const char* setting = std::getenv("A11_UV_DRAIN_STATS");
-      return setting != nullptr && std::atoi(setting) != 0;
-    }();
-    return on;
-  }
-
-  /// How long one queued item held the loop thread.
-  ///
-  /// The loop is single-threaded, so this *is* the delay every other connection
-  /// sees: an item taking 500us is 500us in which no other socket can be served.
-  /// Bucketed rather than averaged, because the question is whether a *tail*
-  /// exists, not what the mean is.
-  static void RecordItemDuration(std::int64_t nanos) {
-    struct Buckets {
-      std::atomic<std::uint64_t> under_10us{0};
-      std::atomic<std::uint64_t> under_100us{0};
-      std::atomic<std::uint64_t> under_1ms{0};
-      std::atomic<std::uint64_t> over_1ms{0};
-      std::atomic<std::uint64_t> total_nanos{0};
-      std::atomic<std::int64_t> worst_nanos{0};
-    };
-    static absl::NoDestructor<Buckets> buckets;
-    static const bool registered = [] {
-      std::atexit([] {
-        std::fprintf(
-            stderr,
-            "uv item: <10us %llu, <100us %llu, <1ms %llu, >=1ms %llu, "
-            "busy %.1f ms total, worst %.0f us\n",
-            static_cast<unsigned long long>(buckets->under_10us.load()),
-            static_cast<unsigned long long>(buckets->under_100us.load()),
-            static_cast<unsigned long long>(buckets->under_1ms.load()),
-            static_cast<unsigned long long>(buckets->over_1ms.load()),
-            static_cast<double>(buckets->total_nanos.load()) / 1e6,
-            static_cast<double>(buckets->worst_nanos.load()) / 1e3);
-      });
-      return true;
-    }();
-    (void)registered;
-    // Plain literals, no digit separators: clang-format has been seen to read
-    // 1'000'000 as character literals when reflowing this region.
-    constexpr std::int64_t kTenMicros = 10000;
-    constexpr std::int64_t kHundredMicros = 100000;
-    constexpr std::int64_t kMilli = 1000000;
-    buckets->total_nanos.fetch_add(static_cast<std::uint64_t>(nanos),
-                                   std::memory_order_relaxed);
-    if (nanos < kTenMicros) {
-      buckets->under_10us.fetch_add(1, std::memory_order_relaxed);
-    } else if (nanos < kHundredMicros) {
-      buckets->under_100us.fetch_add(1, std::memory_order_relaxed);
-    } else if (nanos < kMilli) {
-      buckets->under_1ms.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      buckets->over_1ms.fetch_add(1, std::memory_order_relaxed);
-    }
-    std::int64_t seen = buckets->worst_nanos.load(std::memory_order_relaxed);
-    while (nanos > seen &&
-           !buckets->worst_nanos.compare_exchange_weak(
-               seen, nanos, std::memory_order_relaxed)) {
-    }
-  }
-
-  static void RecordDrainBatch(const std::deque<Item>& batch) {
-    struct Stats {
-      std::atomic<std::uint64_t> drains{0};
-      std::atomic<std::uint64_t> items{0};
-      std::atomic<std::uint64_t> multi_item{0};
-      std::atomic<std::uint64_t> multi_key{0};
-      std::atomic<std::uint64_t> largest{0};
-    };
-
-    static absl::NoDestructor<Stats> stats;
-    static const bool registered = [] {
-      std::atexit([] {
-        const std::uint64_t drains = stats->drains.load();
-        std::fprintf(
-            stderr,
-            "uv drain: %llu drains, %llu items (%.2f/drain), "
-            "%llu with >1 item (%.1f%%), %llu with >1 key (%.1f%%), "
-            "largest %llu\n",
-            static_cast<unsigned long long>(drains),
-            static_cast<unsigned long long>(stats->items.load()),
-            drains == 0 ? 0.0
-                        : static_cast<double>(stats->items.load()) / drains,
-            static_cast<unsigned long long>(stats->multi_item.load()),
-            drains == 0
-                ? 0.0
-                : 100.0 * static_cast<double>(stats->multi_item.load()) /
-                      drains,
-            static_cast<unsigned long long>(stats->multi_key.load()),
-            drains == 0
-                ? 0.0
-                : 100.0 * static_cast<double>(stats->multi_key.load()) / drains,
-            static_cast<unsigned long long>(stats->largest.load()));
-      });
-      return true;
-    }();
-    (void)registered;
-    stats->drains.fetch_add(1, std::memory_order_relaxed);
-    stats->items.fetch_add(batch.size(), std::memory_order_relaxed);
-    if (batch.size() > 1) {
-      stats->multi_item.fetch_add(1, std::memory_order_relaxed);
-      absl::flat_hash_set<const void*> keys;
-      for (const Item& item : batch) {
-        keys.insert(item.key);
-      }
-      if (keys.size() > 1) {
-        stats->multi_key.fetch_add(1, std::memory_order_relaxed);
-      }
-    }
-    std::uint64_t seen = stats->largest.load(std::memory_order_relaxed);
-    while (batch.size() > seen &&
-           !stats->largest.compare_exchange_weak(seen, batch.size(),
-                                                 std::memory_order_relaxed)) {}
-  }
-
-  /// A11_UV_FAIR=0 restores strictly FIFO draining.
-  ///
-  /// Kept as the control the fairness claim is measured against, in the same
-  /// spirit as the pool's dials: the starvation this fixes is a ratio between two
-  /// client populations, so the only honest way to quote a number for it is to run
-  /// both policies in one binary.
-  static bool FairDraining() {
-    static const bool fair = [] {
-      const char* setting = std::getenv("A11_UV_FAIR");
-      return setting == nullptr || std::atoi(setting) != 0;
-    }();
-    return fair;
-  }
-
-  mutable thread::Mutex mu_;
-  thread::CondVar cv_;
-  bool running_ ABSL_GUARDED_BY(mu_) = true;
-  std::optional<std::thread::id> loop_thread_id_ ABSL_GUARDED_BY(mu_);
-  std::deque<Item> work_ ABSL_GUARDED_BY(mu_);
-  std::shared_ptr<uvw::loop> loop_;
-  std::shared_ptr<uvw::async_handle> async_;
-  std::thread thread_;
-};
-
-/**
- * @brief Run @p operation on the loop thread and wait for its result.
- *
- * @param order_key  See UvExecutor::Post. **Pass the connection whenever the
- *   operation touches one**, or its awaited work can be reordered ahead of writes
- *   posted for the same socket. `HttpTransport::RunOnUvForConnection` supplies it
- *   automatically and is what connection code should call.
- */
-template <typename T>
-absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation,
-                          const void* order_key = nullptr) {
-  if (UvExecutor::Instance().IsLoopThread()) {
-    return operation();
-  }
-  auto promise = std::make_shared<a11::Promise<T>>();
-  a11::Future<T> future = promise->future();
-  ABSL_RETURN_IF_ERROR(UvExecutor::Instance().Post(
-      [promise, operation = std::move(operation)]() mutable {
-        (void)promise->SetResult(operation());
-      },
-      order_key));
-  return future.Await();
-}
 
 /**
  * How many application bytes may be queued for the loop before a writer waits.
@@ -669,17 +334,6 @@ absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation,
  */
 constexpr std::size_t kMaxQueuedWriteBytes = 4 * 1024 * 1024;
 
-inline absl::Status RunStatusOnUv(std::function<absl::Status()> operation,
-                                  const void* order_key = nullptr) {
-  absl::StatusOr<a11::Unit> result = RunOnUv<a11::Unit>(
-      [operation =
-           std::move(operation)]() mutable -> absl::StatusOr<a11::Unit> {
-        ABSL_RETURN_IF_ERROR(operation());
-        return a11::Unit{};
-      },
-      order_key);
-  return result.status();
-}
 
 /**
  * @brief TCP + optional TLS transport shared by the HTTP connections.

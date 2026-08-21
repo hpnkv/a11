@@ -216,6 +216,8 @@ enum class StepKind {
   kWait,
   kDrain,
   kCancel,
+  /// `abort node ..`: end a node with a failure rather than with an end.
+  kAbort,
   kFail,
   kLog,
   /// Remember a stream's first value for the loop that owns this body: what
@@ -229,6 +231,17 @@ enum class StepKind {
 };
 
 std::string_view StepKindName(StepKind kind);
+
+/// Whether a step records an outcome of its own for a name to read.
+///
+/// The steps that run a nested body: what makes them different from a `kCall`
+/// is that their status is not a *call's* status to be asked for, it is theirs
+/// to have recorded. A name bound to one reads what it recorded, which is why
+/// `s = try { .. }` and `done = for x in s { .. }` are the same shape.
+inline bool RecordsOutcome(StepKind kind) {
+  return kind == StepKind::kBlock || kind == StepKind::kForEach ||
+         kind == StepKind::kRepeat || kind == StepKind::kPipe;
+}
 
 /// One resolved statement.
 struct Step {
@@ -459,8 +472,10 @@ class GraphBuilder {
   /// Then one in gives one out. `map`, `at`, `truncate`, `text`, `json`,
   /// `packb` and `strformat` reshape each value; `log` and `logf` reshape
   /// nothing and pass each value straight on; `where`, `mime` and `distinct`
-  /// may drop one, which is still at most one out per one in; `batch` and
-  /// `group` gather several into a list, which is *fewer*, and `chunk` and
+  /// may drop one, which is still at most one out per one in; `scan` publishes
+  /// the state it reached at each value, so one in gives exactly one out;
+  /// `batch` and `group` gather several into a list, which is *fewer*, as is
+  /// `window` -- its first `n - 1` values produce nothing -- and `chunk` and
   /// `then` make more. Anything the language gains is assumed not to preserve
   /// the count until it says so, which is the safe direction.
   static bool StagePreservesCount(const Stage& stage) {
@@ -468,7 +483,7 @@ class GraphBuilder {
         new absl::flat_hash_set<std::string>{
             "map",  "at",       "truncate", "text", "json",     "packb",
             "strformat", "where", "mime",   "distinct", "first", "last",
-            "drop", "log",      "logf",
+            "drop", "log",      "logf",     "scan",
             // `sort` reorders and keeps every value; `timeout` and `pace` say
             // *when* a value may pass and change nothing about which do.
             "sort", "timeout", "pace"};

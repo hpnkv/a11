@@ -34,19 +34,31 @@
       "code": "flow.barrier.duplicate-until",
       "family": "barrier",
       "severity": "error",
-      "summary": "A repeat is given a second stop condition."
+      "summary": "A loop is given a second stop condition."
     },
     {
       "code": "flow.barrier.until-outside-repeat",
       "family": "barrier",
       "severity": "error",
-      "summary": "An 'until' or 'while' ends a 'repeat', and there is none here."
+      "summary": "An 'until' or 'while' ends a 'repeat' or a 'for', and there is neither here."
+    },
+    {
+      "code": "flow.barrier.until-parallel",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "An 'until' is written on a loop whose passes run in parallel, where there is no one pass for it to ask about."
     },
     {
       "code": "flow.barrier.wrong-carry",
       "family": "barrier",
       "severity": "error",
       "summary": "A carry names something other than what its repeat carries."
+    },
+    {
+      "code": "flow.form.advance-in-loop",
+      "family": "form",
+      "severity": "error",
+      "summary": "An 'advance' names a value bound outside the loop, where its fixed step would bind the same value on every pass."
     },
     {
       "code": "flow.form.bad-number",
@@ -59,6 +71,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A 'match' pattern the language cannot read: an unclosed hole, an unknown kind, or two holes with one name."
+    },
+    {
+      "code": "flow.form.bind-many-targets",
+      "family": "form",
+      "severity": "error",
+      "summary": "A name is given to a pipe that writes several destinations, which is several steps."
     },
     {
       "code": "flow.form.count-not-positive",
@@ -203,6 +221,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A 'repeat' with no 'until', no 'while' and no 'max': nothing ends it."
+    },
+    {
+      "code": "flow.form.unconditional-abort",
+      "family": "form",
+      "severity": "error",
+      "summary": "An 'abort' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
     },
     {
       "code": "flow.form.unconditional-cancel",
@@ -425,6 +449,12 @@
       "family": "unused",
       "severity": "weak-warning",
       "summary": "A struct no port, cast or other struct in the file names."
+    },
+    {
+      "code": "flow.unused.try-pipe",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "A 'try' pipe whose outcome nothing reads: a failure truncates its destination and every reader sees an ordinary end."
     },
     {
       "code": "flow.unused.try-status",

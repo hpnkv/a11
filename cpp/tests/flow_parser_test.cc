@@ -83,6 +83,46 @@ flow research {
 }
 )flow";
 
+// --- the entry flow ----------------------------------------------------------
+
+TEST(FlowParser, ANamelessFlowIsTheEntryPoint) {
+  const ParseResult parsed = Parse("flow {\n  describe \"a program\"\n}\n");
+  EXPECT_TRUE(Codes(parsed).empty()) << absl::StrJoin(Codes(parsed), ", ");
+  ASSERT_EQ(parsed.flows.size(), 1u);
+  EXPECT_TRUE(parsed.flows[0]->entry);
+  EXPECT_TRUE(parsed.flows[0]->name.text.empty());
+}
+
+TEST(FlowParser, ANamedFlowIsNotAnEntryPoint) {
+  const ParseResult parsed = Parse("flow named { }\n");
+  ASSERT_EQ(parsed.flows.size(), 1u);
+  EXPECT_FALSE(parsed.flows[0]->entry);
+  EXPECT_EQ(parsed.flows[0]->name.text, "named");
+}
+
+TEST(FlowParser, AFileMayHoldBothAnEntryFlowAndNamedOnes) {
+  const ParseResult parsed =
+      Parse("flow helper { }\nflow {\n}\nflow other { }\n");
+  EXPECT_TRUE(Codes(parsed).empty()) << absl::StrJoin(Codes(parsed), ", ");
+  ASSERT_EQ(parsed.flows.size(), 3u);
+  EXPECT_FALSE(parsed.flows[0]->entry);
+  EXPECT_TRUE(parsed.flows[1]->entry);
+  EXPECT_FALSE(parsed.flows[2]->entry);
+}
+
+TEST(FlowParser, AnUnclosedEntryFlowSaysSoWithoutQuotingAnEmptyName) {
+  const ParseResult parsed = Parse("flow {\n  in x: string\n");
+  ASSERT_FALSE(parsed.diagnostics.empty());
+  const std::vector<std::string> messages = Messages(parsed);
+  bool mentioned = false;
+  for (const std::string& message : messages) {
+    // "Flow '' is missing its closing" would read as a file that forgot a name.
+    mentioned = mentioned || message.find("entry flow") != std::string::npos;
+    EXPECT_EQ(message.find("Flow ''"), std::string::npos) << message;
+  }
+  EXPECT_TRUE(mentioned) << absl::StrJoin(messages, " | ");
+}
+
 TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   const ParseResult result = Parse(kResearch);
   ASSERT_TRUE(result.diagnostics.empty())
@@ -388,6 +428,98 @@ TEST(FlowParser, ADescriptionMayStandOnTheLineBelowWhatItDescribes) {
   ASSERT_EQ(flow.headers.size(), 1u);
   EXPECT_EQ(flow.headers[0]->description, "How many pages to read.");
   EXPECT_TRUE(flow.body.empty());
+}
+
+TEST(FlowParser, TryFrontsThreeDifferentThingsToldApartByWhatFollows) {
+  // `try` is the one word in the language that fronts three shapes, and the
+  // test exists because getting the lookahead off by one silently reclassified
+  // every `try run` in the repository as a pipe -- `Peek(0)` is `Current()`, so
+  // asking about "the next word" from 0 asks about the `try` itself.
+  struct Case {
+    std::string_view body;
+    syntax::NodeKind kind;
+  };
+  for (const Case& one : {
+           Case{"  x = try run t(p: a)\n  skip x\n",
+                syntax::NodeKind::kBind},
+           Case{"  try run t(p: a)\n", syntax::NodeKind::kCallStatement},
+           Case{"  try call t(p: a)\n", syntax::NodeKind::kCallStatement},
+           Case{"  try a -> o\n", syntax::NodeKind::kPipe},
+           Case{"  try a | first 1 -> o\n", syntax::NodeKind::kPipe},
+           Case{"  try { a -> o }\n", syntax::NodeKind::kBlock},
+       }) {
+    const ParseResult result =
+        Parse(absl::StrCat("flow f {\n  in a: string stream\n"
+                           "  out o: string stream\n",
+                           one.body, "}\n"));
+    ASSERT_TRUE(result.diagnostics.empty())
+        << one.body << " gave " << absl::StrJoin(Messages(result), "; ");
+    ASSERT_EQ(result.flows.size(), 1u) << one.body;
+    ASSERT_FALSE(result.flows.front()->body.empty()) << one.body;
+    EXPECT_EQ(result.flows.front()->body.front()->kind, one.kind)
+        << one.body << " read as "
+        << syntax::NodeKindName(result.flows.front()->body.front()->kind);
+  }
+}
+
+TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
+  const ParseResult result = Parse(
+      "flow f {\n  in w: string stream\n  out o: string stream\n"
+      "  taken = node()\n  first = run t()\n"
+      "  done = for x in w { x -> taken } after first\n"
+      "  drain taken after done\n  taken -> o\n  skip first\n}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  ASSERT_EQ(result.flows.size(), 1u);
+  // The bind, whose value is the loop -- not a call, which is what `name = for`
+  // used to be misread as.
+  const syntax::Node* bound = result.flows.front()->body[2].get();
+  ASSERT_EQ(bound->kind, syntax::NodeKind::kBind);
+  const auto* bind = syntax::As<syntax::Bind>(bound);
+  ASSERT_NE(bind->value, nullptr);
+  ASSERT_EQ(bind->value->kind, syntax::NodeKind::kForEach);
+  const auto* loop = syntax::As<syntax::ForEach>(bind->value.get());
+  ASSERT_EQ(loop->after.size(), 1u);
+  EXPECT_EQ(loop->after.front().text, "first");
+}
+
+TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
+  // A break inside `{ }`, `[ ]` or `( )` ends nothing -- the closing bracket is
+  // what ends it -- so an operator may begin the next line.
+  //
+  // This used to be true only straight after a `,`, because the loops reading a
+  // comma-separated list skip newlines themselves: `{"a": 1,\n "b": 2}` parsed
+  // and `{"a": x\n or y}` was `Expected }, found 'or'`. One rule now, and it
+  // matters most for a `scan` carrying a record, which is where the language's
+  // longest expressions are.
+  for (const std::string_view wrapped : {
+           "  l | map {\"a\": starts-with(it, \"B\")\n"
+           "       or ends-with(it, \"E\")} -> o\n",
+           "  l | map {\"a\": len(it) > 1\n       and len(it) < 9} -> o\n",
+           "  l | map {\"a\": len(it)\n       > 1} -> o\n",
+           "  l | map {\"a\": len(it)\n       + 1} -> o\n",
+           "  l | map [len(it) > 1\n       and len(it) < 9] -> o\n",
+           "  l | map (len(it)\n       + 1) -> o\n",
+       }) {
+    const ParseResult result =
+        Parse(absl::StrCat("flow f {\n  in l: string stream\n"
+                           "  out o: json stream\n",
+                           wrapped, "}\n"));
+    EXPECT_TRUE(result.diagnostics.empty())
+        << wrapped << " gave " << absl::StrJoin(Messages(result), "; ");
+  }
+}
+
+TEST(FlowParser, OutsideBracketsALineBreakStillEndsTheStatement) {
+  // The property the change above must not cost. A break outside brackets ends
+  // the statement, which is what stops a `where` on the line below from being
+  // read as a continuation of the pipe above it -- so an operator alone on the
+  // next line is still an error rather than a continuation.
+  const ParseResult result = Parse(
+      "flow f {\n  in l: string stream\n  out o: string stream\n"
+      "  l where starts-with(it, \"B\")\n"
+      "  or ends-with(it, \"E\") -> o\n}\n");
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(FlowParser, AStringWithSomethingAfterItIsAStatementAndNotADescription) {

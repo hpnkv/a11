@@ -296,8 +296,12 @@ absl::StatusOr<ChunkMetadata> ChunkMetadata::FromMsgpack(
 }
 
 size_t Chunk::ApproxBytes() const {
-  return ref.size() + data.size() + (metadata ? metadata->ApproxBytes() : 1) +
-         5;
+  // The object's estimate rather than its encoding: this is called for buffer
+  // accounting on every put, and encoding a value to find out how big it is
+  // would reintroduce exactly the cost the object exists to avoid.
+  return ref.size() + data.size() +
+         (object != nullptr ? object->ApproxBytes() : 0) +
+         (metadata ? metadata->ApproxBytes() : 1) + 5;
 }
 
 std::string Chunk::DebugString() const {
@@ -309,7 +313,10 @@ std::string Chunk::GetMimetype() const {
 }
 
 bool Chunk::IsEmpty() const {
-  return ref.empty() && data.empty();
+  // The object counts. A chunk carrying a value has no bytes yet, and reading
+  // that as empty would read it as a null stream terminator -- ending a stream
+  // on its first value.
+  return ref.empty() && data.empty() && object == nullptr;
 }
 
 bool Chunk::IsNull() const {
@@ -320,7 +327,31 @@ absl::Status Chunk::Validate() const {
   if (!ref.empty() && !data.empty()) {
     return absl::InvalidArgumentError("Only one of ref or data may be set");
   }
+  if (object != nullptr && !ref.empty()) {
+    return absl::InvalidArgumentError(
+        "A chunk carrying an object cannot also reference another node");
+  }
   return metadata ? metadata->Validate() : absl::OkStatus();
+}
+
+absl::Status Chunk::Materialize() {
+  if (object == nullptr) {
+    return absl::OkStatus();
+  }
+  if (!data.empty()) {
+    // Bytes already won; drop the value so there is one answer rather than two
+    // that could drift apart.
+    object.reset();
+    return absl::OkStatus();
+  }
+  ABSL_ASSIGN_OR_RETURN(data, object->Encode());
+  if (!metadata.has_value()) {
+    metadata = ChunkMetadata{.mimetype = std::string(object->mimetype())};
+  } else if (metadata->mimetype.empty()) {
+    metadata->mimetype = std::string(object->mimetype());
+  }
+  object.reset();
+  return absl::OkStatus();
 }
 
 absl::StatusOr<Bytes> Chunk::ToMsgpack() const {

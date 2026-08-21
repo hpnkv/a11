@@ -238,7 +238,7 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
       {"flow f { in a: string\n s <- a }",
        "flow.barrier.carry-outside-repeat", "no repeat here"},
       {"flow f { in a: string\n until a }",
-       "flow.barrier.until-outside-repeat", "no repeat here"},
+       "flow.barrier.until-outside-repeat", "no 'repeat' or 'for' here"},
       {"flow f { in a: string\n repeat s = 1 { until a\n while a } }",
        "flow.barrier.duplicate-until", "already has a stop condition"},
       {"flow f { in a: string\n repeat s = 1 { s <- a\n s <- a } }",
@@ -565,6 +565,61 @@ TEST(FlowResolve, AdvanceOnlyMovesAValueALetBound) {
                           "  strformat(\"%s\", w) -> o\n  advance w\n"
                           "  strformat(\"%s\", w) -> o\n}\n"))
                   .empty());
+}
+
+TEST(FlowResolve, AdvanceOfAnOuterNameInALoopIsRefused) {
+  // `advance` moves by an offset fixed while the file is compiled, and a loop
+  // body is resolved once -- so advancing a name bound outside the loop bound
+  // the *same* value on every pass, silently. Four passes over `a b c d e` gave
+  // `a` four times and reported nothing, which is the worst way for this to
+  // behave, so it is now an error that names `for` as the thing to write.
+  EXPECT_EQ(Codes(Check("flow f {\n  in q: string stream required\n"
+                        "  out o: string stream\n  let w = q\n"
+                        "  repeat n = 0 max 4 {\n    w -> o\n"
+                        "    advance w\n  }\n}\n")),
+            (std::vector<std::string>{"flow.form.advance-in-loop"}));
+  // A `for` body is a loop body too, and the same reasoning applies.
+  EXPECT_EQ(Codes(Check("flow f {\n  in q: string stream required\n"
+                        "  in v: string stream required\n"
+                        "  out o: string stream\n  let w = q\n"
+                        "  for x in v {\n    w -> o\n    advance w\n"
+                        "    x -> o\n  }\n}\n")),
+            (std::vector<std::string>{"flow.form.advance-in-loop"}));
+  // A name bound *inside* the body is a different thing: each pass rebinds it,
+  // so advancing it reads two values of the stream per pass, which is exactly
+  // what it says. This must stay allowed.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in q: string stream required\n"
+                          "  in v: string stream required\n"
+                          "  out o: string stream\n"
+                          "  for x in v {\n    let w = q\n    w -> o\n"
+                          "    advance w\n    w -> o\n    x -> o\n  }\n}\n"))
+                  .empty());
+}
+
+TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
+  // The trap in binding a loop: `ResolveAfter` makes `kWait` steps of its own,
+  // and `ResolveBind` names a statement's *first* step. Resolve the `after`
+  // before the loop's own `NewStep` and `done` silently becomes one of those
+  // waits -- the flow still compiles, and `after done` then waits for the wrong
+  // thing. So this asserts on the *kind* of the step the name got.
+  const std::string source =
+      "flow f {\n  in w: string stream\n  out o: string stream\n"
+      "  taken = node()\n  first = run t()\n"
+      "  done = for x in w { x -> taken } after first\n"
+      "  drain taken after done\n  taken -> o\n  skip first\n}\n";
+  // The graph, because the claim is about which *graph* step the name got.
+  const ResolveResult result =
+      Resolve(source, Parse(source), /*build_graph=*/true);
+  EXPECT_TRUE(Codes(result).empty()) << Messages(result);
+  ASSERT_FALSE(result.flows.empty());
+  bool found = false;
+  for (const graph::Step& step : result.flows.front().graph.steps) {
+    if (step.label != "done") continue;
+    found = true;
+    EXPECT_EQ(step.kind, graph::StepKind::kForEach)
+        << "'done' named a " << graph::StepKindName(step.kind);
+  }
+  EXPECT_TRUE(found) << "no step was labelled 'done'";
 }
 
 TEST(FlowResolve, APatternIsReadWhereItIsWritten) {

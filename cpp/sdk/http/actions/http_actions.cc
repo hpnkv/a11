@@ -34,6 +34,7 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 #include "a11/net/http/connection_pool.h"
 #include "a11/net/http/url.h"
 #include "a11/net/http2.h"
@@ -78,11 +79,22 @@ constexpr std::string_view kOctetStream = "application/octet-stream";
 // is bytes. That also keeps the cross-language tag table out of it.
 // ---------------------------------------------------------------------------
 
-data::Chunk JsonChunk(const nlohmann::json& value) {
+/// A JSON chunk, or the reason the value will not fit JSON.
+///
+/// StatusOr rather than a plain Chunk, and `DumpJson` rather than `dump()`,
+/// because everything this encodes came off a socket: a response header's value
+/// is opaque octets on the wire, and a server is entitled to send one that is
+/// not UTF-8. `dump()` answers that with `std::abort()` in every
+/// `-fno-exceptions` translation unit -- which is most of A11 -- so a remote
+/// peer could end this process with no output at all by sending a header. The
+/// check lives in `DumpJson`; this only has to ask it and pass the answer on.
+absl::StatusOr<data::Chunk> JsonChunk(const nlohmann::json& value) {
+  ABSL_ASSIGN_OR_RETURN(std::string encoded,
+                        DumpJson(value, "an HTTP action's JSON output"));
   data::Chunk chunk;
   chunk.metadata =
       data::ChunkMetadata{.mimetype = std::string(data::kJsonMimetype)};
-  chunk.data = value.dump();
+  chunk.data = std::move(encoded);
   return chunk;
 }
 
@@ -184,8 +196,19 @@ class Outputs {
 
   /// Writes a port's single value and closes it.
   absl::Status PutOnly(std::string_view name, const nlohmann::json& value) {
-    ABSL_RETURN_IF_ERROR(Put(name, JsonChunk(value), /*final=*/true));
+    ABSL_ASSIGN_OR_RETURN(data::Chunk chunk, JsonChunk(value));
+    ABSL_RETURN_IF_ERROR(Put(name, std::move(chunk), /*final=*/true));
     return Close(name);
+  }
+
+  /// Writes one JSON value to a port and leaves it open.
+  ///
+  /// The pairing for PutOnly, and the reason both exist rather than every caller
+  /// spelling out the encode: JsonChunk can fail, and a caller that has to
+  /// unpack a StatusOr before it can write tends to write `dump()` instead.
+  absl::Status PutJson(std::string_view name, const nlohmann::json& value) {
+    ABSL_ASSIGN_OR_RETURN(data::Chunk chunk, JsonChunk(value));
+    return Put(name, std::move(chunk), /*final=*/false);
   }
 
   /// Ends a port and releases it, so Finish() does not do it again.
@@ -764,8 +787,9 @@ absl::Status PumpPushes(const std::shared_ptr<Action>& action,
         {"headers", HeaderObject(head->headers)},
         {"request_headers", HeaderObject(push.headers)},
         {"body", body_id}};
+    ABSL_ASSIGN_OR_RETURN(data::Chunk head_chunk, JsonChunk(record));
     ABSL_RETURN_IF_ERROR(
-        pushes->PutChunk(JsonChunk(record), std::nullopt, /*final=*/false)
+        pushes->PutChunk(std::move(head_chunk), std::nullopt, /*final=*/false)
             .Await()
             .status());
 
@@ -857,12 +881,11 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
           }
           // The hop chain is a stream of its own: a caller auditing where a URL
           // actually went reads it without the bodies getting in the way.
-          ABSL_RETURN_IF_ERROR(outputs.Put(
-              "redirects",
-              JsonChunk(nlohmann::json{{"url", target.ToString()},
-                                       {"status", head->status},
-                                       {"location", *location}}),
-              /*final=*/false));
+          ABSL_RETURN_IF_ERROR(
+              outputs.PutJson("redirects",
+                              nlohmann::json{{"url", target.ToString()},
+                                             {"status", head->status},
+                                             {"location", *location}}));
           if (attempt.upload != nullptr) {
             (void)attempt.upload->Abort(absl::CancelledError("redirected"));
             (void)upload.Await();
@@ -903,8 +926,7 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
       // One field per value, in wire order: a stream, because that is what a
       // header block is, repeats and all.
       for (const nlohmann::json& field : FieldPairs(head->headers)) {
-        ABSL_RETURN_IF_ERROR(
-            outputs.Put("fields", JsonChunk(field), /*final=*/false));
+        ABSL_RETURN_IF_ERROR(outputs.PutJson("fields", field));
       }
       ABSL_RETURN_IF_ERROR(outputs.Close("fields"));
       ABSL_RETURN_IF_ERROR(outputs.PutOnly(
@@ -1246,19 +1268,16 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
         std::vector<nlohmann::json> decoded;
         events.Feed(piece, &decoded);
         for (const nlohmann::json& record : decoded) {
-          ABSL_RETURN_IF_ERROR(outputs.Put("items", JsonChunk(record),
-                                           /*final=*/false));
+          ABSL_RETURN_IF_ERROR(outputs.PutJson("items", record));
         }
       } else if (wants_items && framing == ItemFraming::kLines) {
         std::vector<std::string> decoded;
         lines.Feed(piece, &decoded);
         for (const std::string& line : decoded) {
           nlohmann::json value = nlohmann::json::parse(line, nullptr, false);
-          ABSL_RETURN_IF_ERROR(outputs.Put(
-              "items",
-              JsonChunk(value.is_discarded() ? nlohmann::json(line)
-                                             : std::move(value)),
-              /*final=*/false));
+          ABSL_RETURN_IF_ERROR(outputs.PutJson(
+              "items", value.is_discarded() ? nlohmann::json(line)
+                                            : std::move(value)));
         }
       }
     }
@@ -1268,19 +1287,16 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
       std::vector<nlohmann::json> decoded;
       events.Finish(&decoded);
       for (const nlohmann::json& record : decoded) {
-        ABSL_RETURN_IF_ERROR(outputs.Put("items", JsonChunk(record),
-                                         /*final=*/false));
+        ABSL_RETURN_IF_ERROR(outputs.PutJson("items", record));
       }
     } else if (wants_items && framing == ItemFraming::kLines) {
       std::vector<std::string> decoded;
       lines.Finish(&decoded);
       for (const std::string& line : decoded) {
         nlohmann::json value = nlohmann::json::parse(line, nullptr, false);
-        ABSL_RETURN_IF_ERROR(outputs.Put(
-            "items",
-            JsonChunk(value.is_discarded() ? nlohmann::json(line)
-                                           : std::move(value)),
-            /*final=*/false));
+        ABSL_RETURN_IF_ERROR(outputs.PutJson(
+            "items", value.is_discarded() ? nlohmann::json(line)
+                                          : std::move(value)));
       }
     }
 
@@ -1302,8 +1318,7 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
     // every list endpoint, and the reason `items` is not only for NDJSON.
     if (wants_items && framing == ItemFraming::kElements && parsed.is_array()) {
       for (const nlohmann::json& element : parsed) {
-        ABSL_RETURN_IF_ERROR(outputs.Put("items", JsonChunk(element),
-                                         /*final=*/false));
+        ABSL_RETURN_IF_ERROR(outputs.PutJson("items", element));
       }
     }
     return outputs.Close("items");

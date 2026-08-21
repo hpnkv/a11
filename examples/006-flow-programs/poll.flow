@@ -1,0 +1,88 @@
+# Poll a file until it stops growing, then stop -- cleanly.
+#
+#   a11-flow-run --root /var/log poll.flow -- /var/log/system.log
+#
+# `watch.flow` polls a fixed number of times because its `ticker` was given a
+# `for`. This one does not know how many readings it will take: it stops when
+# two consecutive readings agree, which is a fact it learns from the readings.
+#
+# That makes it the shape an interactive program has -- read, decide, either go
+# round again or stop -- and the interesting part is the stopping. There are
+# three ways to end an endless source and only one of them is right:
+#
+#   * Let it run out. There is nothing to run out of; a ticker is endless.
+#   * `cancel clock`. This stops it, and the program then ends `cancelled` with a
+#     non-zero exit code, because that is what cancelling means. A deliberate
+#     stop that reports itself as a crash is not a stop.
+#   * Ask it to finish on its control port. Every action in the standard library
+#     treats `{"command": "stop"}` there as its stream having ended: ports close
+#     normally, the run is a success, and a reader sees the end of a stream
+#     rather than a failure.
+#
+# The third is what this does, and the wiring is worth reading twice: the
+# ticker's `control_events` input is a node this flow also writes to, from inside
+# the loop over the ticker's own output. A cycle through a node is how a flow
+# feeds a decision back into the thing that produced the values it decided on.
+# The language has no word for this on purpose -- `control_events` is a
+# convention of the standard library, and a compiler that knew about it would
+# know about one library's habits.
+
+flow {
+  describe "Report a file's size until two readings agree."
+
+  out exit_code: integer "0 when it settled, 1 when the clock ran out first."
+
+  nodes scratch
+  path = node() in scratch
+  stopper = node() in scratch
+  sizes = node() in scratch
+  steps = node() in scratch
+  report = node() in scratch
+  settled = node() in scratch
+
+  argv | drop 1 | first 1 -> path
+
+  # `for` bounds the whole thing as a last resort: if the file never settles,
+  # the program ends after twenty readings rather than never. A loop with no
+  # bound at all is what `--timeout` is for, and both is better.
+  clock = run ticker(options: {"every": "200ms", "count": 20},
+    control_events: stopper) via scratch
+  skip count of clock
+
+  for tick in clock.ticks {
+    look = run stat_path(path: path) via scratch
+    skip look.exists
+    # `tick.number` is read so the reading knows which it was, and because the
+    # language checks that a loop variable is used for something.
+    look.info | map {"n": tick.number, "size": default(it.size, 0)} -> sizes
+  }
+
+  # The state machine over the readings: `last` is the previous size and `same`
+  # is whether this reading matched it. This is the whole reason `scan` and not
+  # `fold` -- the answer is needed *at each reading*, while there is still a
+  # decision to make, and a `fold` would only produce it once the stream it was
+  # meant to stop had ended.
+  sizes
+    # The start is -1 rather than 0 so the *first* reading cannot look like a
+    # match: a file that really is 0 bytes would otherwise settle before it had
+    # been read twice, which is the one answer this program must not give.
+    | scan {"last": -1, "n": 0, "size": -1, "same": false} as seen,
+      {"last": seen.size, "n": it.n, "size": it.size, "same": seen.size == it.size}
+    -> steps
+
+  steps | map strformat("%d: %d bytes\n", it.n, it.size) -> report
+
+  # The two consequences of having settled, as two pipelines off one node:
+  # tell the ticker to finish, and remember that it happened.
+  steps where it.same | first 1 | map {"command": "stop"} -> stopper
+  steps where it.same | first 1 | map 1 -> settled
+
+  out = run write_stdout(content: report) via scratch
+  skip out.bytes_written
+
+  # Settling is the success. Two pipelines off the node rather than two `if`s,
+  # for the reason `grep.flow` gives: each pipeline off a node sees all of it,
+  # where two conditions reading the node directly would take one value each.
+  settled | count where it > 0 | map 0 -> exit_code
+  settled | count where it == 0 | map 1 -> exit_code
+}

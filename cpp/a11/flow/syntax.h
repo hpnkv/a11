@@ -159,6 +159,7 @@ enum class NodeKind {
   kWait,
   kDrain,
   kCancel,
+  kAbort,
   kFail,
   kLog,
   kForEach,
@@ -514,6 +515,14 @@ struct Pipe : NodeOf<NodeKind::kPipe> {
   PipelinePtr pipeline;
   std::vector<NodePtr> targets;
   std::vector<Word> after;
+  /// `try source -> dest`: a failure arriving from the source, or refused by the
+  /// destination, is a value this flow reads rather than the end of it.
+  ///
+  /// The same word `try run` uses, for the same reason: without it the failure
+  /// is the flow's. `try` on a *stage* is a different and narrower thing -- it
+  /// tolerates one value at a time and carries on -- because a stage fails per
+  /// value where a pipe fails once.
+  bool tolerant = false;
 };
 
 /// One subject of a `skip`: a plain pipeline, or named outputs of a call.
@@ -580,6 +589,18 @@ struct Cancel : NodeOf<NodeKind::kCancel> {
   std::vector<Word> after;
 };
 
+/// `abort node [code] [message]` -- end a node with a failure.
+///
+/// The other ending a stream can have. `drain` says it is over; this says it
+/// went wrong, and a reader cannot otherwise tell the two apart -- a stream cut
+/// short by something the flow noticed looks exactly like one that finished.
+struct Abort : NodeOf<NodeKind::kAbort> {
+  NodePtr target;
+  NodePtr code;
+  NodePtr message;
+  std::vector<Word> after;
+};
+
 /// `fail [code] [message]` -- end the flow with a status.
 struct Fail : NodeOf<NodeKind::kFail> {
   NodePtr code;
@@ -605,6 +626,12 @@ struct ForEach : NodeOf<NodeKind::kForEach> {
   PipelinePtr pipeline;
   int parallel = 1;
   std::vector<NodePtr> body;
+  /// What has to have finished before the loop starts.
+  ///
+  /// A loop is a step like any other, so it waits like one. It can also *be*
+  /// waited for: bound to a name it reads as its own outcome, which is how a
+  /// flow says "once the loop is over" about a node the loop was writing.
+  std::vector<Word> after;
 
   /// The first name, which is the whole value where there is only one.
   const Word& variable() const {
@@ -627,6 +654,8 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// loop or an honest error, so a bound is now only ever the author's.
   std::optional<int> max_iterations;
   std::vector<NodePtr> body;
+  /// What has to have finished before the loop starts. See ForEach::after.
+  std::vector<Word> after;
 };
 
 /// `name <- pipeline` -- what the next pass of a `repeat` carries.
@@ -695,9 +724,24 @@ struct HeaderDeclaration : NodeOf<NodeKind::kHeaderDeclaration> {
 
 using HeaderDeclarationPtr = std::unique_ptr<HeaderDeclaration>;
 
-/// One `flow name { ... }` declaration.
+/// One `flow name { ... }` declaration, or the one `flow { ... }` entry point.
 struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
   Word name;
+  /**
+   * Whether this is the file's entry point: `flow { ... }`, with no name.
+   *
+   * A file may hold one. It is what an interpreter runs when handed the file,
+   * and it is deliberately **not** addressable: a flow with no name cannot be
+   * the target of a `run` or a `call`, which is what stops a program's entry
+   * point from being something a library flow reaches into or something that
+   * recurses into itself.
+   *
+   * Its arguments arrive as ports nobody declared -- `argc` and `argv` -- for
+   * the same reason `main` gets them in C: every program of this shape wants
+   * them, and a file that had to declare them would say the same two lines
+   * every time.
+   */
+  bool entry = false;
   std::string description;
   std::vector<PortDeclarationPtr> ports;
   std::vector<HeaderDeclarationPtr> headers;

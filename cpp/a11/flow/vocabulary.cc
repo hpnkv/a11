@@ -22,9 +22,11 @@ namespace {
 constexpr std::array kStageOrder = {
     std::string_view("first"),   std::string_view("last"),
     std::string_view("drop"),    std::string_view("truncate"),
-    std::string_view("batch"),   std::string_view("flatten"),
+    std::string_view("batch"),   std::string_view("window"),
+    std::string_view("flatten"),
     std::string_view("group"),   std::string_view("sort"),
     std::string_view("where"),   std::string_view("map"),
+    std::string_view("scan"),
     std::string_view("match"),   std::string_view("distinct"),
     std::string_view("then"),    std::string_view("log"),
     std::string_view("logf"),
@@ -46,6 +48,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"drop", StageArgument::kNumber},
           {"truncate", StageArgument::kNumber},
           {"batch", StageArgument::kNumber},
+          {"window", StageArgument::kNumber},
           {"chunk", StageArgument::kNumber},
           {"where", StageArgument::kExpression},
           {"map", StageArgument::kExpression},
@@ -67,6 +70,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"avg", StageArgument::kOptionalExpression},
           {"sort", StageArgument::kSortKey},
           {"fold", StageArgument::kFold},
+          {"scan", StageArgument::kFold},
           {"timeout", StageArgument::kDuration},
           {"pace", StageArgument::kDuration},
           {"text", StageArgument::kNone},
@@ -88,9 +92,12 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"first",
        {"The first `n` values of the stream, and then nothing.", "a count",
-        "Stops reading upstream as soon as it has them, so a producer still "
-        "working is asked to stop rather than run to the end for values nobody "
-        "will see. `| first 1` is how a stream becomes one value.",
+        "Stops reading upstream as soon as it has them, so nothing downstream "
+        "waits for values nobody will see. It does not *cancel* whoever is "
+        "producing: a step feeding a node that nobody drains would stall, and a "
+        "`first 3` must not be able to wedge what it reads from. An action that "
+        "can be asked to finish takes that on a control port of its own. "
+        "`| first 1` is how a stream becomes one value.",
         "hits | first 3 -> shown"}},
       {"last",
        {"The last `n` values of the stream.", "a count",
@@ -115,6 +122,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "Each list goes on as one value, so what follows reads a stream of "
         "lists. Whatever is left when the stream ends goes on too, short.",
         "samples | batch 100 -> frames"}},
+      {"window",
+       {"Gathers values into overlapping lists of the last `n`.", "a count",
+        "One list per value once `n` have arrived, each sharing all but one "
+        "value with the list before it. This is `batch` for a question about "
+        "neighbours rather than about groups: a pattern spanning two lines is "
+        "invisible to a `batch`, because a boundary falls somewhere and half "
+        "the matches fall on it. Holds `n` values and no more, so a window over "
+        "a stream that never ends costs nothing that grows.",
+        "lines | window 3 | map join(it, \"\\n\") -> paragraphs"}},
       {"group",
        {"Gathers values into lists, closed by a question rather than a count.",
         "an expression, with `it` bound to the value in hand",
@@ -249,6 +265,18 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "last pass produced and `it` to the value in hand. The general form of "
         "`sum`, `min` and `max`, for the shape none of them is.",
         "orders | fold 0 as total, total + it.price -> revenue"}},
+      {"scan",
+       {"Every value the fold passed through, rather than only the last.",
+        "a literal to start from, a name for what it carries, an expression",
+        "Written `scan 0 as n, n + 1`, exactly as `fold` is, and the difference "
+        "is where the values go: `fold` yields one when the stream ends and "
+        "this yields one per value as it arrives. That is what a state machine "
+        "is, a state carried forward and read at every step, so a stream whose "
+        "meaning depends on what came before it is expressible without holding "
+        "the stream. The start may be a record, which is what a state of more "
+        "than one part needs; `scan 0 as n, n + 1` numbers a stream, which is "
+        "the smallest useful one.",
+        "lines | scan 0 as n, n + 1 -> numbered"}},
       {"sort",
        {"The stream in order.", "optionally `by` an expression, and `desc`",
         "Reads the whole stream to find out what the order is, so nothing "
@@ -643,10 +671,24 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
       {"drain",
        {"Ends a node and says how it ended.",
         "a node",
-        "Closes the node to further writes and reads what is left, so every "
-        "reader of it sees the end rather than waiting on a stream nobody will "
-        "write to again. The name binds the outcome, as `wait` does.",
+        "Writes both of the two facts that end a stream: the node is marked "
+        "*final*, so an ordered reader stops, and the writer is *closed*, so "
+        "the store admits nothing more. Then it reads what is left, so every "
+        "reader sees the end rather than waiting on a stream nobody will write "
+        "to again. The name binds the outcome, as `wait` does. `abort` is the "
+        "other ending, for a stream that failed rather than finished.",
         "ended = drain findings"}},
+      {"abort",
+       {"Ends a node with a failure rather than with an end.",
+        "a node, and optionally a code and a message",
+        "The other ending a stream can have. `drain` marks a node final and "
+        "closes it, which says the stream is over; this aborts it, which says "
+        "it went wrong. A reader cannot otherwise tell the two apart, and a "
+        "stream cut short by something the flow noticed looks exactly like one "
+        "that finished. Takes the same code and message a `fail` does, and "
+        "waits for nothing for the same reason, so it belongs in an `if` or a "
+        "loop body or carries an `after`.",
+        "if not status page.ok { abort findings unavailable \"gone\" }"}},
       {"cancel",
        {"Asks a step to stop.",
         "a step",
@@ -694,12 +736,17 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "Several names take a tuple apart, which is what `for x, y in zip(a, "
         "b)` reads. A pass that reads none of its variables is reported. This "
         "is one pass over one stream: a stream of lists is still one value per "
-        "pass, and flattening one is an action's job.",
+        "pass, and flattening one is an action's job. `until`/`while` in the "
+        "body ends it early, as it ends a `repeat`; a `for` carries nothing "
+        "between passes, so `<-` is a `repeat`'s and not this one's. Bound to a "
+        "name it reads as its own outcome, which is how a flow says what "
+        "happens once the loop is over: `drain taken after done`.",
         "for hit in search.hits parallel 2 { .. }"}},
       {"repeat",
        {"Runs a block again and again, carrying a value from each pass to the "
         "next.",
         "a name and what it starts as, and optionally `max`",
+        "Bound to a name it reads as its own outcome, as a `for` does. "
         "`name <- source` inside the body is what the next pass starts from. A "
         "`repeat` needs an `until`/`while`, or a `max n`, or both: there is no "
         "default bound, and a loop with nothing ending it is refused rather "
@@ -707,14 +754,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "success.",
         "repeat asked = question max 4 { .. }"}},
       {"until",
-       {"Ends a `repeat` when a condition holds.",
+       {"Ends a `repeat` or a `for` when a condition holds.",
         "a condition",
         "Asked at the tail of a pass, so the body always runs at least once "
         "however the condition starts out. `while` is the same statement with "
-        "the question the other way round.",
+        "the question the other way round. In a `for` it is how a loop over a "
+        "stream stops before the stream does; it stops reading, which is what "
+        "`| first n` does, and does not cancel whatever was producing.",
         "until len(answer) > 0"}},
       {"while",
-       {"Keeps a `repeat` going while a condition holds.",
+       {"Keeps a `repeat` or a `for` going while a condition holds.",
         "a condition",
         "Asked at the tail of a pass, like `until`, so the body always runs at "
         "least once however the condition starts out.",
@@ -896,7 +945,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
         "data does not imply: a log line that should read as the last word "
         "about a step rather than a line racing it. It is also what lets a "
         "`fail` or a `cancel` stand at the top of a body, by saying what it "
-        "waits for.",
+        "waits for. A named loop is a step like any other, so `after done` is "
+        "how the rest of a flow waits for one.",
         "strformat(\"[done] %s\", brief) -> user_log after done"}},
       {"with",
        {"Headers to send on this step.",
@@ -1602,7 +1652,8 @@ constexpr std::array kStatementOrder = {
     std::string_view("try"),    std::string_view("let"),
     std::string_view("advance"), std::string_view("skip"),
     std::string_view("wait"),   std::string_view("drain"),
-    std::string_view("cancel"), std::string_view("fail"),
+    std::string_view("abort"),  std::string_view("cancel"),
+    std::string_view("fail"),
     std::string_view("log"),    std::string_view("logf"),
     std::string_view("if"),     std::string_view("for"),
     std::string_view("repeat"), std::string_view("until"),
@@ -1693,6 +1744,19 @@ bool IsShouted(std::string_view word) {
     if (letter >= 'A' && letter <= 'Z') has_upper = true;
   }
   return has_upper;
+}
+
+absl::Span<const EntryPort> EntryPorts() {
+  // `argv` holds every argument including the program's own name at index 0,
+  // the way a C program's does -- so `argv[0]` is the same thing a reader
+  // already expects it to be, and `argc` agrees with it.
+  static constexpr EntryPort kPorts[] = {
+      {"argc", "integer", true,
+       "How many arguments there are, counting the program's own name."},
+      {"argv", "string", false,
+       "The arguments in order, the program's own name first."},
+  };
+  return absl::MakeConstSpan(kPorts);
 }
 
 absl::Span<const std::string_view> Stages() {
@@ -1944,8 +2008,8 @@ const absl::flat_hash_set<std::string_view>& ReducingStages() {
 
 const absl::flat_hash_set<std::string_view>& PositionalStages() {
   static const auto* words =
-      MakeSet({"first", "last", "drop", "batch", "group", "distinct", "count",
-               "sort", "flatten"});
+      MakeSet({"first", "last", "drop", "batch", "window", "group", "distinct",
+               "count", "sort", "flatten"});
   return *words;
 }
 

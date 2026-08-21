@@ -811,6 +811,203 @@ flow counting {
   EXPECT_EQ(outcome.outputs.at("steps"), Values({"0", "1", "2"}));
 }
 
+TEST(FlowRuntimeTest, ATryPipeTurnsAFailingStreamIntoAValue) {
+  // The gap: a pipe whose source failed mid-stream ended the *flow*, and the
+  // only survivable case was a source that happened to be a `try` call's port.
+  // Now the statement itself can say it expects that, and the failure becomes
+  // something the flow reads.
+  //
+  // `abort` supplies the failure, which is what makes the two changes fit
+  // together: one ends a stream badly and the other survives being on the far
+  // end of one.
+  const Outcome outcome = RunFlow(R"(
+flow resilient {
+  in  words: string stream
+  out seen:  string stream
+  out why:   string
+  findings = node()
+  for word in words {
+    word -> findings
+    if word == "bad" { abort findings unavailable "the source went away" }
+  }
+  moved = try findings -> seen
+  status moved | map it.message -> why
+}
+)",
+                              "resilient", {{"words", {"a", "bad"}}});
+  // The flow succeeded, which is the whole point of `try`.
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  ASSERT_EQ(outcome.outputs.at("why").size(), 1u);
+  EXPECT_NE(outcome.outputs.at("why").front().find("the source went away"),
+            std::string::npos)
+      << outcome.outputs.at("why").front();
+}
+
+TEST(FlowRuntimeTest, ATryPipeThatSucceedsReadsAsOk) {
+  const Outcome outcome = RunFlow(R"(
+flow fine {
+  in  words: string stream
+  out seen:  string stream
+  out ok:    bool
+  moved = try words -> seen
+  status moved | map it.ok -> ok
+}
+)",
+                              "fine", {{"words", {"a", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b"}));
+  EXPECT_EQ(outcome.outputs.at("ok"), Values({"true"}));
+}
+
+TEST(FlowRuntimeTest, AbortEndsANodeWithAFailureRatherThanWithAnEnd) {
+  // The ending `drain` cannot express. Both end the stream; only this one tells
+  // a reader *why*, and without it a stream cut short by something the flow
+  // noticed is indistinguishable from one that finished.
+  //
+  // Read through `status`, because that is where a node's abort status surfaces
+  // -- and the flow itself still succeeds, which is the point: the *node*
+  // failed, not the composition.
+  // Inside the loop, which holds the node open for as long as it runs -- so the
+  // abort provably happens before anything would have closed it. Aborting a node
+  // that something else is about to close cleanly is a race, and not a race this
+  // test wants to be about.
+  const Outcome outcome = RunFlow(R"(
+flow cut-short {
+  in  words: string stream
+  out seen:  string stream
+  findings = node()
+  for word in words {
+    word -> findings
+    if word == "bad" { abort findings unavailable "the source went away" }
+  }
+  findings -> seen
+}
+)",
+                              "cut-short", {{"words", {"a", "bad"}}});
+  // The reader of an aborted node sees the failure rather than an end, and here
+  // nothing tolerates it, so it is the flow's.
+  ASSERT_FALSE(outcome.status.ok());
+  EXPECT_EQ(outcome.status.code(), absl::StatusCode::kUnavailable)
+      << outcome.status;
+  EXPECT_NE(outcome.status.message().find("the source went away"),
+            std::string::npos)
+      << outcome.status;
+}
+
+TEST(FlowRuntimeTest, ANamedLoopIsABarrierTheRestOfTheFlowCanWaitFor) {
+  // What a loop writing an outer node could not say before: "once the loop is
+  // over, that node is over". The node was already closed when the loop's step
+  // finished -- a loop counts as one writer for as long as it runs -- but there
+  // was no way to *say* it, so a flow could not be read for its finished state.
+  const Outcome outcome = RunFlow(R"(
+flow tidy {
+  in  words: string stream
+  out seen:  string stream
+  out over:  bool
+  taken = node()
+  done = for word in words {
+    word -> taken
+    until word == "stop"
+  }
+  ended = drain taken after done
+  status done | map it.ok -> over
+  taken -> seen
+  skip ended
+}
+)",
+                              "tidy", {{"words", {"a", "stop", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "stop"}));
+  // The loop's own outcome, read after it: every pass succeeded.
+  EXPECT_EQ(outcome.outputs.at("over"), Values({"true"}));
+}
+
+TEST(FlowRuntimeTest, ALoopMayWaitForSomethingBeforeItStarts) {
+  const Outcome outcome = RunFlow(R"(
+flow ordered {
+  in  words: string stream
+  out seen:  string stream
+  first = run twice(text: "go")
+  for word in words { word -> seen } after first
+  skip first.quiet
+}
+)",
+                              "ordered", {{"words", {"a", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b"}));
+  // `first.out` is never read, so the loop waiting on the *step* rather than on
+  // a port is the whole of what `after` did here.
+}
+
+TEST(FlowRuntimeTest, AForStopsOnItsUntilAndLeavesTheRestUnread) {
+  // The gap this closes: `repeat` could say when to stop and `for` could not, so
+  // a loop over a stream had to read all of it however early it knew enough.
+  const Outcome outcome = RunFlow(R"(
+flow scanning {
+  in  words: string stream
+  out seen:  string stream
+  for word in words {
+    word -> seen
+    until word == "stop"
+  }
+}
+)",
+                              "scanning",
+                              {{"words", {"a", "b", "stop", "c", "d"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // The value that ended it was seen -- the condition is asked at the *tail* of
+  // the pass, as a `repeat`'s is -- and nothing after it was.
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b", "stop"}));
+}
+
+TEST(FlowRuntimeTest, AForRunsItsBodyOnceHoweverTheConditionStartsOut) {
+  const Outcome outcome = RunFlow(R"(
+flow once {
+  in  words: string stream
+  out seen:  string stream
+  for word in words {
+    word -> seen
+    until true
+  }
+}
+)",
+                              "once", {{"words", {"a", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a"}));
+}
+
+TEST(FlowRuntimeTest, AForWhileIsTheSameQuestionTheOtherWayRound) {
+  const Outcome outcome = RunFlow(R"(
+flow kept {
+  in  words: string stream
+  out seen:  string stream
+  for word in words {
+    word -> seen
+    while word != "stop"
+  }
+}
+)",
+                              "kept", {{"words", {"a", "stop", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "stop"}));
+}
+
+TEST(FlowRuntimeTest, AForWhoseConditionNeverHoldsReadsTheWholeStream) {
+  const Outcome outcome = RunFlow(R"(
+flow all {
+  in  words: string stream
+  out seen:  string stream
+  for word in words {
+    word -> seen
+    until word == "absent"
+  }
+}
+)",
+                              "all", {{"words", {"a", "b", "c"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b", "c"}));
+}
+
 TEST(FlowRuntimeTest, TryAndWaitRecoverFromAFailure) {
   const Outcome outcome = RunFlow(R"(
 flow recover {
@@ -1391,6 +1588,115 @@ flow peak {
                               "peak", {{"samples", {"2", "9"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("highest"), Values({"9"}));
+}
+
+TEST(FlowRuntimeTest, AScanPublishesEveryStateTheFoldPassedThrough) {
+  // The difference from `fold`, and the whole reason for the stage: the same
+  // carry, one value out per value in rather than one at the end.
+  const Outcome outcome = RunFlow(R"(
+flow running {
+  in  steps:    number stream
+  out totals:   number stream
+  out numbered: number stream
+  steps | scan 0 as so_far, so_far + it -> totals
+  steps | scan 0 as n, n + 1 -> numbered
+}
+)",
+                              "running", {{"steps", {"3", "4", "5"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("totals"), Values({"3", "7", "12"}));
+  // Numbering a stream is the smallest useful scan, and nothing else in the
+  // language can do it: `fold` gives one value and `for` carries nothing.
+  EXPECT_EQ(outcome.outputs.at("numbered"), Values({"1", "2", "3"}));
+}
+
+TEST(FlowRuntimeTest, AScanOfNothingYieldsNothing) {
+  // Not the starting value: a state nothing ever advanced is not an answer
+  // about a stream, and `fold`'s single value is the one that reports the empty
+  // case.
+  const Outcome outcome = RunFlow(R"(
+flow empty_scan {
+  in  steps:  number stream
+  out totals: number stream
+  steps | scan 0 as so_far, so_far + it -> totals
+}
+)",
+                              "empty_scan", {{"steps", {}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("totals"), Values({}));
+}
+
+TEST(FlowRuntimeTest, AScanCarriesARecordOfState) {
+  // What a state machine needs: more than one thing carried, and the value
+  // itself carried along so the next stage still has it.
+  const Outcome outcome = RunFlow(R"(
+flow machine {
+  in  lines: string stream
+  out kept:  string stream
+  lines
+    | scan {"inside": false, "line": ""} as at, {"inside": starts-with(it, "B") or (at.inside and not starts-with(it, "E")), "line": it}
+    | where it.inside and not starts-with(it.line, "B")
+    | map it.line
+    -> kept
+}
+)",
+                              "machine",
+                              {{"lines", {"x", "B", "one", "two", "E", "y"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // Quoted, because a computed string reaches a port as JSON whatever the port
+  // says it carries. That is the runtime's own behaviour and not the stage's;
+  // see Part 4 of `doc/FLOW_PROGRAMS_PLAN.md`.
+  EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"one\"", "\"two\""}));
+}
+
+TEST(FlowRuntimeTest, AWindowOverlapsWhereABatchWouldNot) {
+  const Outcome outcome = RunFlow(R"(
+flow neighbours {
+  in  words:   string stream
+  out pairs:   string stream
+  out grouped: string stream
+  words | window 2 | map join(it, "+") -> pairs
+  words | batch 2 | map join(it, "+") -> grouped
+}
+)",
+                              "neighbours",
+                              {{"words", {"a", "b", "c", "d"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  // Every adjacent pair, including the one a `batch` boundary falls between --
+  // which is the pair a cross-line search would otherwise miss. Quoted for the
+  // reason above: a computed string reaches a port as JSON.
+  EXPECT_EQ(outcome.outputs.at("pairs"),
+            Values({"\"a+b\"", "\"b+c\"", "\"c+d\""}));
+  EXPECT_EQ(outcome.outputs.at("grouped"), Values({"\"a+b\"", "\"c+d\""}));
+}
+
+TEST(FlowRuntimeTest, AWindowWiderThanTheStreamYieldsNothing) {
+  // Deliberately unlike `batch`, whose last list may be short: a window
+  // narrower than it was asked for is not a window, and a `| window 3` that
+  // sometimes yielded two values would make every reader check.
+  const Outcome outcome = RunFlow(R"(
+flow narrow {
+  in  words: string stream
+  out seen:  string stream
+  words | window 3 | map join(it, "+") -> seen
+}
+)",
+                              "narrow", {{"words", {"a", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({}));
+}
+
+TEST(FlowRuntimeTest, AWindowOfOneIsEveryValueOnItsOwn) {
+  const Outcome outcome = RunFlow(R"(
+flow single {
+  in  words: string stream
+  out seen:  string stream
+  words | window 1 | map join(it, "+") -> seen
+}
+)",
+                              "single", {{"words", {"a", "b"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("seen"), Values({"\"a\"", "\"b\""}));
 }
 
 TEST(FlowRuntimeTest, SortOrdersTheWholeStreamAndDescReversesIt) {

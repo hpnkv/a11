@@ -64,6 +64,11 @@ class LocalChunkStore final : public ChunkStore {
   using ChunkStore::GetByArrivalOrder;
   using ChunkStore::Next;
 
+  /// Yes: this store hands back what it was given, in the same process, so a
+  /// value never has to become bytes to be kept here. The reason the local fast
+  /// path exists at all.
+  [[nodiscard]] bool HoldsObjects() const override { return true; }
+
   // In-memory implementations of the ChunkStore contract; see chunk_store.h
   // for the semantics of each method.
   a11::Future<data::NodeFragment> Get(std::uint32_t seq,

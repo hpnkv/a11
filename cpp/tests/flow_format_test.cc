@@ -210,6 +210,31 @@ TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
             "}\n");
 }
 
+TEST(FlowFormat, AFoldArgumentOnTheNextLineIsIndentedUnderItsStage) {
+  // A comma at the end of a line says the statement is not over, so what follows
+  // is a tail of it. Without that, a `fold`/`scan` expression written on the
+  // next line began with a `{` or a name -- neither of which reads as a tail --
+  // and was pushed out to the *block's* indent, level with `nodes` and the
+  // statement itself. Two levels rather than one, as a modifier tail gets, so
+  // the argument does not land exactly where the next `|` would.
+  const std::string source =
+      "flow t {\n"
+      "  in  n: number stream\n"
+      "  out o: number\n"
+      "n | fold 0 as total,\n"
+      "total + it\n"
+      "-> o\n"
+      "}\n";
+  EXPECT_EQ(Formatted(source),
+            "flow t {\n"
+            "  in  n: number stream\n"
+            "  out o: number\n"
+            "  n | fold 0 as total,\n"
+            "      total + it\n"
+            "    -> o\n"
+            "}\n");
+}
+
 TEST(FlowFormat, ADescriptionOnItsOwnLineIsIndentedUnderWhatItDescribes) {
   const std::string source =
       "flow t {\n"

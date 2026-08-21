@@ -1,0 +1,22 @@
+# The smallest useful program: read an argument, write a line.
+#
+#   a11-flow-run greet.flow -- Helena
+#   a11-flow-run greet.flow                # says hello to the world
+
+flow {
+  describe "Greet whoever is named on the command line."
+
+  nodes scratch
+  who = node() in scratch
+
+  # argv[0] is this file, the way a C program's argv[0] is itself, so what a
+  # person typed starts at 1. `then "world"` is the default: `first 1` takes the
+  # argument when there is one and falls through to the literal when there is
+  # not, which is a default without a branch.
+  argv | drop 1 then "world" | first 1 -> who
+
+  out = run write_stdout(
+    content: who | map strformat("Hello, %s!\n", trim(it))
+  ) via scratch
+  skip out.bytes_written
+}

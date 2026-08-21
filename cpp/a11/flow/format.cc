@@ -175,6 +175,20 @@ class Formatter {
     // A description on a line of its own belongs to the declaration above it, so
     // it is indented under it like any other tail.
     if (!inside_group && IsDescriptionLine(index)) return true;
+    // A line that begins where the one above left off mid-list continues it: a
+    // comma at the end of the previous line says the statement is not over.
+    //
+    // The case that needed this is a `fold`/`scan` whose expression is on the
+    // next line -- `| scan 0 as total,` then the expression. That expression is
+    // the *stage's argument*, and without this it began with a `{` or a name,
+    // neither of which reads as a tail, so it was pushed out to the block's own
+    // indent and the construct with the language's longest argument became the
+    // worst-looking thing in the file. `skip a,` and `wait first of a,` split
+    // over two lines are the same shape and want the same answer.
+    if (!inside_group && index > 0 &&
+        code_[index - 1].kind == TokenKind::kComma) {
+      return true;
+    }
     // Inside a bracketed group a word starts an element, never a tail: `id:` is a
     // key of the object it is in, and the modifiers of a call are outside its
     // parentheses by definition.
@@ -215,6 +229,16 @@ class Formatter {
            breaks_[index + 1] > 0;
   }
 
+  /// The tail of a list the line above began: the previous line ended in a `,`.
+  ///
+  /// Two levels for the same reason a modifier tail gets two: it is *part of*
+  /// the line above rather than the next thing after it. `| scan 0 as total,`
+  /// and its expression on the next line is one stage, and one level would put
+  /// the expression exactly where the next `|` goes.
+  bool IsArgumentTail(size_t index) const {
+    return index > 0 && code_[index - 1].kind == TokenKind::kComma;
+  }
+
   /// A modifier tail gets two levels rather than one.
   ///
   /// `with "x": y` under a call is not the next step of a pipeline; it is part of
@@ -239,7 +263,8 @@ class Formatter {
     }
     if (ContinuesStatement(index)) {
       return statement_indent_ +
-             options_.indent * (IsModifierTail(index) ? 2 : 1);
+             options_.indent *
+                 (IsModifierTail(index) || IsArgumentTail(index) ? 2 : 1);
     }
     if (ClosesBlock(code_[index])) {
       return std::max(0, block_ - 1) * options_.indent;

@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
@@ -30,6 +31,7 @@
 #include "a11/flow/generate.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/inspect.h"
+#include "a11/flow/interpreter/interpreter.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
@@ -41,6 +43,8 @@
 #include "python/bindings.h"
 #include "python/interop.h"
 #include "python/native_types.h"
+#include "sdk/flow/actions/flow_actions.h"
+#include "sdk/flow/actions/policy.h"
 
 namespace py = pybind11;
 
@@ -759,11 +763,29 @@ them.
           [](const BoundProgram& self) {
             std::vector<std::string> names;
             for (const flow::ResolvedFlow& one : self.program->flows()) {
+              // The entry flow is left out: it has no name, and every caller of
+              // this iterates it to look a flow up or to register one as an
+              // action. An entry point is neither.
+              if (one.plan.entry) continue;
               names.push_back(one.plan.name);
             }
             return names;
           },
-          "Every flow's name, in the order the file declares them.")
+          "Every named flow, in the order the file declares them. The entry "
+          "flow -- `flow { ... }` -- is not here: it has no name, and it is run "
+          "rather than called.")
+      .def_property_readonly(
+          "has_entry",
+          [](const BoundProgram& self) {
+            return self.program->Entry() != nullptr;
+          },
+          R"doc(Whether the file declares a `flow { ... }` -- a program.
+
+A bool rather than the flow itself, because an entry flow is deliberately
+unaddressable: it has no name, so there is no `program["..."]` that reaches it and
+nothing can `run` or `call` it. What a caller does with this is decide whether to
+run the file with `run_program` or to pick one of `names`.
+)doc")
       .def(
           "get",
           [](const BoundProgram& self,
@@ -1091,6 +1113,128 @@ caller can tell a half-read tree from a small one.
 
 The result is what a frontend passes as ``context`` to the other methods, or
 merges over the embedded snapshot itself.
+)doc");
+
+  flow.def(
+      "run_program",
+      [](const std::string& source, const std::string& source_name,
+         const std::vector<std::string>& arguments,
+         const std::vector<std::string>& roots, bool allow_write,
+         bool allow_run, bool allow_net, bool allow_local_net,
+         const std::vector<std::string>& allow_env, bool unrestricted,
+         std::optional<double> timeout_seconds, bool standard_streams,
+         const py::object& registry)
+          -> py::typing::Dict<py::str, py::object> {
+        namespace sdk_flow = a11::sdk::flow;
+
+        // Built here rather than bound as a class: the policy a caller states is
+        // the same short list the command line takes, and a bound struct would
+        // be a second way to say it that could drift from the first.
+        std::vector<std::string> where = roots;
+        if (where.empty() && !unrestricted) {
+          where.emplace_back(".");
+        }
+        sdk_flow::CapabilitiesBuilder capabilities =
+            allow_write ? sdk_flow::WorkspaceCapabilities(std::move(where))
+                        : sdk_flow::ReadOnlyCapabilities(std::move(where));
+        if (unrestricted) {
+          capabilities->filesystem.unrestricted = true;
+          capabilities->filesystem.writable = allow_write;
+        }
+        capabilities->process.enabled = allow_run;
+        capabilities->process.any_program = allow_run;
+        capabilities->process.inherit_environment = allow_run;
+        capabilities->process.sandbox = sdk_flow::SandboxRequest::kPreferred;
+        capabilities->network.enabled = allow_net || allow_local_net;
+        capabilities->network.any_host = capabilities->network.enabled;
+        capabilities->network.may_listen = capabilities->network.enabled;
+        capabilities->network.allow_loopback = allow_local_net;
+        capabilities->network.allow_private = allow_local_net;
+        capabilities->network.allow_link_local = allow_local_net;
+        capabilities->environment.names = allow_env;
+
+        a11::flow::interpreter::RunOptions how;
+        how.arguments = arguments;
+        how.capabilities = capabilities;
+        if (!registry.is_none()) {
+          how.registry = registry.cast<std::shared_ptr<actions::ActionRegistry>>();
+        }
+        how.standard_streams = standard_streams;
+        // The same bridge `make_handler` installs. Without it the program runs
+        // against A11's own registry, which is keyed by `typeid` and so knows
+        // nothing about a type declared in Python -- so a flow saying
+        // `a11.sdk.Interaction{..}` would fail `unimplemented` in the one place
+        // it is most likely to be written, a program the host handed its own
+        // `interact_with_llm` to.
+        how.bridge = HostBridgeForPython();
+        if (timeout_seconds.has_value()) {
+          how.timeout = absl::Seconds(*timeout_seconds);
+        }
+        const a11::flow::interpreter::Source what{.text = source,
+                                                  .name = source_name};
+
+        // Without the GIL: the program runs to completion here, and everything
+        // it does -- reading a file, waiting on a clock, calling an action the
+        // host registered -- happens on A11's fibres. Holding the GIL across it
+        // would deadlock the moment one of those needed to call back into
+        // Python, which is exactly what a host-registered action does.
+        absl::StatusOr<a11::flow::interpreter::RunOutcome> outcome =
+            WithoutGil([&] { return a11::flow::interpreter::Run(what, how); });
+        if (!outcome.ok()) ThrowStatus(outcome.status());
+
+        py::list warnings;
+        for (const flow::Diagnostic& diagnostic : outcome->diagnostics) {
+          warnings.append(
+              JsonToPython(flow::DiagnosticToJsonValue(diagnostic)));
+        }
+        py::dict result;
+        result["exit_code"] = outcome->exit_code;
+        result["diagnostics"] = warnings;
+        return result;
+      },
+      py::arg("source"), py::arg("source_name") = "", py::kw_only(),
+      py::arg("arguments") = std::vector<std::string>{},
+      py::arg("roots") = std::vector<std::string>{},
+      py::arg("allow_write") = false, py::arg("allow_run") = false,
+      py::arg("allow_net") = false, py::arg("allow_local_net") = false,
+      py::arg("allow_env") = std::vector<std::string>{},
+      py::arg("unrestricted") = false,
+      py::arg("timeout_seconds") = std::optional<double>(),
+      py::arg("standard_streams") = true,
+      // `py::none()`, not a null shared_ptr: a default argument is converted
+      // when the function is *defined*, and BindFlow runs before BindActions
+      // registers ActionRegistry -- so a typed default fails at import. The cast
+      // happens at call time instead, when the type is certainly known.
+      py::arg("registry") = py::none(),
+      R"doc(Run a Flow program's entry flow, and return what it did.
+
+The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
+-- so a program behaves identically whichever started it.
+
+Pass a ``registry`` that already holds your own actions and the program can call
+them: a process that registered ``interact_with_llm`` can run a file that asks a
+model, with no subprocess and nothing about the file changed. Names you
+registered are never replaced by the standard library's.
+
+What the program may *do* is the arguments here and nothing the file can say --
+``roots``, ``allow_write``, ``allow_run``, ``allow_net``, ``allow_env`` -- for
+the same reason they are command-line flags in the CLI.
+)doc");
+
+  flow.def(
+      "check_program",
+      [](const std::string& source, const std::string& source_name) {
+        absl::StatusOr<std::string> described =
+            a11::flow::interpreter::DescribeEntry(
+                a11::flow::interpreter::Source{.text = source,
+                                                .name = source_name});
+        if (!described.ok()) ThrowStatus(described.status());
+        return *described;
+      },
+      py::arg("source"), py::arg("source_name") = "",
+      R"doc(What a program's entry flow is, compiling it and running nothing.
+
+Raises if the source will not compile or declares no ``flow { ... }``.
 )doc");
 
   flow.def(

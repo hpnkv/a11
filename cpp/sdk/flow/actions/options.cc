@@ -272,7 +272,8 @@ absl::StatusOr<absl::Duration> ParseDuration(std::string_view text) {
       ++at;
     }
     const std::size_t whole = at;
-    while (at < trimmed.size() && absl::ascii_isdigit(trimmed[at])) {
+    while (at < trimmed.size() &&
+           absl::ascii_isdigit(static_cast<unsigned char>(trimmed[at]))) {
       ++at;
     }
     if (at == whole) {
@@ -281,7 +282,8 @@ absl::StatusOr<absl::Duration> ParseDuration(std::string_view text) {
     if (at < trimmed.size() && trimmed[at] == '.') {
       ++at;
       const std::size_t fraction = at;
-      while (at < trimmed.size() && absl::ascii_isdigit(trimmed[at])) {
+      while (at < trimmed.size() &&
+             absl::ascii_isdigit(static_cast<unsigned char>(trimmed[at]))) {
         ++at;
       }
       if (at == fraction) {
@@ -294,7 +296,8 @@ absl::StatusOr<absl::Duration> ParseDuration(std::string_view text) {
       ++at;
     }
     const std::size_t word = at;
-    while (at < trimmed.size() && absl::ascii_isalpha(trimmed[at])) {
+    while (at < trimmed.size() &&
+           absl::ascii_isalpha(static_cast<unsigned char>(trimmed[at]))) {
       ++at;
     }
     const std::string_view unit = trimmed.substr(word, at - word);

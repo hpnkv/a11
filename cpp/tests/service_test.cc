@@ -90,7 +90,7 @@ TEST(ServiceTest, TheConnectionHookRunsBeforeTheSessionStartsPumping) {
   const auto service = Service::Create(
       /*action_registry=*/nullptr,
       [&prepared, registry](std::shared_ptr<Session> session,
-                            std::shared_ptr<net::WireStream> stream) {
+                            std::shared_ptr<net::WireStream> /*stream*/) {
         // Specialising the connection: the service itself has an empty registry.
         (void)session->SetActionRegistry(registry);
         prepared.push_back(session->GetId());

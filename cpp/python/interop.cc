@@ -77,12 +77,12 @@ void PythonLoop::Remember(const std::shared_ptr<PythonLoop>& loop) {
   // assignment copies a shared_ptr and, at most, retires the previous loop's
   // reference, which only queues. Taking the GIL under this lock would deadlock
   // against a thread holding the GIL and waiting here.
-  absl::MutexLock lock(&RememberedLoopMutex());
+  absl::MutexLock lock(RememberedLoopMutex());
   RememberedLoop() = loop;
 }
 
 std::shared_ptr<PythonLoop> PythonLoop::Remembered() {
-  absl::MutexLock lock(&RememberedLoopMutex());
+  absl::MutexLock lock(RememberedLoopMutex());
   return RememberedLoop();
 }
 

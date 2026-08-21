@@ -75,7 +75,7 @@ struct DtoPlan {
   syntax::Location location;
 
   /// The field of this name, or `nullptr`.
-  const FieldPlan* absl_nullable Field(std::string_view name) const;
+  const FieldPlan* absl_nullable Field(std::string_view field_name) const;
 
   /// Every field name, in declaration order, for a message that lists them.
   std::vector<std::string> FieldNames() const;
@@ -146,13 +146,13 @@ struct FlowPlan {
   syntax::Location location;
 
   /// The port with this name and direction, or `nullptr`.
-  const PortPlan* absl_nullable Port(std::string_view name,
+  const PortPlan* absl_nullable Port(std::string_view port_name,
                                      syntax::PortDirection direction) const;
 
   /// Whether a port of this name is declared in that direction.
-  bool HasPort(std::string_view name,
+  bool HasPort(std::string_view port_name,
                syntax::PortDirection direction) const {
-    return Port(name, direction) != nullptr;
+    return Port(port_name, direction) != nullptr;
   }
 
   /// Every port name in one direction, sorted, for a message that lists them.

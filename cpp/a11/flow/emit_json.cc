@@ -311,6 +311,12 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["value"] = NodeJson(bind->value.get());
       break;
     }
+    case syntax::NodeKind::kBlock: {
+      const auto* block = syntax::As<syntax::Block>(node);
+      value["tolerant"] = block->tolerant;
+      value["body"] = NodeList(block->body);
+      break;
+    }
     case syntax::NodeKind::kCallStatement:
       value["call"] =
           NodeJson(syntax::As<syntax::CallStatement>(node)->call.get());

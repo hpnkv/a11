@@ -200,7 +200,7 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
             py::dict converted =
                 py::module_::import("builtins").attr("dict")(updates);
             typename SchemaMapView<T>::Map values;
-            for (const auto& [key, value] : converted) {
+            for (auto [key, value] : converted) {
               values.insert_or_assign(key.cast<std::string>(),
                                       SchemaValueFromPython<T>(value));
             }

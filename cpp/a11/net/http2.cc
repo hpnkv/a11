@@ -909,7 +909,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     }
   }
 
-  absl::Status OnInboundPlaintext(const char* data, size_t size) override {
+  absl::Status OnInboundPlaintext(const char* absl_nonnull data,
+                                  size_t size) override {
     const ssize_t consumed = nghttp2_session_mem_recv(
         session_, reinterpret_cast<const std::uint8_t*>(data), size);
     if (consumed < 0) {
@@ -2583,7 +2584,6 @@ a11::Future<std::shared_ptr<Http2Client>> Http2Client::Connect(
                     // could not be established (e.g. the server speaks the
                     // other one and closed the connection), reconnect once
                     // with the alternate protocol.
-                    using Preference = Http2Options::ProtocolPreference;
                     if (!options.tls.enabled &&
                         options.client_allow_downgrade &&
                         options.client_preference == Preference::kAuto &&

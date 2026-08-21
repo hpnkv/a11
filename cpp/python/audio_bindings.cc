@@ -88,13 +88,16 @@ py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
 bool IsCContiguous(const py::buffer_info& info) {
   py::ssize_t expected = info.itemsize;
   for (py::ssize_t axis = info.ndim - 1; axis >= 0; --axis) {
-    if (info.shape[axis] == 0) {
+    // `shape` and `strides` are indexed by size_t; the walk is signed because
+    // it runs down to -1.
+    const auto at = static_cast<size_t>(axis);
+    if (info.shape[at] == 0) {
       return true;
     }
-    if (info.strides[axis] != expected) {
+    if (info.strides[at] != expected) {
       return false;
     }
-    expected *= info.shape[axis];
+    expected *= info.shape[at];
   }
   return true;
 }

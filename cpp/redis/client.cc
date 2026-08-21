@@ -50,11 +50,6 @@ constexpr size_t kMaximumReplyDepth = 64;
 constexpr size_t kMaximumReplyElements = 1000000;
 constexpr std::string_view kRedisErrorPayload = "type.a11.dev/redis-error+text";
 
-absl::Status ExceptionStatus(const std::exception& error,
-                             std::string_view operation) {
-  return absl::UnknownError(absl::StrCat(operation, ": ", error.what()));
-}
-
 absl::Status RedisErrorStatus(std::string message) {
   const std::string upper = absl::AsciiStrToUpper(message);
   absl::Status status;

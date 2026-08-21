@@ -137,7 +137,8 @@ struct ProtocolPolicy {
 };
 
 // Whether the client's length-prefixed ALPN list offers @p protocol.
-inline bool AlpnListOffers(const unsigned char* input, unsigned int length,
+inline bool AlpnListOffers(const unsigned char* absl_nonnull input,
+                           unsigned int length,
                            std::string_view protocol) {
   unsigned int offset = 0;
   while (offset < length) {
@@ -158,9 +159,12 @@ inline bool AlpnListOffers(const unsigned char* input, unsigned int length,
 // Server ALPN selection callback. Prefers h2 over http/1.1 among the protocols
 // both offered and enabled by the policy. The returned pointer references the
 // static ALPN constants so it stays valid after the callback returns.
-inline int SelectAlpn(SSL*, const unsigned char** output,
-                      unsigned char* output_length, const unsigned char* input,
-                      unsigned int input_length, void* argument) noexcept {
+inline int SelectAlpn(SSL* absl_nullable,
+                      const unsigned char* absl_nonnull* absl_nonnull output,
+                      unsigned char* absl_nonnull output_length,
+                      const unsigned char* absl_nonnull input,
+                      unsigned int input_length,
+                      void* absl_nullable argument) noexcept {
   const auto* policy = static_cast<const ProtocolPolicy*>(argument);
   const bool allow_h2 = policy == nullptr || policy->enable_h2;
   const bool allow_http1 = policy != nullptr && policy->enable_http1;
@@ -177,7 +181,7 @@ inline int SelectAlpn(SSL*, const unsigned char** output,
   return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
-inline absl::Status LoadCertificateAndKey(SSL_CTX* context,
+inline absl::Status LoadCertificateAndKey(SSL_CTX* absl_nonnull context,
                                           const Http2TlsOptions& options) {
   if (options.certificate_pem_file.empty()) {
     return absl::OkStatus();
@@ -369,7 +373,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   HttpTransport(std::shared_ptr<uvw::tcp_handle> tcp, bool server,
                 Http2Options options, SslContext tls_context,
                 std::string tls_server_name,
-                std::function<void(HttpTransport*)> on_closed)
+                std::function<void(HttpTransport* absl_nonnull)> on_closed)
       : tcp_(std::move(tcp)),
         server_(server),
         options_(std::move(options)),
@@ -382,7 +386,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   // --- Seams implemented by the protocol connection. ---
 
   /// Feeds received (already-decrypted) plaintext into the protocol codec.
-  virtual absl::Status OnInboundPlaintext(const char* data, size_t size) = 0;
+  virtual absl::Status OnInboundPlaintext(const char* absl_nonnull data,
+                                          size_t size) = 0;
   /// Emits any startup bytes once the transport is ready to send (e.g. the
   /// HTTP/2 SETTINGS preface). Returning an error fails the connection.
   virtual absl::Status SendProtocolPreamble() = 0;
@@ -590,7 +595,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     return absl::OkStatus();
   }
 
-  void OnTcpData(const char* data, size_t size) {
+  void OnTcpData(const char* absl_nonnull data, size_t size) {
     if (closed_) {
       return;
     }
@@ -601,7 +606,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     }
   }
 
-  absl::Status WriteApplicationData(const std::uint8_t* data, size_t length) {
+  absl::Status WriteApplicationData(const std::uint8_t* absl_nonnull data,
+                                    size_t length) {
     if (ssl_ == nullptr) {
       return WriteTcp(reinterpret_cast<const char*>(data), length);
     }
@@ -676,8 +682,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   const Http2Options options_;
   const SslContext ssl_context_;
   const std::string tls_server_name_;
-  std::function<void(HttpTransport*)> on_closed_;
-  SSL* ssl_ = nullptr;
+  std::function<void(HttpTransport* absl_nonnull)> on_closed_;
+  SSL* absl_nullable ssl_ = nullptr;
   const std::shared_ptr<a11::Promise<a11::Unit>> ready_promise_;
   const a11::Task ready_future_;
   std::atomic<bool> connected_ = false;
@@ -755,7 +761,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     return AdvanceTlsHandshake();
   }
 
-  absl::Status WriteTcp(const char* data, size_t length) {
+  absl::Status WriteTcp(const char* absl_nonnull data, size_t length) {
     size_t offset = 0;
     {
       // Hand it to the socket directly first.
@@ -864,7 +870,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     return TlsError("TLS handshake failed");
   }
 
-  absl::Status ReceiveTlsData(const char* data, size_t size) {
+  absl::Status ReceiveTlsData(const char* absl_nonnull data, size_t size) {
     BIO* input = SSL_get_rbio(ssl_);
     if (input == nullptr) {
       return absl::InternalError("The TLS connection has no input BIO");

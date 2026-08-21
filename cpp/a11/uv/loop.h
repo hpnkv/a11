@@ -276,6 +276,7 @@ class UvExecutor {
     static const bool registered = [] {
       std::atexit([] {
         const std::uint64_t drains = stats->drains.load();
+        const double per = drains == 0 ? 1.0 : static_cast<double>(drains);
         std::fprintf(
             stderr,
             "uv drain: %llu drains, %llu items (%.2f/drain), "
@@ -284,16 +285,15 @@ class UvExecutor {
             static_cast<unsigned long long>(drains),
             static_cast<unsigned long long>(stats->items.load()),
             drains == 0 ? 0.0
-                        : static_cast<double>(stats->items.load()) / drains,
+                        : static_cast<double>(stats->items.load()) / per,
             static_cast<unsigned long long>(stats->multi_item.load()),
             drains == 0
                 ? 0.0
-                : 100.0 * static_cast<double>(stats->multi_item.load()) /
-                      drains,
+                : 100.0 * static_cast<double>(stats->multi_item.load()) / per,
             static_cast<unsigned long long>(stats->multi_key.load()),
             drains == 0
                 ? 0.0
-                : 100.0 * static_cast<double>(stats->multi_key.load()) / drains,
+                : 100.0 * static_cast<double>(stats->multi_key.load()) / per,
             static_cast<unsigned long long>(stats->largest.load()));
       });
       return true;

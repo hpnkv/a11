@@ -151,7 +151,7 @@ class ChunkObject {
    * a11::data::TryTakeObject, which compares tag() first -- and a cast without
    * that comparison is undefined behaviour with a plausible-looking result.
    */
-  [[nodiscard]] virtual const void* address() const = 0;
+  [[nodiscard]] virtual const void* absl_nonnull address() const = 0;
 };
 
 /**
@@ -198,6 +198,7 @@ struct Chunk {
 
   /** @brief Whether this chunk is carrying a value rather than bytes. */
   [[nodiscard]] bool HasObject() const { return object != nullptr; }
+
   /**
    * @brief Produces @c data from @c object, if it has not been produced yet.
    *

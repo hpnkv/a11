@@ -125,7 +125,9 @@ TEST(FlowDiagnosticsJson, SerialisesWithATrailingNewline) {
   const std::vector<Diagnostic> diagnostics = {Example()};
   const std::string text = DiagnosticsToJson("x.flow", diagnostics);
   EXPECT_TRUE(text.ends_with("}\n"));
-  EXPECT_NO_THROW(nlohmann::json::parse(text));
+  nlohmann::json parsed;
+  EXPECT_NO_THROW(parsed = nlohmann::json::parse(text));
+  EXPECT_TRUE(parsed.is_object());
 }
 
 TEST(FlowCodesJson, PublishesEveryCodeWithItsMeaning) {

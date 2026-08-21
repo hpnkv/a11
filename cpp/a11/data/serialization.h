@@ -105,7 +105,9 @@ class TypedChunkObject final : public ChunkObject {
   [[nodiscard]] std::string_view mimetype() const override {
     return mimetype_;
   }
-  [[nodiscard]] const void* address() const override { return &value_; }
+  [[nodiscard]] const void* absl_nonnull address() const override {
+    return &value_;
+  }
 
   [[nodiscard]] absl::StatusOr<Bytes> Encode() const override;
 
@@ -254,8 +256,13 @@ class SerializationRegistry {
                         Deserializer<T> deserializer) {
     ABSL_RETURN_IF_ERROR(
         RegisterSerializer<T>(type_name, mimetype, serializer));
-    absl::Status status = RegisterDeserializer<T>(
-        std::move(type_name), std::move(mimetype), std::move(deserializer));
+    // Copies rather than moves: the rollback below names the serializer by the
+    // same tag and media type, and a moved-from string would ask
+    // RemoveSerializer to remove something that was never registered -- leaving
+    // the half of the pair this call added behind, which is the one thing the
+    // rollback exists to prevent.
+    absl::Status status =
+        RegisterDeserializer<T>(type_name, mimetype, std::move(deserializer));
     if (!status.ok()) {
       RemoveSerializer(typeid(T), type_name, mimetype);
       return status;

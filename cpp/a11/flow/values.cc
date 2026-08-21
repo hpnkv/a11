@@ -37,6 +37,15 @@ absl::Status Invalid(std::string_view message) {
   return absl::InvalidArgumentError(message);
 }
 
+// absl's predicates take an `unsigned char`; the casts are the conversion the
+// standard library asks for rather than anything about the character.
+bool IsDigit(char letter) {
+  return absl::ascii_isdigit(static_cast<unsigned char>(letter));
+}
+bool IsAlpha(char letter) {
+  return absl::ascii_isalpha(static_cast<unsigned char>(letter));
+}
+
 /// The unit table, largest first: the compact rendering walks it in this order,
 /// and a `%(spec)` looks a unit up in it. The same units a duration may be
 /// *written* in, because what a flow reads back it has to be able to write.
@@ -303,7 +312,7 @@ bool CountsAsNumber(const Value& value) {
 class NativeBridge final : public HostBridge {
  public:
   absl::StatusOr<Value> Coerce(std::string_view tag,
-                               const Value& value) override {
+                               const Value& /*value*/) override {
     // The C++ registry is keyed by `typeid`, so a tag names a type this process
     // was compiled with rather than one it can look up and construct. Saying so
     // is the honest answer: a flow casting to a registered type wants the host
@@ -774,18 +783,16 @@ Value Truncate(const Value& value, std::int64_t size) {
                               static_cast<size_t>(kept))));
     case Value::Kind::kObject: {
       const Value::Pairs& pairs = value.pairs();
-      Value::Pairs head(
-          pairs.begin(),
-          pairs.begin() + std::min<size_t>(pairs.size(),
-                                           static_cast<size_t>(kept)));
+      const auto take = std::min<std::ptrdiff_t>(
+          static_cast<std::ptrdiff_t>(pairs.size()), kept);
+      Value::Pairs head(pairs.begin(), pairs.begin() + take);
       return Value::Object(std::move(head));
     }
     case Value::Kind::kList: {
       const std::vector<Value>& items = value.items();
-      std::vector<Value> head(
-          items.begin(),
-          items.begin() + std::min<size_t>(items.size(),
-                                          static_cast<size_t>(kept)));
+      const auto take = std::min<std::ptrdiff_t>(
+          static_cast<std::ptrdiff_t>(items.size()), kept);
+      std::vector<Value> head(items.begin(), items.begin() + take);
       return Value::List(std::move(head));
     }
     default:
@@ -837,12 +844,12 @@ std::optional<absl::Duration> ParseDuration(std::string_view text) {
     const size_t began = at;
     if (trimmed[at] == '+' || trimmed[at] == '-') ++at;
     const size_t whole = at;
-    while (at < trimmed.size() && absl::ascii_isdigit(trimmed[at])) ++at;
+    while (at < trimmed.size() && IsDigit(trimmed[at])) ++at;
     if (at == whole) return std::nullopt;
     if (at < trimmed.size() && trimmed[at] == '.') {
       ++at;
       const size_t fraction = at;
-      while (at < trimmed.size() && absl::ascii_isdigit(trimmed[at])) ++at;
+      while (at < trimmed.size() && IsDigit(trimmed[at])) ++at;
       if (at == fraction) return std::nullopt;
     }
     const std::string number(trimmed.substr(began, at - began));
@@ -850,7 +857,7 @@ std::optional<absl::Duration> ParseDuration(std::string_view text) {
       ++at;
     }
     const size_t word = at;
-    while (at < trimmed.size() && absl::ascii_isalpha(trimmed[at])) ++at;
+    while (at < trimmed.size() && IsAlpha(trimmed[at])) ++at;
     const std::string_view unit = trimmed.substr(word, at - word);
     double scale = 1.0;
     if (!unit.empty()) {
@@ -1057,7 +1064,7 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     size_t cursor = at + 1;
     std::optional<size_t> chosen;
     const size_t digits = cursor;
-    while (cursor < text.size() && absl::ascii_isdigit(text[cursor])) ++cursor;
+    while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
     if (cursor > digits && cursor < text.size() && text[cursor] == '$') {
       chosen = static_cast<size_t>(
           std::strtoll(text.substr(digits, cursor - digits).c_str(), nullptr,
@@ -1084,12 +1091,12 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
       ++cursor;
     }
     const size_t width = cursor;
-    while (cursor < text.size() && absl::ascii_isdigit(text[cursor])) ++cursor;
+    while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
     const size_t width_end = cursor;
     std::optional<std::string_view> precision;
     if (cursor < text.size() && text[cursor] == '.') {
       const size_t began = ++cursor;
-      while (cursor < text.size() && absl::ascii_isdigit(text[cursor])) ++cursor;
+      while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
       if (cursor == began) {
         out.push_back('%');
         ++at;

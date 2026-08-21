@@ -773,6 +773,24 @@ TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
   EXPECT_EQ(flow["at"]["line"], 1);
 }
 
+// A block and an `abort` are statements like any other, and both were once
+// missing from the switches that name a node and write one out: the envelope
+// carried a `block` with no body at all, and `abort` came back as "error".
+TEST(FlowParser, TheEnvelopeCarriesABlockBodyAndNamesAnAbort) {
+  const ParseResult result =
+      Parse("flow f { in a: string stream\n out o: string stream\n"
+            " try { a -> o\n abort o }\n}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const nlohmann::json value = SyntaxToJsonValue("-", result);
+  const nlohmann::json& block = value["flows"][0]["body"][0];
+  EXPECT_EQ(block["kind"], "block");
+  EXPECT_EQ(block["tolerant"], true);
+  ASSERT_EQ(block["body"].size(), 2u);
+  EXPECT_EQ(block["body"][0]["kind"], "pipe");
+  EXPECT_EQ(block["body"][1]["kind"], "abort");
+}
+
 TEST(FlowParser, ADurationIsTaggedSoItIsNotReadAsACount) {
   const ParseResult result =
       Parse("flow f { in a: string\n x = run t(a: a) timeout 250ms\n"

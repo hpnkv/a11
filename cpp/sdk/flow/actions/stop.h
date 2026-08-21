@@ -225,7 +225,7 @@ class StopSignal {
     thread::PermanentEvent finished;
     std::atomic<bool> finishing{false};
 
-    void Stop(StopReason reason);
+    void Stop(StopReason next);
     void Finish();
   };
 

@@ -1581,7 +1581,82 @@
               "line": 102,
               "start": 4021
             },
-            "kind": "block"
+            "body": [
+              {
+                "at": {
+                  "column": 5,
+                  "end": 4033,
+                  "line": 103,
+                  "start": 4031
+                },
+                "condition": {
+                  "at": {
+                    "column": 13,
+                    "end": 4040,
+                    "line": 103,
+                    "start": 4039
+                  },
+                  "kind": "binary",
+                  "left": {
+                    "at": {
+                      "column": 8,
+                      "end": 4038,
+                      "line": 103,
+                      "start": 4034
+                    },
+                    "kind": "name",
+                    "name": "read"
+                  },
+                  "op": ">",
+                  "right": {
+                    "at": {
+                      "column": 15,
+                      "end": 4047,
+                      "line": 103,
+                      "start": 4041
+                    },
+                    "kind": "name",
+                    "name": "budget"
+                  }
+                },
+                "else_body": [],
+                "kind": "if",
+                "then_body": [
+                  {
+                    "after": [],
+                    "at": {
+                      "column": 7,
+                      "end": 4060,
+                      "line": 104,
+                      "start": 4056
+                    },
+                    "code": {
+                      "at": {
+                        "column": 12,
+                        "end": 4079,
+                        "line": 104,
+                        "start": 4061
+                      },
+                      "kind": "name",
+                      "name": "resource_exhausted"
+                    },
+                    "kind": "fail",
+                    "message": {
+                      "at": {
+                        "column": 31,
+                        "end": 4116,
+                        "line": 104,
+                        "start": 4080
+                      },
+                      "kind": "literal",
+                      "value": "more pages than the budget allowed"
+                    }
+                  }
+                ]
+              }
+            ],
+            "kind": "block",
+            "tolerant": true
           }
         },
         {

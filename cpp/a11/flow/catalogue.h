@@ -79,7 +79,7 @@ struct ActionInfo {
   /// Where the declaration is, when it was found by reading source.
   std::optional<Origin> origin;
 
-  const PortInfo* absl_nullable Port(std::string_view name,
+  const PortInfo* absl_nullable Port(std::string_view port_name,
                                      syntax::PortDirection direction) const;
   std::vector<std::string> PortNames(syntax::PortDirection direction) const;
 };

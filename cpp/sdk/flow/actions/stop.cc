@@ -63,15 +63,15 @@ bool IsStopCommand(const nlohmann::json& command) {
 
 }  // namespace
 
-void StopSignal::Shared::Stop(StopReason reason) {
-  if (reason == StopReason::kRunning) {
+void StopSignal::Shared::Stop(StopReason next) {
+  if (next == StopReason::kRunning) {
     return;
   }
   int expected = static_cast<int>(StopReason::kRunning);
   // The first reason wins: a deadline firing while a cancellation is being
   // applied must not turn `cancelled` into a graceful finish.
-  if (this->reason.compare_exchange_strong(expected, static_cast<int>(reason),
-                                           std::memory_order_acq_rel)) {
+  if (reason.compare_exchange_strong(expected, static_cast<int>(next),
+                                     std::memory_order_acq_rel)) {
     stopped.Notify();
   }
   Finish();

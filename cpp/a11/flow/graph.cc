@@ -35,6 +35,8 @@ std::string_view StepKindName(StepKind kind) {
       return "drain";
     case StepKind::kCancel:
       return "cancel";
+    case StepKind::kAbort:
+      return "abort";
     case StepKind::kFail:
       return "fail";
     case StepKind::kLog:
@@ -131,7 +133,7 @@ std::vector<RefId> FlowGraph::ValueSources(StepId step) const {
     if (expr == kNone) return;
     for (const RefId read : exprs[expr].refs) Push(found, read);
   };
-  for (const auto& [name, expr] : one.headers) add(expr);
+  for (const auto& [header, expr] : one.headers) add(expr);
   add(one.action_id);
   add(one.code);
   add(one.message);

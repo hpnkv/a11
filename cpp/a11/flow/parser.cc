@@ -376,13 +376,13 @@ class ParserImpl {
         if (order[index] == modifier) rank = static_cast<int>(index);
       }
       if (rank < reached) {
+        // Reached at least one modifier to be out of order with, so the index
+        // is not the initial -1.
         Report("flow.form.field-modifier-order",
                absl::StrCat(Quoted(modifier), " is written before ",
-                            Quoted(vocabulary::OrderedFieldModifiers()[reached]),
+                            Quoted(order[static_cast<size_t>(reached)]),
                             "; a field's modifiers read ",
-                            absl::StrJoin(vocabulary::OrderedFieldModifiers(),
-                                          ", "),
-                            "."),
+                            absl::StrJoin(order, ", "), "."),
                at, Severity::kWarning, Family::kForm);
       }
       reached = std::max(reached, rank);

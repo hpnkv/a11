@@ -2937,7 +2937,7 @@ void FlowSuite(Recorder& recorder, double scale) {
   if (piped.ok() && Wanted("pipe_values")) {
     for (const int count : {16, 256, 4096}) {
       std::vector<std::string> values;
-      values.reserve(count);
+      values.reserve(static_cast<size_t>(count));
       for (int index = 0; index < count; ++index) {
         values.push_back(absl::StrCat("value-", index));
       }

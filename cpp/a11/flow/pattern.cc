@@ -16,7 +16,17 @@
 namespace a11::flow::pattern {
 namespace {
 
-bool IsSpace(char letter) { return absl::ascii_isspace(letter); }
+// absl's predicates take an `unsigned char`; the casts are the conversion the
+// standard library asks for rather than anything about the character.
+bool IsSpace(char letter) {
+  return absl::ascii_isspace(static_cast<unsigned char>(letter));
+}
+bool IsDigit(char letter) {
+  return absl::ascii_isdigit(static_cast<unsigned char>(letter));
+}
+bool IsAlnum(char letter) {
+  return absl::ascii_isalnum(static_cast<unsigned char>(letter));
+}
 
 /// How much horizontal whitespace the subject has at `at`.
 size_t FlatRun(std::string_view subject, size_t at) {
@@ -126,14 +136,14 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
         ++end;
       }
       const size_t digits = end;
-      while (end < subject.size() && absl::ascii_isdigit(subject[end])) ++end;
+      while (end < subject.size() && IsDigit(subject[end])) ++end;
       if (end == digits) return std::nullopt;
       if (type == HoleType::kNumber && end < subject.size() &&
           subject[end] == '.') {
         const size_t point = end;
         ++end;
         const size_t after = end;
-        while (end < subject.size() && absl::ascii_isdigit(subject[end])) ++end;
+        while (end < subject.size() && IsDigit(subject[end])) ++end;
         // A trailing point is not part of the number: `1.` in "1. two" is the
         // number and the full stop, which is what a reader means by it.
         if (end == after) end = point;
@@ -335,7 +345,7 @@ Compiled Compile(std::string_view text) {
     }
     if (!name.empty()) {
       for (const char inner : name) {
-        if (!absl::ascii_isalnum(inner) && inner != '_' && inner != '-') {
+        if (!IsAlnum(inner) && inner != '_' && inner != '-') {
           return fail(absl::StrCat("'", name,
                                    "' is not a field name: a hole is named with "
                                    "letters, digits, '_' and '-'."),

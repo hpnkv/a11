@@ -6,7 +6,7 @@ add_executable(a11::bench ALIAS a11_bench)
 target_link_libraries(
   a11_bench PRIVATE a11::concurrency a11::data a11::net a11::nodes a11::stores
                     a11::actions a11::service a11::flow_lang a11::flow_runtime
-                    nlohmann_json::nlohmann_json a11::allocator)
+                    nlohmann_json::nlohmann_json a11::allocator a11::warnings)
 target_include_directories(a11_bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # The uv round-trip row includes a11/net/internal/http_transport.h, which pulls
 # in uvw; uvw's headers only compile against its own target's definitions.

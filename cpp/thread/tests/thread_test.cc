@@ -98,11 +98,11 @@ TEST(WorkQueueTest, LosesNothingUnderConcurrentPushersAndPoppers) {
     });
   }
 
-  for (int index = kPoppers; index < kPoppers + kPushers; ++index) {
+  for (size_t index = kPoppers; index < kPoppers + kPushers; ++index) {
     threads[index].join();
   }
   done.store(true, std::memory_order_release);
-  for (int index = 0; index < kPoppers; ++index) {
+  for (size_t index = 0; index < kPoppers; ++index) {
     threads[index].join();
   }
 
@@ -126,7 +126,7 @@ TEST(WorkQueueTest, PreservesEachPushersOrderUnderOneConsumer) {
     int value = 0;
     while (true) {
       if (queue.Pop(value)) {
-        const int pusher = value / kPerPusher;
+        const auto pusher = static_cast<size_t>(value / kPerPusher);
         // Within one pusher's stream the queue must not reorder: this is what a
         // Chase-Lev deque would give up, and what parts of A11 rely on.
         ASSERT_GT(value, last[pusher]);
@@ -134,7 +134,7 @@ TEST(WorkQueueTest, PreservesEachPushersOrderUnderOneConsumer) {
         ++seen[pusher];
       } else if (done.load(std::memory_order_acquire)) {
         while (queue.Pop(value)) {
-          const int pusher = value / kPerPusher;
+          const auto pusher = static_cast<size_t>(value / kPerPusher);
           ASSERT_GT(value, last[pusher]);
           last[pusher] = value;
           ++seen[pusher];
@@ -158,7 +158,7 @@ TEST(WorkQueueTest, PreservesEachPushersOrderUnderOneConsumer) {
   }
   done.store(true, std::memory_order_release);
   consumer.join();
-  for (int pusher = 0; pusher < kPushers; ++pusher) {
+  for (size_t pusher = 0; pusher < kPushers; ++pusher) {
     EXPECT_EQ(seen[pusher], kPerPusher) << pusher;
   }
 }
@@ -574,7 +574,9 @@ TEST(ThreadChannelTest, LosingWriteCaseDoesNotMovePayload) {
                     channel.writer()->OnWrite(std::move(candidate))}),
             0);
   ASSERT_NE(candidate, nullptr);
-  EXPECT_EQ(*candidate, 2);
+  // Reading it back after the move is the contract this test exists to pin: a
+  // case that loses the Select does not consume its payload.
+  EXPECT_EQ(*candidate, 2);  // NOLINT(bugprone-use-after-move)
 
   std::unique_ptr<int> value;
   ASSERT_TRUE(channel.reader()->Read(&value));

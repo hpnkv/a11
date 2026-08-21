@@ -948,6 +948,14 @@ elseif (A11_BUILD_WEBRTC AND NOT LibDataChannel_FOUND)
 endif ()
 if (A11_BUILD_WEBRTC)
     a11_require_static_target(LibDataChannel::LibDataChannel)
+    # Its headers are somebody else's code, so its warnings are not ours to fix:
+    # rtc/*.hpp trips -Wextra-semi, and the translation unit that includes them
+    # is A11's, so without this the diagnostics arrive attributed to A11.
+    get_target_property(A11_DATACHANNEL_ALIASED
+                        LibDataChannel::LibDataChannel ALIASED_TARGET)
+    if (A11_DATACHANNEL_ALIASED)
+        set_target_properties(${A11_DATACHANNEL_ALIASED} PROPERTIES SYSTEM TRUE)
+    endif ()
 endif ()
 if (A11_BUILD_WEBRTC AND NOT A11_BUILD_HTTP)
     message(FATAL_ERROR
@@ -1020,11 +1028,50 @@ add_subdirectory(thread)
 add_library(a11_warnings INTERFACE)
 add_library(a11::warnings ALIAS a11_warnings)
 set_target_properties(a11_warnings PROPERTIES EXPORT_NAME warnings)
+# One list per compiler rather than one long generator expression: a warning is
+# added here often enough that the line has to stay readable.
+#
+# Two of these are deliberately absent. -Wpadded reports ~440 sites, nearly all
+# of them a `bool` next to an eight-aligned member, and reordering 170-odd
+# structs by field size to silence it would trade the order a reader wants for
+# tail padding nobody measured. -Wunused-member-function fires on the complete
+# rule-of-five of small internal helpers -- deleting an unused move-assignment
+# to satisfy it makes the type worse, not the build cleaner.
+set(A11_CLANG_WARNINGS
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow
+        -Wmissing-field-initializers
+        -Wthread-safety
+        -Werror=thread-safety
+        # `_Nullable` and friends are a clang extension, which is not news; a
+        # pointer in an annotated file that has no annotation is.
+        -Wno-nullability-extension
+        -Wnullability-completeness
+        -Wimplicit-fallthrough
+        -Wextra-semi
+        -Wcast-qual
+        -Wcomma
+        -Wloop-analysis
+        -Wredundant-move
+        -Wunreachable-code-aggressive)
+set(A11_GNU_WARNINGS
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow
+        -Wimplicit-fallthrough
+        -Wextra-semi
+        -Wcast-qual
+        -Wredundant-move)
 target_compile_options(
         a11_warnings
         INTERFACE
-        $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow;-Wmissing-field-initializers;-Wthread-safety;-Werror=thread-safety;-Wno-nullability-extension>
-        $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+        $<$<CXX_COMPILER_ID:AppleClang,Clang>:${A11_CLANG_WARNINGS}>
+        $<$<CXX_COMPILER_ID:GNU>:${A11_GNU_WARNINGS}>)
 if (A11_WARNINGS_AS_ERRORS)
     target_compile_options(
             a11_warnings INTERFACE

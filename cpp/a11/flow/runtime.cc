@@ -2809,13 +2809,16 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
   if (cursor == nullptr) {
     // Outside the lock: subscribing may open a node.
     absl::StatusOr<ReaderPtr> reader = Subscribe(ref);
+    // Taken before the reader is moved out below: what is left behind still has
+    // this status, but a reader of the code should not have to know that.
+    const absl::Status subscribed = reader.status();
     {
       thread::MutexLock lock(&monitor().mu());
       // Whatever happened, this ref is no longer being opened: a failure that
       // left the flag set would leave every other reader of it waiting for a
       // cursor nobody is making any more.
       owner->opening_cursors_.erase(ref);
-      if (reader.ok()) {
+      if (subscribed.ok()) {
         const graph::Ref& one = graph().refs[ref];
         auto made = std::make_unique<ValueCursor>(bridge(), *std::move(reader),
                                                   one.unary, one.label);
@@ -2824,7 +2827,7 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
       }
     }
     monitor().Wake();
-    if (!reader.ok()) return reader.status();
+    if (!subscribed.ok()) return subscribed;
   }
   return cursor->Next(monitor());
 }

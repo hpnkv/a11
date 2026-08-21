@@ -147,7 +147,7 @@ TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
   thread::MutexLock lock(&mu);
   ASSERT_EQ(seen.size(), kMessages);
   for (int index = 0; index < kMessages; ++index) {
-    ASSERT_EQ(seen[index], index) << "at " << index;
+    ASSERT_EQ(seen[static_cast<size_t>(index)], index) << "at " << index;
   }
 }
 
@@ -229,9 +229,11 @@ TEST(InProcessWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   thread::MutexLock lock(&mu);
   ASSERT_EQ(total, kSenders * kPerSender);
   for (int index = 0; index < kSenders; ++index) {
-    ASSERT_EQ(seen[index].size(), kPerSender) << index;
+    const std::vector<int>& from = seen[static_cast<size_t>(index)];
+    ASSERT_EQ(from.size(), kPerSender) << index;
     for (int count = 0; count < kPerSender; ++count) {
-      ASSERT_EQ(seen[index][count], count) << index << " at " << count;
+      ASSERT_EQ(from[static_cast<size_t>(count)], count)
+          << index << " at " << count;
     }
   }
 }

@@ -47,7 +47,7 @@ add_executable(a11_core_test
 target_link_libraries(
   a11_core_test PRIVATE a11::concurrency a11::data a11::net a11::nodes
                         a11::stores a11::actions a11::service a11::obs
-                        GTest::gtest_main a11::allocator
+                        GTest::gtest_main a11::warnings a11::allocator
                         nlohmann_json::nlohmann_json)
 add_test(NAME a11_core_test COMMAND a11_core_test)
 
@@ -69,7 +69,8 @@ add_executable(a11_flow_test
   flow_parser_test.cc
   flow_pattern_test.cc
   flow_resolve_test.cc)
-target_link_libraries(a11_flow_test PRIVATE a11::flow_lang GTest::gtest_main)
+target_link_libraries(
+  a11_flow_test PRIVATE a11::flow_lang GTest::gtest_main a11::warnings)
 add_test(NAME a11_flow_test COMMAND a11_flow_test)
 
 # The executing half, which does link the node and action layers. Kept out of
@@ -80,7 +81,8 @@ add_executable(a11_flow_runtime_test
   flow_shape_test.cc
   flow_values_test.cc)
 target_link_libraries(
-  a11_flow_runtime_test PRIVATE a11::flow_runtime GTest::gtest_main)
+  a11_flow_runtime_test PRIVATE a11::flow_runtime GTest::gtest_main
+                                a11::warnings)
 add_test(NAME a11_flow_runtime_test COMMAND a11_flow_runtime_test)
 
 if (A11_BUILD_REDIS)
@@ -89,7 +91,7 @@ if (A11_BUILD_REDIS)
     redis_chunk_store_test.cc)
   target_link_libraries(
     a11_redis_test PRIVATE a11::concurrency a11::data a11::redis a11::stores
-                           GTest::gtest_main)
+                           GTest::gtest_main a11::warnings)
   add_test(NAME a11_redis_test COMMAND a11_redis_test)
 endif ()
 
@@ -99,7 +101,7 @@ if (A11_BUILD_SQLITE)
   target_include_directories(a11_sqlite_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(
     a11_sqlite_test PRIVATE a11::concurrency a11::data a11::stores
-                            GTest::gtest_main)
+                            GTest::gtest_main a11::warnings)
   add_test(NAME a11_sqlite_test COMMAND a11_sqlite_test)
 endif ()
 
@@ -112,7 +114,7 @@ if (A11_BUILD_HTTP)
   target_link_libraries(
     a11_http_actions_test PRIVATE a11::http_actions a11::actions a11::concurrency
                                   a11::data a11::net a11::nodes a11::stores
-                                  GTest::gtest_main)
+                                  GTest::gtest_main a11::warnings)
   add_test(NAME a11_http_actions_test COMMAND a11_http_actions_test)
 endif ()
 
@@ -125,7 +127,7 @@ if (A11_BUILD_FLOW_ACTIONS)
   target_link_libraries(
     a11_flow_actions_test PRIVATE a11::flow_actions a11::actions
                                   a11::concurrency a11::data a11::nodes
-                                  a11::stores GTest::gtest_main)
+                                  a11::stores GTest::gtest_main a11::warnings)
   add_test(NAME a11_flow_actions_test COMMAND a11_flow_actions_test)
 endif ()
 
@@ -137,7 +139,8 @@ if (A11_BUILD_AUDIO)
     sample_ring_test.cc
     speech_recognizer_test.cc)
   target_link_libraries(
-    a11_audio_test PRIVATE a11::audio a11::concurrency GTest::gtest_main)
+    a11_audio_test PRIVATE a11::audio a11::concurrency GTest::gtest_main
+                           a11::warnings)
   add_test(NAME a11_audio_test COMMAND a11_audio_test)
 
   add_executable(a11_audio_actions_test
@@ -148,6 +151,6 @@ if (A11_BUILD_AUDIO)
   target_link_libraries(
     a11_audio_actions_test PRIVATE a11::audio_actions a11::actions a11::audio
                                    a11::concurrency a11::data a11::net
-                                   a11::nodes GTest::gtest_main)
+                                   a11::nodes GTest::gtest_main a11::warnings)
   add_test(NAME a11_audio_actions_test COMMAND a11_audio_actions_test)
 endif ()

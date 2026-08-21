@@ -169,6 +169,8 @@ std::string_view NodeKindName(NodeKind kind) {
       return "drain";
     case NodeKind::kCancel:
       return "cancel";
+    case NodeKind::kAbort:
+      return "abort";
     case NodeKind::kFail:
       return "fail";
     case NodeKind::kLog:
@@ -295,6 +297,8 @@ void VisitChildren(const Node& node,
     case NodeKind::kIt:
     case NodeKind::kName:
     case NodeKind::kCancel:
+    // What an `advance` holds is the name of a `let`, which is a word.
+    case NodeKind::kAdvance:
       return;
     case NodeKind::kListLiteral:
       all(static_cast<const ListLiteral&>(node).items);
@@ -380,6 +384,9 @@ void VisitChildren(const Node& node,
       if (pipeline != nullptr) visit(*pipeline);
       return;
     }
+    case NodeKind::kBlock:
+      all(static_cast<const Block&>(node).body);
+      return;
     case NodeKind::kCallStatement: {
       const CallExpressionPtr& call =
           static_cast<const CallStatement&>(node).call;
@@ -404,6 +411,13 @@ void VisitChildren(const Node& node,
     case NodeKind::kDrain:
       one(static_cast<const Drain&>(node).target);
       return;
+    case NodeKind::kAbort: {
+      const auto& abort = static_cast<const Abort&>(node);
+      one(abort.target);
+      one(abort.code);
+      one(abort.message);
+      return;
+    }
     case NodeKind::kFail: {
       const auto& fail = static_cast<const Fail&>(node);
       one(fail.code);

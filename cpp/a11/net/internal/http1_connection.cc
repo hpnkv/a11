@@ -123,7 +123,7 @@ absl::Status Http1Connection::SendProtocolPreamble() {
   return absl::OkStatus();  // HTTP/1.1 sends no connection preface.
 }
 
-absl::Status Http1Connection::OnInboundPlaintext(const char* data,
+absl::Status Http1Connection::OnInboundPlaintext(const char* absl_nonnull data,
                                                  size_t size) {
   inbuf_.append(data, size);
   return server() ? ServerParse() : ClientParse();
@@ -339,7 +339,7 @@ absl::Status Http1Connection::DispatchRequest() {
 // --- Client response parsing. ---
 
 absl::StatusOr<std::shared_ptr<Http2ResponseStream>>
-Http1Connection::SubmitRequest(std::string method, std::string scheme,
+Http1Connection::SubmitRequest(std::string method, std::string /*scheme*/,
                                std::string authority, std::string path,
                                HttpHeaders headers, std::string body) {
   std::shared_ptr<Http1Connection> self = Self();

@@ -219,18 +219,18 @@ struct LocalChunkStore::State
    *   collected before a wait is still there after it.
    * @param limit
    *   Maximum fragments to accumulate, counting what is already there.
-   * @param changed
+   * @param waiter
    *   Set to the generation event only when the caller must wait. It is
    *   snapshotted *inside* the lock, which is what closes the lost-wakeup
    *   window -- see WaitForChange().
    * @return
    *   An engaged status when the call has its answer: OK means `fragments` is
    *   that answer, and a non-OK status is the terminal one to fail with.
-   *   `std::nullopt` means the caller must wait on `*changed` and try again.
+   *   `std::nullopt` means the caller must wait on `*waiter` and try again.
    */
   std::optional<absl::Status> CollectNext(
       std::vector<std::optional<data::NodeFragment>>& fragments, size_t limit,
-      std::shared_ptr<thread::PermanentEvent>* changed)
+      std::shared_ptr<thread::PermanentEvent>* waiter)
       ABSL_LOCKS_EXCLUDED(mu) {
     thread::MutexLock lock(&mu);
     while (true) {
@@ -267,7 +267,7 @@ struct LocalChunkStore::State
         return absl::OkStatus();
       }
       if (found == chunks.end()) {
-        *changed = this->changed;
+        *waiter = changed;
         return std::nullopt;
       }
       ++total_chunks_read;

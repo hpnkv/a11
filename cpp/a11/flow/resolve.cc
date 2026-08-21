@@ -605,7 +605,6 @@ std::string StageBodyLabel(const syntax::Stage& stage) {
     default:
       return stage.name;
   }
-  return stage.name;
 }
 
 /// What a reference resolved to.
@@ -659,7 +658,11 @@ struct Ref {
   /// here. It is one fact carried along a pipeline, and it is carried because
   /// it answers a question that is otherwise unanswerable until a value
   /// arrives: whether `| json` has anything to render.
-  std::string shape;
+  ///
+  /// Written `{}` rather than left bare so that the ~25 sites building one of
+  /// these with a braced list -- every one of which stops before this field --
+  /// are not each a -Wmissing-field-initializers warning.
+  std::string shape{};
 };
 
 /// A subject's own label, out of the outcome that names it: `status x` -> `x`.
@@ -3597,9 +3600,9 @@ class FlowResolver {
 }  // namespace
 
 const PortPlan* absl_nullable FlowPlan::Port(
-    std::string_view name, syntax::PortDirection direction) const {
+    std::string_view port_name, syntax::PortDirection direction) const {
   for (const PortPlan& port : ports) {
-    if (port.name == name && port.direction == direction) return &port;
+    if (port.name == port_name && port.direction == direction) return &port;
   }
   return nullptr;
 }
@@ -3639,9 +3642,10 @@ const DtoPlan* absl_nullable Program::Dto(std::string_view name) const {
   return nullptr;
 }
 
-const FieldPlan* absl_nullable DtoPlan::Field(std::string_view name) const {
+const FieldPlan* absl_nullable DtoPlan::Field(
+    std::string_view field_name) const {
   for (const FieldPlan& field : fields) {
-    if (field.name == name) return &field;
+    if (field.name == field_name) return &field;
   }
   return nullptr;
 }

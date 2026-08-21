@@ -176,8 +176,8 @@ Outcome RunFlow(std::string_view source, std::string_view name,
     outcome.status = action.status();
     return outcome;
   }
-  for (const auto& [name, value] : headers) {
-    EXPECT_TRUE((*action)->SetHeader(name, value).ok());
+  for (const auto& [header, value] : headers) {
+    EXPECT_TRUE((*action)->SetHeader(header, value).ok());
   }
   // Every output node before the flow starts, so a value produced early is
   // waiting rather than lost.

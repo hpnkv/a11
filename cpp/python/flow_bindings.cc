@@ -197,14 +197,14 @@ nlohmann::json PythonToJson(const py::handle& value) {
   if (py::isinstance<py::str>(value)) return value.cast<std::string>();
   if (py::isinstance<py::dict>(value)) {
     nlohmann::json object = nlohmann::json::object();
-    for (const auto& [key, item] : value.cast<py::dict>()) {
+    for (auto [key, item] : value.cast<py::dict>()) {
       object[py::str(key).cast<std::string>()] = PythonToJson(item);
     }
     return object;
   }
   if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
     nlohmann::json array = nlohmann::json::array();
-    for (const py::handle& item : value) array.push_back(PythonToJson(item));
+    for (py::handle item : value) array.push_back(PythonToJson(item));
     return array;
   }
   throw py::type_error(
@@ -370,12 +370,12 @@ flow::Value ValueFromPython(const py::handle& value) {
   }
   if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
     std::vector<flow::Value> items;
-    for (const py::handle& item : value) items.push_back(ValueFromPython(item));
+    for (py::handle item : value) items.push_back(ValueFromPython(item));
     return flow::Value::List(std::move(items));
   }
   if (py::isinstance<py::dict>(value)) {
     flow::Value::Pairs pairs;
-    for (const auto& [key, item] : value.cast<py::dict>()) {
+    for (auto [key, item] : value.cast<py::dict>()) {
       pairs.emplace_back(py::str(key).cast<std::string>(),
                          ValueFromPython(item));
     }
@@ -831,7 +831,7 @@ turns that into ``FlowSyntaxError``.
       [](const PyLike<py::str>& format,
          const py::typing::Iterable<py::object>& arguments) -> std::string {
         std::vector<flow::Value> values;
-        for (const py::handle& argument : arguments) {
+        for (py::handle argument : arguments) {
           values.push_back(ValueFromPython(argument));
         }
         return flow::Strformat(ValueFromPython(format), values);

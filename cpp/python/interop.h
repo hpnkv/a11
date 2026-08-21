@@ -109,7 +109,7 @@ class DeferredPythonRefs {
   /// Release @p object, now if that is provably safe and otherwise later.
   ///
   /// Safe from any thread and takes no Python lock in the deferring case.
-  static void Retire(PyObject* object) {
+  static void Retire(PyObject* absl_nullable object) {
     if (object == nullptr) {
       return;
     }
@@ -123,7 +123,7 @@ class DeferredPythonRefs {
       Py_DECREF(object);
       return;
     }
-    absl::MutexLock lock(&Mutex());
+    absl::MutexLock lock(Mutex());
     Pending().push_back(object);
     Size().store(Pending().size(), std::memory_order_relaxed);
     std::size_t seen = HighWater().load(std::memory_order_relaxed);
@@ -145,7 +145,7 @@ class DeferredPythonRefs {
     }
     std::vector<PyObject*> objects;
     {
-      absl::MutexLock lock(&Mutex());
+      absl::MutexLock lock(Mutex());
       objects.swap(Pending());
       Size().store(0, std::memory_order_relaxed);
     }
@@ -490,7 +490,10 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
       // binding: a worker resolving a Python future cannot get the GIL from a
       // loop thread that is parked waiting for that worker.
       py::cpp_function([future]() mutable {
-        WithoutGil([&] { return future.Cancel(); });
+        // Nothing to report a failed cancellation to: asyncio has already
+        // marked the future cancelled, and a future that resolved first is
+        // the ordinary race rather than an error.
+        WithoutGil([&] { return future.Cancel(); }).IgnoreError();
       }));
   py::object completion = coordination.attr("_complete_future");
   auto references =

@@ -87,7 +87,7 @@ TEST(Http2Test, MultiplexesBufferedAndStreamingResponses) {
 TEST(Http2Test, DeliversTrailersAfterTheBody) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
+      [](HttpRequest /*request*/,
          std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
         absl::Status status = response->SendHeaders(
             200, {{"content-type", "text/plain"}, {"trailer", "x-digest"}});

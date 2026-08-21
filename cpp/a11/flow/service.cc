@@ -311,14 +311,14 @@ nlohmann::json Handle(const nlohmann::json& request) {
       options.max_files = limit->get<size_t>();
     }
     const discover::Result found = discover::Discover(roots, options);
-    nlohmann::json answer = found.found.ToJson();
+    nlohmann::json scanned = found.found.ToJson();
     // What was read and what was not. A cap that applied itself silently would
     // make a half-read project look like a project with two actions in it.
-    answer["scanned"] = nlohmann::json{
+    scanned["scanned"] = nlohmann::json{
         {"files_read", found.files_read},
         {"reached_file_limit", found.reached_file_limit},
         {"too_large", found.too_large}};
-    return Success(request, std::move(answer));
+    return Success(request, std::move(scanned));
   }
   // The two directions of the shape/schema translation. Both are about *shapes*
   // rather than about a document, so neither takes an offset and neither needs
@@ -327,18 +327,18 @@ nlohmann::json Handle(const nlohmann::json& request) {
   if (method == "schema") {
     const ParseResult parsed = Parse(source);
     const ResolveResult resolved = Resolve(source, parsed);
-    const std::string wanted = request.value("struct", std::string());
+    const std::string shape_name = request.value("struct", std::string());
     nlohmann::json shapes = nlohmann::json::object();
     for (const DtoPlan& dto : resolved.program.dtos) {
-      if (!wanted.empty() && dto.name != wanted) continue;
+      if (!shape_name.empty() && dto.name != shape_name) continue;
       shapes[dto.name] = DtoToJsonSchema(dto, resolved.program);
     }
-    if (!wanted.empty() && shapes.empty()) {
+    if (!shape_name.empty() && shapes.empty()) {
       std::vector<std::string> known;
       for (const DtoPlan& dto : resolved.program.dtos) known.push_back(dto.name);
       return Failure(request,
-                     absl::StrCat("This document declares no shape '", wanted,
-                                  "'", known.empty()
+                     absl::StrCat("This document declares no shape '",
+                                  shape_name, "'", known.empty()
                                            ? " (it declares none)."
                                            : absl::StrCat(" (it declares ",
                                                           absl::StrJoin(known,

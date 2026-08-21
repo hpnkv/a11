@@ -265,6 +265,9 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
     }
   }
   if (claimed) {
+    // `claimed` and `queued` are the two arms of one if/else above, and only
+    // the queueing arm moves the message: whichever of them ran, the message is
+    // moved exactly once. NOLINTNEXTLINE(bugprone-use-after-move)
     DeliverClaimed(state_, std::move(message), claimed_id);
     return absl::OkStatus();
   }

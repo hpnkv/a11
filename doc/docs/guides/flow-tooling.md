@@ -242,7 +242,8 @@ middle of typing still has a tree to highlight, format and check.
 
 * **`kind` says what a node is**, in kebab case, and the rest of the object is
   what that kind holds: `pipe` has a `pipeline` and `targets`, `call` has an
-  `action`, `args` and `modifiers`, `for-each` has a `variable` and a `body`.
+  `action`, `args` and `modifiers`, `for-each` has a `variable` and a `body`,
+  `block` has a `body` and whether it is `tolerant`.
 * **`at` is where the node started** — the token it began at, not the extent of the
   whole construct. It is nested under its own key rather than sitting beside the
   node's fields because a `repeat` has a `start` of its own, and a format where one

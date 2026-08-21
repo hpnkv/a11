@@ -675,12 +675,11 @@ Examples:
                 options.synchronous = synchronous;
                 if (!cross_process_poll_interval.is_none()) {
                   options.cross_process_poll_interval = ValueOrThrow(
-                      DurationFromPython(cross_process_poll_interval,
-                                         "cross_process_poll_interval"));
+                      DurationFromPython(cross_process_poll_interval, false));
                 }
                 if (!blob_grace_period.is_none()) {
-                  options.blob_grace_period = ValueOrThrow(DurationFromPython(
-                      blob_grace_period, "blob_grace_period"));
+                  options.blob_grace_period =
+                      ValueOrThrow(DurationFromPython(blob_grace_period, false));
                 }
                 const absl::Status status = options.Validate();
                 if (!status.ok()) {
@@ -709,8 +708,8 @@ Examples:
             return NativeDuration(self.cross_process_poll_interval);
           },
           [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
-            self.cross_process_poll_interval = ValueOrThrow(
-                DurationFromPython(value, "cross_process_poll_interval"));
+            self.cross_process_poll_interval =
+                ValueOrThrow(DurationFromPython(value, false));
           },
           "How often to notice other processes' commits; zero disables it.")
       .def_property(
@@ -720,7 +719,7 @@ Examples:
           },
           [](stores::SQLiteChunkStoreOptions& self, const py::handle& value) {
             self.blob_grace_period =
-                ValueOrThrow(DurationFromPython(value, "blob_grace_period"));
+                ValueOrThrow(DurationFromPython(value, false));
           },
           "How long an unreferenced blob survives before a sweep removes it.")
       .def(

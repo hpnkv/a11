@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 
+#include <absl/base/nullability.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 
@@ -54,7 +55,7 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
       std::shared_ptr<uvw::tcp_handle> tcp, bool server,
       Http2RequestHandler handler, Http2Options options,
       internal::SslContext tls_context = {}, std::string tls_server_name = {},
-      std::function<void(HttpTransport*)> on_closed = {},
+      std::function<void(HttpTransport* absl_nonnull)> on_closed = {},
       std::string prebuffered = {});
 
   ~Http1Connection() override = default;
@@ -97,7 +98,8 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
 
  protected:
   // --- HttpTransport seams. ---
-  absl::Status OnInboundPlaintext(const char* data, size_t size) override;
+  absl::Status OnInboundPlaintext(const char* absl_nonnull data,
+                                  size_t size) override;
   absl::Status SendProtocolPreamble() override;
   void OnClose(const absl::Status& status) override;
   std::vector<unsigned char> ClientAlpnWire() const override;
@@ -116,7 +118,7 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   Http1Connection(std::shared_ptr<uvw::tcp_handle> tcp, bool server,
                   Http2RequestHandler handler, Http2Options options,
                   internal::SslContext tls_context, std::string tls_server_name,
-                  std::function<void(HttpTransport*)> on_closed,
+                  std::function<void(HttpTransport* absl_nonnull)> on_closed,
                   std::string prebuffered);
 
   absl::Status Initialize();

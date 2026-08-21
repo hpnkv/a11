@@ -462,8 +462,9 @@ TEST_P(HttpSseOutboundDeliveryTest, DeliversEveryMessageBeforeTheHalfClose) {
       ASSERT_TRUE(absl::SimpleAtoi(fragment.id, &index)) << fragment.id;
       ASSERT_GE(index, 0);
       ASSERT_LT(index, kMessages);
-      EXPECT_FALSE(seen[index]) << "message " << index << " arrived twice";
-      seen[index] = true;
+      const auto at = static_cast<size_t>(index);
+      EXPECT_FALSE(seen[at]) << "message " << index << " arrived twice";
+      seen[at] = true;
     }
     // The request headers reach every message, whether they were sent once per
     // POST or once for the whole stream.
@@ -587,7 +588,7 @@ TEST(HttpSseWireStreamTest, SustainsAPipelinedEchoWithConcurrentPosts) {
     if (std::shared_ptr<HttpSseServerWireStream> peer = weak_peer.lock();
         peer != nullptr) {
       data::WireMessage reply;
-      reply.node_fragments.reserve(fragments);
+      reply.node_fragments.reserve(static_cast<size_t>(fragments));
       for (int index = 0; index < fragments; ++index) {
         reply.node_fragments.push_back(
             data::NodeFragment{.id = absl::StrCat("echo-", index),

@@ -234,6 +234,9 @@ struct Http2ResponseStream::State {
     if (reader == nullptr) {
       return absl::OkStatus();
     }
+    // The data is moved into `chunks` only on the arm that leaves `reader` null,
+    // so reaching here means it was not moved.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     (void)reader->SetValue(std::optional<std::string>(std::move(data)));
     return absl::OkStatus();
   }

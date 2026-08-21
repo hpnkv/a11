@@ -118,6 +118,26 @@ std::uint64_t HandledFilesystemRights(int abi) {
   return handled;
 }
 
+/// The rights Landlock accepts on a rule whose target is not a directory.
+///
+/// A rule carrying a directory-only right -- `READ_DIR`, any of the `MAKE_*` or
+/// `REMOVE_*` -- is refused with EINVAL when its `parent_fd` is a regular file.
+/// Several of the paths a confined child needs to start at all are files
+/// (`/etc/ld.so.cache`, `/dev/null`, the program itself), so the caller's
+/// rights are narrowed to this set for them rather than the call failing and
+/// taking the whole sandbox with it.
+std::uint64_t FileRights(int abi) {
+  std::uint64_t rights =
+      kAccessFsExecute | kAccessFsWriteFile | kAccessFsReadFile;
+  if (abi >= 3) {
+    rights |= kAccessFsTruncate;
+  }
+  if (abi >= 5) {
+    rights |= kAccessFsIoctlDev;
+  }
+  return rights;
+}
+
 std::uint64_t ReadRights(int abi) {
   std::uint64_t rights = kAccessFsReadFile | kAccessFsReadDir;
   (void)abi;
@@ -279,17 +299,27 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
 
   const auto allow = [&sandbox, abi](std::string_view path,
                                      std::uint64_t rights) -> absl::Status {
-    const int fd =
+    const int directory_fd =
         ::open(std::string(path).c_str(), O_PATH | O_CLOEXEC | O_DIRECTORY);
+    const bool directory = directory_fd >= 0;
     // A root that is not there cannot be granted, and is not a reason to refuse
     // to run: the policy already refuses paths under it.
     const int file_fd =
-        fd >= 0 ? fd : ::open(std::string(path).c_str(), O_PATH | O_CLOEXEC);
+        directory ? directory_fd
+                  : ::open(std::string(path).c_str(), O_PATH | O_CLOEXEC);
     if (file_fd < 0) {
       return absl::OkStatus();
     }
     LandlockPathBeneathAttr rule{};
     rule.allowed_access = rights & HandledFilesystemRights(abi);
+    if (!directory) {
+      rule.allowed_access &= FileRights(abi);
+    }
+    if (rule.allowed_access == 0) {
+      // Nothing left to grant, and an empty rule is itself an EINVAL.
+      ::close(file_fd);
+      return absl::OkStatus();
+    }
     rule.parent_fd = file_fd;
     const long added =
         AddRule(sandbox->ruleset_fd_, kRuleTypePathBeneath, &rule, 0);

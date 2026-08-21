@@ -17,6 +17,7 @@
 #define A11_UV_LOOP_H_
 
 #include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -108,8 +109,45 @@ class UvExecutor {
  private:
   friend class absl::NoDestructor<UvExecutor>;
 
+  /// Stops a write to a closed peer from killing the process.
+  ///
+  /// libuv writes with `write`/`writev`, and on a socket whose peer has gone
+  /// that raises SIGPIPE -- whose default disposition terminates the process.
+  /// libuv deliberately leaves this to the application (macOS escapes it
+  /// because libuv sets SO_NOSIGPIPE there, which Linux has no equivalent of),
+  /// so A11 has to say it: every C++ program using these transports would
+  /// otherwise die the first time a peer half-closed mid-write. It is not
+  /// visible from Python only because CPython already ignores SIGPIPE.
+  ///
+  /// Only when the disposition is still the default: A11 is a library, loaded
+  /// into processes that may have their own handler, and replacing one is not
+  /// this constructor's business.
+  static void IgnoreSigPipeIfDefaulted() {
+#if !defined(_WIN32)
+    // Unqualified calls on purpose: `struct sigaction` and the function of
+    // the same name both live in the global namespace, and `::sigaction(...)`
+    // parses as a functional cast to the struct. The declaration of the
+    // function hides the class name, so the plain call finds the function.
+    struct sigaction current{};
+    if (sigaction(SIGPIPE, nullptr, &current) != 0) {
+      return;
+    }
+    if (current.sa_handler != SIG_DFL) {
+      return;
+    }
+    struct sigaction ignore{};
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    if (sigaction(SIGPIPE, &ignore, nullptr) != 0) {
+      LOG(WARNING) << "Could not ignore SIGPIPE; a peer that closes mid-write "
+                      "will terminate this process";
+    }
+#endif
+  }
+
   UvExecutor() {
     {
+      IgnoreSigPipeIfDefaulted();
       loop_ = uvw::loop::create();
       async_ = loop_->resource<uvw::async_handle>();
       const int initialized = async_->init();

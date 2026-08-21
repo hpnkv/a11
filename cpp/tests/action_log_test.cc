@@ -103,10 +103,15 @@ class SinkCapture {
 using LogBody = std::function<absl::Status(std::shared_ptr<Action>)>;
 
 absl::Status RunWith(const std::shared_ptr<Action>& action, LogBody body) {
+  // `body` is copied into the submitted task rather than captured by reference.
+  // The handler returns as soon as it has submitted, so a reference to the
+  // handler closure's own member outlives nothing: the fibre reads it after the
+  // call that owns it has returned. It survived on macOS and read freed memory
+  // on Linux, which is what a dangling reference is entitled to do.
   auto bound = action->BindHandler([body = std::move(body)](
                                        std::shared_ptr<Action> running) {
     return a11::SubmitTask([running = std::move(running),
-                            &body]() -> absl::Status { return body(running); });
+                            body]() -> absl::Status { return body(running); });
   });
   if (!bound.ok()) {
     return bound;

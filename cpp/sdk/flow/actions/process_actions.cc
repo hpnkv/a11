@@ -43,6 +43,7 @@
 #include "sdk/flow/actions/ports.h"
 #include "sdk/flow/actions/sandbox.h"
 #include "sdk/flow/actions/stop.h"
+#include "thread/concurrency.h"
 
 extern char** environ;
 
@@ -770,6 +771,24 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   std::string buffer(kPipeChunkBytes, '\0');
 
   while ((streams[0].open || streams[1].open) && trouble.ok()) {
+    // Give this worker's fibre scheduler a turn.
+    //
+    // `poll()` below is a plain syscall, so this loop occupies its OS thread
+    // without ever reaching a suspension point, and the thread's dispatcher
+    // cannot run. Every fibre attached to that dispatcher is then stranded for
+    // as long as the child lives -- including the control watcher, which is
+    // usually a sibling on this very worker because a submitted fibre lands in
+    // its creator's own slot. A stop command would arrive, complete the
+    // watcher's read, be handed to the scheduler by
+    // `scheduler::schedule_from_remote` -- and sit in a remote-ready queue only
+    // this thread drains, while this loop waits for a child only that command
+    // would end. That is a deadlock, and it was one:
+    // `SpawnProcessTest.StopsALongRunningProcessAndSaysHow` failed about 40% of
+    // the time under load without this yield and not at all with it.
+    //
+    // Cheap by construction: two context switches per poll timeout, so twenty a
+    // second per running child, against ~0.1us each.
+    thread::SleepFor(absl::ZeroDuration());
     if (stop->stopped() && !termed) {
       // Asked nicely first: a program that flushes its output on SIGTERM gets
       // the chance to, and the reading below carries on so that what it flushes

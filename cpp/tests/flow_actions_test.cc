@@ -1264,10 +1264,13 @@ TEST(SandboxTest, PreparesConfinementForARootedPolicy) {
   capabilities->process.any_program = true;
   absl::StatusOr<std::shared_ptr<Sandbox>> prepared =
       Sandbox::Prepare(*capabilities, "/bin/cat");
-  ASSERT_TRUE(prepared.ok());
+  // The skip comes before the assertion: on a system with no sandbox there is
+  // nothing here to be right or wrong about, and a preparation that failed for
+  // a reason of its own must say so rather than assert a bare false.
   if (Availability().kind == SandboxKind::kNone) {
     GTEST_SKIP() << "no sandbox on this system: " << Availability().why_not;
   }
+  ASSERT_TRUE(prepared.ok()) << prepared.status();
   EXPECT_TRUE((*prepared)->active());
 }
 

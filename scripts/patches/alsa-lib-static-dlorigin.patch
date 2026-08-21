@@ -1,0 +1,53 @@
+Do not ask glibc for the $ORIGIN of the main program.
+
+alsa-lib finds its plugin directory by taking the link map of the object that
+contains snd_dlpath() and asking dlinfo() for that object's $ORIGIN. When
+libasound is linked *statically* -- which every A11 build does, so the wheel
+carries no libasound.so loader dependency (see scripts/audit_wheel.py) --
+snd_dlpath() lives in the main executable, and glibc's RTLD_DI_ORIGIN handler is
+
+    case RTLD_DI_ORIGIN:
+      strcpy (arg, l->l_origin);
+
+with l_origin NULL for the main program. The result is a segfault inside
+__strcpy_avx2, reached from Pa_Initialize() the first time PortAudio's ALSA
+backend enumerates devices -- so on a statically linked host, listing audio
+devices crashes the process rather than returning a status. Verified on
+glibc 2.39 (Ubuntu 24.04): dlinfo(RTLD_DI_ORIGIN) on the main program's link map
+faults, and l_name is the empty string exactly there, which is the documented
+way to recognise it.
+
+Skipping the probe leaves snd_plugin_dir unset, so snd_dlpath() falls back to the
+ALSA_PLUGIN_DIR compiled in at configure time -- which is the right answer for a
+static build, since there is no libasound.so next to which plugins would sit.
+Setting the ALSA_PLUGIN_DIR environment variable still takes precedence, and a
+shared build is untouched: there l_name is the library's path, not "".
+
+Applied to alsa-lib 1.2.14 by scripts/bootstrap_wheel_deps.sh before configure.
+--- a/src/dlmisc.c
++++ b/src/dlmisc.c
+@@ -36,6 +36,9 @@
+ 
+ #if defined(HAVE_LIBDL) && defined(__GLIBC__) && !defined(__UCLIBC__)
+ #define DL_ORIGIN_AVAILABLE 1
++/* For a complete struct link_map: <dlfcn.h> only forward-declares it, and the
++ * l_name test in snd_dlinfo_origin() below reads a member. */
++#include <link.h>
+ #endif
+ 
+ #ifndef DOC_HIDDEN
+@@ -71,6 +74,14 @@
+ 	char origin[PATH_MAX];
+ 	if (dladdr1(&snd_dlpath, &info, (void**)&links, RTLD_DL_LINKMAP) == 0)
+ 		return;
++	/* A static libasound puts snd_dlpath() in the main program, whose link
++	 * map has l_name == "" and l_origin == NULL. glibc's RTLD_DI_ORIGIN is a
++	 * bare strcpy() from l_origin, so asking there is a segfault rather than
++	 * an error return. Fall back to the configured ALSA_PLUGIN_DIR, which is
++	 * what a static build wants anyway.
++	 */
++	if (links == NULL || links->l_name == NULL || links->l_name[0] == 0)
++		return;
+ 	if (dlinfo(links, RTLD_DI_ORIGIN, origin))
+ 		return;
+ 	snprintf(path, path_len, "%s/alsa-lib", origin);

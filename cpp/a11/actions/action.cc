@@ -2093,7 +2093,16 @@ void Action::SetCompletionStatus(const absl::Status& status) {
       return;
     }
     if (!dispatch_status_.has_value()) {
-      dispatch_status_ = absl::OkStatus();
+      // A completion that arrives with nothing yet said about the dispatch
+      // answers for the dispatch too, and it must not answer OK for a failure.
+      // When a peer refuses a dispatch it sends the same status to both the
+      // dispatch-status and the status node in one WireMessage, and the two
+      // node writes race: filling OK here lost the real refusal about half the
+      // time (see the test named for it). Adopting the completion is also the
+      // honest answer when a stream dies before any dispatch was acknowledged,
+      // and it can never contradict a dispatch fragment that lands later --
+      // that fragment carries this very status.
+      dispatch_status_ = status.ok() ? absl::OkStatus() : status;
       dispatch = dispatch_promise_;
     }
     if (completion_status_.has_value()) {

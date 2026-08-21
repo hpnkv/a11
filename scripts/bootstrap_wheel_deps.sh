@@ -330,6 +330,12 @@ if [[ "${host_os}" == Linux ]]; then
     alsa-lib.tar.bz2
   (
     cd "${work}/alsa-lib-1.2.14"
+    # A statically linked libasound asks glibc for the main program's $ORIGIN to
+    # find its plugin directory, and glibc answers that with a strcpy() from a
+    # null pointer: listing audio devices segfaults instead of returning a
+    # status. Fail loudly if the patch stops applying rather than shipping a
+    # build that crashes on the first Pa_Initialize().
+    patch -p1 < "${script_dir}/patches/alsa-lib-static-dlorigin.patch"
     CFLAGS="-fPIC ${CFLAGS:-}" ./configure \
       --prefix="${prefix}" --libdir="${prefix}/lib" \
       --disable-shared --enable-static --disable-python

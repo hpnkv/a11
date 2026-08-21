@@ -13,7 +13,6 @@
 
 import {
     Action,
-    ActionPortSchema,
     ActionRegistry,
     ActionSchema,
     INTERACT_WITH_LLM_SCHEMA,

@@ -85,6 +85,26 @@ action = registry.make_action("transform_text")
 
 ::: a11.actions.action.ActionSettings
 
+## Describing actions
+
+::: a11.actions.describe
+
+::: a11.actions.describe.schema_to_json
+
+::: a11.actions.describe.schema_from_json
+
+::: a11.actions.describe.registry_to_json
+
+::: a11.actions.describe.schemas_in_document
+
+::: a11.actions.describe.fill_json_schemas
+
+::: a11.actions.describe.json_schema_for
+
+::: a11.actions.describe.builtin_action_names
+
+::: a11.actions.describe.is_reserved_action
+
 ## Header helpers
 
 ::: a11.actions.action.DefaultHeaders

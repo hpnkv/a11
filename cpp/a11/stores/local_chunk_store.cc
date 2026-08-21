@@ -130,8 +130,7 @@ struct LocalChunkStore::State
       const ReadRequest& request) const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
     std::optional<std::uint32_t> seq;
     if (request.kind == ReadKind::kSequence) {
-      const std::uint32_t requested_seq =
-          static_cast<std::uint32_t>(request.value);
+      const auto requested_seq = static_cast<std::uint32_t>(request.value);
       if (chunks.find(requested_seq) != chunks.end()) {
         seq = requested_seq;
       }
@@ -230,8 +229,7 @@ struct LocalChunkStore::State
    */
   std::optional<absl::Status> CollectNext(
       std::vector<std::optional<data::NodeFragment>>& fragments, size_t limit,
-      std::shared_ptr<thread::PermanentEvent>* waiter)
-      ABSL_LOCKS_EXCLUDED(mu) {
+      std::shared_ptr<thread::PermanentEvent>* waiter) ABSL_LOCKS_EXCLUDED(mu) {
     thread::MutexLock lock(&mu);
     while (true) {
       if (total_chunks_read > std::numeric_limits<std::uint32_t>::max()) {
@@ -353,11 +351,11 @@ LocalChunkStore::Next(absl::Time deadline, size_t limit) {
             }
             return wait;
           }
-          std::optional<absl::Status> settled =
+          std::optional<absl::Status> collected =
               state->CollectNext(fragments, limit, &changed);
-          if (settled.has_value()) {
-            if (!settled->ok()) {
-              return *settled;
+          if (collected.has_value()) {
+            if (!collected->ok()) {
+              return *collected;
             }
             return fragments;
           }

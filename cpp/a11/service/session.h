@@ -177,7 +177,7 @@ class Session : public std::enable_shared_from_this<Session> {
    * @param node_map The new node map.
    * @return OK, or an error status on failure.
    */
-  absl::Status SetNodeMap(std::shared_ptr<nodes::NodeMap> node_map);
+  absl::Status SetNodeMap(const std::shared_ptr<nodes::NodeMap>& node_map);
 
   /**
    * @brief Return the registry used to resolve incoming action messages.
@@ -197,7 +197,7 @@ class Session : public std::enable_shared_from_this<Session> {
    * @return OK, or an error status on failure.
    */
   absl::Status SetActionRegistry(
-      std::shared_ptr<actions::ActionRegistry> registry);
+      const std::shared_ptr<actions::ActionRegistry>& registry);
 
   /**
    * @brief Return the actions currently running in the session.
@@ -261,7 +261,7 @@ class Session : public std::enable_shared_from_this<Session> {
    * @param action The action to dispatch programmatically.
    * @return An awaitable that resolves once the action has been handled.
    */
-  a11::Task DispatchAction(std::shared_ptr<actions::Action> action);
+  a11::Task DispatchAction(const std::shared_ptr<actions::Action>& action);
 
   /**
    * @brief Route a wire message through the session as if it arrived on a

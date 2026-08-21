@@ -74,7 +74,7 @@ class VectorView {
 };
 
 size_t VectorIndex(py::ssize_t index, size_t size, bool allow_end = false) {
-  const py::ssize_t signed_size = static_cast<py::ssize_t>(size);
+  const auto signed_size = static_cast<py::ssize_t>(size);
   if (index < 0) {
     index += signed_size;
   }
@@ -185,12 +185,12 @@ std::uint64_t UnsignedValue(const py::handle& value, std::uint64_t maximum,
       ThrowStatus(absl::InvalidArgumentError(std::string(field) +
                                              " must be an integer"));
     }
-    const py::int_ integer = py::reinterpret_borrow<py::int_>(value);
+    const auto integer = py::reinterpret_borrow<py::int_>(value);
     if (py::cast<bool>(integer.attr("__lt__")(0))) {
       ThrowStatus(
           absl::OutOfRangeError(std::string(field) + " must not be negative"));
     }
-    const std::uint64_t result = integer.cast<std::uint64_t>();
+    const auto result = integer.cast<std::uint64_t>();
     if (result > maximum) {
       ThrowStatus(absl::OutOfRangeError(std::string(field) +
                                         " exceeds its supported range"));
@@ -234,7 +234,7 @@ std::optional<absl::Time> TimestampFromPython(const py::handle& value) {
       ThrowStatus(absl::InvalidArgumentError(
           "timestamp must be a datetime, timing.Time, or None"));
     }
-    const double seconds = value.attr("timestamp")().cast<double>();
+    const auto seconds = value.attr("timestamp")().cast<double>();
     if (!std::isfinite(seconds)) {
       ThrowStatus(absl::OutOfRangeError("timestamp must be finite"));
     }
@@ -401,8 +401,7 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
       .def(
           "insert",
           [](VectorView<T>& view, py::ssize_t index, T value) {
-            const py::ssize_t size =
-                static_cast<py::ssize_t>(view.values().size());
+            const auto size = static_cast<py::ssize_t>(view.values().size());
             if (index < 0) {
               index = std::max<py::ssize_t>(0, index + size);
             }
@@ -461,7 +460,7 @@ void BindVectorView(py::class_<VectorView<T>>& cls) {
             if (found == view.values().end()) {
               throw py::value_error("value is not in vector");
             }
-            const size_t index =
+            const auto index =
                 static_cast<size_t>(found - view.values().begin());
             view.Mutate([&] {
               view.values().erase(view.values().begin() +
@@ -670,7 +669,7 @@ void BindData(py::module_& module) {
           [](ByteMapView& value, const py::handle& updates) {
             data::ByteMap converted = ByteMapValue(updates);
             for (auto& [key, item] : converted) {
-              value.values().insert_or_assign(std::move(key), std::move(item));
+              value.values().insert_or_assign(key, std::move(item));
             }
           },
           "Merge entries from another mapping into this one.",

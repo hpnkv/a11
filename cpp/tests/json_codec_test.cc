@@ -15,14 +15,14 @@
 // rather than on how something was compiled, so proving the check is right here
 // does say something about the library there.
 
+#include "a11/json_codec.h"
+
 #include <string>
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-
-#include "a11/json_codec.h"
 
 namespace a11 {
 namespace {

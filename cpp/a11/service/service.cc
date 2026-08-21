@@ -85,11 +85,10 @@ absl::StatusOr<std::shared_ptr<Session>> Admit(
 
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<Session> session,
-      Session::Create(/*session_id=*/{}, state->options.on_stream_message,
-                      state->options.on_stream_done,
-                      state->options.session_headers,
-                      state->options.session_options, /*node_map=*/nullptr,
-                      registry));
+      Session::Create(
+          /*session_id=*/{}, state->options.on_stream_message,
+          state->options.on_stream_done, state->options.session_headers,
+          state->options.session_options, /*node_map=*/nullptr, registry));
 
   const std::string session_id = session->GetId();
   {
@@ -181,7 +180,7 @@ std::shared_ptr<actions::ActionRegistry> Service::GetActionRegistry() const {
 }
 
 absl::Status Service::SetActionRegistry(
-    std::shared_ptr<actions::ActionRegistry> action_registry) {
+    const std::shared_ptr<actions::ActionRegistry>& action_registry) {
   if (action_registry == nullptr) {
     return absl::InvalidArgumentError("The action registry must not be null");
   }
@@ -229,8 +228,7 @@ absl::StatusOr<std::string> Service::Describe(std::string_view name,
   const bool runnable = registry->GetHandler(name).ok();
   // The item route describes every port, including the ones a caller cannot
   // write: somebody asking about one action by name is inspecting it.
-  return actions::SchemaToJsonText(schema, runnable,
-                                     actions::PortView::kAll);
+  return actions::SchemaToJsonText(schema, runnable, actions::PortView::kAll);
 }
 
 net::DescribeActionsHandler Service::DescribeHandler() {
@@ -248,30 +246,29 @@ net::DescribeActionsHandler Service::DescribeHandler() {
 a11::Task Service::Serve(std::shared_ptr<net::WireStream> stream,
                          StreamMode mode) {
   std::shared_ptr<State> state = state_;
-  return a11::SubmitTask(
-      [state = std::move(state), stream = std::move(stream),
-       mode]() -> absl::Status {
-        ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Session> session,
-                              Admit(state, stream, mode));
-        const std::string session_id = session->GetId();
-        const absl::Status status = session->Done().Await().status();
-        state->Unregister(session_id);
-        if (!status.ok()) {
-          LOG(INFO) << "session " << session_id << " finished: " << status;
-        }
-        return status;
-      });
+  return a11::SubmitTask([state = std::move(state), stream = std::move(stream),
+                          mode]() -> absl::Status {
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Session> session,
+                          Admit(state, stream, mode));
+    const std::string session_id = session->GetId();
+    const absl::Status status = session->Done().Await().status();
+    state->Unregister(session_id);
+    if (!status.ok()) {
+      LOG(INFO) << "session " << session_id << " finished: " << status;
+    }
+    return status;
+  });
 }
 
 absl::StatusOr<std::shared_ptr<Session>> Service::StartStreamHandler(
-    std::shared_ptr<net::WireStream> stream, StreamMode mode) {
+    const std::shared_ptr<net::WireStream>& stream, StreamMode mode) {
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Session> session,
                         Admit(state_, stream, mode));
   // The service owns completion from here; the caller just wanted the handle.
   std::shared_ptr<State> state = state_;
   const std::string session_id = session->GetId();
-  a11::Task watcher = a11::SubmitTask(
-      [state, session, session_id]() -> absl::Status {
+  a11::Task watcher =
+      a11::SubmitTask([state, session, session_id]() -> absl::Status {
         const absl::Status status = session->Done().Await().status();
         state->Unregister(session_id);
         return status;
@@ -281,7 +278,7 @@ absl::StatusOr<std::shared_ptr<Session>> Service::StartStreamHandler(
 }
 
 absl::Status Service::AddStreamToSession(
-    std::string_view session_id, std::shared_ptr<net::WireStream> stream,
+    std::string_view session_id, const std::shared_ptr<net::WireStream>& stream,
     StreamMode mode) {
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Session> session,
                         GetSession(session_id));
@@ -356,9 +353,9 @@ a11::Task Service::Drain(absl::Duration timeout) {
     thread::MutexLock lock(&state->mu);
     while (!state->sessions.empty()) {
       if (absl::Now() >= deadline) {
-        return absl::DeadlineExceededError(absl::StrCat(
-            "The service still has ", state->sessions.size(),
-            " session(s) after draining"));
+        return absl::DeadlineExceededError(
+            absl::StrCat("The service still has ", state->sessions.size(),
+                         " session(s) after draining"));
       }
       state->idle.WaitWithDeadline(&state->mu, deadline);
     }
@@ -366,7 +363,7 @@ a11::Task Service::Drain(absl::Duration timeout) {
   });
 }
 
-absl::Status Service::Abort(absl::Status status) {
+absl::Status Service::Abort(const absl::Status& status) {
   std::vector<std::shared_ptr<Session>> live;
   {
     thread::MutexLock lock(&state_->mu);

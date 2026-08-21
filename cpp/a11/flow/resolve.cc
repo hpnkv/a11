@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +23,7 @@
 #include "a11/flow/plan.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
+#include "absl/strings/match.h"
 
 namespace a11::flow {
 namespace {
@@ -52,8 +54,8 @@ class TypeReader {
   /// Where a diagnostic goes. A `std::function` rather than a template because
   /// the two callers report through different objects and this is called once
   /// per declaration, not once per value.
-  using Reporter = std::function<void(std::string_view code, std::string message,
-                                      const Location& location)>;
+  using Reporter = std::function<void(
+      std::string_view code, std::string message, const Location& location)>;
 
   TypeReader(const DtoNames& dtos, Reporter report)
       : dtos_(dtos), report_(std::move(report)) {}
@@ -64,9 +66,10 @@ class TypeReader {
       CheckParameters(type, {0});
       return type.name;
     }
-    const std::string declared = vocabulary::Canonical(type.name);
+    std::string declared = vocabulary::Canonical(type.name);
     if (vocabulary::TypeNames().contains(declared)) {
-      const absl::Span<const int> allowed = vocabulary::TypeParameters(declared);
+      const absl::Span<const int> allowed =
+          vocabulary::TypeParameters(declared);
       CheckParameters(type, std::vector<int>(allowed.begin(), allowed.end()));
       return declared;
     }
@@ -77,20 +80,20 @@ class TypeReader {
       CheckParameters(type, {0});
       return type.name;
     }
-    if (type.name.find('/') != std::string::npos) {
+    if (absl::StrContains(type.name, '/')) {
       CheckParameters(type, {0});
       return type.name;
     }
     // A dotted name is the tag a serialisation registry knows a type by. An
     // undotted one is nothing the language knows, and is far more often a
     // misspelt built-in than a tag somebody meant.
-    if (type.name.find('.') != std::string::npos) {
+    if (absl::StrContains(type.name, '.')) {
       CheckParameters(type, {0});
       return type.name;
     }
     report_("flow.form.unknown-type",
-            absl::StrCat("Unknown type ", Quoted(type.name), " (known: ",
-                         absl::StrJoin(Known(), ", "),
+            absl::StrCat("Unknown type ", Quoted(type.name),
+                         " (known: ", absl::StrJoin(Known(), ", "),
                          ", a shape this file declares, a serialisation tag "
                          "like 'a11.sdk.AudioBuffer', or a quoted mimetype)."),
             type.location);
@@ -98,8 +101,10 @@ class TypeReader {
   }
 
   /// The shape `type` names, or empty where it names something else.
-  std::string DtoOf(const syntax::TypeExpression& type) const {
-    if (type.quoted) return "";
+  [[nodiscard]] std::string DtoOf(const syntax::TypeExpression& type) const {
+    if (type.quoted) {
+      return "";
+    }
     if (vocabulary::TypeNames().contains(vocabulary::Canonical(type.name))) {
       return "";
     }
@@ -107,7 +112,7 @@ class TypeReader {
   }
 
  private:
-  std::vector<std::string> Known() const {
+  [[nodiscard]] std::vector<std::string> Known() const {
     std::vector<std::string> known;
     for (const std::string_view name : vocabulary::TypeNames()) {
       known.emplace_back(name);
@@ -126,13 +131,16 @@ class TypeReader {
       return;
     }
     std::vector<std::string> counts;
-    for (const int count : allowed) counts.push_back(absl::StrCat(count));
-    report_("flow.form.unknown-type",
-            absl::StrCat(Quoted(type.name), " takes ",
-                         absl::StrJoin(counts, " or "),
-                         " type parameter(s), but ", type.ToString(), " gives ",
-                         given, "."),
-            type.location);
+    counts.reserve(allowed.size());
+    for (const int count : allowed) {
+      counts.push_back(absl::StrCat(count));
+    }
+    report_(
+        "flow.form.unknown-type",
+        absl::StrCat(Quoted(type.name), " takes ",
+                     absl::StrJoin(counts, " or "), " type parameter(s), but ",
+                     type.ToString(), " gives ", given, "."),
+        type.location);
   }
 
   const DtoNames& dtos_;
@@ -165,7 +173,9 @@ bool IsScalarType(std::string_view type) {
 /// weaker copy of it.
 bool ConstantFits(const syntax::Constant& value, std::string_view type) {
   using Kind = syntax::Constant::Kind;
-  if (type == "any" || type == "json" || value.kind == Kind::kNull) return true;
+  if (type == "any" || type == "json" || value.kind == Kind::kNull) {
+    return true;
+  }
   switch (value.kind) {
     case Kind::kBool:
       return type == "bool" || type == "boolean";
@@ -224,7 +234,9 @@ class DtoResolver {
     absl::flat_hash_set<std::string> seen;
     for (const syntax::DtoDeclarationPtr& declaration : declared_) {
       const std::string& name = declaration->name.text;
-      if (name.empty()) continue;
+      if (name.empty()) {
+        continue;
+      }
       if (vocabulary::TypeNames().contains(vocabulary::Canonical(name))) {
         Report("flow.form.struct-shadows-builtin",
                absl::StrCat("Shape ", Quoted(name),
@@ -257,7 +269,9 @@ class DtoResolver {
 
     absl::flat_hash_set<std::string> seen;
     for (const syntax::FieldDeclarationPtr& field : declaration.fields) {
-      if (field->name.text.empty()) continue;
+      if (field->name.text.empty()) {
+        continue;
+      }
       if (!seen.insert(field->name.text).second) {
         Report("flow.form.duplicate-field",
                absl::StrCat("Field ", Quoted(field->name.text), " of ",
@@ -302,8 +316,7 @@ class DtoResolver {
   /// Every one of these is a mistake that would otherwise be found only when a
   /// value arrived and failed to validate for a reason the author could not act
   /// on -- `unique` on a string, a pattern on a number, a range on a bool.
-  void CheckField(const FieldPlan& entry,
-                  const syntax::FieldDeclaration& field,
+  void CheckField(const FieldPlan& entry, const syntax::FieldDeclaration& field,
                   std::string_view owner) {
     const std::string_view type = entry.type;
     const bool shape = !entry.dto_name.empty();
@@ -358,7 +371,9 @@ class DtoResolver {
     }
     if (entry.has_enumeration && !shape) {
       for (const syntax::Constant& allowed : entry.enumeration) {
-        if (ConstantFits(allowed, type)) continue;
+        if (ConstantFits(allowed, type)) {
+          continue;
+        }
         Report("flow.form.field-type-mismatch",
                absl::StrCat("'one of' on ", Quoted(entry.name), " allows a ",
                             syntax::ConstantKindName(allowed.kind),
@@ -380,18 +395,24 @@ class DtoResolver {
     };
     for (DtoPlan& plan : plans) {
       for (const FieldPlan& field : plan.fields) {
-        if (holds_bytes(field)) plan.binary = true;
+        if (holds_bytes(field)) {
+          plan.binary = true;
+        }
       }
     }
     bool changed = true;
     while (changed) {
       changed = false;
       for (DtoPlan& plan : plans) {
-        if (plan.binary) continue;
+        if (plan.binary) {
+          continue;
+        }
         for (const FieldPlan& field : plan.fields) {
           for (const std::string& named :
                {field.dto_name, field.element_dto_name}) {
-            if (named.empty()) continue;
+            if (named.empty()) {
+              continue;
+            }
             for (const DtoPlan& other : plans) {
               if (other.name == named && other.binary) {
                 plan.binary = true;
@@ -451,7 +472,9 @@ std::string ConstantText(const syntax::Constant& value) {
 }
 
 std::string Unparse(const Node* node) {
-  if (node == nullptr) return "";
+  if (node == nullptr) {
+    return "";
+  }
   switch (node->kind) {
     case NodeKind::kLiteral: {
       const syntax::Constant& value = syntax::As<syntax::Literal>(node)->value;
@@ -486,6 +509,7 @@ std::string Unparse(const Node* node) {
     case NodeKind::kBuiltin: {
       const auto* builtin = syntax::As<syntax::Builtin>(node);
       std::vector<std::string> args;
+      args.reserve(builtin->args.size());
       for (const syntax::NodePtr& argument : builtin->args) {
         args.push_back(Unparse(argument.get()));
       }
@@ -513,8 +537,8 @@ std::string Unparse(const Node* node) {
           "status ", Unparse(syntax::As<syntax::Outcome>(node)->subject.get()));
     case NodeKind::kPipelineValue:
       return absl::StrCat(
-          "(",
-          Unparse(syntax::As<syntax::PipelineValue>(node)->pipeline.get()), ")");
+          "(", Unparse(syntax::As<syntax::PipelineValue>(node)->pipeline.get()),
+          ")");
     case NodeKind::kPipeline: {
       const auto* pipeline = syntax::As<syntax::Pipeline>(node);
       std::string label = Unparse(pipeline->source.get());
@@ -537,7 +561,9 @@ std::string StageLabel(const syntax::Stage& stage) {
   std::string tail;
   if (stage.parallel > 1) {
     absl::StrAppend(&tail, " parallel ", stage.parallel);
-    if (!stage.ordered) absl::StrAppend(&tail, " unordered");
+    if (!stage.ordered) {
+      absl::StrAppend(&tail, " unordered");
+    }
   }
   if (stage.failures != nullptr) {
     absl::StrAppend(&tail, " into ", Unparse(stage.failures.get()));
@@ -548,7 +574,9 @@ std::string StageLabel(const syntax::Stage& stage) {
   };
   switch (stage.takes) {
     case vocabulary::StageArgument::kOptionalExpression:
-      if (stage.argument == nullptr) return written(stage.name);
+      if (stage.argument == nullptr) {
+        return written(stage.name);
+      }
       return written(
           absl::StrCat(stage.name, " ", Unparse(stage.argument.get())));
     case vocabulary::StageArgument::kSortKey: {
@@ -556,17 +584,18 @@ std::string StageLabel(const syntax::Stage& stage) {
       if (stage.argument != nullptr) {
         absl::StrAppend(&body, " by ", Unparse(stage.argument.get()));
       }
-      if (stage.descending) absl::StrAppend(&body, " desc");
+      if (stage.descending) {
+        absl::StrAppend(&body, " desc");
+      }
       return written(body);
     }
     case vocabulary::StageArgument::kFold:
-      return written(absl::StrCat(stage.name, " ",
-                                  ConstantText(stage.start), " as ",
-                                  stage.carried.text, ", ",
+      return written(absl::StrCat(stage.name, " ", ConstantText(stage.start),
+                                  " as ", stage.carried.text, ", ",
                                   Unparse(stage.argument.get())));
     case vocabulary::StageArgument::kDuration:
-      return written(absl::StrCat(stage.name, " ",
-                                  absl::FormatDuration(stage.duration)));
+      return written(
+          absl::StrCat(stage.name, " ", absl::FormatDuration(stage.duration)));
     default:
       break;
   }
@@ -580,14 +609,15 @@ std::string StageLabel(const syntax::Stage& stage) {
 std::string StageBodyLabel(const syntax::Stage& stage) {
   switch (stage.takes) {
     case vocabulary::StageArgument::kNumber:
-      return absl::StrCat(stage.name, " ",
-                          stage.is_integer
-                              ? absl::StrCat(
-                                    static_cast<long long>(stage.number))
-                              : absl::StrCat(stage.number));
+      return absl::StrCat(
+          stage.name, " ",
+          stage.is_integer ? absl::StrCat(static_cast<long long>(stage.number))
+                           : absl::StrCat(stage.number));
     case vocabulary::StageArgument::kString:
     case vocabulary::StageArgument::kOptionalString:
-      if (stage.text.empty()) return stage.name;
+      if (stage.text.empty()) {
+        return stage.name;
+      }
       return absl::StrCat(stage.name, " \"", stage.text, "\"");
     case vocabulary::StageArgument::kExpression:
     case vocabulary::StageArgument::kStream:
@@ -597,7 +627,9 @@ std::string StageBodyLabel(const syntax::Stage& stage) {
       if (stage.log.has_format) {
         return absl::StrCat(stage.name, " \"", stage.log.format, "\"");
       }
-      if (stage.log.arguments.empty()) return stage.name;
+      if (stage.log.arguments.empty()) {
+        return stage.name;
+      }
       return absl::StrCat(stage.name, " ",
                           Unparse(stage.log.arguments.front().get()));
     }
@@ -690,15 +722,21 @@ struct Scope {
 /// The two passes over one flow declaration.
 class FlowResolver {
  public:
-  FlowResolver(const LineIndex& lines, const syntax::FlowDeclaration& declaration,
-               const Program& known, ResolvedFlow& resolved,
-               std::vector<Diagnostic>& diagnostics,
+  FlowResolver(const LineIndex& lines,
+               const syntax::FlowDeclaration& declaration, const Program& known,
+               ResolvedFlow& resolved, std::vector<Diagnostic>& diagnostics,
                graph::GraphBuilder* absl_nullable builder = nullptr)
-      : lines_(lines), declaration_(declaration), known_(known),
-        resolved_(resolved), diagnostics_(diagnostics), builder_(builder) {
+      : lines_(lines),
+        declaration_(declaration),
+        known_(known),
+        resolved_(resolved),
+        diagnostics_(diagnostics),
+        builder_(builder) {
     // The shapes are resolved before any flow is, so this is complete by the
     // time a port names one.
-    for (const DtoPlan& dto : known.dtos) dtos_.insert(dto.name);
+    for (const DtoPlan& dto : known.dtos) {
+      dtos_.insert(dto.name);
+    }
   }
 
   /// The flow's ports and headers, without resolving its body.
@@ -730,7 +768,8 @@ class FlowResolver {
         entry.name = std::string(name);
         entry.direction = syntax::PortDirection::kInput;
         entry.declared = std::string(type);
-        entry.type = PortType(syntax::TypeExpression{.name = std::string(type)});
+        entry.type =
+            PortType(syntax::TypeExpression{.name = std::string(type)});
         entry.unary = unary;
         entry.required = false;
         entry.description = std::string(description);
@@ -785,8 +824,7 @@ class FlowResolver {
     for (const PortPlan& port : resolved_.plan.ports) {
       const bool input = port.direction == syntax::PortDirection::kInput;
       Symbol symbol;
-      symbol.kind =
-          input ? SymbolKind::kInputPort : SymbolKind::kOutputPort;
+      symbol.kind = input ? SymbolKind::kInputPort : SymbolKind::kOutputPort;
       symbol.name = port.name;
       symbol.location = port.location;
       // An `in` port is read and an `out` port is written. Reading an `out`
@@ -846,7 +884,9 @@ class FlowResolver {
   /// One stage applied to `source`, as a fresh ref: a mention, not an identity.
   graph::RefId Derive(graph::RefId source, graph::Stage stage,
                       std::string label) {
-    if (builder_ == nullptr || source == graph::kNone) return graph::kNone;
+    if (builder_ == nullptr || source == graph::kNone) {
+      return graph::kNone;
+    }
     graph::Ref ref;
     ref.kind = graph::RefKind::kDerived;
     ref.label = std::move(label);
@@ -872,9 +912,13 @@ class FlowResolver {
   /// mention, exactly as `a11.flow.plan` makes them, because the counts follow
   /// from it.
   graph::RefId StatusOfStep(graph::StepId step) {
-    if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
+    if (builder_ == nullptr || step == graph::kNone) {
+      return graph::kNone;
+    }
     graph::Step& one = builder_->step(step);
-    if (one.status != graph::kNone) return one.status;
+    if (one.status != graph::kNone) {
+      return one.status;
+    }
     graph::Ref ref;
     ref.kind = graph::RefKind::kStatus;
     ref.label = absl::StrCat("status ", one.label);
@@ -890,7 +934,9 @@ class FlowResolver {
   /// Memoised on the step the way a call's status is: `n = wait first of a, b`
   /// and `wait first of a, b -> n` are one race however many read it.
   graph::RefId WinnerOfStep(graph::StepId step) {
-    if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
+    if (builder_ == nullptr || step == graph::kNone) {
+      return graph::kNone;
+    }
     if (builder_->step(step).winner != graph::kNone) {
       return builder_->step(step).winner;
     }
@@ -911,7 +957,9 @@ class FlowResolver {
   /// it. A status is one value however many refs name it, so this costs nothing
   /// but keeps the two implementations countable against each other.
   graph::RefId FreshStatusOfStep(graph::StepId step) {
-    if (builder_ == nullptr || step == graph::kNone) return graph::kNone;
+    if (builder_ == nullptr || step == graph::kNone) {
+      return graph::kNone;
+    }
     graph::Ref ref;
     ref.kind = graph::RefKind::kStatus;
     ref.label = absl::StrCat("status ", builder_->step(step).label);
@@ -921,7 +969,9 @@ class FlowResolver {
   }
 
   graph::RefId StatusOfRef(graph::RefId subject, std::string_view label) {
-    if (builder_ == nullptr || subject == graph::kNone) return graph::kNone;
+    if (builder_ == nullptr || subject == graph::kNone) {
+      return graph::kNone;
+    }
     graph::Ref ref;
     ref.kind = graph::RefKind::kStatus;
     ref.label = absl::StrCat("status ", label);
@@ -1008,10 +1058,12 @@ class FlowResolver {
     scope.names[resolved_.symbols.back().name] = resolved_.symbols.size() - 1;
   }
 
-  size_t Lookup(const Scope& scope, std::string_view name) const {
+  [[nodiscard]] size_t Lookup(const Scope& scope, std::string_view name) const {
     for (const Scope* at = &scope; at != nullptr; at = at->parent) {
       const auto found = at->names.find(name);
-      if (found != at->names.end()) return found->second;
+      if (found != at->names.end()) {
+        return found->second;
+      }
     }
     return kNoSymbol;
   }
@@ -1024,22 +1076,29 @@ class FlowResolver {
   /// Whether @p name is declared outside the innermost loop body enclosing
   /// @p scope. False when there is no loop, and false when the name is the
   /// loop's own or was declared beside the `advance`.
-  bool DeclaredOutsideTheLoop(const Scope& scope, std::string_view name) const {
+  [[nodiscard]] bool DeclaredOutsideTheLoop(const Scope& scope,
+                                            std::string_view name) const {
     bool crossed = false;
     for (const Scope* at = &scope; at != nullptr; at = at->parent) {
-      if (at->names.contains(name)) return crossed;
+      if (at->names.contains(name)) {
+        return crossed;
+      }
       // Read *after* the lookup: a name declared in the loop body is found in
       // the scope that is the loop body, and that is not a crossing.
-      if (at->loop_body) crossed = true;
+      if (at->loop_body) {
+        crossed = true;
+      }
     }
     return false;
   }
 
   /// Every name in scope, sorted -- what a message lists as what was available.
-  std::string Known(const Scope& scope) const {
+  [[nodiscard]] std::string Known(const Scope& scope) const {
     std::vector<std::string> names;
     for (const Scope* at = &scope; at != nullptr; at = at->parent) {
-      for (const auto& [name, index] : at->names) names.push_back(name);
+      for (const auto& [name, index] : at->names) {
+        names.push_back(name);
+      }
     }
     std::sort(names.begin(), names.end());
     names.erase(std::unique(names.begin(), names.end()), names.end());
@@ -1048,8 +1107,7 @@ class FlowResolver {
 
   std::string Label(std::string_view base) {
     const int count = ++labels_[std::string(base)];
-    return count == 1 ? std::string(base)
-                      : absl::StrCat(base, "#", count);
+    return count == 1 ? std::string(base) : absl::StrCat(base, "#", count);
   }
 
   void Report(std::string_view code, std::string message,
@@ -1074,11 +1132,12 @@ class FlowResolver {
   /// field have to agree about what a name means, and they do so by asking the
   /// same object.
   std::string PortType(const syntax::TypeExpression& type) {
-    return TypeReader(dtos_, [this](std::string_view code, std::string message,
-                                    const Location& location) {
-             Report(code, std::move(message), location, Severity::kError,
-                    Family::kForm);
-           })
+    return TypeReader(dtos_,
+                      [this](std::string_view code, std::string message,
+                             const Location& location) {
+                        Report(code, std::move(message), location,
+                               Severity::kError, Family::kForm);
+                      })
         .Read(type);
   }
 
@@ -1094,8 +1153,12 @@ class FlowResolver {
       const std::vector<syntax::NodePtr>& statements, Scope& scope,
       graph::BodyId body = graph::kNone, bool guarded = false) {
     const graph::BodyId outer = body_;
-    if (body != graph::kNone) body_ = body;
-    if (guarded) ++guarded_;
+    if (body != graph::kNone) {
+      body_ = body;
+    }
+    if (guarded) {
+      ++guarded_;
+    }
     std::vector<StepPlan> steps;
     for (const syntax::NodePtr& statement : statements) {
       // A statement may make a step *while resolving its own source*: a race
@@ -1107,7 +1170,9 @@ class FlowResolver {
       ResolveStatement(statement.get(), scope, steps);
       pending_steps_ = outer_pending;
     }
-    if (guarded) --guarded_;
+    if (guarded) {
+      --guarded_;
+    }
     body_ = outer;
     return steps;
   }
@@ -1128,7 +1193,9 @@ class FlowResolver {
   void CheckReachedByChoice(std::string_view code, std::string_view what,
                             const std::vector<syntax::Word>& after,
                             const Location& location) {
-    if (guarded_ > 0 || !after.empty()) return;
+    if (guarded_ > 0 || !after.empty()) {
+      return;
+    }
     Report(code,
            absl::StrCat("This '", what,
                         "' is at the top of a body with no 'after', so it runs "
@@ -1140,7 +1207,9 @@ class FlowResolver {
   /// A stream the runtime binds per pass: a loop's value, its index, a carry.
   graph::RefId BoundRef(graph::BodyId owner, graph::StepId step,
                         std::string role) {
-    if (builder_ == nullptr) return graph::kNone;
+    if (builder_ == nullptr) {
+      return graph::kNone;
+    }
     graph::Ref ref;
     ref.kind = graph::RefKind::kBound;
     ref.label = role;
@@ -1232,9 +1301,9 @@ class FlowResolver {
             outcomes.push_back(ResolveOutcome(subject.get(), scope));
             labels.push_back(SubjectLabel(outcomes.back().label));
           }
-          const std::string written = absl::StrCat(
-              "wait ", wait->race ? "first" : "all", " of ",
-              absl::StrJoin(labels, ", "));
+          const std::string written =
+              absl::StrCat("wait ", wait->race ? "first" : "all", " of ",
+                           absl::StrJoin(labels, ", "));
           StepPlan step;
           step.kind = "wait";
           step.label = written.substr(std::strlen("wait "));
@@ -1250,19 +1319,22 @@ class FlowResolver {
             bool tolerant = true;
             for (const Ref& outcome : outcomes) {
               one.subjects.push_back(outcome.node);
-              if (!outcome.tolerant) tolerant = false;
+              if (!outcome.tolerant) {
+                tolerant = false;
+              }
             }
             // The first outcome is also the step's own, so everything that
             // reads a wait's outcome keeps working: with `first`, that is
             // whichever won, and the runtime fills it in.
             one.outcome = outcomes.front().node;
             one.tolerant = tolerant;
-            if (wait->race) builder_->step(made).winner = WinnerOfStep(made);
+            if (wait->race) {
+              builder_->step(made).winner = WinnerOfStep(made);
+            }
           }
           step.after = ResolveAfter(wait->after, scope, made);
           const graph::RefId winner =
-              made == graph::kNone ? graph::kNone
-                                   : builder_->step(made).winner;
+              made == graph::kNone ? graph::kNone : builder_->step(made).winner;
           steps.push_back(std::move(step));
           // `-> n` writes the number of whichever won, which only a race has.
           for (const syntax::NodePtr& target : wait->targets) {
@@ -1282,8 +1354,8 @@ class FlowResolver {
             pipe.destination = destination.label;
             pipe.location = wait->location;
             if (builder_ != nullptr) {
-              const graph::StepId piped = NewStep(graph::StepKind::kPipe,
-                                                  pipe.label, wait->location);
+              const graph::StepId piped =
+                  NewStep(graph::StepKind::kPipe, pipe.label, wait->location);
               graph::Step& one = builder_->step(piped);
               one.source = winner;
               one.destination = destination.node;
@@ -1325,8 +1397,7 @@ class FlowResolver {
         if (builder_ != nullptr) {
           made = NewStep(graph::StepKind::kDrain,
                          absl::StrCat("drain ", target.label), drain->location);
-          builder_->step(made).outcome =
-              StatusOfRef(target.node, target.label);
+          builder_->step(made).outcome = StatusOfRef(target.node, target.label);
         }
         step.after = ResolveAfter(drain->after, scope, made);
         steps.push_back(std::move(step));
@@ -1345,9 +1416,9 @@ class FlowResolver {
           made = NewStep(graph::StepKind::kCancel,
                          absl::StrCat("cancel ", cancel->name.text),
                          cancel->location);
-          builder_->step(made).target =
-              called == kNoSymbol ? graph::kNone
-                                  : resolved_.symbols[called].step;
+          builder_->step(made).target = called == kNoSymbol
+                                            ? graph::kNone
+                                            : resolved_.symbols[called].step;
         }
         step.after = ResolveAfter(cancel->after, scope, made);
         CheckReachedByChoice("flow.form.unconditional-cancel", "cancel",
@@ -1418,13 +1489,12 @@ class FlowResolver {
         const auto* log = syntax::As<syntax::Log>(statement);
         const bool formatted = log->tail.has_format;
         const graph::LogTail tail =
-            ResolveLogTail(log->tail, scope, /*allow_it=*/false,
-                           log->location);
+            ResolveLogTail(log->tail, scope, /*allow_it=*/false, log->location);
         StepPlan step;
         step.kind = formatted ? "logf" : "log";
-        const syntax::Node* subject =
-            log->tail.arguments.empty() ? nullptr
-                                        : log->tail.arguments.front().get();
+        const syntax::Node* subject = log->tail.arguments.empty()
+                                          ? nullptr
+                                          : log->tail.arguments.front().get();
         step.label = formatted ? tail.format : Unparse(subject);
         step.location = log->location;
         graph::StepId made = graph::kNone;
@@ -1436,10 +1506,9 @@ class FlowResolver {
         // A log says what just happened, so one at the top of a body with
         // nothing to wait for describes something that has not happened yet.
         // Same rule as `fail` and `cancel`, and for the same reason.
-        CheckReachedByChoice(
-            formatted ? "flow.form.unconditional-logf"
-                      : "flow.form.unconditional-log",
-            step.kind, log->after, log->location);
+        CheckReachedByChoice(formatted ? "flow.form.unconditional-logf"
+                                       : "flow.form.unconditional-log",
+                             step.kind, log->after, log->location);
         steps.push_back(std::move(step));
         return;
       }
@@ -1457,8 +1526,8 @@ class FlowResolver {
         graph::BodyId inner_body = graph::kNone;
         if (builder_ != nullptr) {
           made = NewStep(graph::StepKind::kForEach, step.label, loop->location);
-          inner_body = builder_->AddBody(absl::StrCat(step.label, ".body"),
-                                         body_, made);
+          inner_body =
+              builder_->AddBody(absl::StrCat(step.label, ".body"), body_, made);
           graph::Step& one = builder_->step(made);
           one.source = source.node;
           one.parallel = loop->parallel;
@@ -1486,13 +1555,12 @@ class FlowResolver {
           variable.kind = SymbolKind::kLoopVariable;
           variable.name = loop->variables[at].text;
           variable.location = loop->variables[at].location;
-          variable.ref =
-              loop->variables.size() == 1
-                  ? item
-                  : Derive(item,
-                           AtStage(syntax::Constant::Integer(
-                               static_cast<long long>(at))),
-                           absl::StrCat(loop->variables[at].text));
+          variable.ref = loop->variables.size() == 1
+                             ? item
+                             : Derive(item,
+                                      AtStage(syntax::Constant::Integer(
+                                          static_cast<long long>(at))),
+                                      absl::StrCat(loop->variables[at].text));
           Define(inner, variable);
         }
         body_ = outer_body;
@@ -1518,7 +1586,9 @@ class FlowResolver {
       }
       case NodeKind::kRepeat: {
         const auto* repeat = syntax::As<syntax::Repeat>(statement);
-        if (repeat->start != nullptr) Constant(repeat->start.get());
+        if (repeat->start != nullptr) {
+          Constant(repeat->start.get());
+        }
         StepPlan step;
         step.kind = "repeat";
         step.label = Label("repeat");
@@ -1526,9 +1596,10 @@ class FlowResolver {
         graph::StepId made = graph::kNone;
         graph::BodyId inner_body = graph::kNone;
         if (builder_ != nullptr) {
-          made = NewStep(graph::StepKind::kRepeat, step.label, repeat->location);
-          inner_body = builder_->AddBody(absl::StrCat(step.label, ".body"),
-                                         body_, made);
+          made =
+              NewStep(graph::StepKind::kRepeat, step.label, repeat->location);
+          inner_body =
+              builder_->AddBody(absl::StrCat(step.label, ".body"), body_, made);
           graph::Step& one = builder_->step(made);
           one.bodies.push_back(inner_body);
           one.max_iterations = repeat->max_iterations;
@@ -1617,15 +1688,14 @@ class FlowResolver {
         }
         if (!state.has_carry_name || state.carries != carry->name.text) {
           Report("flow.barrier.wrong-carry",
-                 absl::StrCat("This repeat carries ",
-                              state.has_carry_name ? Quoted(state.carries)
-                                                   : "'nothing'",
-                              ", not ", Quoted(carry->name.text), "."),
+                 absl::StrCat(
+                     "This repeat carries ",
+                     state.has_carry_name ? Quoted(state.carries) : "'nothing'",
+                     ", not ", Quoted(carry->name.text), "."),
                  carry->location, Severity::kError, Family::kBarrier);
         } else if (state.carried) {
           Report("flow.barrier.duplicate-carry",
-                 absl::StrCat(Quoted(carry->name.text),
-                              " is already carried."),
+                 absl::StrCat(Quoted(carry->name.text), " is already carried."),
                  carry->location, Severity::kError, Family::kBarrier);
         }
         const graph::StepId owner = state.step;
@@ -1637,9 +1707,8 @@ class FlowResolver {
         step.source = source.label;
         step.location = carry->location;
         if (builder_ != nullptr) {
-          const graph::StepId made =
-              NewStep(graph::StepKind::kCapture, "capture carry",
-                      carry->location);
+          const graph::StepId made = NewStep(graph::StepKind::kCapture,
+                                             "capture carry", carry->location);
           builder_->step(made).source = source.node;
           builder_->step(made).slot = "carry";
           if (owner != graph::kNone) {
@@ -1690,8 +1759,9 @@ class FlowResolver {
           // are gone by then.
           const std::vector<graph::RefId> read = builder_->expr(condition).refs;
           for (const graph::RefId ref : read) {
-            const graph::StepId made = NewStep(
-                graph::StepKind::kCapture, "capture condition", until->location);
+            const graph::StepId made =
+                NewStep(graph::StepKind::kCapture, "capture condition",
+                        until->location);
             builder_->step(made).source = ref;
             builder_->step(made).slot = absl::StrCat("condition:", ref);
           }
@@ -1711,10 +1781,10 @@ class FlowResolver {
         graph::BodyId else_body = graph::kNone;
         if (builder_ != nullptr) {
           made = NewStep(graph::StepKind::kIf, step.label, branch->location);
-          then_body = builder_->AddBody(absl::StrCat(step.label, ".then"), body_,
-                                        made);
-          else_body = builder_->AddBody(absl::StrCat(step.label, ".else"), body_,
-                                        made);
+          then_body =
+              builder_->AddBody(absl::StrCat(step.label, ".then"), body_, made);
+          else_body =
+              builder_->AddBody(absl::StrCat(step.label, ".else"), body_, made);
           graph::Step& one = builder_->step(made);
           one.condition = condition;
           one.bodies.push_back(then_body);
@@ -1737,8 +1807,7 @@ class FlowResolver {
       default:
         Report("flow.syntax.unexpected",
                absl::StrCat("Cannot run a ",
-                            syntax::NodeKindName(statement->kind),
-                            " here."),
+                            syntax::NodeKindName(statement->kind), " here."),
                statement->location, Severity::kError, Family::kSyntax);
         return;
     }
@@ -1784,7 +1853,9 @@ class FlowResolver {
     if (call == nullptr || vocabulary::Canonical(call->name) != "match") {
       return "";
     }
-    if (call->args.empty()) return "";
+    if (call->args.empty()) {
+      return "";
+    }
     const auto* literal = syntax::As<syntax::Literal>(call->args.front().get());
     if (literal == nullptr ||
         literal->value.kind != syntax::Constant::Kind::kString) {
@@ -1799,11 +1870,12 @@ class FlowResolver {
     for (const syntax::Word& name : let->names) {
       // Its own names as well as the scope's: `let age, age = u` defines one
       // and shadows it with the other, which nobody writes on purpose.
-      if (Lookup(scope, name.text) != kNoSymbol || !taken.insert(name.text).second) {
-        Report("flow.name.taken",
-               absl::StrCat(Quoted(name.text),
-                            " is already taken in this scope."),
-               let->location);
+      if (Lookup(scope, name.text) != kNoSymbol ||
+          !taken.insert(name.text).second) {
+        Report(
+            "flow.name.taken",
+            absl::StrCat(Quoted(name.text), " is already taken in this scope."),
+            let->location);
       }
     }
     Ref source = ResolvePipeline(*let->pipeline, scope);
@@ -1813,8 +1885,7 @@ class FlowResolver {
     one.count = 1;
 
     const std::string written = absl::StrJoin(
-        let->names, ", ",
-        [](std::string* out, const syntax::Word& name) {
+        let->names, ", ", [](std::string* out, const syntax::Word& name) {
           absl::StrAppend(out, name.text);
         });
 
@@ -1829,9 +1900,8 @@ class FlowResolver {
     const std::string pattern = PatternOf(*let->pipeline);
 
     // The one value, whatever it is taken apart into.
-    const graph::RefId value_ref =
-        Derive(source.node, std::move(one),
-               absl::StrCat(source.label, " | first 1"));
+    const graph::RefId value_ref = Derive(
+        source.node, std::move(one), absl::StrCat(source.label, " | first 1"));
 
     for (size_t at = 0; at < let->names.size(); ++at) {
       const syntax::Word& name = let->names[at];
@@ -1858,9 +1928,9 @@ class FlowResolver {
         part.text = name.text;
         part.index = static_cast<long long>(at);
         part.named_or_indexed = true;
-        value.ref = Derive(value_ref, std::move(part),
-                           absl::StrCat(source.label, " | first 1 | ",
-                                        name.text));
+        value.ref =
+            Derive(value_ref, std::move(part),
+                   absl::StrCat(source.label, " | first 1 | ", name.text));
         // A part has no next one of its own: the stream's next value is another
         // whole tuple, not another `age`.
         value.value_part = true;
@@ -1919,7 +1989,8 @@ class FlowResolver {
                  " was bound outside this loop, and 'advance' moves by a fixed "
                  "step worked out while the file is compiled -- so every pass "
                  "would bind the same value. Walk the stream with "
-                 "'for x in ", advance->name.text,
+                 "'for x in ",
+                 advance->name.text,
                  "' instead, and end it early with 'until' if it should stop."),
              advance->location, Severity::kError, Family::kForm);
       return;
@@ -1960,17 +2031,16 @@ class FlowResolver {
       drop.name = "drop";
       drop.takes = vocabulary::StageArgument::kNumber;
       drop.count = offset;
-      const graph::RefId dropped =
-          Derive(from, std::move(drop),
-                 absl::StrCat(builder_->flow().refs[from].label, " | drop ",
-                              offset));
+      const graph::RefId dropped = Derive(
+          from, std::move(drop),
+          absl::StrCat(builder_->flow().refs[from].label, " | drop ", offset));
       graph::Stage first;
       first.name = "first";
       first.takes = vocabulary::StageArgument::kNumber;
       first.count = 1;
-      value.ref = Derive(dropped, std::move(first),
-                         absl::StrCat(builder_->flow().refs[dropped].label,
-                                      " | first 1"));
+      value.ref = Derive(
+          dropped, std::move(first),
+          absl::StrCat(builder_->flow().refs[dropped].label, " | first 1"));
     }
     Define(scope, value);
   }
@@ -2003,12 +2073,13 @@ class FlowResolver {
     // of them -- so refuse it rather than quietly naming the first.
     if (const auto* piped = syntax::As<syntax::Pipe>(value);
         piped != nullptr && piped->targets.size() > 1) {
-      Report("flow.form.bind-many-targets",
-             absl::StrCat("This pipe writes ", piped->targets.size(),
-                          " destinations, which is that many steps, so one name "
-                          "cannot stand for it. Write one pipe per destination, "
-                          "or leave it unnamed."),
-             bind->location, Severity::kError, Family::kForm);
+      Report(
+          "flow.form.bind-many-targets",
+          absl::StrCat("This pipe writes ", piped->targets.size(),
+                       " destinations, which is that many steps, so one name "
+                       "cannot stand for it. Write one pipe per destination, "
+                       "or leave it unnamed."),
+          bind->location, Severity::kError, Family::kForm);
     }
     ++binding_;
     ResolveStatement(value, scope, steps);
@@ -2041,7 +2112,9 @@ class FlowResolver {
       builder_->step(graph_before).label = bind->name.text;
     }
     Define(scope, barrier);
-    if (steps.size() > before) steps[before].label = bind->name.text;
+    if (steps.size() > before) {
+      steps[before].label = bind->name.text;
+    }
   }
 
   /// `[try] { ... }` -- a body run as one step, with an outcome of its own.
@@ -2098,7 +2171,9 @@ class FlowResolver {
     map.location = nodes->name.location;
     map.readable = false;
     Define(scope, map);
-    if (nodes->body.empty()) return;
+    if (nodes->body.empty()) {
+      return;
+    }
     const std::string outer = node_map_;
     node_map_ = nodes->name.text;
     for (const syntax::NodePtr& statement : nodes->body) {
@@ -2161,16 +2236,16 @@ class FlowResolver {
   /// `wait` step of its own here -- the same step a written-out `x = wait port`
   /// would have made, so the two spellings cannot drift apart.
   std::vector<std::string> ResolveAfter(const std::vector<syntax::Word>& after,
-                                       Scope& scope,
-                                       graph::StepId step = graph::kNone) {
+                                        Scope& scope,
+                                        graph::StepId step = graph::kNone) {
     std::vector<std::string> held;
     std::vector<graph::StepId> waits;
     for (const syntax::Word& word : after) {
       Symbol* found = Find(scope, word.text);
       if (found == nullptr) {
         Report("flow.name.unknown",
-               absl::StrCat("Unknown name ", Quoted(word.text), " (known: ",
-                            Known(scope), ")."),
+               absl::StrCat("Unknown name ", Quoted(word.text),
+                            " (known: ", Known(scope), ")."),
                word.location);
         continue;
       }
@@ -2192,10 +2267,14 @@ class FlowResolver {
       ++found->reads;
       ++found->status_reads;
       held.push_back(word.text);
-      if (builder_ == nullptr) continue;
+      if (builder_ == nullptr) {
+        continue;
+      }
       if (found->kind == SymbolKind::kCall ||
           found->kind == SymbolKind::kBarrier) {
-        if (found->step != graph::kNone) waits.push_back(found->step);
+        if (found->step != graph::kNone) {
+          waits.push_back(found->step);
+        }
         continue;
       }
       const graph::RefId subject = found->ref;
@@ -2218,8 +2297,8 @@ class FlowResolver {
     const size_t index = Lookup(scope, name);
     if (index == kNoSymbol) {
       Report("flow.name.unknown",
-             absl::StrCat("Unknown name ", Quoted(name), " (known: ",
-                          Known(scope), ")."),
+             absl::StrCat("Unknown name ", Quoted(name),
+                          " (known: ", Known(scope), ")."),
              location);
       return kNoSymbol;
     }
@@ -2264,8 +2343,11 @@ class FlowResolver {
     }
     // `skip o1, o2 of act` / `skip (o1, o2) of act`: named outputs of a call,
     // which is the only thing this shape can mean.
-    const size_t index = ExpectCall(target.call.text, target.call.location, scope);
-    if (index == kNoSymbol) return;
+    const size_t index =
+        ExpectCall(target.call.text, target.call.location, scope);
+    if (index == kNoSymbol) {
+      return;
+    }
     EmitCallOutputSkips(index, target.outputs, target.call.location, after,
                         held, steps);
   }
@@ -2295,12 +2377,12 @@ class FlowResolver {
     step.source = source.label;
     step.location = pipeline.location;
     if (builder_ != nullptr) {
-      const graph::StepId made = NewStep(
-          graph::StepKind::kSkip,
-          count.has_value()
-              ? absl::StrCat("skip ", *count, " of ", source.label)
-              : absl::StrCat("skip ", source.label),
-          pipeline.location);
+      const graph::StepId made =
+          NewStep(graph::StepKind::kSkip,
+                  count.has_value()
+                      ? absl::StrCat("skip ", *count, " of ", source.label)
+                      : absl::StrCat("skip ", source.label),
+                  pipeline.location);
       builder_->step(made).source = source.node;
       builder_->step(made).count = count;
       builder_->step(made).after = held;
@@ -2333,9 +2415,9 @@ class FlowResolver {
       step.source = symbol.name;
       step.location = location;
       if (builder_ != nullptr) {
-        const graph::StepId made = NewStep(
-            graph::StepKind::kSkip, absl::StrCat("skip ", symbol.name),
-            location);
+        const graph::StepId made =
+            NewStep(graph::StepKind::kSkip, absl::StrCat("skip ", symbol.name),
+                    location);
         builder_->step(made).call = symbol.step;
         builder_->step(made).after = held;
       }
@@ -2352,9 +2434,9 @@ class FlowResolver {
       step.source = port.label;
       step.location = name.location;
       if (builder_ != nullptr) {
-        const graph::StepId made = NewStep(
-            graph::StepKind::kSkip, absl::StrCat("skip ", port.label),
-            name.location);
+        const graph::StepId made =
+            NewStep(graph::StepKind::kSkip, absl::StrCat("skip ", port.label),
+                    name.location);
         builder_->step(made).source = port.node;
         builder_->step(made).after = held;
       }
@@ -2379,10 +2461,10 @@ class FlowResolver {
     if (!tail.level.Empty()) {
       if (!vocabulary::IsLogLevel(tail.level.text)) {
         Report("flow.form.unknown-log-level",
-               absl::StrCat("Unknown log level ", Quoted(tail.level.text),
-                            " (known: ",
-                            absl::StrJoin(vocabulary::LogLevels(), ", "),
-                            ", either case)."),
+               absl::StrCat(
+                   "Unknown log level ", Quoted(tail.level.text),
+                   " (known: ", absl::StrJoin(vocabulary::LogLevels(), ", "),
+                   ", either case)."),
                tail.level.location, Severity::kError, Family::kForm);
       } else {
         made.level = vocabulary::Canonical(tail.level.text);
@@ -2401,10 +2483,14 @@ class FlowResolver {
   /// `not_found` -- so it comes back through `named` rather than as an [Expr].
   graph::ExprId ResolveFailCode(const Node* code, Scope& scope,
                                 std::string* absl_nullable named = nullptr) {
-    if (code == nullptr) return graph::kNone;
+    if (code == nullptr) {
+      return graph::kNone;
+    }
     if (const auto* name = syntax::As<syntax::Name>(code); name != nullptr) {
       if (vocabulary::IsStatusCode(name->name)) {
-        if (named != nullptr) *named = name->name;
+        if (named != nullptr) {
+          *named = name->name;
+        }
         return graph::kNone;
       }
       if (Lookup(scope, name->name) == kNoSymbol) {
@@ -2483,7 +2569,8 @@ class FlowResolver {
     }
     graph::ExprId action_id = graph::kNone;
     if (call.modifiers->action_id != nullptr) {
-      action_id = ResolveExpression(call.modifiers->action_id.get(), scope, false);
+      action_id =
+          ResolveExpression(call.modifiers->action_id.get(), scope, false);
     }
     graph::StepId made = graph::kNone;
     if (builder_ != nullptr) {
@@ -2517,8 +2604,8 @@ class FlowResolver {
       feed.destination = absl::StrCat(label, ".", argument.port.text);
       feed.location = argument.port.location;
       if (builder_ != nullptr) {
-        const graph::StepId pipe = NewStep(graph::StepKind::kPipe, feed.label,
-                                           argument.port.location);
+        const graph::StepId pipe =
+            NewStep(graph::StepKind::kPipe, feed.label, argument.port.location);
         builder_->step(pipe).source = source.node;
         builder_->step(pipe).destination = destination.node;
       }
@@ -2545,25 +2632,28 @@ class FlowResolver {
     if (symbol.target != nullptr && !symbol.target->HasPort(name, direction)) {
       const std::vector<std::string> declared =
           symbol.target->PortNames(direction);
-      Report("flow.name.unknown-port",
-             absl::StrCat(symbol.action, " has no ",
-                          direction == syntax::PortDirection::kInput ? "input"
-                                                                    : "output",
-                          " port ", Quoted(name), " (declared: ",
-                          declared.empty() ? "none"
-                                           : absl::StrJoin(declared, ", "),
-                          ")."),
-             location);
+      Report(
+          "flow.name.unknown-port",
+          absl::StrCat(
+              symbol.action, " has no ",
+              direction == syntax::PortDirection::kInput ? "input" : "output",
+              " port ", Quoted(name), " (declared: ",
+              declared.empty() ? "none" : absl::StrJoin(declared, ", "), ")."),
+          location);
       ref.kind = Ref::Kind::kUnknown;
       return ref;
     }
-    if (builder_ == nullptr) return ref;
+    if (builder_ == nullptr) {
+      return ref;
+    }
     // Memoised per `direction:name`: the flow may name one port of one call
     // from several places, and it is one stream however often it is written.
     const graph::StepId step = symbol.step;
-    if (step == graph::kNone) return ref;
-    const std::string key = absl::StrCat(
-        syntax::PortDirectionName(direction), ":", name);
+    if (step == graph::kNone) {
+      return ref;
+    }
+    const std::string key =
+        absl::StrCat(syntax::PortDirectionName(direction), ":", name);
     if (const auto found = builder_->step(step).ports.find(key);
         found != builder_->step(step).ports.end()) {
       ref.node = found->second;
@@ -2599,7 +2689,9 @@ class FlowResolver {
     // The pattern the values carry as the pipeline is walked, so `it` in a
     // stage knows what the stage before made of them.
     std::string previous_pattern = PatternOf(pipeline);
-    if (!pipeline.stages.empty()) previous_pattern.clear();
+    if (!pipeline.stages.empty()) {
+      previous_pattern.clear();
+    }
     for (const syntax::StagePtr& stage : pipeline.stages) {
       graph::RefId stream = graph::kNone;
       graph::ExprId expr = graph::kNone;
@@ -2654,8 +2746,7 @@ class FlowResolver {
       // target does: as something this flow may write.
       graph::RefId failures = graph::kNone;
       if (stage->failures != nullptr) {
-        const Ref target =
-            ResolveDestination(stage->failures.get(), scope);
+        const Ref target = ResolveDestination(stage->failures.get(), scope);
         failures = target.node;
       }
       const graph::RefId source = ref.node;
@@ -2665,8 +2756,8 @@ class FlowResolver {
       ref.writable = false;
       ref.tolerant = false;
       ref.shape = ShapeAfter(*stage, ref.shape);
-      graph::Stage made = GraphStage(*stage, stream, expr, std::move(log),
-                                     failures);
+      graph::Stage made =
+          GraphStage(*stage, stream, expr, std::move(log), failures);
       made.carry = carry;
       ref.node = Derive(source, std::move(made), ref.label);
     }
@@ -2686,7 +2777,9 @@ class FlowResolver {
       // what it is making. Anything else makes something the language cannot
       // name, which is honestly reported as nothing.
       const auto* typed = syntax::As<syntax::TypedValue>(stage.argument.get());
-      if (typed == nullptr) return "";
+      if (typed == nullptr) {
+        return "";
+      }
       return known_.Dto(typed->type.name) != nullptr ? typed->type.name : "";
     }
     if (name == "log" || name == "logf") {
@@ -2699,7 +2792,7 @@ class FlowResolver {
       // `batch`, `group` and `window` make lists *of* the values, so what each
       // value is has not changed; the rest choose among them.
       return name == "batch" || name == "group" || name == "window" ? ""
-                                                                   : carried;
+                                                                    : carried;
     }
     return "";
   }
@@ -2712,11 +2805,15 @@ class FlowResolver {
   /// failure the first value triggers. The pattern language says what is wrong
   /// with it; this only has to place it.
   void CheckPatternStage(const syntax::Stage& stage) {
-    if (vocabulary::Canonical(stage.name) != "match") return;
+    if (vocabulary::Canonical(stage.name) != "match") {
+      return;
+    }
     const pattern::Compiled compiled = pattern::Compile(stage.text);
-    if (compiled.ok()) return;
-    Report("flow.form.bad-pattern", std::string(compiled.error),
-           stage.location, Severity::kError, Family::kForm);
+    if (compiled.ok()) {
+      return;
+    }
+    Report("flow.form.bad-pattern", std::string(compiled.error), stage.location,
+           Severity::kError, Family::kForm);
   }
 
   /// `| json` on a stream of a shape that holds bytes.
@@ -2725,10 +2822,16 @@ class FlowResolver {
   /// would render oddly -- it is one that cannot be rendered at all. `packb`
   /// can, which is what the message says.
   void CheckShapeStage(const syntax::Stage& stage, const Ref& ref) {
-    if (ref.shape.empty()) return;
-    if (vocabulary::Canonical(stage.name) != "json") return;
+    if (ref.shape.empty()) {
+      return;
+    }
+    if (vocabulary::Canonical(stage.name) != "json") {
+      return;
+    }
     const DtoPlan* shape = known_.Dto(ref.shape);
-    if (shape == nullptr || !shape->binary) return;
+    if (shape == nullptr || !shape->binary) {
+      return;
+    }
     Report("flow.form.not-json-representable",
            absl::StrCat(Quoted(shape->name),
                         " holds bytes, which JSON has nothing to carry; write "
@@ -2759,10 +2862,12 @@ class FlowResolver {
       sources.push_back(one.node);
     }
     ref.label = absl::StrCat(zip.name, "(", absl::StrJoin(labels, ", "), ")");
-    if (builder_ == nullptr) return ref;
+    if (builder_ == nullptr) {
+      return ref;
+    }
     graph::Ref made;
     made.kind = zip.name == "interleave" ? graph::RefKind::kMerge
-                                        : graph::RefKind::kZip;
+                                         : graph::RefKind::kZip;
     made.label = ref.label;
     made.owner = body_;
     made.sources = std::move(sources);
@@ -2793,10 +2898,11 @@ class FlowResolver {
         builder_ == nullptr ? 0 : builder_->flow().steps.size();
     ResolveStatement(&wait, scope, made);
     if (pending_steps_ != nullptr) {
-      for (StepPlan& one : made) pending_steps_->push_back(std::move(one));
+      for (StepPlan& one : made) {
+        pending_steps_->push_back(std::move(one));
+      }
     }
-    if (builder_ == nullptr ||
-        builder_->flow().steps.size() <= graph_before) {
+    if (builder_ == nullptr || builder_->flow().steps.size() <= graph_before) {
       return Ref{Ref::Kind::kUnknown, "wait first of"};
     }
     const graph::Step& step = builder_->step(graph_before);
@@ -2810,7 +2916,9 @@ class FlowResolver {
   /// A pipeline source: a stream, a path over one, or a single value.
   Ref ResolveSource(const Node* expression, Scope& scope) {
     std::optional<Ref> stream = AsStream(expression, scope);
-    if (stream.has_value()) return *std::move(stream);
+    if (stream.has_value()) {
+      return *std::move(stream);
+    }
     const graph::ExprId expr = ResolveExpression(expression, scope, false);
     Ref ref;
     ref.kind = Ref::Kind::kValue;
@@ -2828,7 +2936,9 @@ class FlowResolver {
 
   /// A name or a path rooted at one, as a stream; `nullopt` if it is a value.
   std::optional<Ref> AsStream(const Node* expression, Scope& scope) {
-    if (expression == nullptr) return std::nullopt;
+    if (expression == nullptr) {
+      return std::nullopt;
+    }
     switch (expression->kind) {
       case NodeKind::kPipelineValue:
         return ResolvePipeline(
@@ -2845,8 +2955,8 @@ class FlowResolver {
         Symbol* found = Find(scope, name->name);
         if (found == nullptr) {
           Report("flow.name.unknown",
-                 absl::StrCat("Unknown name ", Quoted(name->name), " (known: ",
-                              Known(scope), ")."),
+                 absl::StrCat("Unknown name ", Quoted(name->name),
+                              " (known: ", Known(scope), ")."),
                  expression->location);
           return Ref{Ref::Kind::kUnknown, name->name};
         }
@@ -2859,10 +2969,10 @@ class FlowResolver {
           return Ref{Ref::Kind::kUnknown, name->name};
         }
         if (found->kind == SymbolKind::kNodeMap) {
-          Report("flow.name.not-a-stream",
-                 absl::StrCat(Quoted(name->name),
-                              " is a node map, not a stream."),
-                 expression->location);
+          Report(
+              "flow.name.not-a-stream",
+              absl::StrCat(Quoted(name->name), " is a node map, not a stream."),
+              expression->location);
           return Ref{Ref::Kind::kUnknown, name->name};
         }
         if (!found->readable) {
@@ -2873,7 +2983,9 @@ class FlowResolver {
           return Ref{Ref::Kind::kUnknown, name->name};
         }
         ++found->reads;
-        if (found->kind == SymbolKind::kBarrier) ++found->status_reads;
+        if (found->kind == SymbolKind::kBarrier) {
+          ++found->status_reads;
+        }
         Ref ref;
         ref.label = name->name;
         ref.symbol = Lookup(scope, name->name);
@@ -2920,9 +3032,13 @@ class FlowResolver {
       case NodeKind::kAttr: {
         const auto* attr = syntax::As<syntax::Attr>(expression);
         std::optional<Ref> named = AttrStream(attr, scope);
-        if (named.has_value()) return named;
+        if (named.has_value()) {
+          return named;
+        }
         std::optional<Ref> inner = AsStream(attr->base.get(), scope);
-        if (!inner.has_value()) return std::nullopt;
+        if (!inner.has_value()) {
+          return std::nullopt;
+        }
         Ref ref = *std::move(inner);
         const graph::RefId source = ref.node;
         absl::StrAppend(&ref.label, ".", attr->name);
@@ -2936,7 +3052,9 @@ class FlowResolver {
       case NodeKind::kIndex: {
         const auto* index = syntax::As<syntax::Index>(expression);
         std::optional<Ref> inner = AsStream(index->base.get(), scope);
-        if (!inner.has_value()) return std::nullopt;
+        if (!inner.has_value()) {
+          return std::nullopt;
+        }
         Constant(index->index.get());
         Ref ref = *std::move(inner);
         const graph::RefId source = ref.node;
@@ -2945,11 +3063,10 @@ class FlowResolver {
         ref.has_front = false;
         ref.writable = false;
         ref.tolerant = false;
-        ref.node = Derive(
-            source,
-            AtStage(syntax::ConstantValue(index->index.get())
-                        .value_or(syntax::Constant::Null())),
-            ref.label);
+        ref.node = Derive(source,
+                          AtStage(syntax::ConstantValue(index->index.get())
+                                      .value_or(syntax::Constant::Null())),
+                          ref.label);
         return ref;
       }
       default:
@@ -2960,9 +3077,13 @@ class FlowResolver {
   /// `x.y` where `x` is a call, a node or a barrier -- not a field of a value.
   std::optional<Ref> AttrStream(const syntax::Attr* attr, Scope& scope) {
     const auto* base = syntax::As<syntax::Name>(attr->base.get());
-    if (base == nullptr) return std::nullopt;
+    if (base == nullptr) {
+      return std::nullopt;
+    }
     const size_t index = Lookup(scope, base->name);
-    if (index == kNoSymbol) return std::nullopt;
+    if (index == kNoSymbol) {
+      return std::nullopt;
+    }
     Symbol& symbol = resolved_.symbols[index];
     if (symbol.kind == SymbolKind::kCall) {
       ++symbol.reads;
@@ -3029,9 +3150,15 @@ class FlowResolver {
     // that name: `status x.code` is what x finished with.
     while (true) {
       const auto* attr = syntax::As<syntax::Attr>(cursor);
-      if (attr == nullptr) break;
-      if (!vocabulary::StatusFields().contains(attr->name)) break;
-      if (!HasStatus(attr->base.get(), scope)) break;
+      if (attr == nullptr) {
+        break;
+      }
+      if (!vocabulary::StatusFields().contains(attr->name)) {
+        break;
+      }
+      if (!HasStatus(attr->base.get(), scope)) {
+        break;
+      }
       path.push_back(attr->name);
       cursor = attr->base.get();
     }
@@ -3046,8 +3173,8 @@ class FlowResolver {
           name != nullptr) {
         if (Lookup(scope, name->name) == kNoSymbol) {
           Report("flow.name.unknown",
-                 absl::StrCat("Unknown name ", Quoted(name->name), " (known: ",
-                              Known(scope), ")."),
+                 absl::StrCat("Unknown name ", Quoted(name->name),
+                              " (known: ", Known(scope), ")."),
                  expression->location);
         } else {
           Report("flow.name.no-status",
@@ -3084,12 +3211,12 @@ class FlowResolver {
     ref.kind = Ref::Kind::kStatus;
     ref.label = absl::StrCat("status ", Unparse(cursor));
     GraphSubject(cursor, scope, ref);
-    for (auto at = path.rbegin(); at != path.rend(); ++at) {
+    for (const std::string& at : std::views::reverse(path)) {
       const graph::RefId source = ref.node;
-      absl::StrAppend(&ref.label, ".", *at);
+      absl::StrAppend(&ref.label, ".", at);
       // A field of the record: the status is still the thing waited for, and
       // the field is read out of the value it gives.
-      ref.node = Derive(source, AtStage(*at), ref.label);
+      ref.node = Derive(source, AtStage(at), ref.label);
     }
     return ref;
   }
@@ -3099,10 +3226,14 @@ class FlowResolver {
   /// A call's and a node's are fresh per mention; a bound barrier's is the one
   /// it already waited for, because `s` and `wait ...` are the same moment.
   void GraphSubject(const Node* cursor, Scope& scope, Ref& out) {
-    if (builder_ == nullptr) return;
+    if (builder_ == nullptr) {
+      return;
+    }
     if (const auto* name = syntax::As<syntax::Name>(cursor); name != nullptr) {
       const size_t index = Lookup(scope, name->name);
-      if (index == kNoSymbol) return;
+      if (index == kNoSymbol) {
+        return;
+      }
       const Symbol& symbol = resolved_.symbols[index];
       if (symbol.kind == SymbolKind::kCall) {
         out.tolerant = symbol.tolerant;
@@ -3118,12 +3249,20 @@ class FlowResolver {
       return;
     }
     const auto* attr = syntax::As<syntax::Attr>(cursor);
-    if (attr == nullptr) return;
+    if (attr == nullptr) {
+      return;
+    }
     const auto* base = syntax::As<syntax::Name>(attr->base.get());
-    if (base == nullptr) return;
+    if (base == nullptr) {
+      return;
+    }
     const size_t index = Lookup(scope, base->name);
-    if (index == kNoSymbol) return;
-    if (resolved_.symbols[index].kind != SymbolKind::kCall) return;
+    if (index == kNoSymbol) {
+      return;
+    }
+    if (resolved_.symbols[index].kind != SymbolKind::kCall) {
+      return;
+    }
     if (attr->name == "status") {
       out.tolerant = resolved_.symbols[index].tolerant;
       out.node = FreshStatusOfStep(resolved_.symbols[index].step);
@@ -3147,7 +3286,9 @@ class FlowResolver {
     if (const auto* name = syntax::As<syntax::Name>(expression);
         name != nullptr) {
       const size_t index = Lookup(scope, name->name);
-      if (index == kNoSymbol) return false;
+      if (index == kNoSymbol) {
+        return false;
+      }
       switch (resolved_.symbols[index].kind) {
         case SymbolKind::kCall:
         case SymbolKind::kBarrier:
@@ -3162,13 +3303,23 @@ class FlowResolver {
     if (const auto* attr = syntax::As<syntax::Attr>(expression);
         attr != nullptr) {
       const auto* base = syntax::As<syntax::Name>(attr->base.get());
-      if (base == nullptr) return false;
+      if (base == nullptr) {
+        return false;
+      }
       const size_t index = Lookup(scope, base->name);
-      if (index == kNoSymbol) return false;
+      if (index == kNoSymbol) {
+        return false;
+      }
       const Symbol& symbol = resolved_.symbols[index];
-      if (symbol.kind != SymbolKind::kCall) return false;
-      if (attr->name == "status") return true;
-      if (symbol.target == nullptr) return true;
+      if (symbol.kind != SymbolKind::kCall) {
+        return false;
+      }
+      if (attr->name == "status") {
+        return true;
+      }
+      if (symbol.target == nullptr) {
+        return true;
+      }
       return symbol.target->HasPort(attr->name,
                                     syntax::PortDirection::kOutput) ||
              symbol.target->HasPort(attr->name, syntax::PortDirection::kInput);
@@ -3235,8 +3386,7 @@ class FlowResolver {
         if (resolved_.symbols[index].kind != SymbolKind::kCall) {
           Report("flow.name.not-writable",
                  absl::StrCat(Quoted(base->name), " is not a call, so ",
-                              Quoted(attr->name),
-                              " is not a port to write."),
+                              Quoted(attr->name), " is not a port to write."),
                  expression->location);
           return Ref{Ref::Kind::kUnknown, base->name};
         }
@@ -3263,7 +3413,9 @@ class FlowResolver {
   /// tree handed across a language boundary cannot do that.
   graph::ExprId ResolveExpression(const Node* expression, Scope& scope,
                                   bool allow_it) {
-    if (expression == nullptr) return graph::kNone;
+    if (expression == nullptr) {
+      return graph::kNone;
+    }
     if (builder_ == nullptr) {
       WalkExpression(expression, scope, allow_it, nullptr);
       return graph::kNone;
@@ -3277,7 +3429,9 @@ class FlowResolver {
   /// Note that `node` reads `ref`, for the expression being built.
   void Remember(graph::Expr* absl_nullable out, const Node* node,
                 graph::RefId ref) {
-    if (out == nullptr || ref == graph::kNone) return;
+    if (out == nullptr || ref == graph::kNone) {
+      return;
+    }
     out->bound.emplace_back(node, ref);
     if (std::find(out->refs.begin(), out->refs.end(), ref) == out->refs.end()) {
       out->refs.push_back(ref);
@@ -3286,7 +3440,9 @@ class FlowResolver {
 
   void WalkExpression(const Node* expression, Scope& scope, bool allow_it,
                       graph::Expr* absl_nullable out) {
-    if (expression == nullptr) return;
+    if (expression == nullptr) {
+      return;
+    }
     switch (expression->kind) {
       case NodeKind::kIt:
         if (!allow_it) {
@@ -3328,9 +3484,8 @@ class FlowResolver {
         // The type is checked as far as it can be here -- a built-in name is
         // either known or misspelt -- and a tag is left to the runtime, which
         // is the only place that knows what has been registered.
-        if (typed->type.name.find('.') == std::string::npos &&
-            typed->type.name.find('/') == std::string::npos &&
-            !typed->type.quoted) {
+        if (!absl::StrContains(typed->type.name, '.') &&
+            !absl::StrContains(typed->type.name, '/') && !typed->type.quoted) {
           PortType(typed->type);
         }
         // A shape declared in this file is the one type whose fields are known
@@ -3353,22 +3508,24 @@ class FlowResolver {
         return;
       }
       case NodeKind::kPipelineValue:
-        Remember(out, expression,
-                 ResolvePipeline(
-                     *syntax::As<syntax::PipelineValue>(expression)->pipeline,
-                     scope)
-                     .node);
+        Remember(
+            out, expression,
+            ResolvePipeline(
+                *syntax::As<syntax::PipelineValue>(expression)->pipeline, scope)
+                .node);
         return;
       case NodeKind::kOutcome:
-        Remember(out, expression,
-                 ResolveOutcome(
-                     syntax::As<syntax::Outcome>(expression)->subject.get(),
-                     scope)
-                     .node);
+        Remember(
+            out, expression,
+            ResolveOutcome(
+                syntax::As<syntax::Outcome>(expression)->subject.get(), scope)
+                .node);
         return;
       case NodeKind::kName: {
         const std::optional<Ref> stream = AsStream(expression, scope);
-        if (stream.has_value()) Remember(out, expression, stream->node);
+        if (stream.has_value()) {
+          Remember(out, expression, stream->node);
+        }
         return;
       }
       case NodeKind::kAttr: {
@@ -3411,13 +3568,18 @@ class FlowResolver {
     std::vector<std::string> names;
   };
 
-  std::optional<Fields> FieldsOfPattern(const std::string& text) const {
-    if (text.empty()) return std::nullopt;
+  [[nodiscard]] std::optional<Fields> FieldsOfPattern(
+      const std::string& text) const {
+    if (text.empty()) {
+      return std::nullopt;
+    }
     const pattern::Compiled compiled = pattern::Compile(text);
     // A pattern that does not read is reported where it is written; nothing is
     // known about what it names, so nothing is checked here. Nor is a
     // positional one, which names no fields at all.
-    if (!compiled.ok() || !compiled.pattern.AllNamed()) return std::nullopt;
+    if (!compiled.ok() || !compiled.pattern.AllNamed()) {
+      return std::nullopt;
+    }
     Fields found;
     found.subject = "the pattern";
     for (const pattern::Hole& hole : compiled.pattern.holes) {
@@ -3426,7 +3588,8 @@ class FlowResolver {
     return found;
   }
 
-  std::optional<Fields> FieldsOfSymbol(const Symbol& symbol) const {
+  [[nodiscard]] std::optional<Fields> FieldsOfSymbol(
+      const Symbol& symbol) const {
     if (symbol.kind == SymbolKind::kValue) {
       return FieldsOfPattern(symbol.pattern);
     }
@@ -3436,11 +3599,15 @@ class FlowResolver {
     }
     const syntax::PortDirection direction =
         symbol.kind == SymbolKind::kInputPort ? syntax::PortDirection::kInput
-                                             : syntax::PortDirection::kOutput;
+                                              : syntax::PortDirection::kOutput;
     const PortPlan* port = resolved_.plan.Port(symbol.name, direction);
-    if (port == nullptr) return std::nullopt;
+    if (port == nullptr) {
+      return std::nullopt;
+    }
     const DtoPlan* shape = known_.Dto(port->type);
-    if (shape == nullptr) return std::nullopt;
+    if (shape == nullptr) {
+      return std::nullopt;
+    }
     Fields found;
     found.subject = Quoted(shape->name);
     found.names = shape->FieldNames();
@@ -3460,10 +3627,14 @@ class FlowResolver {
     } else if (const auto* base = syntax::As<syntax::Name>(attr->base.get());
                base != nullptr) {
       const size_t index = Lookup(scope, base->name);
-      if (index == kNoSymbol) return;
+      if (index == kNoSymbol) {
+        return;
+      }
       known = FieldsOfSymbol(resolved_.symbols[index]);
     }
-    if (!known.has_value() || known->names.empty()) return;
+    if (!known.has_value() || known->names.empty()) {
+      return;
+    }
     if (std::find(known->names.begin(), known->names.end(), attr->name) !=
         known->names.end()) {
       return;
@@ -3484,7 +3655,9 @@ class FlowResolver {
   /// same words.
   void CheckShapeLiteral(const DtoPlan& shape, const Node* value) {
     const auto* object = syntax::As<syntax::ObjectLiteral>(value);
-    if (object == nullptr) return;
+    if (object == nullptr) {
+      return;
+    }
     absl::flat_hash_set<std::string> given;
     bool spread = false;
     for (const auto& [key, held] : object->pairs) {
@@ -3496,9 +3669,9 @@ class FlowResolver {
       const FieldPlan* field = shape.Field(key);
       if (field == nullptr) {
         Report("flow.form.unknown-field",
-               absl::StrCat(Quoted(shape.name), " has no field ", Quoted(key),
-                            " (it has: ",
-                            absl::StrJoin(shape.FieldNames(), ", "), ")."),
+               absl::StrCat(
+                   Quoted(shape.name), " has no field ", Quoted(key),
+                   " (it has: ", absl::StrJoin(shape.FieldNames(), ", "), ")."),
                held == nullptr ? value->location : held->location,
                Severity::kError, Family::kForm);
         continue;
@@ -3507,32 +3680,51 @@ class FlowResolver {
       // run time is checked when it arrives.
       const std::optional<syntax::Constant> constant =
           syntax::ConstantValue(held.get());
-      if (!constant.has_value() || !field->dto_name.empty()) continue;
-      if (ConstantFits(*constant, field->type)) continue;
+      if (!constant.has_value() || !field->dto_name.empty()) {
+        continue;
+      }
+      if (ConstantFits(*constant, field->type)) {
+        continue;
+      }
       Report("flow.form.field-type-mismatch",
              absl::StrCat(Quoted(key), " of ", Quoted(shape.name), " holds ",
                           field->declared, ", and this is a ",
                           syntax::ConstantKindName(constant->kind), "."),
              held->location, Severity::kError, Family::kForm);
     }
-    if (spread) return;
+    if (spread) {
+      return;
+    }
     std::vector<std::string> missing;
     for (const FieldPlan& field : shape.fields) {
-      if (!field.required || field.has_default) continue;
-      if (given.contains(field.name)) continue;
+      if (!field.required || field.has_default) {
+        continue;
+      }
+      if (given.contains(field.name)) {
+        continue;
+      }
       missing.push_back(field.name);
     }
-    if (missing.empty()) return;
-    Report("flow.form.missing-field",
-           absl::StrCat(Quoted(shape.name), " requires ",
-                        absl::StrJoin(missing, ", "), ", which this leaves out."),
-           value->location, Severity::kError, Family::kForm);
+    if (missing.empty()) {
+      return;
+    }
+    Report(
+        "flow.form.missing-field",
+        absl::StrCat(Quoted(shape.name), " requires ",
+                     absl::StrJoin(missing, ", "), ", which this leaves out."),
+        value->location, Severity::kError, Family::kForm);
   }
 
   void Constant(const Node* expression) {
-    if (expression == nullptr) return;
-    if (syntax::ConstantValue(expression).has_value()) return;
-    if (expression->kind == NodeKind::kError) return;
+    if (expression == nullptr) {
+      return;
+    }
+    if (syntax::ConstantValue(expression).has_value()) {
+      return;
+    }
+    if (expression->kind == NodeKind::kError) {
+      return;
+    }
     Report("flow.syntax.constant-required",
            "Expected a constant value here (a literal, list or object).",
            expression->location, Severity::kError, Family::kSyntax);
@@ -3602,7 +3794,9 @@ class FlowResolver {
 const PortPlan* absl_nullable FlowPlan::Port(
     std::string_view port_name, syntax::PortDirection direction) const {
   for (const PortPlan& port : ports) {
-    if (port.name == port_name && port.direction == direction) return &port;
+    if (port.name == port_name && port.direction == direction) {
+      return &port;
+    }
   }
   return nullptr;
 }
@@ -3611,7 +3805,9 @@ std::vector<std::string> FlowPlan::PortNames(
     syntax::PortDirection direction) const {
   std::vector<std::string> names;
   for (const PortPlan& port : ports) {
-    if (port.direction == direction) names.push_back(port.name);
+    if (port.direction == direction) {
+      names.push_back(port.name);
+    }
   }
   std::sort(names.begin(), names.end());
   return names;
@@ -3621,23 +3817,31 @@ const FlowPlan* absl_nullable Program::Flow(std::string_view name) const {
   // An empty name matches nothing, so the entry flow cannot be reached here --
   // which is what makes it unaddressable from a `run` or a `call` rather than
   // merely undocumented.
-  if (name.empty()) return nullptr;
+  if (name.empty()) {
+    return nullptr;
+  }
   for (const FlowPlan& flow : flows) {
-    if (!flow.entry && flow.name == name) return &flow;
+    if (!flow.entry && flow.name == name) {
+      return &flow;
+    }
   }
   return nullptr;
 }
 
 const FlowPlan* absl_nullable Program::Entry() const {
   for (const FlowPlan& flow : flows) {
-    if (flow.entry) return &flow;
+    if (flow.entry) {
+      return &flow;
+    }
   }
   return nullptr;
 }
 
 const DtoPlan* absl_nullable Program::Dto(std::string_view name) const {
   for (const DtoPlan& dto : dtos) {
-    if (dto.name == name) return &dto;
+    if (dto.name == name) {
+      return &dto;
+    }
   }
   return nullptr;
 }
@@ -3645,7 +3849,9 @@ const DtoPlan* absl_nullable Program::Dto(std::string_view name) const {
 const FieldPlan* absl_nullable DtoPlan::Field(
     std::string_view field_name) const {
   for (const FieldPlan& field : fields) {
-    if (field.name == field_name) return &field;
+    if (field.name == field_name) {
+      return &field;
+    }
   }
   return nullptr;
 }
@@ -3653,15 +3859,21 @@ const FieldPlan* absl_nullable DtoPlan::Field(
 std::vector<std::string> DtoPlan::FieldNames() const {
   std::vector<std::string> names;
   names.reserve(fields.size());
-  for (const FieldPlan& field : fields) names.push_back(field.name);
+  for (const FieldPlan& field : fields) {
+    names.push_back(field.name);
+  }
   return names;
 }
 
-bool ResolveResult::HasErrors() const { return FirstError() != nullptr; }
+bool ResolveResult::HasErrors() const {
+  return FirstError() != nullptr;
+}
 
 const Diagnostic* absl_nullable ResolveResult::FirstError() const {
   for (const Diagnostic& diagnostic : diagnostics) {
-    if (diagnostic.severity == Severity::kError) return &diagnostic;
+    if (diagnostic.severity == Severity::kError) {
+      return &diagnostic;
+    }
   }
   return nullptr;
 }
@@ -3719,9 +3931,10 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
       diagnostic.family = Family::kForm;
       diagnostic.message =
           declaration->entry
-              ? std::string("A file may declare one entry flow, and this one "
-                            "declares two. A flow that is meant to be called "
-                            "needs a name.")
+              ? std::string(
+                    "A file may declare one entry flow, and this one "
+                    "declares two. A flow that is meant to be called "
+                    "needs a name.")
               : absl::StrCat("Flow ", Quoted(declaration->name.text),
                              " is declared twice.");
       diagnostic.range =

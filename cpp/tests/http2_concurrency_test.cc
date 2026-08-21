@@ -27,8 +27,8 @@ namespace {
 TEST(Http2ConcurrencyTest, ManyConcurrentRequestsOnOneConnection) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         absl::Status status = response->SendResponse(200, {}, request.body);
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
       });
@@ -85,14 +85,15 @@ TEST(Http2ConcurrencyTest, ManyConcurrentRequestsOnOneConnection) {
 // The HTTP SSE shape: one long-lived response stream the client keeps reading
 // while it issues concurrent short requests on the same connection, and the
 // server writes to that stream from the request handlers.
-TEST(Http2ConcurrencyTest, ConcurrentRequestsAlongsideALongLivedResponseStream) {
+TEST(Http2ConcurrencyTest,
+     ConcurrentRequestsAlongsideALongLivedResponseStream) {
   auto events = std::make_shared<std::shared_ptr<Http2ResponseWriter>>();
   thread::Mutex events_mu;
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [events, &events_mu](HttpRequest request,
-                           std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
+      [events, &events_mu](
+          const HttpRequest& request,
+          std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
         if (request.path == "/connect") {
           HttpHeaders headers{{"content-type", "text/event-stream"}};
           absl::Status status = response->SendHeaders(200, headers);

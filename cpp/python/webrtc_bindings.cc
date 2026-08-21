@@ -65,9 +65,9 @@ class PythonSignallingCallback {
   }
 
   template <typename... Args>
-  a11::Task Call(Args&&... args) const {
+  [[nodiscard]] a11::Task Call(Args&&... args) const {
     py::gil_scoped_acquire acquire;
-    py::function callable = py::reinterpret_borrow<py::function>(callable_);
+    auto callable = py::reinterpret_borrow<py::function>(callable_);
     return CallPythonAsync<a11::Unit>(loop_, callable,
                                       std::forward<Args>(args)...);
   }
@@ -326,7 +326,7 @@ void BindWebRtc(py::module_& module) {
                      "SDP description body (for DESCRIPTION messages).")
       .def_readwrite("description_type",
                      &net::SignallingMessage::description_type,
-                     "SDP description type, e.g. \"offer\" or \"answer\".")
+                     R"(SDP description type, e.g. "offer" or "answer".)")
       .def_readwrite("candidate", &net::SignallingMessage::candidate,
                      "ICE candidate string (for CANDIDATE messages).")
       .def_readwrite("mid", &net::SignallingMessage::mid,
@@ -510,12 +510,12 @@ void BindWebRtc(py::module_& module) {
       .def_static(
           "create_client",
           [](std::string identity, std::string peer_identity,
-             std::shared_ptr<net::SignallingService> signalling,
+             const std::shared_ptr<net::SignallingService>& signalling,
              net::WebRtcConfiguration configuration,
              net::WireStreamOptions options) {
             return ValueOrThrow(net::WebRtcWireStream::CreateClient(
-                std::move(identity), std::move(peer_identity),
-                std::move(signalling), std::move(configuration), options));
+                std::move(identity), std::move(peer_identity), signalling,
+                configuration, options));
           },
           "Open a WebRTC data-channel wire stream to a named peer over a "
           "shared in-process signalling service. It performs the ICE/SDP "
@@ -527,12 +527,11 @@ void BindWebRtc(py::module_& module) {
       .def_static(
           "create_client",
           [](std::string peer_identity,
-             std::shared_ptr<net::SignallingTransport> signalling,
-             net::WebRtcConfiguration configuration,
+             const std::shared_ptr<net::SignallingTransport>& signalling,
+             const net::WebRtcConfiguration& configuration,
              net::WireStreamOptions options) {
             return ValueOrThrow(net::WebRtcWireStream::CreateClient(
-                std::move(peer_identity), std::move(signalling),
-                std::move(configuration), options));
+                std::move(peer_identity), signalling, configuration, options));
           },
           "Open a WebRTC data-channel wire stream to a peer over an explicit "
           "signalling transport (e.g. a WebSocket signalling client). Prefer "
@@ -573,17 +572,17 @@ void BindWebRtc(py::module_& module) {
       .def_static(
           "create",
           [](std::string identity,
-             std::shared_ptr<net::SignallingService> signalling,
+             const std::shared_ptr<net::SignallingService>& signalling,
              const py::object& on_stream,
              net::WebRtcConfiguration configuration,
              net::WireStreamOptions stream_options) {
             std::shared_ptr<PythonSignallingCallback> callback = ValueOrThrow(
                 PythonSignallingCallback::Create(on_stream, "on_stream"));
             return ValueOrThrow(net::WebRtcWireServer::Create(
-                std::move(identity), std::move(signalling),
+                std::move(identity), signalling,
                 [callback = std::move(callback)](
-                    std::shared_ptr<net::WebRtcWireStream> stream) {
-                  return callback->Call(std::move(stream));
+                    const std::shared_ptr<net::WebRtcWireStream>& stream) {
+                  return callback->Call(stream);
                 },
                 std::move(configuration), stream_options));
           },
@@ -595,17 +594,17 @@ void BindWebRtc(py::module_& module) {
           py::arg("stream_options") = net::WireStreamOptions{})
       .def_static(
           "create",
-          [](std::shared_ptr<net::SignallingTransport> signalling,
+          [](const std::shared_ptr<net::SignallingTransport>& signalling,
              const py::object& on_stream,
              net::WebRtcConfiguration configuration,
              net::WireStreamOptions stream_options) {
             std::shared_ptr<PythonSignallingCallback> callback = ValueOrThrow(
                 PythonSignallingCallback::Create(on_stream, "on_stream"));
             return ValueOrThrow(net::WebRtcWireServer::Create(
-                std::move(signalling),
+                signalling,
                 [callback = std::move(callback)](
-                    std::shared_ptr<net::WebRtcWireStream> stream) {
-                  return callback->Call(std::move(stream));
+                    const std::shared_ptr<net::WebRtcWireStream>& stream) {
+                  return callback->Call(stream);
                 },
                 std::move(configuration), stream_options));
           },

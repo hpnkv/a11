@@ -74,7 +74,7 @@ absl::Status RegisterUnprivilegedFlowActions(
 }
 
 absl::Status RegisterFlowActions(actions::ActionRegistry& registry,
-                                 CapabilitiesPtr capabilities) {
+                                 const CapabilitiesPtr& capabilities) {
   if (capabilities == nullptr) {
     return absl::InvalidArgumentError(
         "a policy is required; see ReadOnlyCapabilities and its neighbours");
@@ -93,8 +93,7 @@ absl::Status RegisterFlowActions(actions::ActionRegistry& registry,
 
   const bool may_read = filesystem.unrestricted || !filesystem.roots.empty();
   if (may_read) {
-    ABSL_RETURN_IF_ERROR(
-        RegisterFilesystemReadActions(registry, capabilities));
+    ABSL_RETURN_IF_ERROR(RegisterFilesystemReadActions(registry, capabilities));
   }
   if (may_read && filesystem.writable) {
     ABSL_RETURN_IF_ERROR(

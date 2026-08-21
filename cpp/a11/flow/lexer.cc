@@ -22,7 +22,9 @@
 namespace a11::flow {
 namespace {
 
-bool IsDigit(char letter) { return letter >= '0' && letter <= '9'; }
+bool IsDigit(char letter) {
+  return letter >= '0' && letter <= '9';
+}
 
 bool IsAsciiLetter(char letter) {
   return (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
@@ -81,17 +83,20 @@ class Lexer {
       }
       if (letter == '#') {
         const size_t start = index_;
-        while (index_ < source_.size() && source_[index_] != '\n') ++index_;
-        if (options_.keep_comments) Push(TokenKind::kComment, start, index_);
+        while (index_ < source_.size() && source_[index_] != '\n') {
+          ++index_;
+        }
+        if (options_.keep_comments) {
+          Push(TokenKind::kComment, start, index_);
+        }
         continue;
       }
       if (letter == '"') {
         ReadString();
         continue;
       }
-      if (IsDigit(letter) ||
-          (letter == '-' && index_ + 1 < source_.size() &&
-           IsDigit(source_[index_ + 1]))) {
+      if (IsDigit(letter) || (letter == '-' && index_ + 1 < source_.size() &&
+                              IsDigit(source_[index_ + 1]))) {
         ReadNumber();
         continue;
       }
@@ -173,8 +178,7 @@ class Lexer {
     diagnostic.severity = Severity::kError;
     diagnostic.family = family;
     diagnostic.message = std::move(message);
-    diagnostic.range.start =
-        Position{start, line_, Column(start)};
+    diagnostic.range.start = Position{start, line_, Column(start)};
     diagnostic.range.end = Position{end, line_, Column(end)};
     result_.diagnostics.push_back(std::move(diagnostic));
   }
@@ -205,19 +209,29 @@ class Lexer {
     const auto blank = [](std::string_view line) {
       return line.find_first_not_of(" \t\r") == std::string_view::npos;
     };
-    if (lines.size() > 1 && blank(lines.front())) lines.erase(lines.begin());
-    if (lines.size() > 1 && blank(lines.back())) lines.pop_back();
+    if (lines.size() > 1 && blank(lines.front())) {
+      lines.erase(lines.begin());
+    }
+    if (lines.size() > 1 && blank(lines.back())) {
+      lines.pop_back();
+    }
 
     size_t common = std::string_view::npos;
     for (const std::string_view line : lines) {
-      if (blank(line)) continue;
+      if (blank(line)) {
+        continue;
+      }
       common = std::min(common, line.find_first_not_of(" \t"));
     }
-    if (common == std::string_view::npos) common = 0;
+    if (common == std::string_view::npos) {
+      common = 0;
+    }
 
     std::string value;
     for (size_t index = 0; index < lines.size(); ++index) {
-      if (index != 0) value.push_back('\n');
+      if (index != 0) {
+        value.push_back('\n');
+      }
       const std::string_view line = lines[index];
       value.append(line.size() > common ? line.substr(common) : "");
     }
@@ -269,7 +283,7 @@ class Lexer {
         index_ += 2;
         continue;
       }
-      if (source_.compare(index_, 3, "\"\"\"") == 0) {
+      if (source_.compare(index_, 3, R"(""")") == 0) {
         inner_end = index_;
         index_ += 3;
         terminated = true;
@@ -285,8 +299,8 @@ class Lexer {
       // Recovery: it ends where the file does. There is nothing further along to
       // mistake for the rest of it.
       inner_end = index_;
-      Report("flow.syntax.unterminated-string",
-             "Unterminated \"\"\" string.", start, index_);
+      Report("flow.syntax.unterminated-string", R"(Unterminated """ string.)",
+             start, index_);
     }
     // The token is reported at the line it *started* on, as every other token is,
     // so the position is wound back for the push and then forward again: what
@@ -303,14 +317,18 @@ class Lexer {
   }
 
   void ReadString() {
-    if (source_.compare(index_, 3, "\"\"\"") == 0) return ReadMultilineString();
+    if (source_.compare(index_, 3, R"(""")") == 0) {
+      return ReadMultilineString();
+    }
     const size_t start = index_;
     ++index_;
     std::string value;
     bool terminated = false;
     while (index_ < source_.size()) {
       const char letter = source_[index_];
-      if (letter == '\n') break;
+      if (letter == '\n') {
+        break;
+      }
       if (letter == '"') {
         ++index_;
         terminated = true;
@@ -318,7 +336,9 @@ class Lexer {
       }
       if (letter == '\\') {
         ++index_;
-        if (index_ >= source_.size()) break;
+        if (index_ >= source_.size()) {
+          break;
+        }
         switch (const char escaped = source_[index_]) {
           case 'n':
             value.push_back('\n');
@@ -360,7 +380,9 @@ class Lexer {
         // `1..200` is a range of two whole numbers, not a number with two
         // decimal points in it. A `.` only continues the number when it is not
         // the first of a `..`.
-        if (index_ + 1 < source_.size() && source_[index_ + 1] == '.') break;
+        if (index_ + 1 < source_.size() && source_[index_ + 1] == '.') {
+          break;
+        }
         fractional = true;
       }
       ++index_;
@@ -370,7 +392,9 @@ class Lexer {
         source_.substr(start, number_end - start);
 
     const size_t unit_start = index_;
-    while (index_ < source_.size() && IsAsciiLetter(source_[index_])) ++index_;
+    while (index_ < source_.size() && IsAsciiLetter(source_[index_])) {
+      ++index_;
+    }
     const std::string_view unit =
         source_.substr(unit_start, index_ - unit_start);
 
@@ -390,11 +414,11 @@ class Lexer {
 
     const std::optional<double> seconds = vocabulary::DurationUnitSeconds(unit);
     if (!seconds.has_value()) {
-      Report("flow.form.duration-unit",
-             absl::StrCat("Unknown duration unit '", unit, "' (use ",
-                          absl::StrJoin(vocabulary::DurationUnits(), ", "),
-                          ")."),
-             unit_start, index_, Family::kForm);
+      Report(
+          "flow.form.duration-unit",
+          absl::StrCat("Unknown duration unit '", unit, "' (use ",
+                       absl::StrJoin(vocabulary::DurationUnits(), ", "), ")."),
+          unit_start, index_, Family::kForm);
       // Recovery: one bad token over the whole thing. Splitting it into a number
       // and a name would read as two things the author did not write.
       Push(TokenKind::kBad, start, index_);
@@ -429,22 +453,34 @@ class Lexer {
   void ReadPunctuation() {
     const size_t start = index_;
     const char letter = source_[index_];
-    const char next =
-        index_ + 1 < source_.size() ? source_[index_ + 1] : '\0';
+    const char next = index_ + 1 < source_.size() ? source_[index_ + 1] : '\0';
 
     // Longest first, so `...` wins over `..` wins over `.`, `->` over `-` and
     // `<=` over `<`.
     if (letter == '.' && next == '.') {
-      const bool third = index_ + 2 < source_.size() && source_[index_ + 2] == '.';
+      const bool third =
+          index_ + 2 < source_.size() && source_[index_ + 2] == '.';
       return Take(third ? TokenKind::kSpread : TokenKind::kRange, start,
                   third ? 3 : 2);
     }
-    if (letter == '-' && next == '>') return Take(TokenKind::kArrow, start, 2);
-    if (letter == '<' && next == '-') return Take(TokenKind::kCarry, start, 2);
-    if (letter == '=' && next == '=') return Take(TokenKind::kEqualEqual, start, 2);
-    if (letter == '!' && next == '=') return Take(TokenKind::kBangEqual, start, 2);
-    if (letter == '<' && next == '=') return Take(TokenKind::kLessEqual, start, 2);
-    if (letter == '>' && next == '=') return Take(TokenKind::kGreaterEqual, start, 2);
+    if (letter == '-' && next == '>') {
+      return Take(TokenKind::kArrow, start, 2);
+    }
+    if (letter == '<' && next == '-') {
+      return Take(TokenKind::kCarry, start, 2);
+    }
+    if (letter == '=' && next == '=') {
+      return Take(TokenKind::kEqualEqual, start, 2);
+    }
+    if (letter == '!' && next == '=') {
+      return Take(TokenKind::kBangEqual, start, 2);
+    }
+    if (letter == '<' && next == '=') {
+      return Take(TokenKind::kLessEqual, start, 2);
+    }
+    if (letter == '>' && next == '=') {
+      return Take(TokenKind::kGreaterEqual, start, 2);
+    }
 
     switch (letter) {
       case '.':
@@ -506,7 +542,9 @@ class Lexer {
 
 bool LexResult::HasErrors() const {
   for (const Diagnostic& diagnostic : diagnostics) {
-    if (diagnostic.severity == Severity::kError) return true;
+    if (diagnostic.severity == Severity::kError) {
+      return true;
+    }
   }
   return false;
 }
@@ -602,7 +640,9 @@ TokenKind KindFromName(std::string_view name) {
       TokenKind::kRightBracket, TokenKind::kEnd,
   };
   for (const TokenKind kind : kAll) {
-    if (KindName(kind) == name) return kind;
+    if (KindName(kind) == name) {
+      return kind;
+    }
   }
   return TokenKind::kBad;
 }

@@ -52,8 +52,9 @@ class ActionTestServer {
   ActionTestServer() {
     auto server = Http2Server::Create(
         "127.0.0.1", 0,
-        [this](HttpRequest request,
-               std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        [this](
+            const HttpRequest& request,
+            const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
           const absl::Status status = Serve(request, response);
           return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
         });
@@ -67,14 +68,18 @@ class ActionTestServer {
   }
 
   [[nodiscard]] bool ok() const { return server_ != nullptr; }
+
   [[nodiscard]] std::string url(std::string_view path) const {
     return absl::StrCat("http://127.0.0.1:", server_->port(), path);
   }
+
   /// The headers the server last saw, for asserting what was actually sent.
   [[nodiscard]] const a11::net::HttpHeaders& seen_headers() const {
     return seen_headers_;
   }
+
   [[nodiscard]] const std::string& seen_body() const { return seen_body_; }
+
   [[nodiscard]] const std::string& seen_method() const { return seen_method_; }
 
  private:
@@ -87,8 +92,8 @@ class ActionTestServer {
 
     if (path == "/plain") {
       return response->SendResponse(
-          200, {{"content-type", "text/plain"}, {"x-tag", "one"},
-                {"x-tag", "two"}},
+          200,
+          {{"content-type", "text/plain"}, {"x-tag", "one"}, {"x-tag", "two"}},
           "a plain body");
     }
     if (path == "/trailed") {
@@ -128,9 +133,9 @@ class ActionTestServer {
                                     R"([{"n": 1}, {"n": 2}, {"n": 3}])");
     }
     if (path == "/ndjson") {
-      return response->SendResponse(
-          200, {{"content-type", "application/x-ndjson"}},
-          "{\"n\": 1}\n{\"n\": 2}\n{\"n\": 3}\n");
+      return response->SendResponse(200,
+                                    {{"content-type", "application/x-ndjson"}},
+                                    "{\"n\": 1}\n{\"n\": 2}\n{\"n\": 3}\n");
     }
     if (path == "/events") {
       ABSL_RETURN_IF_ERROR(
@@ -196,21 +201,21 @@ absl::Status PutBody(const std::shared_ptr<Action>& action,
 /// A ready-to-run make_http_request with every input port fed. Every port is
 /// written exactly once, because a unary port's end is established by the first
 /// final write and a second one is rejected.
-std::shared_ptr<Action> MakeRequest(std::string id, std::string url,
-                                    nlohmann::json options = {},
-                                    std::string method = {},
-                                    std::vector<std::string> body = {}) {
+std::shared_ptr<Action> MakeRequest(std::string id, const std::string& url,
+                                    const nlohmann::json& options = {},
+                                    const std::string& method = {},
+                                    const std::vector<std::string>& body = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
       MakeHttpRequestSchema(), std::move(id), MakeHttpRequestHandler());
   if (!created.ok()) {
     return nullptr;
   }
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
   if (!PutJson(action, "url", url).ok()) {
     return nullptr;
   }
-  if (!PutJson(action, "method", method.empty() ? nlohmann::json()
-                                                : nlohmann::json(method))
+  if (!PutJson(action, "method",
+               method.empty() ? nlohmann::json() : nlohmann::json(method))
            .ok()) {
     return nullptr;
   }
@@ -396,9 +401,8 @@ TEST(HttpActionsTest, GivesUpAfterTooManyRedirects) {
 TEST(HttpActionsTest, RewritesASeeOtherToABodylessGet) {
   ActionTestServer server;
   ASSERT_TRUE(server.ok());
-  const std::shared_ptr<Action> action =
-      MakeRequest("see-other", server.url("/see-other"), {}, "POST",
-                  {"payload"});
+  const std::shared_ptr<Action> action = MakeRequest(
+      "see-other", server.url("/see-other"), {}, "POST", {"payload"});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
@@ -465,8 +469,9 @@ TEST(HttpActionsTest, OptionsHeadersBeatActionHeaders) {
   // literal x-a11- header to a peer that wants one.
   const std::shared_ptr<Action> action = MakeRequest(
       "override", server.url("/plain"),
-      nlohmann::json{{"headers", {{"accept", "application/json"},
-                                  {"x-a11-passthrough", "kept"}}}});
+      nlohmann::json{
+          {"headers",
+           {{"accept", "application/json"}, {"x-a11-passthrough", "kept"}}}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->SetHeader("accept", "text/plain").ok());
   ASSERT_TRUE(action->Run().ok());
@@ -479,9 +484,8 @@ TEST(HttpActionsTest, OptionsHeadersBeatActionHeaders) {
 TEST(HttpActionsTest, BuffersARequestBodyWithAContentLength) {
   ActionTestServer server;
   ASSERT_TRUE(server.ok());
-  const std::shared_ptr<Action> action =
-      MakeRequest("upload", server.url("/echo"), {}, "POST",
-                  {"one-", "two-", "three"});
+  const std::shared_ptr<Action> action = MakeRequest(
+      "upload", server.url("/echo"), {}, "POST", {"one-", "two-", "three"});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
@@ -496,7 +500,7 @@ TEST(HttpActionsTest, StreamsARequestBodyWithoutAContentLength) {
   absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
       MakeHttpRequestSchema(), "streamed", MakeHttpRequestHandler());
   ASSERT_TRUE(created.ok()) << created.status();
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
 
   const auto put_json = [&action](std::string_view port,
                                   const nlohmann::json& value) {
@@ -513,7 +517,8 @@ TEST(HttpActionsTest, StreamsARequestBodyWithoutAContentLength) {
   put_json("method", "POST");
   put_json("options", nlohmann::json{{"request_body", "stream"}});
 
-  const std::shared_ptr<AsyncNode> body = *action->GetInput("request_body", false);
+  const std::shared_ptr<AsyncNode> body =
+      *action->GetInput("request_body", false);
   ASSERT_TRUE(action->Run().ok());
   // Written *after* the request is under way, which is the point: the length is
   // not known when the headers go out.
@@ -522,9 +527,8 @@ TEST(HttpActionsTest, StreamsARequestBodyWithoutAContentLength) {
     chunk.metadata = data::ChunkMetadata{
         .mimetype = std::string("application/octet-stream")};
     chunk.data = std::string(piece);
-    ASSERT_TRUE(body->PutChunk(std::move(chunk), std::nullopt, false)
-                    .Await()
-                    .ok());
+    ASSERT_TRUE(
+        body->PutChunk(std::move(chunk), std::nullopt, false).Await().ok());
   }
   ASSERT_TRUE(body->Finalize({.wait = true}).Await().ok());
 
@@ -540,8 +544,9 @@ TEST(HttpActionsTest, OmitClosesPortsWithoutWritingThem) {
   ASSERT_TRUE(server.ok());
   const std::shared_ptr<Action> action = MakeRequest(
       "omitting", server.url("/plain"),
-      nlohmann::json{{"omit", {"fields", "redirects", "pushes", "connection",
-                               "trailers"}}});
+      nlohmann::json{
+          {"omit",
+           {"fields", "redirects", "pushes", "connection", "trailers"}}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
@@ -640,14 +645,14 @@ TEST(HttpActionsTest, RejectsUnusableOptions) {
 
 // --- web-fetch ---------------------------------------------------------------
 
-std::shared_ptr<Action> MakeFetch(std::string id, std::string url,
-                                  nlohmann::json options = {}) {
+std::shared_ptr<Action> MakeFetch(std::string id, const std::string& url,
+                                  const nlohmann::json& options = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created =
       Action::Create(WebFetchSchema(), std::move(id), WebFetchHandler());
   if (!created.ok()) {
     return nullptr;
   }
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
   if (!PutJson(action, "url", url).ok() ||
       !PutJson(action, "method", nlohmann::json()).ok() ||
       !PutJson(action, "options",

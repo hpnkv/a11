@@ -11,13 +11,12 @@
  * caught. a11/exception_guard.h has the reasoning.
  */
 
-#include "a11/nodes/internal/exception_guarded_factory.h"
-
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "a11/internal/exception_guard_impl.h"
+#include "a11/nodes/internal/exception_guarded_factory.h"
 #include "a11/nodes/node_map.h"
 #include "a11/stores/chunk_store.h"
 

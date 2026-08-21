@@ -1,7 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/parser.h"
-
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -16,7 +15,9 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/emit_json.h"
+#include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
+#include "absl/strings/match.h"
 
 namespace a11::flow {
 namespace {
@@ -26,6 +27,7 @@ using syntax::NodeKind;
 
 std::vector<std::string> Codes(const ParseResult& result) {
   std::vector<std::string> codes;
+  codes.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
     codes.push_back(diagnostic.code);
   }
@@ -34,6 +36,7 @@ std::vector<std::string> Codes(const ParseResult& result) {
 
 std::vector<std::string> Messages(const ParseResult& result) {
   std::vector<std::string> messages;
+  messages.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
     messages.push_back(diagnostic.message);
   }
@@ -43,6 +46,7 @@ std::vector<std::string> Messages(const ParseResult& result) {
 /// The kinds of a flow's statements, which is the shape a test usually means.
 std::vector<std::string> BodyKinds(const syntax::FlowDeclaration& flow) {
   std::vector<std::string> kinds;
+  kinds.reserve(flow.body.size());
   for (const syntax::NodePtr& statement : flow.body) {
     kinds.emplace_back(syntax::NodeKindName(statement->kind));
   }
@@ -117,7 +121,7 @@ TEST(FlowParser, AnUnclosedEntryFlowSaysSoWithoutQuotingAnEmptyName) {
   bool mentioned = false;
   for (const std::string& message : messages) {
     // "Flow '' is missing its closing" would read as a file that forgot a name.
-    mentioned = mentioned || message.find("entry flow") != std::string::npos;
+    mentioned = mentioned || absl::StrContains(message, "entry flow");
     EXPECT_EQ(message.find("Flow ''"), std::string::npos) << message;
   }
   EXPECT_TRUE(mentioned) << absl::StrJoin(messages, " | ");
@@ -148,9 +152,9 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   ASSERT_TRUE(flow.headers[0]->has_default);
   EXPECT_EQ(flow.headers[0]->default_value.integer, 3);
 
-  EXPECT_EQ(BodyKinds(flow), (std::vector<std::string>{"nodes", "bind",
-                                                       "for-each", "drain",
-                                                       "repeat", "if"}));
+  EXPECT_EQ(BodyKinds(flow),
+            (std::vector<std::string>{"nodes", "bind", "for-each", "drain",
+                                      "repeat", "if"}));
 
   // The call, its modifiers, and the pipeline feeding a port.
   const auto* bind = As<syntax::Bind>(flow.body[1].get());
@@ -332,7 +336,8 @@ TEST(FlowParser, SkipTakesSeveralSubjectsAndACallsOutputsByName) {
   EXPECT_EQ(skip->targets[5].pipeline->source->kind, NodeKind::kAttr);
 }
 
-TEST(FlowParser, SkipNamesAWholeOutputGroupWithNoParenthesesOnlyAsTheWholeStatement) {
+TEST(FlowParser,
+     SkipNamesAWholeOutputGroupWithNoParenthesesOnlyAsTheWholeStatement) {
   const ParseResult result = Parse(
       "flow f {\n"
       "  act = run action(text: \"x\")\n"
@@ -439,9 +444,9 @@ TEST(FlowParser, TryFrontsThreeDifferentThingsToldApartByWhatFollows) {
     std::string_view body;
     syntax::NodeKind kind;
   };
+
   for (const Case& one : {
-           Case{"  x = try run t(p: a)\n  skip x\n",
-                syntax::NodeKind::kBind},
+           Case{"  x = try run t(p: a)\n  skip x\n", syntax::NodeKind::kBind},
            Case{"  try run t(p: a)\n", syntax::NodeKind::kCallStatement},
            Case{"  try call t(p: a)\n", syntax::NodeKind::kCallStatement},
            Case{"  try a -> o\n", syntax::NodeKind::kPipe},
@@ -589,7 +594,8 @@ TEST(FlowParser, AProblemCostsItsOwnLineAndNothingMore) {
       "  a | wat -> b\n"
       "  a -> b\n"
       "}\n");
-  EXPECT_EQ(Codes(result), (std::vector<std::string>{"flow.form.unknown-stage"}));
+  EXPECT_EQ(Codes(result),
+            (std::vector<std::string>{"flow.form.unknown-stage"}));
   ASSERT_EQ(result.flows.size(), 1u);
   // Both statements are there, and the ports around them too.
   EXPECT_EQ(result.flows[0]->ports.size(), 2u);
@@ -617,6 +623,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
     std::string_view code;
     std::string_view message;
   };
+
   // The sentences are the reference implementation's, because they are what the
   // suite and the documentation already quote.
   const Case cases[] = {
@@ -638,8 +645,8 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
        "flow.form.count-not-positive", "counts whole values"},
       {"flow f { in a: string\n x = 5 }", "flow.syntax.unexpected",
        "Expected 'run' or 'call', found '5'."},
-      {"flow f { in a: string\n a | first -> b }",
-       "flow.form.stage-argument", "Expected a count for 'first'"},
+      {"flow f { in a: string\n a | first -> b }", "flow.form.stage-argument",
+       "Expected a count for 'first'"},
       // The tail a stage may carry, and what each part of it needs.
       {"flow f { in w: string stream\n out o: string stream\n"
        " w | collect parallel 4 -> o }",
@@ -706,13 +713,29 @@ TEST(FlowParser, StopsRatherThanSpinsOnTextThatIsNotAFlowAtAll) {
   // Every one of these used to be a way to hang a hand-written parser. The
   // guarantee is only that parsing terminates and says something.
   const std::string_view sources[] = {
-      "",          "}",         "{",        "flow",     "flow f",
-      "flow f {",  "flow f {\n a",  "flow f { a -> }",
-      "flow f { a | }",         "flow f { a( }", "flow f { in }",
-      "flow f { in a: }",       "flow f { for }", "flow f { if { } }",
-      "flow f { repeat }",      "flow f { x = }", "flow f { \"s\" }",
-      "flow f { a -> b, }",     "flow f { {\"a\": } }", ",,,,",
-      "flow f { a | then }",    "flow f { status }", "flow f { a[ }",
+      "",
+      "}",
+      "{",
+      "flow",
+      "flow f",
+      "flow f {",
+      "flow f {\n a",
+      "flow f { a -> }",
+      "flow f { a | }",
+      "flow f { a( }",
+      "flow f { in }",
+      "flow f { in a: }",
+      "flow f { for }",
+      "flow f { if { } }",
+      "flow f { repeat }",
+      "flow f { x = }",
+      "flow f { \"s\" }",
+      "flow f { a -> b, }",
+      "flow f { {\"a\": } }",
+      ",,,,",
+      "flow f { a | then }",
+      "flow f { status }",
+      "flow f { a[ }",
   };
   for (const std::string_view source : sources) {
     const ParseResult result = Parse(source);
@@ -776,10 +799,30 @@ TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
 // A block and an `abort` are statements like any other, and both were once
 // missing from the switches that name a node and write one out: the envelope
 // carried a `block` with no body at all, and `abort` came back as "error".
+// Deep nesting is a diagnostic, not a stack overflow: the parse is recursive
+// descent and A11's fibres have small fixed stacks, so the depth a document can
+// reach has to be a constant of the parser rather than a property of the input.
+TEST(FlowParser, RefusesToDescendPastItsNestingBound) {
+  std::string deep = "flow f {\n  out o: json\n  ";
+  deep.append(400, '[');
+  deep.append(400, ']');
+  deep += " -> o\n}\n";
+  const ParseResult result = Parse(deep);
+  const std::vector<std::string> codes = Codes(result);
+  EXPECT_NE(
+      std::find(codes.begin(), codes.end(), "flow.syntax.nesting-too-deep"),
+      codes.end())
+      << absl::StrJoin(codes, ", ");
+  // Once, not once per level.
+  EXPECT_EQ(
+      std::count(codes.begin(), codes.end(), "flow.syntax.nesting-too-deep"),
+      1);
+}
+
 TEST(FlowParser, TheEnvelopeCarriesABlockBodyAndNamesAnAbort) {
-  const ParseResult result =
-      Parse("flow f { in a: string stream\n out o: string stream\n"
-            " try { a -> o\n abort o }\n}\n");
+  const ParseResult result = Parse(
+      "flow f { in a: string stream\n out o: string stream\n"
+      " try { a -> o\n abort o }\n}\n");
   ASSERT_TRUE(result.diagnostics.empty())
       << absl::StrJoin(Messages(result), "; ");
   const nlohmann::json value = SyntaxToJsonValue("-", result);
@@ -792,12 +835,12 @@ TEST(FlowParser, TheEnvelopeCarriesABlockBodyAndNamesAnAbort) {
 }
 
 TEST(FlowParser, ADurationIsTaggedSoItIsNotReadAsACount) {
-  const ParseResult result =
-      Parse("flow f { in a: string\n x = run t(a: a) timeout 250ms\n"
-            " x.o -> a }");
+  const ParseResult result = Parse(
+      "flow f { in a: string\n x = run t(a: a) timeout 250ms\n"
+      " x.o -> a }");
   const nlohmann::json value = SyntaxToJsonValue("-", result);
-  const nlohmann::json& modifiers = value["flows"][0]["body"][0]["value"]
-                                         ["modifiers"];
+  const nlohmann::json& modifiers =
+      value["flows"][0]["body"][0]["value"]["modifiers"];
   EXPECT_EQ(modifiers["timeout"]["$duration"], 0.25);
 }
 
@@ -824,7 +867,9 @@ std::filesystem::path GoldenPath(std::string_view name) {
 
 std::string ReadFile(const std::filesystem::path& path) {
   std::ifstream stream(path);
-  if (!stream.is_open()) return "";
+  if (!stream.is_open()) {
+    return "";
+  }
   std::stringstream buffer;
   buffer << stream.rdbuf();
   return buffer.str();
@@ -836,7 +881,7 @@ TEST(FlowSyntaxJson, MatchesTheGoldenEveryLanguageReads) {
   // and a frontend in another language reads it back to check its own decoder.
   // Regenerate with
   //
-  //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test \
+  //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test
   //       --gtest_filter=FlowSyntaxJson.MatchesTheGoldenEveryLanguageReads
   const std::filesystem::path source_path = GoldenPath("example.flow");
   const std::string source = ReadFile(source_path);
@@ -862,10 +907,11 @@ TEST(FlowSyntaxJson, MatchesTheGoldenEveryLanguageReads) {
 }
 
 TEST(FlowParser, ConstantFoldingIsWhatTheGrammarsConstantPositionsUse) {
-  const ParseResult result =
-      Parse("flow f { header \"x-a\" as a default [1, {\"k\": \"v\"}, 1.5]\n"
-            " in q: string }");
-  ASSERT_TRUE(result.diagnostics.empty()) << absl::StrJoin(Messages(result), "; ");
+  const ParseResult result = Parse(
+      "flow f { header \"x-a\" as a default [1, {\"k\": \"v\"}, 1.5]\n"
+      " in q: string }");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
   const syntax::HeaderDeclaration& header = *result.flows[0]->headers[0];
   ASSERT_TRUE(header.has_default);
   ASSERT_EQ(header.default_value.kind, syntax::Constant::Kind::kList);
@@ -879,7 +925,9 @@ TEST(FlowParser, ConstantFoldingIsWhatTheGrammarsConstantPositionsUse) {
 
 /// The first node of a flow's body, for a test that only wants the expression.
 const syntax::Node* absl_nullable FirstStatement(const ParseResult& result) {
-  if (result.flows.empty() || result.flows[0]->body.empty()) return nullptr;
+  if (result.flows.empty() || result.flows[0]->body.empty()) {
+    return nullptr;
+  }
   return result.flows[0]->body[0].get();
 }
 
@@ -893,7 +941,8 @@ TEST(FlowParser, StringsWrittenNextToEachOtherAreOneString) {
       "  out b: string\n"
       "  \"x \" \"y\" -> b\n"
       "}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   EXPECT_EQ(result.flows[0]->description, "one two three");
   EXPECT_EQ(result.flows[0]->ports[0]->description, "first second");
 
@@ -912,7 +961,8 @@ TEST(FlowParser, ADescriptionOnItsOwnLineMayBeARunToo) {
       "  out b: string\n"
       "  a -> b\n"
       "}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   EXPECT_EQ(result.flows[0]->ports[0]->description, "first second");
 }
 
@@ -924,7 +974,8 @@ TEST(FlowParser, ALiteralMaySpreadAnotherIntoItself) {
       "  a | map {...it, \"tag\": 1} -> b\n"
       "  a | map [...it, 2] -> b\n"
       "}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
 
   const auto* pipe = As<syntax::Pipe>(FirstStatement(result));
   ASSERT_NE(pipe, nullptr);
@@ -958,7 +1009,8 @@ TEST(FlowParser, ASpreadOfConstantsIsStillAConstant) {
       "  header \"x-a\" as a default {...{\"p\": 1, \"q\": 2}, \"q\": 3}\n"
       "  header \"x-b\" as b default [...[1, 2], 3]\n"
       "  in x: string required\n  out y: string\n  x -> y\n}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   const syntax::Constant& object = result.flows[0]->headers[0]->default_value;
   ASSERT_EQ(object.pairs.size(), 2u);
   EXPECT_EQ(object.pairs[0].first, "p");
@@ -971,7 +1023,8 @@ TEST(FlowParser, ATypeMayBeWrittenWithTrailingBrackets) {
   const ParseResult result = Parse(
       "flow f {\n  in a: string[] required\n  in b: list[string] required\n"
       "  in c: a11.Chunk[][] required\n  out d: string\n  \"\" -> d\n}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   const syntax::TypeExpression& sugared = result.flows[0]->ports[0]->type;
   const syntax::TypeExpression& spelled = result.flows[0]->ports[1]->type;
   EXPECT_EQ(sugared.name, "list");
@@ -994,7 +1047,8 @@ TEST(FlowParser, ReadsADtoBesideAFlow) {
       "  b: number 0..1 default 0.5\n"
       "  c: string one of [\"p\", \"q\"]\n}\n"
       "flow f {\n  in x: S required\n  out y: string\n  x.a -> y\n}\n");
-  ASSERT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  ASSERT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   ASSERT_EQ(result.dtos.size(), 1u);
   ASSERT_EQ(result.flows.size(), 1u);
 
@@ -1012,7 +1066,8 @@ TEST(FlowParser, ReadsADtoBesideAFlow) {
 
 TEST(FlowParser, AFileMayDeclareOnlyShapes) {
   const ParseResult result = Parse("struct S {\n  a: string required\n}\n");
-  EXPECT_TRUE(Messages(result).empty()) << absl::StrJoin(Messages(result), "; ");
+  EXPECT_TRUE(Messages(result).empty())
+      << absl::StrJoin(Messages(result), "; ");
   EXPECT_EQ(result.dtos.size(), 1u);
   // And a file that declares nothing at all still says so.
   EXPECT_FALSE(Messages(Parse("x -> y\n")).empty());
@@ -1025,8 +1080,11 @@ TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
   // is how the values tests found it.
   const auto kind = [](std::string_view source) {
     const ParseResult result = Parse(source);
-    if (result.flows.empty() || result.flows.front()->body.empty()) return "none";
-    return syntax::NodeKindName(result.flows.front()->body.front()->kind).data();
+    if (result.flows.empty() || result.flows.front()->body.empty()) {
+      return "none";
+    }
+    return syntax::NodeKindName(result.flows.front()->body.front()->kind)
+        .data();
   };
   EXPECT_STREQ(kind("flow f {\n  out o: json\n  {\"a\": 1} -> o\n}\n"), "pipe");
   EXPECT_STREQ(kind("flow f {\n  out o: json\n  {} -> o\n}\n"), "pipe");

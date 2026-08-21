@@ -78,15 +78,27 @@ struct TypeTag {};
 inline std::string_view A11SerialTag(TypeTag<ChunkMetadata>) {
   return kChunkMetadataTag;
 }
-inline std::string_view A11SerialTag(TypeTag<Chunk>) { return kChunkTag; }
-inline std::string_view A11SerialTag(TypeTag<NodeRef>) { return kNodeRefTag; }
+
+inline std::string_view A11SerialTag(TypeTag<Chunk>) {
+  return kChunkTag;
+}
+
+inline std::string_view A11SerialTag(TypeTag<NodeRef>) {
+  return kNodeRefTag;
+}
+
 inline std::string_view A11SerialTag(TypeTag<NodeFragment>) {
   return kNodeFragmentTag;
 }
-inline std::string_view A11SerialTag(TypeTag<Port>) { return kPortTag; }
+
+inline std::string_view A11SerialTag(TypeTag<Port>) {
+  return kPortTag;
+}
+
 inline std::string_view A11SerialTag(TypeTag<ActionMessage>) {
   return kActionMessageTag;
 }
+
 inline std::string_view A11SerialTag(TypeTag<WireMessage>) {
   return kWireMessageTag;
 }
@@ -200,8 +212,7 @@ requires MsgpackSerializable<T> absl::Status RegisterMsgpackSerializable(
         serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
         [](const T& value) -> absl::StatusOr<Chunk> {
           ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
-          ABSL_ASSIGN_OR_RETURN(std::string encoded,
-                                PackMsgpack(json, "JSON"));
+          ABSL_ASSIGN_OR_RETURN(std::string encoded, PackMsgpack(json, "JSON"));
           return Chunk{.data = std::move(encoded)};
         },
         [](const Chunk& chunk) -> absl::StatusOr<T> {

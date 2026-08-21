@@ -33,7 +33,7 @@ a11::Future<std::shared_ptr<Http2Client>> Dial(const ParsedUrl& origin,
                                                Http2Options options) {
   options.tls.enabled = origin.secure();
   options.deadline = absl::InfiniteFuture();
-  return Http2Client::Connect(origin.host, origin.port, std::move(options));
+  return Http2Client::Connect(origin.host, origin.port, options);
 }
 
 /**
@@ -48,15 +48,14 @@ a11::Future<std::shared_ptr<Http2Client>> Dial(const ParsedUrl& origin,
 std::shared_ptr<Http2Client> OwnUntilLastLease(
     std::shared_ptr<Http2Client> client, std::function<void()> on_closed) {
   Http2Client* raw = client.get();
-  return std::shared_ptr<Http2Client>(
-      raw, [owned = std::move(client),
-            on_closed = std::move(on_closed)](Http2Client*) mutable {
-        (void)owned->Close();
-        owned.reset();
-        if (on_closed) {
-          on_closed();
-        }
-      });
+  return {raw, [owned = std::move(client),
+                on_closed = std::move(on_closed)](Http2Client*) mutable {
+            (void)owned->Close();
+            owned.reset();
+            if (on_closed) {
+              on_closed();
+            }
+          }};
 }
 
 }  // namespace
@@ -67,6 +66,7 @@ bool HttpConnectionLease::multiplexed() const {
 
 std::shared_ptr<HttpConnectionPool> HttpConnectionPool::Create() {
   struct Enabler final : HttpConnectionPool {};
+
   return std::make_shared<Enabler>();
 }
 
@@ -83,8 +83,8 @@ std::string HttpConnectionPool::KeyFor(const ParsedUrl& origin,
   return absl::StrCat(
       origin.scheme, "://", origin.host, ":", origin.port, "|",
       options.tls.verify_peer ? "verify" : "trust-any", "|",
-      options.tls.ca_certificate_pem_file, "|", options.tls.certificate_pem_file,
-      "|", options.tls.key_pem_file, "|",
+      options.tls.ca_certificate_pem_file, "|",
+      options.tls.certificate_pem_file, "|", options.tls.key_pem_file, "|",
       static_cast<int>(options.client_preference), "|",
       options.enable_h2 ? "1" : "0", options.enable_h2c ? "1" : "0",
       options.enable_http1 ? "1" : "0", options.enable_push ? "1" : "0", "|",
@@ -122,8 +122,8 @@ a11::Future<HttpConnectionLease> HttpConnectionPool::AcquireUnshared(
         absl::InvalidArgumentError("An HTTP connection needs a host and port"));
   }
   return a11::Submit<HttpConnectionLease>(
-      [origin, options = std::move(options)]() mutable
-          -> absl::StatusOr<HttpConnectionLease> {
+      [origin, options = std::move(
+                   options)]() mutable -> absl::StatusOr<HttpConnectionLease> {
         ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Http2Client> client,
                               Dial(origin, std::move(options)).Await());
         return HttpConnectionLease(
@@ -182,8 +182,8 @@ a11::Future<HttpConnectionLease> HttpConnectionPool::Acquire(
     // Someone else is already dialling this origin; wait for their socket.
     return a11::Submit<HttpConnectionLease>(
         [self = shared_from_this(), origin, options = std::move(options),
-         joined = std::move(joined)]() mutable
-            -> absl::StatusOr<HttpConnectionLease> {
+         joined = std::move(
+             joined)]() mutable -> absl::StatusOr<HttpConnectionLease> {
           ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Http2Client> client,
                                 joined.Await());
           if (client->multiplexed() && client->connected()) {
@@ -199,7 +199,8 @@ a11::Future<HttpConnectionLease> HttpConnectionPool::Acquire(
 
   return a11::Submit<HttpConnectionLease>(
       [self = shared_from_this(), key, origin, options = std::move(options),
-       mine = std::move(mine)]() mutable -> absl::StatusOr<HttpConnectionLease> {
+       mine =
+           std::move(mine)]() mutable -> absl::StatusOr<HttpConnectionLease> {
         absl::StatusOr<std::shared_ptr<Http2Client>> dialled =
             Dial(origin, options).Await();
         if (!dialled.ok()) {

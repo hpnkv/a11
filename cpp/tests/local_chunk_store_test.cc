@@ -30,7 +30,7 @@ TEST(LocalChunkStoreTest, PreservesSequenceAndArrivalOrder) {
   absl::StatusOr<std::shared_ptr<LocalChunkStore>> created =
       LocalChunkStore::Create("test");
   ASSERT_TRUE(created.ok());
-  std::shared_ptr<LocalChunkStore> store = *created;
+  const std::shared_ptr<LocalChunkStore>& store = *created;
   absl::StatusOr<std::vector<std::uint32_t>> sequences =
       store->PutMany({Fragment(2, true), Fragment(0), Fragment(1)})
           .Await(absl::Now() + absl::Seconds(5));
@@ -55,7 +55,7 @@ TEST(LocalChunkStoreTest, PreservesSequenceAndArrivalOrder) {
 TEST(LocalChunkStoreTest, CloseWakesBlockedRead) {
   auto created = LocalChunkStore::Create("test");
   ASSERT_TRUE(created.ok());
-  std::shared_ptr<LocalChunkStore> store = *created;
+  const std::shared_ptr<LocalChunkStore>& store = *created;
   auto pending = store->Get(7, absl::Now() + absl::Seconds(5));
   auto closed = store->CloseWritesWithStatus(absl::DataLossError("failed"));
   ASSERT_TRUE(closed.Await().ok());
@@ -80,7 +80,7 @@ TEST(LocalChunkStoreTest, CancellationWakesBlockedReadAndStoreRemainsUsable) {
 TEST(LocalChunkStoreTest, ClearLeavesTombstone) {
   auto created = LocalChunkStore::Create("test");
   ASSERT_TRUE(created.ok());
-  std::shared_ptr<LocalChunkStore> store = *created;
+  const std::shared_ptr<LocalChunkStore>& store = *created;
   ASSERT_TRUE(store->Put(Fragment(0, true)).Await().ok());
   auto original = store->ClearData(0).Await();
   ASSERT_TRUE(original.ok());

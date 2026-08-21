@@ -89,23 +89,32 @@ bool IsValidUtf8(std::string_view text) {
   return true;
 }
 
+/// The first string in @p value that is not valid UTF-8, or nullptr.
+///
+/// Iterative: this runs on whatever fibre is serializing, and A11's fibre
+/// stacks are fixed and small, so the depth of the document must not decide how
+/// much stack the check needs. The work list is on the heap.
 const Json* FindUnencodableString(const Json& value) {
-  if (value.is_string()) {
-    return IsValidUtf8(value.get_ref<const std::string&>()) ? nullptr : &value;
-  }
-  if (value.is_object() || value.is_array()) {
-    for (const auto& element : value) {
-      if (const Json* found = FindUnencodableString(element);
-          found != nullptr) {
-        return found;
+  std::vector<const Json*> pending{&value};
+  while (!pending.empty()) {
+    const Json* one = pending.back();
+    pending.pop_back();
+    if (one->is_string()) {
+      if (!IsValidUtf8(one->get_ref<const std::string&>())) {
+        return one;
+      }
+      continue;
+    }
+    if (one->is_object() || one->is_array()) {
+      for (const auto& element : *one) {
+        pending.push_back(&element);
       }
     }
   }
   return nullptr;
 }
 
-absl::StatusOr<std::string> DumpJson(const Json& value,
-                                     std::string_view what) {
+absl::StatusOr<std::string> DumpJson(const Json& value, std::string_view what) {
   // Checked before nlohmann is asked, because nlohmann's answer to this one is
   // `std::abort()` in every `-fno-exceptions` TU and the linker picks which
   // instantiation of `dump()` survives. See the header for the whole story.
@@ -145,9 +154,8 @@ absl::StatusOr<std::string> PackMsgpack(const Json& value,
     return std::string(reinterpret_cast<const char*>(encoded.data()),
                        encoded.size());
   } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to encode ", what, " as MessagePack: ",
-                     error.what()));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to encode ", what, " as MessagePack: ", error.what()));
   } catch (...) {
     return absl::InvalidArgumentError(
         absl::StrCat("Failed to encode ", what,
@@ -172,9 +180,8 @@ absl::StatusOr<Json> UnpackMsgpack(std::string_view encoded,
     return absl::InvalidArgumentError(
         absl::StrCat("Invalid ", what, " MessagePack data: ", error.what()));
   } catch (...) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Invalid ", what,
-                     " MessagePack data raised a non-standard exception"));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid ", what, " MessagePack data raised a non-standard exception"));
   }
 }
 

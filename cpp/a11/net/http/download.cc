@@ -82,9 +82,10 @@ bool DigestsMatch(std::string_view expected, std::string_view actual) {
 absl::StatusOr<std::filesystem::path> RunDownload(std::string url,
                                                   DownloadOptions options) {
   if (options.destination.empty()) {
-    return absl::InvalidArgumentError("DownloadOptions.destination is required");
+    return absl::InvalidArgumentError(
+        "DownloadOptions.destination is required");
   }
-  const std::filesystem::path destination = options.destination;
+  std::filesystem::path destination = options.destination;
 
   if (std::filesystem::exists(destination)) {
     if (options.expected_sha1.empty()) {
@@ -136,8 +137,7 @@ absl::StatusOr<std::filesystem::path> RunDownload(std::string url,
   // submitted, and nesting a Submit would only spend a second one to block this
   // one against.
   const absl::StatusOr<HttpResponseHead> head = internal::FetchBlocking(
-      std::move(url), std::move(options.fetch), std::move(sink),
-      std::move(options.on_progress));
+      std::move(url), std::move(options.fetch), sink, options.on_progress);
   if (!head.ok()) {
     return fail(head.status());
   }
@@ -155,17 +155,16 @@ absl::StatusOr<std::filesystem::path> RunDownload(std::string url,
     }
     if (!DigestsMatch(options.expected_sha1, *actual)) {
       return fail(absl::DataLossError(absl::StrCat(
-          "downloaded ", destination.filename().string(),
-          " has SHA-1 ", *actual, ", expected ", options.expected_sha1)));
+          "downloaded ", destination.filename().string(), " has SHA-1 ",
+          *actual, ", expected ", options.expected_sha1)));
     }
   }
 
   std::error_code error;
   std::filesystem::rename(temporary, destination, error);
   if (error) {
-    return fail(absl::UnavailableError(
-        absl::StrCat("could not move the download into place: ",
-                     error.message())));
+    return fail(absl::UnavailableError(absl::StrCat(
+        "could not move the download into place: ", error.message())));
   }
   return destination;
 }
@@ -206,7 +205,7 @@ a11::Future<std::filesystem::path> Download(std::string url,
                                             DownloadOptions options) {
   return a11::Submit<std::filesystem::path>(
       [url = std::move(url), options = std::move(options)]() mutable
-      -> absl::StatusOr<std::filesystem::path> {
+          -> absl::StatusOr<std::filesystem::path> {
         return RunDownload(std::move(url), std::move(options));
       });
 }

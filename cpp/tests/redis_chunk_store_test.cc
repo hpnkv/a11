@@ -65,14 +65,14 @@ TEST(RedisChunkStoreTest, ImplementsOrderingAtomicityAndMetadata) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
   options.inline_data_threshold = 32;
   auto created = RedisChunkStore::Create("redis-store", client, options);
   ASSERT_TRUE(created.ok()) << created.status();
-  std::shared_ptr<RedisChunkStore> store = *created;
+  const std::shared_ptr<RedisChunkStore>& store = *created;
 
   ASSERT_TRUE(store->Initialize().Await().ok());
   absl::StatusOr<RedisChunkStoreMetadata> empty = store->GetMetadata().Await();
@@ -129,7 +129,7 @@ TEST(RedisChunkStoreTest, WaitsForWritesAndPropagatesCloseStatus) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -167,7 +167,7 @@ TEST(RedisChunkStoreTest, ClearDataPreservesMetadataAndRemovesLargePayload) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -209,7 +209,7 @@ TEST(RedisChunkStoreTest, UsesRawDataSizeForInlineThreshold) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -231,7 +231,7 @@ TEST(RedisChunkStoreTest, MetadataRemainsReadableWhenChunkDataIsMissing) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -255,7 +255,7 @@ TEST(RedisChunkStoreTest, ReservesS3ReferencesWithoutPretendingToReadThem) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -302,7 +302,7 @@ TEST(RedisChunkStoreTest, RejectsCorruptMetadataBeforeWritingAnything) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -331,7 +331,7 @@ TEST(RedisChunkStoreTest, PreflightsRevisionAndStreamIdExhaustion) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -382,7 +382,7 @@ TEST(RedisChunkStoreTest, ConcurrentBatchesAndCloseCommitWholeBatches) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
@@ -452,7 +452,7 @@ TEST(RedisChunkStoreTest, CancellingAWaitDoesNotConsumeFutureData) {
   if (!connected.ok()) {
     GTEST_SKIP() << "Redis is unavailable: " << connected.status();
   }
-  std::shared_ptr<redis::Client> client = *connected;
+  const std::shared_ptr<redis::Client>& client = *connected;
   RedisChunkStoreOptions options;
   options.key_prefix =
       "a11:test:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";

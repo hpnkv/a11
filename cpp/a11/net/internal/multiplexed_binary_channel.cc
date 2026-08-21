@@ -150,7 +150,7 @@ void MultiplexedBinaryChannel::WireMember(
             }
           },
       .on_error =
-          [weak, id](absl::Status status) {
+          [weak, id](const absl::Status& status) {
             if (auto self = weak.lock(); self != nullptr) {
               self->DropMember(id, status.message());
             }

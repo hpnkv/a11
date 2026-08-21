@@ -89,14 +89,14 @@ class ChannelWireStream
 
  private:
   a11::Task StartEndpoint(bool accept, OnMessage on_message, OnDone on_done);
-  static void Sender(std::shared_ptr<State> state);
+  static void Sender(const std::shared_ptr<State>& state);
   /// Encodes, packetises and writes `message` on the calling thread. Called
   /// with the endpoint's send claim held; see Send.
   static void DeliverClaimed(const std::shared_ptr<State>& state,
-                             data::WireMessage message,
+                             const data::WireMessage& message,
                              std::uint64_t message_id);
-  static void Receiver(std::shared_ptr<State> state);
-  static void WatchTiming(std::shared_ptr<State> state);
+  static void Receiver(const std::shared_ptr<State>& state);
+  static void WatchTiming(const std::shared_ptr<State>& state);
   static void MarkActivity(const std::shared_ptr<State>& state);
   static void ForceAbort(const std::shared_ptr<State>& state,
                          absl::Status status, bool can_communicate = true);

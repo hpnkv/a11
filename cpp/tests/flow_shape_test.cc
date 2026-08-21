@@ -22,7 +22,7 @@ struct Compiled {
   ParseResult parsed;
   ResolveResult resolved;
 
-  const DtoPlan& Shape(std::string_view name) const {
+  [[nodiscard]] const DtoPlan& Shape(std::string_view name) const {
     const DtoPlan* found = resolved.program.Dto(name);
     ABSL_CHECK(found != nullptr) << "no shape " << name;
     return *found;
@@ -36,7 +36,9 @@ Compiled Compile(std::string_view source) {
   return compiled;
 }
 
-Value Object(Value::Pairs pairs) { return Value::Object(std::move(pairs)); }
+Value Object(Value::Pairs pairs) {
+  return Value::Object(std::move(pairs));
+}
 
 constexpr std::string_view kShapes = R"(struct Source {
   id:    string required
@@ -58,8 +60,7 @@ TEST(FlowShape, FillsDefaultsAndKeepsDeclarationOrder) {
   const Compiled compiled = Compile(kShapes);
   const absl::StatusOr<Value> made = CoerceShape(
       compiled.Shape("Source"),
-      Object({{"id", Value::String("a")},
-              {"url", Value::String("https://x")}}),
+      Object({{"id", Value::String("a")}, {"url", Value::String("https://x")}}),
       {.shapes = &compiled.resolved.program});
   ASSERT_TRUE(made.ok()) << made.status();
   ASSERT_EQ(made->kind(), Value::Kind::kObject);
@@ -68,7 +69,9 @@ TEST(FlowShape, FillsDefaultsAndKeepsDeclarationOrder) {
   // is neither required nor defaulted is simply absent, which is what lets a
   // flow ask `if not thing.field`.
   std::vector<std::string> keys;
-  for (const auto& [key, unused] : made->pairs()) keys.push_back(key);
+  for (const auto& [key, unused] : made->pairs()) {
+    keys.push_back(key);
+  }
   EXPECT_EQ(absl::StrJoin(keys, ","), "id,url,kind,rank");
   EXPECT_EQ(made->Get("kind")->text(), "page");
   EXPECT_DOUBLE_EQ(made->Get("rank")->number(), 0.5);
@@ -79,12 +82,12 @@ TEST(FlowShape, DropsWhatTheShapeDoesNotDeclare) {
   // this reader declared has done nothing wrong. Writing such a key out by hand
   // is a different thing, and the resolver says so.
   const Compiled compiled = Compile(kShapes);
-  const absl::StatusOr<Value> made = CoerceShape(
-      compiled.Shape("Source"),
-      Object({{"id", Value::String("a")},
-              {"url", Value::String("https://x")},
-              {"whatever", Value::Integer(7)}}),
-      {.shapes = &compiled.resolved.program});
+  const absl::StatusOr<Value> made =
+      CoerceShape(compiled.Shape("Source"),
+                  Object({{"id", Value::String("a")},
+                          {"url", Value::String("https://x")},
+                          {"whatever", Value::Integer(7)}}),
+                  {.shapes = &compiled.resolved.program});
   ASSERT_TRUE(made.ok()) << made.status();
   EXPECT_EQ(made->Get("whatever"), nullptr);
 }
@@ -93,8 +96,8 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
   const Compiled compiled = Compile(kShapes);
   const CoerceContext context{.shapes = &compiled.resolved.program};
   const auto fails = [&](Value::Pairs pairs) {
-    const absl::StatusOr<Value> made =
-        CoerceShape(compiled.Shape("Source"), Object(std::move(pairs)), context);
+    const absl::StatusOr<Value> made = CoerceShape(
+        compiled.Shape("Source"), Object(std::move(pairs)), context);
     return made.ok() ? std::string() : std::string(made.status().message());
   };
   const Value::Pairs ok = {{"id", Value::String("a")},
@@ -102,10 +105,10 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
 
   EXPECT_NE(fails({{"url", Value::String("https://x")}}).find("'id'"),
             std::string::npos);
-  EXPECT_NE(fails({{"id", Value::String("a")},
-                   {"url", Value::String("ftp://x")}})
-                .find("url"),
-            std::string::npos);
+  EXPECT_NE(
+      fails({{"id", Value::String("a")}, {"url", Value::String("ftp://x")}})
+          .find("url"),
+      std::string::npos);
   EXPECT_NE(fails({{"id", Value::String("a")},
                    {"url", Value::String("https://x")},
                    {"kind", Value::String("scroll")}})
@@ -121,12 +124,12 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
                    {"title", Value::String("far too long to fit")}})
                 .find("most allowed"),
             std::string::npos);
-  EXPECT_NE(fails({{"id", Value::String("a")},
-                   {"url", Value::String("https://x")},
-                   {"tags", Value::List({Value::String("a"),
-                                         Value::String("a")})}})
-                .find("twice"),
-            std::string::npos);
+  EXPECT_NE(
+      fails({{"id", Value::String("a")},
+             {"url", Value::String("https://x")},
+             {"tags", Value::List({Value::String("a"), Value::String("a")})}})
+          .find("twice"),
+      std::string::npos);
 
   // A duration bound compares by its length, however the value arrived.
   EXPECT_TRUE(fails({{"id", Value::String("a")},
@@ -143,13 +146,12 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
 TEST(FlowShape, FollowsTheShapesAShapeNames) {
   const Compiled compiled = Compile(kShapes);
   const CoerceContext context{.shapes = &compiled.resolved.program};
-  const Value inner = Object({{"id", Value::String("a")},
-                              {"url", Value::String("https://x")}});
+  const Value inner =
+      Object({{"id", Value::String("a")}, {"url", Value::String("https://x")}});
 
   const absl::StatusOr<Value> made = CoerceShape(
       compiled.Shape("Cited"),
-      Object({{"source", inner},
-              {"seen", Value::List({inner, inner})}}),
+      Object({{"source", inner}, {"seen", Value::List({inner, inner})}}),
       context);
   ASSERT_TRUE(made.ok()) << made.status();
   // The nested shape was validated too, so its defaults are there.
@@ -159,10 +161,11 @@ TEST(FlowShape, FollowsTheShapesAShapeNames) {
   // And a failure inside one says where it was, by path.
   const absl::StatusOr<Value> bad = CoerceShape(
       compiled.Shape("Cited"),
-      Object({{"source", inner},
-              {"seen", Value::List({inner,
-                                    Object({{"id", Value::String("b")},
-                                            {"url", Value::String("nope")}})})}}),
+      Object(
+          {{"source", inner},
+           {"seen",
+            Value::List({inner, Object({{"id", Value::String("b")},
+                                        {"url", Value::String("nope")}})})}}),
       context);
   ASSERT_FALSE(bad.ok());
   EXPECT_NE(std::string(bad.status().message()).find("seen[1]"),
@@ -173,9 +176,8 @@ TEST(FlowShape, FollowsTheShapesAShapeNames) {
 TEST(FlowShape, ARecordIsARecordAndNothingElse) {
   const Compiled compiled = Compile(kShapes);
   const CoerceContext context{.shapes = &compiled.resolved.program};
-  const absl::StatusOr<Value> made =
-      CoerceShape(compiled.Shape("Source"), Value::String("just a string"),
-                  context);
+  const absl::StatusOr<Value> made = CoerceShape(
+      compiled.Shape("Source"), Value::String("just a string"), context);
   ASSERT_FALSE(made.ok());
   // The message lists what the shape holds, so the author can see what was
   // wanted rather than only that something was wrong.
@@ -190,10 +192,9 @@ TEST(FlowShape, ACastNamesAShapeBeforeItNamesATag) {
   const Compiled compiled = Compile(kShapes);
   syntax::TypeExpression type;
   type.name = "Source";
-  const absl::StatusOr<Value> made =
-      Coerce(Object({{"id", Value::String("a")},
-                     {"url", Value::String("https://x")}}),
-             type, {.shapes = &compiled.resolved.program});
+  const absl::StatusOr<Value> made = Coerce(
+      Object({{"id", Value::String("a")}, {"url", Value::String("https://x")}}),
+      type, {.shapes = &compiled.resolved.program});
   ASSERT_TRUE(made.ok()) << made.status();
   EXPECT_EQ(made->Get("kind")->text(), "page");
 
@@ -213,16 +214,19 @@ class AdoptingBridge : public HostBridge {
     (void)tag;
     return value;
   }
+
   absl::StatusOr<data::Chunk> ToChunk(const Value& value,
                                       std::string_view mimetype) override {
     (void)value;
     (void)mimetype;
     return absl::UnimplementedError("not for this test");
   }
+
   absl::StatusOr<Value> FromChunk(const data::Chunk& chunk) override {
     (void)chunk;
     return absl::UnimplementedError("not for this test");
   }
+
   absl::StatusOr<Value> Adopt(const DtoPlan& shape, const Program& program,
                               const Value& value) override {
     (void)program;

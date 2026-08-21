@@ -182,7 +182,7 @@ absl::StatusOr<std::shared_ptr<internal::SpeechRecognizerState>> LoadState(
     return absl::NotFoundError(absl::StrCat(
         "Silero VAD model file was not found: ", options.vad_model));
   }
-  if (options.language != "auto" && options.language != "" &&
+  if (options.language != "auto" && !options.language.empty() &&
       whisper_lang_id(options.language.c_str()) < 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported Whisper language: ", options.language));
@@ -508,8 +508,8 @@ absl::StatusOr<std::shared_ptr<SpeechRecognizer>> SpeechRecognizer::Create(
     return absl::InvalidArgumentError("subscription must not be null");
   }
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::SpeechRecognizerState> state,
-                        LoadState(std::move(model), std::move(options),
-                                  nullptr, std::move(subscription)));
+                        LoadState(std::move(model), std::move(options), nullptr,
+                                  std::move(subscription)));
   return std::shared_ptr<SpeechRecognizer>(
       new SpeechRecognizer(std::move(state)));
 }
@@ -613,9 +613,8 @@ a11::Task SpeechRecognizer::StartWithReaderLocked(
        close_source = std::move(close_source),
        on_transcription = std::move(on_transcription),
        on_done = std::move(on_done)]() mutable {
-        return self->Run(std::move(reader), pause_after,
-                         std::move(close_source), std::move(on_transcription),
-                         std::move(on_done));
+        return self->Run(reader, pause_after, close_source,
+                         std::move(on_transcription), std::move(on_done));
       },
       {.stack_size = 64 * 1024});
   return a11::ReadyTask();
@@ -667,9 +666,9 @@ const SpeechRecognizerOptions& SpeechRecognizer::options() const {
   return state_->options;
 }
 
-absl::Status SpeechRecognizer::Run(AudioBufferReader reader,
+absl::Status SpeechRecognizer::Run(const AudioBufferReader& reader,
                                    absl::Duration pause_after,
-                                   std::function<void()> close_source,
+                                   const std::function<void()>& close_source,
                                    OnTranscription on_transcription,
                                    OnRecognitionDone on_done) {
   absl::Status status;

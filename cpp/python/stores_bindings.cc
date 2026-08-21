@@ -177,7 +177,7 @@ std::uint64_t UnsignedOption(const py::handle& value, std::uint64_t maximum,
       ThrowStatus(absl::InvalidArgumentError(std::string(name) +
                                              " must be non-negative"));
     }
-    const std::uint64_t converted = value.cast<std::uint64_t>();
+    const auto converted = value.cast<std::uint64_t>();
     if (converted > maximum) {
       ThrowStatus(absl::OutOfRangeError(std::string(name) +
                                         " exceeds its supported range"));
@@ -678,8 +678,8 @@ Examples:
                       DurationFromPython(cross_process_poll_interval, false));
                 }
                 if (!blob_grace_period.is_none()) {
-                  options.blob_grace_period =
-                      ValueOrThrow(DurationFromPython(blob_grace_period, false));
+                  options.blob_grace_period = ValueOrThrow(
+                      DurationFromPython(blob_grace_period, false));
                 }
                 const absl::Status status = options.Validate();
                 if (!status.ok()) {
@@ -805,7 +805,7 @@ Examples:
                  root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
                                 : root.cast<std::string>();
              return ValueOrThrow(stores::SQLiteChunkStore::Create(
-                 std::move(id), std::move(directory), std::move(options)));
+                 std::move(id), directory, std::move(options)));
            }),
            "Create a SQLite store. Without a root it uses the default cache "
            "directory; stores sharing a root share one database.",
@@ -824,7 +824,7 @@ Examples:
                 root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
                                : root.cast<std::string>();
             return ValueOrThrow(stores::SQLiteChunkStore::Create(
-                std::move(id), std::move(directory), std::move(options)));
+                std::move(id), directory, std::move(options)));
           },
           "Create a SQLite store with an optional root and options.",
           py::arg("id"), py::arg("root") = py::none(),
@@ -873,7 +873,7 @@ Examples:
                 root.is_none() ? stores::SQLiteChunkStoreFactory::DefaultRoot()
                                : root.cast<std::string>();
             return ValueOrThrow(stores::SQLiteChunkStoreFactory::Create(
-                std::move(directory), std::move(options)));
+                directory, std::move(options)));
           }),
           "Create a factory rooted at a directory, defaulting to the A11 "
           "cache directory.",
@@ -931,19 +931,21 @@ Examples:
            py::arg("store"),
            py::arg("options") = stores::ChunkStoreReaderOptions{},
            py::keep_alive<1, 2>())
-      .def("ensure_started",
-           [](stores::ChunkStoreReader& self) {
-             WithoutGil([&] { self.EnsureStarted(); });
-           },
-           "Start the background read pump if it is not already running. "
-           "Reading normally starts it lazily; call this to begin buffering "
-           "before the first `next`.")
-      .def("cancel",
-           [](stores::ChunkStoreReader& self) {
-             WithoutGil([&] { self.Cancel(); });
-           },
-           "Stop the background read pump. Pending `next` awaitables are "
-           "resolved and no further chunks are fetched.")
+      .def(
+          "ensure_started",
+          [](stores::ChunkStoreReader& self) {
+            WithoutGil([&] { self.EnsureStarted(); });
+          },
+          "Start the background read pump if it is not already running. "
+          "Reading normally starts it lazily; call this to begin buffering "
+          "before the first `next`.")
+      .def(
+          "cancel",
+          [](stores::ChunkStoreReader& self) {
+            WithoutGil([&] { self.Cancel(); });
+          },
+          "Stop the background read pump. Pending `next` awaitables are "
+          "resolved and no further chunks are fetched.")
       .def(
           "get_status",
           [](const stores::ChunkStoreReader& self) -> NativeStatus {
@@ -1006,25 +1008,27 @@ Examples:
            py::arg("store"),
            py::arg("options") = stores::ChunkStoreWriterOptions{},
            py::keep_alive<1, 2>())
-      .def("ensure_started",
-           [](stores::ChunkStoreWriter& self) {
-             WithoutGil([&] { self.EnsureStarted(); });
-           },
-           "Start the background flush loop if it is not already running. "
-           "Writing normally starts it lazily; call this to begin flushing "
-           "before the first chunk is enqueued.")
-      .def("flush",
-           [](stores::ChunkStoreWriter& self) {
-             WithoutGil([&] { self.Flush(); });
-           },
-           "Run the flush loop now, on this thread, if it is idle. A store "
-           "that accepts the batch without waiting -- an in-memory one does "
-           "-- has confirmed those writes by the time this returns, so their "
-           "confirmations resolve without an event-loop turn. A store that "
-           "cannot leaves the batch in flight and this does nothing, so "
-           "chunks enqueued behind it still go out together. Awaiting a "
-           "confirmation calls this for you; call it directly only to push a "
-           "queue out without awaiting anything.")
+      .def(
+          "ensure_started",
+          [](stores::ChunkStoreWriter& self) {
+            WithoutGil([&] { self.EnsureStarted(); });
+          },
+          "Start the background flush loop if it is not already running. "
+          "Writing normally starts it lazily; call this to begin flushing "
+          "before the first chunk is enqueued.")
+      .def(
+          "flush",
+          [](stores::ChunkStoreWriter& self) {
+            WithoutGil([&] { self.Flush(); });
+          },
+          "Run the flush loop now, on this thread, if it is idle. A store "
+          "that accepts the batch without waiting -- an in-memory one does "
+          "-- has confirmed those writes by the time this returns, so their "
+          "confirmations resolve without an event-loop turn. A store that "
+          "cannot leaves the batch in flight and this does nothing, so "
+          "chunks enqueued behind it still go out together. Awaiting a "
+          "confirmation calls this for you; call it directly only to push a "
+          "queue out without awaiting anything.")
       .def(
           "put_chunk",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self,
@@ -1128,12 +1132,13 @@ Examples:
           "Return the status the writer was aborted with, or None if it was "
           "not aborted. Use this to distinguish a clean close from an "
           "error-driven abort.")
-      .def("is_writable",
-           [](const stores::ChunkStoreWriter& self) {
-             return WithoutGil([&] { return self.IsWritable(); });
-           },
-           "Return whether the writer still accepts chunks. False once the "
-           "stream has been drained, closed, or aborted.")
+      .def(
+          "is_writable",
+          [](const stores::ChunkStoreWriter& self) {
+            return WithoutGil([&] { return self.IsWritable(); });
+          },
+          "Return whether the writer still accepts chunks. False once the "
+          "stream has been drained, closed, or aborted.")
       .def(
           "cancel",
           [](const std::shared_ptr<stores::ChunkStoreWriter>& self) {

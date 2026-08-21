@@ -92,9 +92,8 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
       HttpHeaders headers) override;
   absl::StatusOr<bool> ResponseHeadersSent(std::int32_t stream_id) override;
   absl::StatusOr<bool> ResponseFinished(std::int32_t stream_id) override;
-  [[nodiscard]] bool secure() const override {
-    return ssl_context_ != nullptr;
-  }
+
+  [[nodiscard]] bool secure() const override { return ssl_context_ != nullptr; }
 
  protected:
   // --- HttpTransport seams. ---
@@ -164,10 +163,10 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
   // RFC 6455 WebSocket upgrade state. Once upgraded, the connection switches to
   // raw passthrough (kRaw): inbound bytes are pushed to the duplex body stream
   // and outbound Write bytes go straight to the socket, framed by the caller.
-  bool ws_upgrade_ = false;         ///< This exchange is a WebSocket upgrade.
-  std::string ws_key_;              ///< Client Sec-WebSocket-Key (server side).
-  bool client_ws_ = false;          ///< Client-initiated WebSocket upgrade.
-  std::string client_ws_key_;       ///< Key we sent (client side, for accept).
+  bool ws_upgrade_ = false;    ///< This exchange is a WebSocket upgrade.
+  std::string ws_key_;         ///< Client Sec-WebSocket-Key (server side).
+  bool client_ws_ = false;     ///< Client-initiated WebSocket upgrade.
+  std::string client_ws_key_;  ///< Key we sent (client side, for accept).
   std::shared_ptr<Http2RequestBodyStream::State> request_body_state_;
 
   /// Http2Options::stream_request_body accepted this exchange, so its body is

@@ -73,12 +73,12 @@ absl::Status StreamingMonoResampler::Process(
   if (pending_.size() < 2) {
     return absl::OkStatus();
   }
-  const size_t estimate = static_cast<size_t>(
+  const auto estimate = static_cast<size_t>(
       static_cast<double>(buffer.num_frames) / input_step_ + 2.0);
   output->reserve(output->size() + estimate);
   while (cursor_ + 1.0 < static_cast<double>(pending_.size())) {
-    const size_t left = static_cast<size_t>(cursor_);
-    const float fraction =
+    const auto left = static_cast<size_t>(cursor_);
+    const auto fraction =
         static_cast<float>(cursor_ - static_cast<double>(left));
     output->push_back(pending_[left] +
                       (pending_[left + 1] - pending_[left]) * fraction);

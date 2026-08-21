@@ -135,7 +135,8 @@ struct Options {
 absl::StatusOr<Options> ParseCommandLine(int argc, char** argv) {
   Options options;
   int index = 1;
-  const auto value_for = [&](std::string_view flag) -> absl::StatusOr<std::string> {
+  const auto value_for =
+      [&](std::string_view flag) -> absl::StatusOr<std::string> {
     if (index + 1 >= argc) {
       return absl::InvalidArgumentError(absl::StrCat(flag, " needs a value"));
     }
@@ -297,7 +298,8 @@ int Main(int argc, char** argv) {
   if (options->print_plan || options->check_only) {
     absl::StatusOr<std::string> described = DescribeEntry(source);
     if (!described.ok()) {
-      std::cerr << options->path << ": " << described.status().message() << "\n";
+      std::cerr << options->path << ": " << described.status().message()
+                << "\n";
       return 2;
     }
     std::cout << *described;

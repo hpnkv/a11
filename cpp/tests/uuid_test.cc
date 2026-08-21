@@ -16,7 +16,9 @@ bool IsLowercaseHex(std::string_view text) {
   for (const char one : text) {
     const bool digit = one >= '0' && one <= '9';
     const bool letter = one >= 'a' && one <= 'f';
-    if (!digit && !letter) return false;
+    if (!digit && !letter) {
+      return false;
+    }
   }
   return !text.empty();
 }
@@ -48,7 +50,9 @@ TEST(NewShortIdTest, ClampsTheRequestedWidth) {
 TEST(NewShortIdTest, DoesNotRepeatItselfInBulk) {
   // 48 bits: a million ids is far below the birthday threshold, so a repeat
   // here means the generator is not generating.
-  constexpr int kCount = 1'000'000;
+  // Plain literal, no digit separators: clang-format has been seen to read
+  // 1'000'000 as character literals when reflowing this region.
+  constexpr int kCount = 1000000;
   std::unordered_set<std::string> seen;
   seen.reserve(kCount);
   for (int index = 0; index < kCount; ++index) {

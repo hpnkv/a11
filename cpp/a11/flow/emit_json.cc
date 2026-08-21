@@ -33,7 +33,9 @@ nlohmann::json PositionToJson(const Position& position) {
 
 Position PositionFromJson(const nlohmann::json& value) {
   Position position;
-  if (!value.is_object()) return position;
+  if (!value.is_object()) {
+    return position;
+  }
   position.offset = value.value("offset", static_cast<size_t>(0));
   position.line = value.value("line", 1);
   position.column = value.value("column", 1);
@@ -66,13 +68,17 @@ nlohmann::json NodeJson(const syntax::Node* node);
 
 nlohmann::json NodeList(const std::vector<syntax::NodePtr>& nodes) {
   nlohmann::json list = nlohmann::json::array();
-  for (const syntax::NodePtr& node : nodes) list.push_back(NodeJson(node.get()));
+  for (const syntax::NodePtr& node : nodes) {
+    list.push_back(NodeJson(node.get()));
+  }
   return list;
 }
 
 nlohmann::json WordList(const std::vector<syntax::Word>& words) {
   nlohmann::json list = nlohmann::json::array();
-  for (const syntax::Word& word : words) list.push_back(word.text);
+  for (const syntax::Word& word : words) {
+    list.push_back(word.text);
+  }
   return list;
 }
 
@@ -85,14 +91,16 @@ nlohmann::json LogTailJson(const syntax::LogTail& tail) {
   nlohmann::json value = nlohmann::json::object();
   value["level"] = tail.level.Empty() ? nlohmann::json(nullptr)
                                       : nlohmann::json(tail.level.text);
-  value["format"] = tail.has_format ? nlohmann::json(tail.format)
-                                    : nlohmann::json(nullptr);
+  value["format"] =
+      tail.has_format ? nlohmann::json(tail.format) : nlohmann::json(nullptr);
   value["arguments"] = NodeList(tail.arguments);
   return value;
 }
 
 nlohmann::json DurationJson(const std::optional<absl::Duration>& duration) {
-  if (!duration.has_value()) return nullptr;
+  if (!duration.has_value()) {
+    return nullptr;
+  }
   return nlohmann::json{{"$duration", absl::ToDoubleSeconds(*duration)}};
 }
 
@@ -111,8 +119,12 @@ nlohmann::json TypeJson(const syntax::TypeExpression& type) {
 /// A field's bounds. Absent keys are open ends, which is what `1..` means.
 nlohmann::json RangeJson(const syntax::FieldRange& range) {
   nlohmann::json written = nlohmann::json::object();
-  if (range.has_minimum) written["minimum"] = ConstantToJsonValue(range.minimum);
-  if (range.has_maximum) written["maximum"] = ConstantToJsonValue(range.maximum);
+  if (range.has_minimum) {
+    written["minimum"] = ConstantToJsonValue(range.minimum);
+  }
+  if (range.has_maximum) {
+    written["maximum"] = ConstantToJsonValue(range.maximum);
+  }
   return written;
 }
 
@@ -126,7 +138,9 @@ nlohmann::json PairsJson(
 }
 
 nlohmann::json NodeJson(const syntax::Node* node) {
-  if (node == nullptr) return nullptr;
+  if (node == nullptr) {
+    return nullptr;
+  }
   // The position goes under `at` rather than beside the node's own fields: a
   // `repeat` has a `start`, and a format where one key means two things is a
   // format somebody reads wrong exactly once.
@@ -149,7 +163,8 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["items"] = NodeList(syntax::As<syntax::ListLiteral>(node)->items);
       break;
     case syntax::NodeKind::kObjectLiteral:
-      value["pairs"] = PairsJson(syntax::As<syntax::ObjectLiteral>(node)->pairs);
+      value["pairs"] =
+          PairsJson(syntax::As<syntax::ObjectLiteral>(node)->pairs);
       break;
     case syntax::NodeKind::kIt:
       break;
@@ -199,10 +214,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["takes"] = vocabulary::StageArgumentName(stage->takes);
       switch (stage->takes) {
         case vocabulary::StageArgument::kNumber:
-          value["arg"] = stage->is_integer
-                             ? nlohmann::json(static_cast<long long>(
-                                   stage->number))
-                             : nlohmann::json(stage->number);
+          value["arg"] =
+              stage->is_integer
+                  ? nlohmann::json(static_cast<long long>(stage->number))
+                  : nlohmann::json(stage->number);
           break;
         case vocabulary::StageArgument::kString:
         case vocabulary::StageArgument::kOptionalString:
@@ -391,7 +406,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     case syntax::NodeKind::kForEach: {
       const auto* loop = syntax::As<syntax::ForEach>(node);
       nlohmann::json names = nlohmann::json::array();
-      for (const syntax::Word& name : loop->variables) names.push_back(name.text);
+      for (const syntax::Word& name : loop->variables) {
+        names.push_back(name.text);
+      }
       value["variable"] = loop->variable().text;
       value["variables"] = std::move(names);
       value["pipeline"] = NodeJson(loop->pipeline.get());
@@ -500,8 +517,12 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["required"] = field->required;
       value["unique"] = field->unique;
       value["description"] = field->description;
-      if (!field->range.Empty()) value["range"] = RangeJson(field->range);
-      if (field->has_pattern) value["pattern"] = field->pattern;
+      if (!field->range.Empty()) {
+        value["range"] = RangeJson(field->range);
+      }
+      if (field->has_pattern) {
+        value["pattern"] = field->pattern;
+      }
       if (field->has_enumeration) {
         nlohmann::json allowed = nlohmann::json::array();
         for (const syntax::Constant& one : field->enumeration) {
@@ -553,13 +574,17 @@ nlohmann::json DiagnosticToJsonValue(const Diagnostic& diagnostic) {
   };
   // Absent rather than empty: the flow is unknown when the text did not get far
   // enough to name one, and "" would read as a flow called nothing.
-  if (!diagnostic.flow.empty()) value["flow"] = diagnostic.flow;
+  if (!diagnostic.flow.empty()) {
+    value["flow"] = diagnostic.flow;
+  }
   return value;
 }
 
 Diagnostic DiagnosticFromJsonValue(const nlohmann::json& value) {
   Diagnostic diagnostic;
-  if (!value.is_object()) return diagnostic;
+  if (!value.is_object()) {
+    return diagnostic;
+  }
   diagnostic.code = value.value("code", std::string());
   diagnostic.severity =
       SeverityFromName(value.value("severity", std::string("error")));
@@ -569,19 +594,25 @@ Diagnostic DiagnosticFromJsonValue(const nlohmann::json& value) {
   diagnostic.flow = value.value("flow", std::string());
   const auto range = value.find("range");
   if (range != value.end() && range->is_object()) {
-    diagnostic.range.start = PositionFromJson(range->value("start", nlohmann::json()));
-    diagnostic.range.end = PositionFromJson(range->value("end", nlohmann::json()));
+    diagnostic.range.start =
+        PositionFromJson(range->value("start", nlohmann::json()));
+    diagnostic.range.end =
+        PositionFromJson(range->value("end", nlohmann::json()));
   }
   const auto fixes = value.find("fixes");
   if (fixes != value.end() && fixes->is_array()) {
     for (const nlohmann::json& entry : *fixes) {
-      if (!entry.is_object()) continue;
+      if (!entry.is_object()) {
+        continue;
+      }
       Fix fix;
       fix.label = entry.value("label", std::string());
       const auto edits = entry.find("edits");
       if (edits != entry.end() && edits->is_array()) {
         for (const nlohmann::json& edit : *edits) {
-          if (!edit.is_object()) continue;
+          if (!edit.is_object()) {
+            continue;
+          }
           Edit parsed;
           parsed.start = edit.value("start", static_cast<size_t>(0));
           parsed.end = edit.value("end", parsed.start);
@@ -623,17 +654,17 @@ nlohmann::json DiagnosticsToJsonValue(
       {"format", kDiagnosticsFormat},
       {"source", std::string(source)},
       {"diagnostics", list},
-      {"counts",
-       nlohmann::json{{"error", errors},
-                      {"warning", warnings},
-                      {"weak-warning", weak},
-                      {"information", information}}},
+      {"counts", nlohmann::json{{"error", errors},
+                                {"warning", warnings},
+                                {"weak-warning", weak},
+                                {"information", information}}},
   };
 }
 
 std::string DiagnosticsToJson(std::string_view source,
                               absl::Span<const Diagnostic> diagnostics) {
-  return absl::StrCat(DiagnosticsToJsonValue(source, diagnostics).dump(2), "\n");
+  return absl::StrCat(DiagnosticsToJsonValue(source, diagnostics).dump(2),
+                      "\n");
 }
 
 nlohmann::json CodesToJsonValue() {
@@ -653,20 +684,24 @@ nlohmann::json VocabularyToJsonValue() {
   // must not change because a hash table was rebuilt.
   const auto ordered = [](absl::Span<const std::string_view> words) {
     nlohmann::json list = nlohmann::json::array();
-    for (const std::string_view word : words) list.push_back(word);
+    for (const std::string_view word : words) {
+      list.push_back(word);
+    }
     return list;
   };
   const auto sorted = [](const auto& words) {
     std::vector<std::string_view> out(words.begin(), words.end());
     std::sort(out.begin(), out.end());
     nlohmann::json list = nlohmann::json::array();
-    for (const std::string_view word : out) list.push_back(word);
+    for (const std::string_view word : out) {
+      list.push_back(word);
+    }
     return list;
   };
   nlohmann::json stages = nlohmann::json::object();
   for (const std::string_view stage : vocabulary::Stages()) {
-    stages[std::string(stage)] = vocabulary::StageArgumentName(
-        *vocabulary::StageTakes(stage));
+    stages[std::string(stage)] =
+        vocabulary::StageArgumentName(*vocabulary::StageTakes(stage));
   }
   // What each word *does*, beside the lists of which words there are. Keyed by
   // role and then by word, under the same role names the word-list keys use, so
@@ -683,12 +718,22 @@ nlohmann::json VocabularyToJsonValue() {
       // may list a word another set documents, and `AnyDocumentation` says
       // which cases those are.
       const vocabulary::WordDoc* doc = vocabulary::Documentation(role, word);
-      if (doc == nullptr) doc = vocabulary::AnyDocumentation(word);
-      if (doc == nullptr) continue;
+      if (doc == nullptr) {
+        doc = vocabulary::AnyDocumentation(word);
+      }
+      if (doc == nullptr) {
+        continue;
+      }
       nlohmann::json entry{{"summary", doc->summary}};
-      if (!doc->takes.empty()) entry["takes"] = doc->takes;
-      if (!doc->detail.empty()) entry["detail"] = doc->detail;
-      if (!doc->example.empty()) entry["example"] = doc->example;
+      if (!doc->takes.empty()) {
+        entry["takes"] = doc->takes;
+      }
+      if (!doc->detail.empty()) {
+        entry["detail"] = doc->detail;
+      }
+      if (!doc->example.empty()) {
+        entry["example"] = doc->example;
+      }
       words[std::string(word)] = std::move(entry);
     }
     documentation[std::string(vocabulary::WordRoleName(role))] =
@@ -743,46 +788,46 @@ nlohmann::json DiagnosticsToSarifValue(
         {"ruleId", diagnostic.code},
         {"level", SarifLevel(diagnostic.severity)},
         {"message", nlohmann::json{{"text", diagnostic.message}}},
-        {"locations",
-         nlohmann::json::array({nlohmann::json{
-             {"physicalLocation",
-              nlohmann::json{
-                  {"artifactLocation",
-                   nlohmann::json{{"uri", std::string(source)}}},
-                  // SARIF regions are 1-based lines and columns, with the end
-                  // column exclusive -- the same convention as the range here.
-                  {"region",
-                   nlohmann::json{
-                       {"startLine", diagnostic.range.start.line},
-                       {"startColumn", diagnostic.range.start.column},
-                       {"endLine", diagnostic.range.end.line},
-                       {"endColumn", diagnostic.range.end.column},
-                       {"charOffset", diagnostic.range.start.offset},
-                       {"charLength", diagnostic.range.end.offset -
-                                          diagnostic.range.start.offset}}}}}}}),
+        {
+            "locations",
+            nlohmann::json::array({nlohmann::json{
+                {"physicalLocation",
+                 nlohmann::json{
+                     {"artifactLocation",
+                      nlohmann::json{{"uri", std::string(source)}}},
+                     // SARIF regions are 1-based lines and columns, with the end
+                     // column exclusive -- the same convention as the range here.
+                     {"region",
+                      nlohmann::json{
+                          {"startLine", diagnostic.range.start.line},
+                          {"startColumn", diagnostic.range.start.column},
+                          {"endLine", diagnostic.range.end.line},
+                          {"endColumn", diagnostic.range.end.column},
+                          {"charOffset", diagnostic.range.start.offset},
+                          {"charLength",
+                           diagnostic.range.end.offset -
+                               diagnostic.range.start.offset}}}}}}}),
         },
     });
   }
 
   return nlohmann::json{
-      {"$schema",
-       "https://json.schemastore.org/sarif-2.1.0.json"},
+      {"$schema", "https://json.schemastore.org/sarif-2.1.0.json"},
       {"version", "2.1.0"},
       {"runs",
        nlohmann::json::array({nlohmann::json{
            {"tool",
             nlohmann::json{
-                {"driver",
-                 nlohmann::json{{"name", "a11 flow"},
-                                {"informationUri",
-                                 "https://github.com/hpnkv/a11"},
-                                {"rules", rules}}}}},
+                {"driver", nlohmann::json{{"name", "a11 flow"},
+                                          {"informationUri",
+                                           "https://github.com/hpnkv/a11"},
+                                          {"rules", rules}}}}},
            {"results", results}}})},
   };
 }
 
 std::string DiagnosticsToSarif(std::string_view source,
-                              absl::Span<const Diagnostic> diagnostics) {
+                               absl::Span<const Diagnostic> diagnostics) {
   return absl::StrCat(DiagnosticsToSarifValue(source, diagnostics).dump(2),
                       "\n");
 }
@@ -814,7 +859,8 @@ nlohmann::json ConstantToJsonValue(const syntax::Constant& constant) {
     case syntax::Constant::Kind::kObject: {
       nlohmann::json pairs = nlohmann::json::array();
       for (const auto& [key, value] : constant.pairs) {
-        pairs.push_back(nlohmann::json::array({key, ConstantToJsonValue(value)}));
+        pairs.push_back(
+            nlohmann::json::array({key, ConstantToJsonValue(value)}));
       }
       return nlohmann::json{{"$object", pairs}};
     }
@@ -889,7 +935,8 @@ nlohmann::json TokensToJsonValue(std::string_view source_name,
   };
 }
 
-std::string TokensToJson(std::string_view source_name, std::string_view source) {
+std::string TokensToJson(std::string_view source_name,
+                         std::string_view source) {
   return absl::StrCat(TokensToJsonValue(source_name, source).dump(2), "\n");
 }
 
@@ -904,10 +951,8 @@ nlohmann::json FormatToJsonValue(const FormatResult& result) {
     diagnostics.push_back(DiagnosticToJsonValue(diagnostic));
   }
   return nlohmann::json{
-      {"format", kFormatFormat},
-      {"formatted", result.formatted},
-      {"changed", result.changed},
-      {"edits", edits},
+      {"format", kFormatFormat},    {"formatted", result.formatted},
+      {"changed", result.changed},  {"edits", edits},
       {"diagnostics", diagnostics},
   };
 }
@@ -923,9 +968,15 @@ nlohmann::json CompletionsToJsonValue(const CompleteResult& result) {
     // Only what there is: a proposal with no tail, no type and a caret at the
     // end of what it writes is the common case, and saying so four times would
     // make the payload longer than the list it describes.
-    if (proposal.caret >= 0) written["caret"] = proposal.caret;
-    if (!proposal.tail.empty()) written["tail"] = proposal.tail;
-    if (!proposal.type.empty()) written["type"] = proposal.type;
+    if (proposal.caret >= 0) {
+      written["caret"] = proposal.caret;
+    }
+    if (!proposal.tail.empty()) {
+      written["tail"] = proposal.tail;
+    }
+    if (!proposal.type.empty()) {
+      written["type"] = proposal.type;
+    }
     if (!proposal.documentation.empty()) {
       written["documentation"] = proposal.documentation;
     }
@@ -964,14 +1015,24 @@ nlohmann::json DtoToJson(const DtoPlan& dto) {
         {"required", field.required},
         {"description", field.description},
     };
-    if (!field.element.empty()) written["element"] = field.element;
-    if (!field.dto_name.empty()) written["struct"] = field.dto_name;
+    if (!field.element.empty()) {
+      written["element"] = field.element;
+    }
+    if (!field.dto_name.empty()) {
+      written["struct"] = field.dto_name;
+    }
     if (!field.element_dto_name.empty()) {
       written["element_struct"] = field.element_dto_name;
     }
-    if (field.unique) written["unique"] = true;
-    if (!field.range.Empty()) written["range"] = RangeJson(field.range);
-    if (field.has_pattern) written["pattern"] = field.pattern;
+    if (field.unique) {
+      written["unique"] = true;
+    }
+    if (!field.range.Empty()) {
+      written["range"] = RangeJson(field.range);
+    }
+    if (field.has_pattern) {
+      written["pattern"] = field.pattern;
+    }
     if (field.has_enumeration) {
       nlohmann::json allowed = nlohmann::json::array();
       for (const syntax::Constant& one : field.enumeration) {
@@ -1001,14 +1062,22 @@ nlohmann::json StepsToJson(const std::vector<StepPlan>& steps);
 
 nlohmann::json StepToJson(const StepPlan& step) {
   nlohmann::json written{{"step", step.kind}, {"label", step.label}};
-  if (!step.after.empty()) written["after"] = step.after;
+  if (!step.after.empty()) {
+    written["after"] = step.after;
+  }
   if (!step.action.empty()) {
     written["action"] = step.action;
     written["mode"] = step.mode;
-    if (step.tolerant) written["try"] = true;
-    if (step.tee) written["tee"] = true;
+    if (step.tolerant) {
+      written["try"] = true;
+    }
+    if (step.tee) {
+      written["tee"] = true;
+    }
   }
-  if (!step.node_map.empty()) written["via"] = step.node_map;
+  if (!step.node_map.empty()) {
+    written["via"] = step.node_map;
+  }
   if (step.timeout.has_value()) {
     written["timeout"] = absl::ToDoubleSeconds(*step.timeout);
   }
@@ -1017,7 +1086,9 @@ nlohmann::json StepToJson(const StepPlan& step) {
   if (!step.source.empty()) {
     written[step.destination.empty() ? "of" : "from"] = step.source;
   }
-  if (!step.destination.empty()) written["to"] = step.destination;
+  if (!step.destination.empty()) {
+    written["to"] = step.destination;
+  }
   if (!step.bodies.empty()) {
     nlohmann::json bodies = nlohmann::json::array();
     for (const std::vector<StepPlan>& body : step.bodies) {
@@ -1027,7 +1098,9 @@ nlohmann::json StepToJson(const StepPlan& step) {
     // that nests has one.
     if (step.kind == "if") {
       written["then"] = bodies[0];
-      if (bodies.size() > 1) written["else"] = bodies[1];
+      if (bodies.size() > 1) {
+        written["else"] = bodies[1];
+      }
     } else {
       written["body"] = bodies[0];
     }
@@ -1037,7 +1110,9 @@ nlohmann::json StepToJson(const StepPlan& step) {
 
 nlohmann::json StepsToJson(const std::vector<StepPlan>& steps) {
   nlohmann::json list = nlohmann::json::array();
-  for (const StepPlan& step : steps) list.push_back(StepToJson(step));
+  for (const StepPlan& step : steps) {
+    list.push_back(StepToJson(step));
+  }
   return list;
 }
 
@@ -1050,14 +1125,15 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
     nlohmann::json inputs = nlohmann::json::object();
     nlohmann::json outputs = nlohmann::json::object();
     for (const PortPlan& port : flow.ports) {
-      nlohmann::json& side = port.direction == syntax::PortDirection::kInput
-                                 ? inputs
-                                 : outputs;
+      nlohmann::json& side =
+          port.direction == syntax::PortDirection::kInput ? inputs : outputs;
       side[port.name] = PortToJson(port);
     }
     std::vector<std::string> headers;
     headers.reserve(flow.headers.size());
-    for (const HeaderPlan& header : flow.headers) headers.push_back(header.name);
+    for (const HeaderPlan& header : flow.headers) {
+      headers.push_back(header.name);
+    }
     std::sort(headers.begin(), headers.end());
     flows.push_back(nlohmann::json{
         {"flow", flow.name},
@@ -1071,7 +1147,9 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
     });
   }
   nlohmann::json dtos = nlohmann::json::array();
-  for (const DtoPlan& dto : program.dtos) dtos.push_back(DtoToJson(dto));
+  for (const DtoPlan& dto : program.dtos) {
+    dtos.push_back(DtoToJson(dto));
+  }
   return nlohmann::json{
       {"format", kPlanFormat},
       {"source", std::string(source_name)},
@@ -1083,7 +1161,9 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
 nlohmann::json DtoToJsonValue(const DtoPlan& dto,
                               const Program* absl_nullable program) {
   nlohmann::json out = DtoToJson(dto);
-  if (program == nullptr) return out;
+  if (program == nullptr) {
+    return out;
+  }
   // Breadth-first from this shape, skipping the ones already carried -- so a
   // cycle of shapes travels once and a shape that names itself is not repeated.
   std::vector<const DtoPlan*> found{&dto};
@@ -1093,15 +1173,21 @@ nlohmann::json DtoToJsonValue(const DtoPlan& dto,
     for (const FieldPlan& field : found[index]->fields) {
       for (const std::string& named :
            {field.dto_name, field.element_dto_name}) {
-        if (named.empty() || !seen.insert(named).second) continue;
+        if (named.empty() || !seen.insert(named).second) {
+          continue;
+        }
         const DtoPlan* next = program->Dto(named);
-        if (next == nullptr) continue;
+        if (next == nullptr) {
+          continue;
+        }
         found.push_back(next);
         nested.push_back(DtoToJson(*next));
       }
     }
   }
-  if (!nested.empty()) out["nested"] = std::move(nested);
+  if (!nested.empty()) {
+    out["nested"] = std::move(nested);
+  }
   return out;
 }
 
@@ -1112,7 +1198,9 @@ std::string PlanToJson(std::string_view source_name, const Program& program) {
 std::string DiagnosticToText(std::string_view source,
                              const Diagnostic& diagnostic) {
   std::string prefix;
-  if (!source.empty()) absl::StrAppend(&prefix, source, ":");
+  if (!source.empty()) {
+    absl::StrAppend(&prefix, source, ":");
+  }
   return absl::StrCat(prefix, diagnostic.range.start.line, ":",
                       diagnostic.range.start.column, ": ",
                       SeverityName(diagnostic.severity), ": ",

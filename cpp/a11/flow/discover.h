@@ -122,7 +122,7 @@ Result Discover(absl::Span<const std::string> roots,
 /// What a host with a document open calls on a save. `path` is recorded as the
 /// origin and is not opened.
 catalogue::Catalogue DiscoverInSource(std::string_view source,
-                                     std::string_view path, Language language);
+                                      std::string_view path, Language language);
 
 /// The `format` field of the envelope a scan answers with, which is the
 /// catalogue's own: what a scan produces *is* a catalogue, and a consumer that

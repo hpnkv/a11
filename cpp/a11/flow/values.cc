@@ -2,10 +2,7 @@
 
 #include "a11/flow/values.h"
 
-#include "a11/flow/internal/pattern.h"
-
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -24,11 +21,14 @@
 #include <absl/strings/str_join.h>
 #include <absl/strings/str_split.h>
 #include <absl/time/clock.h>
+#include <cmath>
 #include <nlohmann/json.hpp>
 
 #include "a11/data/serialization.h"
+#include "a11/flow/internal/pattern.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/time.h"
+#include "absl/strings/match.h"
 
 namespace a11::flow {
 namespace {
@@ -42,6 +42,7 @@ absl::Status Invalid(std::string_view message) {
 bool IsDigit(char letter) {
   return absl::ascii_isdigit(static_cast<unsigned char>(letter));
 }
+
 bool IsAlpha(char letter) {
   return absl::ascii_isalpha(static_cast<unsigned char>(letter));
 }
@@ -55,8 +56,8 @@ struct Unit {
 };
 
 constexpr Unit kUnits[] = {
-    {"h", 3600.0}, {"m", 60.0},   {"s", 1.0},
-    {"ms", 1e-3},  {"us", 1e-6},  {"ns", 1e-9},
+    {"h", 3600.0}, {"m", 60.0},  {"s", 1.0},
+    {"ms", 1e-3},  {"us", 1e-6}, {"ns", 1e-9},
 };
 
 /// A double as Python's `repr` writes it: the shortest text that reads back as
@@ -65,9 +66,15 @@ constexpr Unit kUnits[] = {
 /// The spelling is part of the contract -- `text 3.0` has always been `"3.0"`
 /// -- and the round-trip search is what `repr` itself does.
 std::string FormatDouble(double value) {
-  if (std::isnan(value)) return "nan";
-  if (std::isinf(value)) return value > 0 ? "inf" : "-inf";
-  if (value == 0.0) return std::signbit(value) ? "-0.0" : "0.0";
+  if (std::isnan(value)) {
+    return "nan";
+  }
+  if (std::isinf(value)) {
+    return value > 0 ? "inf" : "-inf";
+  }
+  if (value == 0.0) {
+    return std::signbit(value) ? "-0.0" : "0.0";
+  }
   // How many significant digits it takes to read the same number back.
   int digits = 17;
   std::string scientific;
@@ -79,15 +86,19 @@ std::string FormatDouble(double value) {
     }
   }
   const size_t marker = scientific.find('e');
-  const int exponent =
-      static_cast<int>(std::strtol(scientific.c_str() + marker + 1, nullptr, 10));
+  const int exponent = static_cast<int>(
+      std::strtol(scientific.c_str() + marker + 1, nullptr, 10));
   // `repr` switches to an exponent outside this window, and only outside it:
   // `%g` would switch as soon as the exponent reached the digit count, which
   // renders 90.0 as `9e+01` and is not what the language has ever written.
-  if (exponent < -4 || exponent >= 16) return scientific;
+  if (exponent < -4 || exponent >= 16) {
+    return scientific;
+  }
   std::string fixed =
       absl::StrFormat("%.*f", std::max(0, digits - 1 - exponent), value);
-  if (fixed.find('.') == std::string::npos) return absl::StrCat(fixed, ".0");
+  if (!absl::StrContains(fixed, '.')) {
+    return absl::StrCat(fixed, ".0");
+  }
   while (fixed.size() > 1 && fixed.back() == '0' &&
          fixed[fixed.size() - 2] != '.') {
     fixed.pop_back();
@@ -112,7 +123,9 @@ std::string TrimNumber(double value) {
 size_t Utf8Length(std::string_view text) {
   size_t count = 0;
   for (const char letter : text) {
-    if ((static_cast<unsigned char>(letter) & 0xC0) != 0x80) ++count;
+    if ((static_cast<unsigned char>(letter) & 0xC0) != 0x80) {
+      ++count;
+    }
   }
   return count;
 }
@@ -121,8 +134,12 @@ size_t Utf8Length(std::string_view text) {
 size_t Utf8Offset(std::string_view text, size_t index) {
   size_t seen = 0;
   for (size_t at = 0; at < text.size(); ++at) {
-    if ((static_cast<unsigned char>(text[at]) & 0xC0) == 0x80) continue;
-    if (seen == index) return at;
+    if ((static_cast<unsigned char>(text[at]) & 0xC0) == 0x80) {
+      continue;
+    }
+    if (seen == index) {
+      return at;
+    }
     ++seen;
   }
   return text.size();
@@ -133,12 +150,16 @@ std::string Utf8Slice(std::string_view text, std::int64_t start,
                       std::optional<std::int64_t> stop) {
   const auto length = static_cast<std::int64_t>(Utf8Length(text));
   auto resolve = [length](std::int64_t at) {
-    if (at < 0) at += length;
+    if (at < 0) {
+      at += length;
+    }
     return std::clamp<std::int64_t>(at, 0, length);
   };
   const std::int64_t from = resolve(start);
   const std::int64_t to = stop.has_value() ? resolve(*stop) : length;
-  if (to <= from) return {};
+  if (to <= from) {
+    return {};
+  }
   const size_t begin = Utf8Offset(text, static_cast<size_t>(from));
   const size_t end = Utf8Offset(text, static_cast<size_t>(to));
   return std::string(text.substr(begin, end - begin));
@@ -160,11 +181,31 @@ void AppendJsonString(std::string_view text, std::string& out) {
       ++at;
       continue;
     }
-    if (letter == '\n') { out += "\\n"; ++at; continue; }
-    if (letter == '\r') { out += "\\r"; ++at; continue; }
-    if (letter == '\t') { out += "\\t"; ++at; continue; }
-    if (letter == '\b') { out += "\\b"; ++at; continue; }
-    if (letter == '\f') { out += "\\f"; ++at; continue; }
+    if (letter == '\n') {
+      out += "\\n";
+      ++at;
+      continue;
+    }
+    if (letter == '\r') {
+      out += "\\r";
+      ++at;
+      continue;
+    }
+    if (letter == '\t') {
+      out += "\\t";
+      ++at;
+      continue;
+    }
+    if (letter == '\b') {
+      out += "\\b";
+      ++at;
+      continue;
+    }
+    if (letter == '\f') {
+      out += "\\f";
+      ++at;
+      continue;
+    }
     if (letter < 0x20) {
       absl::StrAppendFormat(&out, "\\u%04x", letter);
       ++at;
@@ -196,7 +237,8 @@ void AppendJsonString(std::string_view text, std::string& out) {
       break;
     }
     for (size_t more = 1; more < width; ++more) {
-      point = (point << 6) | (static_cast<unsigned char>(text[at + more]) & 0x3Fu);
+      point =
+          (point << 6) | (static_cast<unsigned char>(text[at + more]) & 0x3Fu);
     }
     at += width;
     if (point > 0xFFFF) {
@@ -217,7 +259,9 @@ void AppendJsonObject(const Value::Pairs& pairs, std::string& out) {
   // before and a flow's own output should not change under a port.
   std::vector<const std::pair<std::string, Value>*> ordered;
   ordered.reserve(pairs.size());
-  for (const auto& pair : pairs) ordered.push_back(&pair);
+  for (const auto& pair : pairs) {
+    ordered.push_back(&pair);
+  }
   std::sort(ordered.begin(), ordered.end(),
             [](const auto* left, const auto* right) {
               return left->first < right->first;
@@ -225,7 +269,9 @@ void AppendJsonObject(const Value::Pairs& pairs, std::string& out) {
   out.push_back('{');
   bool first = true;
   for (const auto* pair : ordered) {
-    if (!first) out += ", ";
+    if (!first) {
+      out += ", ";
+    }
     first = false;
     AppendJsonString(pair->first, out);
     out += ": ";
@@ -261,7 +307,9 @@ void AppendJson(const Value& value, std::string& out) {
       out.push_back('[');
       bool first = true;
       for (const Value& item : value.items()) {
-        if (!first) out += ", ";
+        if (!first) {
+          out += ", ";
+        }
         first = false;
         AppendJson(item, out);
       }
@@ -427,7 +475,9 @@ Value Value::Chunk(data::Chunk chunk) {
 }
 
 Value Value::Host(std::shared_ptr<const HostObject> object) {
-  if (object == nullptr) return Null();
+  if (object == nullptr) {
+    return Null();
+  }
   Value made;
   made.kind_ = Kind::kHost;
   made.host_ = std::move(object);
@@ -469,9 +519,13 @@ Value Value::Of(const syntax::Constant& constant) {
 }
 
 const Value* absl_nullable Value::Get(std::string_view key) const {
-  if (kind_ != Kind::kObject) return nullptr;
+  if (kind_ != Kind::kObject) {
+    return nullptr;
+  }
   for (const auto& [name, value] : *pairs_) {
-    if (name == key) return &value;
+    if (name == key) {
+      return &value;
+    }
   }
   return nullptr;
 }
@@ -480,7 +534,9 @@ bool operator==(const Value& left, const Value& right) {
   if (CountsAsNumber(left) && CountsAsNumber(right)) {
     return NumericEqual(left, right);
   }
-  if (left.kind() != right.kind()) return false;
+  if (left.kind() != right.kind()) {
+    return false;
+  }
   switch (left.kind()) {
     case Value::Kind::kNull:
       return true;
@@ -496,12 +552,16 @@ bool operator==(const Value& left, const Value& right) {
     case Value::Kind::kList:
       return left.items() == right.items();
     case Value::Kind::kObject: {
-      if (left.pairs().size() != right.pairs().size()) return false;
+      if (left.pairs().size() != right.pairs().size()) {
+        return false;
+      }
       // By key, not by order: two objects with the same pairs written in a
       // different order are the same value, as they are in the reference.
       for (const auto& [key, value] : left.pairs()) {
         const Value* other = right.Get(key);
-        if (other == nullptr || !(*other == value)) return false;
+        if (other == nullptr || !(*other == value)) {
+          return false;
+        }
       }
       return true;
     }
@@ -528,7 +588,9 @@ Value Lookup(const Value& value, const Value& key) {
     case Value::Kind::kNull:
       return Value::Null();
     case Value::Kind::kObject: {
-      if (key.kind() != Value::Kind::kString) return Value::Null();
+      if (key.kind() != Value::Kind::kString) {
+        return Value::Null();
+      }
       const Value* found = value.Get(key.text());
       return found == nullptr ? Value::Null() : *found;
     }
@@ -540,7 +602,9 @@ Value Lookup(const Value& value, const Value& key) {
       auto at = key.kind() == Value::Kind::kBool
                     ? static_cast<std::int64_t>(key.boolean())
                     : key.integer();
-      if (at < 0) at += static_cast<std::int64_t>(items.size());
+      if (at < 0) {
+        at += static_cast<std::int64_t>(items.size());
+      }
       if (at < 0 || at >= static_cast<std::int64_t>(items.size())) {
         return Value::Null();
       }
@@ -627,25 +691,35 @@ Value AsNumber(const Value& value) {
     case Value::Kind::kTime: {
       const absl::StatusOr<std::int64_t> nanoseconds =
           TimeNanosecondsSinceEpoch(value.time());
-      if (!nanoseconds.ok()) return Value::Integer(0);
+      if (!nanoseconds.ok()) {
+        return Value::Integer(0);
+      }
       return Value::Double(static_cast<double>(*nanoseconds) / 1e9);
     }
     case Value::Kind::kString:
     case Value::Kind::kBytes: {
       const std::string trimmed(absl::StripAsciiWhitespace(value.text()));
-      if (trimmed.empty()) return Value::Integer(0);
+      if (trimmed.empty()) {
+        return Value::Integer(0);
+      }
       std::string_view digits = trimmed;
-      if (absl::StartsWith(digits, "-")) digits.remove_prefix(1);
+      if (absl::StartsWith(digits, "-")) {
+        digits.remove_prefix(1);
+      }
       const bool whole =
           !digits.empty() &&
           std::all_of(digits.begin(), digits.end(), absl::ascii_isdigit);
       char* end = nullptr;
       if (whole) {
         const long long parsed = std::strtoll(trimmed.c_str(), &end, 10);
-        if (end != nullptr && *end == '\0') return Value::Integer(parsed);
+        if (end != nullptr && *end == '\0') {
+          return Value::Integer(parsed);
+        }
       }
       const double parsed = std::strtod(trimmed.c_str(), &end);
-      if (end == nullptr || *end != '\0') return Value::Integer(0);
+      if (end == nullptr || *end != '\0') {
+        return Value::Integer(0);
+      }
       return Value::Double(parsed);
     }
     case Value::Kind::kNull:
@@ -659,8 +733,8 @@ Value AsNumber(const Value& value) {
           static_cast<std::int64_t>(value.chunk().data.size()));
     case Value::Kind::kHost: {
       const std::optional<size_t> size = value.host().Size();
-      return Value::Integer(
-          size.has_value() ? static_cast<std::int64_t>(*size) : 0);
+      return Value::Integer(size.has_value() ? static_cast<std::int64_t>(*size)
+                                             : 0);
     }
   }
   return Value::Integer(0);
@@ -675,7 +749,7 @@ double AsDouble(const Value& value) {
 
 /// One hole's text, read as the hole said to read it.
 Value AsHole(pattern::HoleType type, std::string_view text) {
-  const Value written = Value::String(std::string(text));
+  Value written = Value::String(std::string(text));
   switch (type) {
     case pattern::HoleType::kInt:
     case pattern::HoleType::kNumber:
@@ -702,9 +776,8 @@ absl::StatusOr<Value> MatchPattern(std::string_view text,
                                    std::string_view subject) {
   const pattern::Compiled compiled = pattern::Compile(text);
   if (!compiled.ok()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("The pattern '", text, "' cannot be read: ",
-                     compiled.error));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The pattern '", text, "' cannot be read: ", compiled.error));
   }
   return MatchCompiled(compiled.pattern, subject);
 }
@@ -713,7 +786,9 @@ Value MatchCompiled(const pattern::Pattern& compiled,
                     std::string_view subject) {
   const std::optional<std::vector<pattern::Capture>> captures =
       pattern::Match(compiled, subject);
-  if (!captures.has_value()) return Value::Null();
+  if (!captures.has_value()) {
+    return Value::Null();
+  }
 
   if (!compiled.AllNamed()) {
     std::vector<Value> items;
@@ -734,10 +809,14 @@ Value MatchCompiled(const pattern::Pattern& compiled,
 }
 
 Value AsJson(const Value& value) {
-  if (!value.IsTextlike()) return value;
+  if (!value.IsTextlike()) {
+    return value;
+  }
   const nlohmann::json parsed =
       nlohmann::json::parse(value.text(), nullptr, false);
-  if (parsed.is_discarded()) return value;
+  if (parsed.is_discarded()) {
+    return value;
+  }
   const std::function<Value(const nlohmann::json&)> convert =
       [&convert](const nlohmann::json& node) -> Value {
     switch (node.type()) {
@@ -755,7 +834,9 @@ Value AsJson(const Value& value) {
       case nlohmann::json::value_t::array: {
         std::vector<Value> items;
         items.reserve(node.size());
-        for (const nlohmann::json& item : node) items.push_back(convert(item));
+        for (const nlohmann::json& item : node) {
+          items.push_back(convert(item));
+        }
         return Value::List(std::move(items));
       }
       case nlohmann::json::value_t::object: {
@@ -779,8 +860,7 @@ Value Truncate(const Value& value, std::int64_t size) {
       return Value::String(Utf8Slice(value.text(), 0, kept));
     case Value::Kind::kBytes:
       return Value::Bytes(value.text().substr(
-          0, std::min<size_t>(value.text().size(),
-                              static_cast<size_t>(kept))));
+          0, std::min<size_t>(value.text().size(), static_cast<size_t>(kept))));
     case Value::Kind::kObject: {
       const Value::Pairs& pairs = value.pairs();
       const auto take = std::min<std::ptrdiff_t>(
@@ -827,7 +907,9 @@ absl::Duration SecondsDuration(double total) {
 
 std::optional<absl::Duration> ParseDuration(std::string_view text) {
   const std::string_view trimmed = absl::StripAsciiWhitespace(text);
-  if (trimmed.empty()) return std::nullopt;
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
   const std::string lowered = absl::AsciiStrToLower(trimmed);
   if (lowered == "forever" || lowered == "infinite" || lowered == "inf") {
     return absl::InfiniteDuration();
@@ -842,22 +924,34 @@ std::optional<absl::Duration> ParseDuration(std::string_view text) {
       continue;
     }
     const size_t began = at;
-    if (trimmed[at] == '+' || trimmed[at] == '-') ++at;
+    if (trimmed[at] == '+' || trimmed[at] == '-') {
+      ++at;
+    }
     const size_t whole = at;
-    while (at < trimmed.size() && IsDigit(trimmed[at])) ++at;
-    if (at == whole) return std::nullopt;
+    while (at < trimmed.size() && IsDigit(trimmed[at])) {
+      ++at;
+    }
+    if (at == whole) {
+      return std::nullopt;
+    }
     if (at < trimmed.size() && trimmed[at] == '.') {
       ++at;
       const size_t fraction = at;
-      while (at < trimmed.size() && IsDigit(trimmed[at])) ++at;
-      if (at == fraction) return std::nullopt;
+      while (at < trimmed.size() && IsDigit(trimmed[at])) {
+        ++at;
+      }
+      if (at == fraction) {
+        return std::nullopt;
+      }
     }
     const std::string number(trimmed.substr(began, at - began));
     while (at < trimmed.size() && (trimmed[at] == ' ' || trimmed[at] == '\t')) {
       ++at;
     }
     const size_t word = at;
-    while (at < trimmed.size() && IsAlpha(trimmed[at])) ++at;
+    while (at < trimmed.size() && IsAlpha(trimmed[at])) {
+      ++at;
+    }
     const std::string_view unit = trimmed.substr(word, at - word);
     double scale = 1.0;
     if (!unit.empty()) {
@@ -869,36 +963,50 @@ std::optional<absl::Duration> ParseDuration(std::string_view text) {
           break;
         }
       }
-      if (!known) return std::nullopt;
+      if (!known) {
+        return std::nullopt;
+      }
     }
     // `-1m30s` is a minute and a half, backwards, not a minute back and half a
     // second forwards: the sign belongs to the whole.
-    if (pieces == 0 && absl::StartsWith(number, "-")) sign = -1.0;
+    if (pieces == 0 && absl::StartsWith(number, "-")) {
+      sign = -1.0;
+    }
     total += std::abs(std::strtod(number.c_str(), nullptr)) * scale;
     ++pieces;
   }
-  if (pieces == 0) return std::nullopt;
+  if (pieces == 0) {
+    return std::nullopt;
+  }
   return SecondsDuration(sign * total);
 }
 
 absl::Duration AsDuration(const Value& value) {
-  if (value.kind() == Value::Kind::kDuration) return value.duration();
+  if (value.kind() == Value::Kind::kDuration) {
+    return value.duration();
+  }
   if (value.IsTextlike()) {
     const std::optional<absl::Duration> parsed = ParseDuration(value.text());
-    if (parsed.has_value()) return *parsed;
+    if (parsed.has_value()) {
+      return *parsed;
+    }
   }
   return SecondsDuration(AsDouble(value));
 }
 
 std::optional<absl::Time> ParseTime(std::string_view text) {
   const std::string_view trimmed = absl::StripAsciiWhitespace(text);
-  if (trimmed.empty()) return std::nullopt;
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
   // The spellings RFC 3339 allows and `TimeText` writes, and the one a
   // timestamp with no zone arrives as: that one is UTC here, which is the zone
   // every instant this language writes is in.
   static constexpr std::string_view kPatterns[] = {
-      "%Y-%m-%dT%H:%M:%E*S%Ez", "%Y-%m-%dT%H:%M:%E*S",
-      "%Y-%m-%d %H:%M:%E*S%Ez", "%Y-%m-%d %H:%M:%E*S",
+      "%Y-%m-%dT%H:%M:%E*S%Ez",
+      "%Y-%m-%dT%H:%M:%E*S",
+      "%Y-%m-%d %H:%M:%E*S%Ez",
+      "%Y-%m-%d %H:%M:%E*S",
       "%Y-%m-%d",
   };
   for (const std::string_view pattern : kPatterns) {
@@ -912,10 +1020,14 @@ std::optional<absl::Time> ParseTime(std::string_view text) {
 }
 
 absl::Time AsTime(const Value& value) {
-  if (value.kind() == Value::Kind::kTime) return value.time();
+  if (value.kind() == Value::Kind::kTime) {
+    return value.time();
+  }
   if (value.IsTextlike()) {
     const std::optional<absl::Time> parsed = ParseTime(value.text());
-    if (parsed.has_value()) return *parsed;
+    if (parsed.has_value()) {
+      return *parsed;
+    }
   }
   return absl::UnixEpoch() + SecondsDuration(AsDouble(value));
 }
@@ -933,7 +1045,9 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
       return TrimNumber(static_cast<double>(total) / (unit.seconds * 1e9));
     }
   }
-  if (total == 0) return "0s";
+  if (total == 0) {
+    return "0s";
+  }
   const std::string sign = total < 0 ? "-" : "";
   std::int64_t left = std::abs(total);
   std::string pieces;
@@ -942,15 +1056,22 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
     // Microseconds of an hour are noise; microseconds of a millisecond and a
     // half are the value. So the fine units are dropped only once a whole
     // second or more has already been written.
-    if ((unit.name == "us" || unit.name == "ns") && coarse) break;
-    if (unit.seconds >= 1.0 && !pieces.empty()) coarse = true;
-    const auto step = static_cast<std::int64_t>(std::llround(unit.seconds * 1e9));
+    if ((unit.name == "us" || unit.name == "ns") && coarse) {
+      break;
+    }
+    if (unit.seconds >= 1.0 && !pieces.empty()) {
+      coarse = true;
+    }
+    const auto step =
+        static_cast<std::int64_t>(std::llround(unit.seconds * 1e9));
     const std::int64_t count = left / step;
     if (count != 0) {
       absl::StrAppend(&pieces, count, unit.name);
       left -= count * step;
     }
-    if (left <= 0) break;
+    if (left <= 0) {
+      break;
+    }
   }
   return absl::StrCat(sign, pieces.empty() ? "0s" : pieces);
 }
@@ -966,9 +1087,8 @@ std::string TimeText(absl::Time value, std::string_view spec) {
     return absl::FormatTime(spec, value, absl::UTCTimeZone());
   }
   const bool whole = nanoseconds.ok() && *nanoseconds % 1000000000 == 0;
-  return absl::FormatTime(
-      whole ? "%Y-%m-%dT%H:%M:%SZ" : "%Y-%m-%dT%H:%M:%E6SZ", value,
-      absl::UTCTimeZone());
+  return absl::FormatTime(whole ? "%Y-%m-%dT%H:%M:%SZ" : "%Y-%m-%dT%H:%M:%E6SZ",
+                          value, absl::UTCTimeZone());
 }
 
 // --- Formatting --------------------------------------------------------------
@@ -993,20 +1113,25 @@ Value WithSpec(const Value& value, std::string_view spec) {
 /// One value through one printf conversion, coercing rather than failing.
 std::string Printf(const Value& value, std::string_view flags,
                    std::string_view width,
-                   std::optional<std::string_view> precision,
-                   char conversion) {
-  if (conversion == 'i') conversion = 'd';  // printf's synonym for the same.
-  const bool numeric = std::string_view("difeEgGxXo").find(conversion) !=
-                       std::string_view::npos;
+                   std::optional<std::string_view> precision, char conversion) {
+  if (conversion == 'i') {
+    conversion = 'd';  // printf's synonym for the same.
+  }
+  const bool numeric =
+      absl::StrContains(std::string_view("difeEgGxXo"), conversion);
   std::string pattern = "%";
   for (const char flag : flags) {
     // `#` and `0` mean nothing beside a string, and the reference's `%` raised
     // on them rather than rendering; dropping them keeps the value visible.
-    if (!numeric && (flag == '#' || flag == '0')) continue;
+    if (!numeric && (flag == '#' || flag == '0')) {
+      continue;
+    }
     pattern.push_back(flag);
   }
   absl::StrAppend(&pattern, width);
-  if (precision.has_value()) absl::StrAppend(&pattern, ".", *precision);
+  if (precision.has_value()) {
+    absl::StrAppend(&pattern, ".", *precision);
+  }
   std::string out(64, '\0');
   int written = 0;
   if (conversion == 'd' || conversion == 'x' || conversion == 'X' ||
@@ -1029,15 +1154,17 @@ std::string Printf(const Value& value, std::string_view flags,
   } else {
     pattern.push_back('s');
     const std::string text = AsText(value);
-    written = std::snprintf(out.data(), out.size(), pattern.c_str(),
-                            text.c_str());
+    written =
+        std::snprintf(out.data(), out.size(), pattern.c_str(), text.c_str());
     if (written >= static_cast<int>(out.size())) {
       out.resize(static_cast<size_t>(written) + 1);
-      written = std::snprintf(out.data(), out.size(), pattern.c_str(),
-                              text.c_str());
+      written =
+          std::snprintf(out.data(), out.size(), pattern.c_str(), text.c_str());
     }
   }
-  if (written < 0) return AsText(value);
+  if (written < 0) {
+    return AsText(value);
+  }
   out.resize(static_cast<size_t>(written));
   return out;
 }
@@ -1064,11 +1191,12 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     size_t cursor = at + 1;
     std::optional<size_t> chosen;
     const size_t digits = cursor;
-    while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
+    while (cursor < text.size() && IsDigit(text[cursor])) {
+      ++cursor;
+    }
     if (cursor > digits && cursor < text.size() && text[cursor] == '$') {
-      chosen = static_cast<size_t>(
-          std::strtoll(text.substr(digits, cursor - digits).c_str(), nullptr,
-                       10));
+      chosen = static_cast<size_t>(std::strtoll(
+          text.substr(digits, cursor - digits).c_str(), nullptr, 10));
       ++cursor;
     } else {
       cursor = at + 1;
@@ -1086,17 +1214,20 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     }
     const size_t flags = cursor;
     while (cursor < text.size() &&
-           std::string_view("-+ 0#").find(text[cursor]) !=
-               std::string_view::npos) {
+           absl::StrContains(std::string_view("-+ 0#"), text[cursor])) {
       ++cursor;
     }
     const size_t width = cursor;
-    while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
+    while (cursor < text.size() && IsDigit(text[cursor])) {
+      ++cursor;
+    }
     const size_t width_end = cursor;
     std::optional<std::string_view> precision;
     if (cursor < text.size() && text[cursor] == '.') {
       const size_t began = ++cursor;
-      while (cursor < text.size() && IsDigit(text[cursor])) ++cursor;
+      while (cursor < text.size() && IsDigit(text[cursor])) {
+        ++cursor;
+      }
       if (cursor == began) {
         out.push_back('%');
         ++at;
@@ -1105,8 +1236,7 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
       precision = std::string_view(text).substr(began, cursor - began);
     }
     if (cursor >= text.size() ||
-        std::string_view("sdifeEgGxXo").find(text[cursor]) ==
-            std::string_view::npos) {
+        !absl::StrContains(std::string_view("sdifeEgGxXo"), text[cursor])) {
       // A `%` that starts nothing recognisable is left alone, so `"100% done"`
       // says what it looks like.
       out.push_back('%');
@@ -1115,7 +1245,9 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     }
     const char conversion = text[cursor];
     const size_t index = chosen.has_value() ? *chosen - 1 : next;
-    if (!chosen.has_value()) ++next;
+    if (!chosen.has_value()) {
+      ++next;
+    }
     if (index >= arguments.size()) {
       // Left as it was written: a visible `%3$s` in the output is easier to
       // diagnose than a flow that died formatting a log line.
@@ -1124,7 +1256,9 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
       continue;
     }
     Value value = arguments[index];
-    if (!spec.empty()) value = WithSpec(value, spec);
+    if (!spec.empty()) {
+      value = WithSpec(value, spec);
+    }
     out += Printf(value, std::string_view(text).substr(flags, width - flags),
                   std::string_view(text).substr(width, width_end - width),
                   precision, conversion);
@@ -1149,8 +1283,9 @@ bool Contains(const Value& container, const Value& member) {
       return member.kind() == Value::Kind::kString &&
              container.Get(member.text()) != nullptr;
     case Value::Kind::kList:
-      return std::any_of(container.items().begin(), container.items().end(),
-                         [&member](const Value& item) { return item == member; });
+      return std::any_of(
+          container.items().begin(), container.items().end(),
+          [&member](const Value& item) { return item == member; });
     case Value::Kind::kString:
     case Value::Kind::kBytes:
       return absl::StrContains(container.text(), AsText(member));
@@ -1166,7 +1301,9 @@ bool Contains(const Value& container, const Value& member) {
 std::vector<std::string> Endings(const Value& value) {
   std::vector<std::string> options;
   if (value.kind() == Value::Kind::kList) {
-    for (const Value& item : value.items()) options.push_back(AsText(item));
+    for (const Value& item : value.items()) {
+      options.push_back(AsText(item));
+    }
     return options;
   }
   options.push_back(AsText(value));
@@ -1183,20 +1320,26 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return MatchPattern(AsText(first), AsText(Argument(arguments, 1)));
   }
   if (name == "strformat") {
-    return Value::String(Strformat(
-        first, arguments.empty() ? arguments : arguments.subspan(1)));
+    return Value::String(
+        Strformat(first, arguments.empty() ? arguments : arguments.subspan(1)));
   }
-  if (name == "now") return Value::Time(a11::Now());
-  if (name == "duration") return Value::Duration(AsDuration(first));
-  if (name == "time") return Value::Time(AsTime(first));
+  if (name == "now") {
+    return Value::Time(a11::Now());
+  }
+  if (name == "duration") {
+    return Value::Duration(AsDuration(first));
+  }
+  if (name == "time") {
+    return Value::Time(AsTime(first));
+  }
   if (name == "seconds") {
     return Value::Double(DurationSeconds(AsDuration(first)));
   }
   if (name == "len") {
     switch (first.kind()) {
       case Value::Kind::kString:
-        return Value::Integer(static_cast<std::int64_t>(
-            Utf8Length(first.text())));
+        return Value::Integer(
+            static_cast<std::int64_t>(Utf8Length(first.text())));
       case Value::Kind::kBytes:
         return Value::Integer(static_cast<std::int64_t>(first.text().size()));
       case Value::Kind::kList:
@@ -1212,10 +1355,15 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
         return Value::Integer(0);
     }
   }
-  if (name == "lower") return Value::String(absl::AsciiStrToLower(AsText(first)));
-  if (name == "upper") return Value::String(absl::AsciiStrToUpper(AsText(first)));
+  if (name == "lower") {
+    return Value::String(absl::AsciiStrToLower(AsText(first)));
+  }
+  if (name == "upper") {
+    return Value::String(absl::AsciiStrToUpper(AsText(first)));
+  }
   if (name == "trim") {
-    return Value::String(std::string(absl::StripAsciiWhitespace(AsText(first))));
+    return Value::String(
+        std::string(absl::StripAsciiWhitespace(AsText(first))));
   }
   // Base64, both alphabets, both ways.
   //
@@ -1243,15 +1391,25 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     }
     return Value::Bytes(data::Bytes(std::move(decoded)));
   }
-  if (name == "text") return Value::String(AsText(first));
-  if (name == "number") return AsNumber(first);
-  if (name == "bool") return Value::Bool(Truthy(first));
+  if (name == "text") {
+    return Value::String(AsText(first));
+  }
+  if (name == "number") {
+    return AsNumber(first);
+  }
+  if (name == "bool") {
+    return Value::Bool(Truthy(first));
+  }
   if (name == "keys") {
     std::vector<Value> keys;
     if (first.kind() == Value::Kind::kObject) {
       std::set<std::string> sorted;
-      for (const auto& [key, unused] : first.pairs()) sorted.insert(key);
-      for (const std::string& key : sorted) keys.push_back(Value::String(key));
+      for (const auto& [key, unused] : first.pairs()) {
+        sorted.insert(key);
+      }
+      for (const std::string& key : sorted) {
+        keys.push_back(Value::String(key));
+      }
     }
     return Value::List(std::move(keys));
   }
@@ -1259,12 +1417,16 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     std::vector<Value> found;
     if (first.kind() == Value::Kind::kObject) {
       std::vector<const std::pair<std::string, Value>*> ordered;
-      for (const auto& pair : first.pairs()) ordered.push_back(&pair);
+      for (const auto& pair : first.pairs()) {
+        ordered.push_back(&pair);
+      }
       std::sort(ordered.begin(), ordered.end(),
                 [](const auto* left, const auto* right) {
                   return left->first < right->first;
                 });
-      for (const auto* pair : ordered) found.push_back(pair->second);
+      for (const auto* pair : ordered) {
+        found.push_back(pair->second);
+      }
     } else if (first.kind() == Value::Kind::kList) {
       found = first.items();
     }
@@ -1276,10 +1438,14 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   }
   if (name == "join") {
     const std::string separator = AsText(Argument(arguments, 1));
-    if (first.kind() != Value::Kind::kList) return Value::String(AsText(first));
+    if (first.kind() != Value::Kind::kList) {
+      return Value::String(AsText(first));
+    }
     std::vector<std::string> pieces;
     pieces.reserve(first.items().size());
-    for (const Value& item : first.items()) pieces.push_back(AsText(item));
+    for (const Value& item : first.items()) {
+      pieces.push_back(AsText(item));
+    }
     return Value::String(absl::StrJoin(pieces, separator));
   }
   if (name == "split") {
@@ -1293,9 +1459,8 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     } else {
       // No separator splits on runs of whitespace and keeps nothing empty,
       // which is what `str.split()` with no argument does.
-      for (std::string_view piece :
-           absl::StrSplit(text, absl::ByAnyChar(" \t\n\r\f\v"),
-                          absl::SkipEmpty())) {
+      for (std::string_view piece : absl::StrSplit(
+               text, absl::ByAnyChar(" \t\n\r\f\v"), absl::SkipEmpty())) {
         pieces.push_back(Value::String(std::string(piece)));
       }
     }
@@ -1304,12 +1469,13 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "merge") {
     Value::Pairs merged;
     for (const Value& value : arguments) {
-      if (value.kind() != Value::Kind::kObject) continue;
+      if (value.kind() != Value::Kind::kObject) {
+        continue;
+      }
       for (const auto& [key, item] : value.pairs()) {
-        auto found = std::find_if(merged.begin(), merged.end(),
-                                  [&key](const auto& pair) {
-                                    return pair.first == key;
-                                  });
+        auto found = std::find_if(
+            merged.begin(), merged.end(),
+            [&key](const auto& pair) { return pair.first == key; });
         if (found == merged.end()) {
           merged.emplace_back(key, item);
         } else {
@@ -1338,12 +1504,16 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     std::string text = AsText(first);
     const std::string from = AsText(Argument(arguments, 1));
     const std::string to = AsText(Argument(arguments, 2));
-    if (from.empty()) return Value::String(std::move(text));
+    if (from.empty()) {
+      return Value::String(std::move(text));
+    }
     std::string out;
     size_t at = 0;
     while (true) {
       const size_t found = text.find(from, at);
-      if (found == std::string::npos) break;
+      if (found == std::string::npos) {
+        break;
+      }
       out.append(text, at, found - at);
       out += to;
       at = found + from.size();
@@ -1352,37 +1522,47 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Value::String(std::move(out));
   }
   if (name == "slice") {
-    const auto start = static_cast<std::int64_t>(
-        AsDouble(Argument(arguments, 1)));
+    const auto start =
+        static_cast<std::int64_t>(AsDouble(Argument(arguments, 1)));
     const Value& stop = Argument(arguments, 2);
     std::optional<std::int64_t> end;
-    if (!stop.IsNull()) end = static_cast<std::int64_t>(AsDouble(stop));
+    if (!stop.IsNull()) {
+      end = static_cast<std::int64_t>(AsDouble(stop));
+    }
     if (first.kind() == Value::Kind::kString) {
       return Value::String(Utf8Slice(first.text(), start, end));
     }
     if (first.kind() == Value::Kind::kBytes) {
       const auto length = static_cast<std::int64_t>(first.text().size());
       auto resolve = [length](std::int64_t at) {
-        if (at < 0) at += length;
+        if (at < 0) {
+          at += length;
+        }
         return std::clamp<std::int64_t>(at, 0, length);
       };
       const std::int64_t from = resolve(start);
       const std::int64_t to = end.has_value() ? resolve(*end) : length;
-      if (to <= from) return Value::Bytes({});
+      if (to <= from) {
+        return Value::Bytes({});
+      }
       return Value::Bytes(first.text().substr(static_cast<size_t>(from),
                                               static_cast<size_t>(to - from)));
     }
     if (first.kind() == Value::Kind::kList) {
       const auto length = static_cast<std::int64_t>(first.items().size());
       auto resolve = [length](std::int64_t at) {
-        if (at < 0) at += length;
+        if (at < 0) {
+          at += length;
+        }
         return std::clamp<std::int64_t>(at, 0, length);
       };
       const std::int64_t from = resolve(start);
       const std::int64_t to = end.has_value() ? resolve(*end) : length;
-      if (to <= from) return Value::List({});
-      return Value::List(std::vector<Value>(
-          first.items().begin() + from, first.items().begin() + to));
+      if (to <= from) {
+        return Value::List({});
+      }
+      return Value::List(std::vector<Value>(first.items().begin() + from,
+                                            first.items().begin() + to));
     }
     return first;
   }
@@ -1396,7 +1576,8 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   }
   if (name == "to_chunk") {
     if (bridge == nullptr) {
-      return Invalid("to_chunk needs the host that knows how a value is written.");
+      return Invalid(
+          "to_chunk needs the host that knows how a value is written.");
     }
     ABSL_ASSIGN_OR_RETURN(
         data::Chunk chunk,
@@ -1405,9 +1586,12 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   }
   if (name == "from_chunk") {
     // Anything already decoded is already what this asks for.
-    if (first.kind() != Value::Kind::kChunk) return first;
+    if (first.kind() != Value::Kind::kChunk) {
+      return first;
+    }
     if (bridge == nullptr) {
-      return Invalid("from_chunk needs the host that knows how a value is read.");
+      return Invalid(
+          "from_chunk needs the host that knows how a value is read.");
     }
     return bridge->FromChunk(first.chunk());
   }
@@ -1423,8 +1607,12 @@ namespace {
 /// treating it as one thing is what a reader would expect from `[...a, b]`
 /// where `a` turned out to be a single record.
 std::vector<Value> SpreadItems(const Value& value) {
-  if (value.kind() == Value::Kind::kList) return value.items();
-  if (value.IsNull()) return {};
+  if (value.kind() == Value::Kind::kList) {
+    return value.items();
+  }
+  if (value.IsNull()) {
+    return {};
+  }
   return {value};
 }
 
@@ -1435,13 +1623,17 @@ std::vector<Value> SpreadItems(const Value& value) {
 /// or as a shape, be spread into a new one. Anything else gives nothing: there
 /// are no keys to take, and inventing one would be inventing data.
 Value::Pairs SpreadPairs(const Value& value) {
-  if (value.kind() == Value::Kind::kObject) return value.pairs();
+  if (value.kind() == Value::Kind::kObject) {
+    return value.pairs();
+  }
   if (value.kind() == Value::Kind::kHost) {
     Value::Pairs pairs;
     // A host object has no way to list its fields, so this goes through its
     // text: a model renders as its JSON, which is exactly the mapping wanted.
     const Value decoded = AsJson(Value::String(AsText(value)));
-    if (decoded.kind() == Value::Kind::kObject) return decoded.pairs();
+    if (decoded.kind() == Value::Kind::kObject) {
+      return decoded.pairs();
+    }
     return pairs;
   }
   return {};
@@ -1460,7 +1652,9 @@ namespace {
 /// have to be told which sort of thing it came from.
 const Value* absl_nullable FieldOf(const Value& value, std::string_view name,
                                    Value& scratch) {
-  if (value.kind() == Value::Kind::kObject) return value.Get(name);
+  if (value.kind() == Value::Kind::kObject) {
+    return value.Get(name);
+  }
   if (value.kind() == Value::Kind::kHost) {
     scratch = value.host().Field(name);
     return scratch.IsNull() ? nullptr : &scratch;
@@ -1502,7 +1696,9 @@ double BoundNumber(const syntax::Constant& bound) {
 
 /// What a value compares as against a range on a field of this type.
 double Magnitude(const Value& value, std::string_view type) {
-  if (BoundsLength(type)) return static_cast<double>(Extent(value));
+  if (BoundsLength(type)) {
+    return static_cast<double>(Extent(value));
+  }
   if (value.kind() == Value::Kind::kDuration) {
     return DurationSeconds(value.duration());
   }
@@ -1513,11 +1709,12 @@ double Magnitude(const Value& value, std::string_view type) {
 }
 
 /// The value a constant is, for a default and for an allowed value.
-Value OfConstant(const syntax::Constant& constant) { return Value::Of(constant); }
+Value OfConstant(const syntax::Constant& constant) {
+  return Value::Of(constant);
+}
 
-absl::Status FieldError(std::string_view path, std::string what) {
-  return absl::InvalidArgumentError(
-      absl::StrCat(path, ": ", std::move(what)));
+absl::Status FieldError(std::string_view path, const std::string& what) {
+  return absl::InvalidArgumentError(absl::StrCat(path, ": ", what));
 }
 
 /// One field of a shape, coerced and checked, with the path for a message.
@@ -1568,7 +1765,9 @@ absl::StatusOr<Value> CoerceFieldType(const FieldPlan& field,
         syntax::TypeExpression as;
         as.name = field.element;
         absl::StatusOr<Value> made = Coerce(items[index], as, context);
-        if (!made.ok()) return made.status();
+        if (!made.ok()) {
+          return made.status();
+        }
         items[index] = *std::move(made);
       }
     }
@@ -1583,7 +1782,9 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
                                   const CoerceContext& context,
                                   std::string_view path) {
   absl::StatusOr<Value> made = CoerceFieldType(field, given, context, path);
-  if (!made.ok()) return made;
+  if (!made.ok()) {
+    return made;
+  }
   const Value& held = *made;
 
   if (field.has_enumeration) {
@@ -1592,12 +1793,14 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
     for (const syntax::Constant& one : field.enumeration) {
       const Value candidate = OfConstant(one);
       spelled.push_back(AsText(candidate));
-      if (candidate == held) allowed = true;
+      if (candidate == held) {
+        allowed = true;
+      }
     }
     if (!allowed) {
-      return FieldError(path, absl::StrCat("'", AsText(held),
-                                          "' is not one of ",
-                                          absl::StrJoin(spelled, ", "), "."));
+      return FieldError(path,
+                        absl::StrCat("'", AsText(held), "' is not one of ",
+                                     absl::StrJoin(spelled, ", "), "."));
     }
   }
   if (field.has_pattern && held.IsTextlike()) {
@@ -1607,12 +1810,12 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
         internal::CompilePattern(field.pattern);
     if (!pattern.ok()) {
       return FieldError(path, absl::StrCat("the pattern '", field.pattern,
-                                          "' is not a regular expression."));
+                                           "' is not a regular expression."));
     }
     if (!std::regex_search(held.text(), *pattern)) {
-      return FieldError(path, absl::StrCat("'", held.text(),
-                                          "' does not match '", field.pattern,
-                                          "'."));
+      return FieldError(path,
+                        absl::StrCat("'", held.text(), "' does not match '",
+                                     field.pattern, "'."));
     }
   }
   if (!field.range.Empty()) {
@@ -1622,9 +1825,9 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
     if (field.range.has_minimum &&
         have < BoundNumber(field.range.minimum) - 1e-9) {
       return FieldError(
-          path, absl::StrCat(length ? "is " : "is ", AsText(AsNumber(
-                                 Value::Double(have))),
-                             unit, ", and the least allowed is ",
+          path, absl::StrCat(length ? "is " : "is ",
+                             AsText(AsNumber(Value::Double(have))), unit,
+                             ", and the least allowed is ",
                              AsText(OfConstant(field.range.minimum)), "."));
     }
     if (field.range.has_maximum &&
@@ -1641,8 +1844,8 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
       for (size_t other = index + 1; other < items.size(); ++other) {
         if (items[index] == items[other]) {
           return FieldError(path, absl::StrCat("holds '", AsText(items[index]),
-                                              "' twice, and its items are "
-                                              "unique."));
+                                               "' twice, and its items are "
+                                               "unique."));
         }
       }
     }
@@ -1671,9 +1874,8 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
       if (field.has_default) {
         // Validate defaults through the same field constraints as input values.
         ABSL_ASSIGN_OR_RETURN(
-            Value made,
-            CoerceField(field, OfConstant(field.default_value), context,
-                        field.name));
+            Value made, CoerceField(field, OfConstant(field.default_value),
+                                    context, field.name));
         pairs.emplace_back(field.name, std::move(made));
         continue;
       }
@@ -1685,15 +1887,17 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
       // Optional fields without defaults remain absent.
       continue;
     }
-    ABSL_ASSIGN_OR_RETURN(
-        Value made, CoerceField(field, *given, context, field.name));
+    ABSL_ASSIGN_OR_RETURN(Value made,
+                          CoerceField(field, *given, context, field.name));
     pairs.emplace_back(field.name, std::move(made));
   }
 
   // The fields the shape declares, in the order it declared them, and nothing
   // else: see the note on [CoerceShape] about extra keys.
   Value made = Value::Object(std::move(pairs));
-  if (context.bridge == nullptr || context.shapes == nullptr) return made;
+  if (context.bridge == nullptr || context.shapes == nullptr) {
+    return made;
+  }
   return context.bridge->Adopt(shape, *context.shapes, made);
 }
 
@@ -1704,17 +1908,25 @@ absl::StatusOr<Value> Coerce(const Value& value,
   if (lowered == "string" || lowered == "text") {
     return Value::String(AsText(value));
   }
-  if (lowered == "number") return AsNumber(value);
+  if (lowered == "number") {
+    return AsNumber(value);
+  }
   if (lowered == "integer" || lowered == "int") {
     return Value::Integer(static_cast<std::int64_t>(AsDouble(value)));
   }
   if (lowered == "bool" || lowered == "boolean") {
     return Value::Bool(Truthy(value));
   }
-  if (lowered == "duration") return Value::Duration(AsDuration(value));
-  if (lowered == "time") return Value::Time(AsTime(value));
+  if (lowered == "duration") {
+    return Value::Duration(AsDuration(value));
+  }
+  if (lowered == "time") {
+    return Value::Time(AsTime(value));
+  }
   if (lowered == "bytes") {
-    if (value.kind() == Value::Kind::kBytes) return value;
+    if (value.kind() == Value::Kind::kBytes) {
+      return value;
+    }
     return Value::Bytes(AsText(value));
   }
   if (lowered == "list" || lowered == "array") {
@@ -1737,7 +1949,9 @@ absl::StatusOr<Value> Coerce(const Value& value,
     // is rather than wrapped in an invented key.
     return value;
   }
-  if (lowered == "any") return value;
+  if (lowered == "any") {
+    return value;
+  }
   // A shape this program declared, before a registry is asked: a `struct`
   // outranks a tag of the same name, because what the file says about the name
   // is what the file means by it. Its own spelling, not the canonical one:
@@ -1767,7 +1981,9 @@ absl::StatusOr<Value> Arithmetic(std::string_view op, const Value& left,
     const bool left_time = left.kind() == Value::Kind::kTime;
     const bool right_time = right.kind() == Value::Kind::kTime;
     if (left_time && right_time) {
-      if (op == "-") return Value::Duration(left.time() - right.time());
+      if (op == "-") {
+        return Value::Duration(left.time() - right.time());
+      }
       return Invalid("Two instants can be subtracted, but not added.");
     }
     if (left_time) {
@@ -1775,7 +1991,9 @@ absl::StatusOr<Value> Arithmetic(std::string_view op, const Value& left,
       return Value::Time(op == "+" ? left.time() + other : left.time() - other);
     }
     if (right_time) {
-      if (op == "+") return Value::Time(right.time() + AsDuration(left));
+      if (op == "+") {
+        return Value::Time(right.time() + AsDuration(left));
+      }
       return Invalid("An instant cannot be subtracted from a duration.");
     }
     const absl::Duration first = AsDuration(left);
@@ -1818,7 +2036,9 @@ int OrderImpl(const Value& left, const Value& right) {
 
 const Value* absl_nullable Bound(const syntax::Node& node,
                                  const EvalContext& context) {
-  if (context.bound == nullptr) return nullptr;
+  if (context.bound == nullptr) {
+    return nullptr;
+  }
   const auto found = context.bound->find(&node);
   return found == context.bound->end() ? nullptr : &found->second;
 }
@@ -1833,6 +2053,9 @@ absl::StatusOr<Value> Add(const Value& left, const Value& right) {
   return Arithmetic("+", left, right);
 }
 
+// As in syntax.cc's VisitChildren: the `node.kind` each cast sits under is the
+// node's type tag, so `dynamic_cast` would re-ask what the switch just decided.
+// NOLINTBEGIN(cppcoreguidelines-pro-type-static-cast-downcast)
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context) {
   // A name the resolver bound to a stream reads as that stream's first value,
@@ -1854,8 +2077,7 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       for (const syntax::NodePtr& item : literal.items) {
         if (const auto* spread = syntax::As<syntax::Spread>(item.get());
             spread != nullptr) {
-          ABSL_ASSIGN_OR_RETURN(Value held,
-                                Evaluate(*spread->value, context));
+          ABSL_ASSIGN_OR_RETURN(Value held, Evaluate(*spread->value, context));
           for (Value& inner : SpreadItems(held)) {
             items.push_back(std::move(inner));
           }
@@ -1884,8 +2106,7 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       for (const auto& [key, item] : literal.pairs) {
         if (const auto* spread = syntax::As<syntax::Spread>(item.get());
             spread != nullptr) {
-          ABSL_ASSIGN_OR_RETURN(Value held,
-                                Evaluate(*spread->value, context));
+          ABSL_ASSIGN_OR_RETURN(Value held, Evaluate(*spread->value, context));
           for (auto& [inner_key, inner] : SpreadPairs(held)) {
             put(inner_key, std::move(inner));
           }
@@ -1940,22 +2161,38 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
         // what makes `name or "unknown"` read as a default.
         ABSL_ASSIGN_OR_RETURN(Value left, Evaluate(*binary.left, context));
         const bool holds = Truthy(left);
-        if ((binary.op == "and") != holds) return left;
+        if ((binary.op == "and") != holds) {
+          return left;
+        }
         return Evaluate(*binary.right, context);
       }
       ABSL_ASSIGN_OR_RETURN(Value left, Evaluate(*binary.left, context));
       ABSL_ASSIGN_OR_RETURN(Value right, Evaluate(*binary.right, context));
-      if (binary.op == "==") return Value::Bool(left == right);
-      if (binary.op == "!=") return Value::Bool(!(left == right));
-      if (binary.op == "in") return Value::Bool(Contains(right, left));
+      if (binary.op == "==") {
+        return Value::Bool(left == right);
+      }
+      if (binary.op == "!=") {
+        return Value::Bool(!(left == right));
+      }
+      if (binary.op == "in") {
+        return Value::Bool(Contains(right, left));
+      }
       if (binary.op == "+" || binary.op == "-") {
         return Arithmetic(binary.op, left, right);
       }
       const int order = OrderImpl(left, right);
-      if (binary.op == "<") return Value::Bool(order < 0);
-      if (binary.op == "<=") return Value::Bool(order <= 0);
-      if (binary.op == ">") return Value::Bool(order > 0);
-      if (binary.op == ">=") return Value::Bool(order >= 0);
+      if (binary.op == "<") {
+        return Value::Bool(order < 0);
+      }
+      if (binary.op == "<=") {
+        return Value::Bool(order <= 0);
+      }
+      if (binary.op == ">") {
+        return Value::Bool(order > 0);
+      }
+      if (binary.op == ">=") {
+        return Value::Bool(order >= 0);
+      }
       return Invalid(absl::StrCat("Unknown operator '", binary.op, "'."));
     }
     case syntax::NodeKind::kName:
@@ -1971,14 +2208,15 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
   }
 }
 
+// NOLINTEND(cppcoreguidelines-pro-type-static-cast-downcast)
+
 // --- Statuses as data --------------------------------------------------------
 
 Value StatusRecord(const absl::Status& status) {
   const auto code = static_cast<size_t>(status.code());
   const absl::Span<const std::string_view> names = vocabulary::StatusCodes();
-  std::string name = code < names.size()
-                         ? absl::AsciiStrToUpper(names[code])
-                         : absl::StrCat("CODE_", code);
+  std::string name = code < names.size() ? absl::AsciiStrToUpper(names[code])
+                                         : absl::StrCat("CODE_", code);
   Value::Pairs pairs;
   pairs.emplace_back("ok", Value::Bool(status.ok()));
   pairs.emplace_back("code", Value::String(std::move(name)));
@@ -1988,7 +2226,9 @@ Value StatusRecord(const absl::Status& status) {
 }
 
 std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {
-  if (value.kind() == Value::Kind::kBool) return std::nullopt;
+  if (value.kind() == Value::Kind::kBool) {
+    return std::nullopt;
+  }
   if (value.kind() == Value::Kind::kInteger) {
     const std::int64_t number = value.integer();
     if (number < 0 ||
@@ -1998,14 +2238,17 @@ std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {
     return static_cast<absl::StatusCode>(number);
   }
   if (value.kind() == Value::Kind::kString) {
-    std::string wanted =
-        Canonical(absl::StripAsciiWhitespace(value.text()));
+    std::string wanted = Canonical(absl::StripAsciiWhitespace(value.text()));
     for (char& letter : wanted) {
-      if (letter == '-') letter = '_';
+      if (letter == '-') {
+        letter = '_';
+      }
     }
     const absl::Span<const std::string_view> names = vocabulary::StatusCodes();
     for (size_t at = 0; at < names.size(); ++at) {
-      if (names[at] == wanted) return static_cast<absl::StatusCode>(at);
+      if (names[at] == wanted) {
+        return static_cast<absl::StatusCode>(at);
+      }
     }
   }
   return std::nullopt;
@@ -2017,11 +2260,13 @@ absl::Status StatusOfRecord(const Value& record) {
       code == nullptr ? std::nullopt : StatusCodeOf(*code);
   if (!resolved.has_value()) {
     const Value* number = record.Get("number");
-    if (number != nullptr) resolved = StatusCodeOf(*number);
+    if (number != nullptr) {
+      resolved = StatusCodeOf(*number);
+    }
   }
   const Value* message = record.Get("message");
-  return absl::Status(resolved.value_or(absl::StatusCode::kUnknown),
-                      message == nullptr ? "" : AsText(*message));
+  return {resolved.value_or(absl::StatusCode::kUnknown),
+          message == nullptr ? "" : AsText(*message)};
 }
 
 }  // namespace a11::flow

@@ -62,8 +62,8 @@ OnModelProgress LogModelProgress(std::string_view what) {
     if (total == 0) {
       return;
     }
-    const std::int64_t decile =
-        static_cast<std::int64_t>((done * 10) / std::max<std::uint64_t>(total, 1));
+    const std::int64_t decile = static_cast<std::int64_t>(
+        (done * 10) / std::max<std::uint64_t>(total, 1));
     if (decile == *last_decile) {
       return;
     }
@@ -230,7 +230,7 @@ data::Chunk TextChunk(const std::string& text) {
 // Cancellation is forwarded to the write so the Task stays a drop-in for the
 // SubmitTask this replaced: a promise-backed Future with no cancellation source
 // answers Cancel() with Unimplemented instead of unwinding the operation.
-a11::Task WriteTask(a11::Future<std::uint32_t> write) {
+a11::Task WriteTask(const a11::Future<std::uint32_t>& write) {
   a11::Promise<a11::Unit> promise;
   a11::Task task = promise.future();
   promise.SetCancellationCallback([write]() { write.Cancel().IgnoreError(); })
@@ -316,7 +316,7 @@ ActionHandler MakeCaptureAudioHandler() {
       // must not block: RequestStop is atomic + idempotent Close, CancelReader
       // only unblocks the watcher.
       ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
-          [stop](std::shared_ptr<Action>) -> absl::Status {
+          [stop](const std::shared_ptr<Action>&) -> absl::Status {
             RequestStop(stop);
             stop->control->CancelReader();
             return absl::OkStatus();
@@ -422,10 +422,10 @@ ActionHandler MakeCaptureTranscriptionHandler() {
       // concern, on whose disk the cache lives.
       // The blocking forms: this already runs on a fiber, and awaiting a
       // nested Submit from one does not complete.
-      ABSL_ASSIGN_OR_RETURN(asr_options.model,
-                            internal::ResolveAsrModelBlocking(
-                                asr_options.model,
-                                LogModelProgress("transcription")));
+      ABSL_ASSIGN_OR_RETURN(
+          asr_options.model,
+          internal::ResolveAsrModelBlocking(asr_options.model,
+                                            LogModelProgress("transcription")));
       ABSL_ASSIGN_OR_RETURN(
           asr_options.vad_model,
           internal::ResolveVadModelBlocking(asr_options.vad_model,
@@ -434,10 +434,9 @@ ActionHandler MakeCaptureTranscriptionHandler() {
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AudioInput> input,
                             AudioInput::Open(capture_options));
       std::string model = asr_options.model;
-      ABSL_ASSIGN_OR_RETURN(
-          std::shared_ptr<SpeechRecognizer> recognizer,
-          SpeechRecognizer::Create(std::move(model), input,
-                                   std::move(asr_options)));
+      ABSL_ASSIGN_OR_RETURN(std::shared_ptr<SpeechRecognizer> recognizer,
+                            SpeechRecognizer::Create(std::move(model), input,
+                                                     std::move(asr_options)));
 
       // Bridge recognizer callbacks onto the output ports. The recognizer awaits
       // each returned Task, which is the natural backpressure point, and its Run
@@ -459,7 +458,7 @@ ActionHandler MakeCaptureTranscriptionHandler() {
       };
 
       ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
-          [stop, recognizer](std::shared_ptr<Action>) -> absl::Status {
+          [stop, recognizer](const std::shared_ptr<Action>&) -> absl::Status {
             RequestStop(stop);
             stop->control->CancelReader();
             (void)recognizer->Stop();  // non-blocking; do not Await here
@@ -526,10 +525,10 @@ ActionHandler MakeTranscribeAudioHandler() {
       // concern, on whose disk the cache lives.
       // The blocking forms: this already runs on a fiber, and awaiting a
       // nested Submit from one does not complete.
-      ABSL_ASSIGN_OR_RETURN(asr_options.model,
-                            internal::ResolveAsrModelBlocking(
-                                asr_options.model,
-                                LogModelProgress("transcription")));
+      ABSL_ASSIGN_OR_RETURN(
+          asr_options.model,
+          internal::ResolveAsrModelBlocking(asr_options.model,
+                                            LogModelProgress("transcription")));
       ABSL_ASSIGN_OR_RETURN(
           asr_options.vad_model,
           internal::ResolveVadModelBlocking(asr_options.vad_model,
@@ -575,7 +574,8 @@ ActionHandler MakeTranscribeAudioHandler() {
 
       // No control events: cancellation stops the run and closes the reader.
       ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
-          [recognizer, audio_node](std::shared_ptr<Action>) -> absl::Status {
+          [recognizer,
+           audio_node](const std::shared_ptr<Action>&) -> absl::Status {
             audio_node->CancelReader();
             (void)recognizer->Stop();  // non-blocking
             return absl::OkStatus();
@@ -686,12 +686,11 @@ ActionSchema CaptureTranscriptionSchema() {
            "Optional capture parameters; the default input is used if omitted.",
            /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
-      "asr_options",
-      Port("asr_options",
-           TaggedMimetype(a11::data::kJsonMimetype,
-                          kSpeechRecognizerOptionsTypeTag),
-           "Speech recognition parameters; model is required.",
-           /*required=*/false, /*unary=*/true));
+      "asr_options", Port("asr_options",
+                          TaggedMimetype(a11::data::kJsonMimetype,
+                                         kSpeechRecognizerOptionsTypeTag),
+                          "Speech recognition parameters; model is required.",
+                          /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
       "control_events",
       Port(
@@ -729,12 +728,11 @@ ActionSchema TranscribeAudioSchema() {
            "Stream of AudioBuffers to transcribe; closing it ends the run.",
            /*required=*/true, /*unary=*/false));
   schema.inputs.emplace(
-      "asr_options",
-      Port("asr_options",
-           TaggedMimetype(a11::data::kJsonMimetype,
-                          kSpeechRecognizerOptionsTypeTag),
-           "Speech recognition parameters; model is required.",
-           /*required=*/false, /*unary=*/true));
+      "asr_options", Port("asr_options",
+                          TaggedMimetype(a11::data::kJsonMimetype,
+                                         kSpeechRecognizerOptionsTypeTag),
+                          "Speech recognition parameters; model is required.",
+                          /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "transcription_pieces",
       Port("transcription_pieces", "text/plain",

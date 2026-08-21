@@ -101,6 +101,7 @@ class ChunkedDecoder {
   absl::Status Feed(std::string_view data, std::string* out, bool* complete);
 
   [[nodiscard]] bool complete() const { return state_ == State::kComplete; }
+
   /**
    * @return The trailer section that followed the last chunk, with lower-cased
    * field names in wire order. Empty until the body is complete, and empty

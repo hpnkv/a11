@@ -26,9 +26,10 @@ absl::Status RaisedUnknown(std::string_view what) {
 }
 
 /// @cond INTERNAL
-void Failure<void>::From(absl::Status status) {
+void Failure<void>::From(const absl::Status& status) {
   LOG(ERROR) << status.message();
 }
+
 /// @endcond
 
 }  // namespace a11::exception_guard::internal

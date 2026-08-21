@@ -61,9 +61,9 @@ absl::StatusOr<AudioControlEvent::Command> ParseControlCommand(
  */
 struct AudioCaptureEvent {
   enum class Kind {
-    kStarted,        ///< Capture stream opened; buffers will follow.
-    kBuffersDropped, ///< One or more buffers were dropped (consumer too slow).
-    kStopped,        ///< Capture finished; no more buffers will follow.
+    kStarted,         ///< Capture stream opened; buffers will follow.
+    kBuffersDropped,  ///< One or more buffers were dropped (consumer too slow).
+    kStopped,         ///< Capture finished; no more buffers will follow.
   };
 
   Kind kind = Kind::kStarted;
@@ -73,9 +73,11 @@ struct AudioCaptureEvent {
   static AudioCaptureEvent Started() {
     return AudioCaptureEvent{Kind::kStarted, 0};
   }
+
   static AudioCaptureEvent Stopped() {
     return AudioCaptureEvent{Kind::kStopped, 0};
   }
+
   static AudioCaptureEvent BuffersDropped(std::uint64_t count) {
     return AudioCaptureEvent{Kind::kBuffersDropped, count};
   }
@@ -107,12 +109,15 @@ struct TranscriptionEvent {
   static TranscriptionEvent CaptureStarted() {
     return TranscriptionEvent{Kind::kCaptureStarted};
   }
+
   static TranscriptionEvent InferenceStarted() {
     return TranscriptionEvent{Kind::kInferenceStarted};
   }
+
   static TranscriptionEvent InferenceStopped() {
     return TranscriptionEvent{Kind::kInferenceStopped};
   }
+
   static TranscriptionEvent CaptureStopped() {
     return TranscriptionEvent{Kind::kCaptureStopped};
   }

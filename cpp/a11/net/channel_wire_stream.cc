@@ -268,7 +268,7 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
     // `claimed` and `queued` are the two arms of one if/else above, and only
     // the queueing arm moves the message: whichever of them ran, the message is
     // moved exactly once. NOLINTNEXTLINE(bugprone-use-after-move)
-    DeliverClaimed(state_, std::move(message), claimed_id);
+    DeliverClaimed(state_, message, claimed_id);
     return absl::OkStatus();
   }
   if (queued) {
@@ -428,9 +428,9 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
     return a11::FailedTask(configured);
   }
 
-  a11::Schedule([state = state_]() { Sender(std::move(state)); });
-  a11::Schedule([state = state_]() { Receiver(std::move(state)); });
-  a11::Schedule([state = state_]() { WatchTiming(std::move(state)); });
+  a11::Schedule([state = state_]() { Sender(state); });
+  a11::Schedule([state = state_]() { Receiver(state); });
+  a11::Schedule([state = state_]() { WatchTiming(state); });
 
   absl::StatusOr<bool> already_open = state_->channel->IsOpen();
   if (!already_open.ok()) {
@@ -633,7 +633,7 @@ void* absl_nullable ChannelWireStream::GetImpl() const {
 // alone.
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
-void ChannelWireStream::Sender(std::shared_ptr<State> state) {
+void ChannelWireStream::Sender(const std::shared_ptr<State>& state) {
   // Holds `State::sending` while this Sender writes one message, and wakes it
   // again on the way out if more arrived meanwhile.
   class Claim {
@@ -787,7 +787,7 @@ void ChannelWireStream::Sender(std::shared_ptr<State> state) {
   }
 }
 
-void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
+void ChannelWireStream::Receiver(const std::shared_ptr<State>& state) {
   while (true) {
     std::shared_ptr<thread::PermanentEvent> changed;
     std::string bytes;
@@ -882,7 +882,7 @@ void ChannelWireStream::Receiver(std::shared_ptr<State> state) {
   }
 }
 
-void ChannelWireStream::WatchTiming(std::shared_ptr<State> state) {
+void ChannelWireStream::WatchTiming(const std::shared_ptr<State>& state) {
   while (true) {
     absl::Time wake;
     bool deadline_first = false;
@@ -919,7 +919,7 @@ void ChannelWireStream::WatchTiming(std::shared_ptr<State> state) {
 }
 
 void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
-                                       data::WireMessage message,
+                                       const data::WireMessage& message,
                                        std::uint64_t message_id) {
   // The same encode, packetise and write the Sender fibre would have done, and
   // the same treatment of a failure: abort the stream. Send still reports OK

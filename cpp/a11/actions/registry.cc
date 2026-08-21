@@ -2,6 +2,7 @@
 
 #include "a11/actions/registry.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -12,8 +13,6 @@
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
-
-#include <algorithm>
 
 #include "a11/actions/action.h"
 #include "a11/actions/builtins.h"
@@ -34,9 +33,8 @@ absl::Status ActionRegistry::Register(std::string action_name,
     // Refused rather than shadowed. These are what a peer is asked with, and an
     // application that could replace one could make itself undiscoverable --
     // which is the situation this whole mechanism exists to end.
-    return absl::InvalidArgumentError(
-        absl::StrCat("'", action_name,
-                     "' is a builtin action and cannot be re-registered"));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", action_name, "' is a builtin action and cannot be re-registered"));
   }
   ABSL_RETURN_IF_ERROR(schema.Validate());
   if (schema.name != action_name) {

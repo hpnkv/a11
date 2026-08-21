@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "sdk/audio/model_registry.h"
-
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -9,14 +7,15 @@
 #include <absl/status/status.h>
 #include <gtest/gtest.h>
 
+#include "sdk/audio/model_registry.h"
+
 namespace a11::sdk::audio {
 namespace {
 
 TEST(AudioModelRegistryTest, ListsTheAcceptedShorthands) {
   EXPECT_EQ(AsrModelShorthands(),
             (std::vector<std::string>{"tiny", "tiny.en", "base", "base.en"}));
-  EXPECT_EQ(VadModelShorthands(),
-            (std::vector<std::string>{"silero-v5.1.2"}));
+  EXPECT_EQ(VadModelShorthands(), (std::vector<std::string>{"silero-v5.1.2"}));
   // The defaults have to be in their own tables, or resolving an empty spec
   // would fail.
   EXPECT_TRUE(LookupAsrModel(kDefaultAsrModel).ok());

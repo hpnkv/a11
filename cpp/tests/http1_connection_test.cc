@@ -40,8 +40,8 @@ Http2Options Http1ClientOptions() {
 TEST(Http1ConnectionTest, BufferedRequestResponseRoundTrip) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         HttpHeaders headers{{"content-type", "text/plain"}};
         absl::Status status = response->SendResponse(
             201, std::move(headers), request.method + ":" + request.body);
@@ -70,17 +70,23 @@ TEST(Http1ConnectionTest, BufferedRequestResponseRoundTrip) {
 TEST(Http1ConnectionTest, ChunkedStreamingResponse) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         EXPECT_EQ(request.path, "/stream");
         // No Content-Length -> chunked transfer-encoding on the wire.
         absl::Status status =
             response->SendHeaders(200, {{"content-type", "text/event-stream"}});
-        if (!status.ok()) return a11::FailedTask(status);
+        if (!status.ok()) {
+          return a11::FailedTask(status);
+        }
         status = response->Write("data: one\n\n");
-        if (!status.ok()) return a11::FailedTask(status);
+        if (!status.ok()) {
+          return a11::FailedTask(status);
+        }
         status = response->Write("data: two\n\n");
-        if (!status.ok()) return a11::FailedTask(status);
+        if (!status.ok()) {
+          return a11::FailedTask(status);
+        }
         status = response->Finish();
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
       });
@@ -106,7 +112,9 @@ TEST(Http1ConnectionTest, ChunkedStreamingResponse) {
   while (true) {
     auto chunk = (*stream)->Read().Await(deadline);
     ASSERT_TRUE(chunk.ok()) << chunk.status();
-    if (!chunk->has_value()) break;
+    if (!chunk->has_value()) {
+      break;
+    }
     body += **chunk;
   }
   EXPECT_EQ(body, "data: one\n\ndata: two\n\n");
@@ -118,8 +126,8 @@ TEST(Http1ConnectionTest, ChunkedStreamingResponse) {
 TEST(Http1ConnectionTest, StreamsAChunkedRequestBody) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         EXPECT_EQ(GetHttpHeader(request.headers, "transfer-encoding"),
                   "chunked");
         const absl::Status status =
@@ -146,7 +154,9 @@ TEST(Http1ConnectionTest, StreamsAChunkedRequestBody) {
   while (true) {
     auto chunk = (*upload)->Read().Await(deadline);
     ASSERT_TRUE(chunk.ok()) << chunk.status();
-    if (!chunk->has_value()) break;
+    if (!chunk->has_value()) {
+      break;
+    }
     body += **chunk;
   }
   EXPECT_EQ(body, "got:alphabeta");
@@ -158,7 +168,8 @@ TEST(Http1ConnectionTest, StreamsAChunkedRequestBody) {
 TEST(Http1ConnectionTest, RejectsContentLengthOnAStreamedRequestBody) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response) {
+      [](const HttpRequest&,
+         const std::shared_ptr<Http2ResponseWriter>& response) {
         const absl::Status status = response->SendResponse(200, {}, "");
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
       });
@@ -179,13 +190,17 @@ TEST(Http1ConnectionTest, RejectsContentLengthOnAStreamedRequestBody) {
 TEST(Http1ConnectionTest, DeliversChunkedTrailers) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
+      [](const HttpRequest&,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         absl::Status status = response->SendHeaders(
             200, {{"content-type", "text/plain"}, {"trailer", "x-digest"}});
-        if (!status.ok()) return a11::FailedTask(status);
+        if (!status.ok()) {
+          return a11::FailedTask(status);
+        }
         status = response->Write("counted");
-        if (!status.ok()) return a11::FailedTask(status);
+        if (!status.ok()) {
+          return a11::FailedTask(status);
+        }
         status = response->FinishWithTrailers({{"x-digest", "7"}});
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
       });
@@ -203,7 +218,9 @@ TEST(Http1ConnectionTest, DeliversChunkedTrailers) {
   while (true) {
     auto chunk = (*stream)->Read().Await(deadline);
     ASSERT_TRUE(chunk.ok()) << chunk.status();
-    if (!chunk->has_value()) break;
+    if (!chunk->has_value()) {
+      break;
+    }
     body += **chunk;
   }
   EXPECT_EQ(body, "counted");
@@ -218,8 +235,8 @@ TEST(Http1ConnectionTest, DeliversChunkedTrailers) {
 TEST(Http1ConnectionTest, RejectsMultipleConcurrentRequests) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
+      [](const HttpRequest&,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         // Never finish: keep the single exchange occupied.
         (void)response->SendHeaders(200, {{"content-type", "text/plain"}});
         return a11::ReadyTask();
@@ -246,12 +263,12 @@ TEST(Http1ConnectionTest, NegotiatesHttp1OverTlsViaAlpn) {
   server_options.tls.enabled = true;
   server_options.tls.certificate_pem_file = TestDataPath("localhost-cert.pem");
   server_options.tls.key_pem_file = TestDataPath("localhost-key.pem");
-  server_options.enable_h2 = false;    // Serve HTTP/1.1 over TLS.
+  server_options.enable_h2 = false;  // Serve HTTP/1.1 over TLS.
   server_options.enable_http1 = true;
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         EXPECT_EQ(request.scheme, "https");
         absl::Status status = response->SendResponse(
             200, {{"content-type", "text/plain"}}, "secure-http1");
@@ -293,8 +310,8 @@ TEST(Http1ConnectionTest, CleartextHttp1OnlyServerServesExplicitHttp1Client) {
   server_options.enable_http1 = true;
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         absl::Status status = response->SendResponse(
             200, {{"content-type", "text/plain"}}, "http1:" + request.body);
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
@@ -330,37 +347,36 @@ TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyToTheHandler) {
       };
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [first_chunk_seen](HttpRequest request,
-                         std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
-        return a11::SubmitTask(
-            [first_chunk_seen, request = std::move(request),
-             response = std::move(response)]() mutable -> absl::Status {
-              if (request.body_stream == nullptr) {
-                return absl::FailedPreconditionError("body was not streamed");
-              }
-              if (!request.body.empty()) {
-                return absl::FailedPreconditionError(
-                    "a streamed body must not also be buffered");
-              }
-              std::string body;
-              bool first = true;
-              while (true) {
-                ABSL_ASSIGN_OR_RETURN(
-                    std::optional<std::string> chunk,
-                    request.body_stream->Read().Await(absl::Now() +
-                                                      absl::Seconds(5)));
-                if (!chunk.has_value()) {
-                  break;
-                }
-                if (first) {
-                  first = false;
-                  (void)first_chunk_seen->SetValue(a11::Unit{});
-                }
-                body.append(*chunk);
-              }
-              return response->SendResponse(200, {}, absl::StrCat("got:", body));
-            });
+      [first_chunk_seen](
+          HttpRequest request,
+          std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        return a11::SubmitTask([first_chunk_seen, request = std::move(request),
+                                response = std::move(
+                                    response)]() mutable -> absl::Status {
+          if (request.body_stream == nullptr) {
+            return absl::FailedPreconditionError("body was not streamed");
+          }
+          if (!request.body.empty()) {
+            return absl::FailedPreconditionError(
+                "a streamed body must not also be buffered");
+          }
+          std::string body;
+          bool first = true;
+          while (true) {
+            ABSL_ASSIGN_OR_RETURN(std::optional<std::string> chunk,
+                                  request.body_stream->Read().Await(
+                                      absl::Now() + absl::Seconds(5)));
+            if (!chunk.has_value()) {
+              break;
+            }
+            if (first) {
+              first = false;
+              (void)first_chunk_seen->SetValue(a11::Unit{});
+            }
+            body.append(*chunk);
+          }
+          return response->SendResponse(200, {}, absl::StrCat("got:", body));
+        });
       },
       server_options);
   ASSERT_TRUE(server.ok()) << server.status();
@@ -412,43 +428,42 @@ TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyOverHttp2) {
       };
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [first_chunk_seen](HttpRequest request,
-                         std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
-        return a11::SubmitTask(
-            [first_chunk_seen, request = std::move(request),
-             response = std::move(response)]() mutable -> absl::Status {
-              if (request.body_stream == nullptr) {
-                return response->SendResponse(
-                    200, {}, absl::StrCat("buffered:", request.body));
-              }
-              std::string body;
-              bool first = true;
-              while (true) {
-                ABSL_ASSIGN_OR_RETURN(
-                    std::optional<std::string> chunk,
-                    request.body_stream->Read().Await(absl::Now() +
-                                                      absl::Seconds(5)));
-                if (!chunk.has_value()) {
-                  break;
-                }
-                if (first) {
-                  first = false;
-                  (void)first_chunk_seen->SetValue(a11::Unit{});
-                }
-                body.append(*chunk);
-              }
-              return response->SendResponse(200, {}, absl::StrCat("got:", body));
-            });
+      [first_chunk_seen](
+          HttpRequest request,
+          std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        return a11::SubmitTask([first_chunk_seen, request = std::move(request),
+                                response = std::move(
+                                    response)]() mutable -> absl::Status {
+          if (request.body_stream == nullptr) {
+            return response->SendResponse(
+                200, {}, absl::StrCat("buffered:", request.body));
+          }
+          std::string body;
+          bool first = true;
+          while (true) {
+            ABSL_ASSIGN_OR_RETURN(std::optional<std::string> chunk,
+                                  request.body_stream->Read().Await(
+                                      absl::Now() + absl::Seconds(5)));
+            if (!chunk.has_value()) {
+              break;
+            }
+            if (first) {
+              first = false;
+              (void)first_chunk_seen->SetValue(a11::Unit{});
+            }
+            body.append(*chunk);
+          }
+          return response->SendResponse(200, {}, absl::StrCat("got:", body));
+        });
       },
       server_options);
   ASSERT_TRUE(server.ok()) << server.status();
 
   Http2Options client_options;
   client_options.client_preference = Http2Options::ProtocolPreference::kHttp2;
-  auto client = Http2Client::Connect("127.0.0.1", (*server)->port(),
-                                     client_options)
-                    .Await(absl::Now() + absl::Seconds(5));
+  auto client =
+      Http2Client::Connect("127.0.0.1", (*server)->port(), client_options)
+          .Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(client.ok()) << client.status();
   auto upload = (*client)->RequestStreamingBody("POST", "/upload",
                                                 {{"x-stream-me", "yes"}});

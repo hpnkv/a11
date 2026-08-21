@@ -113,9 +113,9 @@ struct RunOutcome {
  * @param standard_streams Whether to bind `read_stdin`, `write_stdout` and
  *        `write_stderr`, which RegisterFlowActions deliberately omits.
  */
-absl::Status RegisterStandardLibrary(actions::ActionRegistry& registry,
-                                    const sdk::flow::CapabilitiesPtr& capabilities,
-                                    bool standard_streams);
+absl::Status RegisterStandardLibrary(
+    actions::ActionRegistry& registry,
+    const sdk::flow::CapabilitiesPtr& capabilities, bool standard_streams);
 
 /**
  * @brief Compiles @p source and runs its entry flow to completion.

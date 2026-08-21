@@ -40,7 +40,7 @@ std::string TypeName(ReplyType type) {
   return "unknown";
 }
 
-absl::Status WrongType(ReplyType actual, std::string expected) {
+absl::Status WrongType(ReplyType actual, const std::string& expected) {
   return absl::FailedPreconditionError(
       absl::StrCat("Redis reply is ", TypeName(actual), ", not ", expected));
 }

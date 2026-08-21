@@ -28,12 +28,11 @@ absl::Status ExternalError(const std::exception& error) {
 // direction, which the elementwise transform this replaced was paying for.
 rtc::binary ToRtcBinary(std::string_view bytes) {
   const auto* first = reinterpret_cast<const std::byte*>(bytes.data());
-  return rtc::binary(first, first + bytes.size());
+  return {first, first + bytes.size()};
 }
 
 std::string FromRtcBinary(const rtc::binary& bytes) {
-  return std::string(reinterpret_cast<const char*>(bytes.data()),
-                     bytes.size());
+  return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
 class RtcBinaryChannel final : public BinaryChannel {
@@ -57,7 +56,7 @@ class RtcBinaryChannel final : public BinaryChannel {
             }
           });
       channel_->onError(
-          [on_error = std::move(callbacks.on_error)](std::string error) {
+          [on_error = std::move(callbacks.on_error)](const std::string& error) {
             on_error(absl::UnavailableError(std::move(error)));
           });
       channel_->onClosed(std::move(callbacks.on_closed));
@@ -131,7 +130,9 @@ class RtcBinaryChannel final : public BinaryChannel {
     }
   }
 
-  void* absl_nullable GetImpl() const override { return channel_.get(); }
+  [[nodiscard]] void* absl_nullable GetImpl() const override {
+    return channel_.get();
+  }
 
  private:
   std::shared_ptr<rtc::Channel> channel_;

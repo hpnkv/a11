@@ -22,7 +22,7 @@ TEST(SignallingTest, RoutesMessagesInOrderByIdentity) {
   auto mutex = std::make_shared<thread::Mutex>();
   auto done = std::make_shared<a11::Promise<a11::Unit>>();
   auto server = service->Connect(
-      "server", [received, mutex, done](SignallingMessage message) {
+      "server", [received, mutex, done](const SignallingMessage& message) {
         thread::MutexLock lock(&*mutex);
         received->push_back(message.candidate);
         if (received->size() == 2) {
@@ -32,7 +32,7 @@ TEST(SignallingTest, RoutesMessagesInOrderByIdentity) {
       });
   ASSERT_TRUE(server.ok()) << server.status();
   auto client = service->Connect(
-      "client", [](SignallingMessage) { return a11::ReadyTask(); });
+      "client", [](const SignallingMessage&) { return a11::ReadyTask(); });
   ASSERT_TRUE(client.ok()) << client.status();
 
   EXPECT_TRUE(

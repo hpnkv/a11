@@ -89,14 +89,24 @@ absl::StatusOr<LogLevel> ParseLogLevel(std::string_view name) {
     return kDefaultLogLevel;
   }
   const std::string lowered = absl::AsciiStrToLower(name);
-  if (lowered == "debug") return LogLevel::kDebug;
-  if (lowered == "info") return LogLevel::kInfo;
-  if (lowered == "warning" || lowered == "warn") return LogLevel::kWarning;
-  if (lowered == "error") return LogLevel::kError;
-  if (lowered == "critical" || lowered == "fatal") return LogLevel::kCritical;
-  return absl::InvalidArgumentError(absl::StrCat(
-      "Unknown log level '", name,
-      "'; expected debug, info, warning, error or critical"));
+  if (lowered == "debug") {
+    return LogLevel::kDebug;
+  }
+  if (lowered == "info") {
+    return LogLevel::kInfo;
+  }
+  if (lowered == "warning" || lowered == "warn") {
+    return LogLevel::kWarning;
+  }
+  if (lowered == "error") {
+    return LogLevel::kError;
+  }
+  if (lowered == "critical" || lowered == "fatal") {
+    return LogLevel::kCritical;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unknown log level '", name,
+                   "'; expected debug, info, warning, error or critical"));
 }
 
 absl::LogSeverity LogLevelToSeverity(LogLevel level) {
@@ -143,7 +153,9 @@ void ReportLog(const LogRecord& record) {
 }
 
 bool IsTextualLogMimetype(std::string_view mimetype) {
-  if (absl::StartsWith(mimetype, "text/")) return true;
+  if (absl::StartsWith(mimetype, "text/")) {
+    return true;
+  }
   // `application/json` and anything ending `+json`, with or without the
   // `;type=` parameter A11's JSON codec adds.
   const std::string_view media = mimetype.substr(0, mimetype.find(';'));
@@ -159,16 +171,15 @@ std::string LogText(const LogRecord& record) {
 }
 
 LogRecord LogRecordFromChunk(const data::Chunk& chunk,
-                            std::string_view action_name,
-                            std::string_view action_id) {
+                             std::string_view action_name,
+                             std::string_view action_id) {
   LogRecord record;
   record.action_name = action_name;
   record.action_id = action_id;
   record.data = chunk.data;
   if (chunk.metadata.has_value()) {
     record.mimetype = chunk.metadata->mimetype;
-    record.timestamp =
-        chunk.metadata->timestamp.value_or(absl::InfinitePast());
+    record.timestamp = chunk.metadata->timestamp.value_or(absl::InfinitePast());
   }
   const absl::StatusOr<LogLevel> level =
       ParseLogLevel(Attribute(chunk, kLogLevelAttribute));

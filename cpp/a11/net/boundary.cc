@@ -11,8 +11,6 @@
  * a11/exception_guard.h.
  */
 
-#include "a11/net/internal/exception_guarded_callbacks.h"
-
 #include <memory>
 #include <optional>
 #include <utility>
@@ -22,6 +20,7 @@
 #include "a11/internal/exception_guard_impl.h"
 #include "a11/net/http2.h"
 #include "a11/net/http_sse_wire_stream.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/signalling.h"
 #include "a11/net/websocket_wire_stream.h"
 #include "a11/net/wire_stream.h"
@@ -39,7 +38,7 @@ OnDone GuardOnDone(OnDone callback) {
 
 Http2RequestHandler GuardRequestHandler(Http2RequestHandler handler) {
   return exception_guard::Wrap<a11::Task, HttpRequest,
-                     std::shared_ptr<Http2ResponseWriter>>(
+                               std::shared_ptr<Http2ResponseWriter>>(
       std::move(handler), "HTTP request handler");
 }
 

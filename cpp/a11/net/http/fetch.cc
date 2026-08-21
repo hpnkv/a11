@@ -54,11 +54,12 @@ bool RedirectRewritesToGet(int status) {
   return status == 301 || status == 302 || status == 303;
 }
 
-absl::Status ResponseStatus(const ParsedUrl& url, const HttpResponseHead& head) {
-  return MakeStatus(StatusCodeFromHttp(head.status),
-                    absl::StrCat("HTTP ", head.status, " for ", url.ToString()),
-                    nlohmann::json{{"url", url.ToString()},
-                                   {"http_status", head.status}});
+absl::Status ResponseStatus(const ParsedUrl& url,
+                            const HttpResponseHead& head) {
+  return MakeStatus(
+      StatusCodeFromHttp(head.status),
+      absl::StrCat("HTTP ", head.status, " for ", url.ToString()),
+      nlohmann::json{{"url", url.ToString()}, {"http_status", head.status}});
 }
 
 std::uint64_t ContentLengthOf(const HttpResponseHead& head) {
@@ -77,13 +78,14 @@ std::uint64_t ContentLengthOf(const HttpResponseHead& head) {
  * one implementation of connect/redirect/read rather than two.
  */
 absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
-                                          FetchOptions options, FetchSink sink,
-                                          OnFetchProgress on_progress,
+                                          FetchOptions options,
+                                          const FetchSink& sink,
+                                          const OnFetchProgress& on_progress,
                                           absl::Time deadline) {
   ABSL_ASSIGN_OR_RETURN(ParsedUrl target, ParseUrl(url_text));
   if (target.scheme != "http" && target.scheme != "https") {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "fetch needs an http or https URL, got: ", target.scheme));
+    return absl::InvalidArgumentError(
+        absl::StrCat("fetch needs an http or https URL, got: ", target.scheme));
   }
 
   // A bulk transfer wants a receive window big enough for the path's
@@ -114,8 +116,8 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
 
     close_client();
     ABSL_ASSIGN_OR_RETURN(
-        client,
-        Http2Client::Connect(target.host, target.port, transport).Await(deadline));
+        client, Http2Client::Connect(target.host, target.port, transport)
+                    .Await(deadline));
 
     HttpHeaders headers = options.headers;
     NormalizeHttpHeaders(&headers);
@@ -124,10 +126,9 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
       SetHttpHeader(&headers, "user-agent", std::string(kDefaultUserAgent));
     }
 
-    ABSL_ASSIGN_OR_RETURN(
-        std::shared_ptr<Http2ResponseStream> stream,
-        client->RequestStream(method, target.target(), headers, body,
-                              target.scheme));
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Http2ResponseStream> stream,
+                          client->RequestStream(method, target.target(),
+                                                headers, body, target.scheme));
     ABSL_ASSIGN_OR_RETURN(HttpResponseHead head,
                           stream->Headers().Await(deadline));
 
@@ -136,7 +137,8 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
           GetHttpHeader(head.headers, "location");
       if (location.has_value()) {
         if (followed >= options.max_redirects) {
-          (void)stream->Cancel(absl::ResourceExhaustedError("too many redirects"));
+          (void)stream->Cancel(
+              absl::ResourceExhaustedError("too many redirects"));
           close_client();
           return MakeStatus(
               absl::StatusCode::kResourceExhausted,
@@ -181,7 +183,7 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
       if (!chunk.has_value()) {
         break;
       }
-      if (const absl::Status written = sink(*chunk); !written.ok()) {
+      if (absl::Status written = sink(*chunk); !written.ok()) {
         (void)stream->Cancel(written);
         close_client();
         return written;
@@ -215,25 +217,23 @@ absl::Status FetchOptions::Validate() const {
         "FetchOptions.max_redirects must not be negative");
   }
   if (timeout <= absl::ZeroDuration()) {
-    return absl::InvalidArgumentError(
-        "FetchOptions.timeout must be positive");
+    return absl::InvalidArgumentError("FetchOptions.timeout must be positive");
   }
   return transport.Validate();
 }
 
 namespace internal {
 
-absl::StatusOr<HttpResponseHead> FetchBlocking(std::string url,
-                                               FetchOptions options,
-                                               FetchSink sink,
-                                               OnFetchProgress on_progress) {
+absl::StatusOr<HttpResponseHead> FetchBlocking(
+    std::string url, FetchOptions options, const FetchSink& sink,
+    const OnFetchProgress& on_progress) {
   if (sink == nullptr) {
     return absl::InvalidArgumentError("fetch needs a sink");
   }
   ABSL_RETURN_IF_ERROR(options.Validate());
   const absl::Time deadline = DeadlineFor(options);
-  return RunFetch(std::move(url), std::move(options), std::move(sink),
-                  std::move(on_progress), deadline);
+  return RunFetch(std::move(url), std::move(options), sink, on_progress,
+                  deadline);
 }
 
 }  // namespace internal
@@ -256,10 +256,9 @@ a11::Future<HttpResponse> Fetch(std::string url, FetchOptions options) {
           response.body.append(chunk);
           return absl::OkStatus();
         };
-        ABSL_ASSIGN_OR_RETURN(response.head,
-                              internal::FetchBlocking(std::move(url),
-                                                      std::move(options),
-                                                      std::move(sink)));
+        ABSL_ASSIGN_OR_RETURN(
+            response.head,
+            internal::FetchBlocking(std::move(url), std::move(options), sink));
         return response;
       });
 }
@@ -270,10 +269,9 @@ a11::Future<HttpResponseHead> FetchToSink(std::string url, FetchSink sink,
   return a11::Submit<HttpResponseHead>(
       [url = std::move(url), options = std::move(options),
        sink = std::move(sink), on_progress = std::move(on_progress)]() mutable
-      -> absl::StatusOr<HttpResponseHead> {
-        return internal::FetchBlocking(std::move(url), std::move(options),
-                                       std::move(sink),
-                                       std::move(on_progress));
+          -> absl::StatusOr<HttpResponseHead> {
+        return internal::FetchBlocking(std::move(url), std::move(options), sink,
+                                       on_progress);
       });
 }
 

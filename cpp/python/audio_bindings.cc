@@ -149,11 +149,11 @@ audio::AudioBuffer MakeAudioBufferFromBuffer(const py::buffer& data,
 }
 
 std::shared_ptr<audio::AudioInput> OpenAudioInput(
-    audio::AudioInputOptions options) {
+    const audio::AudioInputOptions& options) {
   absl::StatusOr<std::shared_ptr<audio::AudioInput>> input;
   {
     py::gil_scoped_release release;
-    input = audio::AudioInput::Open(std::move(options));
+    input = audio::AudioInput::Open(options);
   }
   return ValueOrThrow(std::move(input));
 }
@@ -236,7 +236,7 @@ void ReleaseAudioTypeInfo(void* object) {
 
 std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
   Py_INCREF(cls.ptr());
-  return std::shared_ptr<void>(cls.ptr(), &ReleaseAudioTypeInfo);
+  return {cls.ptr(), &ReleaseAudioTypeInfo};
 }
 
 // Resolves the Python class a port's typeinfo should point at from the type tag

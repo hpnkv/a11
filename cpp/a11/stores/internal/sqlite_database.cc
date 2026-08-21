@@ -358,7 +358,7 @@ class SqliteDatabase::Workers {
 SqliteDatabase::SqliteDatabase(ConstructorToken, std::filesystem::path root,
                                SqliteDatabaseOptions options)
     : root_(std::move(root)),
-      options_(std::move(options)),
+      options_(options),
       hooks_(std::make_unique<SqliteHookState>()),
       workers_(std::make_unique<Workers>()) {}
 
@@ -422,7 +422,7 @@ SqliteDatabase::OpenConnection(bool read_only) const {
   sqlite3* handle = nullptr;
   const int code = sqlite3_open_v2(file.c_str(), &handle, flags, nullptr);
   if (code != SQLITE_OK) {
-    const absl::Status status =
+    absl::Status status =
         SqliteStatus(handle, code, absl::StrCat("Cannot open ", file.string()));
     sqlite3_close_v2(handle);
     return status;
@@ -528,7 +528,7 @@ absl::Status SqliteDatabase::Initialize() {
                         OpenConnection(/*read_only=*/false));
 
   ABSL_RETURN_IF_ERROR(writer->Execute("BEGIN IMMEDIATE"));
-  const absl::Status schema = ApplySchema(*writer);
+  absl::Status schema = ApplySchema(*writer);
   if (!schema.ok()) {
     writer->Execute("ROLLBACK").IgnoreError();
     return schema;
@@ -734,7 +734,7 @@ void SqliteDatabase::PollCrossProcess() {
 absl::StatusOr<std::string> SqliteDatabase::WriteBlob(
     std::string_view data) const {
   const std::filesystem::path directory = blobs_directory();
-  const std::string name = a11::NewUuid();
+  std::string name = a11::NewUuid();
   const std::filesystem::path final_path = directory / name;
   const std::filesystem::path temporary =
       directory / absl::StrCat(".tmp-", name);

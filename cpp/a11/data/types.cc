@@ -81,8 +81,7 @@ absl::StatusOr<std::string> JsonString(const nlohmann::json& value,
   return value.get<std::string>();
 }
 
-void PackByteMap(MsgpackWriter* absl_nonnull writer,
-                 const ByteMap& values) {
+void PackByteMap(MsgpackWriter* absl_nonnull writer, const ByteMap& values) {
   // Sorted, because nlohmann's object type is ordered and a ByteMap is a hash
   // map: sorting is what keeps these bytes identical to the JSON path's, and
   // also the only thing that makes the encoding deterministic at all.
@@ -91,11 +90,11 @@ void PackByteMap(MsgpackWriter* absl_nonnull writer,
   for (const auto& entry : values) {
     entries.push_back(&entry);
   }
-  std::sort(entries.begin(), entries.end(),
-            [](const ByteMap::value_type* left,
-               const ByteMap::value_type* right) {
-              return left->first < right->first;
-            });
+  std::sort(
+      entries.begin(), entries.end(),
+      [](const ByteMap::value_type* left, const ByteMap::value_type* right) {
+        return left->first < right->first;
+      });
   writer->PackMapHeader(entries.size());
   for (const ByteMap::value_type* entry : entries) {
     writer->PackString(entry->first);
@@ -160,7 +159,7 @@ std::string DebugChunk(const Chunk& chunk) {
   preview.reserve(shown * 4);
   constexpr char kHex[] = "0123456789abcdef";
   for (size_t index = 0; index < shown; ++index) {
-    const unsigned char byte = static_cast<unsigned char>(chunk.data[index]);
+    const auto byte = static_cast<unsigned char>(chunk.data[index]);
     preview.push_back('\\');
     preview.push_back('x');
     preview.push_back(kHex[byte >> 4U]);
@@ -254,7 +253,8 @@ absl::StatusOr<Bytes> ChunkMetadata::ToMsgpack() const {
   return writer.TakeBytes();
 }
 
-absl::Status ChunkMetadata::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+absl::Status ChunkMetadata::ToMsgpackInto(
+    MsgpackWriter* absl_nonnull writer) const {
   writer->PackString(mimetype);
   if (timestamp.has_value()) {
     writer->PackInt(absl::ToUnixMicros(*timestamp));
@@ -570,15 +570,16 @@ absl::StatusOr<Bytes> NodeFragment::ToMsgpack() const {
   return writer.TakeBytes();
 }
 
-absl::Status NodeFragment::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+absl::Status NodeFragment::ToMsgpackInto(
+    MsgpackWriter* absl_nonnull writer) const {
   writer->PackString(id);
   const bool is_chunk = std::holds_alternative<Chunk>(data);
   writer->PackUint(is_chunk ? 0 : 1);
-  ABSL_RETURN_IF_ERROR(writer->PackRecord([this, is_chunk](
-                                              MsgpackWriter* child) {
-    return is_chunk ? std::get<Chunk>(data).ToMsgpackInto(child)
-                    : std::get<NodeRef>(data).ToMsgpackInto(child);
-  }));
+  ABSL_RETURN_IF_ERROR(
+      writer->PackRecord([this, is_chunk](MsgpackWriter* child) {
+        return is_chunk ? std::get<Chunk>(data).ToMsgpackInto(child)
+                        : std::get<NodeRef>(data).ToMsgpackInto(child);
+      }));
   if (seq.has_value()) {
     writer->PackUint(*seq);
   } else {
@@ -738,15 +739,15 @@ absl::StatusOr<Bytes> ActionMessage::ToMsgpack() const {
   return writer.TakeBytes();
 }
 
-absl::Status ActionMessage::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+absl::Status ActionMessage::ToMsgpackInto(
+    MsgpackWriter* absl_nonnull writer) const {
   writer->PackString(id);
   writer->PackString(name);
   for (const std::vector<Port>* ports : {&inputs, &outputs}) {
     writer->PackArrayHeader(ports->size());
     for (const Port& port : *ports) {
-      ABSL_RETURN_IF_ERROR(writer->PackRecord([&port](MsgpackWriter* child) {
-        return port.ToMsgpackInto(child);
-      }));
+      ABSL_RETURN_IF_ERROR(writer->PackRecord(
+          [&port](MsgpackWriter* child) { return port.ToMsgpackInto(child); }));
     }
   }
   PackByteMap(writer, headers);
@@ -842,7 +843,7 @@ std::string WireMessage::DebugString() const {
       if (const Chunk* chunk = std::get_if<Chunk>(&fragment.data)) {
         stream << BoundedText(DebugChunk(*chunk), kDebugPreviewMaxContentChars);
       } else {
-        const NodeRef& node_ref = std::get<NodeRef>(fragment.data);
+        const auto& node_ref = std::get<NodeRef>(fragment.data);
         stream << "node_ref=" << node_ref.id << '[' << node_ref.offset << ':';
         if (node_ref.length) {
           stream << static_cast<std::uint64_t>(node_ref.offset) +
@@ -902,7 +903,8 @@ absl::StatusOr<Bytes> WireMessage::ToMsgpack() const {
   return writer.TakeBytes();
 }
 
-absl::Status WireMessage::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
+absl::Status WireMessage::ToMsgpackInto(
+    MsgpackWriter* absl_nonnull writer) const {
   writer->PackUint(kVersion);
   writer->PackArrayHeader(node_fragments.size());
   for (const NodeFragment& fragment : node_fragments) {

@@ -53,13 +53,12 @@ absl::Status WriteArguments(const std::shared_ptr<actions::Action>& action,
 
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> argc_node,
                         action->GetInput("argc"));
-  ABSL_RETURN_IF_ERROR(
-      argc_node
-          ->PutChunk(chunk_of("application/json",
-                              absl::StrCat(arguments.size())),
-                     std::nullopt, /*final=*/true)
-          .Await()
-          .status());
+  ABSL_RETURN_IF_ERROR(argc_node
+                           ->PutChunk(chunk_of("application/json",
+                                               absl::StrCat(arguments.size())),
+                                      std::nullopt, /*final=*/true)
+                           .Await()
+                           .status());
 
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> argv_node,
                         action->GetInput("argv"));
@@ -92,15 +91,23 @@ int DrainOutputs(const std::shared_ptr<actions::Action>& action,
                  const FlowPlan& plan) {
   int exit_code = 0;
   for (const PortPlan& port : plan.ports) {
-    if (port.direction != syntax::PortDirection::kOutput) continue;
+    if (port.direction != syntax::PortDirection::kOutput) {
+      continue;
+    }
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
         action->GetOutput(port.name);
-    if (!node.ok()) continue;
+    if (!node.ok()) {
+      continue;
+    }
     while (true) {
       absl::StatusOr<std::optional<data::Chunk>> chunk =
           (*node)->NextChunk().Await();
-      if (!chunk.ok() || !chunk->has_value()) break;
-      if ((*chunk)->IsNull()) continue;
+      if (!chunk.ok() || !chunk->has_value()) {
+        break;
+      }
+      if ((*chunk)->IsNull()) {
+        continue;
+      }
       if (port.name == "exit_code") {
         std::int64_t requested = 0;
         if (absl::SimpleAtoi((*chunk)->data, &requested)) {
@@ -116,7 +123,9 @@ int DrainOutputs(const std::shared_ptr<actions::Action>& action,
 std::vector<Diagnostic> WarningsOf(const CompiledProgram& program) {
   std::vector<Diagnostic> kept;
   for (const Diagnostic& diagnostic : program.diagnostics()) {
-    if (diagnostic.severity != Severity::kError) kept.push_back(diagnostic);
+    if (diagnostic.severity != Severity::kError) {
+      kept.push_back(diagnostic);
+    }
   }
   return kept;
 }
@@ -142,7 +151,8 @@ absl::Status RegisterStandardLibrary(
     const sdk::flow::CapabilitiesPtr& capabilities, bool standard_streams) {
   if (capabilities == nullptr) {
     return absl::InvalidArgumentError(
-        "a policy is required; see a11::sdk::flow::ReadOnlyCapabilities and its "
+        "a policy is required; see a11::sdk::flow::ReadOnlyCapabilities and "
+        "its "
         "neighbours");
   }
   // What the host already registered stays registered. A host that put its own
@@ -151,14 +161,14 @@ absl::Status RegisterStandardLibrary(
   // program's owner. So the standard library goes into a registry of its own
   // and is copied across only where there is nothing in the way.
   actions::ActionRegistry standard;
-  ABSL_RETURN_IF_ERROR(
-      sdk::flow::RegisterFlowActions(standard, capabilities));
+  ABSL_RETURN_IF_ERROR(sdk::flow::RegisterFlowActions(standard, capabilities));
   if (standard_streams) {
-    ABSL_RETURN_IF_ERROR(
-        sdk::flow::RegisterStandardStreamActions(standard));
+    ABSL_RETURN_IF_ERROR(sdk::flow::RegisterStandardStreamActions(standard));
   }
   for (const std::string& name : standard.ListRegisteredActions()) {
-    if (registry.IsRegistered(name)) continue;
+    if (registry.IsRegistered(name)) {
+      continue;
+    }
     ABSL_ASSIGN_OR_RETURN(actions::ActionSchema schema,
                           standard.GetSchema(name));
     ABSL_ASSIGN_OR_RETURN(actions::ActionHandler handler,
@@ -204,7 +214,7 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
     registry = std::make_shared<actions::ActionRegistry>();
   }
   ABSL_RETURN_IF_ERROR(RegisterStandardLibrary(*registry, options.capabilities,
-                                              options.standard_streams));
+                                               options.standard_streams));
 
   // The bridge, when the host gave one. Left null otherwise, which is what
   // makes the runtime fall back to A11's own registry -- the right answer for a
@@ -255,8 +265,7 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   // Drained before the wait, because a port nobody reads holds the flow that is
   // writing it and the wait would then never finish.
   const int exit_code = DrainOutputs(action, entry->plan);
-  ABSL_RETURN_IF_ERROR(
-      action->Wait(absl::InfiniteDuration()).Await().status());
+  ABSL_RETURN_IF_ERROR(action->Wait(absl::InfiniteDuration()).Await().status());
   return RunOutcome{.exit_code = exit_code,
                     .diagnostics = WarningsOf(*program)};
 }

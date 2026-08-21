@@ -47,8 +47,8 @@ std::function<a11::Task(std::shared_ptr<StreamT>)> AcceptInto(
     const std::shared_ptr<Service>& service,
     StreamMode mode = StreamMode::kAccept) {
   std::weak_ptr<Service> weak = service;
-  return [weak = std::move(weak), mode](
-             std::shared_ptr<StreamT> stream) -> a11::Task {
+  return [weak = std::move(weak),
+          mode](std::shared_ptr<StreamT> stream) -> a11::Task {
     std::shared_ptr<Service> resolved = weak.lock();
     if (resolved == nullptr) {
       return a11::FailedTask(absl::FailedPreconditionError(

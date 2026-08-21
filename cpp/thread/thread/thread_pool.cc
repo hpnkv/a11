@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <execinfo.h>
-#include <absl/container/flat_hash_map.h>
 #include "thread/thread_pool.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -32,7 +31,9 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -40,6 +41,7 @@
 #include <absl/base/call_once.h>
 #include <absl/base/no_destructor.h>
 #include <absl/base/optimization.h>
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/inlined_vector.h>
 #include <absl/functional/any_invocable.h>
 #include <absl/log/check.h>
@@ -63,6 +65,7 @@
 #include <boost/fiber/scheduler.hpp>
 #include <boost/fiber/type.hpp>
 #include <boost/intrusive_ptr.hpp>
+#include <execinfo.h>
 
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
@@ -100,7 +103,6 @@ class segmented_stack {
 #endif
 
 namespace thread {
-
 
 // An exact census of *where* fibres are created, under A11_FIBRE_CENSUS=1.
 //
@@ -150,7 +152,8 @@ std::mutex& CensusMutex() {
 }
 
 absl::flat_hash_map<CensusKey, std::uint64_t>& CensusCounts() {
-  static absl::NoDestructor<absl::flat_hash_map<CensusKey, std::uint64_t>> counts;
+  static absl::NoDestructor<absl::flat_hash_map<CensusKey, std::uint64_t>>
+      counts;
   return *counts;
 }
 
@@ -220,7 +223,6 @@ std::uint64_t FibreStartCount() {
   return g_fibre_starts.load(std::memory_order_relaxed);
 }
 
-
 struct Fiber::BoostState {
   boost::intrusive_ptr<boost::fibers::context> context;
 };
@@ -244,6 +246,27 @@ void Fiber::DestroyBoostState() {
 }
 
 namespace {
+
+/// An environment override read as an integer, or nullopt when it is unset or
+/// is not one.
+///
+/// `std::atoi` cannot tell "0" from "not a number", which for a tuning knob
+/// means a typo silently turns the knob down to zero instead of leaving the
+/// default in place.
+std::optional<int> EnvironmentInt(const char* name) {
+  const char* setting = std::getenv(name);
+  if (setting == nullptr) {
+    return std::nullopt;
+  }
+  const std::string_view text(setting);
+  int value = 0;
+  const auto parsed =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
+    return std::nullopt;
+  }
+  return value;
+}
 
 #if !defined(BOOST_USE_SEGMENTED_STACKS)
 boost::context::segmented_stack SegmentedAllocator(size_t) {
@@ -926,11 +949,11 @@ constexpr size_t kMaxWorkers = 64;
 // window at all.
 absl::Duration SpinBudget() {
   static const absl::Duration budget = [] {
-    const char* override_us = std::getenv("A11_POOL_SPIN_US");
-    if (override_us == nullptr) {
+    const std::optional<int> override_us = EnvironmentInt("A11_POOL_SPIN_US");
+    if (!override_us.has_value()) {
       return absl::Microseconds(30);
     }
-    return absl::Microseconds(std::max(0, std::atoi(override_us)));
+    return absl::Microseconds(std::max(0, *override_us));
   }();
   return budget;
 }
@@ -1676,7 +1699,7 @@ class WorkerThreadPool {
   WorkerThreadPool& operator=(const WorkerThreadPool&) = delete;
 
   void Start(size_t num_threads = std::thread::hardware_concurrency());
-  void Schedule(boost::intrusive_ptr<boost::fibers::context> context);
+  void Schedule(const boost::intrusive_ptr<boost::fibers::context>& context);
   void Post(PoolWork work);
   void PostAt(absl::Time deadline, PoolWork work);
 
@@ -1691,20 +1714,17 @@ class WorkerThreadPool {
 void PoolState::Start(size_t num_threads) {
   num_workers_ = num_threads;
   slots_ = std::make_unique<WorkerSlot[]>(num_threads);
-  const char* override_spinners = std::getenv("A11_POOL_SPINNERS");
-  if (override_spinners != nullptr) {
-    max_spinners_ =
-        static_cast<std::uint32_t>(std::max(0, std::atoi(override_spinners)));
+  if (const std::optional<int> spinners = EnvironmentInt("A11_POOL_SPINNERS");
+      spinners.has_value()) {
+    max_spinners_ = static_cast<std::uint32_t>(std::max(0, *spinners));
   }
-  const char* override_recruit = std::getenv("A11_POOL_RECRUIT");
-  if (override_recruit != nullptr) {
-    recruit_backlog_ =
-        static_cast<std::uint32_t>(std::max(0, std::atoi(override_recruit)));
+  if (const std::optional<int> recruit = EnvironmentInt("A11_POOL_RECRUIT");
+      recruit.has_value()) {
+    recruit_backlog_ = static_cast<std::uint32_t>(std::max(0, *recruit));
   }
-  const char* override_hot = std::getenv("A11_POOL_HOT");
-  if (override_hot != nullptr) {
-    hot_workers_ =
-        static_cast<std::uint32_t>(std::max(1, std::atoi(override_hot)));
+  if (const std::optional<int> hot = EnvironmentInt("A11_POOL_HOT");
+      hot.has_value()) {
+    hot_workers_ = static_cast<std::uint32_t>(std::max(1, *hot));
   }
 
   always_wake_ = std::getenv("A11_POOL_ALWAYS_WAKE") != nullptr;
@@ -1741,8 +1761,8 @@ void PoolState::Start(size_t num_threads) {
   // and the park and wake policy is a claim that `parks` stays small next to
   // the number of items, since the pool paying more for parking than for work
   // is exactly the failure the spin window exists to prevent.
-  const char* stats = std::getenv("A11_POOL_STATS");
-  stats_ = stats != nullptr && std::atoi(stats) != 0;
+  const std::optional<int> stats = EnvironmentInt("A11_POOL_STATS");
+  stats_ = stats.value_or(0) != 0;
   if (stats_) {
     static PoolState* reporting = this;
     // stderr rather than LOG: this runs at exit, where the Abseil sink may be
@@ -2020,7 +2040,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
 }
 
 void WorkerThreadPool::Schedule(
-    boost::intrusive_ptr<boost::fibers::context> context) {
+    const boost::intrusive_ptr<boost::fibers::context>& context) {
   CHECK(!state_.shutting_down())
       << "Cannot schedule work after worker-pool shutdown.";
   CHECK(context->get_scheduler() == nullptr)
@@ -2060,9 +2080,10 @@ WorkerThreadPool& WorkerThreadPool::Instance() {
   static const bool started = [] {
     // A11_POOL_THREADS pins the worker count, which the pool's throughput
     // depends strongly on and which therefore has to be settable.
-    const char* override_count = std::getenv("A11_POOL_THREADS");
-    if (override_count != nullptr) {
-      instance->Start(static_cast<size_t>(std::atoi(override_count)));
+    const std::optional<int> override_count =
+        EnvironmentInt("A11_POOL_THREADS");
+    if (override_count.has_value()) {
+      instance->Start(static_cast<size_t>(std::max(0, *override_count)));
     } else {
       instance->Start();
     }

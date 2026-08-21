@@ -43,8 +43,8 @@ TEST(AudioSerializationTest, AudioBufferRoundTripsMsgpack) {
   absl::StatusOr<Chunk> chunk = registry.ToChunk<AudioBuffer>(buffer);
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   ASSERT_TRUE(chunk->metadata.has_value());
-  EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.AudioBuffer"));
+  EXPECT_TRUE(
+      absl::StrContains(chunk->metadata->mimetype, "type=a11.sdk.AudioBuffer"));
   EXPECT_TRUE(absl::StartsWith(chunk->metadata->mimetype, kMsgpackMimetype));
 
   absl::StatusOr<AudioBuffer> decoded = registry.FromChunk<AudioBuffer>(*chunk);
@@ -64,8 +64,8 @@ TEST(AudioSerializationTest, AudioBufferChunkEncodeDecode) {
   buffer.samples = {0.0f, 0.1f, 0.2f, 0.3f};
   absl::StatusOr<Chunk> chunk = EncodeAudioBufferChunk(buffer);
   ASSERT_TRUE(chunk.ok()) << chunk.status();
-  EXPECT_TRUE(absl::StrContains(chunk->metadata->mimetype,
-                                "type=a11.sdk.AudioBuffer"));
+  EXPECT_TRUE(
+      absl::StrContains(chunk->metadata->mimetype, "type=a11.sdk.AudioBuffer"));
   absl::StatusOr<AudioBuffer> decoded = DecodeAudioBufferChunk(*chunk);
   ASSERT_TRUE(decoded.ok()) << decoded.status();
   EXPECT_EQ(decoded->num_channels, 1u);
@@ -200,8 +200,8 @@ TEST(AudioSerializationTest, ControlEventRoundTrip) {
 TEST(AudioSerializationTest, CaptureEventRoundTrip) {
   SerializationRegistry registry(/*register_defaults=*/false);
   ASSERT_TRUE(RegisterAudioTypes(registry).ok());
-  absl::StatusOr<Chunk> chunk = registry.ToChunk<AudioCaptureEvent>(
-      AudioCaptureEvent::BuffersDropped(5));
+  absl::StatusOr<Chunk> chunk =
+      registry.ToChunk<AudioCaptureEvent>(AudioCaptureEvent::BuffersDropped(5));
   ASSERT_TRUE(chunk.ok()) << chunk.status();
   absl::StatusOr<AudioCaptureEvent> decoded =
       registry.FromChunk<AudioCaptureEvent>(*chunk);
@@ -214,9 +214,9 @@ TEST(AudioSerializationTest, CaptureEventRejectsDropOnNonDropKind) {
   ASSERT_TRUE(RegisterAudioTypes(registry).ok());
   // A started event carrying a drop count is invalid on decode.
   Chunk chunk;
-  chunk.metadata = data::ChunkMetadata{
-      .mimetype = std::string(kJsonMimetype) +
-                  ";type=a11.sdk.AudioCaptureEvent"};
+  chunk.metadata =
+      data::ChunkMetadata{.mimetype = std::string(kJsonMimetype) +
+                                      ";type=a11.sdk.AudioCaptureEvent"};
   chunk.data = R"({"kind":"started","dropped":5})";
   EXPECT_FALSE(registry.FromChunk<AudioCaptureEvent>(chunk).ok());
 }
@@ -226,12 +226,10 @@ TEST(AudioSerializationTest, PythonStyleJsonDecodesOnGlobalRegistry) {
   data::SerializationRegistry& reg = data::GlobalSerializationRegistry();
   Chunk chunk;
   chunk.metadata = data::ChunkMetadata{
-      .mimetype =
-          "application/json;type=a11.sdk.AudioInputOptions"};
-  chunk.data =
-      R"({"device_index": -1, "device_name": "", "sample_rate": 0.0, )"
-      R"("channels": 0, "block_frames": 256, "ring_blocks": 32, )"
-      R"("buffer_frames": 512})";
+      .mimetype = "application/json;type=a11.sdk.AudioInputOptions"};
+  chunk.data = R"({"device_index": -1, "device_name": "", "sample_rate": 0.0, )"
+               R"("channels": 0, "block_frames": 256, "ring_blocks": 32, )"
+               R"("buffer_frames": 512})";
   absl::StatusOr<AudioInputOptions> decoded =
       reg.FromChunk<AudioInputOptions>(chunk);
   ASSERT_TRUE(decoded.ok()) << decoded.status();

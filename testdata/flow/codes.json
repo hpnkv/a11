@@ -385,6 +385,12 @@
       "summary": "An expression where the grammar requires a constant."
     },
     {
+      "code": "flow.syntax.nesting-too-deep",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "Brackets, blocks or bodies nested deeper than the parser will descend."
+    },
+    {
       "code": "flow.syntax.statement-end",
       "family": "syntax",
       "severity": "error",

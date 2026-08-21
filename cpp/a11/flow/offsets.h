@@ -31,29 +31,30 @@ class TextIndex {
   TextIndex() = default;
   explicit TextIndex(std::string text);
 
-  const std::string& Text() const { return text_; }
-  size_t LineCount() const { return line_starts_.size(); }
+  [[nodiscard]] const std::string& Text() const { return text_; }
+
+  [[nodiscard]] size_t LineCount() const { return line_starts_.size(); }
 
   /// How many UTF-16 units of the document precede this byte offset.
-  size_t Utf16Of(size_t byte_offset) const;
+  [[nodiscard]] size_t Utf16Of(size_t byte_offset) const;
 
   /// The byte offset that many UTF-16 units into the document.
-  size_t ByteOf(size_t utf16_offset) const;
+  [[nodiscard]] size_t ByteOf(size_t utf16_offset) const;
 
   /// The LSP position -- zero-based line, UTF-16 units into it -- of a byte
   /// offset.
-  std::pair<int, int> PositionOf(size_t byte_offset) const;
+  [[nodiscard]] std::pair<int, int> PositionOf(size_t byte_offset) const;
 
   /// The byte offset of an LSP position, clamped into the document.
-  size_t ByteOfPosition(int line, int character) const;
+  [[nodiscard]] size_t ByteOfPosition(int line, int character) const;
 
  private:
   /// How many bytes the character at `offset` takes, and how many UTF-16 units
   /// it is: two only outside the basic plane, which is the one case a count of
   /// code points and a count of UTF-16 units disagree about.
-  std::pair<size_t, size_t> Step(size_t offset) const;
+  [[nodiscard]] std::pair<size_t, size_t> Step(size_t offset) const;
 
-  size_t LineEnd(size_t line) const;
+  [[nodiscard]] size_t LineEnd(size_t line) const;
 
   std::string text_;
   /// The byte offset each line starts at.

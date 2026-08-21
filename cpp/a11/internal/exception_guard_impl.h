@@ -47,8 +47,8 @@ std::function<Result(Args...)> Wrap(std::function<Result(Args...)> callable,
   if (!callable) {
     return callable;
   }
-  return [callable = std::move(callable), what = std::string(what)](
-             Args... args) -> Result {
+  return [callable = std::move(callable),
+          what = std::string(what)](Args... args) -> Result {
     try {
       return callable(std::forward<Args>(args)...);
     } catch (const std::exception& error) {
@@ -65,8 +65,8 @@ absl::AnyInvocable<Result(Args...)> WrapOnce(
   if (!callable) {
     return callable;
   }
-  return [callable = std::move(callable), what = std::string(what)](
-             Args... args) mutable -> Result {
+  return [callable = std::move(callable),
+          what = std::string(what)](Args... args) mutable -> Result {
     try {
       return callable(std::forward<Args>(args)...);
     } catch (const std::exception& error) {
@@ -83,8 +83,8 @@ absl::AnyInvocable<Result(Args...) &&> WrapConsuming(
   if (!callable) {
     return callable;
   }
-  return [callable = std::move(callable), what = std::string(what)](
-             Args... args) mutable -> Result {
+  return [callable = std::move(callable),
+          what = std::string(what)](Args... args) mutable -> Result {
     try {
       return std::move(callable)(std::forward<Args>(args)...);
     } catch (const std::exception& error) {

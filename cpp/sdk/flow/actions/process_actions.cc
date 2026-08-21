@@ -16,12 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>
-#include <poll.h>
-#include <sys/resource.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -30,7 +24,12 @@
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <fcntl.h>
 #include <nlohmann/json.hpp>
+#include <poll.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -107,33 +106,63 @@ absl::Status ErrnoStatus(int code, std::string_view what) {
 std::optional<int> SignalNamed(std::string_view name) {
   const std::string upper = absl::AsciiStrToUpper(
       absl::StartsWith(name, "SIG") ? name.substr(3) : name);
-  if (upper == "TERM") return SIGTERM;
-  if (upper == "KILL") return SIGKILL;
-  if (upper == "INT") return SIGINT;
-  if (upper == "HUP") return SIGHUP;
-  if (upper == "QUIT") return SIGQUIT;
-  if (upper == "USR1") return SIGUSR1;
-  if (upper == "USR2") return SIGUSR2;
-  if (upper == "CONT") return SIGCONT;
+  if (upper == "TERM") {
+    return SIGTERM;
+  }
+  if (upper == "KILL") {
+    return SIGKILL;
+  }
+  if (upper == "INT") {
+    return SIGINT;
+  }
+  if (upper == "HUP") {
+    return SIGHUP;
+  }
+  if (upper == "QUIT") {
+    return SIGQUIT;
+  }
+  if (upper == "USR1") {
+    return SIGUSR1;
+  }
+  if (upper == "USR2") {
+    return SIGUSR2;
+  }
+  if (upper == "CONT") {
+    return SIGCONT;
+  }
   return std::nullopt;
 }
 
 std::string SignalName(int number) {
   switch (number) {
-    case SIGTERM: return "SIGTERM";
-    case SIGKILL: return "SIGKILL";
-    case SIGINT: return "SIGINT";
-    case SIGHUP: return "SIGHUP";
-    case SIGQUIT: return "SIGQUIT";
-    case SIGSEGV: return "SIGSEGV";
-    case SIGBUS: return "SIGBUS";
-    case SIGABRT: return "SIGABRT";
-    case SIGFPE: return "SIGFPE";
-    case SIGILL: return "SIGILL";
-    case SIGPIPE: return "SIGPIPE";
-    case SIGUSR1: return "SIGUSR1";
-    case SIGUSR2: return "SIGUSR2";
-    default: return absl::StrCat("signal ", number);
+    case SIGTERM:
+      return "SIGTERM";
+    case SIGKILL:
+      return "SIGKILL";
+    case SIGINT:
+      return "SIGINT";
+    case SIGHUP:
+      return "SIGHUP";
+    case SIGQUIT:
+      return "SIGQUIT";
+    case SIGSEGV:
+      return "SIGSEGV";
+    case SIGBUS:
+      return "SIGBUS";
+    case SIGABRT:
+      return "SIGABRT";
+    case SIGFPE:
+      return "SIGFPE";
+    case SIGILL:
+      return "SIGILL";
+    case SIGPIPE:
+      return "SIGPIPE";
+    case SIGUSR1:
+      return "SIGUSR1";
+    case SIGUSR2:
+      return "SIGUSR2";
+    default:
+      return absl::StrCat("signal ", number);
   }
 }
 
@@ -145,6 +174,7 @@ class Pipe {
   Pipe() = default;
   Pipe(const Pipe&) = delete;
   Pipe& operator=(const Pipe&) = delete;
+
   ~Pipe() {
     CloseRead();
     CloseWrite();
@@ -165,6 +195,7 @@ class Pipe {
   }
 
   [[nodiscard]] int read_end() const { return read_end_; }
+
   [[nodiscard]] int write_end() const { return write_end_; }
 
   /// Hands the write end to somebody else, who must close it.
@@ -178,12 +209,14 @@ class Pipe {
     write_end_ = -1;
     return fd;
   }
+
   void CloseRead() {
     if (read_end_ >= 0) {
       ::close(read_end_);
       read_end_ = -1;
     }
   }
+
   void CloseWrite() {
     if (write_end_ >= 0) {
       ::close(write_end_);
@@ -259,9 +292,9 @@ absl::StatusOr<SpawnSettings> ReadSpawnSettings(const Options& options,
                                                 const ProcessPolicy& policy) {
   SpawnSettings settings;
   ABSL_ASSIGN_OR_RETURN(settings.cwd, options.String("cwd", ""));
-  ABSL_ASSIGN_OR_RETURN(settings.clear_environment,
-                        options.Bool("clear_environment",
-                                     !policy.inherit_environment));
+  ABSL_ASSIGN_OR_RETURN(
+      settings.clear_environment,
+      options.Bool("clear_environment", !policy.inherit_environment));
   ABSL_ASSIGN_OR_RETURN(settings.grace,
                         options.Duration("grace", absl::Seconds(5)));
   ABSL_ASSIGN_OR_RETURN(settings.max_output_bytes,
@@ -404,10 +437,13 @@ class ChildPlan {
   }
 
   [[nodiscard]] char* const* argv() const { return argv_.data(); }
+
   [[nodiscard]] char** envp() const { return const_cast<char**>(envp_.data()); }
+
   [[nodiscard]] const char* cwd() const {
     return cwd_.empty() ? nullptr : cwd_.c_str();
   }
+
   [[nodiscard]] const char* program() const {
     return argument_storage_.front().c_str();
   }
@@ -444,10 +480,18 @@ absl::StatusOr<pid_t> Spawn(const ChildPlan& plan, const Sandbox& sandbox,
       (void)ignored;
       ::_exit(127);
     };
-    if (::dup2(stdin_fd, STDIN_FILENO) < 0) fail(errno);
-    if (::dup2(stdout_fd, STDOUT_FILENO) < 0) fail(errno);
-    if (::dup2(stderr_fd, STDERR_FILENO) < 0) fail(errno);
-    if (plan.cwd() != nullptr && ::chdir(plan.cwd()) != 0) fail(errno);
+    if (::dup2(stdin_fd, STDIN_FILENO) < 0) {
+      fail(errno);
+    }
+    if (::dup2(stdout_fd, STDOUT_FILENO) < 0) {
+      fail(errno);
+    }
+    if (::dup2(stderr_fd, STDERR_FILENO) < 0) {
+      fail(errno);
+    }
+    if (plan.cwd() != nullptr && ::chdir(plan.cwd()) != 0) {
+      fail(errno);
+    }
     // Its own process group, so signalling the child does not signal this
     // process, and so a child that spawns children of its own can be stopped as
     // a group rather than leaving orphans behind.
@@ -541,10 +585,9 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   if (!settings.cwd.empty()) {
     // A working directory is a path, so it answers to the filesystem policy
     // like any other -- otherwise `cwd` would be the way around it.
-    ABSL_ASSIGN_OR_RETURN(
-        const std::filesystem::path resolved,
-        ResolvePath(capabilities->filesystem, settings.cwd,
-                    /*for_write=*/false));
+    ABSL_ASSIGN_OR_RETURN(const std::filesystem::path resolved,
+                          ResolvePath(capabilities->filesystem, settings.cwd,
+                                      /*for_write=*/false));
     settings.cwd = resolved.string();
   }
   if (policy.max_seconds > 0) {
@@ -554,8 +597,7 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
     }
   }
 
-  ABSL_ASSIGN_OR_RETURN(OutputPorts outputs,
-                        OpenOutputs(action, options));
+  ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
 
   // The pid is not known until after the fork, and a control command naming a
   // signal may arrive before then. Shared, so the watcher can wait for one.
@@ -649,8 +691,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
       failure.has_value()) {
     int discarded = 0;
     (void)::waitpid(*spawned, &discarded, 0);
-    return give_up(ErrnoStatus(
-        *failure, absl::StrCat("cannot run '", program, "'")));
+    return give_up(
+        ErrnoStatus(*failure, absl::StrCat("cannot run '", program, "'")));
   }
 
   // Before any output, so a flow can order something else behind the process
@@ -673,10 +715,10 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   if (!content.ok()) {
     return give_up(content.status());
   }
-  const std::shared_ptr<AsyncNode> stdin_node = *content;
-  a11::Task feeder = a11::SubmitTask(
-      [node = stdin_node, stdin_fd = input.ReleaseWrite(),
-       stop]() -> absl::Status {
+  const std::shared_ptr<AsyncNode>& stdin_node = *content;
+  a11::Task feeder =
+      a11::SubmitTask([node = stdin_node, stdin_fd = input.ReleaseWrite(),
+                       stop]() -> absl::Status {
         while (!stop->stopped()) {
           absl::StatusOr<std::optional<data::Chunk>> chunk =
               node->NextChunk().Await();
@@ -713,8 +755,10 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
       });
 
   OutputStream streams[2] = {
-      {output.read_end(), outputs["stdout"], LineSplitter(outputs["stdout_lines"])},
-      {errors.read_end(), outputs["stderr"], LineSplitter(outputs["stderr_lines"])},
+      {output.read_end(), outputs["stdout"],
+       LineSplitter(outputs["stdout_lines"])},
+      {errors.read_end(), outputs["stderr"],
+       LineSplitter(outputs["stderr_lines"])},
   };
 
   absl::Status trouble = absl::OkStatus();
@@ -751,8 +795,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
         ++count;
       }
     }
-    const int ready = ::poll(waiting, static_cast<nfds_t>(count),
-                             kPollMilliseconds);
+    const int ready =
+        ::poll(waiting, static_cast<nfds_t>(count), kPollMilliseconds);
     if (ready < 0) {
       if (errno == EINTR) {
         continue;
@@ -787,8 +831,7 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
       }
       if (got == 0) {
         stream->open = false;  // the child closed it, or exited
-        if (const absl::Status flushed = stream->lines.Flush();
-            !flushed.ok()) {
+        if (const absl::Status flushed = stream->lines.Flush(); !flushed.ok()) {
           trouble = flushed;
         }
         continue;
@@ -803,7 +846,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
             " bytes of output this call allows"));
         break;
       }
-      if (const absl::Status written = stream->bytes.PutBytes(std::string(piece));
+      if (const absl::Status written =
+              stream->bytes.PutBytes(std::string(piece));
           !written.ok()) {
         trouble = written;
         break;
@@ -845,8 +889,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   }
 
   const bool signalled = WIFSIGNALED(wait_status);
-  const int code = signalled ? 128 + WTERMSIG(wait_status)
-                             : WEXITSTATUS(wait_status);
+  const int code =
+      signalled ? 128 + WTERMSIG(wait_status) : WEXITSTATUS(wait_status);
   ABSL_RETURN_IF_ERROR(outputs["exit_code"].PutOnly(nlohmann::json(code)));
   // Said rather than encoded: "exit code 143" is a thing no caller should have
   // to decode into "it was terminated".
@@ -864,7 +908,7 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   // The terminal values are written even when the run is about to be reported
   // as a failure: a caller diagnosing a deadline wants to know what the program
   // managed to do first.
-  const absl::Status ended = outputs.Finish();
+  absl::Status ended = outputs.Finish();
   if (const absl::Status stopped = stop->Check(); !stopped.ok()) {
     return stopped;
   }
@@ -875,17 +919,17 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
 
 /// One shape, so the policy lives in the handler rather than in an option.
 ActionHandler MakeHandler(CapabilitiesPtr capabilities) {
-  return [capabilities = std::move(capabilities)](
-             std::shared_ptr<Action> action) {
-    return a11::SubmitTask(
-        [capabilities, action = std::move(action)]() -> absl::Status {
-          if (capabilities == nullptr) {
-            return absl::FailedPreconditionError(
-                "this action was registered without a policy");
-          }
-          return RunSpawnProcess(action, capabilities);
-        });
-  };
+  return
+      [capabilities = std::move(capabilities)](std::shared_ptr<Action> action) {
+        return a11::SubmitTask(
+            [capabilities, action = std::move(action)]() -> absl::Status {
+              if (capabilities == nullptr) {
+                return absl::FailedPreconditionError(
+                    "this action was registered without a policy");
+              }
+              return RunSpawnProcess(action, capabilities);
+            });
+      };
 }
 
 }  // namespace
@@ -899,18 +943,20 @@ ActionSchema SpawnProcessSchema() {
       "written before any of them, so a composition can order something behind "
       "the process having started. A non-zero exit is reported on `exit_code` "
       "rather than failing the action: the program ran, and this is what it "
-      "said. Cancelling the action sends SIGTERM, waits options.grace, and then "
+      "said. Cancelling the action sends SIGTERM, waits options.grace, and "
+      "then "
       "sends SIGKILL.";
-  schema.inputs.emplace(
-      "program", Port("program", "string", "The program to run.",
-                      /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("program",
+                        Port("program", "string", "The program to run.",
+                             /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "arguments",
-      Port("arguments", JsonType(),
-           "The arguments, one per element. A single string is one argument and "
-           "is not split on spaces -- splitting is how a path with a space in "
-           "it becomes two arguments.",
-           /*required=*/false, /*unary=*/true));
+      Port(
+          "arguments", JsonType(),
+          "The arguments, one per element. A single string is one argument and "
+          "is not split on spaces -- splitting is how a path with a space in "
+          "it becomes two arguments.",
+          /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
       "stdin",
       Port("stdin", kOctetStream,
@@ -920,28 +966,29 @@ ActionSchema SpawnProcessSchema() {
            /*required=*/false, /*unary=*/false));
   schema.inputs.emplace(
       "options",
-      Port("options", JsonType(),
-           "All optional: cwd (checked against the same filesystem policy as "
-           "any other path), environment (an object of names to values), "
-           "clear_environment, grace (how long SIGTERM is given before SIGKILL, "
-           "default 5s), max_output_bytes, and omit -- output port names to "
-           "close immediately rather than write.",
-           /*required=*/false, /*unary=*/true));
+      Port(
+          "options", JsonType(),
+          "All optional: cwd (checked against the same filesystem policy as "
+          "any other path), environment (an object of names to values), "
+          "clear_environment, grace (how long SIGTERM is given before SIGKILL, "
+          "default 5s), max_output_bytes, and omit -- output port names to "
+          "close immediately rather than write.",
+          /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
       std::string(kControlPort),
-      Port(kControlPort, JsonType(),
-           "Control commands: {\"command\": \"stop\"} to wind the process "
-           "down, or {\"command\": \"signal\", \"signal\": \"HUP\"} to send one "
-           "of TERM, KILL, INT, HUP, QUIT, USR1, USR2 or CONT to the process "
-           "group.",
-           /*required=*/false, /*unary=*/false));
+      Port(
+          kControlPort, JsonType(),
+          "Control commands: {\"command\": \"stop\"} to wind the process "
+          "down, or {\"command\": \"signal\", \"signal\": \"HUP\"} to send one "
+          "of TERM, KILL, INT, HUP, QUIT, USR1, USR2 or CONT to the process "
+          "group.",
+          /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
-      "pid", Port("pid", "integer",
-                  "The process id, written as soon as there is one.",
-                  /*required=*/false, /*unary=*/true));
+      "pid",
+      Port("pid", "integer", "The process id, written as soon as there is one.",
+           /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "stdout", Port("stdout", kOctetStream,
-                     "Standard output, as it arrives.",
+      "stdout", Port("stdout", kOctetStream, "Standard output, as it arrives.",
                      /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "stdout_lines",

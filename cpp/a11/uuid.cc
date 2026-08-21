@@ -36,9 +36,9 @@ std::string NewUuid() {
 std::string NewShortId(int hex_digits) {
   hex_digits = std::clamp(hex_digits, 8, 16);
   const std::uint64_t value =
-      hex_digits == 16 ? RandomUint64()
-                       : RandomUint64() >> (64U - 4U * static_cast<unsigned>(
-                                                        hex_digits));
+      hex_digits == 16
+          ? RandomUint64()
+          : RandomUint64() >> (64U - 4U * static_cast<unsigned>(hex_digits));
   return absl::StrFormat("%0*x", hex_digits, value);
 }
 

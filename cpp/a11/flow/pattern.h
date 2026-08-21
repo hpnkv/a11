@@ -94,7 +94,7 @@ struct Pattern {
 
   /// Whether every hole has a name, which is what makes the result a record
   /// with fields rather than one read by position.
-  bool AllNamed() const;
+  [[nodiscard]] bool AllNamed() const;
 };
 
 /// A pattern, or what is wrong with the text it was written as.
@@ -105,7 +105,7 @@ struct Compiled {
   /// Where the problem is, counting characters from the start of the pattern.
   size_t column = 0;
 
-  bool ok() const { return error.empty(); }
+  [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
 /// Compile a pattern, saying what is wrong rather than throwing.

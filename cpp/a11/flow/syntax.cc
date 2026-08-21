@@ -98,7 +98,9 @@ std::string TypeExpression::ToString() const {
   if (sugared && parameters.size() == 1) {
     return absl::StrCat(parameters.front().ToString(), "[]");
   }
-  if (parameters.empty()) return name;
+  if (parameters.empty()) {
+    return name;
+  }
   std::vector<std::string> inside;
   inside.reserve(parameters.size());
   for (const TypeExpression& parameter : parameters) {
@@ -204,7 +206,9 @@ std::string_view NodeKindName(NodeKind kind) {
 }
 
 bool IsAnyOf(const Node* node, std::initializer_list<NodeKind> kinds) {
-  if (node == nullptr) return false;
+  if (node == nullptr) {
+    return false;
+  }
   return std::find(kinds.begin(), kinds.end(), node->kind) != kinds.end();
 }
 
@@ -231,10 +235,10 @@ void SetPair(Constant& object, std::string_view key, Constant value) {
 }  // namespace
 
 std::optional<Constant> ConstantValue(const Node* node) {
-  if (const Literal* literal = As<Literal>(node); literal != nullptr) {
+  if (const auto* literal = As<Literal>(node); literal != nullptr) {
     return literal->value;
   }
-  if (const ListLiteral* list = As<ListLiteral>(node); list != nullptr) {
+  if (const auto* list = As<ListLiteral>(node); list != nullptr) {
     Constant constant;
     constant.kind = Constant::Kind::kList;
     for (const NodePtr& item : list->items) {
@@ -251,13 +255,14 @@ std::optional<Constant> ConstantValue(const Node* node) {
         continue;
       }
       std::optional<Constant> value = ConstantValue(item.get());
-      if (!value.has_value()) return std::nullopt;
+      if (!value.has_value()) {
+        return std::nullopt;
+      }
       constant.items.push_back(*std::move(value));
     }
     return constant;
   }
-  if (const ObjectLiteral* object = As<ObjectLiteral>(node);
-      object != nullptr) {
+  if (const auto* object = As<ObjectLiteral>(node); object != nullptr) {
     Constant constant;
     constant.kind = Constant::Kind::kObject;
     for (const auto& [key, item] : object->pairs) {
@@ -272,7 +277,9 @@ std::optional<Constant> ConstantValue(const Node* node) {
         continue;
       }
       std::optional<Constant> value = ConstantValue(item.get());
-      if (!value.has_value()) return std::nullopt;
+      if (!value.has_value()) {
+        return std::nullopt;
+      }
       SetPair(constant, key, *std::move(value));
     }
     return constant;
@@ -280,15 +287,25 @@ std::optional<Constant> ConstantValue(const Node* node) {
   return std::nullopt;
 }
 
+// Every `static_cast` below is guarded by the `node.kind` it is written under,
+// which is what `kind` is for: a node's kind *is* its type tag, set once by the
+// constructor of the struct that declares it. `dynamic_cast` would ask RTTI the
+// same question the switch already answered, once per node per walk, on the
+// path every editor feature runs.
+// NOLINTBEGIN(cppcoreguidelines-pro-type-static-cast-downcast)
 void VisitChildren(const Node& node,
                    const std::function<void(const Node&)>& visit) {
   // One child, when there is one. Every field below is optional in practice --
   // the parser leaves a hole where it could not read a value.
   const auto one = [&](const NodePtr& child) {
-    if (child != nullptr) visit(*child);
+    if (child != nullptr) {
+      visit(*child);
+    }
   };
   const auto all = [&](const std::vector<NodePtr>& children) {
-    for (const NodePtr& child : children) one(child);
+    for (const NodePtr& child : children) {
+      one(child);
+    }
   };
 
   switch (node.kind) {
@@ -349,7 +366,9 @@ void VisitChildren(const Node& node,
       const auto& pipeline = static_cast<const Pipeline&>(node);
       one(pipeline.source);
       for (const StagePtr& stage : pipeline.stages) {
-        if (stage != nullptr) visit(*stage);
+        if (stage != nullptr) {
+          visit(*stage);
+        }
       }
       return;
     }
@@ -359,21 +378,29 @@ void VisitChildren(const Node& node,
     case NodeKind::kPipelineValue: {
       const PipelinePtr& pipeline =
           static_cast<const PipelineValue&>(node).pipeline;
-      if (pipeline != nullptr) visit(*pipeline);
+      if (pipeline != nullptr) {
+        visit(*pipeline);
+      }
       return;
     }
     case NodeKind::kCallModifiers: {
       const auto& modifiers = static_cast<const CallModifiers&>(node);
-      for (const auto& [name, value] : modifiers.headers) one(value);
+      for (const auto& [name, value] : modifiers.headers) {
+        one(value);
+      }
       one(modifiers.action_id);
       return;
     }
     case NodeKind::kCallExpression: {
       const auto& call = static_cast<const CallExpression&>(node);
       for (const CallExpression::Argument& argument : call.args) {
-        if (argument.pipeline != nullptr) visit(*argument.pipeline);
+        if (argument.pipeline != nullptr) {
+          visit(*argument.pipeline);
+        }
       }
-      if (call.modifiers != nullptr) visit(*call.modifiers);
+      if (call.modifiers != nullptr) {
+        visit(*call.modifiers);
+      }
       return;
     }
     case NodeKind::kBind:
@@ -381,7 +408,9 @@ void VisitChildren(const Node& node,
       return;
     case NodeKind::kLet: {
       const PipelinePtr& pipeline = static_cast<const Let&>(node).pipeline;
-      if (pipeline != nullptr) visit(*pipeline);
+      if (pipeline != nullptr) {
+        visit(*pipeline);
+      }
       return;
     }
     case NodeKind::kBlock:
@@ -390,18 +419,24 @@ void VisitChildren(const Node& node,
     case NodeKind::kCallStatement: {
       const CallExpressionPtr& call =
           static_cast<const CallStatement&>(node).call;
-      if (call != nullptr) visit(*call);
+      if (call != nullptr) {
+        visit(*call);
+      }
       return;
     }
     case NodeKind::kPipe: {
       const auto& pipe = static_cast<const Pipe&>(node);
-      if (pipe.pipeline != nullptr) visit(*pipe.pipeline);
+      if (pipe.pipeline != nullptr) {
+        visit(*pipe.pipeline);
+      }
       all(pipe.targets);
       return;
     }
     case NodeKind::kSkip: {
       for (const SkipTarget& target : static_cast<const Skip&>(node).targets) {
-        if (target.pipeline != nullptr) visit(*target.pipeline);
+        if (target.pipeline != nullptr) {
+          visit(*target.pipeline);
+        }
       }
       return;
     }
@@ -429,7 +464,9 @@ void VisitChildren(const Node& node,
       return;
     case NodeKind::kForEach: {
       const auto& loop = static_cast<const ForEach&>(node);
-      if (loop.pipeline != nullptr) visit(*loop.pipeline);
+      if (loop.pipeline != nullptr) {
+        visit(*loop.pipeline);
+      }
       all(loop.body);
       return;
     }
@@ -441,7 +478,9 @@ void VisitChildren(const Node& node,
     }
     case NodeKind::kCarry: {
       const PipelinePtr& pipeline = static_cast<const Carry&>(node).pipeline;
-      if (pipeline != nullptr) visit(*pipeline);
+      if (pipeline != nullptr) {
+        visit(*pipeline);
+      }
       return;
     }
     case NodeKind::kUntil:
@@ -468,10 +507,14 @@ void VisitChildren(const Node& node,
     case NodeKind::kFlowDeclaration: {
       const auto& flow = static_cast<const FlowDeclaration&>(node);
       for (const PortDeclarationPtr& port : flow.ports) {
-        if (port != nullptr) visit(*port);
+        if (port != nullptr) {
+          visit(*port);
+        }
       }
       for (const HeaderDeclarationPtr& header : flow.headers) {
-        if (header != nullptr) visit(*header);
+        if (header != nullptr) {
+          visit(*header);
+        }
       }
       all(flow.body);
       return;
@@ -479,9 +522,25 @@ void VisitChildren(const Node& node,
     case NodeKind::kDtoDeclaration:
       for (const FieldDeclarationPtr& field :
            static_cast<const DtoDeclaration&>(node).fields) {
-        if (field != nullptr) visit(*field);
+        if (field != nullptr) {
+          visit(*field);
+        }
       }
       return;
+  }
+}
+
+// NOLINTEND(cppcoreguidelines-pro-type-static-cast-downcast)
+
+void VisitSubtree(const Node& node,
+                  const std::function<void(const Node&)>& visit) {
+  std::vector<const Node*> pending{&node};
+  while (!pending.empty()) {
+    const Node* one = pending.back();
+    pending.pop_back();
+    visit(*one);
+    VisitChildren(*one,
+                  [&pending](const Node& child) { pending.push_back(&child); });
   }
 }
 
@@ -492,7 +551,9 @@ std::optional<std::string> DottedName(const Node* node) {
     node = attr->base.get();
   }
   const Name* name = As<Name>(node);
-  if (name == nullptr) return std::nullopt;
+  if (name == nullptr) {
+    return std::nullopt;
+  }
   parts.push_back(name->name);
   std::reverse(parts.begin(), parts.end());
   return absl::StrJoin(parts, ".");

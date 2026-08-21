@@ -50,7 +50,7 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
     return absl::ResourceExhaustedError("MessagePack nesting is too deep");
   }
   ABSL_RETURN_IF_ERROR(Need(*position, 1, bytes.size()));
-  const std::uint8_t marker = static_cast<std::uint8_t>(bytes[(*position)++]);
+  const auto marker = static_cast<std::uint8_t>(bytes[(*position)++]);
 
   if (marker <= 0x7f || marker >= 0xe0 || marker == 0xc0 || marker == 0xc2 ||
       marker == 0xc3) {
@@ -184,7 +184,7 @@ absl::Status SkipValue(std::string_view bytes, size_t* position, int depth) {
 // wrapper handles them before delegating the remaining marker classes.
 absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
   ABSL_RETURN_IF_ERROR(Need(*position, 1, bytes.size()));
-  const std::uint8_t marker = static_cast<std::uint8_t>(bytes[*position]);
+  const auto marker = static_cast<std::uint8_t>(bytes[*position]);
   if (marker == 0xc4 || marker == 0xc5 || marker == 0xc6 || marker == 0xd9 ||
       marker == 0xda || marker == 0xdb) {
     ++*position;
@@ -244,7 +244,8 @@ absl::Status ScanValue(std::string_view bytes, size_t* position, int depth) {
 template <typename T>
 void AppendBigEndian(std::string* absl_nonnull out, T value) {
   static_assert(std::is_unsigned_v<T>);
-  for (int shift = static_cast<int>(sizeof(T)) * 8 - 8; shift >= 0; shift -= 8) {
+  for (int shift = static_cast<int>(sizeof(T)) * 8 - 8; shift >= 0;
+       shift -= 8) {
     out->push_back(static_cast<char>((value >> shift) & 0xffU));
   }
 }
@@ -316,7 +317,9 @@ void MsgpackWriter::Reserve(size_t extra) {
   }
 }
 
-void MsgpackWriter::PackNil() { AppendByte(bytes_, 0xc0U); }
+void MsgpackWriter::PackNil() {
+  AppendByte(bytes_, 0xc0U);
+}
 
 void MsgpackWriter::PackBool(bool value) {
   AppendByte(bytes_, value ? 0xc3U : 0xc2U);
@@ -468,7 +471,7 @@ absl::StatusOr<std::string_view> MsgpackReader::ReadBinaryView() {
     return absl::ResourceExhaustedError("MessagePack binary is too large");
   }
   const auto size = static_cast<size_t>(*length);
-  const absl::Status available = Need(position_, size, bytes_.size());
+  absl::Status available = Need(position_, size, bytes_.size());
   if (!available.ok()) {
     position_ = begin;
     return available;
@@ -586,9 +589,8 @@ absl::StatusOr<absl::Status> UnpackStatus(std::string_view bytes) {
     }
   }
   return absl::StatusOr<absl::Status>(
-      std::in_place,
-      MakeStatus(static_cast<absl::StatusCode>(raw_code),
-                 message->get<std::string>(), std::move(detail_array)));
+      std::in_place, MakeStatus(static_cast<absl::StatusCode>(raw_code),
+                                message->get<std::string>(), detail_array));
 }
 
 }  // namespace a11::data

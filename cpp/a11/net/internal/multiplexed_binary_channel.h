@@ -132,7 +132,7 @@ class MultiplexedBinaryChannel
     /// caller is currently handing them over. The claim is per member, so a send
     /// on one channel does not wait behind a send on another -- which is the
     /// point of striping in the first place.
-    std::deque<std::string> pending;
+    std::deque<std::string> pending = {};
     size_t pending_bytes = 0;
     bool flushing = false;
   };

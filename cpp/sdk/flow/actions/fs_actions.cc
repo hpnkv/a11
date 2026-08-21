@@ -16,9 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -27,7 +24,9 @@
 #include <absl/strings/str_format.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <fcntl.h>
 #include <nlohmann/json.hpp>
+#include <unistd.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -93,7 +92,7 @@ absl::Status ErrnoStatus(int code, std::string_view what,
 }
 
 absl::Status ErrorCodeStatus(const std::error_code& error,
-                            std::string_view what, std::string_view path) {
+                             std::string_view what, std::string_view path) {
   return ErrnoStatus(error.value(), what, path);
 }
 
@@ -104,10 +103,14 @@ absl::Status ErrorCodeStatus(const std::error_code& error,
 class Fd {
  public:
   Fd() = default;
+
   explicit Fd(int fd) : fd_(fd) {}
+
   Fd(const Fd&) = delete;
   Fd& operator=(const Fd&) = delete;
+
   Fd(Fd&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+
   Fd& operator=(Fd&& other) noexcept {
     if (this != &other) {
       Close();
@@ -116,10 +119,13 @@ class Fd {
     }
     return *this;
   }
+
   ~Fd() { Close(); }
 
   [[nodiscard]] bool valid() const { return fd_ >= 0; }
+
   [[nodiscard]] int get() const { return fd_; }
+
   void Close() {
     if (fd_ >= 0) {
       ::close(fd_);
@@ -310,8 +316,9 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted, options.Omit());
   ABSL_ASSIGN_OR_RETURN(const ReadSettings settings,
                         ReadReadSettings(options, policy));
-  ABSL_ASSIGN_OR_RETURN(const fs::path path,
-                        ResolveInput(action, policy, "path", /*for_write=*/false));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path path,
+      ResolveInput(action, policy, "path", /*for_write=*/false));
 
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<StopSignal> stop,
@@ -332,9 +339,9 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
   const Sink lines_out = outputs["lines"];
 
   std::error_code error;
-  const fs::file_status status =
-      policy.follow_symlinks ? fs::status(path, error)
-                             : fs::symlink_status(path, error);
+  const fs::file_status status = policy.follow_symlinks
+                                     ? fs::status(path, error)
+                                     : fs::symlink_status(path, error);
   if (error) {
     return finish(ErrorCodeStatus(error, "read", path.string()));
   }
@@ -371,8 +378,8 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
   // On the heap. A fibre's stack is measured in kilobytes, so a 64 KiB buffer
   // as a local would run off the end of it and into whatever is next.
   std::string buffer(static_cast<std::size_t>(settings.chunk_bytes), '\0');
-  std::string whole;      // only when `text` is wanted
-  std::string pending;    // the tail of a line that has not ended yet
+  std::string whole;    // only when `text` is wanted
+  std::string pending;  // the tail of a line that has not ended yet
   std::uint64_t total = 0;
 
   while (true) {
@@ -402,9 +409,9 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
     const std::string_view piece(buffer.data(), static_cast<std::size_t>(got));
     total += piece.size();
     if (settings.max_bytes != 0 && total > settings.max_bytes) {
-      return finish(absl::ResourceExhaustedError(absl::StrCat(
-          "'", path.string(), "' is larger than the ", settings.max_bytes,
-          " bytes this read allows")));
+      return finish(absl::ResourceExhaustedError(
+          absl::StrCat("'", path.string(), "' is larger than the ",
+                       settings.max_bytes, " bytes this read allows")));
     }
 
     if (wants_bytes) {
@@ -471,8 +478,8 @@ struct WriteSettings {
   std::uint64_t max_bytes = 0;
 };
 
-absl::StatusOr<WriteSettings> ReadWriteSettings(const Options& options,
-                                                const FilesystemPolicy& policy) {
+absl::StatusOr<WriteSettings> ReadWriteSettings(
+    const Options& options, const FilesystemPolicy& policy) {
   WriteSettings settings;
   ABSL_ASSIGN_OR_RETURN(settings.append, options.Bool("append", false));
   ABSL_ASSIGN_OR_RETURN(settings.atomic,
@@ -485,7 +492,8 @@ absl::StatusOr<WriteSettings> ReadWriteSettings(const Options& options,
   ABSL_ASSIGN_OR_RETURN(settings.max_bytes,
                         options.Bytes("max_bytes", policy.max_write_bytes));
   if (policy.max_write_bytes != 0 &&
-      (settings.max_bytes == 0 || settings.max_bytes > policy.max_write_bytes)) {
+      (settings.max_bytes == 0 ||
+       settings.max_bytes > policy.max_write_bytes)) {
     settings.max_bytes = policy.max_write_bytes;
   }
   if (settings.append && settings.atomic) {
@@ -514,8 +522,9 @@ absl::Status RunWriteFile(const std::shared_ptr<Action>& action,
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted, options.Omit());
   ABSL_ASSIGN_OR_RETURN(const WriteSettings settings,
                         ReadWriteSettings(options, policy));
-  ABSL_ASSIGN_OR_RETURN(const fs::path path,
-                        ResolveInput(action, policy, "path", /*for_write=*/true));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path path,
+      ResolveInput(action, policy, "path", /*for_write=*/true));
 
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<StopSignal> stop,
@@ -609,7 +618,8 @@ absl::Status RunWriteFile(const std::shared_ptr<Action>& action,
     if (error) {
       std::error_code ignored;
       fs::remove(target, ignored);
-      return give_up(ErrorCodeStatus(error, "rename into place", path.string()));
+      return give_up(
+          ErrorCodeStatus(error, "rename into place", path.string()));
     }
   }
 
@@ -659,8 +669,9 @@ absl::Status RunListDirectory(const std::shared_ptr<Action>& action,
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted, options.Omit());
   ABSL_ASSIGN_OR_RETURN(const ListSettings settings,
                         ReadListSettings(options, policy));
-  ABSL_ASSIGN_OR_RETURN(const fs::path root,
-                        ResolveInput(action, policy, "path", /*for_write=*/false));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path root,
+      ResolveInput(action, policy, "path", /*for_write=*/false));
 
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<StopSignal> stop,
@@ -685,9 +696,9 @@ absl::Status RunListDirectory(const std::shared_ptr<Action>& action,
   std::uint64_t count = 0;
   bool truncated = false;
 
-  const auto options_for_walk = policy.follow_symlinks
-                                    ? fs::directory_options::follow_directory_symlink
-                                    : fs::directory_options::none;
+  const auto options_for_walk =
+      policy.follow_symlinks ? fs::directory_options::follow_directory_symlink
+                             : fs::directory_options::none;
 
   // Entries are written as the walk finds them, not gathered first: a tree with
   // a million files in it should cost a flow one entry of memory, and its first
@@ -799,8 +810,9 @@ absl::Status RunStatPath(const std::shared_ptr<Action>& action,
   const FilesystemPolicy& policy = capabilities->filesystem;
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted, options.Omit());
-  ABSL_ASSIGN_OR_RETURN(const fs::path path,
-                        ResolveInput(action, policy, "path", /*for_write=*/false));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path path,
+      ResolveInput(action, policy, "path", /*for_write=*/false));
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
 
   nlohmann::json info = PathInfo(path, policy.follow_symlinks);
@@ -809,7 +821,7 @@ absl::Status RunStatPath(const std::shared_ptr<Action>& action,
   // what a flow asked for, and failing would make `if not stat.exists` need a
   // `try` around it to be writable at all.
   ABSL_RETURN_IF_ERROR(outputs["exists"].PutOnly(nlohmann::json(exists)));
-  ABSL_RETURN_IF_ERROR(outputs["info"].PutOnly(std::move(info)));
+  ABSL_RETURN_IF_ERROR(outputs["info"].PutOnly(info));
   return outputs.Finish();
 }
 
@@ -822,8 +834,9 @@ absl::Status RunMakeDirectory(const std::shared_ptr<Action>& action,
   const FilesystemPolicy& policy = capabilities->filesystem;
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
   ABSL_ASSIGN_OR_RETURN(const bool parents, options.Bool("parents", true));
-  ABSL_ASSIGN_OR_RETURN(const fs::path path,
-                        ResolveInput(action, policy, "path", /*for_write=*/true));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path path,
+      ResolveInput(action, policy, "path", /*for_write=*/true));
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
 
   std::error_code error;
@@ -844,9 +857,11 @@ absl::Status RunRemovePath(const std::shared_ptr<Action>& action,
   const FilesystemPolicy& policy = capabilities->filesystem;
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
   ABSL_ASSIGN_OR_RETURN(const bool recursive, options.Bool("recursive", false));
-  ABSL_ASSIGN_OR_RETURN(const bool missing_ok, options.Bool("missing_ok", true));
-  ABSL_ASSIGN_OR_RETURN(const fs::path path,
-                        ResolveInput(action, policy, "path", /*for_write=*/true));
+  ABSL_ASSIGN_OR_RETURN(const bool missing_ok,
+                        options.Bool("missing_ok", true));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path path,
+      ResolveInput(action, policy, "path", /*for_write=*/true));
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
 
   std::error_code error;
@@ -865,9 +880,8 @@ absl::Status RunRemovePath(const std::shared_ptr<Action>& action,
         absl::StrCat("'", path.string(),
                      "' is a directory; set options.recursive to remove it"));
   }
-  const std::uintmax_t removed =
-      recursive ? fs::remove_all(path, error)
-                : (fs::remove(path, error) ? 1 : 0);
+  const std::uintmax_t removed = recursive ? fs::remove_all(path, error)
+                                           : (fs::remove(path, error) ? 1 : 0);
   if (error) {
     return ErrorCodeStatus(error, "remove", path.string());
   }
@@ -881,8 +895,9 @@ absl::Status RunMovePath(const std::shared_ptr<Action>& action,
   const FilesystemPolicy& policy = capabilities->filesystem;
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
   ABSL_ASSIGN_OR_RETURN(const bool overwrite, options.Bool("overwrite", false));
-  ABSL_ASSIGN_OR_RETURN(const fs::path from,
-                        ResolveInput(action, policy, "path", /*for_write=*/true));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path from,
+      ResolveInput(action, policy, "path", /*for_write=*/true));
   ABSL_ASSIGN_OR_RETURN(const fs::path to,
                         ResolveInput(action, policy, "to", /*for_write=*/true));
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
@@ -910,8 +925,9 @@ absl::Status RunCopyPath(const std::shared_ptr<Action>& action,
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
   ABSL_ASSIGN_OR_RETURN(const bool recursive, options.Bool("recursive", false));
   ABSL_ASSIGN_OR_RETURN(const bool overwrite, options.Bool("overwrite", false));
-  ABSL_ASSIGN_OR_RETURN(const fs::path from,
-                        ResolveInput(action, policy, "path", /*for_write=*/false));
+  ABSL_ASSIGN_OR_RETURN(
+      const fs::path from,
+      ResolveInput(action, policy, "path", /*for_write=*/false));
   ABSL_ASSIGN_OR_RETURN(const fs::path to,
                         ResolveInput(action, policy, "to", /*for_write=*/true));
   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
@@ -936,7 +952,8 @@ absl::Status RunMakeTemp(const std::shared_ptr<Action>& action,
                          const CapabilitiesPtr& capabilities) {
   const FilesystemPolicy& policy = capabilities->filesystem;
   ABSL_ASSIGN_OR_RETURN(const Options options, ReadOptions(action));
-  ABSL_ASSIGN_OR_RETURN(const std::string prefix, options.String("prefix", "a11-"));
+  ABSL_ASSIGN_OR_RETURN(const std::string prefix,
+                        options.String("prefix", "a11-"));
   ABSL_ASSIGN_OR_RETURN(const std::string suffix, options.String("suffix", ""));
   ABSL_ASSIGN_OR_RETURN(const bool directory, options.Bool("directory", true));
   ABSL_ASSIGN_OR_RETURN(const std::string inside, options.String("in", ""));
@@ -961,10 +978,10 @@ absl::Status RunMakeTemp(const std::shared_ptr<Action>& action,
   }
   ABSL_ASSIGN_OR_RETURN(
       const fs::path path,
-      ResolvePath(policy,
-                  (parent / absl::StrCat(prefix, a11::NewUuid(), suffix))
-                      .string(),
-                  /*for_write=*/true));
+      ResolvePath(
+          policy,
+          (parent / absl::StrCat(prefix, a11::NewUuid(), suffix)).string(),
+          /*for_write=*/true));
 
   if (directory) {
     if (!fs::create_directory(path, error) || error) {
@@ -992,22 +1009,24 @@ using PolicyRun = absl::Status (*)(const std::shared_ptr<Action>&,
 /// One shape for all nine: submit onto a fibre, run, report. The handler holds
 /// the policy, which is what makes it a capability rather than a setting.
 ActionHandler Handler(PolicyRun run, CapabilitiesPtr capabilities) {
-  return [run, capabilities = std::move(capabilities)](
-             std::shared_ptr<Action> action) {
-    return a11::SubmitTask([run, capabilities,
-                            action = std::move(action)]() -> absl::Status {
-      if (capabilities == nullptr) {
-        return absl::FailedPreconditionError(
-            "this action was registered without a policy");
-      }
-      return run(action, capabilities);
-    });
+  return [run, capabilities =
+                   std::move(capabilities)](std::shared_ptr<Action> action) {
+    return a11::SubmitTask(
+        [run, capabilities, action = std::move(action)]() -> absl::Status {
+          if (capabilities == nullptr) {
+            return absl::FailedPreconditionError(
+                "this action was registered without a policy");
+          }
+          return run(action, capabilities);
+        });
   };
 }
 
 /// The two settings every action in this library shares, worded once in
 /// ports.cc so thirty descriptions cannot drift apart.
-std::string_view kOmitHelp() { return SharedOptionsHelp(); }
+std::string_view kOmitHelp() {
+  return SharedOptionsHelp();
+}
 
 }  // namespace
 
@@ -1019,14 +1038,16 @@ ActionSchema ReadFileSchema() {
   ActionSchema schema;
   schema.name = std::string(kReadFileAction);
   schema.description =
-      "Read a file, with each way of wanting it on a port of its own: the bytes "
+      "Read a file, with each way of wanting it on a port of its own: the "
+      "bytes "
       "as they arrive, the whole thing as text, one value per line, and the "
       "metadata -- which is written before any content, so a composition can "
-      "act on the size while the reading is still going on. Reading streams, so "
+      "act on the size while the reading is still going on. Reading streams, "
+      "so "
       "a file larger than memory costs a chunk at a time.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Path of the file to read.",
-                   /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("path",
+                        Port("path", "string", "Path of the file to read.",
+                             /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options",
       Port("options", JsonType(),
@@ -1041,9 +1062,9 @@ ActionSchema ReadFileSchema() {
            "any content.",
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "bytes", Port("bytes", kOctetStream,
-                    "The contents, in order, as they are read.",
-                    /*required=*/false, /*unary=*/false));
+      "bytes",
+      Port("bytes", kOctetStream, "The contents, in order, as they are read.",
+           /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "text", Port("text", "string",
                    "The whole file as one text value. Held in memory, so "
@@ -1070,9 +1091,9 @@ ActionSchema WriteFileSchema() {
       "either the old contents or the new ones and a cancelled write leaves "
       "neither a partial file nor a temporary. Appending cannot be atomic and "
       "says so.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Path of the file to write.",
-                   /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("path",
+                        Port("path", "string", "Path of the file to write.",
+                             /*required=*/true, /*unary=*/true));
   // Not "bytes": an input and an output of the same name are one node, so a
   // port called `bytes` in both directions would be a stream writing to itself.
   schema.inputs.emplace(
@@ -1118,18 +1139,18 @@ ActionSchema ListDirectorySchema() {
       "its first entry arrives before the walk has finished. `truncated` says "
       "whether a limit cut the listing short, because a partial listing that "
       "looks complete is worse than no listing.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Directory to list.",
-                   /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "Directory to list.",
+                                     /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options",
-      Port("options", JsonType(),
-           absl::StrCat("All optional: recursive (false), max_depth, hidden "
-                        "(false -- whether to report dot files), match (one or "
-                        "more `*`/`?` patterns matched against the name), kinds "
-                        "(file, directory, symlink, ...), max_entries, and ",
-                        kOmitHelp()),
-           /*required=*/false, /*unary=*/true));
+      Port(
+          "options", JsonType(),
+          absl::StrCat("All optional: recursive (false), max_depth, hidden "
+                       "(false -- whether to report dot files), match (one or "
+                       "more `*`/`?` patterns matched against the name), kinds "
+                       "(file, directory, symlink, ...), max_entries, and ",
+                       kOmitHelp()),
+          /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "entries",
       Port("entries", JsonType(),
@@ -1155,20 +1176,18 @@ ActionSchema StatPathSchema() {
       "Read one path's metadata. A path that is not there is an answer -- "
       "`exists` is false -- rather than a failure, so a composition can ask "
       "without wrapping the question in a `try`.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Path to look at.",
-                   /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "options", Port("options", JsonType(), absl::StrCat("Optional: ", kOmitHelp()),
-                      /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "Path to look at.",
+                                     /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("options", Port("options", JsonType(),
+                                        absl::StrCat("Optional: ", kOmitHelp()),
+                                        /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "info",
-      Port("info", JsonType(),
-           "{path, name, kind, exists, size, modified, mode}.",
-           /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "exists", Port("exists", "bool", "Whether anything is there.",
-                     /*required=*/false, /*unary=*/true));
+      "info", Port("info", JsonType(),
+                   "{path, name, kind, exists, size, modified, mode}.",
+                   /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("exists",
+                         Port("exists", "bool", "Whether anything is there.",
+                              /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The lookup fails once it is reached.");
   return schema;
 }
@@ -1180,16 +1199,14 @@ ActionSchema MakeDirectorySchema() {
       "Create a directory, and by default its parents. Finding it already "
       "there is a success with `created` false, because a composition that "
       "wants a directory to exist has got what it wanted.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Directory to create.",
-                   /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "options",
-      Port("options", JsonType(), "Optional: parents (true).",
-           /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "resolved", Port("resolved", "string", "The absolute path.",
-                       /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "Directory to create.",
+                                     /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("options",
+                        Port("options", JsonType(), "Optional: parents (true).",
+                             /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("resolved",
+                         Port("resolved", "string", "The absolute path.",
+                              /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "created",
       Port("created", "bool",
@@ -1207,14 +1224,12 @@ ActionSchema RemovePathSchema() {
       "otherwise -- a recursive delete nobody asked for is the most expensive "
       "way for this library to be convenient. A path that is not there is a "
       "success by default, since the composition wanted it gone.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Path to remove.",
-                   /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "options",
-      Port("options", JsonType(),
-           "Optional: recursive (false), missing_ok (true).",
-           /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "Path to remove.",
+                                     /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("options",
+                        Port("options", JsonType(),
+                             "Optional: recursive (false), missing_ok (true).",
+                             /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "removed", Port("removed", "integer", "How many entries were removed.",
                       /*required=*/false, /*unary=*/true));
@@ -1229,18 +1244,16 @@ ActionSchema MovePathSchema() {
       "Rename a path. Atomic within one filesystem and refused across two, "
       "where it would silently become a copy followed by a delete -- use "
       "copy_path and remove_path when that is what is meant.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "Path to move.",
-                   /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "to", Port("to", "string", "Where to move it.",
-                 /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "Path to move.",
+                                     /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("to", Port("to", "string", "Where to move it.",
+                                   /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options", Port("options", JsonType(), "Optional: overwrite (false).",
                       /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "resolved", Port("resolved", "string", "The absolute destination.",
-                       /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("resolved",
+                         Port("resolved", "string", "The absolute destination.",
+                              /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;
 }
@@ -1252,20 +1265,17 @@ ActionSchema CopyPathSchema() {
       "Copy a file or, with options.recursive, a tree. For a copy whose "
       "progress a composition wants to watch, read_file into write_file gives "
       "the same result one chunk at a time.";
-  schema.inputs.emplace(
-      "path", Port("path", "string", "What to copy.",
-                   /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "to", Port("to", "string", "Where to copy it.",
-                 /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "options",
-      Port("options", JsonType(),
-           "Optional: recursive (false), overwrite (false).",
-           /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "resolved", Port("resolved", "string", "The absolute destination.",
-                       /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("path", Port("path", "string", "What to copy.",
+                                     /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("to", Port("to", "string", "Where to copy it.",
+                                   /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("options",
+                        Port("options", JsonType(),
+                             "Optional: recursive (false), overwrite (false).",
+                             /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("resolved",
+                         Port("resolved", "string", "The absolute destination.",
+                              /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;
 }
@@ -1285,9 +1295,9 @@ ActionSchema MakeTempSchema() {
            "Optional: directory (true -- a directory rather than a file), "
            "prefix (\"a11-\"), suffix, in (which directory to make it in).",
            /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "path", Port("path", "string", "The path that was made.",
-                   /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("path",
+                         Port("path", "string", "The path that was made.",
+                              /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;
 }
@@ -1299,27 +1309,35 @@ ActionSchema MakeTempSchema() {
 ActionHandler ReadFileHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunReadFile, std::move(capabilities));
 }
+
 ActionHandler WriteFileHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunWriteFile, std::move(capabilities));
 }
+
 ActionHandler ListDirectoryHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunListDirectory, std::move(capabilities));
 }
+
 ActionHandler StatPathHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunStatPath, std::move(capabilities));
 }
+
 ActionHandler MakeDirectoryHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunMakeDirectory, std::move(capabilities));
 }
+
 ActionHandler RemovePathHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunRemovePath, std::move(capabilities));
 }
+
 ActionHandler MovePathHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunMovePath, std::move(capabilities));
 }
+
 ActionHandler CopyPathHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunCopyPath, std::move(capabilities));
 }
+
 ActionHandler MakeTempHandler(CapabilitiesPtr capabilities) {
   return Handler(&RunMakeTemp, std::move(capabilities));
 }

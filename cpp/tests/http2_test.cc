@@ -31,8 +31,8 @@ std::string TestDataPath(std::string_view name) {
 TEST(Http2Test, MultiplexesBufferedAndStreamingResponses) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         if (request.path == "/stream") {
           absl::Status status = response->SendHeaders(
               200, {{"content-type", "application/octet-stream"},
@@ -87,8 +87,8 @@ TEST(Http2Test, MultiplexesBufferedAndStreamingResponses) {
 TEST(Http2Test, DeliversTrailersAfterTheBody) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest /*request*/,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& /*request*/,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         absl::Status status = response->SendHeaders(
             200, {{"content-type", "text/plain"}, {"trailer", "x-digest"}});
         if (!status.ok()) {
@@ -132,10 +132,9 @@ TEST(Http2Test, DeliversTrailersAfterTheBody) {
   EXPECT_EQ(GetHttpHeader(*trailers, "x-digest"), "20");
   // Repeats survive, as they do in the header block: the trailer section is an
   // ordered field list and not a map.
-  EXPECT_EQ(std::count_if(trailers->begin(), trailers->end(),
-                          [](const auto& field) {
-                            return field.first == "x-repeat";
-                          }),
+  EXPECT_EQ(std::count_if(
+                trailers->begin(), trailers->end(),
+                [](const auto& field) { return field.first == "x-repeat"; }),
             2);
   // Pseudo-headers are never part of a trailer section.
   EXPECT_EQ(GetHttpHeader(*trailers, ":status"), std::nullopt);
@@ -147,7 +146,8 @@ TEST(Http2Test, DeliversTrailersAfterTheBody) {
 TEST(Http2Test, ReportsAnEmptyTrailerSectionWhenThePeerSendsNone) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response) {
+      [](const HttpRequest&,
+         const std::shared_ptr<Http2ResponseWriter>& response) {
         const absl::Status status = response->SendResponse(200, {}, "plain");
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
       });
@@ -170,8 +170,8 @@ TEST(Http2Test, ReportsAnEmptyTrailerSectionWhenThePeerSendsNone) {
 TEST(Http2Test, StreamsARequestBodyWrittenAfterTheHeaders) {
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         // The server sees one ordinary request with a complete body, however
         // many DATA frames it arrived in.
         const absl::Status status = response->SendResponse(
@@ -217,8 +217,8 @@ TEST(Http2Test, StreamsARequestBodyWrittenAfterTheHeaders) {
 absl::StatusOr<std::shared_ptr<Http2Server>> PushingServer() {
   return Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest, std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
+      [](const HttpRequest&,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         // The promise goes out before the response it accompanies is finished;
         // after that the protocol has nowhere to put it.
         //
@@ -368,7 +368,8 @@ TEST(Http2Test, CancellingAPushedResponseRefusesIt) {
 
 TEST(Http2Test, PropagatesHandlerStatusAsHttpResponse) {
   auto server = Http2Server::Create(
-      "127.0.0.1", 0, [](HttpRequest, std::shared_ptr<Http2ResponseWriter>) {
+      "127.0.0.1", 0,
+      [](const HttpRequest&, const std::shared_ptr<Http2ResponseWriter>&) {
         return a11::FailedTask(absl::PermissionDeniedError("not allowed"));
       });
   ASSERT_TRUE(server.ok()) << server.status();
@@ -457,8 +458,8 @@ TEST(Http2Test, NegotiatesTlsWithH2AlpnAndVerifiesPeer) {
   server_options.tls.key_pem_file = TestDataPath("localhost-key.pem");
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [](HttpRequest request,
-         std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+      [](const HttpRequest& request,
+         const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         if (request.scheme != "https") {
           return a11::FailedTask(
               absl::DataLossError("TLS request did not use https"));

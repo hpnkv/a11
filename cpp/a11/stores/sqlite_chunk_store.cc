@@ -90,21 +90,19 @@ void BindBlob(sqlite3_stmt* statement, int index, std::string_view value) {
 std::string ColumnText(sqlite3_stmt* statement, int index) {
   const auto* text = sqlite3_column_text(statement, index);
   if (text == nullptr) {
-    return std::string();
+    return {};
   }
-  return std::string(
-      reinterpret_cast<const char*>(text),
-      static_cast<size_t>(sqlite3_column_bytes(statement, index)));
+  return {reinterpret_cast<const char*>(text),
+          static_cast<size_t>(sqlite3_column_bytes(statement, index))};
 }
 
 std::string ColumnBlob(sqlite3_stmt* statement, int index) {
   const void* blob = sqlite3_column_blob(statement, index);
   if (blob == nullptr) {
-    return std::string();
+    return {};
   }
-  return std::string(
-      static_cast<const char*>(blob),
-      static_cast<size_t>(sqlite3_column_bytes(statement, index)));
+  return {static_cast<const char*>(blob),
+          static_cast<size_t>(sqlite3_column_bytes(statement, index))};
 }
 
 bool ColumnIsNull(sqlite3_stmt* statement, int index) {
@@ -528,7 +526,7 @@ std::string SQLiteChunkStoreFactory::DefaultRoot() {
 }
 
 absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>>
-SQLiteChunkStoreFactory::Create(std::string root,
+SQLiteChunkStoreFactory::Create(const std::string& root,
                                 SQLiteChunkStoreOptions options) {
   if (root.empty()) {
     return absl::InvalidArgumentError(
@@ -548,10 +546,10 @@ SQLiteChunkStoreFactory::Create(std::string root,
 }
 
 absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>>
-SQLiteChunkStoreFactory::Create(std::string root) {
+SQLiteChunkStoreFactory::Create(const std::string& root) {
   ABSL_ASSIGN_OR_RETURN(SQLiteChunkStoreOptions options,
                         SQLiteChunkStoreOptions::FromEnvironment());
-  return Create(std::move(root), std::move(options));
+  return Create(root, std::move(options));
 }
 
 absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>>
@@ -583,10 +581,11 @@ a11::Future<size_t> SQLiteChunkStoreFactory::SweepOrphanBlobs() {
 // Construction
 
 absl::StatusOr<std::shared_ptr<SQLiteChunkStore>> SQLiteChunkStore::Create(
-    std::string node_id, std::string root, SQLiteChunkStoreOptions options) {
+    std::string node_id, const std::string& root,
+    SQLiteChunkStoreOptions options) {
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<SQLiteChunkStoreFactory> factory,
-      SQLiteChunkStoreFactory::Create(std::move(root), std::move(options)));
+      SQLiteChunkStoreFactory::Create(root, std::move(options)));
   return factory->Open(std::move(node_id));
 }
 
@@ -594,7 +593,7 @@ absl::StatusOr<std::shared_ptr<SQLiteChunkStore>> SQLiteChunkStore::Create(
     std::string node_id, std::string root) {
   ABSL_ASSIGN_OR_RETURN(SQLiteChunkStoreOptions options,
                         SQLiteChunkStoreOptions::FromEnvironment());
-  return Create(std::move(node_id), std::move(root), std::move(options));
+  return Create(std::move(node_id), root, std::move(options));
 }
 
 absl::StatusOr<std::shared_ptr<SQLiteChunkStore>> SQLiteChunkStore::Create(
@@ -825,7 +824,7 @@ SQLiteChunkStore::Next(absl::Time deadline, size_t limit) {
             return fragments;
           }
 
-          const absl::Status wait = internal::WaitForChange(
+          absl::Status wait = internal::WaitForChange(
               changed, deadline,
               "Expected seq was not available before the deadline");
           if (!wait.ok()) {
@@ -913,7 +912,7 @@ a11::Future<std::vector<std::uint32_t>> SQLiteChunkStore::PutMany(
 
         std::vector<std::uint32_t> assigned;
 
-        const absl::Status outcome =
+        absl::Status outcome =
             database->RunWrite([&](SqliteConnection& connection)
                                    -> absl::StatusOr<std::vector<std::string>> {
               // A busy-retry re-runs this body, so discard what the previous

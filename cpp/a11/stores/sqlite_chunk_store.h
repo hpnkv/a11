@@ -155,7 +155,8 @@ class SQLiteChunkStore final : public ChunkStore {
    *   The store, or an error if the id, root or options are unusable.
    */
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStore>> Create(
-      std::string node_id, std::string root, SQLiteChunkStoreOptions options);
+      std::string node_id, const std::string& root,
+      SQLiteChunkStoreOptions options);
 
   ~SQLiteChunkStore() override = default;
 
@@ -255,11 +256,11 @@ class SQLiteChunkStoreFactory {
    *   The factory, or an error when the root or options are unusable.
    */
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>> Create(
-      std::string root, SQLiteChunkStoreOptions options);
+      const std::string& root, SQLiteChunkStoreOptions options);
 
   /** Create a factory rooted at @p root with the environment/default policy. */
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>> Create(
-      std::string root);
+      const std::string& root);
 
   /** Create a factory at the default root with the environment/default policy. */
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>> Create();

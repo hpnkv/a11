@@ -121,8 +121,7 @@ absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
   if (later_count >= std::numeric_limits<std::uint32_t>::max()) {
     return absl::OutOfRangeError("byte message requires too many packets");
   }
-  const std::uint32_t packet_count =
-      static_cast<std::uint32_t>(later_count + 1);
+  const auto packet_count = static_cast<std::uint32_t>(later_count + 1);
 
   std::vector<std::string> packets;
   packets.reserve(packet_count);
@@ -234,8 +233,7 @@ struct ByteReassembler::Impl {
     size_t byte_count = 0;
   };
 
-  explicit Impl(ByteChunkingOptions value_options)
-      : options(std::move(value_options)) {}
+  explicit Impl(ByteChunkingOptions value_options) : options(value_options) {}
 
   mutable thread::Mutex mu;
   const ByteChunkingOptions options;
@@ -246,7 +244,7 @@ struct ByteReassembler::Impl {
 ByteReassembler::ByteReassembler(ByteChunkingOptions options) {
   static_assert(sizeof(Impl) <= kImplSize);
   static_assert(alignof(Impl) <= kImplAlignment);
-  std::construct_at(reinterpret_cast<Impl*>(impl_), std::move(options));
+  std::construct_at(reinterpret_cast<Impl*>(impl_), options);
 }
 
 ByteReassembler::~ByteReassembler() {

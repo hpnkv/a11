@@ -37,10 +37,9 @@ using ::a11::nodes::AsyncNode;
 /// Reads `x-a11-deadline`, or InfiniteFuture when the caller set none.
 absl::StatusOr<absl::Time> DeadlineFromAction(
     const std::shared_ptr<actions::Action>& action) {
-  ABSL_ASSIGN_OR_RETURN(
-      std::optional<data::Bytes> raw,
-      action->GetHeader(absl::StrCat(actions::kActionHeaderPrefix,
-                                     "deadline")));
+  ABSL_ASSIGN_OR_RETURN(std::optional<data::Bytes> raw,
+                        action->GetHeader(absl::StrCat(
+                            actions::kActionHeaderPrefix, "deadline")));
   if (!raw.has_value()) {
     return absl::InfiniteFuture();
   }
@@ -108,7 +107,8 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
   // the handle, so a cancellation arriving after the handler returned finds
   // something valid to notify.
   ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
-      [shared, control](std::shared_ptr<actions::Action>) -> absl::Status {
+      [shared,
+       control](const std::shared_ptr<actions::Action>&) -> absl::Status {
         shared->Stop(StopReason::kCancelled);
         if (control != nullptr) {
           control->CancelReader();
@@ -124,9 +124,9 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
   }
 
   if (control != nullptr) {
-    signal->control_task_ = a11::SubmitTask(
-        [shared, control, on_command = std::move(on_command)]()
-            -> absl::Status {
+    signal->control_task_ =
+        a11::SubmitTask([shared, control,
+                         on_command = std::move(on_command)]() -> absl::Status {
           while (!shared->finishing.load(std::memory_order_acquire)) {
             absl::StatusOr<std::optional<nlohmann::json>> command =
                 ReadJsonInput(control);
@@ -181,8 +181,8 @@ absl::Status StopSignal::ArmDeadlineTimer() {
   ABSL_ASSIGN_OR_RETURN(
       deadline_timer_,
       uv::RunOnUv<std::shared_ptr<uvw::timer_handle>>(
-          [delay, shared]()
-              -> absl::StatusOr<std::shared_ptr<uvw::timer_handle>> {
+          [delay,
+           shared]() -> absl::StatusOr<std::shared_ptr<uvw::timer_handle>> {
             std::shared_ptr<uvw::timer_handle> timer =
                 uv::UvExecutor::Instance()
                     .loop()
@@ -221,16 +221,17 @@ void StopSignal::DisarmDeadlineTimer() {
   // reason. Its failure is not worth reporting: the loop being gone is exactly
   // the case where there is nothing left to disarm.
   uv::RunStatusOnUv([timer]() -> absl::Status {
-        if (!timer->closing()) {
-          timer->stop();
-          timer->close();
-        }
-        return absl::OkStatus();
-      })
-      .IgnoreError();
+    if (!timer->closing()) {
+      timer->stop();
+      timer->close();
+    }
+    return absl::OkStatus();
+  }).IgnoreError();
 }
 
-StopSignal::~StopSignal() { Join(); }
+StopSignal::~StopSignal() {
+  Join();
+}
 
 bool StopSignal::stopped() const {
   return shared_->reason.load(std::memory_order_acquire) !=
@@ -242,13 +243,17 @@ StopReason StopSignal::reason() const {
       shared_->reason.load(std::memory_order_acquire));
 }
 
-absl::Time StopSignal::deadline() const { return deadline_; }
+absl::Time StopSignal::deadline() const {
+  return deadline_;
+}
 
 bool StopSignal::has_deadline() const {
   return deadline_ < absl::InfiniteFuture();
 }
 
-thread::Case StopSignal::OnStop() const { return shared_->stopped.OnEvent(); }
+thread::Case StopSignal::OnStop() const {
+  return shared_->stopped.OnEvent();
+}
 
 absl::Status StopSignal::Check() const {
   switch (reason()) {
@@ -296,7 +301,9 @@ bool StopSignal::WaitUntil(absl::Time deadline) {
   return stopped();
 }
 
-void StopSignal::Stop(StopReason reason) { shared_->Stop(reason); }
+void StopSignal::Stop(StopReason reason) {
+  shared_->Stop(reason);
+}
 
 void StopSignal::Join() {
   if (joined_.exchange(true, std::memory_order_acq_rel)) {

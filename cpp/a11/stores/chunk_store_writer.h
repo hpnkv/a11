@@ -43,7 +43,7 @@ struct ChunkStoreWriterOptions {
   /// Maximum number of chunks flushed to the store per batch.
   std::uint64_t max_chunks_to_write_at_once = 8;
   /// Optional bound on the in-flight write buffer size.
-  std::optional<std::uint64_t> num_chunks_to_buffer;
+  std::optional<std::uint64_t> num_chunks_to_buffer = {};
   /// Whether repeated contiguous chunk mimetypes are omitted when writing.
   bool sticky_mimetype = false;
 

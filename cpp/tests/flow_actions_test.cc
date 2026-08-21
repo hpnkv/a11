@@ -1,5 +1,7 @@
 // Copyright 2026 The A11 Authors.
 
+#include "sdk/flow/actions/flow_actions.h"
+
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +32,6 @@
 #include "a11/json_codec.h"
 #include "a11/nodes/async_node.h"
 #include "a11/uuid.h"
-#include "sdk/flow/actions/flow_actions.h"
 #include "sdk/flow/actions/fs_actions.h"
 #include "sdk/flow/actions/options.h"
 #include "sdk/flow/actions/policy.h"
@@ -57,7 +58,8 @@ constexpr absl::Duration kPatience = absl::Seconds(10);
 class Workspace {
  public:
   Workspace() {
-    root_ = fs::temp_directory_path() / absl::StrCat("a11-flow-", a11::NewUuid());
+    root_ =
+        fs::temp_directory_path() / absl::StrCat("a11-flow-", a11::NewUuid());
     std::error_code error;
     fs::create_directories(root_, error);
     // Canonical, because the actions report canonical paths and are right to:
@@ -66,16 +68,20 @@ class Workspace {
     // not resolved -- which is the property the sandbox depends on.
     root_ = fs::weakly_canonical(root_, error);
   }
+
   ~Workspace() {
     std::error_code error;
     fs::remove_all(root_, error);
   }
 
   [[nodiscard]] const fs::path& root() const { return root_; }
+
   [[nodiscard]] std::string path(std::string_view name) const {
     return (root_ / name).string();
   }
 
+  // Not [[nodiscard]]: writing the file is the point, and the path it returns
+  // is a convenience for the callers that want it.
   std::string Write(std::string_view name, std::string_view contents) const {
     const fs::path at = root_ / name;
     std::ofstream out(at, std::ios::binary);
@@ -86,8 +92,8 @@ class Workspace {
 
   [[nodiscard]] std::string Read(std::string_view name) const {
     std::ifstream in(root_ / name, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(in),
-                       std::istreambuf_iterator<char>());
+    return {std::istreambuf_iterator<char>(in),
+            std::istreambuf_iterator<char>()};
   }
 
  private:
@@ -95,8 +101,7 @@ class Workspace {
 };
 
 CapabilitiesPtr WritableIn(const fs::path& root) {
-  CapabilitiesBuilder capabilities =
-      WorkspaceCapabilities({root.string()});
+  CapabilitiesBuilder capabilities = WorkspaceCapabilities({root.string()});
   return capabilities;
 }
 
@@ -111,7 +116,8 @@ absl::Status PutInput(const std::shared_ptr<Action>& action,
   data::Chunk chunk;
   chunk.metadata = data::ChunkMetadata{.mimetype = "application/json"};
   chunk.data = value.dump();
-  return (*node)->PutChunk(std::move(chunk), std::nullopt, /*final=*/true)
+  return (*node)
+      ->PutChunk(std::move(chunk), std::nullopt, /*final=*/true)
       .Await()
       .status();
 }
@@ -140,7 +146,7 @@ std::vector<std::string> ReadAll(const std::shared_ptr<Action>& action,
 }
 
 std::optional<nlohmann::json> ReadOne(const std::shared_ptr<Action>& action,
-                                     std::string_view port) {
+                                      std::string_view port) {
   const std::vector<std::string> values = ReadAll(action, port);
   if (values.empty()) {
     return std::nullopt;
@@ -218,9 +224,9 @@ TEST(FlowOptionsTest, ReadsTheDeadlineHeaderInBothUnits) {
 /// An action with `x-a11-deadline` set @p after from now. `read_file`'s schema
 /// stands in for any action's: StopSignal reads the header and nothing else.
 std::shared_ptr<Action> MakeActionDueIn(absl::Duration after) {
-  absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
-      ReadFileSchema(), a11::NewUuid(),
-      ReadFileHandler(WritableIn(fs::temp_directory_path())));
+  absl::StatusOr<std::shared_ptr<Action>> created =
+      Action::Create(ReadFileSchema(), a11::NewUuid(),
+                     ReadFileHandler(WritableIn(fs::temp_directory_path())));
   if (!created.ok()) {
     return nullptr;
   }
@@ -236,9 +242,11 @@ std::shared_ptr<Action> MakeActionDueIn(absl::Duration after) {
 }
 
 TEST(StopSignalTest, ADeadlineNobodyAsksAboutStillStopsTheAction) {
-  const std::shared_ptr<Action> action = MakeActionDueIn(absl::Milliseconds(40));
+  const std::shared_ptr<Action> action =
+      MakeActionDueIn(absl::Milliseconds(40));
   ASSERT_NE(action, nullptr);
-  absl::StatusOr<std::shared_ptr<StopSignal>> signal = StopSignal::Create(action);
+  absl::StatusOr<std::shared_ptr<StopSignal>> signal =
+      StopSignal::Create(action);
   ASSERT_TRUE(signal.ok()) << signal.status();
   ASSERT_TRUE((*signal)->has_deadline());
   EXPECT_FALSE((*signal)->stopped());
@@ -254,9 +262,11 @@ TEST(StopSignalTest, ADeadlineNobodyAsksAboutStillStopsTheAction) {
 }
 
 TEST(StopSignalTest, ARunThatFinishesFirstIsNotStoppedByItsOwnDeadline) {
-  const std::shared_ptr<Action> action = MakeActionDueIn(absl::Milliseconds(30));
+  const std::shared_ptr<Action> action =
+      MakeActionDueIn(absl::Milliseconds(30));
   ASSERT_NE(action, nullptr);
-  absl::StatusOr<std::shared_ptr<StopSignal>> signal = StopSignal::Create(action);
+  absl::StatusOr<std::shared_ptr<StopSignal>> signal =
+      StopSignal::Create(action);
   ASSERT_TRUE(signal.ok()) << signal.status();
 
   // What a handler does on its way out. Join() disarms the timer and waits for
@@ -333,7 +343,8 @@ TEST(FlowPolicyTest, ResolvesASymlinkOutOfARootAndRefusesIt) {
   if (error) {
     GTEST_SKIP() << "this filesystem does not do symlinks";
   }
-  EXPECT_FALSE(ResolvePath(policy, workspace.path("escape/passwd"), false).ok());
+  EXPECT_FALSE(
+      ResolvePath(policy, workspace.path("escape/passwd"), false).ok());
 }
 
 TEST(FlowPolicyTest, ARootPrefixIsNotAContainingRoot) {
@@ -459,7 +470,7 @@ TEST(FlowRegistrationTest, ATimeOnlyHostGetsAClockAndNothingElse) {
 
 std::shared_ptr<Action> MakeReadFile(const Workspace& workspace,
                                      const std::string& path,
-                                     nlohmann::json options = {}) {
+                                     const nlohmann::json& options = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created =
       Action::Create(ReadFileSchema(), a11::NewUuid(),
                      ReadFileHandler(WritableIn(workspace.root())));
@@ -593,14 +604,14 @@ TEST(ReadFileTest, ReportsAMisspelledOmission) {
 std::shared_ptr<Action> MakeWriteFile(const Workspace& workspace,
                                       const std::string& path,
                                       const std::vector<std::string>& content,
-                                      nlohmann::json options = {}) {
+                                      const nlohmann::json& options = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created =
       Action::Create(WriteFileSchema(), a11::NewUuid(),
                      WriteFileHandler(WritableIn(workspace.root())));
   if (!created.ok()) {
     return nullptr;
   }
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
   if (!PutInput(action, "path", path).ok()) {
     return nullptr;
   }
@@ -618,7 +629,8 @@ std::shared_ptr<Action> MakeWriteFile(const Workspace& workspace,
     chunk.metadata =
         data::ChunkMetadata{.mimetype = "application/octet-stream"};
     chunk.data = piece;
-    if (!(*node)->PutChunk(std::move(chunk), std::nullopt, false)
+    if (!(*node)
+             ->PutChunk(std::move(chunk), std::nullopt, false)
              .Await()
              .ok()) {
       return nullptr;
@@ -670,9 +682,8 @@ TEST(WriteFileTest, LeavesNoTemporaryBehind) {
 TEST(WriteFileTest, AppendsWhenAskedTo) {
   Workspace workspace;
   workspace.Write("log.txt", "first\n");
-  const std::shared_ptr<Action> action =
-      MakeWriteFile(workspace, workspace.path("log.txt"), {"second\n"},
-                    {{"append", true}});
+  const std::shared_ptr<Action> action = MakeWriteFile(
+      workspace, workspace.path("log.txt"), {"second\n"}, {{"append", true}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
@@ -716,7 +727,7 @@ TEST(WriteFileTest, ReadIntoWriteMovesAFileWithoutHoldingIt) {
       Action::Create(WriteFileSchema(), a11::NewUuid(),
                      WriteFileHandler(WritableIn(workspace.root())));
   ASSERT_TRUE(created.ok());
-  const std::shared_ptr<Action> writer = *created;
+  const std::shared_ptr<Action>& writer = *created;
   ASSERT_TRUE(PutInput(writer, "path", workspace.path("to.bin")).ok());
   ASSERT_TRUE(PutInput(writer, "options", nlohmann::json::object()).ok());
 
@@ -726,8 +737,7 @@ TEST(WriteFileTest, ReadIntoWriteMovesAFileWithoutHoldingIt) {
   absl::StatusOr<std::shared_ptr<AsyncNode>> source =
       reader->GetOutput("bytes");
   ASSERT_TRUE(source.ok());
-  absl::StatusOr<std::shared_ptr<AsyncNode>> sink =
-      writer->GetInput("content");
+  absl::StatusOr<std::shared_ptr<AsyncNode>> sink = writer->GetInput("content");
   ASSERT_TRUE(sink.ok());
   ASSERT_TRUE(writer->Run().ok());
   while (true) {
@@ -737,12 +747,12 @@ TEST(WriteFileTest, ReadIntoWriteMovesAFileWithoutHoldingIt) {
     if (!chunk->has_value() || (*chunk)->IsNull()) {
       break;
     }
-    ASSERT_TRUE((*sink)->PutChunk(*std::move(*chunk), std::nullopt, false)
+    ASSERT_TRUE((*sink)
+                    ->PutChunk(*std::move(*chunk), std::nullopt, false)
                     .Await()
                     .ok());
   }
-  ASSERT_TRUE(
-      (*sink)->Finalize({.wait = true, .close = false}).Await().ok());
+  ASSERT_TRUE((*sink)->Finalize({.wait = true, .close = false}).Await().ok());
   ASSERT_TRUE(writer->Wait(kPatience).Await().ok());
   EXPECT_EQ(workspace.Read("to.bin"), body);
 }
@@ -751,7 +761,7 @@ TEST(WriteFileTest, ReadIntoWriteMovesAFileWithoutHoldingIt) {
 
 std::shared_ptr<Action> MakeList(const Workspace& workspace,
                                  const std::string& path,
-                                 nlohmann::json options = {}) {
+                                 const nlohmann::json& options = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created =
       Action::Create(ListDirectorySchema(), a11::NewUuid(),
                      ListDirectoryHandler(WritableIn(workspace.root())));
@@ -785,8 +795,7 @@ TEST(ListDirectoryTest, ReportsEntriesAndACount) {
   const std::optional<nlohmann::json> count = ReadOne(action, "count");
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(*count, 2);
-  const std::optional<nlohmann::json> truncated =
-      ReadOne(action, "truncated");
+  const std::optional<nlohmann::json> truncated = ReadOne(action, "truncated");
   ASSERT_TRUE(truncated.has_value());
   EXPECT_FALSE(truncated->get<bool>());
 }
@@ -810,15 +819,14 @@ TEST(ListDirectoryTest, SaysWhenALimitCutTheListingShort) {
   for (int i = 0; i < 10; ++i) {
     workspace.Write(absl::StrCat("f", i, ".txt"), "x");
   }
-  const std::shared_ptr<Action> action = MakeList(
-      workspace, workspace.root().string(), {{"max_entries", 4}});
+  const std::shared_ptr<Action> action =
+      MakeList(workspace, workspace.root().string(), {{"max_entries", 4}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
 
   EXPECT_EQ(ReadAll(action, "entries").size(), 4u);
-  const std::optional<nlohmann::json> truncated =
-      ReadOne(action, "truncated");
+  const std::optional<nlohmann::json> truncated = ReadOne(action, "truncated");
   ASSERT_TRUE(truncated.has_value());
   EXPECT_TRUE(truncated->get<bool>());
 }
@@ -896,13 +904,13 @@ TEST(MakeTempTest, MakesScratchSpaceInsideTheFirstRoot) {
 
 // --- ticker ------------------------------------------------------------------
 
-std::shared_ptr<Action> MakeTicker(nlohmann::json options) {
+std::shared_ptr<Action> MakeTicker(const nlohmann::json& options) {
   absl::StatusOr<std::shared_ptr<Action>> created =
       Action::Create(TickerSchema(), a11::NewUuid(), TickerHandler());
   if (!created.ok()) {
     return nullptr;
   }
-  if (!PutInput(*created, "options", std::move(options)).ok()) {
+  if (!PutInput(*created, "options", options).ok()) {
     return nullptr;
   }
   return *created;
@@ -999,15 +1007,15 @@ CapabilitiesPtr CanRun(std::vector<std::string> programs) {
 
 std::shared_ptr<Action> MakeSpawn(const CapabilitiesPtr& capabilities,
                                   const std::string& program,
-                                  nlohmann::json arguments = {},
-                                  nlohmann::json options = {},
+                                  const nlohmann::json& arguments = {},
+                                  const nlohmann::json& options = {},
                                   const std::vector<std::string>& input = {}) {
   absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
       SpawnProcessSchema(), a11::NewUuid(), SpawnProcessHandler(capabilities));
   if (!created.ok()) {
     return nullptr;
   }
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
   if (!PutInput(action, "program", program).ok()) {
     return nullptr;
   }
@@ -1031,7 +1039,8 @@ std::shared_ptr<Action> MakeSpawn(const CapabilitiesPtr& capabilities,
     chunk.metadata =
         data::ChunkMetadata{.mimetype = "application/octet-stream"};
     chunk.data = piece;
-    if (!(*stdin_node)->PutChunk(std::move(chunk), std::nullopt, false)
+    if (!(*stdin_node)
+             ->PutChunk(std::move(chunk), std::nullopt, false)
              .Await()
              .ok()) {
       return nullptr;
@@ -1044,9 +1053,9 @@ std::shared_ptr<Action> MakeSpawn(const CapabilitiesPtr& capabilities,
 }
 
 TEST(SpawnProcessTest, KeepsStandardOutputAndStandardErrorApart) {
-  const std::shared_ptr<Action> action = MakeSpawn(
-      CanRun({}), "sh",
-      nlohmann::json::array({"-c", "echo to-out; echo to-err 1>&2"}));
+  const std::shared_ptr<Action> action =
+      MakeSpawn(CanRun({}), "sh",
+                nlohmann::json::array({"-c", "echo to-out; echo to-err 1>&2"}));
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
@@ -1117,8 +1126,8 @@ TEST(SpawnProcessTest, AProgramThatStopsReadingIsNotAnError) {
 }
 
 TEST(SpawnProcessTest, RefusesAProgramThePolicyDoesNotName) {
-  const std::shared_ptr<Action> action = MakeSpawn(CanRun({"echo"}), "rm",
-                                                  nlohmann::json::array({"-rf", "/"}));
+  const std::shared_ptr<Action> action =
+      MakeSpawn(CanRun({"echo"}), "rm", nlohmann::json::array({"-rf", "/"}));
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   const absl::Status status = action->Wait(kPatience).Await().status();
@@ -1136,9 +1145,9 @@ TEST(SpawnProcessTest, PassesArgumentsWithoutSplittingThem) {
 }
 
 TEST(SpawnProcessTest, SetsTheEnvironmentItWasGiven) {
-  const std::shared_ptr<Action> action =
-      MakeSpawn(CanRun({}), "sh", nlohmann::json::array({"-c", "echo $A11_TEST"}),
-                {{"environment", {{"A11_TEST", "present"}}}});
+  const std::shared_ptr<Action> action = MakeSpawn(
+      CanRun({}), "sh", nlohmann::json::array({"-c", "echo $A11_TEST"}),
+      {{"environment", {{"A11_TEST", "present"}}}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
@@ -1379,7 +1388,7 @@ TEST(EncodingTest, ReadsMsgpackOnAnInputPort) {
       Action::Create(ReadFileSchema(), a11::NewUuid(),
                      ReadFileHandler(WritableIn(workspace.root())));
   ASSERT_TRUE(created.ok());
-  const std::shared_ptr<Action> action = *created;
+  const std::shared_ptr<Action>& action = *created;
 
   absl::StatusOr<std::shared_ptr<AsyncNode>> node = action->GetInput("path");
   ASSERT_TRUE(node.ok());
@@ -1389,9 +1398,8 @@ TEST(EncodingTest, ReadsMsgpackOnAnInputPort) {
   chunk.metadata =
       data::ChunkMetadata{.mimetype = std::string(data::kMsgpackMimetype)};
   chunk.data = *packed;
-  ASSERT_TRUE((*node)->PutChunk(std::move(chunk), std::nullopt, true)
-                  .Await()
-                  .ok());
+  ASSERT_TRUE(
+      (*node)->PutChunk(std::move(chunk), std::nullopt, true).Await().ok());
   ASSERT_TRUE(PutInput(action, "options", nlohmann::json::object()).ok());
 
   ASSERT_TRUE(action->Run().ok());
@@ -1403,8 +1411,7 @@ TEST(EncodingTest, WritesMsgpackWhenAsked) {
   Workspace workspace;
   workspace.Write("one.txt", "1");
   const std::shared_ptr<Action> action =
-      MakeList(workspace, workspace.root().string(),
-               {{"encoding", "msgpack"}});
+      MakeList(workspace, workspace.root().string(), {{"encoding", "msgpack"}});
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
@@ -1453,8 +1460,7 @@ TEST(EncodingTest, ANonUtf8NameIsAStatusUnderJsonAndAValueUnderMsgpack) {
   EXPECT_NE(refused.message().find("msgpack"), std::string::npos);
 
   const std::shared_ptr<Action> as_msgpack =
-      MakeList(workspace, workspace.root().string(),
-               {{"encoding", "msgpack"}});
+      MakeList(workspace, workspace.root().string(), {{"encoding", "msgpack"}});
   ASSERT_NE(as_msgpack, nullptr);
   ASSERT_TRUE(as_msgpack->Run().ok());
   ASSERT_TRUE(as_msgpack->Wait(kPatience).Await().ok());
@@ -1524,8 +1530,8 @@ TEST(EnvGetTest, SaysWhichNamesWereNotSetAtAll) {
 }
 
 TEST(RandomBytesTest, DrawsTheCountAndEncodingItWasAsked) {
-  absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
-      RandomBytesSchema(), a11::NewUuid(), RandomBytesHandler());
+  absl::StatusOr<std::shared_ptr<Action>> created =
+      Action::Create(RandomBytesSchema(), a11::NewUuid(), RandomBytesHandler());
   ASSERT_TRUE(created.ok());
   ASSERT_TRUE(PutInput(*created, "options",
                        nlohmann::json{{"count", 16}, {"format", "hex"}})
@@ -1552,8 +1558,8 @@ TEST(NewUuidTest, MakesAsManyAsAsked) {
 TEST(WriteStdoutTest, TakesAStreamAndCountsWhatItWrote) {
   // Writing to the real standard output, which under a test runner is a pipe
   // or the terminal; either way the byte count is what is being checked.
-  absl::StatusOr<std::shared_ptr<Action>> created = Action::Create(
-      WriteStderrSchema(), a11::NewUuid(), WriteStderrHandler());
+  absl::StatusOr<std::shared_ptr<Action>> created =
+      Action::Create(WriteStderrSchema(), a11::NewUuid(), WriteStderrHandler());
   ASSERT_TRUE(created.ok());
   absl::StatusOr<std::shared_ptr<AsyncNode>> content =
       (*created)->GetInput("content");

@@ -15,8 +15,6 @@
 #include <absl/log/log.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
-
-#include "a11/json_codec.h"
 #include <opentelemetry/nostd/span.h>
 #include <opentelemetry/nostd/variant.h>
 #include <opentelemetry/sdk/common/attribute_utils.h>
@@ -28,6 +26,8 @@
 #include <opentelemetry/trace/span_id.h>
 #include <opentelemetry/trace/span_metadata.h>
 #include <opentelemetry/trace/trace_id.h>
+
+#include "a11/json_codec.h"
 
 namespace otel = opentelemetry;
 namespace otel_sdk = opentelemetry::sdk::trace;
@@ -44,13 +44,13 @@ void EnsureCurlGlobalInit() {
 std::string TraceIdHex(const otel::trace::TraceId& id) {
   char buf[2 * otel::trace::TraceId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 std::string SpanIdHex(const otel::trace::SpanId& id) {
   char buf[2 * otel::trace::SpanId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 int OtlpKind(otel::trace::SpanKind kind) {
@@ -166,6 +166,9 @@ std::string BuildPayload(
     if (recordable == nullptr) {
       continue;
     }
+    // Every recordable here came from this exporter's own MakeRecordable,
+    // which returns a SpanData: the SDK hands back what it was given.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
     auto* data = static_cast<otel_sdk::SpanData*>(recordable.get());
     if (resource == nullptr) {
       resource = &data->GetResource();

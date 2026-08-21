@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/lexer.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +11,7 @@
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
 
+#include "a11/flow/lexer.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
 
@@ -25,7 +24,9 @@ std::vector<std::string> Dump(std::string_view source,
                               LexOptions options = {}) {
   std::vector<std::string> out;
   for (const Token& token : Lex(source, options).tokens) {
-    if (token.kind == TokenKind::kEnd) break;
+    if (token.kind == TokenKind::kEnd) {
+      break;
+    }
     out.push_back(absl::StrCat(KindName(token.kind), ":", token.text));
   }
   return out;
@@ -50,7 +51,9 @@ TEST(FlowLexer, EveryTokenPointsAtWhatItRead) {
   const LexResult result = Lex(source);
   EXPECT_TRUE(result.diagnostics.empty());
   for (const Token& token : result.tokens) {
-    if (token.kind == TokenKind::kEnd) continue;
+    if (token.kind == TokenKind::kEnd) {
+      continue;
+    }
     // A token's text is the source it covers, and its offsets say where.
     EXPECT_EQ(token.text, std::string_view(source).substr(
                               token.start, token.end - token.start));
@@ -59,8 +62,8 @@ TEST(FlowLexer, EveryTokenPointsAtWhatItRead) {
 }
 
 TEST(FlowLexer, ANewlineEndsAStatementButABlankLineEndsNothing) {
-  EXPECT_EQ(Dump("a\nb"), (std::vector<std::string>{"word:a", "newline:\n",
-                                                    "word:b"}));
+  EXPECT_EQ(Dump("a\nb"),
+            (std::vector<std::string>{"word:a", "newline:\n", "word:b"}));
   // A run of breaks is one, and a leading one is none: the parser would
   // otherwise see statements that are not there.
   EXPECT_EQ(Dump("\n\n\na\n\n\nb\n\n\n"),
@@ -191,9 +194,9 @@ TEST(FlowLexer, ReadsEveryPunctuationTheGrammarUses) {
             (std::vector<std::string>{
                 // A colon's kind is spelled ":" and so is its text, which is
                 // why this one reads as three of them.
-                "{:{", "}:}", "(:(", "):)", "[:[", "]:]", ":::", ",:,", "|:|",
-                "=:=", ".:.", "<:<", ">:>", "<=:<=", ">=:>=", "==:==", "!=:!=",
-                "+:+", "-:-", "|:|", "->:->"}));
+                "{:{",   "}:}",   "(:(",   "):)", "[:[", "]:]", ":::",
+                ",:,",   "|:|",   "=:=",   ".:.", "<:<", ">:>", "<=:<=",
+                ">=:>=", "==:==", "!=:!=", "+:+", "-:-", "|:|", "->:->"}));
 }
 
 TEST(FlowLexer, ANameMayHoldWhatANameHolds) {
@@ -207,15 +210,19 @@ TEST(FlowLexer, ANameMayHoldWhatANameHolds) {
 
 TEST(FlowLexer, KindNamesRoundTrip) {
   for (const TokenKind kind :
-       {TokenKind::kNewline, TokenKind::kComment, TokenKind::kString,
-        TokenKind::kNumber, TokenKind::kDuration, TokenKind::kWord,
-        TokenKind::kDot, TokenKind::kArrow, TokenKind::kCarry,
-        TokenKind::kEqual, TokenKind::kEqualEqual, TokenKind::kBangEqual,
-        TokenKind::kLess, TokenKind::kLessEqual, TokenKind::kGreater,
-        TokenKind::kGreaterEqual, TokenKind::kPlus, TokenKind::kMinus,
-        TokenKind::kPipe, TokenKind::kColon, TokenKind::kComma,
-        TokenKind::kLeftBrace, TokenKind::kRightBrace, TokenKind::kLeftParen,
-        TokenKind::kRightParen, TokenKind::kLeftBracket,
+       {TokenKind::kNewline,      TokenKind::kComment,
+        TokenKind::kString,       TokenKind::kNumber,
+        TokenKind::kDuration,     TokenKind::kWord,
+        TokenKind::kDot,          TokenKind::kArrow,
+        TokenKind::kCarry,        TokenKind::kEqual,
+        TokenKind::kEqualEqual,   TokenKind::kBangEqual,
+        TokenKind::kLess,         TokenKind::kLessEqual,
+        TokenKind::kGreater,      TokenKind::kGreaterEqual,
+        TokenKind::kPlus,         TokenKind::kMinus,
+        TokenKind::kPipe,         TokenKind::kColon,
+        TokenKind::kComma,        TokenKind::kLeftBrace,
+        TokenKind::kRightBrace,   TokenKind::kLeftParen,
+        TokenKind::kRightParen,   TokenKind::kLeftBracket,
         TokenKind::kRightBracket, TokenKind::kEnd}) {
     EXPECT_EQ(KindFromName(KindName(kind)), kind) << KindName(kind);
   }
@@ -247,8 +254,8 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
     EXPECT_FALSE(doc->detail.empty()) << name;
     EXPECT_FALSE(doc->example.empty()) << name;
     // A summary is one sentence, and it is shown as one.
-    EXPECT_TRUE(absl::EndsWith(doc->summary, ".")) << name << ": "
-                                                   << doc->summary;
+    EXPECT_TRUE(absl::EndsWith(doc->summary, "."))
+        << name << ": " << doc->summary;
     // The word itself appears in its own example, or the example is about
     // something else.
     EXPECT_NE(doc->example.find(name), std::string_view::npos)
@@ -256,8 +263,8 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
     // `--` is never written in text a reader sees: a colon or an em dash.
     for (const std::string_view text :
          {doc->summary, doc->takes, doc->detail, doc->example}) {
-      EXPECT_EQ(text.find("--"), std::string_view::npos) << name << ": "
-                                                         << text;
+      EXPECT_EQ(text.find("--"), std::string_view::npos)
+          << name << ": " << text;
     }
     // Something that takes nothing says nothing about what it takes, so the
     // hover does not print an empty "Takes:" line.
@@ -265,9 +272,9 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
   };
 
   for (const std::string_view stage : vocabulary::Stages()) {
-    documented(vocabulary::StageDocumentation(stage), stage,
-               *vocabulary::StageTakes(stage) !=
-                   vocabulary::StageArgument::kNone);
+    documented(
+        vocabulary::StageDocumentation(stage), stage,
+        *vocabulary::StageTakes(stage) != vocabulary::StageArgument::kNone);
   }
   for (const std::string_view name : vocabulary::OrderedBuiltins()) {
     // Every function but `now()` is given something; `now()` is the clock.
@@ -303,7 +310,9 @@ TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
       // the declarations because a port declaration is where it is offered, and
       // is documented as the port modifier it is.
       const vocabulary::WordDoc* doc = vocabulary::Documentation(role, word);
-      if (doc == nullptr) doc = vocabulary::AnyDocumentation(word);
+      if (doc == nullptr) {
+        doc = vocabulary::AnyDocumentation(word);
+      }
       const std::string where = absl::StrCat(role_name, " '", word, "'");
       ASSERT_NE(doc, nullptr) << where << " has no reference text";
       EXPECT_FALSE(doc->summary.empty()) << where;
@@ -321,9 +330,9 @@ TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
       // The word appears in its own example, so the example is about the word
       // rather than about something near it. Case-insensitively, because a
       // status code is written `not_found` and shown `"NOT_FOUND"`.
-      EXPECT_NE(absl::AsciiStrToLower(doc->example)
-                    .find(absl::AsciiStrToLower(word)),
-                std::string::npos)
+      EXPECT_NE(
+          absl::AsciiStrToLower(doc->example).find(absl::AsciiStrToLower(word)),
+          std::string::npos)
           << where << ": " << doc->example;
     }
   }
@@ -369,8 +378,7 @@ TEST(FlowVocabulary, EveryStageSaysWhatItTakes) {
             vocabulary::StageArgument::kExpression);
   EXPECT_EQ(vocabulary::StageTakes("join"),
             vocabulary::StageArgument::kOptionalString);
-  EXPECT_EQ(vocabulary::StageTakes("then"),
-            vocabulary::StageArgument::kStream);
+  EXPECT_EQ(vocabulary::StageTakes("then"), vocabulary::StageArgument::kStream);
   EXPECT_EQ(vocabulary::StageTakes("collect"),
             vocabulary::StageArgument::kNone);
   // A word that reads like a stage and is not one: the language says so rather
@@ -403,8 +411,7 @@ TEST(FlowVocabulary, AStatusCodeIsAcceptedInEitherCase) {
 TEST(FlowLexer, ReadsRangesAndSpreadsWithoutBreakingNumbers) {
   // `1..200` is a bound and a bound, not a number with two decimal points in
   // it -- so the number scanner has to stop at the first of a `..`.
-  EXPECT_EQ(absl::StrJoin(Dump("1..200"), " "),
-            "number:1 ..:.. number:200");
+  EXPECT_EQ(absl::StrJoin(Dump("1..200"), " "), "number:1 ..:.. number:200");
   EXPECT_EQ(absl::StrJoin(Dump("1.5..2"), " "), "number:1.5 ..:.. number:2");
   EXPECT_EQ(absl::StrJoin(Dump("..9"), " "), "..:.. number:9");
   EXPECT_EQ(absl::StrJoin(Dump("1.."), " "), "number:1 ..:..");

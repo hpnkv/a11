@@ -23,7 +23,7 @@ namespace {
 TEST(ChunkStoreReaderTest, StopsAfterOrderedFinalFragment) {
   auto store_result = LocalChunkStore::Create("reader");
   ASSERT_TRUE(store_result.ok());
-  auto store = *store_result;
+  const auto& store = *store_result;
   ASSERT_TRUE(store
                   ->PutMany({
                       data::NodeFragment{.data = data::Chunk{.data = "a"},
@@ -37,7 +37,7 @@ TEST(ChunkStoreReaderTest, StopsAfterOrderedFinalFragment) {
                   .ok());
   auto reader_result = ChunkStoreReader::Create(store);
   ASSERT_TRUE(reader_result.ok());
-  auto reader = *reader_result;
+  const auto& reader = *reader_result;
   EXPECT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
   EXPECT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
   EXPECT_FALSE(reader->Next(absl::Seconds(1)).Await()->has_value());
@@ -205,9 +205,8 @@ TEST(ChunkStoreReaderTest, UnorderedReaderDoesNotExpandStickyMimetype) {
                   .ok());
   auto reader = *ChunkStoreReader::Create(
       store,
-      ChunkStoreReaderOptions{.ordered = false,
-                              .max_chunks_to_read = 2,
-                              .sticky_mimetype = true});
+      ChunkStoreReaderOptions{
+          .ordered = false, .max_chunks_to_read = 2, .sticky_mimetype = true});
 
   ASSERT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
   auto second = reader->Next(absl::Seconds(1)).Await();
@@ -244,12 +243,12 @@ TEST(ChunkStoreReaderTest, BufferedFragmentReachesALaterReader) {
   reader->EnsureStarted();
   thread::SleepFor(absl::Milliseconds(20));
 
-  ASSERT_TRUE(store
-                  ->Put(data::NodeFragment{.data = data::Chunk{.data = "one"},
-                                           .seq = 0,
-                                           .continued = true})
-                  .Await()
-                  .ok());
+  ASSERT_TRUE(
+      store
+          ->Put(data::NodeFragment{
+              .data = data::Chunk{.data = "one"}, .seq = 0, .continued = true})
+          .Await()
+          .ok());
   // Long enough for the fetch to finish, the fragment to be buffered, and the
   // prefetch of seq 1 -- which nobody will write -- to be in flight.
   thread::SleepFor(absl::Milliseconds(50));

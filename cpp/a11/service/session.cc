@@ -263,7 +263,7 @@ absl::Status Session::Initialize(
           : OnSessionStreamMessage(
                 [weak_self](std::optional<data::WireMessage> message,
                             std::shared_ptr<net::WireStream> stream,
-                            std::shared_ptr<Session>) {
+                            const std::shared_ptr<Session>&) {
                   std::shared_ptr<Session> locked = weak_self.lock();
                   if (locked == nullptr || !message.has_value()) {
                     return a11::ReadyTask();
@@ -272,11 +272,12 @@ absl::Status Session::Initialize(
                                                      std::move(stream));
                 });
   OnSessionStreamDone done_callback =
-      on_stream_done ? std::move(on_stream_done)
-                     : OnSessionStreamDone([](std::shared_ptr<net::WireStream>,
-                                              std::shared_ptr<Session>) {
-                         return a11::ReadyTask();
-                       });
+      on_stream_done
+          ? std::move(on_stream_done)
+          : OnSessionStreamDone([](const std::shared_ptr<net::WireStream>&,
+                                   const std::shared_ptr<Session>&) {
+              return a11::ReadyTask();
+            });
   state_ = std::make_shared<State>(
       std::move(session_id), std::move(normalized), options,
       std::move(node_map), std::move(action_registry), std::move(root),
@@ -392,7 +393,8 @@ std::shared_ptr<nodes::NodeMap> Session::GetNodeMap() const {
   return state_->node_map;
 }
 
-absl::Status Session::SetNodeMap(std::shared_ptr<nodes::NodeMap> node_map) {
+absl::Status Session::SetNodeMap(
+    const std::shared_ptr<nodes::NodeMap>& node_map) {
   if (node_map == nullptr) {
     return absl::InvalidArgumentError("node_map must not be null");
   }
@@ -418,7 +420,7 @@ std::shared_ptr<actions::ActionRegistry> Session::GetActionRegistry() const {
 }
 
 absl::Status Session::SetActionRegistry(
-    std::shared_ptr<actions::ActionRegistry> registry) {
+    const std::shared_ptr<actions::ActionRegistry>& registry) {
   std::vector<std::shared_ptr<actions::Action>> actions;
   {
     thread::MutexLock lock(&state_->mu);
@@ -532,7 +534,7 @@ a11::Task Session::AwaitAllActions(absl::Duration timeout) {
     }
     return MakeStatus(
         code, absl::StrCat(failures.size(), " Actions completed with errors."),
-        std::move(details));
+        details);
   });
 }
 
@@ -657,8 +659,8 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
     return a11::ThenAfterWaiting(
         owned->PutFragment(std::move(fragment)), absl::InfiniteFuture(),
         [owned, fallback_seq, action = std::move(action),
-         protocol_status = std::move(protocol_status), sets_dispatch_status](
-            const absl::StatusOr<std::uint32_t>& stored)
+         protocol_status = std::move(protocol_status),
+         sets_dispatch_status](const absl::StatusOr<std::uint32_t>& stored)
             -> absl::StatusOr<std::uint32_t> {
           if (!stored.ok()) {
             // A write refused because the writer was aborted is not this
@@ -696,7 +698,8 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
   // instead of blocking in a frame that must not block. The second await needs no
   // fibre either way: what follows it only maps a status to a sequence number.
   if (close_marker || (status_chunk && !fast_special.has_value())) {
-    absl::StatusOr<absl::Status> carried = actions::StatusFromChunk(*fast_chunk);
+    absl::StatusOr<absl::Status> carried =
+        actions::StatusFromChunk(*fast_chunk);
     if (!carried.ok()) {
       return a11::FailedFuture<std::uint32_t>(carried.status());
     }
@@ -728,15 +731,14 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
       a11::Task applied = (close_marker && carried->ok())
                               ? (*node)->Close()
                               : (*node)->AbortWithStatus(*carried);
-      return a11::Then(
-          std::move(applied),
-          [seq](const absl::StatusOr<a11::Unit>& done)
-              -> absl::StatusOr<std::uint32_t> {
-            if (!done.ok()) {
-              return done.status();
-            }
-            return seq;
-          });
+      return a11::Then(applied,
+                       [seq](const absl::StatusOr<a11::Unit>& done)
+                           -> absl::StatusOr<std::uint32_t> {
+                         if (!done.ok()) {
+                           return done.status();
+                         }
+                         return seq;
+                       });
     }
     // Writability is not settled: fall through and let a fibre wait for it.
   }
@@ -982,7 +984,8 @@ a11::Task Session::DispatchActionMessage(
       {});
 }
 
-a11::Task Session::DispatchAction(std::shared_ptr<actions::Action> action) {
+a11::Task Session::DispatchAction(
+    const std::shared_ptr<actions::Action>& action) {
   if (action == nullptr) {
     return a11::FailedTask(
         absl::InvalidArgumentError("action must not be null"));
@@ -1068,9 +1071,9 @@ a11::Task Session::DispatchWireMessage(
         std::vector<absl::AnyInvocable<absl::Status() &&>> dispatches;
         dispatches.reserve(group_order.size());
         for (const std::string& id : group_order) {
-          dispatches.push_back([self = self.get(), &message, &fragment_failures,
-                                &failure_mu,
-                                indices = &groups.at(id)]() -> absl::Status {
+          dispatches.emplace_back([self = self.get(), &message,
+                                   &fragment_failures, &failure_mu,
+                                   indices = &groups.at(id)]() -> absl::Status {
             for (const size_t index : *indices) {
               data::NodeFragment& fragment = message.node_fragments[index];
               const std::string fragment_id = fragment.id;
@@ -1134,7 +1137,7 @@ a11::Task Session::DispatchWireMessage(
             absl::StrCat("Failed to dispatch ", failures.size(), " of ",
                          message.node_fragments.size() + message.actions.size(),
                          " WireMessage elements"),
-            std::move(details));
+            details);
       },
       // Default stack, not 16 KiB. This fibre dispatches node fragments, which
       // reach a store write, and a store write driven inline needs 67,695 B below
@@ -1464,65 +1467,65 @@ void Session::ProcessStreamMessages(
 a11::Task Session::HandleStreamDone(
     const std::shared_ptr<StreamState>& stream_state) {
   std::shared_ptr<Session> self = shared_from_this();
-  return a11::SubmitTask([self = std::move(self),
-                          stream_state]() -> absl::Status {
-    {
-      thread::MutexLock lock(&self->state_->mu);
-      if (stream_state->done || stream_state->done_started) {
-        return absl::OkStatus();
-      }
-      stream_state->done_started = true;
-    }
-    const absl::Status stream_status = stream_state->stream->GetStatus();
-    bool remote_session_abort = IsSessionStreamAbortStatus(stream_status);
-    std::vector<std::shared_ptr<actions::Action>> actions_to_cancel;
-    {
-      thread::MutexLock lock(&self->state_->mu);
-      if (remote_session_abort && self->state_->phase != Phase::kAborted) {
-        self->state_->remote_closed = true;
-        self->state_->phase = Phase::kAborted;
-        self->state_->status = stream_status;
-        for (const auto& [unused, action] : self->state_->actions) {
-          (void)unused;
-          actions_to_cancel.push_back(action);
+  return a11::SubmitTask(
+      [self = std::move(self), stream_state]() -> absl::Status {
+        {
+          thread::MutexLock lock(&self->state_->mu);
+          if (stream_state->done || stream_state->done_started) {
+            return absl::OkStatus();
+          }
+          stream_state->done_started = true;
         }
-        for (const auto& [unused, state] : self->state_->stream_states) {
-          (void)unused;
-          state->accepting_messages = false;
+        const absl::Status stream_status = stream_state->stream->GetStatus();
+        bool remote_session_abort = IsSessionStreamAbortStatus(stream_status);
+        std::vector<std::shared_ptr<actions::Action>> actions_to_cancel;
+        {
+          thread::MutexLock lock(&self->state_->mu);
+          if (remote_session_abort && self->state_->phase != Phase::kAborted) {
+            self->state_->remote_closed = true;
+            self->state_->phase = Phase::kAborted;
+            self->state_->status = stream_status;
+            for (const auto& [unused, action] : self->state_->actions) {
+              (void)unused;
+              actions_to_cancel.push_back(action);
+            }
+            for (const auto& [unused, state] : self->state_->stream_states) {
+              (void)unused;
+              state->accepting_messages = false;
+            }
+          }
+          if (!stream_status.ok()) {
+            stream_state->accepting_messages = false;
+          }
         }
-      }
-      if (!stream_status.ok()) {
-        stream_state->accepting_messages = false;
-      }
-    }
-    for (const auto& action : actions_to_cancel) {
-      (void)action->Cancel();
-    }
-    self->NotifyStateChanged();
+        for (const auto& action : actions_to_cancel) {
+          (void)action->Cancel();
+        }
+        self->NotifyStateChanged();
 
-    while (true) {
-      std::shared_ptr<thread::PermanentEvent> changed;
-      {
-        thread::MutexLock lock(&self->state_->mu);
-        if (stream_state->outstanding_messages == 0) {
-          break;
+        while (true) {
+          std::shared_ptr<thread::PermanentEvent> changed;
+          {
+            thread::MutexLock lock(&self->state_->mu);
+            if (stream_state->outstanding_messages == 0) {
+              break;
+            }
+            changed = self->state_->changed;
+          }
+          if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0) {
+            break;
+          }
         }
-        changed = self->state_->changed;
-      }
-      if (thread::Select({thread::OnCancel(), changed->OnEvent()}) == 0) {
-        break;
-      }
-    }
-    OnSessionStreamDone callback;
-    {
-      thread::MutexLock lock(&self->state_->mu);
-      callback = self->state_->on_done;
-    }
-    absl::Status callback_status;
-    callback_status = callback(stream_state->stream, self).Await().status();
-    self->RemoveStream(stream_state);
-    return callback_status;
-  });
+        OnSessionStreamDone callback;
+        {
+          thread::MutexLock lock(&self->state_->mu);
+          callback = self->state_->on_done;
+        }
+        absl::Status callback_status;
+        callback_status = callback(stream_state->stream, self).Await().status();
+        self->RemoveStream(stream_state);
+        return callback_status;
+      });
 }
 
 void Session::RemoveStream(const std::shared_ptr<StreamState>& stream_state) {
@@ -1759,14 +1762,14 @@ absl::StatusOr<std::shared_ptr<SessionWithRecv>> SessionWithRecv::Create(
   OnSessionStreamMessage on_message =
       [weak](std::optional<data::WireMessage> message,
              std::shared_ptr<net::WireStream> stream,
-             std::shared_ptr<Session>) {
+             const std::shared_ptr<Session>&) {
         std::shared_ptr<SessionWithRecv> self = weak.lock();
         return self != nullptr
                    ? self->OnMessage(std::move(message), std::move(stream))
                    : a11::ReadyTask();
       };
   OnSessionStreamDone on_done = [weak](std::shared_ptr<net::WireStream> stream,
-                                       std::shared_ptr<Session>) {
+                                       const std::shared_ptr<Session>&) {
     std::shared_ptr<SessionWithRecv> self = weak.lock();
     return self != nullptr ? self->OnDone(std::move(stream)) : a11::ReadyTask();
   };
@@ -1826,12 +1829,12 @@ a11::Task SessionWithRecv::OnMessage(std::optional<data::WireMessage> message,
         }
         if (self->receive_state_->queue.empty()) {
           if (message.has_value()) {
-            self->receive_state_->queue.push_back(ReceivedSessionMessage{
+            self->receive_state_->queue.emplace_back(ReceivedSessionMessage{
                 .message = std::move(*message),
                 .stream_id = stream->GetId(),
             });
           } else {
-            self->receive_state_->queue.push_back(std::nullopt);
+            self->receive_state_->queue.emplace_back(std::nullopt);
             self->receive_state_->eof_started = true;
           }
           notify = std::exchange(self->receive_state_->changed,

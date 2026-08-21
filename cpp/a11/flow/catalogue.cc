@@ -21,15 +21,17 @@ using syntax::Constant;
 
 std::string Text(const nlohmann::json& value, std::string_view key) {
   const auto found = value.find(key);
-  if (found == value.end() || !found->is_string())
+  if (found == value.end() || !found->is_string()) {
     return "";
+  }
   return found->get<std::string>();
 }
 
 bool Flag(const nlohmann::json& value, std::string_view key, bool fallback) {
   const auto found = value.find(key);
-  if (found == value.end() || !found->is_boolean())
+  if (found == value.end() || !found->is_boolean()) {
     return fallback;
+  }
   return found->get<bool>();
 }
 
@@ -47,14 +49,17 @@ std::vector<PortInfo> PortsFromJson(const nlohmann::json& value,
                                     std::string_view key) {
   std::vector<PortInfo> ports;
   const auto found = value.find(key);
-  if (found == value.end() || !found->is_array())
+  if (found == value.end() || !found->is_array()) {
     return ports;
+  }
   for (const nlohmann::json& one : *found) {
-    if (!one.is_object())
+    if (!one.is_object()) {
       continue;
+    }
     PortInfo port = PortFromJson(one);
-    if (port.name.empty())
+    if (port.name.empty()) {
       continue;
+    }
     ports.push_back(std::move(port));
   }
   return ports;
@@ -62,12 +67,15 @@ std::vector<PortInfo> PortsFromJson(const nlohmann::json& value,
 
 nlohmann::json PortToJson(const PortInfo& port) {
   nlohmann::json value{{"name", port.name}, {"type", port.type}};
-  if (!port.description.empty())
+  if (!port.description.empty()) {
     value["description"] = port.description;
-  if (port.required)
+  }
+  if (port.required) {
     value["required"] = true;
-  if (!port.unary)
+  }
+  if (!port.unary) {
     value["unary"] = false;
+  }
   return value;
 }
 
@@ -78,12 +86,14 @@ nlohmann::json PortToJson(const PortInfo& port) {
 /// somewhere.
 std::optional<Origin> OriginFromJson(const nlohmann::json& value) {
   const auto found = value.find("origin");
-  if (found == value.end() || !found->is_object())
+  if (found == value.end() || !found->is_object()) {
     return std::nullopt;
+  }
   Origin origin;
   origin.file = Text(*found, "file");
-  if (origin.file.empty())
+  if (origin.file.empty()) {
     return std::nullopt;
+  }
   if (const auto line = found->find("line");
       line != found->end() && line->is_number_integer()) {
     origin.line = line->get<int>();
@@ -102,22 +112,26 @@ nlohmann::json OriginToJson(const Origin& origin) {
 
 nlohmann::json PortsToJson(const std::vector<PortInfo>& ports) {
   nlohmann::json list = nlohmann::json::array();
-  for (const PortInfo& port : ports)
+  for (const PortInfo& port : ports) {
     list.push_back(PortToJson(port));
+  }
   return list;
 }
 
 /// A constant from JSON, for a field's default and its allowed values.
 Constant ConstantFromJson(const nlohmann::json& value) {
-  if (value.is_boolean())
+  if (value.is_boolean()) {
     return Constant::Bool(value.get<bool>());
+  }
   if (value.is_number_integer()) {
     return Constant::Integer(value.get<long long>());
   }
-  if (value.is_number())
+  if (value.is_number()) {
     return Constant::Double(value.get<double>());
-  if (value.is_string())
+  }
+  if (value.is_string()) {
     return Constant::String(value.get<std::string>());
+  }
   if (value.is_array()) {
     Constant list;
     list.kind = Constant::Kind::kList;
@@ -178,15 +192,18 @@ DtoPlan ShapeFromJson(std::string_view tag, const nlohmann::json& value) {
   shape.name = std::string(tag);
   shape.description = Text(value, "description");
   const auto fields = value.find("fields");
-  if (fields == value.end() || !fields->is_array())
+  if (fields == value.end() || !fields->is_array()) {
     return shape;
+  }
   for (const nlohmann::json& one : *fields) {
-    if (!one.is_object())
+    if (!one.is_object()) {
       continue;
+    }
     FieldPlan field;
     field.name = Text(one, "name");
-    if (field.name.empty())
+    if (field.name.empty()) {
       continue;
+    }
     field.type = Text(one, "type");
     field.declared = field.type;
     field.element = Text(one, "element");
@@ -196,8 +213,9 @@ DtoPlan ShapeFromJson(std::string_view tag, const nlohmann::json& value) {
       field.default_value = ConstantFromJson(*given);
       field.has_default = true;
     }
-    if (field.type == "bytes" || field.element == "bytes")
+    if (field.type == "bytes" || field.element == "bytes") {
       shape.binary = true;
+    }
     shape.fields.push_back(std::move(field));
   }
   return shape;
@@ -207,19 +225,24 @@ nlohmann::json ShapeToJson(const DtoPlan& shape) {
   nlohmann::json fields = nlohmann::json::array();
   for (const FieldPlan& field : shape.fields) {
     nlohmann::json one{{"name", field.name}, {"type", field.type}};
-    if (!field.element.empty())
+    if (!field.element.empty()) {
       one["element"] = field.element;
-    if (!field.description.empty())
+    }
+    if (!field.description.empty()) {
       one["description"] = field.description;
-    if (field.required)
+    }
+    if (field.required) {
       one["required"] = true;
-    if (field.has_default)
+    }
+    if (field.has_default) {
       one["default"] = ConstantToJson(field.default_value);
+    }
     fields.push_back(std::move(one));
   }
   nlohmann::json value{{"fields", std::move(fields)}};
-  if (!shape.description.empty())
+  if (!shape.description.empty()) {
     value["description"] = shape.description;
+  }
   return value;
 }
 
@@ -230,8 +253,9 @@ const PortInfo* absl_nullable ActionInfo::Port(
   const std::vector<PortInfo>& side =
       direction == syntax::PortDirection::kInput ? inputs : outputs;
   for (const PortInfo& port : side) {
-    if (port.name == port_name)
+    if (port.name == port_name) {
       return &port;
+    }
   }
   return nullptr;
 }
@@ -242,8 +266,9 @@ std::vector<std::string> ActionInfo::PortNames(
       direction == syntax::PortDirection::kInput ? inputs : outputs;
   std::vector<std::string> names;
   names.reserve(side.size());
-  for (const PortInfo& port : side)
+  for (const PortInfo& port : side) {
     names.push_back(port.name);
+  }
   return names;
 }
 
@@ -257,18 +282,21 @@ Catalogue Catalogue::Of(std::vector<ActionInfo> actions,
 
 Catalogue Catalogue::FromJson(const nlohmann::json& value) {
   Catalogue built;
-  if (!value.is_object())
+  if (!value.is_object()) {
     return built;
+  }
 
   if (const auto actions = value.find("actions");
       actions != value.end() && actions->is_array()) {
     for (const nlohmann::json& one : *actions) {
-      if (!one.is_object())
+      if (!one.is_object()) {
         continue;
+      }
       ActionInfo action;
       action.name = Text(one, "name");
-      if (action.name.empty())
+      if (action.name.empty()) {
         continue;
+      }
       action.description = Text(one, "description");
       action.inputs = PortsFromJson(one, "inputs");
       action.outputs = PortsFromJson(one, "outputs");
@@ -280,12 +308,14 @@ Catalogue Catalogue::FromJson(const nlohmann::json& value) {
   if (const auto types = value.find("types");
       types != value.end() && types->is_array()) {
     for (const nlohmann::json& one : *types) {
-      if (!one.is_object())
+      if (!one.is_object()) {
         continue;
+      }
       TypeInfo type;
       type.tag = Text(one, "tag");
-      if (type.tag.empty())
+      if (type.tag.empty()) {
         continue;
+      }
       type.shape = ShapeFromJson(type.tag, one);
       type.origin = OriginFromJson(one);
       built.types_.push_back(std::move(type));
@@ -298,24 +328,30 @@ nlohmann::json Catalogue::ToJson() const {
   nlohmann::json actions = nlohmann::json::array();
   for (const ActionInfo& action : actions_) {
     nlohmann::json one{{"name", action.name}};
-    if (!action.description.empty())
+    if (!action.description.empty()) {
       one["description"] = action.description;
-    if (!action.inputs.empty())
+    }
+    if (!action.inputs.empty()) {
       one["inputs"] = PortsToJson(action.inputs);
-    if (!action.outputs.empty())
+    }
+    if (!action.outputs.empty()) {
       one["outputs"] = PortsToJson(action.outputs);
-    if (!action.headers.empty())
+    }
+    if (!action.headers.empty()) {
       one["headers"] = PortsToJson(action.headers);
-    if (action.origin.has_value())
+    }
+    if (action.origin.has_value()) {
       one["origin"] = OriginToJson(*action.origin);
+    }
     actions.push_back(std::move(one));
   }
   nlohmann::json types = nlohmann::json::array();
   for (const TypeInfo& type : types_) {
     nlohmann::json one = ShapeToJson(type.shape);
     one["tag"] = type.tag;
-    if (type.origin.has_value())
+    if (type.origin.has_value()) {
       one["origin"] = OriginToJson(*type.origin);
+    }
     types.push_back(std::move(one));
   }
   return nlohmann::json{{"format", kCatalogueFormat},
@@ -328,40 +364,46 @@ Catalogue Catalogue::MergedWith(const Catalogue& other) const {
   for (const ActionInfo& action : other.actions_) {
     bool replaced = false;
     for (ActionInfo& mine : merged.actions_) {
-      if (mine.name != action.name)
+      if (mine.name != action.name) {
         continue;
+      }
       mine = action;
       replaced = true;
     }
-    if (!replaced)
+    if (!replaced) {
       merged.actions_.push_back(action);
+    }
   }
   for (const TypeInfo& type : other.types_) {
     bool replaced = false;
     for (TypeInfo& mine : merged.types_) {
-      if (mine.tag != type.tag)
+      if (mine.tag != type.tag) {
         continue;
+      }
       mine = type;
       replaced = true;
     }
-    if (!replaced)
+    if (!replaced) {
       merged.types_.push_back(type);
+    }
   }
   return merged;
 }
 
 const ActionInfo* absl_nullable Catalogue::Action(std::string_view name) const {
   for (const ActionInfo& action : actions_) {
-    if (action.name == name)
+    if (action.name == name) {
       return &action;
+    }
   }
   return nullptr;
 }
 
 const TypeInfo* absl_nullable Catalogue::Type(std::string_view tag) const {
   for (const TypeInfo& type : types_) {
-    if (type.tag == tag)
+    if (type.tag == tag) {
       return &type;
+    }
   }
   return nullptr;
 }

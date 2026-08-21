@@ -1,7 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 #include "a11/net/http_sse_wire_stream.h"
-#include "a11/net/server_headers.h"
 
 #include <atomic>
 #include <filesystem>
@@ -24,6 +23,7 @@
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/net/server_headers.h"
 #include "a11/net/wire_stream_with_recv.h"
 #include "thread/boost_primitives.h"
 
@@ -79,20 +79,20 @@ TEST(HttpSseWireStreamTest, AnswersCorsPreflight) {
                       .Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(response.ok()) << response.status();
   EXPECT_EQ(response->head.status, 204);
-  EXPECT_EQ(GetHttpHeader(response->head.headers,
-                          "access-control-allow-origin"),
-            "*");
-  EXPECT_EQ(GetHttpHeader(response->head.headers,
-                          "access-control-allow-methods"),
-            "*");
-  EXPECT_EQ(GetHttpHeader(response->head.headers,
-                          "access-control-allow-headers"),
-            "*");
+  EXPECT_EQ(
+      GetHttpHeader(response->head.headers, "access-control-allow-origin"),
+      "*");
+  EXPECT_EQ(
+      GetHttpHeader(response->head.headers, "access-control-allow-methods"),
+      "*");
+  EXPECT_EQ(
+      GetHttpHeader(response->head.headers, "access-control-allow-headers"),
+      "*");
   // Exposed by default, and it has to be: a browser reads its stream id off the
   // connect response, and a header it may not read is one it did not receive.
-  EXPECT_EQ(GetHttpHeader(response->head.headers,
-                          "access-control-expose-headers"),
-            "x-a11-stream-id, x-a11-outbound");
+  EXPECT_EQ(
+      GetHttpHeader(response->head.headers, "access-control-expose-headers"),
+      "x-a11-stream-id, x-a11-outbound");
   // What an A11 server says about itself on every reply.
   EXPECT_EQ(GetHttpHeader(response->head.headers, "server"), "a11");
   EXPECT_EQ(GetHttpHeader(response->head.headers, "x-content-type-options"),
@@ -476,15 +476,13 @@ TEST_P(HttpSseOutboundDeliveryTest, DeliversEveryMessageBeforeTheHalfClose) {
   EXPECT_TRUE((*server)->Stop().ok());
 }
 
-INSTANTIATE_TEST_SUITE_P(Delivery, HttpSseOutboundDeliveryTest,
-                         testing::Values(SseOutboundDelivery::kPost,
-                                         SseOutboundDelivery::kStream),
-                         [](const testing::TestParamInfo<SseOutboundDelivery>&
-                                info) {
-                           return info.param == SseOutboundDelivery::kPost
-                                      ? "ConcurrentPosts"
-                                      : "StreamedBody";
-                         });
+INSTANTIATE_TEST_SUITE_P(
+    Delivery, HttpSseOutboundDeliveryTest,
+    testing::Values(SseOutboundDelivery::kPost, SseOutboundDelivery::kStream),
+    [](const testing::TestParamInfo<SseOutboundDelivery>& param) {
+      return param.param == SseOutboundDelivery::kPost ? "ConcurrentPosts"
+                                                       : "StreamedBody";
+    });
 
 // Streamed delivery over HTTP/1.1, where the body is a chunked one and the
 // connect request already owns its connection -- so the upload has to get one of
@@ -675,39 +673,37 @@ TEST(HttpSseWireStreamTest, FallsBackToPostsWhenTheServerIsSilentOnModes) {
   // standing in for an SSE server built before streamed delivery existed.
   auto proxy = Http2Server::Create(
       "127.0.0.1", 0,
-      [upstream_port](HttpRequest request,
-                      std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
-        return a11::SubmitTask(
-            [upstream_port, request = std::move(request),
-             response = std::move(response)]() mutable -> absl::Status {
-              ABSL_ASSIGN_OR_RETURN(
-                  std::shared_ptr<Http2Client> upstream,
-                  Http2Client::Connect("127.0.0.1", upstream_port)
-                      .Await(absl::Now() + absl::Seconds(5)));
-              ABSL_ASSIGN_OR_RETURN(
-                  std::shared_ptr<Http2ResponseStream> upstream_stream,
-                  upstream->RequestStream(request.method, request.path,
-                                          request.headers,
-                                          std::move(request.body)));
-              ABSL_ASSIGN_OR_RETURN(
-                  HttpResponseHead head,
-                  upstream_stream->Headers().Await(absl::Now() +
-                                                   absl::Seconds(5)));
-              EraseHttpHeader(&head.headers, kSseOutboundModesHeader);
-              ABSL_RETURN_IF_ERROR(
-                  response->SendHeaders(head.status, head.headers));
-              while (true) {
-                ABSL_ASSIGN_OR_RETURN(
-                    std::optional<std::string> chunk,
-                    upstream_stream->Read().Await(absl::InfiniteFuture()));
-                if (!chunk.has_value()) {
-                  break;
-                }
-                ABSL_RETURN_IF_ERROR(response->Write(std::move(*chunk)));
-              }
-              return response->Finish();
-            });
+      [upstream_port](
+          HttpRequest request,
+          std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        return a11::SubmitTask([upstream_port, request = std::move(request),
+                                response = std::move(
+                                    response)]() mutable -> absl::Status {
+          ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Http2Client> upstream,
+                                Http2Client::Connect("127.0.0.1", upstream_port)
+                                    .Await(absl::Now() + absl::Seconds(5)));
+          ABSL_ASSIGN_OR_RETURN(
+              std::shared_ptr<Http2ResponseStream> upstream_stream,
+              upstream->RequestStream(request.method, request.path,
+                                      request.headers,
+                                      std::move(request.body)));
+          ABSL_ASSIGN_OR_RETURN(
+              HttpResponseHead head,
+              upstream_stream->Headers().Await(absl::Now() + absl::Seconds(5)));
+          EraseHttpHeader(&head.headers, kSseOutboundModesHeader);
+          ABSL_RETURN_IF_ERROR(
+              response->SendHeaders(head.status, head.headers));
+          while (true) {
+            ABSL_ASSIGN_OR_RETURN(
+                std::optional<std::string> chunk,
+                upstream_stream->Read().Await(absl::InfiniteFuture()));
+            if (!chunk.has_value()) {
+              break;
+            }
+            ABSL_RETURN_IF_ERROR(response->Write(std::move(*chunk)));
+          }
+          return response->Finish();
+        });
       });
   ASSERT_TRUE(proxy.ok()) << proxy.status();
 

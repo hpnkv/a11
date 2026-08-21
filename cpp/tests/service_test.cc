@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/statusor.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
@@ -15,8 +16,6 @@
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
-#include <absl/status/statusor.h>
-
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/service/serving.h"
 #include "a11/service/session.h"
@@ -32,10 +31,10 @@ ActionSchema EchoSchema() {
   ActionSchema schema;
   schema.name = "echo";
   schema.description = "Echo the input back.";
-  schema.inputs.emplace(
-      "text", ActionPortSchema{.name = "text", .type = "text/plain"});
-  schema.outputs.emplace(
-      "out", ActionPortSchema{.name = "out", .type = "text/plain"});
+  schema.inputs.emplace("text",
+                        ActionPortSchema{.name = "text", .type = "text/plain"});
+  schema.outputs.emplace("out",
+                         ActionPortSchema{.name = "out", .type = "text/plain"});
   return schema;
 }
 
@@ -43,8 +42,8 @@ ActionSchema PeerOnlySchema() {
   ActionSchema schema;
   schema.name = "peer_only";
   schema.description = "A tool only one peer announced.";
-  schema.outputs.emplace(
-      "out", ActionPortSchema{.name = "out", .type = "text/plain"});
+  schema.outputs.emplace("out",
+                         ActionPortSchema{.name = "out", .type = "text/plain"});
   return schema;
 }
 
@@ -89,8 +88,9 @@ TEST(ServiceTest, TheConnectionHookRunsBeforeTheSessionStartsPumping) {
   auto registry = EchoRegistry();
   const auto service = Service::Create(
       /*action_registry=*/nullptr,
-      [&prepared, registry](std::shared_ptr<Session> session,
-                            std::shared_ptr<net::WireStream> /*stream*/) {
+      [&prepared, registry](
+          const std::shared_ptr<Session>& session,
+          const std::shared_ptr<net::WireStream>& /*stream*/) {
         // Specialising the connection: the service itself has an empty registry.
         (void)session->SetActionRegistry(registry);
         prepared.push_back(session->GetId());
@@ -111,8 +111,8 @@ TEST(ServiceTest, TheConnectionHookRunsBeforeTheSessionStartsPumping) {
 
 TEST(ServiceTest, ARejectingHookRefusesTheConnectionAndLeavesNothingBehind) {
   const auto service = Service::Create(
-      EchoRegistry(),
-      [](std::shared_ptr<Session>, std::shared_ptr<net::WireStream>) {
+      EchoRegistry(), [](const std::shared_ptr<Session>&,
+                         const std::shared_ptr<net::WireStream>&) {
         return a11::FailedTask(absl::PermissionDeniedError("not for you"));
       });
   ASSERT_TRUE(service.ok()) << service.status();
@@ -194,8 +194,9 @@ TEST(ServiceTest, EachConnectionGetsItsOwnRegistryCopyWhenAsked) {
   // callable on the other's session.
   EXPECT_NE((*first)->GetActionRegistry(), (*second)->GetActionRegistry());
   EXPECT_NE((*first)->GetActionRegistry(), (*service)->GetActionRegistry());
-  ASSERT_TRUE((*first)->GetActionRegistry()->Register("peer_only",
-                                                      PeerOnlySchema())
+  ASSERT_TRUE((*first)
+                  ->GetActionRegistry()
+                  ->Register("peer_only", PeerOnlySchema())
                   .ok());
   EXPECT_FALSE((*second)->GetActionRegistry()->IsRegistered("peer_only"));
   EXPECT_FALSE((*service)->GetActionRegistry()->IsRegistered("peer_only"));

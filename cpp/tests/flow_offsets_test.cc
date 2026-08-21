@@ -1,13 +1,12 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/offsets.h"
-
 #include <string>
 #include <string_view>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/flow/offsets.h"
 #include "a11/flow/service.h"
 
 namespace a11::flow {
@@ -71,7 +70,9 @@ TEST(FlowOffsets, AnEmptyDocumentIsStillIndexable) {
 nlohmann::json Ask(std::string_view method, std::string_view offsets) {
   nlohmann::json request{{"method", std::string(method)},
                          {"source", std::string(kSource)}};
-  if (!offsets.empty()) request["offsets"] = std::string(offsets);
+  if (!offsets.empty()) {
+    request["offsets"] = std::string(offsets);
+  }
   return Handle(request);
 }
 
@@ -91,7 +92,9 @@ TEST(FlowOffsets, TheServiceAnswersInTheBasisTheClientAskedFor) {
     EXPECT_EQ(left[at].at("kind"), right[at].at("kind"));
     const auto from = left[at].at("start").get<size_t>();
     EXPECT_EQ(right[at].at("start").get<size_t>(), index.Utf16Of(from));
-    if (right[at].at("start") != left[at].at("start")) differed = true;
+    if (right[at].at("start") != left[at].at("start")) {
+      differed = true;
+    }
   }
   // If nothing moved the test is not testing anything.
   EXPECT_TRUE(differed);

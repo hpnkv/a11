@@ -107,9 +107,9 @@ absl::StatusOr<std::string> Resolve(const ModelTable& table, std::string spec,
     if (std::filesystem::is_regular_file(spec, error)) {
       return spec;
     }
-    return absl::InvalidArgumentError(absl::StrCat(
-        "model must be a path to an existing file or one of: ",
-        absl::StrJoin(NamesOf(table), ", "), "; got: ", spec));
+    return absl::InvalidArgumentError(
+        absl::StrCat("model must be a path to an existing file or one of: ",
+                     absl::StrJoin(NamesOf(table), ", "), "; got: ", spec));
   }
 
   net::DownloadOptions options;
@@ -122,9 +122,8 @@ absl::StatusOr<std::string> Resolve(const ModelTable& table, std::string spec,
   // timeout is raised well past what a single request needs.
   options.fetch.timeout = absl::Minutes(30);
 
-  ABSL_ASSIGN_OR_RETURN(
-      const std::filesystem::path path,
-      net::Download(known->url, std::move(options)).Await());
+  ABSL_ASSIGN_OR_RETURN(const std::filesystem::path path,
+                        net::Download(known->url, std::move(options)).Await());
   return path.string();
 }
 
@@ -180,8 +179,9 @@ absl::StatusOr<std::string> ResolveVadModelBlocking(
 a11::Future<std::string> ResolveAsrModel(std::string spec,
                                          OnModelProgress on_progress) {
   return a11::Submit<std::string>(
-      [spec = std::move(spec), on_progress = std::move(on_progress)]() mutable
-      -> absl::StatusOr<std::string> {
+      [spec = std::move(spec),
+       on_progress =
+           std::move(on_progress)]() mutable -> absl::StatusOr<std::string> {
         return internal::ResolveAsrModelBlocking(std::move(spec),
                                                  std::move(on_progress));
       });
@@ -190,8 +190,9 @@ a11::Future<std::string> ResolveAsrModel(std::string spec,
 a11::Future<std::string> ResolveVadModel(std::string spec,
                                          OnModelProgress on_progress) {
   return a11::Submit<std::string>(
-      [spec = std::move(spec), on_progress = std::move(on_progress)]() mutable
-      -> absl::StatusOr<std::string> {
+      [spec = std::move(spec),
+       on_progress =
+           std::move(on_progress)]() mutable -> absl::StatusOr<std::string> {
         return internal::ResolveVadModelBlocking(std::move(spec),
                                                  std::move(on_progress));
       });

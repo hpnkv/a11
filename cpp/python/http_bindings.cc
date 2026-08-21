@@ -58,7 +58,7 @@ absl::StatusOr<net::HttpHeaders> HttpHeadersFromPython(
 
     net::HttpHeaders result;
     for (const py::handle item : entries) {
-      py::sequence pair = py::reinterpret_borrow<py::sequence>(item);
+      auto pair = py::reinterpret_borrow<py::sequence>(item);
       if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||
           !py::isinstance<py::str>(pair[1])) {
         return absl::InvalidArgumentError(
@@ -138,9 +138,9 @@ class PythonHttpCallback {
   }
 
   template <typename... Args>
-  a11::Task Call(Args&&... args) const {
+  [[nodiscard]] a11::Task Call(Args&&... args) const {
     py::gil_scoped_acquire acquire;
-    py::function callable = py::reinterpret_borrow<py::function>(callable_);
+    auto callable = py::reinterpret_borrow<py::function>(callable_);
     return CallPythonAsync<a11::Unit>(loop_, callable,
                                       std::forward<Args>(args)...);
   }
@@ -198,8 +198,8 @@ auto ValueWithoutGil(Operation&& operation) {
 }
 
 /// A progress callback as Python sees it: `Callable[[int, int], None] | None`.
-using OnProgressPython = py::typing::Optional<
-    py::typing::Callable<void(py::int_, py::int_)>>;
+using OnProgressPython =
+    py::typing::Optional<py::typing::Callable<void(py::int_, py::int_)>>;
 
 // GIL-reacquiring release for a Python type held as an ActionPortSchema
 // typeinfo handle. Mirrors the actions binding's own deleter so the referent
@@ -213,7 +213,7 @@ void ReleaseHttpTypeInfo(void* object) {
 
 std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
   Py_INCREF(cls.ptr());
-  return std::shared_ptr<void>(cls.ptr(), &ReleaseHttpTypeInfo);
+  return {cls.ptr(), &ReleaseHttpTypeInfo};
 }
 
 // One HTTP Action, ready to register. Both the Python export and
@@ -259,8 +259,7 @@ std::vector<HttpActionEntry> HttpActionEntries() {
     }
   };
   std::vector<HttpActionEntry> entries;
-  const auto add = [&](std::string_view name,
-                       a11::actions::ActionSchema schema,
+  const auto add = [&](std::string_view name, a11::actions::ActionSchema schema,
                        a11::actions::ActionHandler handler) {
     attach(schema);
     entries.push_back(HttpActionEntry{.name = name,
@@ -562,7 +561,7 @@ void BindHttp(py::module_& module) {
   // response stream. pybind11 renders a signature when def() runs, so both types
   // have to be registered by then or one of them has no name to render.
   py::class_<net::HttpPushedResponse> pushed_response(module,
-                                                     "HttpPushedResponse");
+                                                      "HttpPushedResponse");
   py::classh<net::Http2ResponseStream> response_stream(module,
                                                        "Http2ResponseStream");
 
@@ -740,118 +739,132 @@ void BindHttp(py::module_& module) {
       .def_property_readonly("stream_id", &net::Http2DuplexStream::stream_id,
                              "The HTTP/2 stream identifier.");
 
-  py::classh<net::Http2ResponseWriter>(module, "Http2ResponseWriter")
-      .def(
-          "send_headers",
-          [](net::Http2ResponseWriter& self, int status,
-             const py::typing::Optional<py::typing::Iterable<
-                 py::typing::Tuple<py::str, py::str>>>& headers) {
-            net::HttpHeaders converted =
-                ValueOrThrow(HttpHeadersFromPython(headers));
-            CallWithoutGil(
-                [&self, status, converted = std::move(converted)]() mutable {
+  py::
+      classh<net::Http2ResponseWriter>(module, "Http2ResponseWriter")
+          .def(
+              "send_headers",
+              [](net::Http2ResponseWriter& self, int status,
+                 const py::typing::Optional<py::typing::Iterable<
+                     py::typing::Tuple<py::str, py::str>>>& headers) {
+                net::HttpHeaders converted =
+                    ValueOrThrow(HttpHeadersFromPython(headers));
+                CallWithoutGil([&self, status,
+                                converted = std::move(converted)]() mutable {
                   return self.SendHeaders(status, std::move(converted));
                 });
-          },
-          "Send the response status and headers.", py::arg("status"),
-          py::arg("headers") = py::none())
-      .def(
-          "write",
-          [](net::Http2ResponseWriter& self, const py::object& data) {
-            std::string converted = ValueOrThrow(HttpBodyFromPython(data));
-            CallWithoutGil([&self, converted = std::move(converted)]() mutable {
-              return self.Write(std::move(converted));
-            });
-          },
-          "Write a chunk of response body data.", py::arg("data"))
-      .def(
-          "finish",
-          [](net::Http2ResponseWriter& self) {
-            CallWithoutGil([&self] { return self.Finish(); });
-          },
-          "Signal the end of the response body.")
-      .def(
-          "finish_with_trailers",
-          [](net::Http2ResponseWriter& self,
-             const py::typing::Optional<py::typing::Iterable<
-                 py::typing::Tuple<py::str, py::str>>>& trailers) {
-            net::HttpHeaders converted =
-                ValueOrThrow(HttpHeadersFromPython(trailers));
-            CallWithoutGil([&self, converted = std::move(converted)]() mutable {
-              return self.FinishWithTrailers(std::move(converted));
-            });
-          },
-          "End the response body with a trailer section -- the only place a "
-          "value computed while streaming (a checksum, a row count) can be "
-          "reported from. Equivalent to finish() when empty.",
-          py::arg("trailers") = py::none())
-      .def(
-          "push_promise",
-          [](net::Http2ResponseWriter& self, std::string method,
-             std::string path,
-             const py::typing::Optional<py::typing::Iterable<
-                 py::typing::Tuple<py::str, py::str>>>& headers) {
-            net::HttpHeaders converted =
-                ValueOrThrow(HttpHeadersFromPython(headers));
-            return ValueWithoutGil(
-                [&self, method = std::move(method), path = std::move(path),
-                 headers = std::move(converted)]() mutable {
-                  return self.PushPromise(std::move(method), std::move(path),
-                                          std::move(headers));
+              },
+              "Send the response status and headers.", py::arg("status"),
+              py::arg("headers") = py::none())
+          .def(
+              "write",
+              [](net::Http2ResponseWriter& self, const py::object& data) {
+                std::string converted = ValueOrThrow(HttpBodyFromPython(data));
+                CallWithoutGil(
+                    [&self, converted = std::move(converted)]() mutable {
+                      return self.Write(std::move(converted));
+                    });
+              },
+              "Write a chunk of response body data.", py::arg("data"))
+          .def(
+              "finish",
+              [](net::Http2ResponseWriter& self) {
+                CallWithoutGil([&self] { return self.Finish(); });
+              },
+              "Signal the end of the response body.")
+          .def(
+              "finish_with_trailers",
+              [](net::Http2ResponseWriter& self,
+                 const py::typing::Optional<py::typing::Iterable<
+                     py::typing::Tuple<py::str, py::str>>>& trailers) {
+                net::HttpHeaders converted =
+                    ValueOrThrow(HttpHeadersFromPython(trailers));
+                CallWithoutGil(
+                    [&self, converted = std::move(converted)]() mutable {
+                      return self.FinishWithTrailers(std::move(converted));
+                    });
+              },
+              "End the response body with a trailer section -- the only place "
+              "a "
+              "value computed while streaming (a checksum, a row count) can be "
+              "reported from. Equivalent to finish() when empty.",
+              py::arg("trailers") = py::none())
+          .def(
+              "push_promise",
+              [](net::Http2ResponseWriter& self, std::string method,
+                 std::string path,
+                 const py::typing::Optional<py::typing::Iterable<
+                     py::typing::Tuple<py::str, py::str>>>& headers) {
+                net::HttpHeaders converted =
+                    ValueOrThrow(HttpHeadersFromPython(headers));
+                return ValueWithoutGil(
+                    [&self, method = std::move(method), path = std::move(path),
+                     headers = std::move(converted)]() mutable {
+                      return self.PushPromise(std::move(method),
+                                              std::move(path),
+                                              std::move(headers));
+                    });
+              },
+              "Promise a response the client did not ask for, returning the "
+              "writer "
+              "for it. Must be called before this response is finished, and "
+              "fails "
+              "when the client did not enable push.",
+              py::arg("method"), py::arg("path"),
+              py::arg("headers") = py::none())
+          .def(
+              "send_response",
+              [](
+                  net::Http2ResponseWriter& self, int status,
+                  const py::typing::Optional<py::typing::
+                                                 Iterable<py::typing::
+                                                              Tuple<py::str, py::str>>>& headers,
+                  const py::object& body) {
+                net::HttpHeaders converted_headers =
+                    ValueOrThrow(HttpHeadersFromPython(headers));
+                std::string converted_body =
+                    ValueOrThrow(HttpBodyFromPython(body));
+                CallWithoutGil([&self, status,
+                                headers = std::move(converted_headers),
+                                body = std::move(converted_body)]() mutable {
+                  return self.SendResponse(status, std::move(headers),
+                                           std::move(body));
                 });
-          },
-          "Promise a response the client did not ask for, returning the writer "
-          "for it. Must be called before this response is finished, and fails "
-          "when the client did not enable push.",
-          py::arg("method"), py::arg("path"), py::arg("headers") = py::none())
-      .def(
-          "send_response",
-          [](net::Http2ResponseWriter& self, int status,
-             const py::typing::Optional<py::typing::Iterable<
-                 py::typing::Tuple<py::str, py::str>>>& headers,
-             const py::object& body) {
-            net::HttpHeaders converted_headers =
-                ValueOrThrow(HttpHeadersFromPython(headers));
-            std::string converted_body = ValueOrThrow(HttpBodyFromPython(body));
-            CallWithoutGil([&self, status,
-                            headers = std::move(converted_headers),
-                            body = std::move(converted_body)]() mutable {
-              return self.SendResponse(status, std::move(headers),
-                                       std::move(body));
-            });
-          },
-          "Send a complete response (status, headers, and body) at once.",
-          py::arg("status"), py::arg("headers") = py::none(),
-          py::arg("body") = py::bytes())
-      .def(
-          "abort",
-          [](net::Http2ResponseWriter& self,
-             const PyLike<NativeStatus>& status) {
-            absl::Status converted = StatusFromPython(status);
-            CallWithoutGil([&self, converted = std::move(converted)]() mutable {
-              return self.Abort(std::move(converted));
-            });
-          },
-          "Abort the response with the given status.", py::arg("status"))
-      .def(
-          "wait_done",
-          [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
-            return FutureToPython(WithoutGil([&] { return self->Done(); }));
-          },
-          "Await completion of the response.")
-      .def_property_readonly(
-          "done",
-          [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
-            return FutureToPython(WithoutGil([&] { return self->Done(); }));
-          },
-          "Future that completes when the response is done.")
-      .def_property_readonly("headers_sent",
-                             &net::Http2ResponseWriter::headers_sent,
-                             "Whether the response headers have been sent.")
-      .def_property_readonly("finished", &net::Http2ResponseWriter::finished,
-                             "Whether the response has been finished.")
-      .def_property_readonly("stream_id", &net::Http2ResponseWriter::stream_id,
-                             "The HTTP/2 stream identifier.");
+              },
+              "Send a complete response (status, headers, and body) at once.",
+              py::arg("status"), py::arg("headers") = py::none(),
+              py::arg("body") = py::bytes())
+          .def(
+              "abort",
+              [](net::Http2ResponseWriter& self,
+                 const PyLike<NativeStatus>& status) {
+                absl::Status converted = StatusFromPython(status);
+                CallWithoutGil(
+                    [&self, converted = std::move(converted)]() mutable {
+                      return self.Abort(std::move(converted));
+                    });
+              },
+              "Abort the response with the given status.", py::arg("status"))
+          .def(
+              "wait_done",
+              [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
+                return FutureToPython(WithoutGil([&] { return self->Done(); }));
+              },
+              "Await completion of the response.")
+          .def_property_readonly(
+              "done",
+              [](const std::shared_ptr<net::Http2ResponseWriter>& self) {
+                return FutureToPython(WithoutGil([&] { return self->Done(); }));
+              },
+              "Future that completes when the response is done.")
+          .def_property_readonly("headers_sent",
+                                 &net::Http2ResponseWriter::headers_sent,
+                                 "Whether the response headers have been sent.")
+          .def_property_readonly("finished",
+                                 &net::Http2ResponseWriter::finished,
+                                 "Whether the response has been finished.")
+          .def_property_readonly("stream_id",
+                                 &net::Http2ResponseWriter::stream_id,
+                                 "The HTTP/2 stream identifier.");
 
   py::classh<net::Http2Server>(module, "Http2Server")
       .def_static(
@@ -865,9 +878,9 @@ void BindHttp(py::module_& module) {
                   std::move(bind_address), port,
                   [callback = std::move(callback)](
                       net::HttpRequest request,
-                      std::shared_ptr<net::Http2ResponseWriter> response) {
-                    return callback->Call(std::move(request),
-                                          std::move(response));
+                      const std::shared_ptr<net::Http2ResponseWriter>&
+                          response) {
+                    return callback->Call(std::move(request), response);
                   },
                   options);
             });
@@ -1191,8 +1204,9 @@ void BindHttp(py::module_& module) {
                   PythonHttpCallback::Create(on_connect, "on_connect"));
               callback =
                   [owner = std::move(owner)](
-                      std::shared_ptr<net::HttpSseServerWireStream> stream) {
-                    return owner->Call(std::move(stream));
+                      const std::shared_ptr<net::HttpSseServerWireStream>&
+                          stream) {
+                    return owner->Call(stream);
                   };
             }
             return ValueWithoutGil([&] {
@@ -1244,8 +1258,9 @@ void BindHttp(py::module_& module) {
                              "Whether the scheme implies TLS.")
       .def_property_readonly("authority", &net::ParsedUrl::authority,
                              "The authority as a header value.")
-      .def_property_readonly("target", &net::ParsedUrl::target,
-                             "The request target: path and query, at least \"/\".")
+      .def_property_readonly(
+          "target", &net::ParsedUrl::target,
+          "The request target: path and query, at least \"/\".")
       .def_property_readonly("origin", &net::ParsedUrl::origin,
                              "scheme://authority, with no trailing slash.")
       .def("__str__", &net::ParsedUrl::ToString)
@@ -1268,8 +1283,7 @@ void BindHttp(py::module_& module) {
 
   py::class_<net::FetchOptions>(module, "FetchOptions")
       .def(py::init<>(), "Construct default fetch options.")
-      .def_readwrite("method", &net::FetchOptions::method,
-                     "Request method.")
+      .def_readwrite("method", &net::FetchOptions::method, "Request method.")
       .def_property(
           "headers",
           [](const net::FetchOptions& options) {
@@ -1327,8 +1341,7 @@ void BindHttp(py::module_& module) {
           "Final path; parent directories are created.")
       .def_readwrite("expected_sha1", &net::DownloadOptions::expected_sha1,
                      "Expected SHA-1 as hex, or empty to skip verification.")
-      .def_readwrite("fetch", &net::DownloadOptions::fetch,
-                     "Request settings.")
+      .def_readwrite("fetch", &net::DownloadOptions::fetch, "Request settings.")
       .def_property(
           "on_progress",
           [](const net::DownloadOptions&) -> OnProgressPython {
@@ -1345,14 +1358,13 @@ void BindHttp(py::module_& module) {
 
   module.def(
       "fetch",
-      [](std::string url, const py::typing::Optional<net::FetchOptions>&
-                              options) {
+      [](std::string url,
+         const py::typing::Optional<net::FetchOptions>& options) {
         net::FetchOptions converted = options.is_none()
                                           ? net::FetchOptions{}
                                           : options.cast<net::FetchOptions>();
-        return FutureToPython(WithoutGil([&] {
-          return net::Fetch(std::move(url), std::move(converted));
-        }));
+        return FutureToPython(WithoutGil(
+            [&] { return net::Fetch(std::move(url), std::move(converted)); }));
       },
       R"doc(Fetch a URL and buffer the whole response.
 
@@ -1371,8 +1383,9 @@ Examples:
       "download",
       [](std::string url, net::DownloadOptions options) {
         return FutureToPythonAs<py::str>(
-            WithoutGil(
-                [&] { return net::Download(std::move(url), std::move(options)); }),
+            WithoutGil([&] {
+              return net::Download(std::move(url), std::move(options));
+            }),
             [](const std::filesystem::path& path) -> py::object {
               return py::str(path.string());
             });
@@ -1387,17 +1400,15 @@ Returns the destination path. A destination that already exists and matches
   module.def(
       "file_sha1",
       [](std::string path) {
-        return ValueWithoutGil([&path] {
-          return net::FileSha1(std::filesystem::path(path));
-        });
+        return ValueWithoutGil(
+            [&path] { return net::FileSha1(std::filesystem::path(path)); });
       },
-      "Compute the SHA-1 of a file as lowercase hex. Blocks.",
-      py::arg("path"));
+      "Compute the SHA-1 of a file as lowercase hex. Blocks.", py::arg("path"));
 
   module.def(
       "get_http_header",
       [](const py::typing::List<py::typing::Tuple<py::str, py::str>>& headers,
-         std::string name) -> py::typing::Optional<py::str> {
+         const std::string& name) -> py::typing::Optional<py::str> {
         std::optional<std::string> value = net::GetHttpHeader(
             ValueOrThrow(HttpHeadersFromPython(headers)), name);
         if (!value.has_value()) {

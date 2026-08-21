@@ -110,7 +110,7 @@ constexpr std::size_t kTlsPlaintextBufferSize = 256 * 1024;
 
 // ALPN protocol identifiers in OpenSSL wire form (length-prefixed).
 inline constexpr unsigned char kH2Alpn[] = {2, 'h', '2'};
-inline constexpr unsigned char kHttp1Alpn[] = {8, 'h', 't', 't', 'p',
+inline constexpr unsigned char kHttp1Alpn[] = {8,   'h', 't', 't', 'p',
                                                '/', '1', '.', '1'};
 
 /**
@@ -138,8 +138,7 @@ struct ProtocolPolicy {
 
 // Whether the client's length-prefixed ALPN list offers @p protocol.
 inline bool AlpnListOffers(const unsigned char* absl_nonnull input,
-                           unsigned int length,
-                           std::string_view protocol) {
+                           unsigned int length, std::string_view protocol) {
   unsigned int offset = 0;
   while (offset < length) {
     const unsigned int entry_length = input[offset];
@@ -233,12 +232,12 @@ inline std::string DiscoverCaBundle() {
     return configured;
   }
   static constexpr std::array<const char*, 6> kCandidates = {
-      "/etc/ssl/cert.pem",                        // macOS, BSD
-      "/etc/ssl/certs/ca-certificates.crt",       // Debian, Ubuntu, Alpine
-      "/etc/pki/tls/certs/ca-bundle.crt",         // Fedora, RHEL
-      "/etc/ssl/ca-bundle.pem",                   // openSUSE
-      "/opt/homebrew/etc/openssl@3/cert.pem",     // Homebrew, Apple silicon
-      "/usr/local/etc/openssl@3/cert.pem",        // Homebrew, Intel
+      "/etc/ssl/cert.pem",                     // macOS, BSD
+      "/etc/ssl/certs/ca-certificates.crt",    // Debian, Ubuntu, Alpine
+      "/etc/pki/tls/certs/ca-bundle.crt",      // Fedora, RHEL
+      "/etc/ssl/ca-bundle.pem",                // openSUSE
+      "/opt/homebrew/etc/openssl@3/cert.pem",  // Homebrew, Apple silicon
+      "/usr/local/etc/openssl@3/cert.pem",     // Homebrew, Intel
   };
   for (const char* candidate : kCandidates) {
     std::error_code error;
@@ -297,7 +296,7 @@ inline absl::StatusOr<SslContext> CreateTlsContext(
       if (!bundle.empty()) {
         ERR_clear_error();
         if (SSL_CTX_load_verify_locations(context.get(), bundle.c_str(),
-                                         nullptr) == 1) {
+                                          nullptr) == 1) {
           trusted = 1;
         }
       }
@@ -321,8 +320,6 @@ inline bool IsIpAddress(std::string_view host) {
          inet_pton(AF_INET6, value.c_str(), &ipv6) == 1;
 }
 
-
-
 /**
  * How many application bytes may be queued for the loop before a writer waits.
  *
@@ -337,7 +334,6 @@ inline bool IsIpAddress(std::string_view host) {
  * the crossing, and well below anything that would matter as memory.
  */
 constexpr std::size_t kMaxQueuedWriteBytes = 4 * 1024 * 1024;
-
 
 /**
  * @brief TCP + optional TLS transport shared by the HTTP connections.
@@ -355,8 +351,11 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   }
 
   [[nodiscard]] a11::Task Ready() const { return ready_future_; }
+
   [[nodiscard]] bool connected() const { return connected_.load(); }
+
   [[nodiscard]] bool secure() const { return ssl_context_ != nullptr; }
+
   [[nodiscard]] void* absl_nonnull GetImpl() const { return tcp_.get(); }
 
   absl::Status Close(
@@ -393,10 +392,12 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
   virtual absl::Status SendProtocolPreamble() = 0;
   /// Tears down protocol-level state during close (finish streams, etc.).
   virtual void OnClose(const absl::Status& status) = 0;
+
   /// The ALPN protocols this client offers, in wire form (may be empty).
   virtual std::vector<unsigned char> ClientAlpnWire() const {
-    return std::vector<unsigned char>(std::begin(kH2Alpn), std::end(kH2Alpn));
+    return {std::begin(kH2Alpn), std::end(kH2Alpn)};
   }
+
   /// Validates/records the ALPN protocol the TLS peer negotiated.
   virtual absl::Status OnAlpnNegotiated(std::string_view protocol) {
     if (protocol != "h2") {
@@ -516,9 +517,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     queued_write_bytes_.fetch_add(bytes, std::memory_order_relaxed);
     const absl::Status posted = UvExecutor::Instance().Post(
         [self = std::move(self), bytes, write = std::move(write)]() mutable {
-          const absl::Status status = write();
-          self->queued_write_bytes_.fetch_sub(bytes,
-                                              std::memory_order_relaxed);
+          absl::Status status = write();
+          self->queued_write_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
           // Nobody is waiting for this status, so the connection carries it:
           // closing is what tells every stream on it, which is the same thing
           // that happens when the socket itself fails.
@@ -674,7 +674,9 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
 
   // Accessors for derived protocol connections.
   [[nodiscard]] bool server() const { return server_; }
+
   [[nodiscard]] const Http2Options& options() const { return options_; }
+
   [[nodiscard]] bool closed() const { return closed_; }
 
   const std::shared_ptr<uvw::tcp_handle> tcp_;
@@ -728,7 +730,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
       if (!alpn.empty() &&
           SSL_set_alpn_protos(ssl_, alpn.data(),
                               static_cast<unsigned int>(alpn.size())) != 0) {
-        return absl::InternalError(OpenSslErrorMessage("Configuring HTTP ALPN"));
+        return absl::InternalError(
+            OpenSslErrorMessage("Configuring HTTP ALPN"));
       }
       if (tls_server_name_.empty()) {
         return absl::InvalidArgumentError(
@@ -784,8 +787,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
         const unsigned int attempt = static_cast<unsigned int>(std::min(
             remaining,
             static_cast<size_t>(std::numeric_limits<unsigned int>::max())));
-        const int accepted = tcp_->try_write(const_cast<char*>(data + offset),
-                                             attempt);
+        const int accepted =
+            tcp_->try_write(const_cast<char*>(data + offset), attempt);
         if (accepted > 0) {
           offset += static_cast<size_t>(accepted);
           continue;
@@ -826,7 +829,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
       if (length <= 0) {
         return TlsError("Reading encrypted TLS output");
       }
-      ABSL_RETURN_IF_ERROR(WriteTcp(buffer.data(), static_cast<size_t>(length)));
+      ABSL_RETURN_IF_ERROR(
+          WriteTcp(buffer.data(), static_cast<size_t>(length)));
     }
     return absl::OkStatus();
   }
@@ -844,8 +848,8 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
       const unsigned char* protocol = nullptr;
       unsigned int protocol_length = 0;
       SSL_get0_alpn_selected(ssl_, &protocol, &protocol_length);
-      const std::string_view negotiated(
-          reinterpret_cast<const char*>(protocol), protocol_length);
+      const std::string_view negotiated(reinterpret_cast<const char*>(protocol),
+                                        protocol_length);
       ABSL_RETURN_IF_ERROR(OnAlpnNegotiated(negotiated));
       if (!server_ && options_.tls.verify_peer) {
         const long verification = SSL_get_verify_result(ssl_);

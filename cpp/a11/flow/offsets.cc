@@ -51,7 +51,9 @@ std::pair<size_t, size_t> TextIndex::Step(size_t offset) const {
   }
   // A malformed sequence is one byte, so a document that is not quite UTF-8 is
   // still indexed rather than walked off the end of.
-  if (offset + width > text_.size()) width = 1;
+  if (offset + width > text_.size()) {
+    width = 1;
+  }
   return {width, size};
 }
 
@@ -64,10 +66,9 @@ size_t TextIndex::Utf16Of(size_t byte_offset) const {
   const size_t wanted = std::min(byte_offset, text_.size());
   // The line whose start is at or before the offset, then a walk along it: the
   // whole point of holding the per-line totals.
-  const auto found = std::upper_bound(line_starts_.begin(), line_starts_.end(),
-                                      wanted);
-  const size_t line =
-      static_cast<size_t>(found - line_starts_.begin()) - 1;
+  const auto found =
+      std::upper_bound(line_starts_.begin(), line_starts_.end(), wanted);
+  const size_t line = static_cast<size_t>(found - line_starts_.begin()) - 1;
   size_t units = line_utf16_starts_[line];
   size_t at = line_starts_[line];
   while (at < wanted) {
@@ -95,10 +96,9 @@ size_t TextIndex::ByteOf(size_t utf16_offset) const {
 
 std::pair<int, int> TextIndex::PositionOf(size_t byte_offset) const {
   const size_t wanted = std::min(byte_offset, text_.size());
-  const auto found = std::upper_bound(line_starts_.begin(), line_starts_.end(),
-                                      wanted);
-  const size_t line =
-      static_cast<size_t>(found - line_starts_.begin()) - 1;
+  const auto found =
+      std::upper_bound(line_starts_.begin(), line_starts_.end(), wanted);
+  const size_t line = static_cast<size_t>(found - line_starts_.begin()) - 1;
   size_t units = 0;
   size_t at = line_starts_[line];
   while (at < wanted) {
@@ -110,8 +110,12 @@ std::pair<int, int> TextIndex::PositionOf(size_t byte_offset) const {
 }
 
 size_t TextIndex::ByteOfPosition(int line, int character) const {
-  if (line < 0) return 0;
-  if (static_cast<size_t>(line) >= line_starts_.size()) return text_.size();
+  if (line < 0) {
+    return 0;
+  }
+  if (static_cast<size_t>(line) >= line_starts_.size()) {
+    return text_.size();
+  }
   size_t at = line_starts_[static_cast<size_t>(line)];
   const size_t end = LineEnd(static_cast<size_t>(line));
   size_t units = 0;
@@ -141,10 +145,14 @@ std::string_view OffsetBasisName(OffsetBasis basis) {
 
 void RebaseToUtf16(nlohmann::json& answer, const TextIndex& index) {
   if (answer.is_array()) {
-    for (nlohmann::json& item : answer) RebaseToUtf16(item, index);
+    for (nlohmann::json& item : answer) {
+      RebaseToUtf16(item, index);
+    }
     return;
   }
-  if (!answer.is_object()) return;
+  if (!answer.is_object()) {
+    return;
+  }
   for (auto& [key, value] : answer.items()) {
     if (value.is_number_unsigned() && IsOffsetField(key)) {
       value = index.Utf16Of(value.get<size_t>());

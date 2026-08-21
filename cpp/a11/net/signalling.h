@@ -48,13 +48,13 @@ enum class SignallingMessageType {
 struct SignallingMessage {
   SignallingMessageType type =
       SignallingMessageType::kDescription;  ///< Payload discriminator.
-  std::string sender;            ///< Identity of the originating peer.
-  std::string recipient;         ///< Identity of the target peer.
-  std::string description;       ///< SDP offer or answer text.
-  std::string description_type;  ///< SDP type, such as offer or answer.
-  std::string candidate;         ///< ICE candidate text.
-  std::string mid;               ///< Media/data-section id for the candidate.
-  absl::Status error;            ///< Negotiation failure for kError messages.
+  std::string sender = {};            ///< Identity of the originating peer.
+  std::string recipient;              ///< Identity of the target peer.
+  std::string description = {};       ///< SDP offer or answer text.
+  std::string description_type = {};  ///< SDP type, such as offer or answer.
+  std::string candidate = {};         ///< ICE candidate text.
+  std::string mid = {};     ///< Media/data-section id for the candidate.
+  absl::Status error = {};  ///< Negotiation failure for kError messages.
   /**
    * @brief Capability tokens the sender supports; a peer echoes those it shares.
    *
@@ -63,7 +63,7 @@ struct SignallingMessage {
    * stays off rather than breaking the connection, and no version negotiation is
    * needed. Currently only `a11-pmtud/1` (path MTU probing).
    */
-  std::vector<std::string> capabilities;
+  std::vector<std::string> capabilities = {};
 
   /** @return OK if the fields are consistent for this message's type. */
   absl::Status Validate() const;

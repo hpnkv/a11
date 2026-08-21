@@ -91,7 +91,9 @@ std::string PortTable(const catalogue::ActionInfo& action) {
             "Inputs", &action.inputs},
         std::pair<std::string_view, const std::vector<catalogue::PortInfo>*>{
             "Outputs", &action.outputs}}) {
-    if (ports->empty()) continue;
+    if (ports->empty()) {
+      continue;
+    }
     absl::StrAppend(&out, "\n**", heading, "**\n\n");
     for (const catalogue::PortInfo& port : *ports) {
       absl::StrAppend(&out, "- `", port.name, "`: ", port.type,
@@ -108,11 +110,13 @@ std::string PortTable(const catalogue::ActionInfo& action) {
 
 /// The fields of a shape, as one block of Markdown.
 std::string FieldTable(const DtoPlan& shape) {
-  if (shape.fields.empty()) return "";
+  if (shape.fields.empty()) {
+    return "";
+  }
   std::string out = "\n**Fields**\n\n";
   for (const FieldPlan& field : shape.fields) {
-    absl::StrAppend(&out, "- `", field.name, "`: ",
-                    field.declared.empty() ? field.type : field.declared,
+    absl::StrAppend(&out, "- `", field.name,
+                    "`: ", field.declared.empty() ? field.type : field.declared,
                     field.required ? " *(required)*" : "");
     if (!field.description.empty()) {
       absl::StrAppend(&out, " — ", field.description);
@@ -144,7 +148,9 @@ std::vector<size_t> DeclarationStarts(const ParseResult& parsed) {
 /// Whether `offset` falls in the declaration that starts at `start`.
 bool Within(const std::vector<size_t>& starts, size_t start, size_t offset,
             size_t size) {
-  if (offset < start) return false;
+  if (offset < start) {
+    return false;
+  }
   size_t end = size;
   for (const size_t boundary : starts) {
     if (boundary > start) {
@@ -161,17 +167,21 @@ bool Within(const std::vector<size_t>& starts, size_t start, size_t offset,
 /// the place this came from, and both want the name: landing on the `struct`
 /// keyword is landing one word to the left of the thing that was asked about.
 const syntax::Word* absl_nullable NameOfFlow(const ParseResult& parsed,
-                                              std::string_view name) {
+                                             std::string_view name) {
   for (const syntax::FlowDeclarationPtr& flow : parsed.flows) {
-    if (flow->name.text == name) return &flow->name;
+    if (flow->name.text == name) {
+      return &flow->name;
+    }
   }
   return nullptr;
 }
 
 const syntax::Word* absl_nullable NameOfShape(const ParseResult& parsed,
-                                               std::string_view name) {
+                                              std::string_view name) {
   for (const syntax::DtoDeclarationPtr& shape : parsed.dtos) {
-    if (shape->name.text == name) return &shape->name;
+    if (shape->name.text == name) {
+      return &shape->name;
+    }
   }
   return nullptr;
 }
@@ -180,7 +190,9 @@ const syntax::Word* absl_nullable NameOfShape(const ParseResult& parsed,
 const SemanticToken* absl_nullable TokenAt(
     const std::vector<SemanticToken>& tokens, size_t offset) {
   for (const SemanticToken& token : tokens) {
-    if (offset >= token.start && offset < token.end) return &token;
+    if (offset >= token.start && offset < token.end) {
+      return &token;
+    }
   }
   return nullptr;
 }
@@ -190,8 +202,8 @@ const SemanticToken* absl_nullable TokenAt(
 /// `a11.sdk.AudioBuffer` is five tokens and one name, and a caret anywhere in it
 /// is a caret on the type -- so the whole chain is gathered rather than the one
 /// word the caret happens to be in.
-std::pair<std::string, size_t> DottedAround(
-    const std::vector<Token>& tokens, size_t index) {
+std::pair<std::string, size_t> DottedAround(const std::vector<Token>& tokens,
+                                            size_t index) {
   size_t first = index;
   while (first >= 2 && tokens[first - 1].kind == TokenKind::kDot &&
          tokens[first - 2].IsWord()) {
@@ -203,7 +215,9 @@ std::pair<std::string, size_t> DottedAround(
     last += 2;
   }
   std::string name;
-  for (size_t at = first; at <= last; ++at) absl::StrAppend(&name, tokens[at].text);
+  for (size_t at = first; at <= last; ++at) {
+    absl::StrAppend(&name, tokens[at].text);
+  }
   return {name, first};
 }
 
@@ -327,7 +341,9 @@ std::string_view RoleName(vocabulary::WordRole role) {
 std::string KindPhrase(SemanticKind kind) {
   std::string phrase(SemanticKindName(kind));
   for (char& letter : phrase) {
-    if (letter == '-') letter = ' ';
+    if (letter == '-') {
+      letter = ' ';
+    }
   }
   return phrase;
 }
@@ -348,12 +364,14 @@ std::string_view DurationUnitOf(std::string_view text) {
 
 std::string DocMarkdown(std::string_view name, std::string_view kind,
                         const vocabulary::WordDoc& doc) {
-  std::string out = absl::StrCat("`", name, "` — ", kind, "\n\n", doc.summary,
-                                 "\n");
+  std::string out =
+      absl::StrCat("`", name, "` — ", kind, "\n\n", doc.summary, "\n");
   if (!doc.takes.empty()) {
     absl::StrAppend(&out, "\n**Takes:** ", doc.takes, ".\n");
   }
-  if (!doc.detail.empty()) absl::StrAppend(&out, "\n", doc.detail, "\n");
+  if (!doc.detail.empty()) {
+    absl::StrAppend(&out, "\n", doc.detail, "\n");
+  }
   if (!doc.example.empty()) {
     absl::StrAppend(&out, "\n**Example:** `", doc.example, "`\n");
   }
@@ -362,12 +380,15 @@ std::string DocMarkdown(std::string_view name, std::string_view kind,
 
 }  // namespace
 
-
 std::string WordMarkdown(std::string_view name, vocabulary::WordRole role) {
   const std::string canonical = vocabulary::Canonical(name);
   const vocabulary::WordDoc* doc = vocabulary::Documentation(role, canonical);
-  if (doc == nullptr) doc = vocabulary::AnyDocumentation(canonical);
-  if (doc == nullptr) return "";
+  if (doc == nullptr) {
+    doc = vocabulary::AnyDocumentation(canonical);
+  }
+  if (doc == nullptr) {
+    return "";
+  }
   return DocMarkdown(name, RoleName(role), *doc);
 }
 
@@ -396,7 +417,9 @@ std::string PortMarkdown(std::string_view name, std::string_view type,
                          bool required, bool unary,
                          std::string_view description) {
   std::string out = absl::StrCat("`", name, "` — an input port\n\n");
-  if (!description.empty()) absl::StrAppend(&out, description, "\n");
+  if (!description.empty()) {
+    absl::StrAppend(&out, description, "\n");
+  }
   absl::StrAppend(&out, "\n**Takes:** ", type.empty() ? "any" : type,
                   unary ? " (one value)" : " (a stream)",
                   required ? ", required" : ", optional", ".\n");
@@ -406,15 +429,15 @@ std::string PortMarkdown(std::string_view name, std::string_view type,
 std::string FlowMarkdown(const FlowPlan& flow) {
   std::string ports;
   for (const PortPlan& port : flow.ports) {
-    absl::StrAppend(&ports, "- `", port.name, "`: ",
-                    port.declared.empty() ? port.type : port.declared,
-                    port.direction == syntax::PortDirection::kInput ? " (in)"
-                                                                    : " (out)",
-                    "\n");
+    absl::StrAppend(
+        &ports, "- `", port.name,
+        "`: ", port.declared.empty() ? port.type : port.declared,
+        port.direction == syntax::PortDirection::kInput ? " (in)" : " (out)",
+        "\n");
   }
   return absl::StrCat("`", flow.name, "` — a flow of this file\n\n",
-                      flow.description, ports.empty() ? "" : "\n\n**Ports**\n\n",
-                      ports);
+                      flow.description,
+                      ports.empty() ? "" : "\n\n**Ports**\n\n", ports);
 }
 
 std::string ShapeMarkdown(const DtoPlan& shape) {
@@ -472,7 +495,8 @@ std::string_view SymbolClassName(SymbolClass kind) {
 /// has no block to match braces around: a port, a field, a bound step. Their range
 /// and selection are usually the same token, and this is what makes "usually" into
 /// "always".
-Range Widened(const LineIndex& lines, const Range& range, const Range& selection) {
+Range Widened(const LineIndex& lines, const Range& range,
+              const Range& selection) {
   return lines.Between(std::min(range.start.offset, selection.start.offset),
                        std::max(range.end.offset, selection.end.offset));
 }
@@ -481,7 +505,9 @@ Range ConstructRange(const LineIndex& lines, absl::Span<const Token> tokens,
                      const syntax::Location& opened, const Range& selection) {
   size_t end = opened.end;
   size_t at = 0;
-  while (at < tokens.size() && tokens[at].start < opened.start) ++at;
+  while (at < tokens.size() && tokens[at].start < opened.start) {
+    ++at;
+  }
   int depth = 0;
   for (; at < tokens.size() && tokens[at].kind != TokenKind::kEnd; ++at) {
     if (tokens[at].kind == TokenKind::kLeftBrace) {
@@ -528,14 +554,17 @@ std::vector<DocumentSymbol> Symbols(std::string_view source) {
       one.selection = RangeOf(lines, field->name.location);
       // A field is one line and has no block, so its extent is the line it is
       // written on -- but its name still has to be inside it.
-      one.range = Widened(lines, RangeOf(lines, field->location), one.selection);
+      one.range =
+          Widened(lines, RangeOf(lines, field->location), one.selection);
       shape.children.push_back(std::move(one));
     }
     found.push_back(std::move(shape));
   }
 
   for (const ResolvedFlow& flow : resolved.flows) {
-    if (flow.declaration == nullptr) continue;
+    if (flow.declaration == nullptr) {
+      continue;
+    }
     DocumentSymbol one;
     one.name = flow.plan.name;
     one.kind = SymbolClass::kFlow;
@@ -550,7 +579,9 @@ std::vector<DocumentSymbol> Symbols(std::string_view source) {
     // implicit ones are the language's, not the author's, and nobody navigates
     // to `index`.
     for (const Symbol& symbol : flow.symbols) {
-      if (symbol.implicit) continue;
+      if (symbol.implicit) {
+        continue;
+      }
       if (symbol.kind == SymbolKind::kInputPort ||
           symbol.kind == SymbolKind::kOutputPort) {
         continue;  // already listed, with its declared type
@@ -575,7 +606,9 @@ Description Describe(std::string_view source, size_t offset,
   const LexResult lexed = Lex(source, LexOptions{.keep_comments = true});
   const std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
   const SemanticToken* here = TokenAt(semantic, offset);
-  if (here == nullptr) return about;
+  if (here == nullptr) {
+    return about;
+  }
   // A line break is a token -- it is what ends a statement -- but it is not
   // something anybody hovers, and "`\n` -- punctuation" is a worse answer than
   // no answer.
@@ -586,7 +619,9 @@ Description Describe(std::string_view source, size_t offset,
 
   size_t index = 0;
   for (size_t at = 0; at < semantic.size(); ++at) {
-    if (&semantic[at] == here) index = at;
+    if (&semantic[at] == here) {
+      index = at;
+    }
   }
   about.found = true;
   about.text = std::string(source.substr(here->start, here->end - here->start));
@@ -606,13 +641,17 @@ Description Describe(std::string_view source, size_t offset,
   // answering with whichever came first in the file would describe a port the
   // reader cannot see and offer a definition in the wrong flow.
   for (const ResolvedFlow& flow : resolved.flows) {
-    if (flow.declaration == nullptr) continue;
+    if (flow.declaration == nullptr) {
+      continue;
+    }
     if (!Within(starts, flow.declaration->location.start, here->start,
                 source.size())) {
       continue;
     }
     for (const Symbol& symbol : flow.symbols) {
-      if (symbol.name != about.text || symbol.implicit) continue;
+      if (symbol.name != about.text || symbol.implicit) {
+        continue;
+      }
       about.kind = ClassOf(symbol.kind);
       about.summary =
           absl::StrCat("`", about.text, "` — ", SymbolKindName(symbol.kind),
@@ -622,10 +661,10 @@ Description Describe(std::string_view source, size_t offset,
       if (symbol.kind == SymbolKind::kCall) {
         absl::StrAppend(&about.summary, ", running `", symbol.action, "`");
       }
-      if (const PortPlan* port = flow.plan.Port(
-              symbol.name, symbol.kind == SymbolKind::kInputPort
-                               ? syntax::PortDirection::kInput
-                               : syntax::PortDirection::kOutput);
+      if (const PortPlan* port =
+              flow.plan.Port(symbol.name, symbol.kind == SymbolKind::kInputPort
+                                              ? syntax::PortDirection::kInput
+                                              : syntax::PortDirection::kOutput);
           port != nullptr) {
         about.detail = port->description;
         absl::StrAppend(&about.summary, ": ",
@@ -633,7 +672,9 @@ Description Describe(std::string_view source, size_t offset,
       }
       break;
     }
-    if (about.has_definition) break;
+    if (about.has_definition) {
+      break;
+    }
   }
 
   // A shape, whether this file declared it or the host knows it. Both read the
@@ -654,9 +695,9 @@ Description Describe(std::string_view source, size_t offset,
       about.text = dotted;
       about.range = lines.Between(lexed.tokens[first].start, here->end);
       about.kind = SymbolClass::kDto;
-      about.summary = absl::StrCat("`", dotted, "` — a struct of ",
-                                   shape->fields.size(), " field",
-                                   shape->fields.size() == 1 ? "" : "s");
+      about.summary =
+          absl::StrCat("`", dotted, "` — a struct of ", shape->fields.size(),
+                       " field", shape->fields.size() == 1 ? "" : "s");
       about.detail = shape->description;
       about.markdown = ShapeMarkdown(*shape);
       about.origin = from_host;
@@ -670,9 +711,8 @@ Description Describe(std::string_view source, size_t offset,
   }
 
   // An action, whether a flow of this file or one the world has.
-  if (!about.has_definition &&
-      (here->kind == SemanticKind::kActionName ||
-       here->kind == SemanticKind::kFlowName)) {
+  if (!about.has_definition && (here->kind == SemanticKind::kActionName ||
+                                here->kind == SemanticKind::kFlowName)) {
     if (const FlowPlan* sibling = resolved.program.Flow(about.text);
         sibling != nullptr) {
       about.kind = SymbolClass::kFlow;
@@ -711,13 +751,14 @@ Description Describe(std::string_view source, size_t offset,
   // `vocabulary.cc` now, with the rest of the language.
   if (about.summary.empty()) {
     for (const vocabulary::WordRole role : RolesFor(here->kind)) {
-      const std::string key =
-          role == vocabulary::WordRole::kSymbol ? about.text
-          : here->kind == SemanticKind::kDuration
-              ? std::string(DurationUnitOf(about.text))
-              : word;
+      const std::string key = role == vocabulary::WordRole::kSymbol ? about.text
+                              : here->kind == SemanticKind::kDuration
+                                  ? std::string(DurationUnitOf(about.text))
+                                  : word;
       const vocabulary::WordDoc* doc = vocabulary::Documentation(role, key);
-      if (doc == nullptr) continue;
+      if (doc == nullptr) {
+        continue;
+      }
       // A brace is not "an operator" and a `|` is not "a punctuation": for a
       // mark the token's own kind is the more useful word, and it is what the
       // reader sees the colour of.

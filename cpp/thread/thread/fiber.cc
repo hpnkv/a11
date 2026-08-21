@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <algorithm>
-#include <atomic>
-#include <mutex>
-#include <vector>
-#include <absl/base/no_destructor.h>
 #include "thread/fiber.h"
 
+#include <algorithm>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <vector>
 
+#include <absl/base/no_destructor.h>
 #include <absl/log/check.h>
 
 #include "thread/boost_primitives.h"
@@ -96,7 +96,7 @@ Fiber::Fiber(Unstarted, InvocableWork work, Fiber* parent)
 Fiber::Fiber(Unstarted, InvocableWork work, TreeOptions&& tree_options)
     : work_(std::move(work)),
       parent_(nullptr),
-      tree_options_(std::move(tree_options)),
+      tree_options_(tree_options),
       next_sibling_(this),
       prev_sibling_(this) {
   ConstructBoostState();
@@ -272,8 +272,8 @@ void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
     return;
   }
   const std::lock_guard<std::mutex> lock(ReapMutex());
-  ReapQueue().push_back(
-      ReapEntry{.fiber = std::move(fiber), .on_finished = std::move(on_finished)});
+  ReapQueue().push_back(ReapEntry{.fiber = std::move(fiber),
+                                  .on_finished = std::move(on_finished)});
   // Written under the lock, so it always agrees with the queue as of the last
   // release. Readers are relaxed and so may lag by nanoseconds, which costs at
   // worst a drain deferred to the next pass round a worker's loop.
@@ -313,7 +313,8 @@ void ReapFinishedFibers() {
       return;
     }
     const size_t scan = std::min(kMaxScanPerPass, queue.size());
-    size_t at = cursor.fetch_add(scan, std::memory_order_relaxed) % queue.size();
+    size_t at =
+        cursor.fetch_add(scan, std::memory_order_relaxed) % queue.size();
     for (size_t seen = 0; seen < scan; ++seen) {
       if (at >= queue.size()) {
         at = 0;

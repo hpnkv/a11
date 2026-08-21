@@ -49,29 +49,36 @@ class FakePath {
               // only if the path carries it.
               return association_mtu_ <= limit_;
             },
-        .probe_burst =
-            [this](size_t payload, int count,
-                   absl::Time) -> std::optional<int> {
+        .probe_burst = [this](size_t payload, int count,
+                              absl::Time) -> std::optional<int> {
+          thread::MutexLock lock(&mu_);
+          for (int index = 0; index < count; ++index) {
+            probed_.push_back(payload);
+          }
+          if (answer_nothing_) {
+            return 0;
+          }
+          if (association_mtu_ > limit_) {
+            return 0;
+          }
+          // A size that only carries one packet at a time answers the first
+          // probe of a burst and drops the rest -- the real failure mode this
+          // search exists to reject.
+          if (association_mtu_ > sustained_limit_) {
+            return 1;
+          }
+          return count;
+        },
+        .pause =
+            [this] {
               thread::MutexLock lock(&mu_);
-              for (int index = 0; index < count; ++index) {
-                probed_.push_back(payload);
-              }
-              if (answer_nothing_) {
-                return 0;
-              }
-              if (association_mtu_ > limit_) {
-                return 0;
-              }
-              // A size that only carries one packet at a time answers the first
-              // probe of a burst and drops the rest -- the real failure mode this
-              // search exists to reject.
-              if (association_mtu_ > sustained_limit_) {
-                return 1;
-              }
-              return count;
+              ++pauses_;
             },
-        .pause = [this] { thread::MutexLock lock(&mu_); ++pauses_; },
-        .resume = [this] { thread::MutexLock lock(&mu_); ++resumes_; },
+        .resume =
+            [this] {
+              thread::MutexLock lock(&mu_);
+              ++resumes_;
+            },
         .fail =
             [this](absl::Status status) {
               thread::MutexLock lock(&mu_);
@@ -85,37 +92,45 @@ class FakePath {
     limit_ = limit;
     sustained_limit_ = limit;
   }
+
   /// A path that answers a single probe up to `limit` but only carries traffic up
   /// to `sustained`. Real: measured between 4096 and 4256 on the reference machine.
   void SetSustainedLimit(size_t sustained) {
     thread::MutexLock lock(&mu_);
     sustained_limit_ = sustained;
   }
+
   void AnswerNothing() {
     thread::MutexLock lock(&mu_);
     answer_nothing_ = true;
   }
+
   /// Makes the next `count` applies report "not connected yet".
   void RefuseApplies(int count) {
     thread::MutexLock lock(&mu_);
     refuse_applies_ = count;
   }
+
   size_t association_mtu() const {
     thread::MutexLock lock(&mu_);
     return association_mtu_;
   }
+
   size_t pauses() const {
     thread::MutexLock lock(&mu_);
     return pauses_;
   }
+
   size_t resumes() const {
     thread::MutexLock lock(&mu_);
     return resumes_;
   }
+
   std::vector<size_t> probed() const {
     thread::MutexLock lock(&mu_);
     return probed_;
   }
+
   absl::Status failure() const {
     thread::MutexLock lock(&mu_);
     return failure_;
@@ -312,7 +327,8 @@ TEST(PathMtuTest, StoppingLeavesTheAssociationAtAConfirmedSize) {
 // in the wire suite timed out.
 TEST(PathMtuTest, RejectsASizeThatOnlySurvivesOneProbeAtATime) {
   FakePath path(8192);
-  path.SetSustainedLimit(2048);  // Answers a lone probe far above what it carries.
+  path.SetSustainedLimit(
+      2048);  // Answers a lone probe far above what it carries.
   PathMtuDiscovery discovery(TestOptions(), path.Prober());
 
   const size_t confirmed = discovery.Search();

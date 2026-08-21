@@ -6,8 +6,8 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
-#include <type_traits>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -305,8 +305,7 @@ absl::StatusOr<SpeechRecognizerOptions> A11FromJson(
                         GetOr(json, "speech_pad_millis", v.speech_pad_millis));
   ABSL_ASSIGN_OR_RETURN(v.max_speech_seconds, GetOr(json, "max_speech_seconds",
                                                     v.max_speech_seconds));
-  ABSL_ASSIGN_OR_RETURN(v.vad_model,
-                        GetOr(json, "vad_model", v.vad_model));
+  ABSL_ASSIGN_OR_RETURN(v.vad_model, GetOr(json, "vad_model", v.vad_model));
   ABSL_ASSIGN_OR_RETURN(v.silero_threshold,
                         GetOr(json, "silero_threshold", v.silero_threshold));
   if (absl::Status valid = v.Validate(); !valid.ok()) {

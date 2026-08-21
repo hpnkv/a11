@@ -353,7 +353,7 @@ class PythonLoop {
   ~PythonLoop();
 
   /** Whether the loop is closed, so nothing posted to it will ever run. */
-  bool IsClosed() const;
+  [[nodiscard]] bool IsClosed() const;
 
   class Cancellation;
   absl::StatusOr<std::shared_ptr<Cancellation>> Schedule(
@@ -418,9 +418,9 @@ class PythonReferences {
   PythonReferences& operator=(const PythonReferences&) = delete;
   ~PythonReferences();
 
-  py::object loop() const;
-  py::object future() const;
-  py::object completion() const;
+  [[nodiscard]] py::object loop() const;
+  [[nodiscard]] py::object future() const;
+  [[nodiscard]] py::object completion() const;
   /**
    * Whether the calling thread is the one the loop runs on.
    *
@@ -429,7 +429,7 @@ class PythonReferences {
    * resolve its future directly rather than posting to the thread it is already
    * on, which would cost the awaiting coroutine an event-loop turn.
    */
-  bool OnLoopThread() const;
+  [[nodiscard]] bool OnLoopThread() const;
   void ClearWithGilHeld();
 
  private:
@@ -651,9 +651,9 @@ class AsyncPythonCallback {
   ~AsyncPythonCallback();
 
   template <typename... Args>
-  a11::Task Call(Args&&... args) const {
+  [[nodiscard]] a11::Task Call(Args&&... args) const {
     py::gil_scoped_acquire acquire;
-    py::function function = py::reinterpret_borrow<py::function>(callable_);
+    auto function = py::reinterpret_borrow<py::function>(callable_);
     return CallPythonAsync<a11::Unit>(loop_, function,
                                       std::forward<Args>(args)...);
   }
@@ -670,7 +670,7 @@ class AsyncPythonCallback {
 template <typename T>
 absl::StatusOr<T> DataFromPython(const py::handle& value) {
   try {
-    py::bytes packed = value.attr("to_msgpack")().cast<py::bytes>();
+    auto packed = value.attr("to_msgpack")().cast<py::bytes>();
     std::string bytes = packed;
     return T::FromMsgpack(bytes);
   } catch (py::error_already_set& error) {

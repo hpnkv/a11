@@ -77,7 +77,7 @@ struct Http2RequestBodyStream::State {
     return absl::OkStatus();
   }
 
-  void Finish(absl::Status completion) {
+  void Finish(const absl::Status& completion) {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
     {
       thread::MutexLock lock(&mu);
@@ -241,7 +241,7 @@ struct Http2ResponseStream::State {
     return absl::OkStatus();
   }
 
-  void Finish(absl::Status completion) {
+  void Finish(const absl::Status& completion) {
     std::shared_ptr<a11::Promise<std::optional<std::string>>> reader;
     std::shared_ptr<a11::Promise<std::optional<HttpPushedResponse>>>
         push_reader;

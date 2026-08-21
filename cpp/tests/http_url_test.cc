@@ -1,10 +1,10 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/net/http/url.h"
-
 #include <string>
 
 #include <gtest/gtest.h>
+
+#include "a11/net/http/url.h"
 
 namespace a11::net {
 namespace {
@@ -85,9 +85,9 @@ TEST(HttpUrlTest, RejectsUrlsItCannotDial) {
 }
 
 TEST(HttpUrlTest, RoundTripsThroughToString) {
-  for (const std::string text : {"http://example.com/a/b?c=d",
-                                 "https://example.com:8443/x",
-                                 "http://[::1]:9000/y?z=1"}) {
+  for (const std::string text :
+       {"http://example.com/a/b?c=d", "https://example.com:8443/x",
+        "http://[::1]:9000/y?z=1"}) {
     const auto url = ParseUrl(text);
     ASSERT_TRUE(url.ok()) << url.status();
     EXPECT_EQ(url->ToString(), text);

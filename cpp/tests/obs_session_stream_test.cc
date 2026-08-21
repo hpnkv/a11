@@ -87,26 +87,28 @@ TEST_F(SessionStreamSpanTest, StreamSpansSharePreassignedTraceAndRecordSends) {
 
   std::atomic<bool> first_done = false;
   std::atomic<bool> second_done = false;
-  ASSERT_TRUE(
-      first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&first_done]() {
-                first_done = true;
-                return a11::ReadyTask();
-              })
-          .Await()
-          .ok());
-  ASSERT_TRUE(
-      second
-          ->Accept(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&second_done]() {
-                second_done = true;
-                return a11::ReadyTask();
-              })
-          .Await()
-          .ok());
+  ASSERT_TRUE(first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&first_done]() {
+                        first_done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await()
+                  .ok());
+  ASSERT_TRUE(second
+                  ->Accept(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&second_done]() {
+                        second_done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await()
+                  .ok());
 
   data::WireMessage message{.node_fragments = {{
                                 .id = "node",

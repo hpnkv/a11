@@ -2,8 +2,6 @@
 
 #include "a11/nodes/node_map.h"
 
-#include "a11/nodes/internal/exception_guarded_factory.h"
-
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -17,6 +15,7 @@
 
 #include "a11/data/types.h"
 #include "a11/nodes/async_node.h"
+#include "a11/nodes/internal/exception_guarded_factory.h"
 #include "a11/stores/chunk_store.h"
 #include "a11/stores/local_chunk_store.h"
 #include "thread/boost_primitives.h"
@@ -49,6 +48,7 @@ absl::StatusOr<std::shared_ptr<NodeMap>> NodeMap::Create(
   return std::make_shared<MakeSharedEnabler>(std::move(factory));
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   {
@@ -122,7 +122,9 @@ std::vector<std::string> NodeMap::Ids() const {
   {
     thread::MutexLock lock(&mu_);
     ids.reserve(nodes_.size());
-    for (const auto& [id, node] : nodes_) ids.push_back(id);
+    for (const auto& [id, node] : nodes_) {
+      ids.push_back(id);
+    }
   }
   std::sort(ids.begin(), ids.end());
   return ids;

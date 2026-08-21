@@ -53,12 +53,12 @@ auto ThenAfterWaiting(Future<T> future, absl::Time deadline, Fn transform)
   if (future.IsReady()) {
     return CompletedFuture<U>(transform(future.Await()));
   }
-  return Submit<U>([future = std::move(future), deadline,
-                    transform = std::move(transform)]() mutable
-                   -> absl::StatusOr<U> {
-    const absl::StatusOr<T> result = future.Await(deadline);
-    return transform(result);
-  });
+  return Submit<U>(
+      [future = std::move(future), deadline,
+       transform = std::move(transform)]() mutable -> absl::StatusOr<U> {
+        const absl::StatusOr<T> result = future.Await(deadline);
+        return transform(result);
+      });
 }
 
 template <typename T>
@@ -115,7 +115,7 @@ inline Task SubmitTask(absl::AnyInvocable<absl::Status() &&> work,
         ABSL_RETURN_IF_ERROR(std::move(work)());
         return Unit{};
       },
-      std::move(tree_options));
+      tree_options);
 }
 
 }  // namespace a11

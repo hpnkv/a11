@@ -20,8 +20,6 @@
  * deadline, so a wedge fails the test instead of hanging the suite.
  */
 
-#include "a11/stores/chunk_store_reader.h"
-
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -41,6 +39,7 @@
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "a11/stores/chunk_store_reader.h"
 #include "a11/stores/local_chunk_store.h"
 #include "thread/fiber.h"
 
@@ -56,8 +55,8 @@ constexpr absl::Duration kReadDeadline = absl::Seconds(10);
 
 data::NodeFragment FinalFragment(std::string payload) {
   return data::NodeFragment{
-      .data = data::Chunk{.metadata = data::ChunkMetadata{.mimetype =
-                                                              "application/"
+      .data = data::Chunk{.metadata =
+                              data::ChunkMetadata{.mimetype = "application/"
                                                               "octet-stream"},
                           .data = std::move(payload)},
       .seq = 0,
@@ -175,10 +174,12 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesWrittenThroughTheirWriter) {
     reads.push_back((*node)->NextChunk());
     writes.push_back(a11::SubmitTask([owned = *node]() -> absl::Status {
       return owned
-          ->PutChunk(data::Chunk{.metadata = data::ChunkMetadata{
-                                     .mimetype = "application/octet-stream"},
-                                 .data = "reply"},
-                     std::nullopt, true)
+          ->PutChunk(
+              data::Chunk{.metadata =
+                              data::ChunkMetadata{
+                                  .mimetype = "application/octet-stream"},
+                          .data = "reply"},
+              std::nullopt, true)
           .Await()
           .status();
     }));
@@ -187,7 +188,8 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesWrittenThroughTheirWriter) {
   size_t wedged = 0;
   const absl::Time deadline = absl::Now() + kReadDeadline;
   for (a11::Future<std::optional<data::Chunk>>& read : reads) {
-    const absl::StatusOr<std::optional<data::Chunk>> value = read.Await(deadline);
+    const absl::StatusOr<std::optional<data::Chunk>> value =
+        read.Await(deadline);
     if (!value.ok() || !value->has_value()) {
       ++wedged;
     }
@@ -234,10 +236,12 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentStreamBoundNodesWakeTheirReaders) {
     reads.push_back((*node)->NextChunk());
     writes.push_back(a11::SubmitTask([owned = *node]() -> absl::Status {
       return owned
-          ->PutChunk(data::Chunk{.metadata = data::ChunkMetadata{
-                                     .mimetype = "application/octet-stream"},
-                                 .data = "reply"},
-                     std::nullopt, true)
+          ->PutChunk(
+              data::Chunk{.metadata =
+                              data::ChunkMetadata{
+                                  .mimetype = "application/octet-stream"},
+                          .data = "reply"},
+              std::nullopt, true)
           .Await()
           .status();
     }));
@@ -246,7 +250,8 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentStreamBoundNodesWakeTheirReaders) {
   size_t wedged = 0;
   const absl::Time deadline = absl::Now() + kReadDeadline;
   for (a11::Future<std::optional<data::Chunk>>& read : reads) {
-    const absl::StatusOr<std::optional<data::Chunk>> value = read.Await(deadline);
+    const absl::StatusOr<std::optional<data::Chunk>> value =
+        read.Await(deadline);
     if (!value.ok() || !value->has_value()) {
       ++wedged;
     }

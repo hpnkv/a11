@@ -33,7 +33,9 @@ std::string_view PathOnly(std::string_view path) {
 
 std::string_view QueryOfPath(std::string_view path) {
   const size_t query = path.find('?');
-  if (query == std::string_view::npos) return {};
+  if (query == std::string_view::npos) {
+    return {};
+  }
   std::string_view rest = path.substr(query + 1);
   const size_t fragment = rest.find('#');
   return fragment == std::string_view::npos ? rest : rest.substr(0, fragment);
@@ -43,13 +45,19 @@ bool MatchDescribePath(std::string_view path,
                        const DescribeEndpointOptions& options,
                        std::string* absl_nonnull name) {
   name->clear();
-  if (!options.Enabled()) return false;
-  if (path == options.path) return true;
+  if (!options.Enabled()) {
+    return false;
+  }
+  if (path == options.path) {
+    return true;
+  }
   // `/actions/` with nothing after it is the collection, spelled with a
   // trailing slash. Treating it as an action named "" would 404 on a URL that
   // plainly means the list.
   const std::string prefix = options.path + "/";
-  if (!absl::StartsWith(path, prefix)) return false;
+  if (!absl::StartsWith(path, prefix)) {
+    return false;
+  }
   *name = std::string(path.substr(prefix.size()));
   return true;
 }
@@ -80,9 +88,10 @@ std::optional<a11::Task> TryDescribeOverHttp(
         StatusCodeToHttp(body.status().code()), std::move(extra_headers),
         std::string(body.status().message())));
   }
-  SetHttpHeader(&extra_headers, "content-type", "application/json; charset=utf-8");
-  return Answered(response->SendResponse(200, std::move(extra_headers),
-                                         std::move(*body)));
+  SetHttpHeader(&extra_headers, "content-type",
+                "application/json; charset=utf-8");
+  return Answered(
+      response->SendResponse(200, std::move(extra_headers), std::move(*body)));
 }
 
 }  // namespace a11::net

@@ -39,7 +39,7 @@ namespace a11 {
 /// a failed result, and returns results in input order.
 template <typename T>
 std::vector<absl::StatusOr<T>> AwaitAll(
-    std::vector<Future<T>> futures,
+    const std::vector<Future<T>>& futures,
     absl::Time deadline = absl::InfiniteFuture()) {
   std::vector<absl::StatusOr<T>> results;
   results.reserve(futures.size());

@@ -159,8 +159,8 @@ std::uint16_t StatusCodeToWebSocket(absl::StatusCode code) {
   return 4001;
 }
 
-absl::Status MakeStatus(absl::StatusCode code, std::string message,
-                        nlohmann::json details) {
+absl::Status MakeStatus(absl::StatusCode code, const std::string& message,
+                        const nlohmann::json& details) {
   absl::Status status(code, std::move(message));
   if (details.is_array() && !details.empty()) {
     // Details reach here from a peer or from an application, so a string in
@@ -168,9 +168,8 @@ absl::Status MakeStatus(absl::StatusCode code, std::string message,
     // and becomes an error status.
     absl::StatusOr<std::string> encoded = DumpJson(details, "status details");
     if (!encoded.ok()) {
-      return absl::InternalError(
-          absl::StrCat("Failed to encode status details: ",
-                       encoded.status().message()));
+      return absl::InternalError(absl::StrCat(
+          "Failed to encode status details: ", encoded.status().message()));
     }
     status.SetPayload(kStatusDetailsPayloadUrl, absl::Cord(*encoded));
   }
@@ -245,9 +244,8 @@ absl::StatusOr<absl::Status> StatusFromJson(const nlohmann::json& value) {
     }
   }
   return absl::StatusOr<absl::Status>(
-      std::in_place,
-      MakeStatus(static_cast<absl::StatusCode>(raw_code),
-                 value["message"].get<std::string>(), std::move(details)));
+      std::in_place, MakeStatus(static_cast<absl::StatusCode>(raw_code),
+                                value["message"].get<std::string>(), details));
 }
 
 }  // namespace a11

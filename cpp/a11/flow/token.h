@@ -88,11 +88,11 @@ struct Token {
   /// A `kDuration`'s value.
   absl::Duration duration;
 
-  bool IsWord() const { return kind == TokenKind::kWord; }
+  [[nodiscard]] bool IsWord() const { return kind == TokenKind::kWord; }
 
   /// Whether a line break, a `}` or the end of the file is here: the three ways
   /// a statement can end.
-  bool EndsStatement() const {
+  [[nodiscard]] bool EndsStatement() const {
     return kind == TokenKind::kNewline || kind == TokenKind::kRightBrace ||
            kind == TokenKind::kEnd;
   }

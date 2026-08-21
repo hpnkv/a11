@@ -23,6 +23,7 @@
 #include "a11/net/internal/http1_codec.h"
 #include "a11/net/internal/http_streams.h"
 #include "a11/status.h"
+#include "absl/strings/match.h"
 
 namespace a11::net {
 namespace {
@@ -43,10 +44,10 @@ bool WantsClose(std::string_view version, const HttpHeaders& headers) {
   if (connection.has_value()) {
     std::string lowered = *connection;
     absl::AsciiStrToLower(&lowered);
-    if (lowered.find("close") != std::string::npos) {
+    if (absl::StrContains(lowered, "close")) {
       return true;
     }
-    if (lowered.find("keep-alive") != std::string::npos) {
+    if (absl::StrContains(lowered, "keep-alive")) {
       return false;
     }
   }
@@ -63,6 +64,7 @@ absl::StatusOr<std::shared_ptr<Http1Connection>> Http1Connection::Create(
   if (tcp == nullptr) {
     return absl::InvalidArgumentError("TCP handle must not be null");
   }
+
   struct MakeSharedEnabler final : Http1Connection {
     MakeSharedEnabler(std::shared_ptr<uvw::tcp_handle> tcp, bool server,
                       Http2RequestHandler handler, Http2Options options,
@@ -75,6 +77,7 @@ absl::StatusOr<std::shared_ptr<Http1Connection>> Http1Connection::Create(
                           std::move(tls_server_name), std::move(on_closed),
                           std::move(prebuffered)) {}
   };
+
   auto connection = std::make_shared<MakeSharedEnabler>(
       std::move(tcp), server, std::move(handler), std::move(options),
       std::move(tls_context), std::move(tls_server_name), std::move(on_closed),
@@ -83,11 +86,13 @@ absl::StatusOr<std::shared_ptr<Http1Connection>> Http1Connection::Create(
   return connection;
 }
 
-Http1Connection::Http1Connection(
-    std::shared_ptr<uvw::tcp_handle> tcp, bool server,
-    Http2RequestHandler handler, Http2Options options,
-    internal::SslContext tls_context, std::string tls_server_name,
-    std::function<void(HttpTransport*)> on_closed, std::string prebuffered)
+Http1Connection::Http1Connection(std::shared_ptr<uvw::tcp_handle> tcp,
+                                 bool server, Http2RequestHandler handler,
+                                 Http2Options options,
+                                 internal::SslContext tls_context,
+                                 std::string tls_server_name,
+                                 std::function<void(HttpTransport*)> on_closed,
+                                 std::string prebuffered)
     : HttpTransport(std::move(tcp), server, std::move(options),
                     std::move(tls_context), std::move(tls_server_name),
                     std::move(on_closed)),
@@ -106,8 +111,7 @@ absl::Status Http1Connection::Initialize() {
 }
 
 std::vector<unsigned char> Http1Connection::ClientAlpnWire() const {
-  return std::vector<unsigned char>(std::begin(internal::kHttp1Alpn),
-                                    std::end(internal::kHttp1Alpn));
+  return {std::begin(internal::kHttp1Alpn), std::end(internal::kHttp1Alpn)};
 }
 
 absl::Status Http1Connection::OnAlpnNegotiated(std::string_view protocol) {
@@ -138,13 +142,13 @@ absl::Status Http1Connection::ServerParse() {
           internal::FindHeaderBlockEnd(inbuf_);
       if (!head_end.has_value()) {
         if (inbuf_.size() > options().max_buffered_request_bytes) {
-          return absl::ResourceExhaustedError("HTTP/1.1 request head too large");
+          return absl::ResourceExhaustedError(
+              "HTTP/1.1 request head too large");
         }
         return absl::OkStatus();  // Await the rest of the head.
       }
-      absl::StatusOr<Http1RequestHead> head =
-          internal::ParseRequestHead(std::string_view(inbuf_).substr(
-              0, *head_end));
+      absl::StatusOr<Http1RequestHead> head = internal::ParseRequestHead(
+          std::string_view(inbuf_).substr(0, *head_end));
       inbuf_.erase(0, *head_end);
       if (!head.ok()) {
         return head.status();  // Malformed request: fail the connection.
@@ -172,9 +176,8 @@ absl::Status Http1Connection::ServerParse() {
                     ws_key.has_value();
       if (ws_upgrade_) {
         ws_key_ = *ws_key;
-        request_body_state_ =
-            std::make_shared<Http2RequestBodyStream::State>(
-                options().max_buffered_request_bytes);
+        request_body_state_ = std::make_shared<Http2RequestBodyStream::State>(
+            options().max_buffered_request_bytes);
         return DispatchRequest();
       }
 
@@ -258,8 +261,8 @@ absl::Status Http1Connection::ServerParse() {
         }
       } else {  // Chunked.
         bool complete = false;
-        ABSL_RETURN_IF_ERROR(request_chunk_decoder_.Feed(
-            inbuf_, &request_body_, &complete));
+        ABSL_RETURN_IF_ERROR(
+            request_chunk_decoder_.Feed(inbuf_, &request_body_, &complete));
         inbuf_.clear();
         if (request_body_.size() > options().max_request_body_size) {
           return absl::OutOfRangeError("HTTP/1.1 request body too large");
@@ -295,8 +298,7 @@ absl::Status Http1Connection::DispatchRequest() {
 
   HttpRequest request;
   request.scheme = secure() ? "https" : "http";
-  request.authority =
-      GetHttpHeader(request_head_.headers, "host").value_or("");
+  request.authority = GetHttpHeader(request_head_.headers, "host").value_or("");
   request.path = request_head_.target;
   request.headers = request_head_.headers;
   if (ws_upgrade_) {
@@ -576,8 +578,8 @@ absl::Status Http1Connection::ClientParse() {
         return head.status();
       }
       if (head->status != 101) {
-        const absl::Status status = absl::UnavailableError(absl::StrCat(
-            "HTTP/1.1 WebSocket upgrade returned ", head->status));
+        const absl::Status status = absl::UnavailableError(
+            absl::StrCat("HTTP/1.1 WebSocket upgrade returned ", head->status));
         response_state_->Finish(status);
         return status;
       }
@@ -624,10 +626,9 @@ absl::Status Http1Connection::ClientParse() {
     response_head.status = head->status;
     response_head.headers = head->headers;
     response_state_->SetHeaders(std::move(response_head));
-    ABSL_ASSIGN_OR_RETURN(
-        response_body_plan_,
-        internal::PlanResponseBody(client_method_, head->status,
-                                   head->headers));
+    ABSL_ASSIGN_OR_RETURN(response_body_plan_,
+                          internal::PlanResponseBody(
+                              client_method_, head->status, head->headers));
     response_body_remaining_ = response_body_plan_.content_length;
     response_chunk_decoder_ = ChunkedDecoder();
     if (response_body_plan_.framing == BodyFraming::kNone) {
@@ -716,8 +717,7 @@ absl::Status Http1Connection::SendHeadersOnLoop(std::int32_t stream_id,
         {"upgrade", "websocket"},
         {"connection", "Upgrade"},
         {"sec-websocket-accept", internal::ComputeWebSocketAccept(ws_key_)}};
-    const std::string head =
-        internal::SerializeResponse(101, upgrade_headers);
+    const std::string head = internal::SerializeResponse(101, upgrade_headers);
     ABSL_RETURN_IF_ERROR(WriteApplicationData(
         reinterpret_cast<const std::uint8_t*>(head.data()), head.size()));
     response_headers_sent_ = true;
@@ -737,8 +737,7 @@ absl::Status Http1Connection::SendHeadersOnLoop(std::int32_t stream_id,
     response_chunked_ = true;
   }
   if (GetHttpHeader(headers, "connection") == std::nullopt) {
-    SetHttpHeader(&headers, "connection",
-                  keep_alive_ ? "keep-alive" : "close");
+    SetHttpHeader(&headers, "connection", keep_alive_ ? "keep-alive" : "close");
   }
   const std::string head = internal::SerializeResponse(status, headers);
   ABSL_RETURN_IF_ERROR(WriteApplicationData(
@@ -750,11 +749,10 @@ absl::Status Http1Connection::SendHeadersOnLoop(std::int32_t stream_id,
 absl::Status Http1Connection::Write(std::int32_t stream_id, std::string data) {
   std::shared_ptr<Http1Connection> self = Self();
   const size_t bytes = data.size();
-  return PostWrite(
-      bytes,
-      [self = std::move(self), stream_id, data = std::move(data)]() mutable {
-        return self->WriteOnLoop(stream_id, std::move(data));
-      });
+  return PostWrite(bytes, [self = std::move(self), stream_id,
+                           data = std::move(data)]() mutable {
+    return self->WriteOnLoop(stream_id, std::move(data));
+  });
 }
 
 absl::Status Http1Connection::WriteOnLoop(std::int32_t stream_id,
@@ -827,40 +825,40 @@ absl::Status Http1Connection::SendResponse(std::int32_t stream_id, int status,
                                            HttpHeaders headers,
                                            std::string body) {
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUvForConnection([self = std::move(self), stream_id, status,
-                                     headers = std::move(headers),
-                                     body = std::move(
-                                         body)]() mutable -> absl::Status {
-    if (self->server() == false) {
-      return absl::FailedPreconditionError(
-          "A client HTTP/1.1 connection cannot send a response");
-    }
-    if (stream_id != self->stream_id_) {
-      return absl::NotFoundError("HTTP/1.1 request stream is no longer active");
-    }
-    if (self->response_headers_sent_) {
-      return absl::FailedPreconditionError(
-          "HTTP/1.1 response headers have already been sent");
-    }
-    if (status < 100 || status > 599) {
-      return absl::InvalidArgumentError("HTTP response status is invalid");
-    }
-    NormalizeHttpHeaders(&headers);
-    ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
-    SetHttpHeader(&headers, "content-length", std::to_string(body.size()));
-    if (GetHttpHeader(headers, "connection") == std::nullopt) {
-      SetHttpHeader(&headers, "connection",
-                    self->keep_alive_ ? "keep-alive" : "close");
-    }
-    std::string wire = internal::SerializeResponse(status, headers);
-    wire.append(body);
-    ABSL_RETURN_IF_ERROR(self->WriteApplicationData(
-        reinterpret_cast<const std::uint8_t*>(wire.data()), wire.size()));
-    self->response_headers_sent_ = true;
-    self->response_finished_ = true;
-    self->FinishResponseAndAdvance();
-    return absl::OkStatus();
-  });
+  return RunStatusOnUvForConnection(
+      [self = std::move(self), stream_id, status, headers = std::move(headers),
+       body = std::move(body)]() mutable -> absl::Status {
+        if (self->server() == false) {
+          return absl::FailedPreconditionError(
+              "A client HTTP/1.1 connection cannot send a response");
+        }
+        if (stream_id != self->stream_id_) {
+          return absl::NotFoundError(
+              "HTTP/1.1 request stream is no longer active");
+        }
+        if (self->response_headers_sent_) {
+          return absl::FailedPreconditionError(
+              "HTTP/1.1 response headers have already been sent");
+        }
+        if (status < 100 || status > 599) {
+          return absl::InvalidArgumentError("HTTP response status is invalid");
+        }
+        NormalizeHttpHeaders(&headers);
+        ABSL_RETURN_IF_ERROR(ValidateHttpHeaders(headers));
+        SetHttpHeader(&headers, "content-length", std::to_string(body.size()));
+        if (GetHttpHeader(headers, "connection") == std::nullopt) {
+          SetHttpHeader(&headers, "connection",
+                        self->keep_alive_ ? "keep-alive" : "close");
+        }
+        std::string wire = internal::SerializeResponse(status, headers);
+        wire.append(body);
+        ABSL_RETURN_IF_ERROR(self->WriteApplicationData(
+            reinterpret_cast<const std::uint8_t*>(wire.data()), wire.size()));
+        self->response_headers_sent_ = true;
+        self->response_finished_ = true;
+        self->FinishResponseAndAdvance();
+        return absl::OkStatus();
+      });
 }
 
 absl::StatusOr<std::shared_ptr<Http2ResponseWriter>>
@@ -877,24 +875,24 @@ absl::Status Http1Connection::AbortResponse(std::int32_t stream_id,
     return absl::InvalidArgumentError("Response abort status must be non-OK");
   }
   std::shared_ptr<Http1Connection> self = Self();
-  return RunStatusOnUvForConnection([self = std::move(self), stream_id,
-                                     status = std::move(
-                                         status)]() mutable -> absl::Status {
-    if (stream_id != self->stream_id_) {
-      return absl::OkStatus();
-    }
-    if (!self->response_headers_sent_) {
-      HttpHeaders headers;
-      headers.emplace_back("content-type", "text/plain; charset=utf-8");
-      // Reuse the buffered-response path; SendResponse advances the exchange.
-      return self->SendResponse(stream_id, StatusCodeToHttp(status.code()),
-                                std::move(headers),
-                                std::string(status.message()));
-    }
-    // Headers already sent: HTTP/1.1 cannot reset a stream, so close.
-    self->CloseOnLoop(status);
-    return absl::OkStatus();
-  });
+  return RunStatusOnUvForConnection(
+      [self = std::move(self), stream_id,
+       status = std::move(status)]() mutable -> absl::Status {
+        if (stream_id != self->stream_id_) {
+          return absl::OkStatus();
+        }
+        if (!self->response_headers_sent_) {
+          HttpHeaders headers;
+          headers.emplace_back("content-type", "text/plain; charset=utf-8");
+          // Reuse the buffered-response path; SendResponse advances the exchange.
+          return self->SendResponse(stream_id, StatusCodeToHttp(status.code()),
+                                    std::move(headers),
+                                    std::string(status.message()));
+        }
+        // Headers already sent: HTTP/1.1 cannot reset a stream, so close.
+        self->CloseOnLoop(status);
+        return absl::OkStatus();
+      });
 }
 
 void Http1Connection::FinishResponseAndAdvance() {
@@ -927,8 +925,7 @@ absl::StatusOr<bool> Http1Connection::ResponseHeadersSent(
       });
 }
 
-absl::StatusOr<bool> Http1Connection::ResponseFinished(
-    std::int32_t stream_id) {
+absl::StatusOr<bool> Http1Connection::ResponseFinished(std::int32_t stream_id) {
   std::shared_ptr<Http1Connection> self = Self();
   return RunOnUvForConnection<bool>(
       [self = std::move(self), stream_id]() -> absl::StatusOr<bool> {
@@ -993,9 +990,8 @@ absl::Status Http1Connection::FinishRequest(std::int32_t /*stream_id*/) {
 void Http1Connection::OnClose(const absl::Status& status) {
   if (response_state_ != nullptr) {
     // A body delimited by connection close completes cleanly on EOF.
-    const bool clean_eof =
-        client_head_parsed_ &&
-        response_body_plan_.framing == BodyFraming::kUntilClose;
+    const bool clean_eof = client_head_parsed_ && response_body_plan_.framing ==
+                                                      BodyFraming::kUntilClose;
     response_state_->Finish(clean_eof ? absl::OkStatus() : status);
   }
   if (writer_state_ != nullptr) {
@@ -1004,9 +1000,9 @@ void Http1Connection::OnClose(const absl::Status& status) {
   if (request_body_state_ != nullptr) {
     // A cleanly-closed WebSocket ends its inbound frame stream without error,
     // and so does a streamed request body the peer already ended.
-    const bool clean_eof = state_ == ParseState::kRaw ||
-                           (streaming_request_body_ &&
-                            state_ == ParseState::kAwaitingResponse);
+    const bool clean_eof =
+        state_ == ParseState::kRaw ||
+        (streaming_request_body_ && state_ == ParseState::kAwaitingResponse);
     request_body_state_->Finish(clean_eof ? absl::OkStatus() : status);
   }
 }

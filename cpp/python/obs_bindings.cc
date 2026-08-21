@@ -50,7 +50,7 @@ class PySpan {
   explicit PySpan(obs::Span span) : span_(std::move(span)) {}
 
   // W3C traceparent for this span, so it can parent child actions/spans.
-  std::string Traceparent() const {
+  [[nodiscard]] std::string Traceparent() const {
     const std::string trace_id = span_.TraceIdHex();
     if (trace_id.empty()) {
       return "";

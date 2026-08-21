@@ -28,9 +28,8 @@ namespace a11::nodes {
 namespace {
 
 std::shared_ptr<data::SerializationRegistry> GlobalRegistryPointer() {
-  return std::shared_ptr<data::SerializationRegistry>(
-      &data::GlobalSerializationRegistry(),
-      [](data::SerializationRegistry*) {});
+  return {&data::GlobalSerializationRegistry(),
+          [](data::SerializationRegistry*) {}};
 }
 
 /// The terminator Finalize() writes when the producer has no last value.
@@ -43,7 +42,7 @@ data::Chunk NullChunk() {
 // holds the awaitable, so a rejected write or a store that refuses to close
 // would otherwise be visible only to whoever thinks to read GetWriterStatus().
 template <typename T>
-void LogIfFailed(a11::Future<T> pending, std::string_view what) {
+void LogIfFailed(const a11::Future<T>& pending, std::string_view what) {
   pending.OnReady([what](const absl::StatusOr<T>& result) {
     if (!result.ok()) {
       LOG(WARNING) << "AsyncNode " << what << " failed: " << result.status();
@@ -291,9 +290,9 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
       options.close ? (*output)->DrainAndClose() : a11::ReadyTask();
 
   if (!options.wait) {
-    LogIfFailed(std::move(write.confirmation), "final write");
+    LogIfFailed(write.confirmation, "final write");
     if (options.close) {
-      LogIfFailed(std::move(closed), "close");
+      LogIfFailed(closed, "close");
     }
     return a11::ReadyTask();
   }
@@ -306,7 +305,7 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
     // if that write fails, so it is the only awaitable this needs.
     return closed;
   }
-  return a11::Then(std::move(write.confirmation),
+  return a11::Then(write.confirmation,
                    [](const absl::StatusOr<std::uint32_t>& stored)
                        -> absl::StatusOr<a11::Unit> {
                      if (!stored.ok()) {

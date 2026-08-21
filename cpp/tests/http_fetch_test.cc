@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/net/http/fetch.h"
-
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -16,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/concurrency/future.h"
+#include "a11/net/http/fetch.h"
 #include "a11/net/http2.h"
 
 namespace a11::net {
@@ -36,31 +35,33 @@ class FetchTestServer {
   FetchTestServer() {
     auto server = Http2Server::Create(
         "127.0.0.1", 0,
-        [this](HttpRequest request,
-               std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        [this](
+            const HttpRequest& request,
+            const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
           requests_.push_back(absl::StrCat(request.method, " ", request.path));
           const std::string& path = request.path;
           absl::Status status;
           if (path == "/body") {
-            status = response->SendResponse(200, {{"content-type", "text/plain"}},
-                                            "the-body");
+            status = response->SendResponse(
+                200, {{"content-type", "text/plain"}}, "the-body");
           } else if (path == "/hop-1") {
             status = response->SendResponse(302, {{"location", "/hop-2"}}, "");
           } else if (path == "/hop-2") {
             // Absolute, and to the same origin, so ResolveReference's absolute
             // branch is exercised too.
             status = response->SendResponse(
-                302, {{"location", absl::StrCat("http://127.0.0.1:", port(),
-                                                "/body")}},
+                302,
+                {{"location",
+                  absl::StrCat("http://127.0.0.1:", port(), "/body")}},
                 "");
           } else if (path == "/loop") {
             status = response->SendResponse(302, {{"location", "/loop"}}, "");
           } else if (path == "/see-other") {
-            status = response->SendResponse(303, {{"location", "/echo-method"}},
-                                            "");
+            status =
+                response->SendResponse(303, {{"location", "/echo-method"}}, "");
           } else if (path == "/keep-method") {
-            status = response->SendResponse(307, {{"location", "/echo-method"}},
-                                            "");
+            status =
+                response->SendResponse(307, {{"location", "/echo-method"}}, "");
           } else if (path == "/echo-method") {
             status = response->SendResponse(
                 200, {}, absl::StrCat(request.method, ":", request.body));
@@ -72,10 +73,18 @@ class FetchTestServer {
             status = response->SendResponse(500, {}, "boom");
           } else if (path == "/chunks") {
             status = response->SendHeaders(200, {{"content-length", "9"}});
-            if (status.ok()) status = response->Write("abc");
-            if (status.ok()) status = response->Write("def");
-            if (status.ok()) status = response->Write("ghi");
-            if (status.ok()) status = response->Finish();
+            if (status.ok()) {
+              status = response->Write("abc");
+            }
+            if (status.ok()) {
+              status = response->Write("def");
+            }
+            if (status.ok()) {
+              status = response->Write("ghi");
+            }
+            if (status.ok()) {
+              status = response->Finish();
+            }
           } else {
             status = response->SendResponse(400, {}, "unknown path");
           }
@@ -85,10 +94,13 @@ class FetchTestServer {
   }
 
   [[nodiscard]] bool ok() const { return server_.ok(); }
+
   [[nodiscard]] std::uint16_t port() const { return (*server_)->port(); }
+
   [[nodiscard]] std::string Url(std::string_view path) const {
     return absl::StrCat("http://127.0.0.1:", port(), path);
   }
+
   [[nodiscard]] const std::vector<std::string>& requests() const {
     return requests_;
   }
@@ -130,8 +142,8 @@ TEST(HttpFetchTest, FollowsARedirectChain) {
   const auto response = Fetch(server.Url("/hop-1")).Await(Soon());
   ASSERT_TRUE(response.ok()) << response.status();
   EXPECT_EQ(response->body, "the-body");
-  EXPECT_EQ(server.requests(),
-            (std::vector<std::string>{"GET /hop-1", "GET /hop-2", "GET /body"}));
+  EXPECT_EQ(server.requests(), (std::vector<std::string>{
+                                   "GET /hop-1", "GET /hop-2", "GET /body"}));
 }
 
 TEST(HttpFetchTest, StopsAfterMaxRedirects) {
@@ -178,8 +190,7 @@ TEST(HttpFetchTest, RewritesTheMethodOn303ButNotOn307) {
   post.body = "payload";
 
   // 303 means "go look over there instead", so the body does not follow.
-  const auto see_other =
-      Fetch(server.Url("/see-other"), post).Await(Soon());
+  const auto see_other = Fetch(server.Url("/see-other"), post).Await(Soon());
   ASSERT_TRUE(see_other.ok()) << see_other.status();
   EXPECT_EQ(see_other->body, "GET:");
 
@@ -213,7 +224,8 @@ TEST(HttpFetchTest, StreamsToASinkAndReportsProgress) {
   // the total taken from Content-Length.
   ASSERT_FALSE(progress.empty());
   EXPECT_EQ(progress.front().first, 0u);
-  EXPECT_EQ(progress.back(), std::make_pair(std::uint64_t{9}, std::uint64_t{9}));
+  EXPECT_EQ(progress.back(),
+            std::make_pair(std::uint64_t{9}, std::uint64_t{9}));
 }
 
 TEST(HttpFetchTest, ASinkFailureFailsTheFetch) {
@@ -221,11 +233,9 @@ TEST(HttpFetchTest, ASinkFailureFailsTheFetch) {
   ASSERT_TRUE(server.ok());
 
   const auto head =
-      FetchToSink(server.Url("/chunks"),
-                  [](std::string_view) -> absl::Status {
-                    return absl::UnavailableError("disk full");
-                  })
-          .Await(Soon());
+      FetchToSink(server.Url("/chunks"), [](std::string_view) -> absl::Status {
+        return absl::UnavailableError("disk full");
+      }).Await(Soon());
   ASSERT_FALSE(head.ok());
   EXPECT_EQ(head.status().code(), absl::StatusCode::kUnavailable);
   EXPECT_EQ(head.status().message(), "disk full");
@@ -251,8 +261,9 @@ TEST(HttpFetchTest, ABodyLargerThanTheBufferStreamsInsteadOfFailing) {
   const std::string body(kBodySize, 'x');
   auto server = Http2Server::Create(
       "127.0.0.1", 0,
-      [&body](HttpRequest, std::shared_ptr<Http2ResponseWriter> response)
-          -> a11::Task {
+      [&body](
+          const HttpRequest&,
+          const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         const absl::Status status = response->SendResponse(
             200, {{"content-length", absl::StrCat(body.size())}}, body);
         return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
@@ -266,15 +277,15 @@ TEST(HttpFetchTest, ABodyLargerThanTheBufferStreamsInsteadOfFailing) {
   options.transport.max_response_body_size = 2 * kBodySize;
 
   std::uint64_t received = 0;
-  const auto head = FetchToSink(
-                        absl::StrCat("http://127.0.0.1:", (*server)->port(),
-                                     "/bulk"),
-                        [&received](std::string_view chunk) -> absl::Status {
-                          received += chunk.size();
-                          return absl::OkStatus();
-                        },
-                        options)
-                        .Await(absl::Now() + absl::Seconds(60));
+  const auto head =
+      FetchToSink(
+          absl::StrCat("http://127.0.0.1:", (*server)->port(), "/bulk"),
+          [&received](std::string_view chunk) -> absl::Status {
+            received += chunk.size();
+            return absl::OkStatus();
+          },
+          options)
+          .Await(absl::Now() + absl::Seconds(60));
   ASSERT_TRUE(head.ok()) << head.status();
   EXPECT_EQ(head->status, 200);
   EXPECT_EQ(received, kBodySize);

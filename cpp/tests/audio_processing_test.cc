@@ -28,7 +28,7 @@ AudioBuffer Buffer(std::vector<float> samples, size_t channels, size_t frames,
 }
 
 std::vector<float> ConstantSamples(size_t millis, float value) {
-  const size_t samples = static_cast<size_t>(
+  const auto samples = static_cast<size_t>(
       kWhisperSampleRate * static_cast<double>(millis) / 1000.0);
   return std::vector<float>(samples, value);
 }

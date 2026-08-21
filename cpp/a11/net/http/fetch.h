@@ -119,10 +119,9 @@ namespace internal {
  *
  * @warning Blocks. Never call it on the libuv loop thread.
  */
-absl::StatusOr<HttpResponseHead> FetchBlocking(std::string url,
-                                               FetchOptions options,
-                                               FetchSink sink,
-                                               OnFetchProgress on_progress = {});
+absl::StatusOr<HttpResponseHead> FetchBlocking(
+    std::string url, FetchOptions options, const FetchSink& sink,
+    const OnFetchProgress& on_progress = {});
 
 }  // namespace internal
 

@@ -6,8 +6,6 @@
 // counted, a node nobody closed, a pass of a loop that saw the wrong value --
 // do not show up in a unit test of a part.
 
-#include "a11/flow/runtime.h"
-
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -35,6 +33,7 @@
 #include "a11/concurrency/executor.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/flow/runtime.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "thread/boost_primitives.h"
@@ -47,8 +46,8 @@ using PortValues = std::map<std::string, Values>;
 
 data::Chunk JsonChunk(std::string_view json) {
   return data::Chunk{
-      .metadata = data::ChunkMetadata{.mimetype =
-                                          std::string(data::kJsonMimetype)},
+      .metadata =
+          data::ChunkMetadata{.mimetype = std::string(data::kJsonMimetype)},
       .data = std::string(json)};
 }
 
@@ -63,18 +62,18 @@ struct Outcome {
 actions::ActionSchema TwiceSchema() {
   return actions::ActionSchema{
       .name = "twice",
-      .inputs = {{"text", actions::ActionPortSchema{.name = "text",
-                                                    .type = "str"}}},
-      .outputs = {{"out", actions::ActionPortSchema{.name = "out",
-                                                    .type = "str"}},
-                  {"quiet", actions::ActionPortSchema{.name = "quiet",
-                                                      .type = "str"}}},
+      .inputs = {{"text",
+                  actions::ActionPortSchema{.name = "text", .type = "str"}}},
+      .outputs = {{"out",
+                   actions::ActionPortSchema{.name = "out", .type = "str"}},
+                  {"quiet",
+                   actions::ActionPortSchema{.name = "quiet", .type = "str"}}},
   };
 }
 
 actions::ActionHandler TwiceHandler() {
   return actions::MakeAsyncActionHandler(
-      [](std::shared_ptr<actions::Action> action) -> absl::Status {
+      [](const std::shared_ptr<actions::Action>& action) -> absl::Status {
         ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> input,
                               action->GetInput("text"));
         ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> output,
@@ -84,8 +83,12 @@ actions::ActionHandler TwiceHandler() {
         while (true) {
           ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> chunk,
                                 input->NextChunk().Await());
-          if (!chunk.has_value()) break;
-          if (chunk->IsNull()) continue;
+          if (!chunk.has_value()) {
+            break;
+          }
+          if (chunk->IsNull()) {
+            continue;
+          }
           const std::string shouted = absl::AsciiStrToUpper(chunk->data);
           for (int at = 0; at < 2; ++at) {
             ABSL_RETURN_IF_ERROR(
@@ -105,14 +108,14 @@ actions::ActionHandler TwiceHandler() {
 actions::ActionSchema BoomSchema() {
   return actions::ActionSchema{
       .name = "boom",
-      .outputs = {{"out", actions::ActionPortSchema{.name = "out",
-                                                    .type = "str"}}},
+      .outputs = {{"out",
+                   actions::ActionPortSchema{.name = "out", .type = "str"}}},
   };
 }
 
 actions::ActionHandler BoomHandler() {
   return actions::MakeAsyncActionHandler(
-      [](std::shared_ptr<actions::Action>) -> absl::Status {
+      [](const std::shared_ptr<actions::Action>&) -> absl::Status {
         return absl::NotFoundError("nothing there");
       });
 }
@@ -129,8 +132,12 @@ Values Collect(const std::shared_ptr<nodes::AsyncNode>& node) {
   while (true) {
     absl::StatusOr<std::optional<data::Chunk>> chunk =
         node->NextChunk().Await(absl::Now() + absl::Seconds(5));
-    if (!chunk.ok() || !chunk->has_value()) break;
-    if ((*chunk)->IsNull()) continue;
+    if (!chunk.ok() || !chunk->has_value()) {
+      break;
+    }
+    if ((*chunk)->IsNull()) {
+      continue;
+    }
     found.push_back((*chunk)->data);
   }
   return found;
@@ -138,9 +145,9 @@ Values Collect(const std::shared_ptr<nodes::AsyncNode>& node) {
 
 /// Compile a flow, run it once against the test registry, and read its outputs.
 Outcome RunFlow(std::string_view source, std::string_view name,
-            const PortValues& inputs = {},
-            const std::map<std::string, std::string>& headers = {},
-            bool close_inputs = true) {
+                const PortValues& inputs = {},
+                const std::map<std::string, std::string>& headers = {},
+                bool close_inputs = true) {
   Outcome outcome;
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
       CompiledProgram::Compile(std::string(source), "test.flow");
@@ -186,7 +193,9 @@ Outcome RunFlow(std::string_view source, std::string_view name,
     outputs[port] = *(*action)->GetOutput(port, false);
   }
   outcome.status = (*action)->Run().status();
-  if (!outcome.status.ok()) return outcome;
+  if (!outcome.status.ok()) {
+    return outcome;
+  }
   for (const auto& [port, unused] : schema->inputs) {
     const std::shared_ptr<nodes::AsyncNode> node =
         *(*action)->GetInput(port, false);
@@ -202,10 +211,13 @@ Outcome RunFlow(std::string_view source, std::string_view name,
       EXPECT_TRUE(node->Finalize({.wait = true}).Await().ok());
     }
   }
-  outcome.status =
-      (*action)->Wait(absl::Seconds(20)).Await(absl::Now() + absl::Seconds(30))
-          .status();
-  for (auto& [port, node] : outputs) outcome.outputs[port] = Collect(node);
+  outcome.status = (*action)
+                       ->Wait(absl::Seconds(20))
+                       .Await(absl::Now() + absl::Seconds(30))
+                       .status();
+  for (auto& [port, node] : outputs) {
+    outcome.outputs[port] = Collect(node);
+  }
   return outcome;
 }
 
@@ -221,15 +233,17 @@ class LogCapture {
       // Locked because a flow's statements run concurrently: two logs whose
       // `after` clauses are satisfied together reach the sink from two fibres.
       thread::MutexLock lock(&mu_);
-      lines_.push_back(Line{.level = std::string(actions::LogLevelName(
-                                record.level)),
-                            .channel = std::string(record.channel),
-                            .text = std::string(record.data),
-                            .mimetype = std::string(record.mimetype),
-                            .lineno = record.lineno.value_or(0)});
+      lines_.push_back(
+          Line{.level = std::string(actions::LogLevelName(record.level)),
+               .channel = std::string(record.channel),
+               .text = std::string(record.data),
+               .mimetype = std::string(record.mimetype),
+               .lineno = record.lineno.value_or(0)});
     });
   }
+
   ~LogCapture() { actions::SetActionLogSink(nullptr); }
+
   LogCapture(const LogCapture&) = delete;
   LogCapture& operator=(const LogCapture&) = delete;
 
@@ -249,7 +263,9 @@ class LogCapture {
   /// What was logged, in the order it arrived.
   Values texts() const {
     Values out;
-    for (const Line& line : lines()) out.push_back(line.text);
+    for (const Line& line : lines()) {
+      out.push_back(line.text);
+    }
     return out;
   }
 
@@ -263,7 +279,9 @@ class LogCapture {
   /// The line whose text is `text`, or nullopt.
   std::optional<Line> find(std::string_view text) const {
     for (const Line& line : lines()) {
-      if (line.text == text) return line;
+      if (line.text == text) {
+        return line;
+      }
     }
     return std::nullopt;
   }
@@ -283,13 +301,14 @@ flow copy {
   words -> said
 }
 )",
-                              "copy", {{"words", {"\"a\"", "\"b\""}}});
+                                  "copy", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
 }
 
 TEST(FlowRuntimeTest, StagesReshapeAStream) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow shape {
   in  words: string stream
   out kept:  string stream
@@ -298,8 +317,7 @@ flow shape {
   words | count -> total
 }
 )",
-                              "shape",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+              "shape", {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"a\"", "\"b\""}));
   EXPECT_EQ(outcome.outputs.at("total"), Values({"3"}));
@@ -314,7 +332,7 @@ flow shout {
   say.out -> loudest
 }
 )",
-                              "shout", {{"words", {"\"hi\""}}});
+                                  "shout", {{"words", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("loudest"), Values({"\"HI\"", "\"HI\""}));
 }
@@ -329,7 +347,7 @@ flow keep {
   seen | collect -> all
 }
 )",
-                              "keep", {{"words", {"\"a\"", "\"b\""}}});
+                                  "keep", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("all"), Values({"[\"a\", \"b\"]"}));
 }
@@ -344,7 +362,7 @@ flow ignore {
   "finished" -> done
 }
 )",
-                              "ignore", {{"words", {"\"a\""}}});
+                                  "ignore", {{"words", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
 }
@@ -359,7 +377,7 @@ flow ignore {
   "finished" -> done
 }
 )",
-                              "ignore", {{"words", {"\"a\""}}});
+                                  "ignore", {{"words", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
 }
@@ -374,7 +392,7 @@ flow ignore {
   "finished" -> done
 }
 )",
-                              "ignore", {{"words", {"\"a\""}}});
+                                  "ignore", {{"words", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
 }
@@ -389,7 +407,7 @@ flow each {
   }
 }
 )",
-                              "each", {{"words", {"\"a\"", "\"b\""}}});
+                                  "each", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("lines"), Values({"\"<a>\"", "\"<b>\""}));
 }
@@ -397,7 +415,8 @@ flow each {
 TEST(FlowRuntimeTest, ForEachSeesTheSameOuterValueEveryPass) {
   // The materialisation rule: `prefix` is read inside the loop, so it is
   // buffered once in the scope that owns it and replayed to every pass.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow prefixed {
   in  prefix: string
   in  words:  string stream
@@ -407,9 +426,8 @@ flow prefixed {
   }
 }
 )",
-                              "prefixed",
-                              {{"prefix", {"\"p\""}},
-                               {"words", {"\"a\"", "\"b\"", "\"c\""}}});
+              "prefixed",
+              {{"prefix", {"\"p\""}}, {"words", {"\"a\"", "\"b\"", "\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("lines"),
             Values({"\"p:a\"", "\"p:b\"", "\"p:c\""}));
@@ -450,7 +468,7 @@ flow woven {
   }
 }
 )",
-                              "woven", {{"items", {"\"a\"", "\"b\""}}});
+                                  "woven", {{"items", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Every pass replays from the start, which is what replaying means, so both
   // see the value that was there when the buffer was first read.
@@ -473,7 +491,7 @@ flow twice {
   strformat("%s", words) -> out
 }
 )",
-                              "twice", {{"words", {"\"a\"", "\"b\""}}});
+                                  "twice", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values seen = outcome.outputs.at("out");
   std::sort(seen.begin(), seen.end());
@@ -492,7 +510,7 @@ flow doubled {
   strformat("%s%s", word, word) -> out
 }
 )",
-                              "doubled", {{"words", {"\"a\"", "\"b\""}}});
+                                  "doubled", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"aa\""}));
 }
@@ -509,7 +527,7 @@ flow shared {
   strformat("b:%s", one) -> out
 }
 )",
-                              "shared", {{"one", {"\"x\""}}});
+                                  "shared", {{"one", {"\"x\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values seen = outcome.outputs.at("out");
   std::sort(seen.begin(), seen.end());
@@ -531,7 +549,7 @@ flow promised {
   strformat("%s", only) -> out
 }
 )",
-                              "promised", {{"words", {"\"a\"", "\"b\""}}});
+                                  "promised", {{"words", {"\"a\"", "\"b\""}}});
   // `first 1` reduces, so `only` is unary and correct: the reduction is the
   // flow saying which value it means.
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
@@ -543,7 +561,8 @@ TEST(FlowRuntimeTest, AdvanceBindsTheNextValueOfTheSameStream) {
   // first value, the second use the second, and so on. It holds however the
   // flow is scheduled -- each binding is the *k*th value of its stream by
   // construction, not because one step ran before another.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow paced {
   in  words: string stream required
   out out:   string stream
@@ -556,8 +575,7 @@ flow paced {
   strformat("3:%s", word) -> out
 }
 )",
-                              "paced",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+              "paced", {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values seen = outcome.outputs.at("out");
   std::sort(seen.begin(), seen.end());
@@ -578,7 +596,7 @@ flow overrun {
   strformat("2:%s", word) -> out
 }
 )",
-                              "overrun", {{"words", {"\"only\""}}});
+                                  "overrun", {{"words", {"\"only\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values seen = outcome.outputs.at("out");
   std::sort(seen.begin(), seen.end());
@@ -638,7 +656,7 @@ flow strictly {
   }
 }
 )",
-                              "strictly");
+                                  "strictly");
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kPermissionDenied);
   EXPECT_EQ(outcome.status.message(), "not yours");
 }
@@ -647,7 +665,8 @@ TEST(FlowRuntimeTest, MatchPullsFieldsOutAndDropsWhatDoesNotFit) {
   // As a stage it is a `where` and a `map` at once, which is what makes reading
   // a log worth writing: the lines that fit become records, and the ones that
   // do not are gone.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome = RunFlow(
+      R"(
 flow parsed {
   in  lines: string stream required
   out names: string stream
@@ -657,10 +676,9 @@ flow parsed {
   lines | match "name={name} age={age:int}" | map it.age  -> ages
 }
 )",
-                              "parsed",
-                              {{"lines",
-                                {"\"name=Alice   age=27\"", "\"nothing here\"",
-                                 "\"name=Bo age=3\""}}});
+      "parsed",
+      {{"lines",
+        {"\"name=Alice   age=27\"", "\"nothing here\"", "\"name=Bo age=3\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("names"), Values({"\"Alice\"", "\"Bo\""}));
   // `:int` is read as one, so the ages are numbers rather than their text.
@@ -700,7 +718,8 @@ flow one {
 }
 
 TEST(FlowRuntimeTest, APositionalPatternIsReadByIndex) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow split {
   in  lines: string stream required
   out out:   string stream
@@ -708,8 +727,7 @@ flow split {
   lines | match "{}:{}" | map it[1] -> out
 }
 )",
-                              "split",
-                              {{"lines", {"\"left:right\"", "\"a:b\""}}});
+              "split", {{"lines", {"\"left:right\"", "\"a:b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"right\"", "\"b\""}));
 }
@@ -728,7 +746,7 @@ flow broken {
   lines | match "name={name" -> out
 }
 )",
-                              "broken", {{"lines", {"\"name=Alice\""}}});
+                                  "broken", {{"lines", {"\"name=Alice\""}}});
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kInvalidArgument);
   EXPECT_NE(outcome.status.message().find("with no '}'"), std::string::npos)
       << outcome.status.message();
@@ -740,7 +758,8 @@ TEST(FlowRuntimeTest, ALetTakesAValueApartByFieldOrByPosition) {
   // value: its field where it has one, its position where it is a list.
   // `Lookup` answers by the value's own kind, so this has to ask both ways
   // rather than choose once.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow taken {
   in  users: json stream required
   in  pair:  json required
@@ -754,9 +773,9 @@ flow taken {
   strformat("%s then %s", first, second) -> placed
 }
 )",
-                              "taken",
-                              {{"users", {"{\"name\": \"Alice\", \"age\": 27}"}},
-                               {"pair", {"[\"one\", \"two\"]"}}});
+              "taken",
+              {{"users", {R"({"name": "Alice", "age": 27})"}},
+               {"pair", {R"(["one", "two"])"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("named"), Values({"\"Alice is 27\""}));
   EXPECT_EQ(outcome.outputs.at("placed"), Values({"\"one then two\""}));
@@ -774,7 +793,7 @@ flow parsed {
   strformat("%s/%d", name, age) -> out
 }
 )",
-                              "parsed", {{"line", {"\"name=Bo age=3\""}}});
+                                  "parsed", {{"line", {"\"name=Bo age=3\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"Bo/3\""}));
 }
@@ -791,7 +810,7 @@ flow branch {
   }
 }
 )",
-                              "branch", {{"count", {"5"}}});
+                                  "branch", {{"count", {"5"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"many\""}));
 }
@@ -807,7 +826,7 @@ flow counting {
   }
 }
 )",
-                              "counting");
+                                  "counting");
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("steps"), Values({"0", "1", "2"}));
 }
@@ -835,7 +854,7 @@ flow resilient {
   status moved | map it.message -> why
 }
 )",
-                              "resilient", {{"words", {"a", "bad"}}});
+                                  "resilient", {{"words", {"a", "bad"}}});
   // The flow succeeded, which is the whole point of `try`.
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   ASSERT_EQ(outcome.outputs.at("why").size(), 1u);
@@ -854,7 +873,7 @@ flow fine {
   status moved | map it.ok -> ok
 }
 )",
-                              "fine", {{"words", {"a", "b"}}});
+                                  "fine", {{"words", {"a", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b"}));
   EXPECT_EQ(outcome.outputs.at("ok"), Values({"true"}));
@@ -884,7 +903,7 @@ flow cut-short {
   findings -> seen
 }
 )",
-                              "cut-short", {{"words", {"a", "bad"}}});
+                                  "cut-short", {{"words", {"a", "bad"}}});
   // The reader of an aborted node sees the failure rather than an end, and here
   // nothing tolerates it, so it is the flow's.
   ASSERT_FALSE(outcome.status.ok());
@@ -916,7 +935,7 @@ flow tidy {
   skip ended
 }
 )",
-                              "tidy", {{"words", {"a", "stop", "b"}}});
+                                  "tidy", {{"words", {"a", "stop", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "stop"}));
   // The loop's own outcome, read after it: every pass succeeded.
@@ -933,7 +952,7 @@ flow ordered {
   skip first.quiet
 }
 )",
-                              "ordered", {{"words", {"a", "b"}}});
+                                  "ordered", {{"words", {"a", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b"}));
   // `first.out` is never read, so the loop waiting on the *step* rather than on
@@ -943,7 +962,8 @@ flow ordered {
 TEST(FlowRuntimeTest, AForStopsOnItsUntilAndLeavesTheRestUnread) {
   // The gap this closes: `repeat` could say when to stop and `for` could not, so
   // a loop over a stream had to read all of it however early it knew enough.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow scanning {
   in  words: string stream
   out seen:  string stream
@@ -953,8 +973,7 @@ flow scanning {
   }
 }
 )",
-                              "scanning",
-                              {{"words", {"a", "b", "stop", "c", "d"}}});
+              "scanning", {{"words", {"a", "b", "stop", "c", "d"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // The value that ended it was seen -- the condition is asked at the *tail* of
   // the pass, as a `repeat`'s is -- and nothing after it was.
@@ -972,7 +991,7 @@ flow once {
   }
 }
 )",
-                              "once", {{"words", {"a", "b"}}});
+                                  "once", {{"words", {"a", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a"}));
 }
@@ -988,7 +1007,7 @@ flow kept {
   }
 }
 )",
-                              "kept", {{"words", {"a", "stop", "b"}}});
+                                  "kept", {{"words", {"a", "stop", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "stop"}));
 }
@@ -1004,7 +1023,7 @@ flow all {
   }
 }
 )",
-                              "all", {{"words", {"a", "b", "c"}}});
+                                  "all", {{"words", {"a", "b", "c"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"a", "b", "c"}));
 }
@@ -1020,7 +1039,7 @@ flow recover {
   }
 }
 )",
-                              "recover");
+                                  "recover");
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"NOT_FOUND\""}));
 }
@@ -1033,7 +1052,7 @@ flow strict {
   "unreached" -> said
 }
 )",
-                              "strict");
+                                  "strict");
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kNotFound);
 }
 
@@ -1051,7 +1070,7 @@ flow refuse {
   "welcome" -> said
 }
 )",
-                              "refuse");
+                                  "refuse");
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kPermissionDenied);
   EXPECT_EQ(outcome.status.message(), "not for you");
 }
@@ -1064,7 +1083,7 @@ flow tenanted {
   tenant -> said
 }
 )",
-                              "tenanted", {}, {{"x-tenant", "acme"}});
+                                  "tenanted", {}, {{"x-tenant", "acme"}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"acme\""}));
 }
@@ -1077,7 +1096,7 @@ flow tenanted {
   tenant -> said
 }
 )",
-                              "tenanted");
+                                  "tenanted");
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"none\""}));
 }
@@ -1097,7 +1116,7 @@ flow outer {
   step.said -> said
 }
 )",
-                              "outer", {{"word", {"\"x\""}}});
+                                  "outer", {{"word", {"\"x\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"[x]\""}));
 }
@@ -1111,7 +1130,7 @@ flow both {
   words | last 1 -> all
 }
 )",
-                              "both", {{"words", {"\"a\"", "\"b\""}}});
+                                  "both", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values got = outcome.outputs.at("all");
   std::sort(got.begin(), got.end());
@@ -1119,7 +1138,8 @@ flow both {
 }
 
 TEST(FlowRuntimeTest, ThenOrdersTwoStreamsIntoOne) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow ordered {
   in  first:  string stream
   in  second: string stream
@@ -1127,14 +1147,14 @@ flow ordered {
   first then second -> all
 }
 )",
-                              "ordered",
-                              {{"first", {"\"1\""}}, {"second", {"\"2\""}}});
+              "ordered", {{"first", {"\"1\""}}, {"second", {"\"2\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("all"), Values({"\"1\"", "\"2\""}));
 }
 
 TEST(FlowRuntimeTest, SkipCountTakesValuesOffForEveryReader) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow headless {
   in  rows: string stream
   out kept: string stream
@@ -1144,8 +1164,7 @@ flow headless {
   rows | count -> seen
 }
 )",
-                              "headless",
-                              {{"rows", {"\"h\"", "\"a\"", "\"b\""}}});
+              "headless", {{"rows", {"\"h\"", "\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"a\"", "\"b\""}));
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"2"}));
@@ -1178,7 +1197,7 @@ flow gate {
   }
 }
 )",
-                              "gate", {{"codes", {"204", "500"}}});
+                                  "gate", {{"codes", {"204", "500"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // The *first* value: `let` is one value, whatever the stream went on to say.
   EXPECT_EQ(outcome.outputs.at("verdict"), Values({"\"ok\""}));
@@ -1188,7 +1207,8 @@ TEST(FlowRuntimeTest, OneValueIsReadableInSeveralPlacesAtOnce) {
   // The stream behind it is read once and replayed, which is what the analysis
   // does for anything two things read -- so a value can be used as freely as a
   // variable in any other language.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow twice {
   in  words: string stream
   out shout: string
@@ -1200,7 +1220,7 @@ flow twice {
   word == word -> same
 }
 )",
-                              "twice", {{"words", {"\"hi\"", "\"ignored\""}}});
+              "twice", {{"words", {"\"hi\"", "\"ignored\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("shout"), Values({"\"HI\""}));
   EXPECT_EQ(outcome.outputs.at("size"), Values({"2"}));
@@ -1222,7 +1242,7 @@ flow absent {
   }
 }
 )",
-                              "absent", {{"words", {}}});
+                                  "absent", {{"words", {}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"nothing arrived\""}));
 }
@@ -1238,7 +1258,7 @@ flow pieces {
   body | chunk 4 | count -> count
 }
 )",
-                              "pieces", {{"whole", {"\"abcdefghij\""}}});
+                                  "pieces", {{"whole", {"\"abcdefghij\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("parts"),
             Values({"\"abcd\"", "\"efgh\"", "\"ij\""}));
@@ -1254,7 +1274,7 @@ flow careful {
   out parts: string stream
 }
 )",
-                              "careful", {{"whole", {}}});
+                                  "careful", {{"whole", {}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
 
   const Outcome cut = RunFlow(R"(
@@ -1265,7 +1285,7 @@ flow careful {
   body | chunk 3 -> parts
 }
 )",
-                          "careful", {{"whole", {"\"ééé\""}}});
+                              "careful", {{"whole", {"\"ééé\""}}});
   ASSERT_TRUE(cut.status.ok()) << cut.status;
   // Each `é` is two bytes, so three bytes takes one whole one and stops.
   EXPECT_EQ(cut.outputs.at("parts"),
@@ -1280,7 +1300,7 @@ flow whole {
   records | chunk 4 -> parts
 }
 )",
-                              "whole", {{"records", {"{\"a\": 1}", "7"}}});
+                                  "whole", {{"records", {"{\"a\": 1}", "7"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("parts"), Values({"{\"a\": 1}", "7"}));
 }
@@ -1300,9 +1320,9 @@ flow together {
   zip(left, right) | map strformat("%s%s", it[0], it[1]) -> joined
 }
 )",
-                              "together",
-                              {{"left", {"\"a\"", "\"b\"", "\"c\""}},
-                               {"right", {"\"1\"", "\"2\"", "\"3\""}}});
+                                  "together",
+                                  {{"left", {"\"a\"", "\"b\"", "\"c\""}},
+                                   {"right", {"\"1\"", "\"2\"", "\"3\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("joined"),
             Values({"\"a1\"", "\"b2\"", "\"c3\""}));
@@ -1312,7 +1332,8 @@ TEST(FlowRuntimeTest, ZipPadsAStreamThatEndsWellWithNulls) {
   // The short one contributes a null from then on, so the long one is read to
   // its end rather than truncated to the shorter -- which is what lets a stream
   // of values be zipped against a stream of the few annotations somebody made.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome = RunFlow(
+      R"(
 flow ragged {
   in  left:   string stream
   in  right:  string stream
@@ -1322,9 +1343,7 @@ flow ragged {
   zip(left, right) | count -> count
 }
 )",
-                              "ragged",
-                              {{"left", {"\"a\"", "\"b\"", "\"c\""}},
-                               {"right", {"\"1\""}}});
+      "ragged", {{"left", {"\"a\"", "\"b\"", "\"c\""}}, {"right", {"\"1\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("joined"),
             Values({"[\"a\", \"1\"]", "[\"b\", null]", "[\"c\", null]"}));
@@ -1334,7 +1353,8 @@ flow ragged {
 
   // The other way round reads the same, so which argument is shorter is not
   // something an author has to think about.
-  const Outcome mirrored = RunFlow(R"(
+  const Outcome mirrored =
+      RunFlow(R"(
 flow ragged {
   in  left:   string stream
   in  right:  string stream
@@ -1342,9 +1362,7 @@ flow ragged {
   zip(left, right) -> joined
 }
 )",
-                               "ragged",
-                               {{"left", {"\"a\""}},
-                                {"right", {"\"1\"", "\"2\""}}});
+              "ragged", {{"left", {"\"a\""}}, {"right", {"\"1\"", "\"2\""}}});
   ASSERT_TRUE(mirrored.status.ok()) << mirrored.status;
   EXPECT_EQ(mirrored.outputs.at("joined"),
             Values({"[\"a\", \"1\"]", "[null, \"2\"]"}));
@@ -1362,7 +1380,7 @@ flow risky {
   zip(left, bad.out) -> joined
 }
 )",
-                              "risky", {{"left", {"\"a\"", "\"b\""}}});
+                                  "risky", {{"left", {"\"a\"", "\"b\""}}});
   ASSERT_FALSE(outcome.status.ok());
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kNotFound);
 }
@@ -1389,9 +1407,9 @@ flow ordinary {
   done.code -> drained
 }
 )",
-                              "ordinary",
-                              {{"left", {"\"a\"", "\"b\"", "\"c\""}},
-                               {"right", {"\"1\"", "\"2\"", "\"3\""}}});
+                                  "ordinary",
+                                  {{"left", {"\"a\"", "\"b\"", "\"c\""}},
+                                   {"right", {"\"1\"", "\"2\"", "\"3\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("first_two"),
             Values({"[\"a\", \"1\"]", "[\"b\", \"2\"]"}));
@@ -1404,7 +1422,8 @@ TEST(FlowRuntimeTest, AForLoopMayTakeATupleApartByName) {
   // What makes `zip` worth having: the alternative is one name and `it[0]`
   // everywhere, and a tuple whose parts have names reads like the two streams
   // it came from.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow named {
   in  urls:   string stream
   in  titles: string stream
@@ -1414,12 +1433,10 @@ flow named {
   }
 }
 )",
-                              "named",
-                              {{"urls", {"\"/a\"", "\"/b\""}},
-                               {"titles", {"\"A\"", "\"B\""}}});
+              "named",
+              {{"urls", {"\"/a\"", "\"/b\""}}, {"titles", {"\"A\"", "\"B\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(outcome.outputs.at("lines"),
-            Values({"\"/a = A\"", "\"/b = B\""}));
+  EXPECT_EQ(outcome.outputs.at("lines"), Values({"\"/a = A\"", "\"/b = B\""}));
 }
 
 TEST(FlowRuntimeTest, OneNameStillTakesTheWholeValue) {
@@ -1432,7 +1449,7 @@ flow whole {
   }
 }
 )",
-                              "whole", {{"words", {"\"a\""}}});
+                                  "whole", {{"words", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"[\"a\", \"a\"]"}));
 }
@@ -1445,7 +1462,7 @@ flow alone {
   zip(words) -> only
 }
 )",
-                              "alone", {{"words", {"\"a\"", "\"b\""}}});
+                                  "alone", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("only"), Values({"[\"a\"]", "[\"b\"]"}));
 }
@@ -1460,12 +1477,11 @@ flow tagged {
   zip(words, "tag") -> joined
 }
 )",
-                              "tagged", {{"words", {"\"a\"", "\"b\""}}});
+                                  "tagged", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("joined"),
             Values({"[\"a\", \"tag\"]", "[\"b\", null]"}));
 }
-
 
 TEST(FlowRuntimeTest, ALogStatementWritesToTheFlowsOwnLog) {
   LogCapture logs;
@@ -1478,7 +1494,7 @@ flow narrated {
   logf warning "%s words in all" 2 after said
 }
 )",
-                              "narrated", {{"words", {"\"a\"", "\"b\""}}});
+                                  "narrated", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
 
@@ -1519,7 +1535,7 @@ flow totals {
   prices | count -> counted
 }
 )",
-                              "totals", {{"prices", {"1", "4", "7"}}});
+                                  "totals", {{"prices", {"1", "4", "7"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("revenue"), Values({"12"}));
   EXPECT_EQ(outcome.outputs.at("biggest"), Values({"7"}));
@@ -1529,16 +1545,15 @@ flow totals {
 }
 
 TEST(FlowRuntimeTest, AnAggregationMayReadOneFieldOfEachValue) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow revenue {
   in  orders: json stream
   out total:  number
   orders | sum it.price -> total
 }
 )",
-                              "revenue",
-                              {{"orders", {"{\"price\": 3}",
-                                           "{\"price\": 4.5}"}}});
+              "revenue", {{"orders", {"{\"price\": 3}", "{\"price\": 4.5}"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("total"), Values({"7.5"}));
 }
@@ -1555,7 +1570,7 @@ flow empty {
   prices | sum -> total
 }
 )",
-                              "empty");
+                                  "empty");
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("biggest"), Values({}));
   EXPECT_EQ(outcome.outputs.at("total"), Values({"0"}));
@@ -1571,7 +1586,7 @@ flow folded {
   steps | fold 0 as so_far, so_far + it -> furthest
 }
 )",
-                              "folded", {{"steps", {"3", "4", "5"}}});
+                                  "folded", {{"steps", {"3", "4", "5"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("furthest"), Values({"12"}));
 }
@@ -1586,7 +1601,7 @@ flow peak {
   samples | fold 0 as best, best + it - best -> highest
 }
 )",
-                              "peak", {{"samples", {"2", "9"}}});
+                                  "peak", {{"samples", {"2", "9"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("highest"), Values({"9"}));
 }
@@ -1603,7 +1618,7 @@ flow running {
   steps | scan 0 as n, n + 1 -> numbered
 }
 )",
-                              "running", {{"steps", {"3", "4", "5"}}});
+                                  "running", {{"steps", {"3", "4", "5"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("totals"), Values({"3", "7", "12"}));
   // Numbering a stream is the smallest useful scan, and nothing else in the
@@ -1622,7 +1637,7 @@ flow empty_scan {
   steps | scan 0 as so_far, so_far + it -> totals
 }
 )",
-                              "empty_scan", {{"steps", {}}});
+                                  "empty_scan", {{"steps", {}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("totals"), Values({}));
 }
@@ -1630,7 +1645,8 @@ flow empty_scan {
 TEST(FlowRuntimeTest, AScanCarriesARecordOfState) {
   // What a state machine needs: more than one thing carried, and the value
   // itself carried along so the next stage still has it.
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow machine {
   in  lines: string stream
   out kept:  string stream
@@ -1641,8 +1657,7 @@ flow machine {
     -> kept
 }
 )",
-                              "machine",
-                              {{"lines", {"x", "B", "one", "two", "E", "y"}}});
+              "machine", {{"lines", {"x", "B", "one", "two", "E", "y"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Quoted, because a computed string reaches a port as JSON whatever the port
   // says it carries. That is the runtime's own behaviour and not the stage's;
@@ -1651,7 +1666,8 @@ flow machine {
 }
 
 TEST(FlowRuntimeTest, AWindowOverlapsWhereABatchWouldNot) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow neighbours {
   in  words:   string stream
   out pairs:   string stream
@@ -1660,8 +1676,7 @@ flow neighbours {
   words | batch 2 | map join(it, "+") -> grouped
 }
 )",
-                              "neighbours",
-                              {{"words", {"a", "b", "c", "d"}}});
+              "neighbours", {{"words", {"a", "b", "c", "d"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Every adjacent pair, including the one a `batch` boundary falls between --
   // which is the pair a cross-line search would otherwise miss. Quoted for the
@@ -1682,7 +1697,7 @@ flow narrow {
   words | window 3 | map join(it, "+") -> seen
 }
 )",
-                              "narrow", {{"words", {"a", "b"}}});
+                                  "narrow", {{"words", {"a", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({}));
 }
@@ -1695,13 +1710,14 @@ flow single {
   words | window 1 | map join(it, "+") -> seen
 }
 )",
-                              "single", {{"words", {"a", "b"}}});
+                                  "single", {{"words", {"a", "b"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("seen"), Values({"\"a\"", "\"b\""}));
 }
 
 TEST(FlowRuntimeTest, SortOrdersTheWholeStreamAndDescReversesIt) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow ordered {
   in  words: string stream
   out up:    string stream
@@ -1710,9 +1726,7 @@ flow ordered {
   words | sort desc -> down
 }
 )",
-                              "ordered",
-                              {{"words", {"\"pear\"", "\"apple\"",
-                                          "\"fig\""}}});
+              "ordered", {{"words", {"\"pear\"", "\"apple\"", "\"fig\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("up"),
             Values({"\"apple\"", "\"fig\"", "\"pear\""}));
@@ -1721,42 +1735,39 @@ flow ordered {
 }
 
 TEST(FlowRuntimeTest, SortByAKeyIsStableInTheValuesOwnOrder) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow ranked {
   in  hits:   json stream
   out best:   json stream
   hits | sort by it.score desc -> best
 }
 )",
-                              "ranked",
-                              {{"hits", {"{\"id\": 1, \"score\": 5}",
-                                         "{\"id\": 2, \"score\": 9}",
-                                         "{\"id\": 3, \"score\": 5}"}}});
+              "ranked",
+              {{"hits",
+                {R"({"id": 1, "score": 5})", R"({"id": 2, "score": 9})",
+                 R"({"id": 3, "score": 5})"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // 2 first for its score; 1 before 3 because they tie and that is the order
   // they were written in.
   ASSERT_EQ(outcome.outputs.at("best").size(), 3u);
-  EXPECT_NE(outcome.outputs.at("best")[0].find("\"id\": 2"),
-            std::string::npos);
-  EXPECT_NE(outcome.outputs.at("best")[1].find("\"id\": 1"),
-            std::string::npos);
-  EXPECT_NE(outcome.outputs.at("best")[2].find("\"id\": 3"),
-            std::string::npos);
+  EXPECT_NE(outcome.outputs.at("best")[0].find("\"id\": 2"), std::string::npos);
+  EXPECT_NE(outcome.outputs.at("best")[1].find("\"id\": 1"), std::string::npos);
+  EXPECT_NE(outcome.outputs.at("best")[2].find("\"id\": 3"), std::string::npos);
 }
 
 TEST(FlowRuntimeTest, FlattenIsTheInverseOfBatch) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow spread {
   in  words: string stream
   out out:   string stream
   words | batch 2 | flatten -> out
 }
 )",
-                              "spread",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+              "spread", {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(outcome.outputs.at("out"),
-            Values({"\"a\"", "\"b\"", "\"c\""}));
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\"", "\"c\""}));
 }
 
 TEST(FlowRuntimeTest, FlattenLetsAValueThatIsNotAListThrough) {
@@ -1767,13 +1778,14 @@ flow mixed {
   words | flatten -> out
 }
 )",
-                              "mixed", {{"words", {"\"a\"", "[\"b\"]"}}});
+                                  "mixed", {{"words", {"\"a\"", "[\"b\"]"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\""}));
 }
 
 TEST(FlowRuntimeTest, InterleaveReadsSeveralStreamsAsOne) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow merged {
   in  fast: string stream
   in  slow: string stream
@@ -1781,9 +1793,7 @@ flow merged {
   interleave(fast, slow) -> all
 }
 )",
-                              "merged",
-                              {{"fast", {"\"a\"", "\"b\""}},
-                               {"slow", {"\"c\""}}});
+              "merged", {{"fast", {"\"a\"", "\"b\""}}, {"slow", {"\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Every value, once. The order between the two sources is whatever arrived
   // first, which is the whole point, so only the multiset is pinned.
@@ -1800,23 +1810,23 @@ constexpr std::string_view kOrderShape = R"(struct Order {
 )";
 
 TEST(FlowRuntimeTest, ATryStageDropsTheValueItCouldNotDo) {
-  const Outcome outcome = RunFlow(absl::StrCat(kOrderShape, R"(
+  const Outcome outcome = RunFlow(
+      absl::StrCat(kOrderShape, R"(
 flow tolerant {
   in  docs: json stream
   out out:  json stream
   docs | try map it as Order -> out
 }
 )"),
-                              "tolerant",
-                              {{"docs", {"{\"id\": \"a\"}", "{}",
-                                         "{\"id\": \"b\"}"}}});
+      "tolerant", {{"docs", {R"({"id": "a"})", "{}", R"({"id": "b"})"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // The two that fit, and no failure: `try` says the flow expected this.
   EXPECT_EQ(outcome.outputs.at("out").size(), 2u);
 }
 
 TEST(FlowRuntimeTest, ATryStageRoutesItsFailuresWhereItWasTold) {
-  const Outcome outcome = RunFlow(absl::StrCat(kOrderShape, R"(
+  const Outcome outcome =
+      RunFlow(absl::StrCat(kOrderShape, R"(
 flow routed {
   in  docs: json stream
   out good: json stream
@@ -1824,8 +1834,7 @@ flow routed {
   docs | try map it as Order into bad -> good
 }
 )"),
-                              "routed",
-                              {{"docs", {"{\"id\": \"a\"}", "{}"}}});
+              "routed", {{"docs", {R"({"id": "a"})", "{}"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("good").size(), 1u);
   // The failure arrives as a status record, which is a stream like any other.
@@ -1842,21 +1851,20 @@ flow strict {
   docs | map it as Order -> out
 }
 )"),
-                              "strict", {{"docs", {"{}"}}});
+                                  "strict", {{"docs", {"{}"}}});
   EXPECT_FALSE(outcome.status.ok());
 }
 
 TEST(FlowRuntimeTest, AParallelStagePutsTheOrderBack) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome = RunFlow(
+      R"(
 flow wide {
   in  words: string stream
   out out:   string stream
   words | map upper(it) parallel 4 -> out
 }
 )",
-                              "wide",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\"",
-                                          "\"d\"", "\"e\""}}});
+      "wide", {{"words", {"\"a\"", "\"b\"", "\"c\"", "\"d\"", "\"e\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Four at a time, and the stream downstream is still the order it was read
   // in: that is what `parallel` without `unordered` promises.
@@ -1865,37 +1873,34 @@ flow wide {
 }
 
 TEST(FlowRuntimeTest, AnUnorderedParallelStageStillDeliversEveryValue) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow loose {
   in  words: string stream
   out out:   string stream
   words | map upper(it) parallel 4 unordered -> out
 }
 )",
-                              "loose",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\"",
-                                          "\"d\""}}});
+              "loose", {{"words", {"\"a\"", "\"b\"", "\"c\"", "\"d\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   Values sorted = outcome.outputs.at("out");
   std::sort(sorted.begin(), sorted.end());
-  EXPECT_EQ(sorted,
-            Values({"\"A\"", "\"B\"", "\"C\"", "\"D\""}));
+  EXPECT_EQ(sorted, Values({"\"A\"", "\"B\"", "\"C\"", "\"D\""}));
 }
 
 TEST(FlowRuntimeTest, PaceSpacesValuesOutWithoutDroppingAny) {
   const absl::Time started = absl::Now();
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow paced {
   in  words: string stream
   out out:   string stream
   words | pace 20ms -> out
 }
 )",
-                              "paced",
-                              {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+              "paced", {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(outcome.outputs.at("out"),
-            Values({"\"a\"", "\"b\"", "\"c\""}));
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\"", "\"c\""}));
   // Nothing dropped, and the second and third value each waited: two gaps of
   // 20ms is the floor. Generous on the upper end, because a loaded machine may
   // take much longer and that is not a failure.
@@ -1912,7 +1917,7 @@ flow watched {
   words | timeout 50ms -> out
 }
 )",
-                              "watched", {}, {}, /*close_inputs=*/false);
+                                  "watched", {}, {}, /*close_inputs=*/false);
   EXPECT_EQ(outcome.status.code(), absl::StatusCode::kDeadlineExceeded)
       << outcome.status;
 }
@@ -1925,7 +1930,7 @@ flow watched {
   words | timeout 5s -> out
 }
 )",
-                              "watched", {{"words", {"\"a\"", "\"b\""}}});
+                                  "watched", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\""}));
 }
@@ -1941,7 +1946,7 @@ flow raced {
   a.out | first 1 -> out
 }
 )",
-                              "raced", {{"text", {"\"hi\""}}});
+                                  "raced", {{"text", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"HI\""}));
 }
@@ -1956,7 +1961,7 @@ flow raced {
   wait first of a, b -> out
 }
 )",
-                              "raced", {{"text", {"\"hi\""}}});
+                                  "raced", {{"text", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
   // Either of them may win, and which one is exactly what the flow is being
   // told; that it is one of the two, counted from zero, is the contract.
@@ -1976,7 +1981,7 @@ flow raced {
   strformat("won %s", n) -> out
 }
 )",
-                              "raced", {{"text", {"\"hi\""}}});
+                                  "raced", {{"text", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
   ASSERT_EQ(outcome.outputs.at("out").size(), 1u);
   const std::string& said = outcome.outputs.at("out").front();
@@ -1994,7 +1999,7 @@ flow raced {
   n -> out
 }
 )",
-                              "raced", {{"text", {"\"hi\""}}});
+                                  "raced", {{"text", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
   ASSERT_EQ(outcome.outputs.at("out").size(), 1u);
   const std::string& bound = outcome.outputs.at("out").front();
@@ -2012,7 +2017,7 @@ flow both {
   a.out | count -> out
 }
 )",
-                              "both", {{"text", {"\"hi\""}}});
+                                  "both", {{"text", {"\"hi\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"2"}));
 }
@@ -2026,7 +2031,7 @@ flow watched {
   words | log | logf "saw %s" it -> said
 }
 )",
-                              "watched", {{"words", {"\"a\"", "\"b\""}}});
+                                  "watched", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Two stages, neither of which changed anything: the values arrive as
   // written, JSON quoting and all.
@@ -2051,7 +2056,7 @@ flow counted {
   }
 }
 )",
-                              "counted", {{"words", {"\"a\"", "\"b\""}}});
+                                  "counted", {{"words", {"\"a\"", "\"b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(logs.texts(), Values({"one: a", "one: b"}));
 }
@@ -2073,7 +2078,7 @@ flow shaped {
   urls | map Hit{url: it, score: 1} | log | logf "at %s" it.url -> kept
 }
 )",
-                              "shaped", {{"urls", {"\"a\""}}});
+                                  "shaped", {{"urls", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
 
   ASSERT_EQ(logs.lines().size(), 2u);
@@ -2095,7 +2100,7 @@ flow said {
   log "a literal" after out
 }
 )",
-                              "said", {{"words", {"\"a\""}}});
+                                  "said", {{"words", {"\"a\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   for (const LogCapture::Line& line : logs.lines()) {
     EXPECT_EQ(line.mimetype, "text/plain") << line.text;

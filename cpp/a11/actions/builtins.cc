@@ -46,13 +46,15 @@ data::Chunk TextChunk(std::string text, std::string_view mimetype) {
  * serialization registry the caller's side is carrying, and the two things it
  * accepts -- a JSON request document and an action name -- are text either way.
  */
-absl::StatusOr<std::string> ReadUnaryText(
-    const std::shared_ptr<Action>& action, std::string_view port) {
+absl::StatusOr<std::string> ReadUnaryText(const std::shared_ptr<Action>& action,
+                                          std::string_view port) {
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> input,
                         action->GetInput(std::string(port)));
   ABSL_ASSIGN_OR_RETURN(std::optional<data::Chunk> chunk,
                         input->NextChunk().Await());
-  if (!chunk.has_value() || chunk->IsNull() || chunk->IsEmpty()) return "";
+  if (!chunk.has_value() || chunk->IsNull() || chunk->IsEmpty()) {
+    return "";
+  }
   ABSL_RETURN_IF_ERROR(chunk->Materialize());
   return chunk->data;
 }
@@ -87,8 +89,7 @@ absl::Status RunListActions(const std::shared_ptr<Action>& action) {
                         RegistryOf(action));
   ABSL_ASSIGN_OR_RETURN(const std::string encoded,
                         ReadUnaryText(action, "request"));
-  ABSL_ASSIGN_OR_RETURN(const SchemaQuery request,
-                        ParseSchemaQuery(encoded));
+  ABSL_ASSIGN_OR_RETURN(const SchemaQuery request, ParseSchemaQuery(encoded));
   ABSL_ASSIGN_OR_RETURN(std::string document,
                         RegistryToJsonText(*registry, request));
   return WriteUnary(action, "actions", std::move(document),
@@ -98,7 +99,8 @@ absl::Status RunListActions(const std::shared_ptr<Action>& action) {
 absl::Status RunGetSchema(const std::shared_ptr<Action>& action) {
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<ActionRegistry> registry,
                         RegistryOf(action));
-  ABSL_ASSIGN_OR_RETURN(const std::string name, ReadUnaryText(action, "action"));
+  ABSL_ASSIGN_OR_RETURN(const std::string name,
+                        ReadUnaryText(action, "action"));
   if (name.empty()) {
     return absl::InvalidArgumentError(
         "__get_schema__ needs the name of an action on its 'action' input");
@@ -111,8 +113,7 @@ absl::Status RunGetSchema(const std::shared_ptr<Action>& action) {
   const bool runnable = registry->GetHandler(name).ok();
   ABSL_ASSIGN_OR_RETURN(std::string document,
                         SchemaToJsonText(schema, runnable, PortView::kAll));
-  return WriteUnary(action, "schema", std::move(document),
-                    data::kJsonMimetype);
+  return WriteUnary(action, "schema", std::move(document), data::kJsonMimetype);
 }
 
 absl::Status RunPing(const std::shared_ptr<Action>& action) {
@@ -145,17 +146,17 @@ ActionSchema ListActionsSchema() {
   schema.description =
       "List the actions this peer serves, with their schemas, as one "
       "a11.actions/v1 document. Takes an optional request object on 'request': "
-      "'names' (full-match patterns), 'exact' (names), 'ports' (\"callable\" or "
+      "'names' (full-match patterns), 'exact' (names), 'ports' (\"callable\" "
+      "or "
       "\"all\"), 'include_reserved', and 'runnable_only'.";
   schema.inputs.emplace(
       "request", Port("request", std::string(data::kJsonMimetype),
                       "Which actions to describe. Absent means all of them.",
                       /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "actions",
-      Port("actions", std::string(data::kJsonMimetype),
-           "The a11.actions/v1 document, whole.", /*required=*/true,
-           /*unary=*/true));
+      "actions", Port("actions", std::string(data::kJsonMimetype),
+                      "The a11.actions/v1 document, whole.", /*required=*/true,
+                      /*unary=*/true));
   return schema;
 }
 
@@ -185,10 +186,9 @@ ActionSchema PingSchema() {
   schema.description =
       "Ping the server to check if it is alive. Requires a single value on the "
       "port `input`, which it returns as a single value on the port `output`.";
-  schema.inputs.emplace("input",
-                        Port("input", std::string(data::kTextMimetype),
-                             "Ping input value", /*required=*/false,
-                             /*unary=*/false));
+  schema.inputs.emplace("input", Port("input", std::string(data::kTextMimetype),
+                                      "Ping input value", /*required=*/false,
+                                      /*unary=*/false));
   schema.outputs.emplace("output",
                          Port("output", std::string(data::kTextMimetype),
                               "Pong response value", /*required=*/false,
@@ -220,7 +220,9 @@ bool IsBuiltinAction(std::string_view name) {
 
 const BuiltinAction* absl_nullable GetBuiltinAction(std::string_view name) {
   const auto found = Builtins().find(name);
-  if (found == Builtins().end()) return nullptr;
+  if (found == Builtins().end()) {
+    return nullptr;
+  }
   return &found->second;
 }
 

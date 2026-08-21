@@ -74,7 +74,7 @@ class WebSocketWireStream final : public ChannelWireStream {
    *     via Start()/Send() once returned.
    */
   static absl::StatusOr<std::shared_ptr<WebSocketWireStream>> CreateClient(
-      std::string url, WireStreamOptions options = {},
+      const std::string& url, WireStreamOptions options = {},
       WebSocketClientOptions websocket_options = {});
 
   explicit WebSocketWireStream(ConstructorToken, std::shared_ptr<State> state)

@@ -5,8 +5,8 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
-#include <map>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -263,8 +263,7 @@ struct ChunkStoreReader::State
    */
   void Drive() {
     DriveInline(&mu, &pump, "ChunkStoreReader", [this] {
-      while (DriveOnce()) {
-      }
+      while (DriveOnce()) {}
     });
   }
 
@@ -281,10 +280,12 @@ struct ChunkStoreReader::State
   /** @return Whether the caller should drive again without yielding. */
   bool DriveOnce() {
     std::vector<Completion> completions;
+
     struct Wanted {
       std::uint64_t position;
       std::uint64_t generation;
     };
+
     std::vector<Wanted> to_issue;
     bool ordered = true;
     {
@@ -296,8 +297,7 @@ struct ChunkStoreReader::State
       // operation per fragment sequenced behind the first. Keep that path on
       // one-at-a-time; overlapping reads with clears is a different problem
       // and not one this buys anything on.
-      const size_t ceiling =
-          options.pop_chunks ? 1 : kMaxFetchesInFlight;
+      const size_t ceiling = options.pop_chunks ? 1 : kMaxFetchesInFlight;
       if (status.has_value() || operation != Operation::kNone) {
         // Terminal requests were collected above; a clear in progress will
         // arrange the next wake-up from its completion callback.
@@ -308,8 +308,7 @@ struct ChunkStoreReader::State
       } else {
         while (fetches_in_flight + to_issue.size() < ceiling &&
                HasReadCapacityLocked(to_issue.size())) {
-          if (next_fetch_position >
-              std::numeric_limits<std::uint32_t>::max()) {
+          if (next_fetch_position > std::numeric_limits<std::uint32_t>::max()) {
             if (to_issue.empty() && fetches_in_flight == 0) {
               status = absl::OutOfRangeError(
                   "ChunkStoreReader position exceeds the sequence range");
@@ -320,9 +319,8 @@ struct ChunkStoreReader::State
           // A read this reader has asked for but not yet delivered. Counted
           // against capacity so the prefetch window is the buffer size, not
           // the buffer size plus everything in flight.
-          to_issue.push_back(
-              Wanted{.position = next_fetch_position++,
-                     .generation = fetch_generation});
+          to_issue.push_back(Wanted{.position = next_fetch_position++,
+                                    .generation = fetch_generation});
         }
         fetches_in_flight += to_issue.size();
       }
@@ -349,13 +347,13 @@ struct ChunkStoreReader::State
                          /*inline_drive=*/true) ||
             drive_again;
       } else {
-        InstallFetch(std::move(pending), wanted.position, wanted.generation);
+        InstallFetch(pending, wanted.position, wanted.generation);
       }
     }
     return drive_again;
   }
 
-  void InstallFetch(a11::Future<data::NodeFragment> pending,
+  void InstallFetch(const a11::Future<data::NodeFragment>& pending,
                     std::uint64_t position_wanted, std::uint64_t generation) {
     bool cancel = false;
     {
@@ -417,7 +415,7 @@ struct ChunkStoreReader::State
     if (start_clear) {
       a11::Future<data::NodeFragment> pending;
       pending = store->ClearData(clear_seq);
-      InstallClear(std::move(pending), clear_generation);
+      InstallClear(pending, clear_generation);
       return false;
     }
     if (inline_drive) {
@@ -427,7 +425,7 @@ struct ChunkStoreReader::State
     return false;
   }
 
-  void InstallClear(a11::Future<data::NodeFragment> pending,
+  void InstallClear(const a11::Future<data::NodeFragment>& pending,
                     std::uint64_t generation) {
     bool cancel = false;
     {
@@ -616,8 +614,8 @@ struct ChunkStoreReader::State
     // fragments this reader has committed to holding. Counting them keeps the
     // prefetch window equal to the configured buffer size rather than that
     // plus everything outstanding.
-    const size_t committed = buffer.size() + fetches_in_flight +
-                             arrived.size() + about_to_issue;
+    const size_t committed =
+        buffer.size() + fetches_in_flight + arrived.size() + about_to_issue;
     return committed < capacity;
   }
 
@@ -799,8 +797,8 @@ ChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
   std::shared_ptr<State> state = state_;
   return a11::ThenAfterWaiting(
       state->Next(timeout), absl::InfiniteFuture(),
-      [state, limit](
-          const absl::StatusOr<State::NextResult>& first) -> absl::StatusOr<Batch> {
+      [state, limit](const absl::StatusOr<State::NextResult>& first)
+          -> absl::StatusOr<Batch> {
         if (!first.ok()) {
           return first.status();
         }

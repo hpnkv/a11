@@ -9,13 +9,13 @@
  * throwing. See a11/flow/internal/pattern.h.
  */
 
-#include "a11/flow/internal/pattern.h"
-
 #include <regex>
 #include <string>
 
 #include <absl/status/status.h>
 #include <absl/strings/str_cat.h>
+
+#include "a11/flow/internal/pattern.h"
 
 namespace a11::flow::internal {
 

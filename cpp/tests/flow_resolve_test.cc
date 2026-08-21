@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/resolve.h"
-
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -14,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/flow/parser.h"
+#include "a11/flow/resolve.h"
 
 namespace a11::flow {
 namespace {
@@ -24,6 +23,7 @@ ResolveResult Check(std::string_view source) {
 
 std::vector<std::string> Codes(const ResolveResult& result) {
   std::vector<std::string> codes;
+  codes.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
     codes.push_back(diagnostic.code);
   }
@@ -32,6 +32,7 @@ std::vector<std::string> Codes(const ResolveResult& result) {
 
 std::string Messages(const ResolveResult& result) {
   std::vector<std::string> messages;
+  messages.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
     messages.push_back(diagnostic.message);
   }
@@ -50,9 +51,13 @@ std::vector<std::filesystem::path> Corpus() {
        {root / "examples" / "003-flow-dsl",
         root / "examples" / "004-deep-research", root / "scripts",
         root / "testdata" / "flow"}) {
-    if (!std::filesystem::is_directory(directory)) continue;
+    if (!std::filesystem::is_directory(directory)) {
+      continue;
+    }
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-      if (entry.path().extension() == ".flow") paths.push_back(entry.path());
+      if (entry.path().extension() == ".flow") {
+        paths.push_back(entry.path());
+      }
     }
   }
   std::sort(paths.begin(), paths.end());
@@ -168,14 +173,16 @@ TEST(FlowResolve, SkipACallWhoseRealPortsAreUnknownHereStillResolves) {
   EXPECT_EQ(plan.steps[2].source, "x");
 }
 
-TEST(FlowResolve, SkipNamedOutputsOfACallReusesThePortValidationOfADottedReference) {
+TEST(FlowResolve,
+     SkipNamedOutputsOfACallReusesThePortValidationOfADottedReference) {
   const std::string inner =
       "flow inner { in a: string\n out b: string\n a -> b }\n";
   const std::string outer =
       "flow outer { in a: string\n"
       "  x = run inner(a: a)\n  skip nope of x }\n";
   const ResolveResult result = Check(inner + outer);
-  EXPECT_EQ(Codes(result), (std::vector<std::string>{"flow.name.unknown-port"}));
+  EXPECT_EQ(Codes(result),
+            (std::vector<std::string>{"flow.name.unknown-port"}));
   EXPECT_NE(Messages(result).find("has no output port 'nope'"),
             std::string::npos)
       << Messages(result);
@@ -226,6 +233,7 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
     std::string_view code;
     std::string_view message;
   };
+
   // Every message here is `a11/flow/plan.py`'s, because the suite and the
   // documentation already quote them.
   const Case cases[] = {
@@ -235,18 +243,17 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
        "flow.name.not-writable", "cannot be written by this flow"},
       {"flow f { in a: string\n wait nobody }", "flow.name.unknown",
        "Unknown name 'nobody'"},
-      {"flow f { in a: string\n s <- a }",
-       "flow.barrier.carry-outside-repeat", "no repeat here"},
-      {"flow f { in a: string\n until a }",
-       "flow.barrier.until-outside-repeat", "no 'repeat' or 'for' here"},
+      {"flow f { in a: string\n s <- a }", "flow.barrier.carry-outside-repeat",
+       "no repeat here"},
+      {"flow f { in a: string\n until a }", "flow.barrier.until-outside-repeat",
+       "no 'repeat' or 'for' here"},
       {"flow f { in a: string\n repeat s = 1 { until a\n while a } }",
        "flow.barrier.duplicate-until", "already has a stop condition"},
       {"flow f { in a: string\n repeat s = 1 { s <- a\n s <- a } }",
        "flow.barrier.duplicate-carry", "is already carried"},
       {"flow f { in a: string\n repeat s = 1 { t <- a } }",
        "flow.barrier.wrong-carry", "This repeat carries 's', not 't'."},
-      {"flow f { in a: wat }", "flow.form.unknown-type",
-       "Unknown type 'wat'"},
+      {"flow f { in a: wat }", "flow.form.unknown-type", "Unknown type 'wat'"},
       {"flow f { in a: list[string, object] }", "flow.form.unknown-type",
        "type parameter"},
       {"flow f { in a: string\n in a: string }", "flow.form.duplicate-port",
@@ -261,7 +268,8 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
        "flow.name.unknown-node-map", "Unknown node map 'nowhere'"},
       {"flow f { in a: string\n x = run t(p: a)\n x -> a }",
        "flow.name.call-as-stream", "name one of its ports"},
-      {"flow f { in a: string\n out b: string\n x = run t(p: a)\n x | count -> b }",
+      {"flow f { in a: string\n out b: string\n x = run t(p: a)\n x | count -> "
+       "b }",
        "flow.name.call-as-stream", "name one of its ports"},
       {"flow f { in a: string\n out b: string\n nodes m\n m -> b }",
        "flow.name.not-a-stream", "is a node map, not a stream"},
@@ -448,10 +456,10 @@ TEST(FlowResolve, ARaceIsAValueAndWaitingForEveryoneIsNot) {
 TEST(FlowResolve, ALogStageChangesNothingAboutTheStream) {
   // A log is a pass-through, so what the pipeline was carrying it still carries:
   // the shape survives, and so does the proof that there is one value.
-  const ResolveResult result =
-      Check("struct Hit {\n  url: string\n}\n\n"
-            "flow f {\n  in a: string\n  out b: Hit\n"
-            "  a | map Hit{url: it} | log it.url | first 1 -> b\n}\n");
+  const ResolveResult result = Check(
+      "struct Hit {\n  url: string\n}\n\n"
+      "flow f {\n  in a: string\n  out b: Hit\n"
+      "  a | map Hit{url: it} | log it.url | first 1 -> b\n}\n");
   EXPECT_TRUE(Codes(result).empty()) << Messages(result);
 }
 
@@ -510,12 +518,17 @@ constexpr std::string_view kShapes = R"(flow shapes {
 /// Whether the ref the graph labelled `label` carries at most one value.
 bool Unary(const ResolvedFlow& flow, std::string_view label) {
   for (const graph::Ref& ref : flow.graph.refs) {
-    if (ref.label == label) return ref.unary;
+    if (ref.label == label) {
+      return ref.unary;
+    }
   }
   std::vector<std::string> labels;
-  for (const graph::Ref& ref : flow.graph.refs) labels.push_back(ref.label);
-  ADD_FAILURE() << "no ref labelled '" << label << "'; the graph has: "
-                << absl::StrJoin(labels, " | ");
+  labels.reserve(flow.graph.refs.size());
+  for (const graph::Ref& ref : flow.graph.refs) {
+    labels.push_back(ref.label);
+  }
+  ADD_FAILURE() << "no ref labelled '" << label
+                << "'; the graph has: " << absl::StrJoin(labels, " | ");
   return false;
 }
 
@@ -525,8 +538,7 @@ TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   // said `stream`, are streams however they are used.
   const ResolveResult result =
       Resolve(kShapes, Parse(kShapes), /*build_graph=*/true);
-  ASSERT_TRUE(result.diagnostics.empty())
-      << absl::StrJoin(Codes(result), ", ");
+  ASSERT_TRUE(result.diagnostics.empty()) << absl::StrJoin(Codes(result), ", ");
   ASSERT_FALSE(result.flows.empty());
   const ResolvedFlow& flow = result.flows.front();
 
@@ -614,7 +626,9 @@ TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
   ASSERT_FALSE(result.flows.empty());
   bool found = false;
   for (const graph::Step& step : result.flows.front().graph.steps) {
-    if (step.label != "done") continue;
+    if (step.label != "done") {
+      continue;
+    }
     found = true;
     EXPECT_EQ(step.kind, graph::StepKind::kForEach)
         << "'done' named a " << graph::StepKindName(step.kind);
@@ -625,17 +639,20 @@ TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
 TEST(FlowResolve, APatternIsReadWhereItIsWritten) {
   // A pattern is a literal almost every time, so a typo in one belongs in the
   // editor rather than in the failure the first value triggers.
-  EXPECT_EQ(Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
-                        "  l | match \"name={name\" -> o\n}\n")),
-            (std::vector<std::string>{"flow.form.bad-pattern"}));
-  EXPECT_EQ(Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
-                        "  l | match \"{a} {a}\" -> o\n}\n")),
-            (std::vector<std::string>{"flow.form.bad-pattern"}));
+  EXPECT_EQ(
+      Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+                  "  l | match \"name={name\" -> o\n}\n")),
+      (std::vector<std::string>{"flow.form.bad-pattern"}));
+  EXPECT_EQ(
+      Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+                  "  l | match \"{a} {a}\" -> o\n}\n")),
+      (std::vector<std::string>{"flow.form.bad-pattern"}));
   // And a pattern that reads is left alone.
-  EXPECT_TRUE(Codes(Check("flow f {\n  in l: string stream\n"
-                          "  out o: json stream\n"
-                          "  l | match \"name={name} age={age:int}\" -> o\n}\n"))
-                  .empty());
+  EXPECT_TRUE(
+      Codes(Check("flow f {\n  in l: string stream\n"
+                  "  out o: json stream\n"
+                  "  l | match \"name={name} age={age:int}\" -> o\n}\n"))
+          .empty());
 }
 
 TEST(FlowResolve, ALetMayTakeAValueApart) {
@@ -676,36 +693,40 @@ TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
   EXPECT_EQ(Codes(Check(absl::StrCat(
                 kHead, "  lines | match \"{a}: {b}\" | map it.c -> o\n}\n"))),
             (std::vector<std::string>{"flow.form.unknown-field"}));
-  EXPECT_EQ(Codes(Check(absl::StrCat(
-                kHead, "  let who = match(\"name={name}\", lines)\n"
-                       "  strformat(\"%s\", who.nmae) -> o\n}\n"))),
-            (std::vector<std::string>{"flow.form.unknown-field"}));
+  EXPECT_EQ(
+      Codes(Check(absl::StrCat(kHead,
+                               "  let who = match(\"name={name}\", lines)\n"
+                               "  strformat(\"%s\", who.nmae) -> o\n}\n"))),
+      (std::vector<std::string>{"flow.form.unknown-field"}));
 
   // Spelled right, nothing said.
-  EXPECT_TRUE(Codes(Check(absl::StrCat(
-                        kHead, "  strformat(\"%s\", src.url) -> o\n"
+  EXPECT_TRUE(
+      Codes(Check(absl::StrCat(kHead,
+                               "  strformat(\"%s\", src.url) -> o\n"
                                "  lines | match \"{a}: {b}\" | map it.a -> o\n"
                                "  let who = match(\"name={name}\", lines)\n"
                                "  strformat(\"%s\", who.name) -> o\n}\n")))
-                  .empty());
+          .empty());
 
   // And where the file never said, nothing is checked: a `json` port may hold
   // anything, and `it` with no pattern behind it is anybody's guess. A check that
   // cried wolf here would be worse than no check.
-  EXPECT_TRUE(Codes(Check(absl::StrCat(
-                        kHead, "  strformat(\"%s\", loose.anything) -> o\n"
+  EXPECT_TRUE(
+      Codes(Check(absl::StrCat(kHead,
+                               "  strformat(\"%s\", loose.anything) -> o\n"
                                "  lines | map it.whatever -> o\n}\n")))
-                  .empty());
+          .empty());
   // A positional pattern names no fields, so it says nothing either.
-  EXPECT_TRUE(Codes(Check(absl::StrCat(
-                        kHead,
-                        "  lines | match \"{}:{}\" | map it.nope -> o\n}\n")))
-                  .empty());
+  EXPECT_TRUE(
+      Codes(Check(absl::StrCat(
+                kHead, "  lines | match \"{}:{}\" | map it.nope -> o\n}\n")))
+          .empty());
   // One level only: a field holding a record of its own says nothing about its
   // keys, so the chain stops rather than guessing.
-  EXPECT_TRUE(Codes(Check(absl::StrCat(
-                        kHead, "  strformat(\"%s\", src.url.deeper) -> o\n}\n")))
-                  .empty());
+  EXPECT_TRUE(
+      Codes(Check(absl::StrCat(
+                kHead, "  strformat(\"%s\", src.url.deeper) -> o\n}\n")))
+          .empty());
 }
 
 TEST(FlowResolve, FindsNothingWrongWithAnyFlowThisRepositoryShips) {
@@ -735,7 +756,9 @@ TEST(FlowResolve, CountsWhatReadsAndWritesEachName) {
   ASSERT_EQ(result.flows.size(), 1u);
   const auto find = [&](std::string_view name) -> const Symbol* {
     for (const Symbol& symbol : result.flows[0].symbols) {
-      if (symbol.name == name) return &symbol;
+      if (symbol.name == name) {
+        return &symbol;
+      }
     }
     return nullptr;
   };

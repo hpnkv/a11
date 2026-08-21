@@ -12,13 +12,13 @@
 #include <absl/strings/str_join.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/flow/catalogue.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
-#include "a11/flow/catalogue.h"
 #include "a11/flow/inspect.h"
 #include "a11/flow/navigate.h"
 #include "a11/flow/offsets.h"
@@ -40,34 +40,43 @@ constexpr std::array kMethods = {
     Method{"parse", "the syntax tree, as flow.syntax/v1"},
     Method{"plan", "what each flow resolved to, as flow.plan/v1"},
     Method{"format", "the document formatted, as flow.format/v1"},
-    Method{"complete", "what may be written at `offset`, as flow.completions/v1"},
+    Method{"complete",
+           "what may be written at `offset`, as flow.completions/v1"},
     Method{"describe", "what is at `offset`, as flow.hover/v1"},
     Method{"symbols", "what the document declares, as flow.symbols/v1"},
-    Method{"definition", "where the name at `offset` was bound, as "
-                         "flow.definition/v1"},
-    Method{"catalogue", "the actions and types the tools know, as "
-                        "flow.catalogue/v1"},
-    Method{"scan", "the actions `paths` declares in source, as "
-                   "flow.catalogue/v1 with origins"},
-    Method{"schema",
-           "the JSON Schema a shape describes, as flow.schema/v1"},
+    Method{"definition",
+           "where the name at `offset` was bound, as "
+           "flow.definition/v1"},
+    Method{"catalogue",
+           "the actions and types the tools know, as "
+           "flow.catalogue/v1"},
+    Method{"scan",
+           "the actions `paths` declares in source, as "
+           "flow.catalogue/v1 with origins"},
+    Method{"schema", "the JSON Schema a shape describes, as flow.schema/v1"},
     Method{"shapes",
            "the shapes a JSON Schema describes, as Flow text and as plans"},
     Method{"codes", "the published diagnostic codes, as flow.codes/v1"},
-    Method{"vocabulary", "every word the language knows, as flow.vocabulary/v1"},
+    Method{"vocabulary",
+           "every word the language knows, as flow.vocabulary/v1"},
     Method{"syntax", "an editor definition, generated for `target`"},
 };
 
 nlohmann::json Failure(const nlohmann::json& request, std::string message) {
-  nlohmann::json answer{{"ok", false},
-                        {"error", nlohmann::json{{"message", std::move(message)}}}};
-  if (request.contains("id")) answer["id"] = request.at("id");
+  nlohmann::json answer{
+      {"ok", false},
+      {"error", nlohmann::json{{"message", std::move(message)}}}};
+  if (request.contains("id")) {
+    answer["id"] = request.at("id");
+  }
   return answer;
 }
 
 nlohmann::json Success(const nlohmann::json& request, nlohmann::json result) {
   nlohmann::json answer{{"ok", true}, {"result", std::move(result)}};
-  if (request.contains("id")) answer["id"] = request.at("id");
+  if (request.contains("id")) {
+    answer["id"] = request.at("id");
+  }
   return answer;
 }
 
@@ -84,8 +93,10 @@ catalogue::Catalogue KnownWorld(const nlohmann::json& request) {
   if (context == request.end() || !context->is_object()) {
     return catalogue::Catalogue::Builtin();
   }
-  const catalogue::Catalogue given = catalogue::Catalogue::FromJson(*context);
-  if (context->value("replace", false)) return given;
+  catalogue::Catalogue given = catalogue::Catalogue::FromJson(*context);
+  if (context->value("replace", false)) {
+    return given;
+  }
   return catalogue::Catalogue::Builtin().MergedWith(given);
 }
 
@@ -98,9 +109,8 @@ nlohmann::json OriginToJson(const catalogue::Origin& origin) {
 
 nlohmann::json RangeToJson(const Range& range) {
   const auto position = [](const Position& one) {
-    return nlohmann::json{{"offset", one.offset},
-                          {"line", one.line},
-                          {"column", one.column}};
+    return nlohmann::json{
+        {"offset", one.offset}, {"line", one.line}, {"column", one.column}};
   };
   return nlohmann::json{{"start", position(range.start)},
                         {"end", position(range.end)}};
@@ -115,8 +125,12 @@ nlohmann::json SymbolToJson(const DocumentSymbol& symbol) {
                        {"kind", SymbolClassName(symbol.kind)},
                        {"range", RangeToJson(symbol.range)},
                        {"selection", RangeToJson(symbol.selection)}};
-  if (!symbol.detail.empty()) value["detail"] = symbol.detail;
-  if (!children.empty()) value["children"] = std::move(children);
+  if (!symbol.detail.empty()) {
+    value["detail"] = symbol.detail;
+  }
+  if (!children.empty()) {
+    value["children"] = std::move(children);
+  }
   return value;
 }
 
@@ -136,7 +150,9 @@ std::vector<Diagnostic> Problems(std::string_view source) {
 absl::Span<const std::string_view> Methods() {
   static const std::vector<std::string_view>* names = [] {
     auto* list = new std::vector<std::string_view>();
-    for (const Method& method : kMethods) list->push_back(method.name);
+    for (const Method& method : kMethods) {
+      list->push_back(method.name);
+    }
     return list;
   }();
   return absl::MakeConstSpan(names->data(), names->size());
@@ -144,7 +160,9 @@ absl::Span<const std::string_view> Methods() {
 
 std::string_view MethodSummary(std::string_view method) {
   for (const Method& known : kMethods) {
-    if (known.name == method) return known.summary;
+    if (known.name == method) {
+      return known.summary;
+    }
   }
   return "";
 }
@@ -171,15 +189,18 @@ nlohmann::json Handle(const nlohmann::json& request) {
   OffsetBasis basis = OffsetBasis::kBytes;
   const std::string wanted = request.value("offsets", std::string());
   if (!OffsetBasisFromName(wanted, basis)) {
-    return Failure(request, absl::StrCat("`offsets` is 'bytes' or 'utf16', not '",
-                                         wanted, "'."));
+    return Failure(
+        request,
+        absl::StrCat("`offsets` is 'bytes' or 'utf16', not '", wanted, "'."));
   }
   // Built once per request and only where it is needed: for a byte-counting
   // client this is the whole cost of the feature.
   const TextIndex index =
       basis == OffsetBasis::kUtf16 ? TextIndex(source) : TextIndex();
   const auto answer = [&](nlohmann::json result) {
-    if (basis == OffsetBasis::kUtf16) RebaseToUtf16(result, index);
+    if (basis == OffsetBasis::kUtf16) {
+      RebaseToUtf16(result, index);
+    }
     return Success(request, std::move(result));
   };
 
@@ -222,11 +243,12 @@ nlohmann::json Handle(const nlohmann::json& request) {
     if (!offset.is_number_unsigned() && !offset.is_number_integer()) {
       return Failure(request,
                      absl::StrCat("`offset` is a number of ",
-                                  OffsetBasisName(basis),
-                                  " into the source."));
+                                  OffsetBasisName(basis), " into the source."));
     }
     const long long at = offset.get<long long>();
-    if (at < 0) return Failure(request, "`offset` cannot be negative.");
+    if (at < 0) {
+      return Failure(request, "`offset` cannot be negative.");
+    }
     const size_t reached = basis == OffsetBasis::kUtf16
                                ? index.ByteOf(static_cast<size_t>(at))
                                : static_cast<size_t>(at);
@@ -255,9 +277,8 @@ nlohmann::json Handle(const nlohmann::json& request) {
       }
       return answer(std::move(result));
     }
-    nlohmann::json result{{"format", kHoverFormat},
-                          {"source", path},
-                          {"found", about.found}};
+    nlohmann::json result{
+        {"format", kHoverFormat}, {"source", path}, {"found", about.found}};
     if (about.found) {
       result["text"] = about.text;
       result["kind"] = SymbolClassName(about.kind);
@@ -298,12 +319,15 @@ nlohmann::json Handle(const nlohmann::json& request) {
     if (const auto paths = request.find("paths");
         paths != request.end() && paths->is_array()) {
       for (const nlohmann::json& one : *paths) {
-        if (one.is_string()) roots.push_back(one.get<std::string>());
+        if (one.is_string()) {
+          roots.push_back(one.get<std::string>());
+        }
       }
     }
     if (roots.empty()) {
-      return Failure(request, "'scan' needs 'paths': a list of files or "
-                              "directories to read.");
+      return Failure(request,
+                     "'scan' needs 'paths': a list of files or "
+                     "directories to read.");
     }
     discover::Options options = discover::Options::Default();
     if (const auto limit = request.find("max_files");
@@ -314,10 +338,10 @@ nlohmann::json Handle(const nlohmann::json& request) {
     nlohmann::json scanned = found.found.ToJson();
     // What was read and what was not. A cap that applied itself silently would
     // make a half-read project look like a project with two actions in it.
-    scanned["scanned"] = nlohmann::json{
-        {"files_read", found.files_read},
-        {"reached_file_limit", found.reached_file_limit},
-        {"too_large", found.too_large}};
+    scanned["scanned"] =
+        nlohmann::json{{"files_read", found.files_read},
+                       {"reached_file_limit", found.reached_file_limit},
+                       {"too_large", found.too_large}};
     return Success(request, std::move(scanned));
   }
   // The two directions of the shape/schema translation. Both are about *shapes*
@@ -330,20 +354,24 @@ nlohmann::json Handle(const nlohmann::json& request) {
     const std::string shape_name = request.value("struct", std::string());
     nlohmann::json shapes = nlohmann::json::object();
     for (const DtoPlan& dto : resolved.program.dtos) {
-      if (!shape_name.empty() && dto.name != shape_name) continue;
+      if (!shape_name.empty() && dto.name != shape_name) {
+        continue;
+      }
       shapes[dto.name] = DtoToJsonSchema(dto, resolved.program);
     }
     if (!shape_name.empty() && shapes.empty()) {
       std::vector<std::string> known;
-      for (const DtoPlan& dto : resolved.program.dtos) known.push_back(dto.name);
-      return Failure(request,
-                     absl::StrCat("This document declares no shape '",
-                                  shape_name, "'", known.empty()
-                                           ? " (it declares none)."
-                                           : absl::StrCat(" (it declares ",
-                                                          absl::StrJoin(known,
-                                                                        ", "),
-                                                          ").")));
+      known.reserve(resolved.program.dtos.size());
+      for (const DtoPlan& dto : resolved.program.dtos) {
+        known.push_back(dto.name);
+      }
+      return Failure(
+          request,
+          absl::StrCat("This document declares no shape '", shape_name, "'",
+                       known.empty()
+                           ? " (it declares none)."
+                           : absl::StrCat(" (it declares ",
+                                          absl::StrJoin(known, ", "), ").")));
     }
     nlohmann::json diagnostics = nlohmann::json::array();
     for (const Diagnostic& diagnostic : resolved.diagnostics) {
@@ -364,7 +392,9 @@ nlohmann::json Handle(const nlohmann::json& request) {
     std::string text;
     for (const DtoPlan& dto : read.dtos) {
       dtos.push_back(DtoToJsonValue(dto));
-      if (!text.empty()) text.push_back('\n');
+      if (!text.empty()) {
+        text.push_back('\n');
+      }
       absl::StrAppend(&text, DtoToFlow(dto));
     }
     nlohmann::json diagnostics = nlohmann::json::array();
@@ -373,20 +403,25 @@ nlohmann::json Handle(const nlohmann::json& request) {
     }
     // The Flow text is the useful half: it can be pasted into a file, read,
     // edited and checked in, which a plan cannot.
-    return Success(request, nlohmann::json{{"format", kSchemaFormat},
-                                           {"text", std::move(text)},
-                                           {"structs", std::move(dtos)},
-                                           {"diagnostics",
-                                            std::move(diagnostics)}});
+    return Success(request,
+                   nlohmann::json{{"format", kSchemaFormat},
+                                  {"text", std::move(text)},
+                                  {"structs", std::move(dtos)},
+                                  {"diagnostics", std::move(diagnostics)}});
   }
-  if (method == "codes") return Success(request, CodesToJsonValue());
-  if (method == "vocabulary") return Success(request, VocabularyToJsonValue());
+  if (method == "codes") {
+    return Success(request, CodesToJsonValue());
+  }
+  if (method == "vocabulary") {
+    return Success(request, VocabularyToJsonValue());
+  }
   if (method == "syntax") {
     const std::string name = request.value("target", std::string("sublime"));
     SyntaxTarget target = SyntaxTarget::kSublime;
     if (!SyntaxTargetFromName(name, target)) {
       return Failure(request, absl::StrCat("No editor definition is generated "
-                                           "for ", name, "."));
+                                           "for ",
+                                           name, "."));
     }
     return Success(request, nlohmann::json{
                                 {"target", SyntaxTargetName(target)},
@@ -394,9 +429,8 @@ nlohmann::json Handle(const nlohmann::json& request) {
                                 {"text", GenerateSyntax(target)},
                             });
   }
-  return Failure(request,
-                 absl::StrCat(method, " is not a method this speaks (",
-                              absl::StrJoin(Methods(), ", "), ")."));
+  return Failure(request, absl::StrCat(method, " is not a method this speaks (",
+                                       absl::StrJoin(Methods(), ", "), ")."));
 }
 
 }  // namespace a11::flow

@@ -200,8 +200,8 @@ class SpeechRecognizer : public std::enable_shared_from_this<SpeechRecognizer> {
                                   std::function<void()> close_source,
                                   OnTranscription on_transcription,
                                   OnRecognitionDone on_done);
-  absl::Status Run(AudioBufferReader reader, absl::Duration pause_after,
-                   std::function<void()> close_source,
+  absl::Status Run(const AudioBufferReader& reader, absl::Duration pause_after,
+                   const std::function<void()>& close_source,
                    OnTranscription on_transcription, OnRecognitionDone on_done);
 
   std::shared_ptr<internal::SpeechRecognizerState> state_;

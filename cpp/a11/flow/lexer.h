@@ -28,7 +28,7 @@ struct LexResult {
   std::vector<Diagnostic> diagnostics;
 
   /// Whether anything is an error, which is what the strict entry points check.
-  bool HasErrors() const;
+  [[nodiscard]] bool HasErrors() const;
 };
 
 /// Turn Flow source into tokens, ending with a single `end` token.

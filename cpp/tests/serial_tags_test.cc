@@ -11,6 +11,8 @@
  * language and forgotten here fails a test rather than a conversation.
  */
 
+#include "a11/data/serial_tags.h"
+
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -27,8 +29,6 @@
 
 #include "a11/actions/log.h"
 #include "a11/actions/schema.h"
-
-#include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
@@ -60,10 +60,14 @@ std::vector<std::string> SharedTags() {
   const nlohmann::json table = SharedTagTable();
   std::vector<std::string> result;
   for (const auto& [section, entries] : table.items()) {
-    if (!section.empty() && section.front() == '_') continue;
+    if (!section.empty() && section.front() == '_') {
+      continue;
+    }
     // The other half of the fixture: media types, not tags. See
     // MediaTypesMatchTheFixture below.
-    if (section == "media_types") continue;
+    if (section == "media_types") {
+      continue;
+    }
     for (const auto& [name, tag] : entries.items()) {
       result.push_back(tag.get<std::string>());
     }
@@ -257,9 +261,9 @@ TEST(SerialTagsTest, AudioTypesPublishTheCanonicalTags) {
   EXPECT_EQ(A11SerialTag(TypeTag<DeviceInfo>{}), kAudioDeviceInfoTag);
   EXPECT_EQ(A11SerialTag(TypeTag<AudioControlEvent>{}), kAudioControlEventTag);
   EXPECT_EQ(A11SerialTag(TypeTag<AudioCaptureEvent>{}), kAudioCaptureEventTag);
-  EXPECT_EQ(A11SerialTag(TypeTag<TranscriptionEvent>{}), kTranscriptionEventTag);
+  EXPECT_EQ(A11SerialTag(TypeTag<TranscriptionEvent>{}),
+            kTranscriptionEventTag);
 }
-
 
 TEST(SerialTagsTest, MediaTypesMatchTheFixture) {
   // Pinned across languages exactly as the tags are. `text` and `bytes` are the
@@ -267,7 +271,7 @@ TEST(SerialTagsTest, MediaTypesMatchTheFixture) {
   // languages that tell those apart, and a chunk using either carries no `type`
   // parameter, so the media type alone is what a peer has to go on.
   const nlohmann::json table = SharedTagTable();
-  const nlohmann::json media_types = table.at("media_types");
+  const nlohmann::json& media_types = table.at("media_types");
 
   EXPECT_EQ(media_types.at("json").get<std::string>(), kJsonMimetype);
   EXPECT_EQ(media_types.at("msgpack").get<std::string>(), kMsgpackMimetype);
@@ -312,7 +316,7 @@ TEST(LogChunkTest, TheReservedPortAndItsMetadataMatchTheFixture) {
   const nlohmann::json fixture = SharedLogChunk();
   EXPECT_EQ(fixture.at("port").get<std::string>(), actions::kActionLogOutput);
 
-  const nlohmann::json attributes = fixture.at("attributes");
+  const nlohmann::json& attributes = fixture.at("attributes");
   EXPECT_EQ(attributes.at("level").get<std::string>(),
             actions::kLogLevelAttribute);
   EXPECT_EQ(attributes.at("internal").get<std::string>(),
@@ -332,9 +336,8 @@ TEST(LogChunkTest, TheReservedPortAndItsMetadataMatchTheFixture) {
   for (const nlohmann::json& level : fixture.at("levels")) {
     levels.push_back(level.get<std::string>());
   }
-  EXPECT_EQ(levels,
-            (std::vector<std::string>{"debug", "info", "warning", "error",
-                                      "critical"}));
+  EXPECT_EQ(levels, (std::vector<std::string>{"debug", "info", "warning",
+                                              "error", "critical"}));
   for (const std::string& name : levels) {
     const absl::StatusOr<actions::LogLevel> parsed =
         actions::ParseLogLevel(name);
@@ -345,8 +348,7 @@ TEST(LogChunkTest, TheReservedPortAndItsMetadataMatchTheFixture) {
             fixture.at("default_level").get<std::string>());
 
   // Both spellings host languages differ on resolve to the canonical name.
-  for (const auto& [written, meant] :
-       fixture.at("level_aliases").items()) {
+  for (const auto& [written, meant] : fixture.at("level_aliases").items()) {
     const absl::StatusOr<actions::LogLevel> parsed =
         actions::ParseLogLevel(written);
     ASSERT_TRUE(parsed.ok()) << written << ": " << parsed.status();

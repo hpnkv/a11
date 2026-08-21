@@ -117,8 +117,9 @@ struct WebRtcConfiguration {
   // Stripe packets across data channels while preserving one reliable
   // WireStream. Clients maintain `desired_channels`; servers admit at most
   // `max_channels` per peer.
-  size_t desired_channels = 8;  ///< Data channels a client opens and replenishes.
-  size_t max_channels = 8;      ///< Data channels a server admits per peer.
+  size_t desired_channels =
+      8;                    ///< Data channels a client opens and replenishes.
+  size_t max_channels = 8;  ///< Data channels a server admits per peer.
 
   /**
    * @brief Discover the path MTU by probing, instead of assuming `mtu`.
@@ -168,8 +169,9 @@ class WebRtcWireStream final : public ChannelWireStream {
    */
   static absl::StatusOr<std::shared_ptr<WebRtcWireStream>> CreateClient(
       std::string identity, std::string peer_identity,
-      std::shared_ptr<SignallingService> signalling,
-      WebRtcConfiguration configuration = {}, WireStreamOptions options = {});
+      const std::shared_ptr<SignallingService>& signalling,
+      const WebRtcConfiguration& configuration = {},
+      WireStreamOptions options = {});
 
   /**
    * @brief Dials a peer over an explicit signalling transport.
@@ -186,8 +188,9 @@ class WebRtcWireStream final : public ChannelWireStream {
    */
   static absl::StatusOr<std::shared_ptr<WebRtcWireStream>> CreateClient(
       std::string peer_identity,
-      std::shared_ptr<SignallingTransport> signalling,
-      WebRtcConfiguration configuration = {}, WireStreamOptions options = {});
+      const std::shared_ptr<SignallingTransport>& signalling,
+      const WebRtcConfiguration& configuration = {},
+      WireStreamOptions options = {});
 
   /**
    * @brief Adopts an already-established data channel as a WireStream.
@@ -219,7 +222,8 @@ class WebRtcWireStream final : public ChannelWireStream {
    * accessor. Used by WebRtcWireServer and the client factory to wrap a
    * multiplexed channel that stripes across several data channels.
    */
-  static absl::StatusOr<std::shared_ptr<WebRtcWireStream>> BuildMultiplexedStream(
+  static absl::StatusOr<std::shared_ptr<WebRtcWireStream>>
+  BuildMultiplexedStream(
       std::shared_ptr<internal::BinaryChannel> channel,
       std::shared_ptr<rtc::DataChannel> primary_channel,
       std::shared_ptr<rtc::PeerConnection> connection,
@@ -327,7 +331,8 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
    * @return The running server, or an error status.
    */
   static absl::StatusOr<std::shared_ptr<WebRtcWireServer>> Create(
-      std::string identity, std::shared_ptr<SignallingService> signalling,
+      std::string identity,
+      const std::shared_ptr<SignallingService>& signalling,
       OnWebRtcStream on_stream, WebRtcConfiguration configuration = {},
       WireStreamOptions stream_options = {});
 
@@ -353,8 +358,8 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
    * @return The running server, or an error status.
    */
   static absl::StatusOr<std::shared_ptr<WebRtcWireServer>> Create(
-      std::shared_ptr<SignallingTransport> signalling, OnWebRtcStream on_stream,
-      WebRtcConfiguration configuration = {},
+      const std::shared_ptr<SignallingTransport>& signalling,
+      OnWebRtcStream on_stream, WebRtcConfiguration configuration = {},
       WireStreamOptions stream_options = {});
 
   ~WebRtcWireServer();
@@ -378,7 +383,7 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
       : state_(std::move(state)) {}
 
   static a11::Task OnSignal(const std::shared_ptr<State>& state,
-                            SignallingMessage message);
+                            const SignallingMessage& message);
   static absl::Status HandleOffer(const std::shared_ptr<State>& state,
                                   const SignallingMessage& message);
   static absl::Status HandleCandidate(const std::shared_ptr<State>& state,

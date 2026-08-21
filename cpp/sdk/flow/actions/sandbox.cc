@@ -10,15 +10,14 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <absl/strings/str_replace.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #if defined(__linux__)
 #include <sys/prctl.h>
@@ -86,11 +85,11 @@ constexpr std::uint64_t kAccessFsMakeSock = 1ULL << 9;
 constexpr std::uint64_t kAccessFsMakeFifo = 1ULL << 10;
 constexpr std::uint64_t kAccessFsMakeBlock = 1ULL << 11;
 constexpr std::uint64_t kAccessFsMakeSym = 1ULL << 12;
-constexpr std::uint64_t kAccessFsRefer = 1ULL << 13;   // ABI 2
+constexpr std::uint64_t kAccessFsRefer = 1ULL << 13;     // ABI 2
 constexpr std::uint64_t kAccessFsTruncate = 1ULL << 14;  // ABI 3
 constexpr std::uint64_t kAccessFsIoctlDev = 1ULL << 15;  // ABI 5
 
-constexpr std::uint64_t kAccessNetBindTcp = 1ULL << 0;   // ABI 4
+constexpr std::uint64_t kAccessNetBindTcp = 1ULL << 0;  // ABI 4
 constexpr std::uint64_t kAccessNetConnectTcp = 1ULL << 1;
 
 constexpr int kRuleTypePathBeneath = 1;
@@ -280,8 +279,8 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
 
   const auto allow = [&sandbox, abi](std::string_view path,
                                      std::uint64_t rights) -> absl::Status {
-    const int fd = ::open(std::string(path).c_str(),
-                          O_PATH | O_CLOEXEC | O_DIRECTORY);
+    const int fd =
+        ::open(std::string(path).c_str(), O_PATH | O_CLOEXEC | O_DIRECTORY);
     // A root that is not there cannot be granted, and is not a reason to refuse
     // to run: the policy already refuses paths under it.
     const int file_fd =
@@ -298,8 +297,8 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     ::close(file_fd);
     if (added < 0) {
       return absl::UnavailableError(
-          absl::StrCat("cannot allow '", path, "' through Landlock: ",
-                       std::strerror(reason)));
+          absl::StrCat("cannot allow '", path,
+                       "' through Landlock: ", std::strerror(reason)));
     }
     return absl::OkStatus();
   };
@@ -318,22 +317,20 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
        {"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc/ld.so.cache",
         "/etc/ld.so.preload", "/proc/self", "/dev/null", "/dev/urandom",
         "/dev/zero"}) {
-    ABSL_RETURN_IF_ERROR(
-        allow(essential, kAccessFsReadFile | kAccessFsReadDir |
-                             kAccessFsExecute));
+    ABSL_RETURN_IF_ERROR(allow(
+        essential, kAccessFsReadFile | kAccessFsReadDir | kAccessFsExecute));
   }
   if (!program.empty() && program.front() == '/') {
-    ABSL_RETURN_IF_ERROR(
-        allow(program, kAccessFsReadFile | kAccessFsExecute));
+    ABSL_RETURN_IF_ERROR(allow(program, kAccessFsReadFile | kAccessFsExecute));
   }
   sandbox->kind_ = SandboxKind::kLandlock;
-  sandbox->description_ = absl::StrCat(
-      "landlock abi ", abi, " over ", filesystem.roots.size(),
-      filesystem.roots.size() == 1 ? " root" : " roots",
-      filesystem.writable ? " (read/write)" : " (read-only)",
-      available.confines_network && !capabilities.network.enabled
-          ? ", tcp refused"
-          : ", network not confined");
+  sandbox->description_ =
+      absl::StrCat("landlock abi ", abi, " over ", filesystem.roots.size(),
+                   filesystem.roots.size() == 1 ? " root" : " roots",
+                   filesystem.writable ? " (read/write)" : " (read-only)",
+                   available.confines_network && !capabilities.network.enabled
+                       ? ", tcp refused"
+                       : ", network not confined");
   return sandbox;
 
 #elif defined(__APPLE__)
@@ -418,8 +415,7 @@ int Sandbox::Apply() const {
 }
 
 std::vector<std::string> Sandbox::WrapCommand(
-    std::string_view program,
-    const std::vector<std::string>& arguments) const {
+    std::string_view program, const std::vector<std::string>& arguments) const {
   if (kind_ != SandboxKind::kSeatbelt) {
     return arguments;
   }
@@ -441,6 +437,8 @@ std::string Sandbox::WrapProgram(std::string_view program) const {
   return "/usr/bin/sandbox-exec";
 }
 
-std::string Sandbox::Describe() const { return description_; }
+std::string Sandbox::Describe() const {
+  return description_;
+}
 
 }  // namespace a11::sdk::flow

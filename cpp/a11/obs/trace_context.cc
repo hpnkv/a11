@@ -19,6 +19,7 @@
 #include <absl/strings/string_view.h>
 
 #include "a11/data/types.h"
+#include "absl/strings/match.h"
 
 namespace a11::obs {
 namespace {
@@ -30,7 +31,7 @@ bool IsLowerHex(std::string_view value) {
     return false;
   }
   for (const char c : value) {
-    if (kLowerHex.find(c) == std::string_view::npos) {
+    if (!absl::StrContains(kLowerHex, c)) {
       return false;
     }
   }

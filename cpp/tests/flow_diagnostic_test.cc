@@ -1,13 +1,13 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/diagnostic.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <absl/container/flat_hash_set.h>
 #include <gtest/gtest.h>
+
+#include "a11/flow/diagnostic.h"
 
 namespace a11::flow {
 namespace {
@@ -77,7 +77,9 @@ TEST(FlowDiagnosticCodes, AreSortedUniqueAndWellFormed) {
     }
     EXPECT_FALSE(info.summary.empty()) << info.code;
     EXPECT_TRUE(info.summary.ends_with(".")) << info.code;
-    if (!previous.empty()) EXPECT_LT(previous, info.code);
+    if (!previous.empty()) {
+      EXPECT_LT(previous, info.code);
+    }
     EXPECT_TRUE(seen.insert(info.code).second) << info.code;
     previous = info.code;
   }

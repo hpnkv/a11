@@ -41,8 +41,8 @@
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
 #include "a11/flow/schema.h"
-#include "a11/flow/tool/lsp.h"
 #include "a11/flow/service.h"
+#include "a11/flow/tool/lsp.h"
 #include "a11/flow/vocabulary.h"
 
 namespace a11::flow::tool {
@@ -161,7 +161,9 @@ bool ReadFile(std::string_view path, std::string& text, std::string& reason) {
 
 bool WriteFile(const std::string& path, const std::string& text) {
   std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  if (!file) return false;
+  if (!file) {
+    return false;
+  }
   file << text;
   return file.good();
 }
@@ -189,7 +191,9 @@ std::vector<Diagnostic> Problems(std::string_view source) {
 size_t CountErrors(const std::vector<Diagnostic>& found) {
   size_t errors = 0;
   for (const Diagnostic& diagnostic : found) {
-    if (diagnostic.severity == Severity::kError) ++errors;
+    if (diagnostic.severity == Severity::kError) {
+      ++errors;
+    }
   }
   return errors;
 }
@@ -207,7 +211,9 @@ int Check(const Options& options) {
       continue;
     }
     const std::vector<Diagnostic> found = Problems(source);
-    if (CountErrors(found) > 0) exit_code = std::max(exit_code, 1);
+    if (CountErrors(found) > 0) {
+      exit_code = std::max(exit_code, 1);
+    }
     switch (options.format) {
       case Output::kJson:
         Emit(DiagnosticsToJsonValue(path, found));
@@ -241,7 +247,9 @@ int Fmt(const Options& options) {
     const FormatResult result = Format(source);
     bool refused = false;
     for (const Diagnostic& diagnostic : result.diagnostics) {
-      if (diagnostic.severity != Severity::kError) continue;
+      if (diagnostic.severity != Severity::kError) {
+        continue;
+      }
       // A file that will not parse is left exactly as it is, and the problem is
       // what gets reported: half-formatting somebody's file is how a formatter
       // loses their work.
@@ -256,7 +264,9 @@ int Fmt(const Options& options) {
       nlohmann::json payload = FormatToJsonValue(result);
       payload["source"] = path;
       Emit(payload);
-      if (result.changed) exit_code = std::max(exit_code, 1);
+      if (result.changed) {
+        exit_code = std::max(exit_code, 1);
+      }
       continue;
     }
     if (options.check) {
@@ -310,7 +320,9 @@ int Highlight(const Options& options) {
   for (const SemanticToken& token : semantic) {
     const std::string_view text(source.data() + token.start,
                                 token.end - token.start);
-    if (text == "\n") continue;
+    if (text == "\n") {
+      continue;
+    }
     const std::string kind(SemanticKindName(token.kind));
     std::printf("%4d:%-4d %-20s %.*s\n", token.line, token.column, kind.c_str(),
                 static_cast<int>(text.size()), text.data());
@@ -320,7 +332,9 @@ int Highlight(const Options& options) {
 
 /// One syntax node and everything under it, indented: how the parser read it.
 void Outline(const nlohmann::json& node, int depth) {
-  if (!node.is_object()) return;
+  if (!node.is_object()) {
+    return;
+  }
   const nlohmann::json at = node.value("at", nlohmann::json::object());
   std::string label = node.value("kind", std::string("?"));
   for (const std::string_view key :
@@ -337,23 +351,27 @@ void Outline(const nlohmann::json& node, int depth) {
   // In reading order rather than the envelope's, which is sorted by key and so
   // puts a flow's body in front of its ports.
   static constexpr std::array kOrder = {
-      std::string_view("ports"),    std::string_view("headers"),
-      std::string_view("type"),     std::string_view("condition"),
-      std::string_view("source"),   std::string_view("pipeline"),
-      std::string_view("subject"),  std::string_view("target"),
-      std::string_view("value"),    std::string_view("start"),
-      std::string_view("stages"),   std::string_view("args"),
+      std::string_view("ports"),     std::string_view("headers"),
+      std::string_view("type"),      std::string_view("condition"),
+      std::string_view("source"),    std::string_view("pipeline"),
+      std::string_view("subject"),   std::string_view("target"),
+      std::string_view("value"),     std::string_view("start"),
+      std::string_view("stages"),    std::string_view("args"),
       std::string_view("modifiers"), std::string_view("targets"),
       std::string_view("then_body"), std::string_view("else_body"),
       std::string_view("body"),
   };
   std::vector<std::string> keys;
   for (const auto& [key, value] : node.items()) {
-    if (key != "kind" && key != "at") keys.push_back(key);
+    if (key != "kind" && key != "at") {
+      keys.push_back(key);
+    }
   }
   const auto rank = [](const std::string& key) {
     for (size_t index = 0; index < kOrder.size(); ++index) {
-      if (kOrder[index] == key) return index;
+      if (kOrder[index] == key) {
+        return index;
+      }
     }
     return kOrder.size();
   };
@@ -393,7 +411,9 @@ int Parse(const Options& options) {
     Emit(SyntaxToJsonValue(path, parsed));
   } else {
     const nlohmann::json payload = SyntaxToJsonValue(path, parsed);
-    for (const nlohmann::json& flow : payload.at("flows")) Outline(flow, 0);
+    for (const nlohmann::json& flow : payload.at("flows")) {
+      Outline(flow, 0);
+    }
     for (const Diagnostic& diagnostic : parsed.diagnostics) {
       std::cerr << DiagnosticToText(Reported(path), diagnostic) << "\n";
     }
@@ -428,12 +448,14 @@ int Describe(const Options& options) {
   for (const DtoPlan& dto : resolved.program.dtos) {
     std::cout << "struct " << dto.name << (dto.binary ? "  (holds bytes)" : "")
               << "\n";
-    if (!dto.description.empty()) std::cout << "  " << dto.description << "\n";
+    if (!dto.description.empty()) {
+      std::cout << "  " << dto.description << "\n";
+    }
     for (const FieldPlan& field : dto.fields) {
-      std::printf("  field  %s: %s%s\n", field.name.c_str(),
-                  field.declared.empty() ? field.type.c_str()
-                                         : field.declared.c_str(),
-                  field.required ? " (required)" : "");
+      std::printf(
+          "  field  %s: %s%s\n", field.name.c_str(),
+          field.declared.empty() ? field.type.c_str() : field.declared.c_str(),
+          field.required ? " (required)" : "");
     }
   }
   for (const FlowPlan& flow : resolved.program.flows) {
@@ -442,18 +464,22 @@ int Describe(const Options& options) {
     std::cout << (flow.entry ? "flow (entry point)"
                              : absl::StrCat("flow ", flow.name))
               << "\n";
-    if (!flow.description.empty()) std::cout << "  " << flow.description << "\n";
+    if (!flow.description.empty()) {
+      std::cout << "  " << flow.description << "\n";
+    }
     for (const syntax::PortDirection direction :
          {syntax::PortDirection::kInput, syntax::PortDirection::kOutput}) {
       const std::string word =
           direction == syntax::PortDirection::kInput ? "input" : "output";
       for (const PortPlan& port : flow.ports) {
-        if (port.direction != direction) continue;
-        std::printf("  %-6s %s: %s (%s%s)\n", word.c_str(), port.name.c_str(),
-                    port.declared.empty() ? port.type.c_str()
-                                          : port.declared.c_str(),
-                    port.unary ? "one value" : "stream",
-                    port.required ? ", required" : "");
+        if (port.direction != direction) {
+          continue;
+        }
+        std::printf(
+            "  %-6s %s: %s (%s%s)\n", word.c_str(), port.name.c_str(),
+            port.declared.empty() ? port.type.c_str() : port.declared.c_str(),
+            port.unary ? "one value" : "stream",
+            port.required ? ", required" : "");
       }
     }
     for (const HeaderPlan& header : flow.headers) {
@@ -464,7 +490,9 @@ int Describe(const Options& options) {
     }
     const nlohmann::json plan = PlanToJsonValue(path, resolved.program);
     for (const nlohmann::json& described : plan.at("flows")) {
-      if (described.value("flow", std::string()) != flow.name) continue;
+      if (described.value("flow", std::string()) != flow.name) {
+        continue;
+      }
       for (const nlohmann::json& step : described.at("steps")) {
         const std::string kind = step.value("step", std::string("?"));
         std::printf("  %-6s %s\n", kind.c_str(),
@@ -502,12 +530,15 @@ int Schema(const Options& options) {
   }
   nlohmann::json schemas = nlohmann::json::object();
   for (const DtoPlan& dto : resolved.program.dtos) {
-    if (!options.dto.empty() && dto.name != options.dto) continue;
+    if (!options.dto.empty() && dto.name != options.dto) {
+      continue;
+    }
     schemas[dto.name] = DtoToJsonSchema(dto, resolved.program);
   }
   if (schemas.empty()) {
     std::cerr << path << ": declares no shape"
-              << (options.dto.empty() ? "" : absl::StrCat(" '", options.dto, "'"))
+              << (options.dto.empty() ? ""
+                                      : absl::StrCat(" '", options.dto, "'"))
               << ".\n";
     return 1;
   }
@@ -537,7 +568,7 @@ int Complete(const Options& options) {
     int column = 1;
     while (offset < source.size() && column < options.column &&
            source[offset] != '\n') {
-      const unsigned char lead = static_cast<unsigned char>(source[offset]);
+      const auto lead = static_cast<unsigned char>(source[offset]);
       size_t width = 1;
       if (lead >= 0xF0) {
         width = 4;
@@ -560,10 +591,10 @@ int Complete(const Options& options) {
   }
   for (const Proposal& proposal : completed.proposals) {
     const std::string kind(ProposalKindName(proposal.kind));
-    std::printf("%-13s %s%s%s\n", kind.c_str(), proposal.name.c_str(),
-                proposal.tail.c_str(),
-                proposal.type.empty() ? ""
-                                      : absl::StrCat(": ", proposal.type).c_str());
+    std::printf(
+        "%-13s %s%s%s\n", kind.c_str(), proposal.name.c_str(),
+        proposal.tail.c_str(),
+        proposal.type.empty() ? "" : absl::StrCat(": ", proposal.type).c_str());
   }
   return 0;
 }
@@ -593,9 +624,13 @@ int Vocabulary(const Options& options) {
     return 0;
   }
   for (const auto& [key, words] : table.items()) {
-    if (!words.is_array()) continue;
+    if (!words.is_array()) {
+      continue;
+    }
     std::vector<std::string> list;
-    for (const nlohmann::json& word : words) list.push_back(word);
+    for (const nlohmann::json& word : words) {
+      list.push_back(word);
+    }
     std::printf("%-18s %s\n", key.c_str(), absl::StrJoin(list, " ").c_str());
   }
   return 0;
@@ -667,11 +702,12 @@ int SyntaxOne(const Options& options, SyntaxTarget target) {
     return 2;
   }
   if (existing == generated) {
-    if (!options.quiet) std::cout << path << ": up to date\n";
+    if (!options.quiet) {
+      std::cout << path << ": up to date\n";
+    }
     return 0;
   }
-  std::cerr << path
-            << ": out of date -- run `a11 flow syntax --target "
+  std::cerr << path << ": out of date -- run `a11 flow syntax --target "
             << SyntaxTargetName(target) << " --generate`\n";
   return 1;
 }
@@ -699,7 +735,9 @@ int Syntax(const Options& options) {
 }
 
 int Serve(const Options& options) {
-  if (options.protocol == "lsp") return RunLsp(std::cin, std::cout);
+  if (options.protocol == "lsp") {
+    return RunLsp(std::cin, std::cout);
+  }
   if (options.protocol != "json") {
     std::cerr << "serve speaks json or lsp, not " << options.protocol << "\n";
     return 2;
@@ -710,13 +748,15 @@ int Serve(const Options& options) {
   // pipe and no framing library.
   std::string line;
   while (std::getline(std::cin, line)) {
-    if (line.empty()) continue;
+    if (line.empty()) {
+      continue;
+    }
     nlohmann::json request = nlohmann::json::parse(line, nullptr, false);
     if (request.is_discarded()) {
-      std::cout << nlohmann::json{
-                       {"ok", false},
-                       {"error",
-                        nlohmann::json{{"message", "That is not JSON."}}}}
+      std::cout << nlohmann::json{{"ok", false},
+                                  {"error",
+                                   nlohmann::json{
+                                       {"message", "That is not JSON."}}}}
                        .dump()
                 << "\n";
       std::cout.flush();
@@ -751,8 +791,8 @@ Options ReadOptions(int argc, char** argv) {
       } else if (named == "sarif") {
         options.format = Output::kSarif;
       } else if (options.complaint.empty()) {
-        options.complaint = absl::StrCat("--format is text, json or sarif, not ",
-                                         named, ".");
+        options.complaint =
+            absl::StrCat("--format is text, json or sarif, not ", named, ".");
       }
     } else if (argument == "--quiet" || argument == "-q") {
       options.quiet = true;
@@ -796,14 +836,18 @@ Options ReadOptions(int argc, char** argv) {
       options.command = "help";
     } else if (argument == "--version") {
       options.command = "version";
-    } else if (argument.size() > 1 && argument[0] == '-' && argument != kStdin) {
-      options.complaint = absl::StrCat(argument, " is not an option this takes.");
+    } else if (argument.size() > 1 && argument[0] == '-' &&
+               argument != kStdin) {
+      options.complaint =
+          absl::StrCat(argument, " is not an option this takes.");
     } else if (options.command.empty()) {
       options.command = argument;
     } else {
       options.files.push_back(argument);
     }
-    if (!options.complaint.empty()) return options;
+    if (!options.complaint.empty()) {
+      return options;
+    }
   }
   return options;
 }
@@ -827,23 +871,41 @@ int Main(int argc, char** argv) {
               << kCodesFormat << " " << kVocabularyFormat << "\n";
     return 0;
   }
-  const bool wants_file =
-      command == "check" || command == "fmt" || command == "highlight" ||
-      command == "parse" || command == "describe" || command == "complete" ||
-      command == "schema";
+  const bool wants_file = command == "check" || command == "fmt" ||
+                          command == "highlight" || command == "parse" ||
+                          command == "describe" || command == "complete" ||
+                          command == "schema";
   if (wants_file && options.files.empty()) {
     std::cerr << command << " takes a file, or `-` for standard input\n";
     return 2;
   }
-  if (command == "check") return Check(options);
-  if (command == "fmt") return Fmt(options);
-  if (command == "highlight") return Highlight(options);
-  if (command == "parse") return Parse(options);
-  if (command == "describe") return Describe(options);
-  if (command == "schema") return Schema(options);
-  if (command == "complete") return Complete(options);
-  if (command == "codes") return Codes(options);
-  if (command == "vocabulary") return Vocabulary(options);
+  if (command == "check") {
+    return Check(options);
+  }
+  if (command == "fmt") {
+    return Fmt(options);
+  }
+  if (command == "highlight") {
+    return Highlight(options);
+  }
+  if (command == "parse") {
+    return Parse(options);
+  }
+  if (command == "describe") {
+    return Describe(options);
+  }
+  if (command == "schema") {
+    return Schema(options);
+  }
+  if (command == "complete") {
+    return Complete(options);
+  }
+  if (command == "codes") {
+    return Codes(options);
+  }
+  if (command == "vocabulary") {
+    return Vocabulary(options);
+  }
   if (command == "scan") {
     if (options.files.empty()) {
       std::cerr << "scan takes a file or a directory to read\n";
@@ -851,8 +913,12 @@ int Main(int argc, char** argv) {
     }
     return Scan(options);
   }
-  if (command == "syntax") return Syntax(options);
-  if (command == "serve") return Serve(options);
+  if (command == "syntax") {
+    return Syntax(options);
+  }
+  if (command == "serve") {
+    return Serve(options);
+  }
   std::cerr << command << " is not a command. Try `a11-flow help`.\n";
   return 2;
 }
@@ -860,4 +926,6 @@ int Main(int argc, char** argv) {
 }  // namespace
 }  // namespace a11::flow::tool
 
-int main(int argc, char** argv) { return a11::flow::tool::Main(argc, argv); }
+int main(int argc, char** argv) {
+  return a11::flow::tool::Main(argc, argv);
+}

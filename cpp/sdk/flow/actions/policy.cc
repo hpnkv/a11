@@ -24,6 +24,8 @@
 #include <absl/strings/str_split.h>
 #include <absl/strings/strip.h>
 
+#include "absl/strings/match.h"
+
 namespace a11::sdk::flow {
 namespace {
 
@@ -35,10 +37,11 @@ absl::StatusOr<std::filesystem::path> Canonical(
   // Weakly, because a path being written to does not exist yet. It resolves
   // symlinks and `..` across the part that does exist, which is where an escape
   // out of a root would be hiding.
-  std::filesystem::path resolved = std::filesystem::weakly_canonical(path, error);
+  std::filesystem::path resolved =
+      std::filesystem::weakly_canonical(path, error);
   if (error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("cannot resolve '", path.string(), "': ", error.message()));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "cannot resolve '", path.string(), "': ", error.message()));
   }
   return resolved;
 }
@@ -122,7 +125,7 @@ absl::StatusOr<std::filesystem::path> ResolvePath(
     return absl::PermissionDeniedError(
         "this host registered the filesystem actions read-only");
   }
-  ABSL_ASSIGN_OR_RETURN(const std::filesystem::path resolved,
+  ABSL_ASSIGN_OR_RETURN(std::filesystem::path resolved,
                         Canonical(std::filesystem::path(path)));
   if (policy.unrestricted) {
     return resolved;
@@ -164,9 +167,8 @@ absl::StatusOr<std::string> ResolveProgram(const ProcessPolicy& policy,
     // Either spelling matches: a policy naming `/bin/ls` accepts `ls`, and one
     // naming `ls` accepts an absolute path ending in it. Anything looser would
     // let `../../bin/sh` through under the name of something else.
-    if (allowed == program ||
-        std::filesystem::path(allowed).filename() ==
-            std::filesystem::path(program).filename()) {
+    if (allowed == program || std::filesystem::path(allowed).filename() ==
+                                  std::filesystem::path(program).filename()) {
       return allowed;
     }
   }
@@ -186,7 +188,8 @@ absl::Status CheckEnvironment(const EnvironmentPolicy& policy,
     }
   }
   return absl::PermissionDeniedError(absl::StrCat(
-      "'", name, "' is not one of the environment variables this host exposes"));
+      "'", name,
+      "' is not one of the environment variables this host exposes"));
 }
 
 absl::Status CheckHost(const NetworkPolicy& policy, std::string_view host) {
@@ -198,11 +201,10 @@ absl::Status CheckHost(const NetworkPolicy& policy, std::string_view host) {
         "this host did not register the network actions");
   }
   if (!policy.any_host) {
-    const bool matched = std::any_of(
-        policy.hosts.begin(), policy.hosts.end(),
-        [host](const std::string& pattern) {
-          return MatchesHostPattern(host, pattern);
-        });
+    const bool matched = std::any_of(policy.hosts.begin(), policy.hosts.end(),
+                                     [host](const std::string& pattern) {
+                                       return MatchesHostPattern(host, pattern);
+                                     });
     if (!matched) {
       return absl::PermissionDeniedError(absl::StrCat(
           "'", host, "' is not one of the hosts this host allows (",
@@ -237,8 +239,8 @@ absl::Status CheckAddress(const NetworkPolicy& policy,
     }
     if (!policy.allow_private) {
       const bool private_range =
-          parts[0] == 10 || (parts[0] == 172 && parts[1] >= 16 &&
-                             parts[1] <= 31) ||
+          parts[0] == 10 ||
+          (parts[0] == 172 && parts[1] >= 16 && parts[1] <= 31) ||
           (parts[0] == 192 && parts[1] == 168);
       if (private_range) {
         return refuse("a private address");
@@ -260,7 +262,7 @@ absl::Status CheckAddress(const NetworkPolicy& policy,
   }
   // Unique local addresses, fc00::/7: the IPv6 spelling of a private range.
   if ((absl::StartsWith(lowered, "fc") || absl::StartsWith(lowered, "fd")) &&
-      lowered.find(':') != std::string::npos && !policy.allow_private) {
+      absl::StrContains(lowered, ':') && !policy.allow_private) {
     return refuse("a private address");
   }
   return absl::OkStatus();
@@ -285,9 +287,9 @@ absl::Status CheckListen(const NetworkPolicy& policy, std::uint32_t port) {
       policy.listen_ports.end()) {
     return absl::OkStatus();
   }
-  return absl::PermissionDeniedError(absl::StrCat(
-      "port ", port, " is not one of the ports this host allows (",
-      absl::StrJoin(policy.listen_ports, ", "), ")"));
+  return absl::PermissionDeniedError(
+      absl::StrCat("port ", port, " is not one of the ports this host allows (",
+                   absl::StrJoin(policy.listen_ports, ", "), ")"));
 }
 
 }  // namespace a11::sdk::flow

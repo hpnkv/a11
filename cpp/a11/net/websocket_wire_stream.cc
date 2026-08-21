@@ -33,7 +33,6 @@
 namespace a11::net {
 namespace {
 
-
 std::string NewWebSocketId() {
   return absl::StrFormat("ws-%016x%016x", RandomUint64(), RandomUint64());
 }
@@ -57,7 +56,8 @@ absl::Status WebSocketClientOptions::Validate() const {
 }
 
 absl::StatusOr<std::shared_ptr<WebSocketWireStream>>
-WebSocketWireStream::CreateClient(std::string url, WireStreamOptions options,
+WebSocketWireStream::CreateClient(const std::string& url,
+                                  WireStreamOptions options,
                                   WebSocketClientOptions websocket_options) {
   ABSL_RETURN_IF_ERROR(options.Validate());
   ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseWebSocketUrl(url));
@@ -148,9 +148,10 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
           [weak](HttpRequest request,
                  std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
             std::shared_ptr<State> active = weak.lock();
-            if (active == nullptr)
+            if (active == nullptr) {
               return a11::FailedTask(absl::CancelledError(
                   "WebSocket server is no longer available"));
+            }
             if (request.method != "CONNECT" ||
                 request.protocol != "websocket" ||
                 request.path != active->options.path) {
@@ -158,21 +159,20 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
               // cannot preflight cannot read the answer either.
               if (IsPreflight(active->options.headers.cors, request.method)) {
                 HttpHeaders preflight;
-                ApplyServerHeaders(active->options.headers,
-                                   CachePolicy::kUnset, &preflight);
+                ApplyServerHeaders(active->options.headers, CachePolicy::kUnset,
+                                   &preflight);
                 absl::Status status =
                     response->SendResponse(204, std::move(preflight));
-                return status.ok() ? a11::ReadyTask()
-                                   : a11::FailedTask(status);
+                return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
               }
               // Discovery over plain HTTP, before the 404: whoever has the port
               // number can ask what is on it without speaking A11 first.
               HttpHeaders described;
               ApplyServerHeaders(active->options.headers,
                                  CachePolicy::kVolatile, &described);
-              if (std::optional<a11::Task> answered = TryDescribeOverHttp(
-                      active->options.describe, request, response,
-                      std::move(described));
+              if (std::optional<a11::Task> answered =
+                      TryDescribeOverHttp(active->options.describe, request,
+                                          response, std::move(described));
                   answered.has_value()) {
                 return std::move(*answered);
               }
@@ -188,8 +188,9 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
                 WebSocketWireStream::CreateAccepted(
                     std::move(request), std::move(response),
                     active->options.stream_options, active->options.framing);
-            if (!stream.ok())
+            if (!stream.ok()) {
               return a11::FailedTask(stream.status());
+            }
             // Guarded where the server adopted it; see
             // WebSocketWireServer::Create.
             return active->on_stream(std::move(*stream));

@@ -58,7 +58,7 @@ absl::Status ValidateName(std::string_view name);
  * (see a11::data::SerializationRegistry).
  */
 struct ChunkMetadata {
-  std::string mimetype;                   ///< Media type of the chunk payload.
+  std::string mimetype = {};              ///< Media type of the chunk payload.
   std::optional<absl::Time> timestamp{};  ///< Optional creation timestamp.
   ByteMap attributes{};                   ///< Free-form key/value attributes.
 
@@ -321,9 +321,9 @@ struct NodeRef {
  * stream is not yet complete).
  */
 struct NodeFragment {
-  std::string id;  ///< Id of the node this fragment belongs to.
+  std::string id = {};  ///< Id of the node this fragment belongs to.
   std::variant<Chunk, NodeRef> data = Chunk{};  ///< Inline chunk or reference.
-  std::optional<std::uint32_t> seq;             ///< Ordering sequence number.
+  std::optional<std::uint32_t> seq = {};        ///< Ordering sequence number.
   bool continued = false;  ///< Whether further fragments follow this one.
 
   /// Estimate memory/wire weight for session and transport limits.

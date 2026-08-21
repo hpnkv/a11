@@ -39,6 +39,7 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -208,7 +209,9 @@ class UvExecutor {
   static bool DrainStatsEnabled() {
     static const bool on = [] {
       const char* setting = std::getenv("A11_UV_DRAIN_STATS");
-      return setting != nullptr && std::atoi(setting) != 0;
+      int value = 0;
+      return setting != nullptr && absl::SimpleAtoi(setting, &value) &&
+             value != 0;
     }();
     return on;
   }
@@ -223,6 +226,7 @@ class UvExecutor {
       std::atomic<std::uint64_t> total_nanos{0};
       std::atomic<std::int64_t> worst_nanos{0};
     };
+
     static absl::NoDestructor<Buckets> buckets;
     static const bool registered = [] {
       std::atexit([] {
@@ -257,10 +261,8 @@ class UvExecutor {
       buckets->over_1ms.fetch_add(1, std::memory_order_relaxed);
     }
     std::int64_t seen = buckets->worst_nanos.load(std::memory_order_relaxed);
-    while (nanos > seen &&
-           !buckets->worst_nanos.compare_exchange_weak(
-               seen, nanos, std::memory_order_relaxed)) {
-    }
+    while (nanos > seen && !buckets->worst_nanos.compare_exchange_weak(
+                               seen, nanos, std::memory_order_relaxed)) {}
   }
 
   static void RecordDrainBatch(const std::deque<Item>& batch) {
@@ -284,8 +286,7 @@ class UvExecutor {
             "largest %llu\n",
             static_cast<unsigned long long>(drains),
             static_cast<unsigned long long>(stats->items.load()),
-            drains == 0 ? 0.0
-                        : static_cast<double>(stats->items.load()) / per,
+            drains == 0 ? 0.0 : static_cast<double>(stats->items.load()) / per,
             static_cast<unsigned long long>(stats->multi_item.load()),
             drains == 0
                 ? 0.0
@@ -321,7 +322,11 @@ class UvExecutor {
   static bool FairDraining() {
     static const bool fair = [] {
       const char* setting = std::getenv("A11_UV_FAIR");
-      return setting == nullptr || std::atoi(setting) != 0;
+      // A value that is not a number leaves fair draining on: only an explicit
+      // 0 turns it off, so a typo cannot quietly change how the loop drains.
+      int value = 0;
+      return setting == nullptr || !absl::SimpleAtoi(setting, &value) ||
+             value != 0;
     }();
     return fair;
   }

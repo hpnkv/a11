@@ -127,8 +127,8 @@ struct ResolveResult {
   std::vector<ResolvedFlow> flows;
   std::vector<Diagnostic> diagnostics;
 
-  bool HasErrors() const;
-  const Diagnostic* absl_nullable FirstError() const;
+  [[nodiscard]] bool HasErrors() const;
+  [[nodiscard]] const Diagnostic* absl_nullable FirstError() const;
 };
 
 /// Resolve a parsed program: names, ports, scopes, node maps and types.

@@ -41,12 +41,16 @@ nlohmann::json ConstantJson(const Constant& value) {
       return absl::FormatDuration(value.duration);
     case Constant::Kind::kList: {
       nlohmann::json items = nlohmann::json::array();
-      for (const Constant& item : value.items) items.push_back(ConstantJson(item));
+      for (const Constant& item : value.items) {
+        items.push_back(ConstantJson(item));
+      }
       return items;
     }
     case Constant::Kind::kObject: {
       nlohmann::json pairs = nlohmann::json::object();
-      for (const auto& [key, held] : value.pairs) pairs[key] = ConstantJson(held);
+      for (const auto& [key, held] : value.pairs) {
+        pairs[key] = ConstantJson(held);
+      }
       return pairs;
     }
   }
@@ -70,14 +74,18 @@ std::string ConstantFlow(const Constant& value) {
       return absl::FormatDuration(value.duration);
     case Constant::Kind::kList: {
       std::vector<std::string> items;
-      for (const Constant& item : value.items) items.push_back(ConstantFlow(item));
+      items.reserve(value.items.size());
+      for (const Constant& item : value.items) {
+        items.push_back(ConstantFlow(item));
+      }
       return absl::StrCat("[", absl::StrJoin(items, ", "), "]");
     }
     case Constant::Kind::kObject: {
       std::vector<std::string> pairs;
+      pairs.reserve(value.pairs.size());
       for (const auto& [key, held] : value.pairs) {
-        pairs.push_back(absl::StrCat(nlohmann::json(key).dump(), ": ",
-                                     ConstantFlow(held)));
+        pairs.push_back(
+            absl::StrCat(nlohmann::json(key).dump(), ": ", ConstantFlow(held)));
       }
       return absl::StrCat("{", absl::StrJoin(pairs, ", "), "}");
     }
@@ -87,12 +95,18 @@ std::string ConstantFlow(const Constant& value) {
 
 /// A constant of whatever kind this JSON value is.
 Constant ConstantOf(const nlohmann::json& value) {
-  if (value.is_boolean()) return Constant::Bool(value.get<bool>());
+  if (value.is_boolean()) {
+    return Constant::Bool(value.get<bool>());
+  }
   if (value.is_number_integer()) {
     return Constant::Integer(value.get<long long>());
   }
-  if (value.is_number()) return Constant::Double(value.get<double>());
-  if (value.is_string()) return Constant::String(value.get<std::string>());
+  if (value.is_number()) {
+    return Constant::Double(value.get<double>());
+  }
+  if (value.is_string()) {
+    return Constant::String(value.get<std::string>());
+  }
   if (value.is_array()) {
     Constant list;
     list.kind = Constant::Kind::kList;
@@ -167,7 +181,9 @@ void WriteScalar(std::string_view type, nlohmann::json& out) {
   // validates. A quoted mimetype or a registry tag is a type only the host
   // knows; a schema can say it is a string carrying that, and the extension says
   // which.
-  if (type == "json" || type == "any") return;
+  if (type == "json" || type == "any") {
+    return;
+  }
   out["type"] = "string";
   out[std::string(kFlowTypeKey)] = std::string(type);
 }
@@ -179,7 +195,9 @@ nlohmann::json FieldSchema(const FieldPlan& field) {
     // A `$ref` carries no siblings a validator has to merge, so a described
     // reference is the reference and the description beside it.
     out["$ref"] = absl::StrCat("#/$defs/", field.dto_name);
-    if (!field.description.empty()) out["description"] = field.description;
+    if (!field.description.empty()) {
+      out["description"] = field.description;
+    }
     return out;
   }
   if (field.type == "list" || field.type == "array") {
@@ -193,7 +211,9 @@ nlohmann::json FieldSchema(const FieldPlan& field) {
       }
       out["items"] = std::move(items);
     }
-    if (field.unique) out["uniqueItems"] = true;
+    if (field.unique) {
+      out["uniqueItems"] = true;
+    }
     if (field.range.has_minimum) {
       out["minItems"] = field.range.minimum.integer;
     }
@@ -216,7 +236,9 @@ nlohmann::json FieldSchema(const FieldPlan& field) {
       }
     }
   }
-  if (field.has_pattern) out["pattern"] = field.pattern;
+  if (field.has_pattern) {
+    out["pattern"] = field.pattern;
+  }
   if (field.has_enumeration) {
     nlohmann::json allowed = nlohmann::json::array();
     for (const Constant& one : field.enumeration) {
@@ -224,8 +246,12 @@ nlohmann::json FieldSchema(const FieldPlan& field) {
     }
     out["enum"] = std::move(allowed);
   }
-  if (field.has_default) out["default"] = ConstantJson(field.default_value);
-  if (!field.description.empty()) out["description"] = field.description;
+  if (field.has_default) {
+    out["default"] = ConstantJson(field.default_value);
+  }
+  if (!field.description.empty()) {
+    out["description"] = field.description;
+  }
   return out;
 }
 
@@ -237,14 +263,20 @@ nlohmann::json ShapeSchema(const DtoPlan& dto) {
   for (const FieldPlan& field : dto.fields) {
     properties[field.name] = FieldSchema(field);
     order.push_back(field.name);
-    if (field.required) required.push_back(field.name);
+    if (field.required) {
+      required.push_back(field.name);
+    }
   }
   nlohmann::json out{{"type", "object"},
                      {"title", dto.name},
                      {"properties", std::move(properties)},
                      {std::string(kFlowOrderKey), std::move(order)}};
-  if (!dto.description.empty()) out["description"] = dto.description;
-  if (!required.empty()) out["required"] = std::move(required);
+  if (!dto.description.empty()) {
+    out["description"] = dto.description;
+  }
+  if (!required.empty()) {
+    out["required"] = std::move(required);
+  }
   // A key the shape does not declare is dropped rather than refused, which is
   // what the coercion does -- so the schema says the same thing rather than
   // describing a stricter type than the one that will actually be built.
@@ -261,7 +293,9 @@ std::vector<const DtoPlan*> Reachable(const DtoPlan& dto,
     for (const FieldPlan& field : found[index]->fields) {
       for (const std::string& named :
            {field.dto_name, field.element_dto_name}) {
-        if (named.empty() || !seen.insert(named).second) continue;
+        if (named.empty() || !seen.insert(named).second) {
+          continue;
+        }
         if (const DtoPlan* next = program.Dto(named); next != nullptr) {
           found.push_back(next);
         }
@@ -298,13 +332,17 @@ std::string FlowName(std::string_view given) {
       capitalise = true;
       continue;
     }
-    if (name.empty() && letter >= '0' && letter <= '9') name.push_back('_');
+    if (name.empty() && letter >= '0' && letter <= '9') {
+      name.push_back('_');
+    }
     name.push_back(capitalise && letter >= 'a' && letter <= 'z'
                        ? static_cast<char>(letter - 32)
                        : letter);
     capitalise = false;
   }
-  if (name.empty()) return "Shape";
+  if (name.empty()) {
+    return "Shape";
+  }
   // A shape may not be named after a built-in type, so one that would be gets a
   // suffix rather than a diagnostic nobody can act on.
   if (vocabulary::TypeNames().contains(vocabulary::Canonical(name))) {
@@ -316,22 +354,42 @@ std::string FlowName(std::string_view given) {
 /// The shape a `$ref` names, or empty when it is not one this can follow.
 std::string RefName(const nlohmann::json& schema) {
   const auto ref = schema.find("$ref");
-  if (ref == schema.end() || !ref->is_string()) return "";
+  if (ref == schema.end() || !ref->is_string()) {
+    return "";
+  }
   const std::string target = ref->get<std::string>();
   constexpr std::string_view kPrefix = "#/$defs/";
-  if (!absl::StartsWith(target, kPrefix)) return "";
+  if (!absl::StartsWith(target, kPrefix)) {
+    return "";
+  }
   return FlowName(target.substr(kPrefix.size()));
 }
 
 /// The keywords this reads. Anything else in a property is reported once.
 const absl::flat_hash_set<std::string>& KnownKeywords() {
   static const auto* words = new absl::flat_hash_set<std::string>{
-      "type",        "format",      "contentEncoding", "items",
-      "enum",        "const",       "default",         "description",
-      "title",       "pattern",     "minimum",         "maximum",
-      "minLength",   "maxLength",   "minItems",        "maxItems",
-      "uniqueItems", "$ref",        "properties",      "required",
-      "additionalProperties",       std::string(kFlowTypeKey),
+      "type",
+      "format",
+      "contentEncoding",
+      "items",
+      "enum",
+      "const",
+      "default",
+      "description",
+      "title",
+      "pattern",
+      "minimum",
+      "maximum",
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+      "uniqueItems",
+      "$ref",
+      "properties",
+      "required",
+      "additionalProperties",
+      std::string(kFlowTypeKey),
       std::string(kFlowOrderKey),
   };
   return *words;
@@ -356,12 +414,24 @@ std::string ScalarType(const nlohmann::json& property) {
       }
     }
   }
-  if (spelled == "integer") return "integer";
-  if (spelled == "number") return "number";
-  if (spelled == "boolean") return "bool";
-  if (spelled == "object") return "object";
-  if (spelled == "array") return "list";
-  if (spelled != "string") return "json";
+  if (spelled == "integer") {
+    return "integer";
+  }
+  if (spelled == "number") {
+    return "number";
+  }
+  if (spelled == "boolean") {
+    return "bool";
+  }
+  if (spelled == "object") {
+    return "object";
+  }
+  if (spelled == "array") {
+    return "list";
+  }
+  if (spelled != "string") {
+    return "json";
+  }
   // A string with something that says how to read it: the three types JSON has
   // no word for.
   const auto encoding = property.find("contentEncoding");
@@ -372,8 +442,12 @@ std::string ScalarType(const nlohmann::json& property) {
   const auto format = property.find("format");
   if (format != property.end() && format->is_string()) {
     const std::string named = format->get<std::string>();
-    if (named == "date-time") return "time";
-    if (named == "duration") return "duration";
+    if (named == "date-time") {
+      return "time";
+    }
+    if (named == "duration") {
+      return "duration";
+    }
   }
   return "string";
 }
@@ -410,14 +484,18 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
       }
       field.declared = absl::StrCat(field.element, "[]");
     }
-    if (property.value("uniqueItems", false)) field.unique = true;
+    if (property.value("uniqueItems", false)) {
+      field.unique = true;
+    }
     if (property.contains("minItems")) {
       field.range.has_minimum = true;
-      field.range.minimum = Constant::Integer(property["minItems"].get<long long>());
+      field.range.minimum =
+          Constant::Integer(property["minItems"].get<long long>());
     }
     if (property.contains("maxItems")) {
       field.range.has_maximum = true;
-      field.range.maximum = Constant::Integer(property["maxItems"].get<long long>());
+      field.range.maximum =
+          Constant::Integer(property["maxItems"].get<long long>());
     }
   } else {
     // A length and a magnitude are one range in Flow, and which of the two a
@@ -448,7 +526,9 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
     for (const nlohmann::json& one : *allowed) {
       // A `null` among the allowed values is a schema saying the field may be
       // absent, which Flow says by the field not being required.
-      if (one.is_null()) continue;
+      if (one.is_null()) {
+        continue;
+      }
       field.enumeration.push_back(ConstantOf(one));
     }
     field.has_enumeration = !field.enumeration.empty();
@@ -476,7 +556,9 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
   }
 
   for (const auto& [keyword, unused] : property.items()) {
-    if (KnownKeywords().contains(keyword)) continue;
+    if (KnownKeywords().contains(keyword)) {
+      continue;
+    }
     Report(into, "flow.schema.unsupported-keyword",
            absl::StrCat("'", keyword, "' on '", name,
                         "' has no spelling in a shape, so it was dropped."));
@@ -486,7 +568,9 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
 
 void ReadShape(const nlohmann::json& schema, std::string_view name,
                SchemaImport& into, absl::flat_hash_set<std::string>& seen) {
-  if (!seen.insert(std::string(name)).second) return;
+  if (!seen.insert(std::string(name)).second) {
+    return;
+  }
 
   DtoPlan dto;
   dto.name = std::string(name);
@@ -499,7 +583,9 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
   if (const auto listed = schema.find("required");
       listed != schema.end() && listed->is_array()) {
     for (const nlohmann::json& one : *listed) {
-      if (one.is_string()) required.insert(one.get<std::string>());
+      if (one.is_string()) {
+        required.insert(one.get<std::string>());
+      }
     }
   }
 
@@ -545,21 +631,29 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
   // Only the definitions something actually referred to: a `$defs` full of
   // shapes nothing uses would arrive as a file of unused declarations.
   const auto defs = schema.find("$defs");
-  if (defs == schema.end() || !defs->is_object()) return;
+  if (defs == schema.end() || !defs->is_object()) {
+    return;
+  }
   const DtoPlan& written = into.dtos[into.dtos.size() - 1];
   std::vector<std::string> wanted;
   for (const FieldPlan& field : written.fields) {
     for (const std::string& named : {field.dto_name, field.element_dto_name}) {
-      if (!named.empty()) wanted.push_back(named);
+      if (!named.empty()) {
+        wanted.push_back(named);
+      }
     }
   }
   for (const std::string& named : wanted) {
     for (const auto& [key, definition] : defs->items()) {
-      if (FlowName(key) != named || !definition.is_object()) continue;
+      if (FlowName(key) != named || !definition.is_object()) {
+        continue;
+      }
       // The `$defs` travel with every nested read, so a shape that names one two
       // levels down is still found.
       nlohmann::json carried = definition;
-      if (!carried.contains("$defs")) carried["$defs"] = *defs;
+      if (!carried.contains("$defs")) {
+        carried["$defs"] = *defs;
+      }
       ReadShape(carried, named, into, seen);
     }
   }
@@ -569,18 +663,24 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
 void MarkBinary(std::vector<DtoPlan>& dtos) {
   for (DtoPlan& dto : dtos) {
     for (const FieldPlan& field : dto.fields) {
-      if (field.type == "bytes" || field.element == "bytes") dto.binary = true;
+      if (field.type == "bytes" || field.element == "bytes") {
+        dto.binary = true;
+      }
     }
   }
   bool changed = true;
   while (changed) {
     changed = false;
     for (DtoPlan& dto : dtos) {
-      if (dto.binary) continue;
+      if (dto.binary) {
+        continue;
+      }
       for (const FieldPlan& field : dto.fields) {
         for (const std::string& named :
              {field.dto_name, field.element_dto_name}) {
-          if (named.empty()) continue;
+          if (named.empty()) {
+            continue;
+          }
           for (const DtoPlan& other : dtos) {
             if (other.name == named && other.binary) {
               dto.binary = true;
@@ -606,7 +706,9 @@ nlohmann::json DtoToJsonSchema(const DtoPlan& dto, const Program& program) {
     // reference that resolves rather than one that dangles.
     defs[one->name] = ShapeSchema(*one);
   }
-  if (!defs.empty()) out["$defs"] = std::move(defs);
+  if (!defs.empty()) {
+    out["$defs"] = std::move(defs);
+  }
   return out;
 }
 
@@ -638,25 +740,27 @@ std::string DtoToFlow(const DtoPlan& dto) {
   types.reserve(dto.fields.size());
   for (const FieldPlan& field : dto.fields) {
     name_width = std::max(name_width, field.name.size() + 1);
-    std::string written =
-        field.declared.empty() ? field.type : field.declared;
-    if (field.required) absl::StrAppend(&written, " required");
-    if (field.unique) absl::StrAppend(&written, " unique");
+    std::string written = field.declared.empty() ? field.type : field.declared;
+    if (field.required) {
+      absl::StrAppend(&written, " required");
+    }
+    if (field.unique) {
+      absl::StrAppend(&written, " unique");
+    }
     if (!field.range.Empty()) {
-      absl::StrAppend(&written, " ",
-                      field.range.has_minimum
-                          ? ConstantFlow(field.range.minimum)
-                          : "",
-                      "..",
-                      field.range.has_maximum
-                          ? ConstantFlow(field.range.maximum)
-                          : "");
+      absl::StrAppend(
+          &written, " ",
+          field.range.has_minimum ? ConstantFlow(field.range.minimum) : "",
+          "..",
+          field.range.has_maximum ? ConstantFlow(field.range.maximum) : "");
     }
     if (field.has_pattern) {
-      absl::StrAppend(&written, " matching ", nlohmann::json(field.pattern).dump());
+      absl::StrAppend(&written, " matching ",
+                      nlohmann::json(field.pattern).dump());
     }
     if (field.has_enumeration) {
       std::vector<std::string> allowed;
+      allowed.reserve(field.enumeration.size());
       for (const Constant& one : field.enumeration) {
         allowed.push_back(ConstantFlow(one));
       }

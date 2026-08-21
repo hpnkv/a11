@@ -34,11 +34,11 @@ namespace a11::net {
  * travels to a server.
  */
 struct ParsedUrl {
-  std::string scheme;    ///< Lowercase, without "://" (e.g. "https").
-  std::string host;      ///< Hostname or IP literal, without IPv6 brackets.
+  std::string scheme;      ///< Lowercase, without "://" (e.g. "https").
+  std::string host;        ///< Hostname or IP literal, without IPv6 brackets.
   std::uint16_t port = 0;  ///< Explicit port, or the scheme's default.
-  std::string path;      ///< Begins with '/', or is empty when none was given.
-  std::string query;     ///< Query without the leading '?'; empty when absent.
+  std::string path;   ///< Begins with '/', or is empty when none was given.
+  std::string query;  ///< Query without the leading '?'; empty when absent.
 
   /** @return Whether the scheme implies TLS ("https" or "wss"). */
   [[nodiscard]] bool secure() const;

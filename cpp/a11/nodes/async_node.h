@@ -67,7 +67,7 @@ struct FinalizeOptions {
   bool close = true;
   /// Explicit sequence number for the final chunk; assigned in order when
   /// omitted.
-  std::optional<std::uint32_t> seq;
+  std::optional<std::uint32_t> seq = {};
   /// MIME type selecting the encoding of a typed value. Ignored by the
   /// no-value and raw-chunk overloads.
   std::string_view mimetype = {};
@@ -294,8 +294,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    *   readers, so it must have one.
    */
   template <typename T>
-    requires data::HasSerialTypeTag<T>
-  a11::Future<std::uint32_t> PutObject(
+  requires data::HasSerialTypeTag<T> a11::Future<std::uint32_t> PutObject(
       T value, std::string_view mimetype,
       std::optional<std::uint32_t> seq = std::nullopt, bool final = false) {
     std::shared_ptr<data::SerializationRegistry> registry;
@@ -303,10 +302,10 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
       thread::MutexLock lock(&mu_);
       registry = serialization_registry_;
     }
-    return PutChunk(data::MakeChunkObject<T>(
-                        std::move(value), data::SerialTypeTag<T>(),
-                        std::string(mimetype), registry),
-                    seq, final);
+    return PutChunk(
+        data::MakeChunkObject<T>(std::move(value), data::SerialTypeTag<T>(),
+                                 std::string(mimetype), registry),
+        seq, final);
   }
 
   template <typename T>
@@ -464,8 +463,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
             // no tag at all -- a JSON-native value, a bare string -- and those
             // simply have no fast path to take.
             if constexpr (data::HasSerialTypeTag<T>) {
-              if (std::optional<T> taken = data::TryTakeObject<T>(
-                      **chunk, data::SerialTypeTag<T>());
+              if (std::optional<T> taken =
+                      data::TryTakeObject<T>(**chunk, data::SerialTypeTag<T>());
                   taken.has_value()) {
                 return taken;
               }

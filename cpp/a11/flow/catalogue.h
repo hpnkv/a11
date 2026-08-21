@@ -79,9 +79,10 @@ struct ActionInfo {
   /// Where the declaration is, when it was found by reading source.
   std::optional<Origin> origin;
 
-  const PortInfo* absl_nullable Port(std::string_view port_name,
-                                     syntax::PortDirection direction) const;
-  std::vector<std::string> PortNames(syntax::PortDirection direction) const;
+  [[nodiscard]] const PortInfo* absl_nullable Port(
+      std::string_view port_name, syntax::PortDirection direction) const;
+  [[nodiscard]] std::vector<std::string> PortNames(
+      syntax::PortDirection direction) const;
 };
 
 /// One type the host knows, by the tag a flow writes it as.
@@ -126,17 +127,23 @@ class Catalogue {
   /// That is what "a live registry extends the snapshot" means, and it is why
   /// merging is a whole-entry replace rather than a field-by-field merge: half a
   /// description from each side would be a third thing that is true of neither.
-  Catalogue MergedWith(const Catalogue& other) const;
+  [[nodiscard]] Catalogue MergedWith(const Catalogue& other) const;
 
-  const ActionInfo* absl_nullable Action(std::string_view name) const;
-  const TypeInfo* absl_nullable Type(std::string_view tag) const;
+  [[nodiscard]] const ActionInfo* absl_nullable Action(
+      std::string_view name) const;
+  [[nodiscard]] const TypeInfo* absl_nullable Type(std::string_view tag) const;
 
-  const std::vector<ActionInfo>& actions() const { return actions_; }
-  const std::vector<TypeInfo>& types() const { return types_; }
+  [[nodiscard]] const std::vector<ActionInfo>& actions() const {
+    return actions_;
+  }
 
-  bool Empty() const { return actions_.empty() && types_.empty(); }
+  [[nodiscard]] const std::vector<TypeInfo>& types() const { return types_; }
 
-  nlohmann::json ToJson() const;
+  [[nodiscard]] bool Empty() const {
+    return actions_.empty() && types_.empty();
+  }
+
+  [[nodiscard]] nlohmann::json ToJson() const;
 
  private:
   std::vector<ActionInfo> actions_;

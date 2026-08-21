@@ -62,10 +62,13 @@ class HttpConnectionLease {
   [[nodiscard]] const std::shared_ptr<Http2Client>& client() const {
     return client_;
   }
+
   /** @return Whether this lease joined a connection that already existed. */
   [[nodiscard]] bool reused() const { return reused_; }
+
   /** @return Whether the connection is HTTP/2. @see Http2Client::multiplexed */
   [[nodiscard]] bool multiplexed() const;
+
   /** Releases this share of the connection early; the destructor does it too. */
   void Release() { client_.reset(); }
 

@@ -38,8 +38,7 @@ class MsgpackWriter {
    * @p target must outlive the writer. Nested records can use this constructor
    * to append to a parent or reused scratch buffer; see PackRecord().
    */
-  explicit MsgpackWriter(std::string* absl_nonnull target)
-      : bytes_(target) {}
+  explicit MsgpackWriter(std::string* absl_nonnull target) : bytes_(target) {}
 
   // Copying or moving would invalidate bytes_ when it points to owned_.
   MsgpackWriter(const MsgpackWriter&) = delete;

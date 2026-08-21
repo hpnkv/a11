@@ -52,7 +52,7 @@ struct Word {
   std::string text;
   Location location;
 
-  bool Empty() const { return text.empty(); }
+  [[nodiscard]] bool Empty() const { return text.empty(); }
 };
 
 /// A value the language can write out in full: what a literal is, and what
@@ -83,6 +83,7 @@ struct Constant {
   std::vector<std::pair<std::string, Constant>> pairs;
 
   static Constant Null() { return {}; }
+
   static Constant Bool(bool value);
   static Constant Integer(long long value);
   static Constant Double(double value);
@@ -90,7 +91,7 @@ struct Constant {
   static Constant Duration(absl::Duration value);
 
   /// The number this holds, whichever way it was written.
-  double AsDouble() const;
+  [[nodiscard]] double AsDouble() const;
 };
 
 /// The spelling of a constant's kind in the output formats.
@@ -105,9 +106,9 @@ std::string_view ConstantKindName(Constant::Kind kind);
 /// serialisation tag, or a mimetype when `quoted` -- and `parameters` are the
 /// types a generic one was given.
 struct TypeExpression {
-  Location location;
+  Location location = {};
   std::string name;
-  std::vector<TypeExpression> parameters;
+  std::vector<TypeExpression> parameters = {};
   bool quoted = false;
   /// Whether a `list[T]` was written `T[]`.
   ///
@@ -117,7 +118,7 @@ struct TypeExpression {
   bool sugared = false;
 
   /// The type as it would be written, which is what a message quotes.
-  std::string ToString() const;
+  [[nodiscard]] std::string ToString() const;
 };
 
 /// What a node is. One per construct, mirroring `a11/flow/syntax.py`.
@@ -204,13 +205,21 @@ struct NodeOf : Node {
 /// mistaken assumption is a null rather than a misread object.
 template <typename T>
 const T* As(const Node* node) {
-  if (node == nullptr || node->kind != T::kNodeKind) return nullptr;
+  if (node == nullptr || node->kind != T::kNodeKind) {
+    {
+      return nullptr;
+    }
+  }
   return static_cast<const T*>(node);
 }
 
 template <typename T>
 T* As(Node* node) {
-  if (node == nullptr || node->kind != T::kNodeKind) return nullptr;
+  if (node == nullptr || node->kind != T::kNodeKind) {
+    {
+      return nullptr;
+    }
+  }
   return static_cast<T*>(node);
 }
 
@@ -477,7 +486,7 @@ struct Let : NodeOf<NodeKind::kLet> {
   PipelinePtr pipeline;
 
   /// The first name, which is the whole value where there is only one.
-  const Word& name() const {
+  [[nodiscard]] const Word& name() const {
     static const Word kNone;
     return names.empty() ? kNone : names.front();
   }
@@ -634,7 +643,7 @@ struct ForEach : NodeOf<NodeKind::kForEach> {
   std::vector<Word> after;
 
   /// The first name, which is the whole value where there is only one.
-  const Word& variable() const {
+  [[nodiscard]] const Word& variable() const {
     static const Word kNone;
     return variables.empty() ? kNone : variables.front();
   }
@@ -762,7 +771,7 @@ struct FieldRange {
   Constant minimum;
   Constant maximum;
 
-  bool Empty() const { return !has_minimum && !has_maximum; }
+  [[nodiscard]] bool Empty() const { return !has_minimum && !has_maximum; }
 };
 
 /// One `name: type [modifiers] ["description"]` field of a `struct`.
@@ -823,6 +832,21 @@ std::optional<Constant> ConstantValue(const Node* node);
 /// and is reached through the node that holds it.
 void VisitChildren(const Node& node,
                    const std::function<void(const Node&)>& visit);
+
+/// Every node of the subtree rooted at @p node, @p node itself included.
+///
+/// Iterative, with the work list on the heap. A pass that walked the tree by
+/// calling itself from a VisitChildren callback would put the document's
+/// nesting on the call stack, and A11's work runs on pooled fibres whose stacks
+/// are fixed and small -- so the tree's shape must not decide how much stack a
+/// pass needs. The parser bounds nesting as well (see kMaxNesting there); this
+/// is the other half, and the one that does not depend on where the tree came
+/// from.
+///
+/// Order is unspecified beyond "parents before children": use VisitChildren
+/// directly if a pass needs source order.
+void VisitSubtree(const Node& node,
+                  const std::function<void(const Node&)>& visit);
 
 /// `a11.sdk.AudioBuffer` for a chain of plain names, or `nullopt`.
 ///

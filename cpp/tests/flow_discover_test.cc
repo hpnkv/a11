@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/discover.h"
-
 #include <algorithm>
 #include <filesystem>
 #include <string>
@@ -12,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/catalogue.h"
+#include "a11/flow/discover.h"
 #include "a11/flow/navigate.h"
 
 namespace a11::flow {
@@ -32,16 +31,22 @@ const catalogue::ActionInfo* absl_nullable Find(
   return found.Action(name);
 }
 
-std::vector<std::string> PortNames(const std::vector<catalogue::PortInfo>& ports) {
+std::vector<std::string> PortNames(
+    const std::vector<catalogue::PortInfo>& ports) {
   std::vector<std::string> names;
-  for (const catalogue::PortInfo& port : ports) names.push_back(port.name);
+  names.reserve(ports.size());
+  for (const catalogue::PortInfo& port : ports) {
+    names.push_back(port.name);
+  }
   return names;
 }
 
 const catalogue::PortInfo* absl_nullable Port(
     const std::vector<catalogue::PortInfo>& ports, std::string_view name) {
   for (const catalogue::PortInfo& port : ports) {
-    if (port.name == name) return &port;
+    if (port.name == name) {
+      return &port;
+    }
   }
   return nullptr;
 }
@@ -212,7 +217,8 @@ TEST(FlowDiscover, ReadsOneDocumentWithoutOpeningIt) {
   // path is recorded rather than read.
   const std::string source =
       "import a11\n"
-      "S = a11.ActionSchema(name=\"live\", description=\"Read from a buffer.\")\n";
+      "S = a11.ActionSchema(name=\"live\", description=\"Read from a "
+      "buffer.\")\n";
   const catalogue::Catalogue found =
       discover::DiscoverInSource(source, "untitled.py", Language::kPython);
   const catalogue::ActionInfo* action = found.Action("live");
@@ -251,8 +257,7 @@ TEST(FlowDiscover, AScannedActionHoversAsItsDescriptionAndSaysWhereItIs) {
       "  s = run simple(text: text)\n"
       "  s.out -> out\n"
       "}\n";
-  const Description about =
-      Describe(source, source.find("simple"), Scanned());
+  const Description about = Describe(source, source.find("simple"), Scanned());
   ASSERT_TRUE(about.found);
   EXPECT_EQ(about.text, "simple");
   EXPECT_NE(about.markdown.find("Return the input unchanged."),
@@ -276,7 +281,7 @@ TEST(FlowDiscover, AScannedActionHoversAsItsDescriptionAndSaysWhereItIs) {
 }
 
 TEST(FlowCatalogue, CarriesAnOriginThroughJsonAndAMerge) {
-  const catalogue::Catalogue scanned = Scanned();
+  const catalogue::Catalogue& scanned = Scanned();
   const catalogue::Catalogue round_tripped =
       catalogue::Catalogue::FromJson(scanned.ToJson());
   const catalogue::ActionInfo* before = scanned.Action("simple");

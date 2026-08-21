@@ -132,7 +132,7 @@ class Service : public std::enable_shared_from_this<Service> {
    * not. This is what makes prototyping against a running service possible.
    */
   absl::Status SetActionRegistry(
-      std::shared_ptr<actions::ActionRegistry> action_registry);
+      const std::shared_ptr<actions::ActionRegistry>& action_registry);
   /** @brief Replace the per-connection hook. Affects connections from now on. */
   absl::Status SetOnConnection(OnServiceConnection on_connection);
 
@@ -176,12 +176,13 @@ class Service : public std::enable_shared_from_this<Service> {
    * peer, or to inspect it -- and is content for the service to own completion.
    */
   absl::StatusOr<std::shared_ptr<Session>> StartStreamHandler(
-      std::shared_ptr<net::WireStream> stream,
+      const std::shared_ptr<net::WireStream>& stream,
       StreamMode mode = StreamMode::kAccept);
   /** @brief Attach another transport to an existing session. */
-  absl::Status AddStreamToSession(std::string_view session_id,
-                                  std::shared_ptr<net::WireStream> stream,
-                                  StreamMode mode = StreamMode::kAccept);
+  absl::Status AddStreamToSession(
+      std::string_view session_id,
+      const std::shared_ptr<net::WireStream>& stream,
+      StreamMode mode = StreamMode::kAccept);
 
   // --- who is connected -------------------------------------------------
 
@@ -214,7 +215,7 @@ class Service : public std::enable_shared_from_this<Service> {
    */
   a11::Task Drain(absl::Duration timeout = absl::InfiniteDuration());
   /** @brief Stop accepting and abort every live session with @p status. */
-  absl::Status Abort(absl::Status status);
+  absl::Status Abort(const absl::Status& status);
   /** @return A Task resolving once the service is closed and empty. */
   [[nodiscard]] a11::Task Done() const;
 

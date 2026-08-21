@@ -40,9 +40,9 @@ std::string_view PathMtuStateName(PathMtuState state) {
 
 absl::Status PathMtuOptions::Validate() const {
   if (min_mtu < 2 * probe_overhead) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "path MTU min_mtu must leave room for ", probe_overhead,
-        " bytes of header, got ", min_mtu));
+    return absl::InvalidArgumentError(
+        absl::StrCat("path MTU min_mtu must leave room for ", probe_overhead,
+                     " bytes of header, got ", min_mtu));
   }
   if (base_mtu < min_mtu) {
     return absl::InvalidArgumentError(
@@ -86,8 +86,7 @@ void PathMtuDiscovery::SetState(PathMtuState state) {
       return;
     }
     state_ = state;
-    event = std::exchange(changed_,
-                          std::make_shared<thread::PermanentEvent>());
+    event = std::exchange(changed_, std::make_shared<thread::PermanentEvent>());
   }
   event->Notify();
 }
@@ -112,8 +111,7 @@ void PathMtuDiscovery::Stop() {
   {
     thread::MutexLock lock(&mu_);
     stopped_ = true;
-    event = std::exchange(changed_,
-                          std::make_shared<thread::PermanentEvent>());
+    event = std::exchange(changed_, std::make_shared<thread::PermanentEvent>());
   }
   event->Notify();
 }
@@ -136,8 +134,7 @@ void PathMtuDiscovery::ReportSendFailure() {
       return;
     }
     black_hole_ = true;
-    event = std::exchange(changed_,
-                          std::make_shared<thread::PermanentEvent>());
+    event = std::exchange(changed_, std::make_shared<thread::PermanentEvent>());
   }
   if (event != nullptr) {
     event->Notify();
@@ -342,9 +339,9 @@ void PathMtuDiscovery::Run() {
         thread::MutexLock lock(&mu_);
         changed = changed_;
       }
-      const int selected = thread::SelectUntil(
-          absl::Now() + options_.startup_retry,
-          {thread::OnCancel(), changed->OnEvent()});
+      const int selected =
+          thread::SelectUntil(absl::Now() + options_.startup_retry,
+                              {thread::OnCancel(), changed->OnEvent()});
       if (selected == 0) {
         return;
       }

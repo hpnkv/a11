@@ -89,7 +89,7 @@ a11::Future<T> CompleteInline(F&& operation) {
  */
 inline absl::Status WaitForChange(
     const std::shared_ptr<thread::PermanentEvent>& changed, absl::Time deadline,
-    std::string message) {
+    const std::string& message) {
   const int selected =
       thread::SelectUntil(deadline, {thread::OnCancel(), changed->OnEvent()});
   if (selected == 0) {

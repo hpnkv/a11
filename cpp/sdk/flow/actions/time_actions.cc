@@ -73,7 +73,8 @@ absl::StatusOr<TickerOptions> ReadTickerOptions(const Options& options) {
   }
   ABSL_ASSIGN_OR_RETURN(
       parsed.count,
-      options.IntInRange("count", 0, 0, std::numeric_limits<std::int64_t>::max()));
+      options.IntInRange("count", 0, 0,
+                         std::numeric_limits<std::int64_t>::max()));
   ABSL_ASSIGN_OR_RETURN(parsed.duration,
                         options.Duration("for", absl::InfiniteDuration()));
   ABSL_ASSIGN_OR_RETURN(parsed.catch_up, options.Bool("catch_up", false));
@@ -184,7 +185,7 @@ absl::Status RunSleep(const std::shared_ptr<actions::Action>& action) {
   }
 
   const bool interrupted = stop->WaitFor(requested);
-  const absl::Status exit = stop->ExitStatus();
+  absl::Status exit = stop->ExitStatus();
   stop->Join();
   if (!exit.ok()) {
     outputs.Abort(exit).IgnoreError();
@@ -194,8 +195,8 @@ absl::Status RunSleep(const std::shared_ptr<actions::Action>& action) {
   // elapsed" from "something asked us to get on with it" -- which is exactly
   // what a flow racing a delay against a call wants to know.
   ABSL_RETURN_IF_ERROR(outputs["woke"].PutOnly(nlohmann::json{
-      {"at", absl::FormatTime(absl::RFC3339_full, absl::Now(),
-                              absl::UTCTimeZone())},
+      {"at",
+       absl::FormatTime(absl::RFC3339_full, absl::Now(), absl::UTCTimeZone())},
       {"elapsed_ms", absl::ToInt64Milliseconds(requested)},
       {"interrupted", interrupted}}));
   return outputs.Finish();
@@ -265,7 +266,7 @@ ActionSchema SleepSchema() {
   schema.inputs.emplace(
       std::string(kControlPort),
       Port(kControlPort, JsonType(),
-           "Control commands; a {\"command\": \"stop\"} ends the wait early.",
+           R"(Control commands; a {"command": "stop"} ends the wait early.)",
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "woke",

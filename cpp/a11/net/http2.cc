@@ -47,6 +47,7 @@
 #include "a11/net/internal/http_streams.h"
 #include "a11/net/internal/http_transport.h"
 #include "a11/status.h"
+#include "absl/strings/match.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
@@ -437,9 +438,8 @@ absl::Status ValidateHttpHeaders(const HttpHeaders& headers) {
       return absl::InvalidArgumentError(
           absl::StrCat("Invalid lowercase HTTP/2 field name: ", name));
     }
-    if (value.find('\0') != std::string::npos ||
-        value.find('\r') != std::string::npos ||
-        value.find('\n') != std::string::npos) {
+    if (absl::StrContains(value, '\0') || absl::StrContains(value, '\r') ||
+        absl::StrContains(value, '\n')) {
       return absl::InvalidArgumentError(
           absl::StrCat("Invalid HTTP/2 field value for ", name));
     }
@@ -500,7 +500,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
   static absl::StatusOr<std::shared_ptr<Http2Connection>> Create(
       std::shared_ptr<uvw::tcp_handle> tcp, bool server,
-      Http2RequestHandler handler, Http2Options options,
+      Http2RequestHandler handler, const Http2Options& options,
       SslContext tls_context = {}, std::string tls_server_name = {},
       std::function<void(HttpTransport*)> on_closed = {},
       std::string prebuffered = {}) {
@@ -514,9 +514,10 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
                         SslContext tls_context, std::string tls_server_name,
                         std::function<void(HttpTransport*)> on_closed,
                         std::string prebuffered)
-          : Http2Connection(std::move(tcp), server, std::move(handler), options,
-                            std::move(tls_context), std::move(tls_server_name),
-                            std::move(on_closed), std::move(prebuffered)) {}
+          : Http2Connection(std::move(tcp), server, std::move(handler),
+                            std::move(options), std::move(tls_context),
+                            std::move(tls_server_name), std::move(on_closed),
+                            std::move(prebuffered)) {}
     };
 
     auto connection = std::make_shared<MakeSharedEnabler>(
@@ -544,9 +545,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
          path = std::move(path), headers = std::move(headers),
          body = std::move(body)]() mutable
             -> absl::StatusOr<std::shared_ptr<Http2ResponseStream>> {
-          return self->SubmitRequestOnLoop(
-              std::move(method), std::move(scheme), std::move(authority),
-              std::move(path), std::move(headers), std::move(body));
+          return self->SubmitRequestOnLoop(std::move(method), scheme, authority,
+                                           std::move(path), std::move(headers),
+                                           std::move(body));
         });
   }
 
@@ -559,9 +560,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
          scheme = std::move(scheme), authority = std::move(authority),
          path = std::move(path), headers = std::move(headers)]() mutable
             -> absl::StatusOr<std::shared_ptr<Http2DuplexStream>> {
-          return self->SubmitDuplexOnLoop(
-              std::move(protocol), std::move(scheme), std::move(authority),
-              std::move(path), std::move(headers));
+          return self->SubmitDuplexOnLoop(std::move(protocol), scheme,
+                                          authority, std::move(path),
+                                          std::move(headers));
         });
   }
 
@@ -574,9 +575,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
          scheme = std::move(scheme), authority = std::move(authority),
          path = std::move(path), headers = std::move(headers)]() mutable
             -> absl::StatusOr<std::shared_ptr<Http2DuplexStream>> {
-          return self->OpenDuplexOnLoop(
-              std::move(method), /*protocol=*/{}, std::move(scheme),
-              std::move(authority), std::move(path), std::move(headers));
+          return self->OpenDuplexOnLoop(std::move(method), /*protocol=*/{},
+                                        scheme, authority, std::move(path),
+                                        std::move(headers));
         });
   }
 
@@ -635,17 +636,17 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   absl::Status SendResponse(std::int32_t stream_id, int status,
                             HttpHeaders headers, std::string body) override {
     std::shared_ptr<Http2Connection> self = Self();
-    return RunStatusOnUvForConnection([self = std::move(self), stream_id,
-                                       status, headers = std::move(headers),
-                                       body = std::move(
-                                           body)]() mutable -> absl::Status {
-      ABSL_RETURN_IF_ERROR(
-          self->SendHeadersOnLoop(stream_id, status, std::move(headers)));
-      if (!body.empty()) {
-        ABSL_RETURN_IF_ERROR(self->WriteOnLoop(stream_id, std::move(body)));
-      }
-      return self->FinishOnLoop(stream_id);
-    });
+    return RunStatusOnUvForConnection(
+        [self = std::move(self), stream_id, status,
+         headers = std::move(headers),
+         body = std::move(body)]() mutable -> absl::Status {
+          ABSL_RETURN_IF_ERROR(
+              self->SendHeadersOnLoop(stream_id, status, std::move(headers)));
+          if (!body.empty()) {
+            ABSL_RETURN_IF_ERROR(self->WriteOnLoop(stream_id, std::move(body)));
+          }
+          return self->FinishOnLoop(stream_id);
+        });
   }
 
   absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> SubmitPushPromise(
@@ -955,8 +956,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   }
 
   absl::StatusOr<std::shared_ptr<Http2ResponseStream>> SubmitRequestOnLoop(
-      std::string method, std::string scheme, std::string authority,
-      std::string path, HttpHeaders headers, std::string body) {
+      std::string method, const std::string& scheme,
+      const std::string& authority, std::string path, HttpHeaders headers,
+      std::string body) {
     if (server_) {
       return absl::FailedPreconditionError(
           "A server HTTP/2 connection cannot submit requests");
@@ -1048,9 +1050,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         if (const absl::Status completion_status =
                 done.Await(deadline).status();
             absl::IsDeadlineExceeded(completion_status)) {
-          if (const std::shared_ptr<Http2ResponseStream> stream =
+          if (const std::shared_ptr<Http2ResponseStream> held_stream =
                   response_weak.lock()) {
-            stream
+            held_stream
                 ->Cancel(absl::DeadlineExceededError(
                     "HTTP/2 request exceeded its deadline"))
                 .IgnoreError();
@@ -1062,8 +1064,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   }
 
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitDuplexOnLoop(
-      std::string protocol, std::string scheme, std::string authority,
-      std::string path, HttpHeaders headers) {
+      std::string protocol, const std::string& scheme,
+      const std::string& authority, std::string path, HttpHeaders headers) {
     if (protocol.empty()) {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT requires a protocol");
@@ -1075,9 +1077,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT protocol must be a lowercase token");
     }
-    return OpenDuplexOnLoop("CONNECT", std::move(protocol), std::move(scheme),
-                            std::move(authority), std::move(path),
-                            std::move(headers));
+    return OpenDuplexOnLoop("CONNECT", protocol, scheme, authority,
+                            std::move(path), std::move(headers));
   }
 
   /**
@@ -1090,8 +1091,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
    * until Write() feeds it -- so it is written once.
    */
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> OpenDuplexOnLoop(
-      std::string method, std::string protocol, std::string scheme,
-      std::string authority, std::string path, HttpHeaders headers) {
+      std::string method, const std::string& protocol,
+      const std::string& scheme, const std::string& authority, std::string path,
+      HttpHeaders headers) {
     if (server_) {
       return absl::FailedPreconditionError(
           "A server HTTP/2 connection cannot submit requests");
@@ -1099,8 +1101,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (closed_ || !connected_.load()) {
       return absl::UnavailableError("HTTP/2 connection is not connected");
     }
-    if (method.empty() || scheme.empty() || authority.empty() ||
-        path.empty() || path.front() != '/') {
+    if (method.empty() || scheme.empty() || authority.empty() || path.empty() ||
+        path.front() != '/') {
       return absl::InvalidArgumentError(
           "HTTP/2 method, scheme, authority, and absolute path are required");
     }
@@ -1162,10 +1164,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     };
 
     auto response = std::make_shared<MakeResponseEnabler>(stream->response);
-    auto duplex =
-        std::make_shared<MakeDuplexEnabler>(Self(), response);
+    auto duplex = std::make_shared<MakeDuplexEnabler>(Self(), response);
     streams_.emplace(stream_id, std::move(stream));
-    if (const absl::Status send_status = SendSession(); !send_status.ok()) {
+    if (absl::Status send_status = SendSession(); !send_status.ok()) {
       streams_.erase(stream_id);
       return send_status;
     }
@@ -1322,9 +1323,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     auto values = RequestHeaders(method, scheme, associated->origin_authority,
                                  path, /*protocol=*/{}, headers);
     auto fields = MakeNv(values);
-    const std::int32_t promised_id = nghttp2_submit_push_promise(
-        session_, NGHTTP2_FLAG_NONE, stream_id, fields.data(), fields.size(),
-        nullptr);
+    const std::int32_t promised_id =
+        nghttp2_submit_push_promise(session_, NGHTTP2_FLAG_NONE, stream_id,
+                                    fields.data(), fields.size(), nullptr);
     if (promised_id == NGHTTP2_ERR_PUSH_DISABLED) {
       return absl::FailedPreconditionError(
           "The peer did not enable HTTP/2 server push");
@@ -1357,7 +1358,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
 
     auto writer = std::make_shared<MakeWriterEnabler>(Self(), promised_id,
                                                       std::move(writer_state));
-    if (const absl::Status sent = SendSession(); !sent.ok()) {
+    if (absl::Status sent = SendSession(); !sent.ok()) {
       streams_.erase(promised_id);
       return sent;
     }
@@ -2200,7 +2201,7 @@ absl::StatusOr<std::shared_ptr<HttpTransport>> CreateServerConnection(
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<Http2Connection> connection,
       Http2Connection::Create(client, /*server=*/true, std::move(handler),
-                              std::move(options), std::move(tls_context), {},
+                              options, std::move(tls_context), {},
                               std::move(on_closed), std::move(prebuffered)));
   return std::static_pointer_cast<HttpTransport>(connection);
 }
@@ -2225,7 +2226,7 @@ void SetNoDelay(const std::shared_ptr<uvw::tcp_handle>& tcp,
 
 absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
     std::string bind_address, std::uint16_t port, Http2RequestHandler handler,
-    Http2Options options) {
+    const Http2Options& options) {
   if (bind_address.empty()) {
     return absl::InvalidArgumentError("HTTP/2 bind address must not be empty");
   }
@@ -2341,10 +2342,9 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
           }
           if (allow_h2c && !allow_http1) {
             register_connection(
-                CreateServerConnection(/*http1=*/false, client,
-                                       server->handler, server->options,
-                                       server->tls_context, remove_connection,
-                                       {}),
+                CreateServerConnection(/*http1=*/false, client, server->handler,
+                                       server->options, server->tls_context,
+                                       remove_connection, {}),
                 client.get());
             return;
           }
@@ -2370,7 +2370,7 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
           client->on<uvw::data_event>(
               [server, client, sniff_buffer, remove_connection,
                register_connection](const uvw::data_event& event,
-                                     uvw::tcp_handle& handle) {
+                                    uvw::tcp_handle& handle) {
                 sniff_buffer->append(event.data.get(), event.length);
                 const PrefaceGuess guess = GuessPreface(*sniff_buffer);
                 if (guess == PrefaceGuess::kNeedMore) {
@@ -2479,7 +2479,7 @@ void* absl_nullable Http2Server::GetImpl() const {
 }
 
 a11::Future<std::shared_ptr<Http2Client>> Http2Client::Connect(
-    std::string host, std::uint16_t port, Http2Options options) {
+    std::string host, std::uint16_t port, const Http2Options& options) {
   if (host.empty()) {
     return a11::FailedFuture<std::shared_ptr<Http2Client>>(
         absl::InvalidArgumentError("HTTP/2 host must not be empty"));
@@ -2606,9 +2606,9 @@ a11::Future<std::shared_ptr<Http2Client>> Http2Client::Connect(
                   }
                   struct MakeSharedEnabler final : Http2Client {
                     MakeSharedEnabler(std::string host, std::uint16_t port,
-                                      Http2Options options,
+                                      const Http2Options& options,
                                       std::shared_ptr<HttpTransport> connection)
-                        : Http2Client(std::move(host), port, std::move(options),
+                        : Http2Client(std::move(host), port, options,
                                       std::move(connection)) {}
                   };
                   std::shared_ptr<Http2Client> client =
@@ -2677,7 +2677,7 @@ struct Http2Client::Impl {
 };
 
 Http2Client::Http2Client(std::string host, std::uint16_t port,
-                         Http2Options options,
+                         const Http2Options& options,
                          std::shared_ptr<HttpTransport> connection) {
   static_assert(sizeof(Impl) <= kImplSize,
                 "Http2Client::Impl outgrew its inline storage. kImplSize in "
@@ -2719,11 +2719,11 @@ absl::StatusOr<std::shared_ptr<Http2ResponseStream>> Http2Client::RequestStream(
     scheme = connection->secure() ? "https" : "http";
   }
   std::string authority = state()->host;
-  if (authority.find(':') != std::string::npos &&
+  if (absl::StrContains(authority, ':') &&
       (authority.empty() || authority.front() != '[')) {
     authority = absl::StrCat("[", authority, "]");
   }
-  authority = absl::StrCat(authority, ":", state()->port);
+  absl::StrAppend(&authority, ":", state()->port);
   return http->SubmitRequest(std::move(method), std::move(scheme),
                              std::move(authority), std::move(path),
                              std::move(headers), std::move(body));
@@ -2745,11 +2745,11 @@ absl::StatusOr<std::shared_ptr<Http2DuplexStream>> Http2Client::ExtendedConnect(
     scheme = connection->secure() ? "https" : "http";
   }
   std::string authority = state()->host;
-  if (authority.find(':') != std::string::npos &&
+  if (absl::StrContains(authority, ':') &&
       (authority.empty() || authority.front() != '[')) {
     authority = absl::StrCat("[", authority, "]");
   }
-  authority = absl::StrCat(authority, ":", state()->port);
+  absl::StrAppend(&authority, ":", state()->port);
   return http->SubmitDuplex(std::move(protocol), std::move(scheme),
                             std::move(authority), std::move(path),
                             std::move(headers));
@@ -2771,11 +2771,11 @@ Http2Client::RequestStreamingBody(std::string method, std::string path,
     scheme = connection->secure() ? "https" : "http";
   }
   std::string authority = state()->host;
-  if (authority.find(':') != std::string::npos &&
+  if (absl::StrContains(authority, ':') &&
       (authority.empty() || authority.front() != '[')) {
     authority = absl::StrCat("[", authority, "]");
   }
-  authority = absl::StrCat(authority, ":", state()->port);
+  absl::StrAppend(&authority, ":", state()->port);
   return http->SubmitStreamingRequest(std::move(method), std::move(scheme),
                                       std::move(authority), std::move(path),
                                       std::move(headers));
@@ -2808,7 +2808,7 @@ a11::Future<HttpResponse> Http2Client::Request(std::string method,
           }
           if (response.body.size() + chunk->size() >
               options.max_response_body_size) {
-            const absl::Status status = absl::OutOfRangeError(
+            absl::Status status = absl::OutOfRangeError(
                 "HTTP/2 response exceeds max_response_body_size");
             (void)stream->Cancel(status);
             return status;

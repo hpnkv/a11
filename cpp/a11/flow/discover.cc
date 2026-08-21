@@ -20,6 +20,7 @@
 #include <absl/types/span.h>
 
 #include "a11/flow/diagnostic.h"
+#include "absl/strings/match.h"
 
 namespace a11::flow::discover {
 namespace {
@@ -73,18 +74,22 @@ class Masked {
     }
   }
 
-  std::string_view text() const { return text_; }
-  size_t size() const { return text_.size(); }
-  char at(size_t index) const { return index < text_.size() ? text_[index] : '\0'; }
+  [[nodiscard]] std::string_view text() const { return text_; }
+
+  [[nodiscard]] size_t size() const { return text_.size(); }
+
+  [[nodiscard]] char at(size_t index) const {
+    return index < text_.size() ? text_[index] : '\0';
+  }
 
   /// The string that starts at `offset`, decoded, or `nullopt` if none does.
-  const std::string* absl_nullable StringAt(size_t offset) const {
+  [[nodiscard]] const std::string* absl_nullable StringAt(size_t offset) const {
     const auto found = strings_.find(offset);
     return found == strings_.end() ? nullptr : &found->second.value;
   }
 
   /// One past the closing quote of the string starting at `offset`.
-  size_t StringEnd(size_t offset) const {
+  [[nodiscard]] size_t StringEnd(size_t offset) const {
     const auto found = strings_.find(offset);
     return found == strings_.end() ? offset : found->second.end;
   }
@@ -98,7 +103,9 @@ class Masked {
   /// Blanks `[from, to)` but leaves the line breaks, so lines still count.
   void Blank(size_t from, size_t to) {
     for (size_t at = from; at < to && at < text_.size(); ++at) {
-      if (text_[at] != '\n' && text_[at] != '\r') text_[at] = ' ';
+      if (text_[at] != '\n' && text_[at] != '\r') {
+        text_[at] = ' ';
+      }
     }
   }
 
@@ -142,9 +149,11 @@ class Masked {
     return source_.size();
   }
 
-  bool Repeats(size_t at, char c, size_t times) const {
+  [[nodiscard]] bool Repeats(size_t at, char c, size_t times) const {
     for (size_t n = 0; n < times; ++n) {
-      if (at + n >= source_.size() || source_[at + n] != c) return false;
+      if (at + n >= source_.size() || source_[at + n] != c) {
+        return false;
+      }
     }
     return true;
   }
@@ -168,16 +177,19 @@ class Masked {
 
   /// How many of `prefix` letters before `index` are a string prefix (`r`, `f`,
   /// `b`, `rb`, `u`), so `f"..."` is one string and `name"..."` is not.
-  size_t PythonPrefix(size_t index) const {
+  [[nodiscard]] size_t PythonPrefix(size_t index) const {
     size_t letters = 0;
     while (letters < 2 && index > letters) {
       const char c = absl::ascii_tolower(
           static_cast<unsigned char>(source_[index - letters - 1]));
-      if (c != 'r' && c != 'f' && c != 'b' && c != 'u') break;
+      if (c != 'r' && c != 'f' && c != 'b' && c != 'u') {
+        break;
+      }
       ++letters;
     }
     // Only a prefix if what is before it is not part of a longer word.
-    if (letters > 0 && index > letters && IsWordChar(source_[index - letters - 1])) {
+    if (letters > 0 && index > letters &&
+        IsWordChar(source_[index - letters - 1])) {
       return 0;
     }
     return letters;
@@ -188,8 +200,8 @@ class Masked {
       const char c = source_[at];
       if (c == '#') {
         const size_t line_end = source_.find('\n', at);
-        const size_t to = line_end == std::string_view::npos ? source_.size()
-                                                            : line_end;
+        const size_t to =
+            line_end == std::string_view::npos ? source_.size() : line_end;
         Blank(at, to);
         at = to;
         continue;
@@ -200,7 +212,9 @@ class Masked {
         for (size_t n = 0; n < prefix; ++n) {
           const char letter = absl::ascii_tolower(
               static_cast<unsigned char>(source_[at - n - 1]));
-          if (letter == 'r') raw = true;
+          if (letter == 'r') {
+            raw = true;
+          }
         }
         const size_t quote_length = Repeats(at, c, 3) ? 3 : 1;
         std::string value;
@@ -209,7 +223,9 @@ class Masked {
         // front of it, exactly as the Flow parser does for its own: the text is
         // what a reader is shown, and eight spaces of Python indentation are not
         // part of it.
-        if (quote_length == 3) value = Dedent(value);
+        if (quote_length == 3) {
+          value = Dedent(value);
+        }
         Keep(at, end, std::move(value), quote_length);
         at = end;
         continue;
@@ -304,10 +320,12 @@ class Masked {
         const size_t end = ReadQuoted(at, c, 1, /*raw=*/false, value);
         // A template literal holding `${..}` is not a literal value, and half of
         // one would be worse than none.
-        if (c == '`' && value.find("${") != std::string::npos) {
+        if (c == '`' && absl::StrContains(value, "${")) {
           Blank(at, end);
         } else {
-          if (c == '`') value = Dedent(value);
+          if (c == '`') {
+            value = Dedent(value);
+          }
           Keep(at, end, std::move(value), 1);
         }
         at = end;
@@ -329,27 +347,41 @@ class Masked {
       const size_t br = text.find('\n', start);
       lines.push_back(text.substr(
           start, (br == std::string_view::npos ? text.size() : br) - start));
-      if (br == std::string_view::npos) break;
+      if (br == std::string_view::npos) {
+        break;
+      }
       start = br + 1;
     }
-    if (lines.size() < 2) return std::string(text);
+    if (lines.size() < 2) {
+      return std::string(text);
+    }
     size_t common = std::string::npos;
     for (size_t n = 1; n < lines.size(); ++n) {
       const size_t indent = lines[n].find_first_not_of(" \t");
-      if (indent == std::string_view::npos) continue;  // A blank line says nothing.
+      if (indent == std::string_view::npos) {
+        continue;  // A blank line says nothing.
+      }
       common = std::min(common, indent);
     }
-    if (common == std::string::npos || common == 0) return std::string(text);
+    if (common == std::string::npos || common == 0) {
+      return std::string(text);
+    }
     std::string out;
     for (size_t n = 0; n < lines.size(); ++n) {
-      if (n > 0) out.push_back('\n');
+      if (n > 0) {
+        out.push_back('\n');
+      }
       out.append(n == 0 || lines[n].size() < common ? lines[n]
-                                                   : lines[n].substr(common));
+                                                    : lines[n].substr(common));
     }
     // A literal opened on its own line begins with a break the reader never
     // meant to be part of the text.
-    if (!out.empty() && out.front() == '\n') out.erase(0, 1);
-    while (!out.empty() && IsSpace(out.back())) out.pop_back();
+    if (!out.empty() && out.front() == '\n') {
+      out.erase(0, 1);
+    }
+    while (!out.empty() && IsSpace(out.back())) {
+      out.pop_back();
+    }
     return out;
   }
 
@@ -363,7 +395,9 @@ class Masked {
 /// The next offset at or after `from` that is not whitespace.
 size_t SkipSpace(const Masked& masked, size_t from) {
   size_t at = from;
-  while (at < masked.size() && IsSpace(masked.at(at))) ++at;
+  while (at < masked.size() && IsSpace(masked.at(at))) {
+    ++at;
+  }
   return at;
 }
 
@@ -386,7 +420,9 @@ char Mate(char open) {
 size_t MatchBracket(const Masked& masked, size_t open) {
   const char opener = masked.at(open);
   const char closer = Mate(opener);
-  if (closer == '\0') return kNowhere;
+  if (closer == '\0') {
+    return kNowhere;
+  }
   int depth = 0;
   for (size_t at = open; at < masked.size(); ++at) {
     const char c = masked.at(at);
@@ -394,8 +430,12 @@ size_t MatchBracket(const Masked& masked, size_t open) {
       ++depth;
     } else if (c == ')' || c == ']' || c == '}') {
       --depth;
-      if (depth == 0) return c == closer ? at : kNowhere;
-      if (depth < 0) return kNowhere;
+      if (depth == 0) {
+        return c == closer ? at : kNowhere;
+      }
+      if (depth < 0) {
+        return kNowhere;
+      }
     }
   }
   return kNowhere;
@@ -419,7 +459,9 @@ std::vector<std::pair<size_t, size_t>> SplitTopLevel(const Masked& masked,
       start = at + 1;
     }
   }
-  if (start < to) parts.emplace_back(start, to);
+  if (start < to) {
+    parts.emplace_back(start, to);
+  }
   // A trailing separator leaves an empty last part, which is not an entry.
   while (!parts.empty() &&
          SkipSpace(masked, parts.back().first) >= parts.back().second) {
@@ -443,8 +485,10 @@ size_t FindTopLevel(const Masked& masked, size_t from, size_t to, char mark,
     } else if (c == mark && depth == 0) {
       if (skip_double &&
           (masked.at(at + 1) == '=' || masked.at(at + 1) == mark ||
-           masked.at(at ? at - 1 : 0) == '=' || masked.at(at ? at - 1 : 0) == '!' ||
-           masked.at(at ? at - 1 : 0) == '<' || masked.at(at ? at - 1 : 0) == '>')) {
+           masked.at(at ? at - 1 : 0) == '=' ||
+           masked.at(at ? at - 1 : 0) == '!' ||
+           masked.at(at ? at - 1 : 0) == '<' ||
+           masked.at(at ? at - 1 : 0) == '>')) {
         continue;
       }
       return at;
@@ -456,16 +500,22 @@ size_t FindTopLevel(const Masked& masked, size_t from, size_t to, char mark,
 /// The word ending at `to`, walking back over word characters.
 std::string_view WordBefore(const Masked& masked, size_t to) {
   size_t end = to;
-  while (end > 0 && IsSpace(masked.at(end - 1))) --end;
+  while (end > 0 && IsSpace(masked.at(end - 1))) {
+    --end;
+  }
   size_t start = end;
-  while (start > 0 && IsWordChar(masked.at(start - 1))) --start;
+  while (start > 0 && IsWordChar(masked.at(start - 1))) {
+    --start;
+  }
   return masked.text().substr(start, end - start);
 }
 
 /// The word starting at `from`.
 std::string_view WordAt(const Masked& masked, size_t from) {
   size_t end = from;
-  while (end < masked.size() && IsWordChar(masked.at(end))) ++end;
+  while (end < masked.size() && IsWordChar(masked.at(end))) {
+    ++end;
+  }
   return masked.text().substr(from, end - from);
 }
 
@@ -478,7 +528,9 @@ std::vector<size_t> WholeWords(const Masked& masked, std::string_view word) {
     const bool before = at > 0 && IsWordChar(text[at - 1]);
     const size_t after_at = at + word.size();
     const bool after = after_at < text.size() && IsWordChar(text[after_at]);
-    if (!before && !after) found.push_back(at);
+    if (!before && !after) {
+      found.push_back(at);
+    }
     at = text.find(word, at + 1);
   }
   return found;
@@ -510,21 +562,31 @@ void CollectConstants(const Masked& masked, Constants& into) {
       continue;
     }
     if (c == ')' || c == ']') {
-      if (depth > 0) --depth;
+      if (depth > 0) {
+        --depth;
+      }
       continue;
     }
-    if (c != '=' || depth != 0) continue;
-    if (masked.at(at + 1) == '=') continue;
+    if (c != '=' || depth != 0) {
+      continue;
+    }
+    if (masked.at(at + 1) == '=') {
+      continue;
+    }
     const char previous = at > 0 ? masked.at(at - 1) : '\0';
     if (previous == '=' || previous == '!' || previous == '<' ||
         previous == '>' || previous == '+' || previous == '-') {
       continue;
     }
     const std::string_view name = WordBefore(masked, at);
-    if (name.empty()) continue;
+    if (name.empty()) {
+      continue;
+    }
     const size_t value_at = SkipSpace(masked, at + 1);
     const std::string* text = masked.StringAt(value_at);
-    if (text == nullptr) continue;
+    if (text == nullptr) {
+      continue;
+    }
     // The first binding wins: a name rebound later in the file is beyond what a
     // textual read can follow, and the first is the one a reader sees.
     into.try_emplace(std::string(name), *text);
@@ -561,7 +623,9 @@ bool ReadCall(const Masked& masked, size_t from, size_t to,
               const Constants& constants, Value& value) {
   size_t at = SkipSpace(masked, from);
   // `new` before a constructor is TypeScript's, and says nothing here.
-  if (WordAt(masked, at) == "new") at = SkipSpace(masked, at + 3);
+  if (WordAt(masked, at) == "new") {
+    at = SkipSpace(masked, at + 3);
+  }
   size_t name_end = at;
   // A qualified name: `a11.ActionSchema`, `std::string`.
   while (name_end < to) {
@@ -575,9 +639,13 @@ bool ReadCall(const Masked& masked, size_t from, size_t to,
     }
   }
   const size_t paren = SkipSpace(masked, name_end);
-  if (paren >= to || masked.at(paren) != '(') return false;
+  if (paren >= to || masked.at(paren) != '(') {
+    return false;
+  }
   const size_t close = MatchBracket(masked, paren);
-  if (close == kNowhere || close > to) return false;
+  if (close == kNowhere || close > to) {
+    return false;
+  }
 
   std::string_view qualified = masked.text().substr(at, name_end - at);
   // The last segment is the name that matters: `a11.ActionPortSchema` is an
@@ -585,8 +653,12 @@ bool ReadCall(const Masked& masked, size_t from, size_t to,
   const size_t dot = qualified.find_last_of('.');
   const size_t colon = qualified.rfind("::");
   size_t bare = 0;
-  if (dot != std::string_view::npos) bare = dot + 1;
-  if (colon != std::string_view::npos) bare = std::max(bare, colon + 2);
+  if (dot != std::string_view::npos) {
+    bare = dot + 1;
+  }
+  if (colon != std::string_view::npos) {
+    bare = std::max(bare, colon + 2);
+  }
   value.call = std::string(qualified.substr(bare));
   value.args_from = paren + 1;
   value.args_to = close;
@@ -598,8 +670,12 @@ bool ReadCall(const Masked& masked, size_t from, size_t to,
     // that wanted the call still has it.
     const Value inner =
         ReadValue(masked, args[0].first, args[0].second, constants);
-    if (inner.text.has_value()) value.text = inner.text;
-    if (inner.flag.has_value()) value.flag = inner.flag;
+    if (inner.text.has_value()) {
+      value.text = inner.text;
+    }
+    if (inner.flag.has_value()) {
+      value.flag = inner.flag;
+    }
     if (inner.is_object) {
       value.is_object = true;
       value.object_from = inner.object_from;
@@ -622,7 +698,9 @@ Value ReadValue(const Masked& masked, size_t from, size_t to,
                 const Constants& constants) {
   Value value;
   const size_t at = SkipSpace(masked, from);
-  if (at >= to) return value;
+  if (at >= to) {
+    return value;
+  }
 
   // A string, and every literal written next to it: prose that outgrew its line
   // is written as adjacent literals in Python and C++ and joined with `+` in
@@ -632,7 +710,9 @@ Value ReadValue(const Masked& masked, size_t from, size_t to,
     size_t cursor = at;
     while (cursor < to) {
       const std::string* piece = masked.StringAt(cursor);
-      if (piece == nullptr) break;
+      if (piece == nullptr) {
+        break;
+      }
       joined.append(*piece);
       cursor = SkipSpace(masked, masked.StringEnd(cursor));
       if (cursor < to && masked.at(cursor) == '+') {
@@ -653,7 +733,9 @@ Value ReadValue(const Masked& masked, size_t from, size_t to,
     return value;
   }
 
-  if (ReadCall(masked, at, to, constants, value)) return value;
+  if (ReadCall(masked, at, to, constants, value)) {
+    return value;
+  }
 
   const std::string_view word = WordAt(masked, at);
   if (word == "true" || word == "True") {
@@ -725,8 +807,10 @@ Entry ReadEntry(const Masked& masked, size_t from, size_t to,
     }
   }
 
-  const size_t colon = FindTopLevel(masked, start, to, ':', /*skip_double=*/true);
-  const size_t equals = FindTopLevel(masked, start, to, '=', /*skip_double=*/true);
+  const size_t colon =
+      FindTopLevel(masked, start, to, ':', /*skip_double=*/true);
+  const size_t equals =
+      FindTopLevel(masked, start, to, '=', /*skip_double=*/true);
   size_t split = kNowhere;
   if (colon != kNowhere && (equals == kNowhere || colon < equals)) {
     split = colon;
@@ -740,7 +824,9 @@ Entry ReadEntry(const Masked& masked, size_t from, size_t to,
   }
 
   size_t key_from = start;
-  if (masked.at(key_from) == '.') ++key_from;  // A designated initialiser.
+  if (masked.at(key_from) == '.') {
+    ++key_from;  // A designated initialiser.
+  }
   key_from = SkipSpace(masked, key_from);
   // A key is a string literal (`"actions": ..`) or a bare word (`name=..`), and
   // never a name resolved through the constants: a keyword argument called
@@ -751,14 +837,20 @@ Entry ReadEntry(const Masked& masked, size_t from, size_t to,
     entry.key_was_literal = true;
   } else {
     std::string_view word = masked.text().substr(key_from, split - key_from);
-    while (!word.empty() && IsSpace(word.back())) word.remove_suffix(1);
+    while (!word.empty() && IsSpace(word.back())) {
+      word.remove_suffix(1);
+    }
     // A computed key: `[PORT]: ..`, which is how TypeScript writes an object
     // whose key is a variable. The brackets come off and the name inside is
     // read as a name.
     if (word.size() > 2 && word.front() == '[' && word.back() == ']') {
       word = word.substr(1, word.size() - 2);
-      while (!word.empty() && IsSpace(word.back())) word.remove_suffix(1);
-      while (!word.empty() && IsSpace(word.front())) word.remove_prefix(1);
+      while (!word.empty() && IsSpace(word.back())) {
+        word.remove_suffix(1);
+      }
+      while (!word.empty() && IsSpace(word.front())) {
+        word.remove_prefix(1);
+      }
       entry.computed_key = true;
     }
     // Only a plain word is a key. Anything else -- an index, a call -- is a
@@ -781,7 +873,7 @@ Entry ReadEntry(const Masked& masked, size_t from, size_t to,
 /// distinction that lets a positional read of an unknown helper's arguments
 /// leave a field empty rather than fill it with the wrong thing.
 bool ReadsAsProse(std::string_view text) {
-  return text.find(' ') != std::string_view::npos;
+  return absl::StrContains(text, ' ');
 }
 
 /// One port, out of whatever built it.
@@ -793,8 +885,8 @@ bool ReadsAsProse(std::string_view text) {
 /// description, a word that is not the port's name is the type -- and a helper
 /// whose arguments run in an unexpected order gives a port with a name and
 /// nothing else rather than a port with a description in its type.
-PortInfo ReadPort(const Masked& masked, std::string_view port_name,
-                  size_t from, size_t to, const Constants& constants) {
+PortInfo ReadPort(const Masked& masked, std::string_view port_name, size_t from,
+                  size_t to, const Constants& constants) {
   PortInfo port;
   port.name = std::string(port_name);
 
@@ -823,23 +915,33 @@ PortInfo ReadPort(const Masked& masked, std::string_view port_name,
         // schema's business and not this port's.
         continue;
       }
-      if (entry.key == "type" && held.text.has_value()) port.type = *held.text;
+      if (entry.key == "type" && held.text.has_value()) {
+        port.type = *held.text;
+      }
       if (entry.key == "description" && held.text.has_value()) {
         port.description = *held.text;
       }
       if (entry.key == "required" && held.flag.has_value()) {
         port.required = *held.flag;
       }
-      if (entry.key == "unary" && held.flag.has_value()) port.unary = *held.flag;
+      if (entry.key == "unary" && held.flag.has_value()) {
+        port.unary = *held.flag;
+      }
       continue;
     }
-    if (held.text.has_value()) positional.push_back(*held.text);
-    if (held.flag.has_value()) flags.push_back(*held.flag);
+    if (held.text.has_value()) {
+      positional.push_back(*held.text);
+    }
+    if (held.flag.has_value()) {
+      flags.push_back(*held.flag);
+    }
   }
 
   if (known) {
     // `ActionPortSchema(name, type, ...)`.
-    if (positional.size() >= 2 && port.type.empty()) port.type = positional[1];
+    if (positional.size() >= 2 && port.type.empty()) {
+      port.type = positional[1];
+    }
     if (positional.size() >= 3 && port.description.empty()) {
       port.description = positional[2];
     }
@@ -848,9 +950,13 @@ PortInfo ReadPort(const Masked& masked, std::string_view port_name,
 
   // An unknown helper: read the arguments for what they look like.
   for (const std::string& text : positional) {
-    if (text == port.name) continue;
+    if (text == port.name) {
+      continue;
+    }
     if (ReadsAsProse(text)) {
-      if (port.description.empty()) port.description = text;
+      if (port.description.empty()) {
+        port.description = text;
+      }
     } else if (port.type.empty()) {
       port.type = text;
     }
@@ -875,18 +981,20 @@ PortInfo ReadPort(const Masked& masked, std::string_view port_name,
 /// port is dropped.
 std::string KeyName(const Entry& entry, Language language,
                     const Constants& constants) {
-  if (entry.key_was_literal) return entry.key;
-  const bool is_variable =
-      entry.computed_key || language == Language::kPython;
-  if (!is_variable) return entry.key;
+  if (entry.key_was_literal) {
+    return entry.key;
+  }
+  const bool is_variable = entry.computed_key || language == Language::kPython;
+  if (!is_variable) {
+    return entry.key;
+  }
   const auto found = constants.find(entry.key);
   return found == constants.end() ? std::string() : found->second;
 }
 
 /// Every port of one `inputs`/`outputs`/`headers` map.
 std::vector<PortInfo> ReadPorts(const Masked& masked, size_t from, size_t to,
-                                const Constants& constants,
-                                Language language) {
+                                const Constants& constants, Language language) {
   std::vector<PortInfo> ports;
   const Value map = ReadValue(masked, from, to, constants);
   size_t body_from = from;
@@ -899,7 +1007,9 @@ std::vector<PortInfo> ReadPorts(const Masked& masked, size_t from, size_t to,
     // whose outer braces this already unwrapped -- otherwise there is nothing
     // here to read.
     const size_t open = SkipSpace(masked, from);
-    if (masked.at(open) != '{' && masked.at(open) != '[') return ports;
+    if (masked.at(open) != '{' && masked.at(open) != '[') {
+      return ports;
+    }
   }
   for (const auto& [start, end] :
        SplitTopLevel(masked, body_from, body_to, ',')) {
@@ -907,9 +1017,13 @@ std::vector<PortInfo> ReadPorts(const Masked& masked, size_t from, size_t to,
     // A port whose key could not be read is dropped rather than invented: a
     // port named after an unresolved constant would be a port that does not
     // exist, offered in completion.
-    if (!entry.keyed) continue;
+    if (!entry.keyed) {
+      continue;
+    }
     const std::string name = KeyName(entry, language, constants);
-    if (name.empty()) continue;
+    if (name.empty()) {
+      continue;
+    }
     ports.push_back(
         ReadPort(masked, name, entry.value_from, entry.value_to, constants));
   }
@@ -958,28 +1072,41 @@ void ReadAssembled(const Masked& masked, size_t word_at,
     variable_at = SkipSpace(masked, variable_at + 1);
   }
   const std::string_view variable = WordAt(masked, variable_at);
-  if (variable.empty()) return;
+  if (variable.empty()) {
+    return;
+  }
 
   const auto [from, to] = EnclosingBlock(masked, variable_at);
   const std::string prefix = absl::StrCat(variable, ".");
   size_t at = from;
   while (at < to) {
     const size_t found = masked.text().find(prefix, at);
-    if (found == std::string_view::npos || found >= to) break;
+    if (found == std::string_view::npos || found >= to) {
+      break;
+    }
     at = found + prefix.size();
-    if (found > 0 && IsWordChar(masked.at(found - 1))) continue;
+    if (found > 0 && IsWordChar(masked.at(found - 1))) {
+      continue;
+    }
     const std::string_view field = WordAt(masked, at);
     const size_t after = SkipSpace(masked, at + field.size());
 
     if (field == "name" || field == "description") {
-      if (masked.at(after) != '=' || masked.at(after + 1) == '=') continue;
+      if (masked.at(after) != '=' || masked.at(after + 1) == '=') {
+        continue;
+      }
       const size_t statement_end =
           std::min(to, masked.text().find(';', after) == std::string_view::npos
                            ? to
                            : masked.text().find(';', after));
-      const Value value = ReadValue(masked, after + 1, statement_end, constants);
-      if (!value.text.has_value()) continue;
-      if (field == "name" && action.name.empty()) action.name = *value.text;
+      const Value value =
+          ReadValue(masked, after + 1, statement_end, constants);
+      if (!value.text.has_value()) {
+        continue;
+      }
+      if (field == "name" && action.name.empty()) {
+        action.name = *value.text;
+      }
       if (field == "description" && action.description.empty()) {
         action.description = *value.text;
       }
@@ -989,33 +1116,51 @@ void ReadAssembled(const Masked& masked, size_t word_at,
     const bool inputs = field == "inputs";
     const bool outputs = field == "outputs";
     const bool headers = field == "headers";
-    if (!inputs && !outputs && !headers) continue;
+    if (!inputs && !outputs && !headers) {
+      continue;
+    }
     // `.emplace("port", Port(..))` or `.insert({"port", Port(..)})`.
-    if (masked.at(after) != '.') continue;
+    if (masked.at(after) != '.') {
+      continue;
+    }
     const std::string_view verb = WordAt(masked, after + 1);
-    if (verb != "emplace" && verb != "insert" && verb != "try_emplace") continue;
+    if (verb != "emplace" && verb != "insert" && verb != "try_emplace") {
+      continue;
+    }
     const size_t paren = SkipSpace(masked, after + 1 + verb.size());
-    if (masked.at(paren) != '(') continue;
+    if (masked.at(paren) != '(') {
+      continue;
+    }
     const size_t close = MatchBracket(masked, paren);
-    if (close == kNowhere) continue;
+    if (close == kNowhere) {
+      continue;
+    }
     const std::vector<std::pair<size_t, size_t>> args =
         SplitTopLevel(masked, paren + 1, close, ',');
-    if (args.empty()) continue;
+    if (args.empty()) {
+      continue;
+    }
     std::vector<PortInfo>& side =
         inputs ? action.inputs : (outputs ? action.outputs : action.headers);
     if (args.size() >= 2) {
       const Value key =
           ReadValue(masked, args[0].first, args[0].second, constants);
-      if (!key.text.has_value()) continue;
+      if (!key.text.has_value()) {
+        continue;
+      }
       side.push_back(ReadPort(masked, *key.text, args[1].first,
                               args.back().second, constants));
     } else {
       // `.insert({"port", ..})` -- one argument that is the pair.
       const Entry entry =
           ReadEntry(masked, args[0].first, args[0].second, constants);
-      if (!entry.keyed) continue;
+      if (!entry.keyed) {
+        continue;
+      }
       const std::string name = KeyName(entry, language, constants);
-      if (name.empty()) continue;
+      if (name.empty()) {
+        continue;
+      }
       side.push_back(
           ReadPort(masked, name, entry.value_from, entry.value_to, constants));
     }
@@ -1027,7 +1172,9 @@ void ReadConstructed(const Masked& masked, size_t paren,
                      const Constants& constants, Language language,
                      ActionInfo& action) {
   const size_t close = MatchBracket(masked, paren);
-  if (close == kNowhere) return;
+  if (close == kNowhere) {
+    return;
+  }
   size_t from = paren + 1;
   size_t to = close;
   // `new ActionSchema({..})`: the object is the argument list.
@@ -1041,13 +1188,21 @@ void ReadConstructed(const Masked& masked, size_t paren,
   }
   for (const auto& [start, end] : SplitTopLevel(masked, from, to, ',')) {
     const Entry entry = ReadEntry(masked, start, end, constants);
-    if (!entry.keyed) continue;
+    if (!entry.keyed) {
+      continue;
+    }
     if (entry.key == "name" || entry.key == "description") {
       const Value value =
           ReadValue(masked, entry.value_from, entry.value_to, constants);
-      if (!value.text.has_value()) continue;
-      if (entry.key == "name") action.name = *value.text;
-      if (entry.key == "description") action.description = *value.text;
+      if (!value.text.has_value()) {
+        continue;
+      }
+      if (entry.key == "name") {
+        action.name = *value.text;
+      }
+      if (entry.key == "description") {
+        action.description = *value.text;
+      }
       continue;
     }
     if (entry.key == "inputs") {
@@ -1082,7 +1237,9 @@ std::vector<ActionInfo> ReadSchemas(std::string_view source,
     }
     // Nothing can look up an action with no name, so half an entry is dropped
     // rather than offered.
-    if (action.name.empty()) continue;
+    if (action.name.empty()) {
+      continue;
+    }
     Origin origin;
     origin.file = std::string(path);
     const Position position = lines.At(at);
@@ -1100,13 +1257,17 @@ std::optional<std::string> ReadFile(const std::filesystem::path& path,
                                     size_t limit, bool& too_large) {
   std::error_code error;
   const std::uintmax_t size = std::filesystem::file_size(path, error);
-  if (error) return std::nullopt;
+  if (error) {
+    return std::nullopt;
+  }
   if (size > limit) {
     too_large = true;
     return std::nullopt;
   }
   std::ifstream in(path, std::ios::binary);
-  if (!in) return std::nullopt;
+  if (!in) {
+    return std::nullopt;
+  }
   std::ostringstream held;
   held << in.rdbuf();
   return held.str();
@@ -1120,7 +1281,9 @@ std::optional<std::string> ReadFile(const std::filesystem::path& path,
 /// search: this is the idiom, not an include graph.
 Constants SiblingConstants(const std::filesystem::path& path, size_t limit) {
   Constants constants;
-  if (path.extension() != ".cc" && path.extension() != ".cpp") return constants;
+  if (path.extension() != ".cc" && path.extension() != ".cpp") {
+    return constants;
+  }
   for (const char* extension : {".h", ".hpp"}) {
     std::filesystem::path header = path;
     header.replace_extension(extension);
@@ -1136,12 +1299,14 @@ Constants SiblingConstants(const std::filesystem::path& path, size_t limit) {
 
 bool Skipped(const Options& options, std::string_view name) {
   for (const std::string& pattern : options.skip_directories) {
-    if (pattern == name) return true;
+    if (pattern == name) {
+      return true;
+    }
     // One trailing `*`, which is what `cmake-build-*` needs and the whole of
     // the matching anybody has asked for here.
     if (!pattern.empty() && pattern.back() == '*' &&
-        absl::StartsWith(name, std::string_view(pattern).substr(
-                                   0, pattern.size() - 1))) {
+        absl::StartsWith(
+            name, std::string_view(pattern).substr(0, pattern.size() - 1))) {
       return true;
     }
   }
@@ -1152,22 +1317,28 @@ void ScanOneFile(const std::filesystem::path& path, std::string_view as_given,
                  const Options& options, Result& result,
                  std::vector<ActionInfo>& into) {
   const std::optional<Language> language = LanguageOf(path.string());
-  if (!language.has_value()) return;
+  if (!language.has_value()) {
+    return;
+  }
   bool too_large = false;
   const std::optional<std::string> text =
       ReadFile(path, options.max_file_bytes, too_large);
-  if (too_large) result.too_large.push_back(std::string(as_given));
-  if (!text.has_value()) return;
+  if (too_large) {
+    result.too_large.emplace_back(as_given);
+  }
+  if (!text.has_value()) {
+    return;
+  }
   ++result.files_read;
   // A file with none of the word in it is the common case, and reading it any
   // further would be masking a megabyte to find nothing.
-  if (text->find(kSchemaWord) == std::string::npos) return;
-  const Constants shared =
-      *language == Language::kCpp
-          ? SiblingConstants(path, options.max_file_bytes)
-          : Constants();
-  for (ActionInfo& action :
-       ReadSchemas(*text, as_given, *language, shared)) {
+  if (text->find(kSchemaWord) == std::string::npos) {
+    return;
+  }
+  const Constants shared = *language == Language::kCpp
+                               ? SiblingConstants(path, options.max_file_bytes)
+                               : Constants();
+  for (ActionInfo& action : ReadSchemas(*text, as_given, *language, shared)) {
     into.push_back(std::move(action));
   }
 }
@@ -1176,9 +1347,13 @@ void ScanOneFile(const std::filesystem::path& path, std::string_view as_given,
 
 std::optional<Language> LanguageOf(std::string_view path) {
   const size_t dot = path.find_last_of('.');
-  if (dot == std::string_view::npos) return std::nullopt;
+  if (dot == std::string_view::npos) {
+    return std::nullopt;
+  }
   const std::string_view extension = path.substr(dot);
-  if (extension == ".py" || extension == ".pyi") return Language::kPython;
+  if (extension == ".py" || extension == ".pyi") {
+    return Language::kPython;
+  }
   if (extension == ".cc" || extension == ".cpp" || extension == ".cxx" ||
       extension == ".h" || extension == ".hpp") {
     return Language::kCpp;
@@ -1202,7 +1377,8 @@ Options Options::Default() {
 }
 
 catalogue::Catalogue DiscoverInSource(std::string_view source,
-                                     std::string_view path, Language language) {
+                                      std::string_view path,
+                                      Language language) {
   return catalogue::Catalogue::Of(ReadSchemas(source, path, language, {}));
 }
 
@@ -1216,13 +1392,19 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
       ScanOneFile(path, root, options, result, found);
       continue;
     }
-    if (!std::filesystem::is_directory(path, error)) continue;
+    if (!std::filesystem::is_directory(path, error)) {
+      continue;
+    }
     std::filesystem::recursive_directory_iterator walk(
         path, std::filesystem::directory_options::skip_permission_denied,
         error);
-    if (error) continue;
+    if (error) {
+      continue;
+    }
     for (auto entry = begin(walk); entry != end(walk); entry.increment(error)) {
-      if (error) break;
+      if (error) {
+        break;
+      }
       if (result.files_read >= options.max_files) {
         result.reached_file_limit = true;
         break;
@@ -1233,8 +1415,11 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
         }
         continue;
       }
-      if (!entry->is_regular_file(error)) continue;
-      ScanOneFile(entry->path(), entry->path().string(), options, result, found);
+      if (!entry->is_regular_file(error)) {
+        continue;
+      }
+      ScanOneFile(entry->path(), entry->path().string(), options, result,
+                  found);
     }
   }
   // A name declared twice keeps the first, which is the one a reader scanning
@@ -1246,7 +1431,9 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
     const bool seen = std::any_of(
         unique.begin(), unique.end(),
         [&](const ActionInfo& kept) { return kept.name == action.name; });
-    if (!seen) unique.push_back(std::move(action));
+    if (!seen) {
+      unique.push_back(std::move(action));
+    }
   }
   result.found = catalogue::Catalogue::Of(std::move(unique));
   return result;

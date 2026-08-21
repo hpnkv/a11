@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/values.h"
-
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,6 +12,7 @@
 
 #include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
+#include "a11/flow/values.h"
 
 namespace a11::flow {
 namespace {
@@ -34,7 +33,9 @@ absl::StatusOr<Value> EvaluatedIn(std::string_view expression,
   }
   const syntax::FlowDeclaration& flow = *parsed->flows.front();
   const auto* pipe = syntax::As<syntax::Pipe>(flow.body.front().get());
-  if (pipe == nullptr) return absl::InvalidArgumentError("not a pipe");
+  if (pipe == nullptr) {
+    return absl::InvalidArgumentError("not a pipe");
+  }
   EvalContext context;
   context.bridge = bridge.get();
   context.it = it;
@@ -44,9 +45,12 @@ absl::StatusOr<Value> EvaluatedIn(std::string_view expression,
 
 /// The text of the value that expression gives, for the many cases where the
 /// rendering *is* the thing under test.
-std::string TextOf(std::string_view expression, const Value& it = Value::Null()) {
+std::string TextOf(std::string_view expression,
+                   const Value& it = Value::Null()) {
   const absl::StatusOr<Value> value = EvaluatedIn(expression, it);
-  if (!value.ok()) return absl::StrCat("<error: ", value.status().message(), ">");
+  if (!value.ok()) {
+    return absl::StrCat("<error: ", value.status().message(), ">");
+  }
   return AsText(*value);
 }
 
@@ -72,17 +76,15 @@ TEST(FlowValues, RendersScalarsAsTheReferenceDid) {
 }
 
 TEST(FlowValues, RendersContainersAsSortedJson) {
-  const Value object = Value::Object({{"b", Value::Integer(2)},
-                                      {"a", Value::String("x")}});
+  const Value object =
+      Value::Object({{"b", Value::Integer(2)}, {"a", Value::String("x")}});
   EXPECT_EQ(AsText(object), R"({"a": "x", "b": 2})");
   EXPECT_EQ(AsText(Value::List({Value::Integer(1), Value::Null()})),
             "[1, null]");
   // ensure_ascii, as `json.dumps` defaults to: the same text whichever engine
   // rendered it, and no encoding question for whatever reads it next.
-  EXPECT_EQ(AsText(Value::List({Value::String("é")})),
-            R"(["\u00e9"])");
-  EXPECT_EQ(AsText(Value::List({Value::String("🙂")})),
-            R"(["\ud83d\ude42"])");
+  EXPECT_EQ(AsText(Value::List({Value::String("é")})), R"(["\u00e9"])");
+  EXPECT_EQ(AsText(Value::List({Value::String("🙂")})), R"(["\ud83d\ude42"])");
 }
 
 TEST(FlowValues, ReadsNumbersOutOfWhateverArrived) {
@@ -92,9 +94,9 @@ TEST(FlowValues, ReadsNumbersOutOfWhateverArrived) {
   EXPECT_EQ(AsNumber(Value::String("nonsense")).integer(), 0);
   EXPECT_EQ(AsNumber(Value::Null()).integer(), 0);
   EXPECT_EQ(AsNumber(Value::Bool(true)).integer(), 1);
-  EXPECT_EQ(AsNumber(Value::List({Value::Integer(1), Value::Integer(2)}))
-                .integer(),
-            2);
+  EXPECT_EQ(
+      AsNumber(Value::List({Value::Integer(1), Value::Integer(2)})).integer(),
+      2);
 }
 
 TEST(FlowValues, LookupAnswersNothingRatherThanFailing) {
@@ -191,9 +193,9 @@ TEST(FlowValues, StrformatIsPrintfAndOnlyPrintf) {
   EXPECT_EQ(Strformat(Value::String("took %(ms)dms"),
                       {Value::Duration(absl::Seconds(2))}),
             "took 2000ms");
-  EXPECT_EQ(Strformat(Value::String("%s"),
-                      {Value::Duration(absl::Seconds(90))}),
-            "1m30s");
+  EXPECT_EQ(
+      Strformat(Value::String("%s"), {Value::Duration(absl::Seconds(90))}),
+      "1m30s");
 }
 
 TEST(FlowValues, EvaluatesLiteralsAndPaths) {
@@ -290,14 +292,15 @@ TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {
 }
 
 TEST(FlowValues, ALiteralMaySpreadAnotherIntoItself) {
-  const Value record = Value::Object({{"a", Value::Integer(1)},
-                                      {"b", Value::Integer(2)}});
+  const Value record =
+      Value::Object({{"a", Value::Integer(1)}, {"b", Value::Integer(2)}});
   // A later key wins over one the spread brought in, and an earlier one does
   // not -- which is what makes `{...it, "tags": [..]}` an override.
   EXPECT_EQ(TextOf(R"({...it, "b": 9})", record), R"({"a": 1, "b": 9})");
   EXPECT_EQ(TextOf(R"({"b": 9, ...it})", record), R"({"a": 1, "b": 2})");
   // `...` is the same thing as `...`.
-  EXPECT_EQ(TextOf(R"({...it, "c": 3})", record), R"({"a": 1, "b": 2, "c": 3})");
+  EXPECT_EQ(TextOf(R"({...it, "c": 3})", record),
+            R"({"a": 1, "b": 2, "c": 3})");
 
   const Value items = Value::List({Value::Integer(1), Value::Integer(2)});
   EXPECT_EQ(TextOf(R"([...it, 3])", items), "[1, 2, 3]");
@@ -316,8 +319,7 @@ TEST(FlowValues, ALiteralMaySpreadAnotherIntoItself) {
 
 TEST(FlowValues, ItIsTheValueAStageIsLookingAt) {
   EXPECT_EQ(TextOf("it", Value::Integer(7)), "7");
-  EXPECT_EQ(TextOf("it.name",
-                   Value::Object({{"name", Value::String("Ada")}})),
+  EXPECT_EQ(TextOf("it.name", Value::Object({{"name", Value::String("Ada")}})),
             "Ada");
 }
 

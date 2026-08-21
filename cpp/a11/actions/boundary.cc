@@ -9,8 +9,6 @@
  * explains why they cannot live at the call sites.
  */
 
-#include "a11/actions/internal/exception_guarded_handlers.h"
-
 #include <memory>
 #include <regex>
 #include <string>
@@ -21,6 +19,7 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/internal/exception_guarded_handlers.h"
 #include "a11/actions/internal/pattern.h"
 #include "a11/concurrency/internal/exception_guard_future.h"
 #include "a11/internal/exception_guard_impl.h"

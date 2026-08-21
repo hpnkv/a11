@@ -66,8 +66,8 @@ TEST(SessionTest, AbortStatusPrecedesDoneCallback) {
   absl::Status observed;
   bool closed = false;
   OnSessionStreamDone on_done = [&observed, &closed](
-                                    std::shared_ptr<net::WireStream>,
-                                    std::shared_ptr<Session> session) {
+                                    const std::shared_ptr<net::WireStream>&,
+                                    const std::shared_ptr<Session>& session) {
     observed = session->GetStatus();
     closed = session->IsClosed();
     return a11::ReadyTask();

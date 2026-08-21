@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/navigate.h"
-
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -13,6 +11,7 @@
 
 #include "a11/flow/catalogue.h"
 #include "a11/flow/complete.h"
+#include "a11/flow/navigate.h"
 
 namespace a11::flow {
 namespace {
@@ -58,7 +57,9 @@ catalogue::Catalogue Known() {
   })"));
 }
 
-size_t At(std::string_view needle) { return kSource.find(needle); }
+size_t At(std::string_view needle) {
+  return kSource.find(needle);
+}
 
 /// Every symbol's selection is inside its range, however deep.
 void CheckContained(const std::vector<DocumentSymbol>& symbols,
@@ -89,9 +90,10 @@ TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
   EXPECT_EQ(kSource.substr(flow.range.start.offset, 4), "flow");
   EXPECT_EQ(kSource[flow.range.end.offset - 1], '}')
       << "a flow's range should end on the brace that closes it";
-  EXPECT_EQ(kSource.substr(flow.selection.start.offset,
-                           flow.selection.end.offset - flow.selection.start.offset),
-            "research");
+  EXPECT_EQ(
+      kSource.substr(flow.selection.start.offset,
+                     flow.selection.end.offset - flow.selection.start.offset),
+      "research");
 
   // And it holds for text somebody is part-way through typing, which is where a
   // range that stopped at the keyword would otherwise still be produced: there is
@@ -209,8 +211,8 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
   // The thing a flow author most often has to leave the file to find out. With
   // nothing to go on the answer is only what the word is; with a catalogue it
   // is the action.
-  const Description bare = Describe(kSource, At("web-search"),
-                                    catalogue::Catalogue());
+  const Description bare =
+      Describe(kSource, At("web-search"), catalogue::Catalogue());
   EXPECT_TRUE(bare.found);
   EXPECT_EQ(bare.markdown.find("**Inputs**"), std::string::npos);
 
@@ -218,8 +220,9 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
   ASSERT_TRUE(about.found);
   EXPECT_NE(about.markdown.find("Search the web."), std::string::npos);
   EXPECT_NE(about.markdown.find("**Inputs**"), std::string::npos);
-  EXPECT_NE(about.markdown.find("`query`: str *(required)* — What to look for."),
-            std::string::npos)
+  EXPECT_NE(
+      about.markdown.find("`query`: str *(required)* — What to look for."),
+      std::string::npos)
       << about.markdown;
   EXPECT_NE(about.markdown.find("`results`: dict stream"), std::string::npos);
   // An action is not in this document, so there is nowhere in it to go.
@@ -233,10 +236,11 @@ TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
   // of these is now a sentence about what the form does, and the kind survives
   // only as the label above it.
   struct Case {
-    std::string_view at;      ///< The text to put the caret in.
-    std::string_view label;   ///< What the summary calls it.
-    std::string_view says;    ///< What the summary goes on to say.
+    std::string_view at;     ///< The text to put the caret in.
+    std::string_view label;  ///< What the summary calls it.
+    std::string_view says;   ///< What the summary goes on to say.
   };
+
   const Case kCases[] = {
       {"| join", "flow operator", "Puts a stream through a stage."},
       {"-> found", "flow operator",
@@ -276,8 +280,9 @@ TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
 }
 
 TEST(FlowNavigate, ADurationHoversAsItsUnit) {
-  const std::string one = "flow f {\n  in a: string\n  out b: string\n"
-                          "  x = run act(q: a) timeout 250ms\n  x.r -> b\n}\n";
+  const std::string one =
+      "flow f {\n  in a: string\n  out b: string\n"
+      "  x = run act(q: a) timeout 250ms\n  x.r -> b\n}\n";
   const Description ms = Describe(one, one.find("250ms"));
   ASSERT_TRUE(ms.found);
   EXPECT_EQ(ms.text, "250ms");
@@ -286,8 +291,9 @@ TEST(FlowNavigate, ADurationHoversAsItsUnit) {
   // A compound duration is two tokens to the lexer and added by the parser, so
   // a caret is always in a duration of one unit -- there is no whole `1m30s`
   // for a hover to be about.
-  const std::string many = "flow f {\n  in a: string\n  out b: string\n"
-                           "  x = run act(q: a) timeout 1m30s\n  x.r -> b\n}\n";
+  const std::string many =
+      "flow f {\n  in a: string\n  out b: string\n"
+      "  x = run act(q: a) timeout 1m30s\n  x.r -> b\n}\n";
   const Description minutes = Describe(many, many.find("1m30s"));
   ASSERT_TRUE(minutes.found);
   EXPECT_EQ(minutes.text, "1m");
@@ -383,7 +389,8 @@ TEST(FlowCatalogue, CompletionOffersAnActionsPortsAndItsName) {
       "  page = run web-search()\n}\n";
   std::vector<std::string> names;
   for (const Proposal& proposal :
-       CompleteAt(source, source.find("web-search()") + 11, Known()).proposals) {
+       CompleteAt(source, source.find("web-search()") + 11, Known())
+           .proposals) {
     names.push_back(proposal.name);
   }
   EXPECT_EQ(absl::StrJoin(names, ","), "query");

@@ -14,16 +14,15 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>
-#include <poll.h>
-#include <unistd.h>
-
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
+#include <fcntl.h>
 #include <nlohmann/json.hpp>
+#include <poll.h>
+#include <unistd.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -52,8 +51,7 @@ constexpr int kPollMilliseconds = 50;
 constexpr std::int64_t kMaxRandomBytes = 1024 * 1024;
 
 absl::Status ErrnoStatus(int code, std::string_view what) {
-  return absl::UnavailableError(
-      absl::StrCat(what, ": ", std::strerror(code)));
+  return absl::UnavailableError(absl::StrCat(what, ": ", std::strerror(code)));
 }
 
 // ---------------------------------------------------------------------------
@@ -73,8 +71,7 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
                          static_cast<std::int64_t>(kDefaultChunkBytes), 1,
                          8 * 1024 * 1024));
 
-  ABSL_ASSIGN_OR_RETURN(OutputPorts outputs,
-                        OpenOutputs(action, options));
+  ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OpenOutputs(action, options));
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<StopSignal> stop,
                         StopSignal::Create(action, kControlPort));
 
@@ -161,7 +158,7 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
     trouble = lines.PutText(line);
   }
 
-  const absl::Status exit = stop->ExitStatus();
+  absl::Status exit = stop->ExitStatus();
   stop->Join();
   if (!trouble.ok()) {
     outputs.Abort(trouble).IgnoreError();
@@ -276,8 +273,7 @@ absl::Status RunEnvGet(const std::shared_ptr<Action>& action,
   nlohmann::json values = nlohmann::json::object();
   nlohmann::json missing = nlohmann::json::array();
   for (const std::string& name : names) {
-    ABSL_RETURN_IF_ERROR(
-        CheckEnvironment(capabilities->environment, name));
+    ABSL_RETURN_IF_ERROR(CheckEnvironment(capabilities->environment, name));
     const char* value = std::getenv(name.c_str());
     if (value == nullptr) {
       missing.push_back(name);
@@ -315,7 +311,7 @@ absl::StatusOr<std::string> SystemRandom(std::size_t count) {
       if (errno == EINTR) {
         continue;
       }
-      const absl::Status failed =
+      absl::Status failed =
           ErrnoStatus(errno, "cannot read the system random source");
       ::close(fd);
       return failed;
@@ -399,7 +395,9 @@ ActionHandler Plain(absl::Status (*run)(const std::shared_ptr<Action>&)) {
   };
 }
 
-std::string_view kOmitHelp() { return SharedOptionsHelp(); }
+std::string_view kOmitHelp() {
+  return SharedOptionsHelp();
+}
 
 }  // namespace
 
@@ -424,7 +422,7 @@ ActionSchema ReadStdinSchema() {
   schema.inputs.emplace(
       std::string(kControlPort),
       Port(kControlPort, JsonType(),
-           "Control commands; a {\"command\": \"stop\"} stops reading.",
+           R"(Control commands; a {"command": "stop"} stops reading.)",
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "bytes", Port("bytes", kOctetStream, "Standard input, as it arrives.",
@@ -445,21 +443,18 @@ ActionSchema ReadStdinSchema() {
 
 namespace {
 
-ActionSchema WriteStreamSchema(std::string_view name,
-                               std::string_view which,
+ActionSchema WriteStreamSchema(std::string_view name, std::string_view which,
                                std::string_view why) {
   ActionSchema schema;
   schema.name = std::string(name);
   schema.description = absl::StrCat(
-      "Write a stream to this process's ", which,
-      ". ", why,
+      "Write a stream to this process's ", which, ". ", why,
       " The write is the backpressure point, so whoever is producing the "
       "content is held behind the terminal or the pipe rather than buffered "
       "ahead of it.");
   schema.inputs.emplace(
-      "content",
-      Port("content", kOctetStream, "What to write, in order.",
-           /*required=*/false, /*unary=*/false));
+      "content", Port("content", kOctetStream, "What to write, in order.",
+                      /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "bytes_written",
       Port("bytes_written", "integer", "How many bytes were written.",
@@ -497,15 +492,14 @@ ActionSchema EnvGetSchema() {
       Port("names", JsonType(),
            "The variable names to read, as a string or a list of strings.",
            /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "options",
-      Port("options", JsonType(), absl::StrCat("Optional: ", SharedOptionsHelp()),
-           /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("options",
+                        Port("options", JsonType(),
+                             absl::StrCat("Optional: ", SharedOptionsHelp()),
+                             /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "values",
-      Port("values", JsonType(),
-           "An object of the names that were set to their values.",
-           /*required=*/false, /*unary=*/true));
+      "values", Port("values", JsonType(),
+                     "An object of the names that were set to their values.",
+                     /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "missing",
       Port("missing", JsonType(),
@@ -533,9 +527,9 @@ ActionSchema RandomBytesSchema() {
            "raw -- raw writes only `bytes`). Named `format` because `encoding` "
            "already means json-or-msgpack on every action here.",
            /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "bytes", Port("bytes", kOctetStream, "The bytes themselves.",
-                    /*required=*/false, /*unary=*/false));
+  schema.outputs.emplace("bytes",
+                         Port("bytes", kOctetStream, "The bytes themselves.",
+                              /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "text", Port("text", "string",
                    "The bytes in the requested format, or nothing when raw.",
@@ -550,9 +544,9 @@ ActionSchema NewUuidSchema() {
   schema.description =
       "Make identifiers -- A11's ordinary kind, which are unique but not "
       "unguessable. Use random_bytes where the value has to be a secret.";
-  schema.inputs.emplace(
-      "options", Port("options", JsonType(), "Optional: count (1).",
-                      /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("options",
+                        Port("options", JsonType(), "Optional: count (1).",
+                             /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "ids", Port("ids", "string", "The identifiers, one per value.",
                   /*required=*/false, /*unary=*/false));
@@ -564,7 +558,9 @@ ActionSchema NewUuidSchema() {
 // Handlers and registration
 // ---------------------------------------------------------------------------
 
-ActionHandler ReadStdinHandler() { return Plain(&RunReadStdin); }
+ActionHandler ReadStdinHandler() {
+  return Plain(&RunReadStdin);
+}
 
 ActionHandler WriteStdoutHandler() {
   return [](std::shared_ptr<Action> action) {
@@ -583,32 +579,35 @@ ActionHandler WriteStderrHandler() {
 }
 
 ActionHandler EnvGetHandler(CapabilitiesPtr capabilities) {
-  return [capabilities = std::move(capabilities)](
-             std::shared_ptr<Action> action) {
-    return a11::SubmitTask(
-        [capabilities, action = std::move(action)]() -> absl::Status {
-          if (capabilities == nullptr) {
-            return absl::FailedPreconditionError(
-                "this action was registered without a policy");
-          }
-          return RunEnvGet(action, capabilities);
-        });
-  };
+  return
+      [capabilities = std::move(capabilities)](std::shared_ptr<Action> action) {
+        return a11::SubmitTask(
+            [capabilities, action = std::move(action)]() -> absl::Status {
+              if (capabilities == nullptr) {
+                return absl::FailedPreconditionError(
+                    "this action was registered without a policy");
+              }
+              return RunEnvGet(action, capabilities);
+            });
+      };
 }
 
-ActionHandler RandomBytesHandler() { return Plain(&RunRandomBytes); }
+ActionHandler RandomBytesHandler() {
+  return Plain(&RunRandomBytes);
+}
 
-ActionHandler NewUuidHandler() { return Plain(&RunNewUuid); }
+ActionHandler NewUuidHandler() {
+  return Plain(&RunNewUuid);
+}
 
 absl::Status RegisterStandardStreamActions(actions::ActionRegistry& registry) {
-  ABSL_RETURN_IF_ERROR(registry.Register(std::string(kReadStdinAction),
-                                         ReadStdinSchema(),
-                                         ReadStdinHandler()));
+  ABSL_RETURN_IF_ERROR(registry.Register(
+      std::string(kReadStdinAction), ReadStdinSchema(), ReadStdinHandler()));
   ABSL_RETURN_IF_ERROR(registry.Register(std::string(kWriteStdoutAction),
                                          WriteStdoutSchema(),
                                          WriteStdoutHandler()));
-  return registry.Register(std::string(kWriteStderrAction),
-                           WriteStderrSchema(), WriteStderrHandler());
+  return registry.Register(std::string(kWriteStderrAction), WriteStderrSchema(),
+                           WriteStderrHandler());
 }
 
 absl::Status RegisterRandomActions(actions::ActionRegistry& registry) {

@@ -40,6 +40,7 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -104,10 +105,7 @@ actions::ActionHandler EchoHandler() {
       if (!output.ok()) {
         return output.status();
       }
-      return (*output)
-          ->PutChunk(**chunk, std::nullopt, true)
-          .Await()
-          .status();
+      return (*output)->PutChunk(**chunk, std::nullopt, true).Await().status();
     });
   };
 }
@@ -136,9 +134,9 @@ absl::StatusOr<Peers> ConnectedPeers(size_t index) {
   std::shared_ptr<Session> server;
   std::shared_ptr<Service> service;
   if (use_bare_session) {
-    ABSL_ASSIGN_OR_RETURN(server,
-                          Session::Create(absl::StrCat("server-", index), {}, {},
-                                          {}, {}, nullptr, registry));
+    ABSL_ASSIGN_OR_RETURN(
+        server, Session::Create(absl::StrCat("server-", index), {}, {}, {}, {},
+                                nullptr, registry));
   } else {
     ABSL_ASSIGN_OR_RETURN(service, Service::Create(registry));
   }
@@ -175,21 +173,21 @@ absl::Status Stage(std::string_view name, absl::Status status) {
   if (status.ok()) {
     return status;
   }
-  return absl::Status(status.code(),
-                      absl::StrCat("stage=", name, " ", status.message()));
+  return {status.code(), absl::StrCat("stage=", name, " ", status.message())};
 }
 
 absl::Status OneEchoCall(const Peers& peers, int round) {
   // An empty action id, so each call gets a generated one. A literal makes every
   // call share an instance id and their port nodes collide in the node map.
-  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<actions::Action> call,
-                        actions::Action::Create(EchoSchema(), /*action_id=*/""));
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<actions::Action> call,
+      actions::Action::Create(EchoSchema(), /*action_id=*/""));
   ABSL_RETURN_IF_ERROR(call->BindNodeMap(peers.client->GetNodeMap()));
   ABSL_RETURN_IF_ERROR(call->BindSession(peers.client));
   ABSL_RETURN_IF_ERROR(call->BindStream(peers.pair.first));
-  ABSL_RETURN_IF_ERROR(Stage(
-      absl::StrCat("call/round", round),
-      call->Call().Await(absl::Now() + kStageDeadline).status()));
+  ABSL_RETURN_IF_ERROR(
+      Stage(absl::StrCat("call/round", round),
+            call->Call().Await(absl::Now() + kStageDeadline).status()));
 
   // No bind_stream argument, deliberately. It overrides a default the library
   // keys off the action's mode -- inputs bind when `mode != kRun`, outputs when
@@ -199,15 +197,17 @@ absl::Status OneEchoCall(const Peers& peers, int round) {
   // tee each reply back, corrupting the connection for every later call.
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> input,
                         call->GetInput("input"));
-  ABSL_RETURN_IF_ERROR(Stage(
-      absl::StrCat("put-input/round", round),
-      input
-          ->PutChunk(data::Chunk{.metadata = data::ChunkMetadata{
-                                     .mimetype = "application/octet-stream"},
-                                 .data = "ping"},
-                     std::nullopt, true)
-          .Await(absl::Now() + kStageDeadline)
-          .status()));
+  ABSL_RETURN_IF_ERROR(
+      Stage(absl::StrCat("put-input/round", round),
+            input
+                ->PutChunk(
+                    data::Chunk{.metadata =
+                                    data::ChunkMetadata{
+                                        .mimetype = "application/octet-stream"},
+                                .data = "ping"},
+                    std::nullopt, true)
+                .Await(absl::Now() + kStageDeadline)
+                .status()));
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> output,
                         call->GetOutput("output"));
   const absl::StatusOr<std::optional<data::Chunk>> read =
@@ -241,14 +241,17 @@ TEST(RemoteCallWedgeTest, ConcurrentCallsAcrossConnectionsAllComplete) {
   // Overridable so the threshold can be swept: a failure that appears sharply at
   // a particular count is a resource cap, while one that fades in gradually is a
   // race.
-  const size_t kConnections = [] {
-    const char* value = std::getenv("A11_WEDGE_CONNECTIONS");
-    return value != nullptr ? static_cast<size_t>(std::atoi(value)) : size_t{64};
-  }();
-  const int kCallsEach = [] {
-    const char* value = std::getenv("A11_WEDGE_CALLS");
-    return value != nullptr ? std::atoi(value) : 8;
-  }();
+  // A knob that will not parse keeps the default rather than becoming zero,
+  // which in this test would silently turn a wedge hunt into a no-op.
+  const auto knob = [](const char* name, int fallback) {
+    const char* value = std::getenv(name);
+    int parsed = 0;
+    return value != nullptr && absl::SimpleAtoi(value, &parsed) ? parsed
+                                                                : fallback;
+  };
+  const auto kConnections =
+      static_cast<size_t>(knob("A11_WEDGE_CONNECTIONS", 64));
+  const int kCallsEach = knob("A11_WEDGE_CALLS", 8);
 
   std::vector<Peers> connections;
   connections.reserve(kConnections);
@@ -284,9 +287,9 @@ TEST(RemoteCallWedgeTest, ConcurrentCallsAcrossConnectionsAllComplete) {
     (void)peers.pair.second->Abort(absl::CancelledError("test over"));
   }
 
-  EXPECT_TRUE(failures.empty())
-      << failures.size() << " of " << kConnections
-      << " connections failed; first: " << (failures.empty() ? "" : failures[0]);
+  EXPECT_TRUE(failures.empty()) << failures.size() << " of " << kConnections
+                                << " connections failed; first: "
+                                << (failures.empty() ? "" : failures[0]);
 }
 
 }  // namespace

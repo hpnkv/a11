@@ -44,7 +44,7 @@ struct ChunkStoreReaderOptions {
   /// Sequence number at which reading begins.
   std::uint32_t offset = 0;
   /// Optional cap on the total number of fragments to read.
-  std::optional<std::uint64_t> max_chunks_to_read;
+  std::optional<std::uint64_t> max_chunks_to_read = {};
   /// Whether ordered reads inherit the last explicitly set chunk mimetype.
   bool sticky_mimetype = false;
 
@@ -118,7 +118,7 @@ class ChunkStoreReader {
    *    An awaitable that resolves once the reader has drained the store or
    *    been cancelled.
    */
-  a11::Task Done() const;
+  [[nodiscard]] a11::Task Done() const;
 
   /** @brief
    *    Get the next fragment from the store.

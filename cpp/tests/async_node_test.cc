@@ -35,11 +35,13 @@ struct Counted {
 
   static int encodes;
   static int decodes;
+
   static void Reset() {
     encodes = 0;
     decodes = 0;
   }
 };
+
 int Counted::encodes = 0;
 int Counted::decodes = 0;
 
@@ -73,8 +75,8 @@ std::shared_ptr<AsyncNode> CountedNode() {
 TEST(ChunkObjectTest, AValueWrittenAndReadLocallyIsNeverEncoded) {
   Counted::Reset();
   const std::shared_ptr<AsyncNode> node = CountedNode();
-  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 7},
-                                       "application/json", std::nullopt, true)
+  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 7}, "application/json",
+                                       std::nullopt, true)
                   .Await()
                   .ok());
   const absl::StatusOr<std::optional<Counted>> back =
@@ -90,8 +92,8 @@ TEST(ChunkObjectTest, AValueWrittenAndReadLocallyIsNeverEncoded) {
 TEST(ChunkObjectTest, EveryReaderGetsItsOwnCopy) {
   Counted::Reset();
   const std::shared_ptr<AsyncNode> node = CountedNode();
-  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 1},
-                                       "application/json", std::nullopt, true)
+  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 1}, "application/json",
+                                       std::nullopt, true)
                   .Await()
                   .ok());
   const absl::StatusOr<std::optional<Counted>> first =
@@ -112,8 +114,8 @@ TEST(ChunkObjectTest, EveryReaderGetsItsOwnCopy) {
 TEST(ChunkObjectTest, AskingForTheChunkProducesTheBytes) {
   Counted::Reset();
   const std::shared_ptr<AsyncNode> node = CountedNode();
-  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 3},
-                                       "application/json", std::nullopt, true)
+  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 3}, "application/json",
+                                       std::nullopt, true)
                   .Await()
                   .ok());
   // A reader that wants bytes gets bytes, exactly as it did before chunks could
@@ -131,8 +133,8 @@ TEST(ChunkObjectTest, AskingForTheChunkProducesTheBytes) {
 TEST(ChunkObjectTest, AReaderWantingAnotherTypeFallsBackToTheBytes) {
   Counted::Reset();
   const std::shared_ptr<AsyncNode> node = CountedNode();
-  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 5},
-                                       "application/json", std::nullopt, true)
+  ASSERT_TRUE(node->PutObject<Counted>(Counted{.number = 5}, "application/json",
+                                       std::nullopt, true)
                   .Await()
                   .ok());
   const absl::StatusOr<std::optional<nlohmann::json>> as_json =
@@ -159,9 +161,9 @@ TEST(ChunkObjectTest, AnObjectCarryingChunkIsNotEmptyAndNotNull) {
 
 TEST(ChunkObjectTest, MaterializeIsIdempotentAndReleasesTheValue) {
   Counted::Reset();
-  data::Chunk chunk = data::MakeChunkObject<Counted>(
-      Counted{.number = 2}, "a11.test.Counted", "application/json",
-      CountedRegistry());
+  data::Chunk chunk =
+      data::MakeChunkObject<Counted>(Counted{.number = 2}, "a11.test.Counted",
+                                     "application/json", CountedRegistry());
   ASSERT_TRUE(chunk.Materialize().ok());
   const std::string once = chunk.data;
   ASSERT_TRUE(chunk.Materialize().ok());
@@ -171,13 +173,13 @@ TEST(ChunkObjectTest, MaterializeIsIdempotentAndReleasesTheValue) {
 }
 
 TEST(ChunkObjectTest, ATagMismatchDoesNotCast) {
-  data::Chunk chunk = data::MakeChunkObject<Counted>(
-      Counted{.number = 4}, "a11.test.Counted", "application/json",
-      CountedRegistry());
+  data::Chunk chunk =
+      data::MakeChunkObject<Counted>(Counted{.number = 4}, "a11.test.Counted",
+                                     "application/json", CountedRegistry());
   // The guard that stands in for RTTI. A wrong tag must yield nothing rather
   // than a plausible-looking reinterpretation of the bytes.
-  EXPECT_FALSE(
-      data::TryTakeObject<Counted>(chunk, "a11.test.SomethingElse").has_value());
+  EXPECT_FALSE(data::TryTakeObject<Counted>(chunk, "a11.test.SomethingElse")
+                   .has_value());
   EXPECT_TRUE(
       data::TryTakeObject<Counted>(chunk, "a11.test.Counted").has_value());
 }

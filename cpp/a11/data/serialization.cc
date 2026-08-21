@@ -29,6 +29,7 @@
 #include "a11/data/serializable.h"
 #include "a11/data/types.h"
 #include "a11/json_codec.h"
+#include "absl/strings/match.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::data {
@@ -36,7 +37,7 @@ namespace {
 
 struct Mimetype {
   std::string media_type;
-  absl::flat_hash_map<std::string, std::string> parameters;
+  absl::flat_hash_map<std::string, std::string> parameters = {};
 };
 
 std::string Trim(std::string_view input) {
@@ -56,7 +57,7 @@ bool IsTokenChar(char value) {
     return true;
   }
   constexpr std::string_view extra = "!#$%&'*+-.^_`|~";
-  return extra.find(value) != std::string_view::npos;
+  return absl::StrContains(extra, value);
 }
 
 absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
@@ -83,7 +84,7 @@ absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
       return absl::InvalidArgumentError("Mimetype contains an invalid token");
     }
   }
-  if (!allow_patterns && media_type.find('*') != std::string::npos) {
+  if (!allow_patterns && absl::StrContains(media_type, '*')) {
     return absl::InvalidArgumentError(
         "Registered mimetypes cannot contain wildcards");
   }
@@ -102,7 +103,7 @@ absl::StatusOr<Mimetype> ParseMimetype(std::string_view input,
     if (key.empty() || value.empty()) {
       return absl::InvalidArgumentError("Empty mimetype parameter");
     }
-    if (!allow_patterns && value.find('*') != std::string::npos) {
+    if (!allow_patterns && absl::StrContains(value, '*')) {
       return absl::InvalidArgumentError(
           "Registered mimetype parameters cannot contain wildcards");
     }
@@ -279,7 +280,8 @@ bool IsValidUtf8(std::string_view text) {
 // Neither codec transforms anything. That is the entire point: the JSON
 // representation of a std::string is a quoted, escaped copy, and of bytes a
 // base64 copy a third larger again.
-absl::Status RegisterStringCodecs(SerializationRegistry* absl_nonnull registry) {
+absl::Status RegisterStringCodecs(
+    SerializationRegistry* absl_nonnull registry) {
   ABSL_RETURN_IF_ERROR(registry->Register<std::string>(
       "bytes", std::string(kBytesMimetype),
       [](const std::string& value) -> absl::StatusOr<Chunk> {
@@ -298,9 +300,8 @@ absl::Status RegisterStringCodecs(SerializationRegistry* absl_nonnull registry) 
         // teardown one hop away.
         if (!IsValidUtf8(value)) {
           return absl::InvalidArgumentError(absl::StrCat(
-              "A ", kTextMimetype,
-              " chunk must be valid UTF-8; use ", kBytesMimetype,
-              " for bytes that are not text"));
+              "A ", kTextMimetype, " chunk must be valid UTF-8; use ",
+              kBytesMimetype, " for bytes that are not text"));
         }
         return Chunk{.data = value};
       },
@@ -365,7 +366,7 @@ const SerializationRegistry::Impl* SerializationRegistry::GetImpl() const {
 }
 
 absl::Status SerializationRegistry::RegisterSerializerErased(
-    std::type_index type, std::string type_name, std::string mimetype,
+    std::type_index type, std::string type_name, const std::string& mimetype,
     ErasedSerializer serializer) {
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
@@ -395,7 +396,7 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
 }
 
 absl::Status SerializationRegistry::RegisterDeserializerErased(
-    std::type_index type, std::string type_name, std::string mimetype,
+    std::type_index type, std::string type_name, const std::string& mimetype,
     ErasedDeserializer deserializer) {
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");

@@ -22,8 +22,6 @@
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
 #include "a11/data/types.h"
-#include "a11/net/wire_stream.h"
-#include "a11/service/session.h"
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
@@ -41,6 +39,8 @@
 #include "a11/flow/token.h"
 #include "a11/flow/values.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/net/wire_stream.h"
+#include "a11/service/session.h"
 #include "python/bindings.h"
 #include "python/interop.h"
 #include "python/native_types.h"
@@ -112,7 +112,9 @@ py::dict DiagnosticToDict(const flow::Diagnostic& diagnostic) {
   range["start"] = PositionToDict(diagnostic.range.start);
   range["end"] = PositionToDict(diagnostic.range.end);
   value["range"] = range;
-  if (!diagnostic.flow.empty()) value["flow"] = diagnostic.flow;
+  if (!diagnostic.flow.empty()) {
+    value["flow"] = diagnostic.flow;
+  }
   py::list fixes;
   for (const flow::Fix& fix : diagnostic.fixes) {
     py::dict entry;
@@ -136,7 +138,9 @@ PyJsonObject LexToDict(std::string_view source, bool keep_comments) {
   const flow::LexResult result =
       flow::Lex(source, flow::LexOptions{.keep_comments = keep_comments});
   py::list tokens;
-  for (const flow::Token& token : result.tokens) tokens.append(TokenToDict(token));
+  for (const flow::Token& token : result.tokens) {
+    tokens.append(TokenToDict(token));
+  }
   py::list diagnostics;
   for (const flow::Diagnostic& diagnostic : result.diagnostics) {
     diagnostics.append(DiagnosticToDict(diagnostic));
@@ -168,7 +172,9 @@ py::object JsonToPython(const nlohmann::json& value) {
       return py::str(value.get_ref<const std::string&>());
     case nlohmann::json::value_t::array: {
       py::list list;
-      for (const nlohmann::json& item : value) list.append(JsonToPython(item));
+      for (const nlohmann::json& item : value) {
+        list.append(JsonToPython(item));
+      }
       return list;
     }
     case nlohmann::json::value_t::object: {
@@ -190,11 +196,21 @@ py::object JsonToPython(const nlohmann::json& value) {
 /// a caller passing something a request cannot hold, and saying so is better
 /// than quietly stringifying it.
 nlohmann::json PythonToJson(const py::handle& value) {
-  if (value.is_none()) return nullptr;
-  if (py::isinstance<py::bool_>(value)) return value.cast<bool>();
-  if (py::isinstance<py::int_>(value)) return value.cast<long long>();
-  if (py::isinstance<py::float_>(value)) return value.cast<double>();
-  if (py::isinstance<py::str>(value)) return value.cast<std::string>();
+  if (value.is_none()) {
+    return nullptr;
+  }
+  if (py::isinstance<py::bool_>(value)) {
+    return value.cast<bool>();
+  }
+  if (py::isinstance<py::int_>(value)) {
+    return value.cast<long long>();
+  }
+  if (py::isinstance<py::float_>(value)) {
+    return value.cast<double>();
+  }
+  if (py::isinstance<py::str>(value)) {
+    return value.cast<std::string>();
+  }
   if (py::isinstance<py::dict>(value)) {
     nlohmann::json object = nlohmann::json::object();
     for (auto [key, item] : value.cast<py::dict>()) {
@@ -204,7 +220,9 @@ nlohmann::json PythonToJson(const py::handle& value) {
   }
   if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
     nlohmann::json array = nlohmann::json::array();
-    for (py::handle item : value) array.push_back(PythonToJson(item));
+    for (py::handle item : value) {
+      array.push_back(PythonToJson(item));
+    }
     return array;
   }
   throw py::type_error(
@@ -238,9 +256,9 @@ class PythonObject : public flow::HostObject {
     object_ = py::object();
   }
 
-  std::string Tag() const override { return tag_; }
+  [[nodiscard]] std::string Tag() const override { return tag_; }
 
-  std::string Text() const override {
+  [[nodiscard]] std::string Text() const override {
     const py::gil_scoped_acquire acquire;
     try {
       // What the value is *on the wire*, which for a model is its JSON and for
@@ -263,7 +281,7 @@ class PythonObject : public flow::HostObject {
     }
   }
 
-  bool Truthy() const override {
+  [[nodiscard]] bool Truthy() const override {
     const py::gil_scoped_acquire acquire;
     try {
       return py::bool_(object_);
@@ -273,7 +291,7 @@ class PythonObject : public flow::HostObject {
     }
   }
 
-  std::optional<size_t> Size() const override {
+  [[nodiscard]] std::optional<size_t> Size() const override {
     const py::gil_scoped_acquire acquire;
     try {
       return py::len(object_);
@@ -283,7 +301,7 @@ class PythonObject : public flow::HostObject {
     }
   }
 
-  flow::Value Field(std::string_view name) const override {
+  [[nodiscard]] flow::Value Field(std::string_view name) const override {
     const py::gil_scoped_acquire acquire;
     const std::string key(name);
     try {
@@ -291,8 +309,10 @@ class PythonObject : public flow::HostObject {
         return ValueFromPython(object_.attr(key.c_str()));
       }
       if (py::isinstance<py::dict>(object_)) {
-        const py::dict mapping = object_.cast<py::dict>();
-        if (mapping.contains(key)) return ValueFromPython(mapping[key.c_str()]);
+        const auto mapping = object_.cast<py::dict>();
+        if (mapping.contains(key)) {
+          return ValueFromPython(mapping[key.c_str()]);
+        }
       }
     } catch (py::error_already_set& error) {
       error.discard_as_unraisable(__func__);
@@ -302,7 +322,7 @@ class PythonObject : public flow::HostObject {
     return flow::Value::Null();
   }
 
-  flow::Value Element(const flow::Value& key) const override {
+  [[nodiscard]] flow::Value Element(const flow::Value& key) const override {
     const py::gil_scoped_acquire acquire;
     try {
       return ValueFromPython(object_[ValueToPython(key)]);
@@ -312,9 +332,11 @@ class PythonObject : public flow::HostObject {
     }
   }
 
-  bool Equals(const flow::HostObject& other) const override {
+  [[nodiscard]] bool Equals(const flow::HostObject& other) const override {
     const auto* twin = dynamic_cast<const PythonObject*>(&other);
-    if (twin == nullptr) return false;
+    if (twin == nullptr) {
+      return false;
+    }
     const py::gil_scoped_acquire acquire;
     try {
       return object_.equal(twin->object_);
@@ -325,7 +347,7 @@ class PythonObject : public flow::HostObject {
   }
 
   /// The object itself, for handing back to the host.
-  py::object object() const {
+  [[nodiscard]] py::object object() const {
     const py::gil_scoped_acquire acquire;
     return object_;
   }
@@ -352,7 +374,9 @@ std::string TypeName(const py::handle& value) {
 /// else -- a pydantic model, an enum member, a dataclass -- becomes a host
 /// object, which is the escape hatch that lets `coerce` mean anything at all.
 flow::Value ValueFromPython(const py::handle& value) {
-  if (value.is_none()) return flow::Value::Null();
+  if (value.is_none()) {
+    return flow::Value::Null();
+  }
   if (py::isinstance<py::bool_>(value)) {
     return flow::Value::Bool(value.cast<bool>());
   }
@@ -365,12 +389,15 @@ flow::Value ValueFromPython(const py::handle& value) {
   if (py::isinstance<py::str>(value)) {
     return flow::Value::String(value.cast<std::string>());
   }
-  if (py::isinstance<py::bytes>(value) || py::isinstance<py::bytearray>(value)) {
+  if (py::isinstance<py::bytes>(value) ||
+      py::isinstance<py::bytearray>(value)) {
     return flow::Value::Bytes(value.cast<std::string>());
   }
   if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
     std::vector<flow::Value> items;
-    for (py::handle item : value) items.push_back(ValueFromPython(item));
+    for (py::handle item : value) {
+      items.push_back(ValueFromPython(item));
+    }
     return flow::Value::List(std::move(items));
   }
   if (py::isinstance<py::dict>(value)) {
@@ -388,7 +415,8 @@ flow::Value ValueFromPython(const py::handle& value) {
       duration.ok()) {
     return flow::Value::Duration(*duration);
   }
-  if (absl::StatusOr<absl::Time> time = TimeFromPython(value, true); time.ok()) {
+  if (absl::StatusOr<absl::Time> time = TimeFromPython(value, true);
+      time.ok()) {
     return flow::Value::Time(*time);
   }
   return flow::Value::Host(std::make_shared<PythonObject>(
@@ -431,9 +459,10 @@ py::object ValueToPython(const flow::Value& value) {
     case flow::Value::Kind::kChunk:
       return py::cast(value.chunk());
     case flow::Value::Kind::kHost: {
-      const auto* object =
-          dynamic_cast<const PythonObject*>(&value.host());
-      if (object != nullptr) return object->object();
+      const auto* object = dynamic_cast<const PythonObject*>(&value.host());
+      if (object != nullptr) {
+        return object->object();
+      }
       return py::str(value.host().Text());
     }
   }
@@ -454,8 +483,7 @@ class PythonBridge : public flow::HostBridge {
     const py::gil_scoped_acquire acquire;
     try {
       const py::object registry = Registry();
-      const py::object target =
-          registry.attr("resolve_type")(std::string(tag));
+      const py::object target = registry.attr("resolve_type")(std::string(tag));
       if (target.is_none()) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Nothing here knows the type '", tag,
@@ -464,7 +492,9 @@ class PythonBridge : public flow::HostBridge {
             "flow runs."));
       }
       const py::object given = ValueToPython(value);
-      if (py::isinstance(given, target)) return value;
+      if (py::isinstance(given, target)) {
+        return value;
+      }
       if (py::hasattr(target, "model_validate")) {
         return ValueFromPython(target.attr("model_validate")(given));
       }
@@ -539,7 +569,7 @@ class PythonBridge : public flow::HostBridge {
     for (const data::Chunk* chunk : chunks) {
       absl::Status from_registry;
       try {
-        values.push_back(ValueFromPython(from_chunk(py::cast(*chunk))));
+        values.emplace_back(ValueFromPython(from_chunk(py::cast(*chunk))));
         continue;
       } catch (py::error_already_set& error) {
         from_registry = StatusFromPythonException(error);
@@ -548,11 +578,11 @@ class PythonBridge : public flow::HostBridge {
       // describe bytes rather than a structure. See [FromChunk].
       if (absl::IsNotFound(from_registry)) {
         const std::string mimetype = chunk->GetMimetype();
-        values.push_back(absl::StartsWith(mimetype, "text/")
-                             ? flow::Value::String(chunk->data)
-                             : flow::Value::Bytes(chunk->data));
+        values.emplace_back(absl::StartsWith(mimetype, "text/")
+                                ? flow::Value::String(chunk->data)
+                                : flow::Value::Bytes(chunk->data));
       } else {
-        values.push_back(from_registry);
+        values.emplace_back(from_registry);
       }
     }
     return values;
@@ -576,10 +606,10 @@ class PythonBridge : public flow::HostBridge {
     const std::string requested(mimetype);
     for (const flow::Value* value : values) {
       try {
-        chunks.push_back(
+        chunks.emplace_back(
             to_chunk(ValueToPython(*value), requested).cast<data::Chunk>());
       } catch (py::error_already_set& error) {
-        chunks.push_back(StatusFromPythonException(error));
+        chunks.emplace_back(StatusFromPythonException(error));
       }
     }
     return chunks;
@@ -606,7 +636,9 @@ class PythonBridge : public flow::HostBridge {
           py::module_::import("a11.flow.plan")
               .attr("_model_for_dto")(
                   flow::DtoToJsonValue(shape, &program).dump());
-      if (model.is_none()) return value;
+      if (model.is_none()) {
+        return value;
+      }
       return flow::Value::Host(std::make_shared<PythonObject>(
           model.attr("model_validate")(ValueToPython(value)), shape.name));
     } catch (py::error_already_set& error) {
@@ -658,7 +690,7 @@ struct BoundFlow {
   std::shared_ptr<const flow::CompiledProgram> program;
   std::string name;
 
-  const flow::FlowPlan& plan() const {
+  [[nodiscard]] const flow::FlowPlan& plan() const {
     const flow::ResolvedFlow* found = program->Flow(name);
     if (found == nullptr) {
       throw py::key_error(absl::StrCat("No flow named '", name, "' any more."));
@@ -681,7 +713,7 @@ PyJsonObject DescribeFlow(const BoundFlow& flow) {
     }
   }
   // Unreachable: the handle only exists for a flow the program declares.
-  return PyJsonObject();
+  return {};
 }
 
 }  // namespace
@@ -732,9 +764,8 @@ nested bodies and all.
             // accept anywhere a handler is taken: wrapping it in a Python
             // callable would bounce every invocation through the interpreter
             // for nothing, and would need a running loop it does not have.
-            return py::cast(NativeActionHandler(ValueOrThrow(
-                flow::MakeHandler(self.program, self.name,
-                                  std::move(options)))));
+            return py::cast(NativeActionHandler(ValueOrThrow(flow::MakeHandler(
+                self.program, self.name, std::move(options)))));
           },
           py::arg("dispatch_stream") = py::none(),
           R"doc(The action handler that runs this flow.
@@ -748,9 +779,8 @@ stream when it finishes, after which the session can dispatch nothing.
         return absl::StrCat("<FlowPlan ", self.plan().name, ">");
       });
 
-  py::class_<BoundProgram>(
-      flow, "Program",
-      R"doc(The flows compiled from one Flow source file.
+  py::class_<BoundProgram>(flow, "Program",
+                           R"doc(The flows compiled from one Flow source file.
 
 A program is self-contained: its flows may call each other by name, and anything
 else they call is looked up in the action registry of whatever runtime dispatches
@@ -767,13 +797,16 @@ them.
               // The entry flow is left out: it has no name, and every caller of
               // this iterates it to look a flow up or to register one as an
               // action. An entry point is neither.
-              if (one.plan.entry) continue;
+              if (one.plan.entry) {
+                continue;
+              }
               names.push_back(one.plan.name);
             }
             return names;
           },
           "Every named flow, in the order the file declares them. The entry "
-          "flow -- `flow { ... }` -- is not here: it has no name, and it is run "
+          "flow -- `flow { ... }` -- is not here: it has no name, and it is "
+          "run "
           "rather than called.")
       .def_property_readonly(
           "has_entry",
@@ -791,7 +824,9 @@ run the file with `run_program` or to pick one of `names`.
           "get",
           [](const BoundProgram& self,
              const std::string& name) -> std::optional<BoundFlow> {
-            if (self.program->Flow(name) == nullptr) return std::nullopt;
+            if (self.program->Flow(name) == nullptr) {
+              return std::nullopt;
+            }
             return BoundFlow{self.program, name};
           },
           py::arg("name"), "The flow of this name, or ``None``.")
@@ -909,8 +944,8 @@ column and message the Python compiler has always reported.
           resolved.diagnostics.push_back(std::move(found));
         }
         flow::SortDiagnostics(resolved.diagnostics);
-        return JsonToPython(flow::DiagnosticsToJsonValue(
-                                source_name, resolved.diagnostics))
+        return JsonToPython(flow::DiagnosticsToJsonValue(source_name,
+                                                         resolved.diagnostics))
             .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
@@ -965,8 +1000,7 @@ read either and get the same answer.
   flow.def(
       "vocabulary",
       []() {
-        return JsonToPython(flow::VocabularyToJsonValue())
-            .cast<PyJsonObject>();
+        return JsonToPython(flow::VocabularyToJsonValue()).cast<PyJsonObject>();
       },
       R"doc(Every word set the language gives meaning to.
 
@@ -996,8 +1030,8 @@ definition that still keeps a copy to it.
   flow.def(
       "complete",
       [](std::string_view source, size_t offset) {
-        return JsonToPython(
-                   flow::CompletionsToJsonValue(flow::CompleteAt(source, offset)))
+        return JsonToPython(flow::CompletionsToJsonValue(
+                                flow::CompleteAt(source, offset)))
             .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("offset"),
@@ -1015,7 +1049,7 @@ filtering twice drops what a fuzzy matcher would have kept.
       [](std::string_view source, std::string_view source_name) {
         const flow::ParseResult parsed = flow::Parse(source);
         const flow::ResolveResult resolved = flow::Resolve(source, parsed);
-        PyJsonObject value =
+        auto value =
             JsonToPython(flow::PlanToJsonValue(source_name, resolved.program))
                 .cast<PyJsonObject>();
         py::list diagnostics;
@@ -1084,8 +1118,7 @@ the check covers, rather than one a list in Python has to be told about.
       "scan",
       [](const std::vector<std::string>& paths) {
         const flow::discover::Result found = flow::discover::Discover(paths);
-        PyJsonObject value =
-            JsonToPython(found.found.ToJson()).cast<PyJsonObject>();
+        auto value = JsonToPython(found.found.ToJson()).cast<PyJsonObject>();
         PyJsonObject scanned;
         scanned["files_read"] = static_cast<long long>(found.files_read);
         scanned["reached_file_limit"] = found.reached_file_limit;
@@ -1159,7 +1192,8 @@ merges over the embedded snapshot itself.
         how.arguments = arguments;
         how.capabilities = capabilities;
         if (!registry.is_none()) {
-          how.registry = registry.cast<std::shared_ptr<actions::ActionRegistry>>();
+          how.registry =
+              registry.cast<std::shared_ptr<actions::ActionRegistry>>();
         }
         how.standard_streams = standard_streams;
         // Where a `call` step goes, when it is to leave this process. Both or
@@ -1198,7 +1232,9 @@ merges over the embedded snapshot itself.
         // Python, which is exactly what a host-registered action does.
         absl::StatusOr<a11::flow::interpreter::RunOutcome> outcome =
             WithoutGil([&] { return a11::flow::interpreter::Run(what, how); });
-        if (!outcome.ok()) ThrowStatus(outcome.status());
+        if (!outcome.ok()) {
+          ThrowStatus(outcome.status());
+        }
 
         py::list warnings;
         for (const flow::Diagnostic& diagnostic : outcome->diagnostics) {
@@ -1226,8 +1262,7 @@ merges over the embedded snapshot itself.
       py::arg("registry") = py::none(),
       // Same reason as `registry` above: Session and WireStream are registered
       // by other Bind* functions, so these are cast at call time.
-      py::arg("session") = py::none(),
-      py::arg("dispatch_stream") = py::none(),
+      py::arg("session") = py::none(), py::arg("dispatch_stream") = py::none(),
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
@@ -1255,8 +1290,10 @@ resolver looks a name up before it decides anything.
         absl::StatusOr<std::string> described =
             a11::flow::interpreter::DescribeEntry(
                 a11::flow::interpreter::Source{.text = source,
-                                                .name = source_name});
-        if (!described.ok()) ThrowStatus(described.status());
+                                               .name = source_name});
+        if (!described.ok()) {
+          ThrowStatus(described.status());
+        }
         return *described;
       },
       py::arg("source"), py::arg("source_name") = "",

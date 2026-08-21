@@ -119,7 +119,7 @@ void DistributeBlock(
       buffer.sample_rate = sample_rate;
       // The callback stamps a block with the instant of its final frame, so
       // frame `frame` in a block of `block.frames` was taken this far earlier.
-      const double frames_from_end =
+      const auto frames_from_end =
           static_cast<double>(block.frames - 1 - frame);
       buffer.end_time =
           block.capture_time - absl::Seconds(frames_from_end / sample_rate);
@@ -140,7 +140,7 @@ void DistributeBlock(
 
 // The reassembly fiber: drain the ring into subscriptions, close the channels
 // of departed subscriptions, and exit cleanly on cancellation.
-absl::Status PumpBody(std::shared_ptr<CaptureContext> context,
+absl::Status PumpBody(const std::shared_ptr<CaptureContext>& context,
                       SampleRing* ring) {
   while (true) {
     std::vector<std::shared_ptr<SubscriptionState>> closing;
@@ -224,7 +224,7 @@ AudioInput::~AudioInput() {
 }
 
 absl::StatusOr<std::shared_ptr<AudioInput>> AudioInput::Open(
-    AudioInputOptions options) {
+    const AudioInputOptions& options) {
   ABSL_RETURN_IF_ERROR(options.Validate());
 
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::PortAudioSession> session,
@@ -371,11 +371,9 @@ absl::Status AudioInput::StartCaptureLocked() {
 
   stream_ = stream;
   std::shared_ptr<internal::CaptureContext> context = context_;
-  pump_ = a11::SubmitTask(
-      [context = std::move(context), ring]() mutable {
-        return PumpBody(std::move(context), ring);
-      },
-      {.stack_size = 16384});
+  pump_ = a11::SubmitTask([context = std::move(context),
+                           ring]() mutable { return PumpBody(context, ring); },
+                          {.stack_size = 16384});
   capturing_ = true;
   return absl::OkStatus();
 }

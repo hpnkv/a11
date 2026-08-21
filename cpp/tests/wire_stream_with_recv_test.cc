@@ -20,13 +20,14 @@ namespace {
 TEST(WireStreamWithRecvTest, PullsDataAndRemoteHalfCloseExactlyOnce) {
   auto pair = *InProcessWireStream::CreatePair();
   auto receiver = *WireStreamWithRecv::Create(pair.second);
-  ASSERT_TRUE(
-      pair.first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver->Accept().Await().ok());
 
   data::WireMessage message{.node_fragments = {{
@@ -52,13 +53,14 @@ TEST(WireStreamWithRecvTest, PullsDataAndRemoteHalfCloseExactlyOnce) {
 TEST(WireStreamWithRecvTest, TimeoutIsLocalAndAbortBeatsBufferedData) {
   auto pair = *InProcessWireStream::CreatePair();
   auto receiver = *WireStreamWithRecv::Create(pair.second);
-  ASSERT_TRUE(
-      pair.first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver->Accept().Await().ok());
   EXPECT_EQ(receiver->Receive(absl::Milliseconds(2)).Await().status().code(),
             absl::StatusCode::kDeadlineExceeded);
@@ -84,13 +86,14 @@ TEST(WireStreamWithRecvTest, TimeoutIsLocalAndAbortBeatsBufferedData) {
 TEST(WireStreamWithRecvTest, CancelledReceiveDoesNotConsumeNextMessage) {
   auto pair = *InProcessWireStream::CreatePair();
   auto receiver = *WireStreamWithRecv::Create(pair.second);
-  ASSERT_TRUE(
-      pair.first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver->Accept().Await().ok());
 
   auto cancelled = receiver->Receive();

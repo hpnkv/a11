@@ -2,13 +2,11 @@
 
 #include "a11/net/in_process_wire_stream.h"
 
-#include <execinfo.h>
-#include <cstdlib>
-#include <cstdio>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -22,6 +20,7 @@
 #include <absl/strings/str_format.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <execinfo.h>
 
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
@@ -66,7 +65,7 @@ struct InProcessWireStream::State {
   };
 
   State(WireStreamOptions stream_options, std::string stream_id)
-      : options(std::move(stream_options)),
+      : options(stream_options),
         id(std::move(stream_id)),
         deadline(options.deadline),
         terminal_promise(std::make_shared<a11::Promise<a11::Unit>>()),
@@ -332,9 +331,9 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
       state_->span.SetAttribute("a11.stream.id", state_->id);
     }
   }
-  a11::Schedule([state = state_]() { Sender(std::move(state)); });
-  a11::Schedule([state = state_]() { Receiver(std::move(state)); });
-  a11::Schedule([state = state_]() { WatchTiming(std::move(state)); });
+  a11::Schedule([state = state_]() { Sender(state); });
+  a11::Schedule([state = state_]() { Receiver(state); });
+  a11::Schedule([state = state_]() { WatchTiming(state); });
   if (expired) {
     ForceAbort(state_,
                absl::DeadlineExceededError("WireStream deadline exceeded"));
@@ -476,7 +475,7 @@ void* absl_nullable InProcessWireStream::GetImpl() const {
 // alone.
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
-void InProcessWireStream::Sender(std::shared_ptr<State> state) {
+void InProcessWireStream::Sender(const std::shared_ptr<State>& state) {
   // Holds `State::sending` while this Sender is delivering one message, and
   // wakes Sender again on the way out if more arrived meanwhile. Local, because
   // State is this class's own business.
@@ -538,9 +537,9 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
       // headers, since a header describes the message rather than the
       // fragments inside it.
       // A message already at the ceiling has nothing to gain and is left
-        // exactly as it is.
-        if (outbound.end == End::kNone &&
-            outbound.message.ApproxBytes() < kMergeCeilingBytes) {
+      // exactly as it is.
+      if (outbound.end == End::kNone &&
+          outbound.message.ApproxBytes() < kMergeCeilingBytes) {
         size_t approximate = outbound.message.ApproxBytes();
         while (!state->outbound.empty()) {
           const State::Outbound& next = state->outbound.front();
@@ -624,7 +623,7 @@ void InProcessWireStream::Sender(std::shared_ptr<State> state) {
   }
 }
 
-void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
+void InProcessWireStream::Receiver(const std::shared_ptr<State>& state) {
   while (true) {
     std::string payload;
     {
@@ -722,7 +721,7 @@ void InProcessWireStream::Receiver(std::shared_ptr<State> state) {
   }
 }
 
-void InProcessWireStream::WatchTiming(std::shared_ptr<State> state) {
+void InProcessWireStream::WatchTiming(const std::shared_ptr<State>& state) {
   while (true) {
     absl::Time wake;
     bool deadline_is_first = false;

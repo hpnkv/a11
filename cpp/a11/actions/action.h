@@ -33,9 +33,8 @@
 #include <absl/container/flat_hash_set.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
-#include <absl/time/time.h>
-
 #include <absl/strings/str_format.h>
+#include <absl/time/time.h>
 
 #include "a11/actions/log.h"
 #include "a11/actions/schema.h"
@@ -184,7 +183,7 @@ class Action : public std::enable_shared_from_this<Action> {
   /** @brief Returns the bound registry. */
   [[nodiscard]] std::shared_ptr<ActionRegistry> GetRegistry() const;
   /** @brief Binds the owning session. */
-  absl::Status BindSession(std::shared_ptr<service::Session> session);
+  absl::Status BindSession(const std::shared_ptr<service::Session>& session);
   /** @brief Returns the owning session, if any. */
   [[nodiscard]] std::shared_ptr<service::Session> GetSession() const;
 
@@ -198,7 +197,7 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return The port's node, or an error when @p name is not an input.
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetInput(
-      std::string name, std::optional<bool> bind_stream = std::nullopt);
+      const std::string& name, std::optional<bool> bind_stream = std::nullopt);
   /**
    * @brief Returns the output port node named @p name.
    * @param name Output port name from the schema.
@@ -206,9 +205,10 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return The port's node, or an error when @p name is not an output.
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetOutput(
-      std::string name, std::optional<bool> bind_stream = std::nullopt);
+      const std::string& name, std::optional<bool> bind_stream = std::nullopt);
   /** @brief Returns the input or output port node named @p name. */
-  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetPort(std::string name);
+  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetPort(
+      const std::string& name);
   /** @brief Whether the schema declares a port named @p name. */
   [[nodiscard]] bool ContainsPort(std::string_view name) const;
 
@@ -304,7 +304,7 @@ class Action : public std::enable_shared_from_this<Action> {
   /** @brief Whether header @p name is set. */
   [[nodiscard]] bool HasHeader(std::string_view name) const;
   /** @brief Sets header @p name to @p value. */
-  absl::Status SetHeader(std::string name, data::Bytes value);
+  absl::Status SetHeader(const std::string& name, data::Bytes value);
   /** @brief Removes header @p name. */
   absl::Status RemoveHeader(std::string_view name);
   /** @brief Copies header @p name from this action onto @p target. */
@@ -435,7 +435,7 @@ class Action : public std::enable_shared_from_this<Action> {
   Action(ActionSchema schema, std::string id, ActionHandler handler,
          std::shared_ptr<nodes::NodeMap> node_map,
          std::shared_ptr<net::WireStream> stream,
-         std::shared_ptr<service::Session> session,
+         const std::shared_ptr<service::Session>& session,
          std::shared_ptr<ActionRegistry> registry,
          std::shared_ptr<ActionLimiter> nested_limiter);
 
@@ -447,7 +447,7 @@ class Action : public std::enable_shared_from_this<Action> {
       const std::vector<data::Port>& ports,
       const absl::flat_hash_map<std::string, ActionPortSchema>& schema_ports,
       std::string_view kind) const;
-  void RunHandler(std::shared_ptr<ActionLimiter> limiter);
+  void RunHandler(const std::shared_ptr<ActionLimiter>& limiter);
   absl::Status ApplyInputAutofills();
   [[nodiscard]] std::vector<data::NodeFragment> CollectAutofillFragments()
       const;
@@ -464,7 +464,8 @@ class Action : public std::enable_shared_from_this<Action> {
   // Applies an already-finished Action's terminal state to an output node that
   // is only being materialised now, so a late reader sees the end of the stream.
   static absl::Status CloseUnwrittenOutput(
-      const std::shared_ptr<nodes::AsyncNode>& node, const absl::Status& status);
+      const std::shared_ptr<nodes::AsyncNode>& node,
+      const absl::Status& status);
   // Applies `options` to `chunk`, reports it to the process sink, and writes it
   // to the log port when anything could read it. The one place the log policy
   // lives; the Log/Logf templates only build the chunk.
@@ -477,12 +478,12 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::Status ReleaseNodesAfterRun();
   absl::Status DetachBoundStreamNodes();
   absl::Status SendRemoteCancel();
-  void CompleteCall(absl::Status status, bool remove_from_session);
-  void AbortLocalCallOutputs(absl::Status status);
+  void CompleteCall(const absl::Status& status, bool remove_from_session);
+  void AbortLocalCallOutputs(const absl::Status& status);
   absl::Status TrackInSession(const std::shared_ptr<service::Session>& session);
   void UntrackFromSession();
   void SetDispatchStatus(absl::Status status);
-  void SetCompletionStatus(absl::Status status);
+  void SetCompletionStatus(const absl::Status& status);
 
   // Tracing hooks (a11::obs). StartActionSpan opens this action's span after a
   // successful Begin(); it fails (so the action fails) when the reserved OTel
@@ -572,9 +573,9 @@ absl::Status Action::Log(const T& value, const LogOptions& options) {
     // Normalised to std::string first: the registry has a codec for that, not
     // for a pointer or an array of char.
     const std::string text{std::string_view(value)};
-    chunk = registry.ToChunk<std::string>(
-        text, options.mimetype.empty() ? data::kTextMimetype
-                                       : options.mimetype);
+    chunk = registry.ToChunk<std::string>(text, options.mimetype.empty()
+                                                    ? data::kTextMimetype
+                                                    : options.mimetype);
   } else {
     chunk = registry.ToChunk<T>(value, options.mimetype);
   }

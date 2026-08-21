@@ -25,14 +25,14 @@
 
 #include "a11/actions/action.h"
 #include "a11/actions/log.h"
+#include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
-#include "a11/nodes/async_node.h"
-#include "a11/actions/registry.h"
 #include "a11/net/in_process_wire_stream.h"
+#include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "a11/service/session.h"
 #include "thread/boost_primitives.h"
@@ -43,8 +43,8 @@ namespace {
 ActionSchema QuietSchema() {
   return ActionSchema{
       .name = "quiet",
-      .outputs = {{"output", ActionPortSchema{.name = "output",
-                                              .type = "text/plain"}}},
+      .outputs = {{"output",
+                   ActionPortSchema{.name = "output", .type = "text/plain"}}},
   };
 }
 
@@ -71,7 +71,9 @@ class SinkCapture {
       });
     });
   }
+
   ~SinkCapture() { SetActionLogSink(nullptr); }
+
   SinkCapture(const SinkCapture&) = delete;
   SinkCapture& operator=(const SinkCapture&) = delete;
 
@@ -103,10 +105,8 @@ using LogBody = std::function<absl::Status(std::shared_ptr<Action>)>;
 absl::Status RunWith(const std::shared_ptr<Action>& action, LogBody body) {
   auto bound = action->BindHandler([body = std::move(body)](
                                        std::shared_ptr<Action> running) {
-    return a11::SubmitTask(
-        [running = std::move(running), &body]() -> absl::Status {
-          return body(running);
-        });
+    return a11::SubmitTask([running = std::move(running),
+                            &body]() -> absl::Status { return body(running); });
   });
   if (!bound.ok()) {
     return bound;
@@ -119,10 +119,9 @@ absl::Status RunWith(const std::shared_ptr<Action>& action, LogBody body) {
 
 TEST(ActionLogTest, TheLogPortCannotBeDeclaredInASchema) {
   ActionSchema schema = QuietSchema();
-  schema.outputs.emplace(
-      std::string(kActionLogOutput),
-      ActionPortSchema{.name = std::string(kActionLogOutput),
-                       .type = "text/plain"});
+  schema.outputs.emplace(std::string(kActionLogOutput),
+                         ActionPortSchema{.name = std::string(kActionLogOutput),
+                                          .type = "text/plain"});
   const absl::Status status = schema.Validate();
   EXPECT_TRUE(absl::IsInvalidArgument(status)) << status;
   EXPECT_NE(status.message().find("is reserved"), std::string_view::npos)
@@ -177,19 +176,18 @@ TEST(ActionLogTest, EveryStringLikeSpellingIsText) {
   SinkCapture capture;
   auto action = *Action::Create(QuietSchema(), "spellings");
   const char* pointer = "pointer";
-  ASSERT_TRUE(RunWith(action, [pointer](
-                                  const std::shared_ptr<Action>& running) {
-                if (const absl::Status literal = running->Log("literal");
-                    !literal.ok()) {
-                  return literal;
-                }
-                if (const absl::Status view =
-                        running->Log(std::string_view("view"));
-                    !view.ok()) {
-                  return view;
-                }
-                return running->Log(pointer);
-              }).ok());
+  ASSERT_TRUE(
+      RunWith(action, [pointer](const std::shared_ptr<Action>& running) {
+        if (const absl::Status literal = running->Log("literal");
+            !literal.ok()) {
+          return literal;
+        }
+        if (const absl::Status view = running->Log(std::string_view("view"));
+            !view.ok()) {
+          return view;
+        }
+        return running->Log(pointer);
+      }).ok());
   const std::vector<SinkCapture::Copied> records = capture.records();
   ASSERT_EQ(records.size(), 3u);
   for (const SinkCapture::Copied& record : records) {
@@ -329,8 +327,8 @@ TEST(ActionLogTest, AClaimedLogPortCarriesTheChunksAndClosesItself) {
                   return first;
                 }
                 return running->Log("second", LogOptions{.level = "warning",
-                                                        .lineno = 7,
-                                                        .internal = true});
+                                                         .lineno = 7,
+                                                         .internal = true});
               }).ok());
 
   // A claimed port owns presentation, so the sink is not also told.
@@ -432,24 +430,22 @@ TEST(ActionLogTest, LevelNamesRoundTripAndAcceptTheCommonAliases) {
   EXPECT_NE(LogLevelToSeverity(LogLevel::kCritical), absl::LogSeverity::kFatal);
 }
 
-
 TEST(ActionLogTest, ADispatchedActionsLogsReachTheCaller) {
   // The path with the most moving parts: the receiver logs, the write tees to
   // the peer, and the caller reads the mirror of a node whose id it never sent,
   // because both sides derive it from the same action id.
   auto registry = std::make_shared<ActionRegistry>();
-  ASSERT_TRUE(registry
-                  ->Register("quiet", QuietSchema(),
-                             [](std::shared_ptr<Action> action) {
-                               return a11::SubmitTask(
-                                   [action = std::move(action)]()
-                                       -> absl::Status {
-                                     return action->Log(
-                                         "from the far end",
-                                         LogOptions{.level = "warning"});
-                                   });
-                             })
-                  .ok());
+  ASSERT_TRUE(
+      registry
+          ->Register("quiet", QuietSchema(),
+                     [](std::shared_ptr<Action> action) {
+                       return a11::SubmitTask(
+                           [action = std::move(action)]() -> absl::Status {
+                             return action->Log("from the far end",
+                                                LogOptions{.level = "warning"});
+                           });
+                     })
+          .ok());
 
   service::SessionOptions options;
   options.no_stream_timeout = absl::InfiniteDuration();
@@ -466,7 +462,7 @@ TEST(ActionLogTest, ADispatchedActionsLogsReachTheCaller) {
   auto caller_registry = std::make_shared<ActionRegistry>();
   ASSERT_TRUE(caller_registry->Register("quiet", QuietSchema()).ok());
   auto call = *caller_registry->MakeAction("quiet", "remote-log", nullptr,
-                                          pair.first, client);
+                                           pair.first, client);
   // Claimed before the call, which is what a caller that means to read the logs
   // does; bind_stream is false, or the caller would tee every reply back at the
   // peer and corrupt the connection.
@@ -519,7 +515,7 @@ TEST(ActionLogTest, ADispatchedActionThatNeverLogsStillEndsItsLogStream) {
   auto caller_registry = std::make_shared<ActionRegistry>();
   ASSERT_TRUE(caller_registry->Register("quiet", QuietSchema()).ok());
   auto call = *caller_registry->MakeAction("quiet", "silent-log", nullptr,
-                                          pair.first, client);
+                                           pair.first, client);
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> logs = call->GetLogNode();
   ASSERT_TRUE(logs.ok()) << logs.status();
 

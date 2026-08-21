@@ -52,15 +52,15 @@ using ::a11::actions::ActionHeaderSchema;
 using ::a11::actions::ActionPortSchema;
 using ::a11::actions::ActionSchema;
 using ::a11::net::GetHttpHeader;
+using ::a11::net::Http2Client;
+using ::a11::net::Http2DuplexStream;
+using ::a11::net::Http2Options;
+using ::a11::net::Http2ResponseStream;
 using ::a11::net::HttpConnectionLease;
 using ::a11::net::HttpConnectionPool;
 using ::a11::net::HttpHeaders;
 using ::a11::net::HttpPushedResponse;
 using ::a11::net::HttpResponseHead;
-using ::a11::net::Http2Client;
-using ::a11::net::Http2DuplexStream;
-using ::a11::net::Http2Options;
-using ::a11::net::Http2ResponseStream;
 using ::a11::net::ParsedUrl;
 using ::a11::nodes::AsyncNode;
 
@@ -153,16 +153,15 @@ absl::StatusOr<std::optional<std::string>> ReadText(
  */
 class Outputs {
  public:
-  static absl::StatusOr<Outputs> Open(
-      const std::shared_ptr<Action>& action,
-      const std::vector<std::string>& names,
-      const std::vector<std::string>& omitted) {
+  static absl::StatusOr<Outputs> Open(const std::shared_ptr<Action>& action,
+                                      const std::vector<std::string>& names,
+                                      const std::vector<std::string>& omitted) {
     Outputs outputs;
     for (const std::string& name : names) {
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> node,
                             action->GetOutput(name));
-      const bool omit = std::find(omitted.begin(), omitted.end(), name) !=
-                        omitted.end();
+      const bool omit =
+          std::find(omitted.begin(), omitted.end(), name) != omitted.end();
       if (omit) {
         // Nothing will be written here, and saying so now is what lets a caller
         // ask for three of eight ports without draining the other five.
@@ -364,16 +363,16 @@ absl::StatusOr<RequestOptions> ParseOptions(const nlohmann::json& object) {
     options.body_mode = BodyMode::kStream;
   } else {
     return absl::InvalidArgumentError(
-        "options.request_body must be \"buffer\" or \"stream\"");
+        R"(options.request_body must be "buffer" or "stream")");
   }
 
   ABSL_ASSIGN_OR_RETURN(options.accept_pushes,
                         JsonBool(object, "accept_pushes", false));
   ABSL_ASSIGN_OR_RETURN(options.reuse_connection,
                         JsonBool(object, "reuse_connection", true));
-  ABSL_ASSIGN_OR_RETURN(options.user_agent,
-                        JsonString(object, "user_agent",
-                                   std::string(kDefaultUserAgent)));
+  ABSL_ASSIGN_OR_RETURN(
+      options.user_agent,
+      JsonString(object, "user_agent", std::string(kDefaultUserAgent)));
 
   ABSL_ASSIGN_OR_RETURN(
       const std::int64_t max_body,
@@ -398,7 +397,7 @@ absl::StatusOr<RequestOptions> ParseOptions(const nlohmann::json& object) {
         Http2Options::ProtocolPreference::kHttp11;
   } else {
     return absl::InvalidArgumentError(
-        "options.http_version must be \"auto\", \"2\" or \"1.1\"");
+        R"(options.http_version must be "auto", "2" or "1.1")");
   }
 
   if (object.contains("tls")) {
@@ -431,11 +430,11 @@ absl::StatusOr<RequestOptions> ParseOptions(const nlohmann::json& object) {
                 "options.headers values must be strings or arrays of strings");
           }
           options.extra_headers.emplace_back(folded,
-                                            repeated.get<std::string>());
+                                             repeated.get<std::string>());
         }
       } else if (value.is_string()) {
         options.extra_headers.emplace_back(std::move(folded),
-                                          value.get<std::string>());
+                                           value.get<std::string>());
       } else {
         return absl::InvalidArgumentError(
             "options.headers values must be strings or arrays of strings");
@@ -592,8 +591,8 @@ struct Exchange {
   std::string method;
   HttpHeaders headers;
   RequestOptions options;
-  std::string buffered_body;          ///< Set when body_mode is kBuffer.
-  std::shared_ptr<AsyncNode> body;    ///< Set when body_mode is kStream.
+  std::string buffered_body;        ///< Set when body_mode is kBuffer.
+  std::shared_ptr<AsyncNode> body;  ///< Set when body_mode is kStream.
   absl::Time deadline = absl::InfiniteFuture();
 };
 
@@ -657,7 +656,8 @@ absl::StatusOr<Exchange> ReadExchange(const std::shared_ptr<Action>& action) {
   ABSL_ASSIGN_OR_RETURN(exchange.deadline,
                         DeadlineFromAction(action, exchange.options.timeout));
   if (exchange.deadline <= absl::Now()) {
-    return absl::DeadlineExceededError("The request deadline has already passed");
+    return absl::DeadlineExceededError(
+        "The request deadline has already passed");
   }
 
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<AsyncNode> body_node,
@@ -690,8 +690,9 @@ absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
   ABSL_ASSIGN_OR_RETURN(
       attempt.lease,
       exchange.options.reuse_connection
-          ? HttpConnectionPool::Shared()->Acquire(target, transport).Await(
-                exchange.deadline)
+          ? HttpConnectionPool::Shared()
+                ->Acquire(target, transport)
+                .Await(exchange.deadline)
           : HttpConnectionPool::AcquireUnshared(target, transport)
                 .Await(exchange.deadline));
 
@@ -710,10 +711,9 @@ absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
     a11::net::SetHttpHeader(&headers, "content-length",
                             std::to_string(body.size()));
   }
-  ABSL_ASSIGN_OR_RETURN(attempt.response,
-                        attempt.lease.client()->RequestStream(
-                            method, target.target(), headers, body,
-                            target.scheme));
+  ABSL_ASSIGN_OR_RETURN(attempt.response, attempt.lease.client()->RequestStream(
+                                              method, target.target(), headers,
+                                              body, target.scheme));
   return attempt;
 }
 
@@ -722,7 +722,8 @@ absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
 absl::Status PumpRequestBody(const std::shared_ptr<AsyncNode>& body,
                              const std::shared_ptr<Http2DuplexStream>& upload) {
   while (true) {
-    absl::StatusOr<std::optional<data::Chunk>> chunk = body->NextChunk().Await();
+    absl::StatusOr<std::optional<data::Chunk>> chunk =
+        body->NextChunk().Await();
     if (!chunk.ok()) {
       (void)upload->Abort(chunk.status());
       return chunk.status();
@@ -810,11 +811,11 @@ absl::Status PumpPushes(const std::shared_ptr<Action>& action,
             "A pushed response exceeds options.max_body_bytes"));
         break;
       }
-      ABSL_RETURN_IF_ERROR(
-          body->PutChunk(BytesChunk(std::move(**chunk)), std::nullopt,
-                         /*final=*/false)
-              .Await()
-              .status());
+      ABSL_RETURN_IF_ERROR(body->PutChunk(BytesChunk(std::move(**chunk)),
+                                          std::nullopt,
+                                          /*final=*/false)
+                               .Await()
+                               .status());
     }
     ABSL_RETURN_IF_ERROR(Outputs::CloseNode(body));
   }
@@ -881,11 +882,10 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
           }
           // The hop chain is a stream of its own: a caller auditing where a URL
           // actually went reads it without the bodies getting in the way.
-          ABSL_RETURN_IF_ERROR(
-              outputs.PutJson("redirects",
-                              nlohmann::json{{"url", target.ToString()},
-                                             {"status", head->status},
-                                             {"location", *location}}));
+          ABSL_RETURN_IF_ERROR(outputs.PutJson(
+              "redirects", nlohmann::json{{"url", target.ToString()},
+                                          {"status", head->status},
+                                          {"location", *location}}));
           if (attempt.upload != nullptr) {
             (void)attempt.upload->Abort(absl::CancelledError("redirected"));
             (void)upload.Await();
@@ -933,8 +933,7 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
           "connection",
           nlohmann::json{
               {"url", target.ToString()},
-              {"http_version",
-               attempt.lease.multiplexed() ? "2" : "1.1"},
+              {"http_version", attempt.lease.multiplexed() ? "2" : "1.1"},
               {"secure", target.secure()},
               {"reused", attempt.lease.reused()}}));
       ABSL_RETURN_IF_ERROR(outputs.Close("redirects"));
@@ -945,8 +944,8 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
       const std::shared_ptr<AsyncNode> pushes = outputs.Get("pushes");
       if (pushes != nullptr && exchange.options.accept_pushes) {
         pushed = a11::SubmitTask([action, response, pushes,
-                                 deadline = exchange.deadline,
-                                 limit = exchange.options.max_body_bytes]() {
+                                  deadline = exchange.deadline,
+                                  limit = exchange.options.max_body_bytes]() {
           return PumpPushes(action, response, pushes, deadline, limit);
         });
       }
@@ -969,9 +968,8 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
               "The response body exceeds options.max_body_bytes");
           break;
         }
-        ABSL_RETURN_IF_ERROR(
-            outputs.Put("body", BytesChunk(std::move(**chunk)),
-                        /*final=*/false));
+        ABSL_RETURN_IF_ERROR(outputs.Put("body", BytesChunk(std::move(**chunk)),
+                                         /*final=*/false));
       }
       ABSL_RETURN_IF_ERROR(outputs.Close("body"));
       (void)upload.Await();
@@ -1071,9 +1069,9 @@ class EventStreamDecoder {
       const size_t colon = line.find(':');
       const std::string_view name =
           colon == std::string_view::npos ? line : line.substr(0, colon);
-      std::string_view value =
-          colon == std::string_view::npos ? std::string_view()
-                                          : line.substr(colon + 1);
+      std::string_view value = colon == std::string_view::npos
+                                   ? std::string_view()
+                                   : line.substr(colon + 1);
       if (!value.empty() && value.front() == ' ') {
         value.remove_prefix(1);
       }
@@ -1229,7 +1227,8 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
     // does and what a caller reading an API's error document needs.
     ABSL_RETURN_IF_ERROR(outputs.PutOnly("status_code", head.status));
     ABSL_RETURN_IF_ERROR(outputs.PutOnly("ok", head.status < 400));
-    ABSL_RETURN_IF_ERROR(outputs.PutOnly("headers", HeaderObject(head.headers)));
+    ABSL_RETURN_IF_ERROR(
+        outputs.PutOnly("headers", HeaderObject(head.headers)));
 
     const ItemFraming framing = FramingFor(head.headers);
     const bool wants_items = outputs.Get("items") != nullptr;
@@ -1276,8 +1275,7 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
         for (const std::string& line : decoded) {
           nlohmann::json value = nlohmann::json::parse(line, nullptr, false);
           ABSL_RETURN_IF_ERROR(outputs.PutJson(
-              "items", value.is_discarded() ? nlohmann::json(line)
-                                            : std::move(value)));
+              "items", value.is_discarded() ? nlohmann::json(line) : value));
         }
       }
     }
@@ -1295,8 +1293,7 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
       for (const std::string& line : decoded) {
         nlohmann::json value = nlohmann::json::parse(line, nullptr, false);
         ABSL_RETURN_IF_ERROR(outputs.PutJson(
-            "items", value.is_discarded() ? nlohmann::json(line)
-                                          : std::move(value)));
+            "items", value.is_discarded() ? nlohmann::json(line) : value));
       }
     }
 
@@ -1342,7 +1339,9 @@ ActionPortSchema Port(std::string name, std::string type, std::string desc,
 }
 
 /// The type name for a port carrying arbitrary JSON.
-std::string JsonType() { return std::string(data::kJsonMimetype); }
+std::string JsonType() {
+  return std::string(data::kJsonMimetype);
+}
 
 void AddSharedHeaders(ActionSchema& schema) {
   schema.headers.emplace(
@@ -1396,7 +1395,8 @@ ActionSchema MakeHttpRequestSchema() {
       "Request settings, all optional: max_redirects (5), timeout (seconds), "
       "request_body (\"buffer\" | \"stream\"), http_version (\"auto\" | \"2\" "
       "| \"1.1\"), accept_pushes (false), reuse_connection (true), "
-      "max_body_bytes, user_agent, headers (an object, merged over the action's "
+      "max_body_bytes, user_agent, headers (an object, merged over the "
+      "action's "
       "own headers and the way to send an x-a11- one), tls "
       "{verify_peer, ca_file, certificate_file, key_file}, and omit -- output "
       "port names to close immediately rather than write.");
@@ -1423,10 +1423,10 @@ ActionSchema MakeHttpRequestSchema() {
            "Every response header field as a [name, value] pair, in wire order "
            "and with repeats intact.",
            /*required=*/false, /*unary=*/false));
-  schema.outputs.emplace(
-      "body", Port("body", std::string(kOctetStream),
-                   "Response body chunks, in order, as they arrive.",
-                   /*required=*/false, /*unary=*/false));
+  schema.outputs.emplace("body",
+                         Port("body", std::string(kOctetStream),
+                              "Response body chunks, in order, as they arrive.",
+                              /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "trailers",
       Port("trailers", JsonType(),
@@ -1440,13 +1440,14 @@ ActionSchema MakeHttpRequestSchema() {
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "pushes",
-      Port("pushes", JsonType(),
-           "One record per response the server pushed: {method, url, path, "
-           "status, headers, request_headers, body}, where `body` is the id of "
-           "a node the pushed body is streamed into -- attach to it to read it. "
-           "Needs options.accept_pushes, and the node is reachable where the "
-           "action's node map is.",
-           /*required=*/false, /*unary=*/false));
+      Port(
+          "pushes", JsonType(),
+          "One record per response the server pushed: {method, url, path, "
+          "status, headers, request_headers, body}, where `body` is the id of "
+          "a node the pushed body is streamed into -- attach to it to read it. "
+          "Needs options.accept_pushes, and the node is reachable where the "
+          "action's node map is.",
+          /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "connection",
       Port("connection", JsonType(),
@@ -1478,16 +1479,16 @@ ActionSchema WebFetchSchema() {
       "status_code",
       Port("status_code", "integer", "The response's status code.",
            /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "ok", Port("ok", "bool", "Whether the status is below 400.",
-                 /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("ok",
+                         Port("ok", "bool", "Whether the status is below 400.",
+                              /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "headers", Port("headers", JsonType(),
                       "Response header fields as an object, lower-cased.",
                       /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace(
-      "text", Port("text", "string", "The whole body as text.",
-                   /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("text",
+                         Port("text", "string", "The whole body as text.",
+                              /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "json",
       Port("json", JsonType(),
@@ -1513,9 +1514,8 @@ ActionSchema WebFetchSchema() {
 
 ActionHandler MakeHttpRequestHandler() {
   return [](std::shared_ptr<Action> action) {
-    return a11::SubmitTask([action = std::move(action)]() {
-      return RunRequest(action);
-    });
+    return a11::SubmitTask(
+        [action = std::move(action)]() { return RunRequest(action); });
   };
 }
 
@@ -1528,8 +1528,8 @@ ActionHandler WebFetchHandler() {
 
 absl::Status RegisterHttpActions(a11::actions::ActionRegistry& registry) {
   ABSL_RETURN_IF_ERROR(registry.Register(std::string(kMakeHttpRequestAction),
-                                        MakeHttpRequestSchema(),
-                                        MakeHttpRequestHandler()));
+                                         MakeHttpRequestSchema(),
+                                         MakeHttpRequestHandler()));
   return registry.Register(std::string(kWebFetchAction), WebFetchSchema(),
                            WebFetchHandler());
 }

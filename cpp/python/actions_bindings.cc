@@ -263,16 +263,16 @@ std::vector<std::optional<data::NodeFragment>> ActionAutofillsFromPython(
   std::vector<std::optional<data::NodeFragment>> result;
   for (const py::handle item : py::reinterpret_borrow<py::iterable>(value)) {
     if (item.is_none()) {
-      result.push_back(std::nullopt);
+      result.emplace_back(std::nullopt);
       continue;
     }
     if (py::isinstance<data::NodeFragment>(item)) {
-      result.push_back(item.cast<data::NodeFragment>());
+      result.emplace_back(item.cast<data::NodeFragment>());
     } else {
-      result.push_back(py::module_::import("a11.data.types")
-                           .attr("NodeFragment")
-                           .attr("model_validate")(item)
-                           .cast<data::NodeFragment>());
+      result.emplace_back(py::module_::import("a11.data.types")
+                              .attr("NodeFragment")
+                              .attr("model_validate")(item)
+                              .cast<data::NodeFragment>());
     }
   }
   return result;
@@ -287,11 +287,13 @@ std::vector<std::optional<data::NodeFragment>> ActionAutofillsFromPython(
  * agrees with what a caller wrote.
  */
 std::string DescribeRequestToJson(const py::object& request) {
-  if (request.is_none()) return {};
-  if (py::isinstance<py::str>(request)) return request.cast<std::string>();
-  return py::module_::import("json")
-      .attr("dumps")(request)
-      .cast<std::string>();
+  if (request.is_none()) {
+    return {};
+  }
+  if (py::isinstance<py::str>(request)) {
+    return request.cast<std::string>();
+  }
+  return py::module_::import("json").attr("dumps")(request).cast<std::string>();
 }
 
 template <typename T>
@@ -303,8 +305,8 @@ absl::flat_hash_map<std::string, T> ActionSchemaMapFromPython(
   }
   absl::flat_hash_map<std::string, T> result;
   for (const py::handle pair : value.attr("items")()) {
-    const py::tuple item = py::reinterpret_borrow<py::tuple>(pair);
-    const std::string key = item[0].cast<std::string>();
+    const auto item = py::reinterpret_borrow<py::tuple>(pair);
+    const auto key = item[0].cast<std::string>();
     const py::handle element = item[1];
     if (py::isinstance<T>(element)) {
       result.insert_or_assign(key, element.cast<T>());
@@ -367,21 +369,21 @@ class PythonActionCallback {
     DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
   }
 
-  a11::Task CallAsync(std::shared_ptr<actions::Action> action) const {
+  a11::Task CallAsync(const std::shared_ptr<actions::Action>& action) const {
     py::gil_scoped_acquire acquire;
     absl::StatusOr<std::shared_ptr<PythonLoop>> loop = EnsureLoop();
     if (!loop.ok()) {
       return a11::FailedTask(loop.status());
     }
-    py::function callable = py::reinterpret_borrow<py::function>(callable_);
-    return CallPythonAsync<a11::Unit>(*loop, callable, std::move(action));
+    auto callable = py::reinterpret_borrow<py::function>(callable_);
+    return CallPythonAsync<a11::Unit>(*loop, callable, action);
   }
 
-  absl::Status CallSync(std::shared_ptr<actions::Action> action) const {
+  absl::Status CallSync(const std::shared_ptr<actions::Action>& action) const {
     py::gil_scoped_acquire acquire;
     try {
-      py::function callable = py::reinterpret_borrow<py::function>(callable_);
-      py::object result = callable(std::move(action));
+      auto callable = py::reinterpret_borrow<py::function>(callable_);
+      py::object result = callable(action);
       if (!result.is_none()) {
         return absl::InvalidArgumentError(
             "synchronous action callback must return None");
@@ -438,16 +440,17 @@ class PythonActionCallback {
 struct AsyncPythonActionHandler {
   std::shared_ptr<PythonActionCallback> owner;
 
-  a11::Task operator()(std::shared_ptr<actions::Action> action) const {
-    return owner->CallAsync(std::move(action));
+  a11::Task operator()(const std::shared_ptr<actions::Action>& action) const {
+    return owner->CallAsync(action);
   }
 };
 
 struct SyncPythonActionHandler {
   std::shared_ptr<PythonActionCallback> owner;
 
-  absl::Status operator()(std::shared_ptr<actions::Action> action) const {
-    return owner->CallSync(std::move(action));
+  absl::Status operator()(
+      const std::shared_ptr<actions::Action>& action) const {
+    return owner->CallSync(action);
   }
 };
 
@@ -533,7 +536,7 @@ std::shared_ptr<void> PortSchemaTypeInfoFromPython(const py::handle& value) {
         "ActionPortSchema typeinfo must be a Python type or None"));
   }
   Py_INCREF(value.ptr());
-  return std::shared_ptr<void>(value.ptr(), &ReleasePortSchemaTypeInfo);
+  return {value.ptr(), &ReleasePortSchemaTypeInfo};
 }
 
 py::object PortSchemaTypeInfoToPython(const std::shared_ptr<void>& typeinfo) {
@@ -945,7 +948,7 @@ void BindActions(py::module_& module) {
       .def_property(
           "settings", &actions::Action::GetSettings,
           [](actions::Action& self, actions::ActionSettings settings) {
-            ThrowIfNotOk(self.SetSettings(std::move(settings)));
+            ThrowIfNotOk(self.SetSettings(settings));
           },
           "The action's runtime settings.")
       .def(
@@ -1010,8 +1013,8 @@ void BindActions(py::module_& module) {
       .def(
           "bind_session",
           [](const std::shared_ptr<actions::Action>& self,
-             std::shared_ptr<service::Session> session) {
-            return ReturnAction(self, self->BindSession(std::move(session)));
+             const std::shared_ptr<service::Session>& session) {
+            return ReturnAction(self, self->BindSession(session));
           },
           "Bind the action's session and return the action.",
           py::arg("session"), py::keep_alive<1, 2>())
@@ -1037,8 +1040,8 @@ void BindActions(py::module_& module) {
           "get_input",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
-            return ValueOrThrow(WithoutGil(
-                [&] { return self.GetInput(std::move(name), bind_stream); }));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetInput(name, bind_stream); }));
           },
           "Return the input port node with the given name.", py::arg("name"),
           py::arg("bind_stream") = std::nullopt)
@@ -1046,16 +1049,15 @@ void BindActions(py::module_& module) {
           "get_output",
           [](actions::Action& self, std::string name,
              std::optional<bool> bind_stream) {
-            return ValueOrThrow(WithoutGil(
-                [&] { return self.GetOutput(std::move(name), bind_stream); }));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetOutput(name, bind_stream); }));
           },
           "Return the output port node with the given name.", py::arg("name"),
           py::arg("bind_stream") = std::nullopt)
       .def(
           "get_port",
           [](actions::Action& self, std::string name) {
-            return ValueOrThrow(
-                WithoutGil([&] { return self.GetPort(std::move(name)); }));
+            return ValueOrThrow(WithoutGil([&] { return self.GetPort(name); }));
           },
           "Return the port node with the given name.", py::arg("name"))
       // The log surface. Only the chunk-taking half is native: turning a Python
@@ -1070,16 +1072,24 @@ void BindActions(py::module_& module) {
              std::optional<std::string> file, std::optional<int> lineno,
              bool internal) {
             actions::LogOptions options;
-            if (level.has_value()) options.level = *level;
-            if (channel.has_value()) options.channel = *channel;
-            if (file.has_value()) options.file = *file;
+            if (level.has_value()) {
+              options.level = *level;
+            }
+            if (channel.has_value()) {
+              options.channel = *channel;
+            }
+            if (file.has_value()) {
+              options.file = *file;
+            }
             options.lineno = lineno;
             options.internal = internal;
-            if (metadata.has_value()) options.metadata = &*metadata;
+            if (metadata.has_value()) {
+              options.metadata = &*metadata;
+            }
             // Released for the reason every port accessor releases it: writing
             // the log port waits, and what it waits for can need the GIL.
-            ThrowIfNotOk(
-                WithoutGil([&] { return self.Log(std::move(chunk), options); }));
+            ThrowIfNotOk(WithoutGil(
+                [&] { return self.Log(std::move(chunk), options); }));
           },
           "Write an already-built chunk to the action's log port. Only a "
           "running action may log.",
@@ -1097,8 +1107,7 @@ void BindActions(py::module_& module) {
       .def(
           "__getitem__",
           [](actions::Action& self, std::string name) {
-            return ValueOrThrow(
-                WithoutGil([&] { return self.GetPort(std::move(name)); }));
+            return ValueOrThrow(WithoutGil([&] { return self.GetPort(name); }));
           },
           "Return the port node with the given name.", py::arg("name"))
       .def("contains_port", &actions::Action::ContainsPort,
@@ -1144,8 +1153,8 @@ void BindActions(py::module_& module) {
            py::arg("name"))
       .def(
           "set_header",
-          [](const std::shared_ptr<actions::Action>& self, std::string name,
-             const py::object& value) {
+          [](const std::shared_ptr<actions::Action>& self,
+             const std::string& name, const py::object& value) {
             std::string bytes;
             if (py::isinstance<py::bytes>(value)) {
               bytes = value.cast<std::string>();
@@ -1155,8 +1164,7 @@ void BindActions(py::module_& module) {
               ThrowStatus(absl::InvalidArgumentError(
                   "header value must be str or bytes"));
             }
-            return ReturnAction(
-                self, self->SetHeader(std::move(name), std::move(bytes)));
+            return ReturnAction(self, self->SetHeader(name, std::move(bytes)));
           },
           "Set a header from a str or bytes value and return the action.",
           py::arg("name"), py::arg("value"))
@@ -1251,8 +1259,8 @@ Examples:
             // the event-loop thread. Holding the GIL across it deadlocks
             // the process against a worker that needs the GIL to resolve
             // a Python future.
-            return FutureToPython(WithoutGil(
-                [&] { return self->Call(std::move(*converted)); }));
+            return FutureToPython(
+                WithoutGil([&] { return self->Call(std::move(*converted)); }));
           },
           R"doc(Dispatch the action remotely and return a future of the action.
 
@@ -1282,8 +1290,8 @@ Examples:
             // the event-loop thread. Holding the GIL across it deadlocks
             // the process against a worker that needs the GIL to resolve
             // a Python future.
-            return FutureToPython(WithoutGil(
-                [&] { return self->WaitForDispatch(*converted); }));
+            return FutureToPython(
+                WithoutGil([&] { return self->WaitForDispatch(*converted); }));
           },
           "Return a future that resolves when the action has been dispatched.",
           py::arg("timeout") = py::none())
@@ -1532,8 +1540,7 @@ Examples:
       "autofills do not travel and come back empty.",
       py::arg("described"));
   module.def(
-      "builtin_action_names",
-      []() { return actions::BuiltinActionNames(); },
+      "builtin_action_names", []() { return actions::BuiltinActionNames(); },
       "The names of the actions every registry answers for, sorted.");
 
   module.def(
@@ -1568,8 +1575,8 @@ Examples:
       std::string(actions::kActionDispatchStatusOutput);
   module.def(
       "log_record_from_chunk",
-      [](const data::Chunk& chunk, std::string action_name,
-         std::string action_id) {
+      [](const data::Chunk& chunk, const std::string& action_name,
+         const std::string& action_id) {
         const actions::LogRecord record =
             actions::LogRecordFromChunk(chunk, action_name, action_id);
         py::dict result;
@@ -1578,18 +1585,16 @@ Examples:
         result["level"] = std::string(actions::LogLevelName(record.level));
         result["channel"] = std::string(record.channel);
         result["file"] = std::string(record.file);
-        result["lineno"] = record.lineno.has_value()
-                               ? py::cast(*record.lineno)
-                               : py::none();
+        result["lineno"] =
+            record.lineno.has_value() ? py::cast(*record.lineno) : py::none();
         result["internal"] = record.internal;
         result["mimetype"] = std::string(record.mimetype);
         result["data"] = py::bytes(record.data.data(), record.data.size());
         result["text"] = actions::LogText(record);
-        result["timestamp"] =
-            record.timestamp == absl::InfinitePast()
-                ? py::none()
-                : py::cast(absl::ToDoubleSeconds(record.timestamp -
-                                                 absl::UnixEpoch()));
+        result["timestamp"] = record.timestamp == absl::InfinitePast()
+                                  ? py::none()
+                                  : py::cast(absl::ToDoubleSeconds(
+                                        record.timestamp - absl::UnixEpoch()));
         return result;
       },
       "Read a log chunk's metadata back out as a mapping: level, channel, "

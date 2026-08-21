@@ -29,7 +29,8 @@ absl::StatusOr<AudioControlEvent::Command> ParseControlCommand(
 
 absl::Status AudioControlEvent::Validate() const {
   if (ToString(command).empty()) {
-    return absl::InvalidArgumentError("AudioControlEvent has an unknown command");
+    return absl::InvalidArgumentError(
+        "AudioControlEvent has an unknown command");
   }
   return absl::OkStatus();
 }

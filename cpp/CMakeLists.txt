@@ -1062,7 +1062,12 @@ set(A11_GNU_WARNINGS
         -Wextra
         -Wpedantic
         -Wconversion
-        -Wshadow
+        # `=local` rather than plain -Wshadow, which on GCC also reports a
+        # constructor parameter that shares a name with the member it
+        # initialises -- `S(int value) : value(value) {}`, the canonical way to
+        # write one. The subset kept is what clang's -Wshadow reports: a local
+        # or parameter hidden by another one.
+        -Wshadow=local
         -Wimplicit-fallthrough
         -Wextra-semi
         -Wcast-qual

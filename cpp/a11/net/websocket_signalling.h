@@ -157,7 +157,8 @@ class WebSocketSignallingServer
   explicit WebSocketSignallingServer(std::shared_ptr<State> state)
       : state_(std::move(state)) {}
 
-  static void Remove(const std::shared_ptr<State>& state, std::string identity);
+  static void Remove(const std::shared_ptr<State>& state,
+                     const std::string& identity);
 
   std::shared_ptr<State> state_;
 };

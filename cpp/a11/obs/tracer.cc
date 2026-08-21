@@ -96,13 +96,13 @@ otel::trace::SpanId RandomSpanId() {
 std::string TraceIdToHex(const otel::trace::TraceId& id) {
   char buf[2 * otel::trace::TraceId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 std::string SpanIdToHex(const otel::trace::SpanId& id) {
   char buf[2 * otel::trace::SpanId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 otel::trace::SpanKind ToOtelKind(SpanKind kind) {

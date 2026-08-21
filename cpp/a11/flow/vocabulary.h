@@ -130,7 +130,8 @@ struct WordDoc {
 /// Every stage in [Stages] has an entry, which `FlowVocabulary.EveryWordIs
 /// Documented` pins: a stage added to the grammar without reference text is a
 /// hole a test finds rather than one a reader finds.
-const WordDoc* absl_nullable StageDocumentation(std::string_view canonical_name);
+const WordDoc* absl_nullable StageDocumentation(
+    std::string_view canonical_name);
 
 /// What a built-in function does, or `nullptr` where the name is not one.
 ///
@@ -229,7 +230,7 @@ std::vector<std::string_view> WordsOf(WordRole role);
 /// The word is the canonical form for every role but [WordRole::kSymbol], where
 /// it is the punctuation as written.
 const WordDoc* absl_nullable Documentation(WordRole role,
-                                          std::string_view canonical_name);
+                                           std::string_view canonical_name);
 
 /// Every punctuation mark and non-word operator the language gives meaning to,
 /// in the order a listing reads them.

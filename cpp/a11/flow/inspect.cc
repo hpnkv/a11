@@ -3,6 +3,7 @@
 #include "a11/flow/inspect.h"
 
 #include <cstddef>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -64,7 +65,9 @@ class Inspector {
 
   void Run(const ParseResult& parsed, const ResolveResult& resolved) {
     for (const ResolvedFlow& flow : resolved.flows) {
-      if (flow.declaration == nullptr) continue;
+      if (flow.declaration == nullptr) {
+        continue;
+      }
       flow_ = flow.plan.name;
       Unused(flow);
       Statements(flow.declaration->body);
@@ -100,23 +103,35 @@ class Inspector {
   /// thing to write and is what a JSONSchema is turned into; nothing there is
   /// unused, so nothing is said about it.
   void UnusedShapes(const ParseResult& parsed, const ResolveResult& resolved) {
-    if (resolved.program.dtos.empty() || resolved.flows.empty()) return;
+    if (resolved.program.dtos.empty() || resolved.flows.empty()) {
+      return;
+    }
     absl::flat_hash_set<std::string> named;
     for (const DtoPlan& dto : resolved.program.dtos) {
       for (const FieldPlan& field : dto.fields) {
-        if (!field.dto_name.empty()) named.insert(field.dto_name);
+        if (!field.dto_name.empty()) {
+          named.insert(field.dto_name);
+        }
         if (!field.element_dto_name.empty()) {
           named.insert(field.element_dto_name);
         }
       }
     }
     for (const ResolvedFlow& flow : resolved.flows) {
-      for (const PortPlan& port : flow.plan.ports) named.insert(port.type);
-      if (flow.declaration != nullptr) NamedTypes(flow.declaration->body, named);
+      for (const PortPlan& port : flow.plan.ports) {
+        named.insert(port.type);
+      }
+      if (flow.declaration != nullptr) {
+        NamedTypes(flow.declaration->body, named);
+      }
     }
     for (const syntax::DtoDeclarationPtr& declaration : parsed.dtos) {
-      if (named.contains(declaration->name.text)) continue;
-      if (resolved.program.Dto(declaration->name.text) == nullptr) continue;
+      if (named.contains(declaration->name.text)) {
+        continue;
+      }
+      if (resolved.program.Dto(declaration->name.text) == nullptr) {
+        continue;
+      }
       Report("flow.unused.struct",
              absl::StrCat("Nothing names the shape ",
                           Quoted(declaration->name.text),
@@ -127,30 +142,38 @@ class Inspector {
   }
 
   /// Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
-  void NamedTypes(const std::vector<syntax::NodePtr>& body,
-                  absl::flat_hash_set<std::string>& named) {
-    for (const syntax::NodePtr& node : body) NamedTypes(node.get(), named);
+  ///
+  /// Every node, whatever its kind: a cast can be anywhere an expression can,
+  /// and enumerating the places would be a list to keep in step with the
+  /// grammar for no gain. VisitSubtree rather than a recursive walk of its own,
+  /// so a deeply nested document costs heap rather than fibre stack.
+  static void NamedTypes(const std::vector<syntax::NodePtr>& body,
+                         absl::flat_hash_set<std::string>& named) {
+    for (const syntax::NodePtr& node : body) {
+      NamedTypes(node.get(), named);
+    }
   }
 
-  void NamedTypes(const syntax::Node* absl_nullable node,
-                  absl::flat_hash_set<std::string>& named) {
-    if (node == nullptr) return;
-    if (const auto* typed = syntax::As<syntax::TypedValue>(node);
-        typed != nullptr) {
-      named.insert(typed->type.name);
+  static void NamedTypes(const syntax::Node* absl_nullable node,
+                         absl::flat_hash_set<std::string>& named) {
+    if (node == nullptr) {
+      return;
     }
-    // Every child, whatever the node is: a cast can be anywhere an expression
-    // can, and enumerating the places would be a list to keep in step with the
-    // grammar for no gain.
-    syntax::VisitChildren(
-        *node, [&](const syntax::Node& child) { NamedTypes(&child, named); });
+    syntax::VisitSubtree(*node, [&named](const syntax::Node& one) {
+      if (const auto* typed = syntax::As<syntax::TypedValue>(&one);
+          typed != nullptr) {
+        named.insert(typed->type.name);
+      }
+    });
   }
 
   // --- what nothing uses ----------------------------------------------------
 
   void Unused(const ResolvedFlow& flow) {
     for (const Symbol& symbol : flow.symbols) {
-      if (symbol.implicit || symbol.name.empty()) continue;
+      if (symbol.implicit || symbol.name.empty()) {
+        continue;
+      }
       switch (symbol.kind) {
         case SymbolKind::kHeader:
           if (symbol.reads == 0) {
@@ -211,14 +234,15 @@ class Inspector {
           break;
         case SymbolKind::kCall:
           if (symbol.tolerant && symbol.status_reads == 0) {
-            Report("flow.unused.try-status",
-                   absl::StrCat("'try' lets ", symbol.action,
-                                " fail without ending the flow, and nothing "
-                                "here reads its status: a failure leaves the "
-                                "ports it feeds silently empty. Read it with "
-                                "'wait ", symbol.name, "' or 'status ",
-                                symbol.name, "'."),
-                   symbol.location, Severity::kWeakWarning, Family::kUnused);
+            Report(
+                "flow.unused.try-status",
+                absl::StrCat("'try' lets ", symbol.action,
+                             " fail without ending the flow, and nothing "
+                             "here reads its status: a failure leaves the "
+                             "ports it feeds silently empty. Read it with "
+                             "'wait ",
+                             symbol.name, "' or 'status ", symbol.name, "'."),
+                symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
           break;
         default:
@@ -236,7 +260,9 @@ class Inspector {
   }
 
   void Statement(const Node* statement) {
-    if (statement == nullptr) return;
+    if (statement == nullptr) {
+      return;
+    }
     switch (statement->kind) {
       case NodeKind::kPipe: {
         const auto* pipe = syntax::As<syntax::Pipe>(statement);
@@ -246,7 +272,9 @@ class Inspector {
       case NodeKind::kSkip:
         for (const syntax::SkipTarget& target :
              syntax::As<syntax::Skip>(statement)->targets) {
-          if (target.pipeline != nullptr) Pipeline(*target.pipeline);
+          if (target.pipeline != nullptr) {
+            Pipeline(*target.pipeline);
+          }
         }
         return;
       case NodeKind::kCarry:
@@ -314,11 +342,13 @@ class Inspector {
 
   void Count(int count, std::string_view word,
              const syntax::Location& location) {
-    if (count >= 1) return;
-    Report("flow.form.count-not-positive",
-           absl::StrCat("'", word, " ", count,
-                        "' is not a number of anything."),
-           location, Severity::kWarning, Family::kForm);
+    if (count >= 1) {
+      return;
+    }
+    Report(
+        "flow.form.count-not-positive",
+        absl::StrCat("'", word, " ", count, "' is not a number of anything."),
+        location, Severity::kWarning, Family::kForm);
   }
 
   /// The stage arithmetic, over one pipeline.
@@ -353,21 +383,21 @@ class Inspector {
         if (keeps_one) {
           Report("flow.sequence.redundant-stage",
                  absl::StrCat(StageName(stage), " has nothing to choose from: ",
-                              StageName(*reduced_by),
-                              " left one value."),
+                              StageName(*reduced_by), " left one value."),
                  stage.location, Severity::kWeakWarning, Family::kSequence);
         } else if (stage.name == "count") {
           Report("flow.sequence.impossible",
-                 absl::StrCat(StageName(stage), " is 1 here, however long the "
+                 absl::StrCat(StageName(stage),
+                              " is 1 here, however long the "
                               "stream was: ",
                               StageName(*reduced_by), " left one value."),
                  stage.location, Severity::kWarning, Family::kSequence);
         } else {
-          Report("flow.sequence.impossible",
-                 absl::StrCat(StageName(stage),
-                              " reads a stream of values, and ",
-                              StageName(*reduced_by), " left one."),
-                 stage.location, Severity::kWarning, Family::kSequence);
+          Report(
+              "flow.sequence.impossible",
+              absl::StrCat(StageName(stage), " reads a stream of values, and ",
+                           StageName(*reduced_by), " left one."),
+              stage.location, Severity::kWarning, Family::kSequence);
         }
       } else if (previous != nullptr && previous->name == stage.name &&
                  IsIdempotent(stage.name)) {
@@ -375,60 +405,80 @@ class Inspector {
                absl::StrCat(StageName(stage), " twice does what one does."),
                stage.location, Severity::kWeakWarning, Family::kSequence);
       }
-      if (reduced_by == nullptr && Reduces(stage)) reduced_by = &stage;
+      if (reduced_by == nullptr && Reduces(stage)) {
+        reduced_by = &stage;
+      }
       previous = &stage;
     }
     Expression(pipeline.source.get());
   }
 
   /// Pipelines hidden inside an expression: `(hits | count) > 0`.
+  /// Every pipeline written inside an expression, however deeply nested.
+  ///
+  /// A work list rather than recursion: the depth here is the document's
+  /// nesting, and A11 runs this on pooled fibres whose stacks are fixed and
+  /// small. Children are pushed in reverse so the visit order is the one a
+  /// recursive descent would have produced.
   void Expression(const Node* expression) {
-    if (expression == nullptr) return;
-    switch (expression->kind) {
-      case NodeKind::kPipelineValue:
-        Pipeline(*syntax::As<syntax::PipelineValue>(expression)->pipeline);
-        return;
-      case NodeKind::kListLiteral:
-        for (const syntax::NodePtr& item :
-             syntax::As<syntax::ListLiteral>(expression)->items) {
-          Expression(item.get());
-        }
-        return;
-      case NodeKind::kObjectLiteral:
-        for (const auto& [key, value] :
-             syntax::As<syntax::ObjectLiteral>(expression)->pairs) {
-          Expression(value.get());
-        }
-        return;
-      case NodeKind::kBuiltin:
-        for (const syntax::NodePtr& argument :
-             syntax::As<syntax::Builtin>(expression)->args) {
-          Expression(argument.get());
-        }
-        return;
-      case NodeKind::kUnary:
-        Expression(syntax::As<syntax::Unary>(expression)->operand.get());
-        return;
-      case NodeKind::kBinary: {
-        const auto* binary = syntax::As<syntax::Binary>(expression);
-        Expression(binary->left.get());
-        Expression(binary->right.get());
-        return;
+    if (expression == nullptr) {
+      return;
+    }
+    std::vector<const Node*> pending{expression};
+    const auto push = [&pending](const Node* node) {
+      if (node != nullptr) {
+        pending.push_back(node);
       }
-      case NodeKind::kTypedValue:
-        Expression(syntax::As<syntax::TypedValue>(expression)->value.get());
-        return;
-      case NodeKind::kAttr:
-        Expression(syntax::As<syntax::Attr>(expression)->base.get());
-        return;
-      case NodeKind::kIndex: {
-        const auto* index = syntax::As<syntax::Index>(expression);
-        Expression(index->base.get());
-        Expression(index->index.get());
-        return;
+    };
+    const auto push_all = [&push](const std::vector<syntax::NodePtr>& nodes) {
+      for (const syntax::NodePtr& node : std::views::reverse(nodes)) {
+        push(node.get());
       }
-      default:
-        return;
+    };
+    while (!pending.empty()) {
+      const Node* one = pending.back();
+      pending.pop_back();
+      switch (one->kind) {
+        case NodeKind::kPipelineValue:
+          Pipeline(*syntax::As<syntax::PipelineValue>(one)->pipeline);
+          break;
+        case NodeKind::kListLiteral:
+          push_all(syntax::As<syntax::ListLiteral>(one)->items);
+          break;
+        case NodeKind::kObjectLiteral: {
+          const auto& pairs = syntax::As<syntax::ObjectLiteral>(one)->pairs;
+          for (const auto& [key, value] : std::views::reverse(pairs)) {
+            push(value.get());
+          }
+          break;
+        }
+        case NodeKind::kBuiltin:
+          push_all(syntax::As<syntax::Builtin>(one)->args);
+          break;
+        case NodeKind::kUnary:
+          push(syntax::As<syntax::Unary>(one)->operand.get());
+          break;
+        case NodeKind::kBinary: {
+          const auto* binary = syntax::As<syntax::Binary>(one);
+          push(binary->right.get());
+          push(binary->left.get());
+          break;
+        }
+        case NodeKind::kTypedValue:
+          push(syntax::As<syntax::TypedValue>(one)->value.get());
+          break;
+        case NodeKind::kAttr:
+          push(syntax::As<syntax::Attr>(one)->base.get());
+          break;
+        case NodeKind::kIndex: {
+          const auto* index = syntax::As<syntax::Index>(one);
+          push(index->index.get());
+          push(index->base.get());
+          break;
+        }
+        default:
+          break;
+      }
     }
   }
 
@@ -446,7 +496,9 @@ class Inspector {
       if (step.kind == "wait" || step.kind == "drain") {
         const std::string subject =
             step.kind == "wait" ? step.source : step.destination;
-        if (subject.empty()) continue;
+        if (subject.empty()) {
+          continue;
+        }
         const auto [found, fresh] = waited.emplace(subject, 0);
         if (!fresh) {
           Report("flow.barrier.duplicate",
@@ -460,16 +512,18 @@ class Inspector {
         // `wait x` puts the call's outcome under `status x`, which is the label
         // a wait step carries.
         if (waited.contains(absl::StrCat("status ", step.label))) {
-          Report("flow.barrier.cancel-after-wait",
-                 absl::StrCat("This body already waited for ",
-                              Quoted(step.label),
-                              ", so there is nothing left to stop."),
-                 step.location, Severity::kWarning, Family::kBarrier);
+          Report(
+              "flow.barrier.cancel-after-wait",
+              absl::StrCat("This body already waited for ", Quoted(step.label),
+                           ", so there is nothing left to stop."),
+              step.location, Severity::kWarning, Family::kBarrier);
         }
       }
     }
     for (const StepPlan& step : steps) {
-      for (const std::vector<StepPlan>& body : step.bodies) Barriers(body);
+      for (const std::vector<StepPlan>& body : step.bodies) {
+        Barriers(body);
+      }
     }
   }
 
@@ -487,7 +541,9 @@ std::vector<Diagnostic> Inspect(std::string_view source,
   // A file that does not resolve is a file whose facts are unreliable: an
   // unknown name reads as nothing using the thing it meant to use, and every
   // "nothing uses this" would be noise on top of the real problem.
-  if (resolved.HasErrors()) return found;
+  if (resolved.HasErrors()) {
+    return found;
+  }
   const LineIndex lines(source);
   Inspector(lines, found).Run(parsed, resolved);
   SortDiagnostics(found);

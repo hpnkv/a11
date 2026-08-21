@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/format.h"
-
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -12,10 +10,10 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
-
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/emit_json.h"
+#include "a11/flow/format.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/token.h"
@@ -26,6 +24,7 @@ namespace {
 std::string Formatted(std::string_view source) {
   const FormatResult result = Format(source);
   std::vector<std::string> messages;
+  messages.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
     messages.push_back(diagnostic.message);
   }
@@ -46,8 +45,12 @@ std::string Formatted(std::string_view source) {
 std::vector<std::string> Stream(std::string_view source) {
   std::vector<std::string> out;
   for (const Token& token : Lex(source).tokens) {
-    if (token.kind == TokenKind::kEnd) break;
-    if (token.kind == TokenKind::kNewline) continue;
+    if (token.kind == TokenKind::kEnd) {
+      break;
+    }
+    if (token.kind == TokenKind::kNewline) {
+      continue;
+    }
     std::string text(token.text);
     if (token.kind == TokenKind::kComment) {
       while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
@@ -70,9 +73,13 @@ nlohmann::json Tree(std::string_view source) {
   const auto strip = [](nlohmann::json& node, const auto& self) -> void {
     if (node.is_object()) {
       node.erase("at");
-      for (auto& [key, child] : node.items()) self(child, self);
+      for (auto& [key, child] : node.items()) {
+        self(child, self);
+      }
     } else if (node.is_array()) {
-      for (auto& child : node) self(child, self);
+      for (auto& child : node) {
+        self(child, self);
+      }
     }
   };
   strip(value, strip);
@@ -92,9 +99,13 @@ std::vector<std::filesystem::path> Corpus() {
        {root / "examples" / "003-flow-dsl",
         root / "examples" / "004-deep-research", root / "scripts",
         root / "testdata" / "flow"}) {
-    if (!std::filesystem::is_directory(directory)) continue;
+    if (!std::filesystem::is_directory(directory)) {
+      continue;
+    }
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-      if (entry.path().extension() == ".flow") paths.push_back(entry.path());
+      if (entry.path().extension() == ".flow") {
+        paths.push_back(entry.path());
+      }
     }
   }
   std::sort(paths.begin(), paths.end());
@@ -382,8 +393,7 @@ TEST(FlowFormat, IsIdempotentAndTokenPreservingOverTheCorpus) {
     const std::vector<std::string> after = Stream(once.formatted);
     for (size_t index = 0; index < std::min(before.size(), after.size());
          ++index) {
-      ASSERT_EQ(before[index], after[index])
-          << path << " at token " << index;
+      ASSERT_EQ(before[index], after[index]) << path << " at token " << index;
     }
     ASSERT_EQ(before.size(), after.size()) << path;
     EXPECT_EQ(Tree(once.formatted), Tree(source)) << path;

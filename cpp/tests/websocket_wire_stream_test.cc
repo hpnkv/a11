@@ -33,7 +33,7 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
   server_options.bind_address = "127.0.0.1";
   auto server = *WebSocketWireServer::Create(
       [&accepted_promise, &server_message_promise,
-       &server_done](std::shared_ptr<WebSocketWireStream> stream) {
+       &server_done](const std::shared_ptr<WebSocketWireStream>& stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
         if (!published.ok()) {
           return a11::FailedTask(published);
@@ -58,16 +58,17 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
   auto client = *WebSocketWireStream::CreateClient(
       "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
   std::atomic<bool> client_done = false;
-  ASSERT_TRUE(
-      client
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&client_done]() {
-                client_done = true;
-                return a11::ReadyTask();
-              })
-          .Await(absl::Now() + absl::Seconds(5))
-          .ok());
+  ASSERT_TRUE(client
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&client_done]() {
+                        client_done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
   auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(accepted.ok()) << accepted.status();
 
@@ -122,7 +123,7 @@ TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
   server_options.port = 0;
   server_options.bind_address = "127.0.0.1";
   auto server = *WebSocketWireServer::Create(
-      [&accepted_promise](std::shared_ptr<WebSocketWireStream> stream) {
+      [&accepted_promise](const std::shared_ptr<WebSocketWireStream>& stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
         if (!published.ok()) {
           return a11::FailedTask(published);
@@ -130,7 +131,9 @@ TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
         // Accepts and then holds the stream open: no half-close from this side,
         // so the client cannot reach a clean bidirectional finish.
         return stream->Accept(
-            [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
+            [](const std::optional<data::WireMessage>&) {
+              return a11::ReadyTask();
+            },
             []() { return a11::ReadyTask(); });
       },
       server_options);
@@ -140,16 +143,17 @@ TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
   auto client = *WebSocketWireStream::CreateClient(
       "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
   std::atomic<bool> client_done = false;
-  ASSERT_TRUE(
-      client
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&client_done]() {
-                client_done = true;
-                return a11::ReadyTask();
-              })
-          .Await(absl::Now() + absl::Seconds(5))
-          .ok());
+  ASSERT_TRUE(client
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&client_done]() {
+                        client_done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
   auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(accepted.ok()) << accepted.status();
 
@@ -165,7 +169,8 @@ TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
   while (!client_done && absl::Now() < limit) {
     thread::SleepFor(absl::Milliseconds(1));
   }
-  EXPECT_TRUE(client_done) << "abort after half-close did not finish the stream";
+  EXPECT_TRUE(client_done)
+      << "abort after half-close did not finish the stream";
   // And it reports the caller's reason rather than an invented one.
   EXPECT_EQ(client->GetStatus().code(), absl::StatusCode::kCancelled);
   EXPECT_TRUE(server->Stop().ok());
@@ -181,8 +186,8 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
   server_options.port = 0;
   server_options.bind_address = "127.0.0.1";
   auto server = *WebSocketWireServer::Create(
-      [&accepted_promise,
-       &server_message_promise](std::shared_ptr<WebSocketWireStream> stream) {
+      [&accepted_promise, &server_message_promise](
+          const std::shared_ptr<WebSocketWireStream>& stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
         if (!published.ok()) {
           return a11::FailedTask(published);
@@ -208,13 +213,14 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
   auto client = WebSocketWireStream::CreateClient(
       "ws://127.0.0.1:" + std::to_string(*port) + "/a11", {}, client_options);
   ASSERT_TRUE(client.ok()) << client.status();
-  ASSERT_TRUE(
-      (*client)
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              []() { return a11::ReadyTask(); })
-          .Await(absl::Now() + absl::Seconds(5))
-          .ok());
+  ASSERT_TRUE((*client)
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      []() { return a11::ReadyTask(); })
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
   auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(accepted.ok()) << accepted.status();
 
@@ -268,7 +274,7 @@ TEST(WebSocketWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   server_options.port = 0;
   server_options.bind_address = "127.0.0.1";
   auto server = WebSocketWireServer::Create(
-      [&](std::shared_ptr<WebSocketWireStream> stream) {
+      [&](const std::shared_ptr<WebSocketWireStream>& stream) {
         accepted = stream;
         return stream->Accept(
             [&](std::optional<data::WireMessage> message) {
@@ -277,8 +283,7 @@ TEST(WebSocketWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
                 for (const data::NodeFragment& fragment :
                      message->node_fragments) {
                   const std::uint32_t tag = fragment.seq.value_or(0);
-                  seen[tag >> 24U].push_back(
-                      static_cast<int>(tag & 0xFFFFFFU));
+                  seen[tag >> 24U].push_back(static_cast<int>(tag & 0xFFFFFFU));
                   ++total;
                 }
                 cv.SignalAll();
@@ -295,13 +300,14 @@ TEST(WebSocketWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   auto client = WebSocketWireStream::CreateClient(
       "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
   ASSERT_TRUE(client.ok()) << client.status();
-  ASSERT_TRUE(
-      (*client)
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              []() { return a11::ReadyTask(); })
-          .Await(absl::Now() + absl::Seconds(10))
-          .ok());
+  ASSERT_TRUE((*client)
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      []() { return a11::ReadyTask(); })
+                  .Await(absl::Now() + absl::Seconds(10))
+                  .ok());
 
   const std::string payload(256, 'x');
   std::vector<std::thread> senders;
@@ -359,7 +365,7 @@ TEST(WebSocketWireStreamTest, ReassemblesMultipleLargeChunkedMessagesInOrder) {
   server_options.framing.split_size = 1024;
   auto server = WebSocketWireServer::Create(
       [&accepted_promise, &messages_promise,
-       &messages](std::shared_ptr<WebSocketWireStream> stream) {
+       &messages](const std::shared_ptr<WebSocketWireStream>& stream) {
         const absl::Status published = accepted_promise.SetValue(stream);
         if (!published.ok()) {
           return a11::FailedTask(published);
@@ -387,13 +393,14 @@ TEST(WebSocketWireStreamTest, ReassemblesMultipleLargeChunkedMessagesInOrder) {
   auto client = WebSocketWireStream::CreateClient(
       "ws://127.0.0.1:" + std::to_string(*port) + "/a11", {}, client_options);
   ASSERT_TRUE(client.ok()) << client.status();
-  ASSERT_TRUE(
-      (*client)
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              []() { return a11::ReadyTask(); })
-          .Await(absl::Now() + absl::Seconds(5))
-          .ok());
+  ASSERT_TRUE((*client)
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      []() { return a11::ReadyTask(); })
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
   auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(accepted.ok()) << accepted.status();
 

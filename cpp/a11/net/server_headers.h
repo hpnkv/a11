@@ -143,7 +143,7 @@ void ApplyCorsHeaders(const CorsOptions& options,
  * @brief Whether @p method is a CORS preflight this policy should answer.
  */
 [[nodiscard]] bool IsPreflight(const CorsOptions& options,
-                              std::string_view method);
+                               std::string_view method);
 
 }  // namespace a11::net
 

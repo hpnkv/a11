@@ -36,9 +36,9 @@ constexpr std::array kOwnRule = {
 /// bound step rather than a comparison. The statements that produce a value,
 /// plus `node`, which is the declaration that does.
 constexpr std::array kBindingVerbs = {
-    std::string_view("run"),   std::string_view("call"),
-    std::string_view("try"),   std::string_view("node"),
-    std::string_view("wait"),  std::string_view("drain"),
+    std::string_view("run"),  std::string_view("call"),
+    std::string_view("try"),  std::string_view("node"),
+    std::string_view("wait"), std::string_view("drain"),
 };
 
 /// `else` opens a block and so is written with the statements; `it` is a value
@@ -51,7 +51,9 @@ constexpr std::string_view kIt = "it";
 std::string Shout(std::string_view word) {
   std::string shouted(word);
   for (char& letter : shouted) {
-    if (letter >= 'a' && letter <= 'z') letter = static_cast<char>(letter - 32);
+    if (letter >= 'a' && letter <= 'z') {
+      letter = static_cast<char>(letter - 32);
+    }
   }
   return shouted;
 }
@@ -60,8 +62,12 @@ std::string Shout(std::string_view word) {
 std::string Inline(absl::Span<const std::string_view> words) {
   std::vector<std::string> parts;
   parts.reserve(words.size() * 2);
-  for (const std::string_view word : words) parts.emplace_back(word);
-  for (const std::string_view word : words) parts.push_back(Shout(word));
+  for (const std::string_view word : words) {
+    parts.emplace_back(word);
+  }
+  for (const std::string_view word : words) {
+    parts.push_back(Shout(word));
+  }
   return absl::StrJoin(parts, "|");
 }
 
@@ -74,8 +80,12 @@ std::string Wrapped(absl::Span<const std::string_view> words,
                     std::string_view indent, size_t width = 70) {
   std::vector<std::string> parts;
   parts.reserve(words.size() * 2);
-  for (const std::string_view word : words) parts.emplace_back(word);
-  for (const std::string_view word : words) parts.push_back(Shout(word));
+  for (const std::string_view word : words) {
+    parts.emplace_back(word);
+  }
+  for (const std::string_view word : words) {
+    parts.push_back(Shout(word));
+  }
   std::string out;
   std::string line;
   for (size_t index = 0; index < parts.size(); ++index) {
@@ -92,8 +102,9 @@ std::string Wrapped(absl::Span<const std::string_view> words,
 }
 
 /// The words of a table that are not in `without`, in the table's order.
-std::vector<std::string_view> Except(absl::Span<const std::string_view> words,
-                                     absl::Span<const std::string_view> without) {
+std::vector<std::string_view> Except(
+    absl::Span<const std::string_view> words,
+    absl::Span<const std::string_view> without) {
   std::vector<std::string_view> kept;
   for (const std::string_view word : words) {
     if (std::find(without.begin(), without.end(), word) == without.end()) {
@@ -111,8 +122,12 @@ std::vector<std::string_view> Split(absl::Span<const std::string_view> words) {
     while (start <= word.size()) {
       const size_t space = word.find(' ', start);
       const size_t end = space == std::string_view::npos ? word.size() : space;
-      if (end > start) parts.push_back(word.substr(start, end - start));
-      if (space == std::string_view::npos) break;
+      if (end > start) {
+        parts.push_back(word.substr(start, end - start));
+      }
+      if (space == std::string_view::npos) {
+        break;
+      }
       start = space + 1;
     }
   }
@@ -124,7 +139,7 @@ std::vector<std::string_view> Split(absl::Span<const std::string_view> words) {
 std::vector<std::string_view> StatementKeywords() {
   std::vector<std::string_view> words =
       Except(vocabulary::OrderedStatements(), kOwnRule);
-  words.push_back("else");
+  words.emplace_back("else");
   return words;
 }
 
@@ -151,9 +166,11 @@ std::vector<std::string_view> DurationUnits() {
 std::vector<std::string_view> OperatorWords() {
   std::vector<std::string_view> words;
   for (const std::string_view word : {"and", "or", "not"}) {
-    if (vocabulary::OperatorWords().contains(word)) words.push_back(word);
+    if (vocabulary::OperatorWords().contains(word)) {
+      words.push_back(word);
+    }
   }
-  words.push_back("in");
+  words.emplace_back("in");
   return words;
 }
 
@@ -167,7 +184,9 @@ std::string PortModifierRules() {
                     ".a11flow\n");
   }
   // Trailing newline belongs to the template, not to the last rule.
-  if (!out.empty()) out.pop_back();
+  if (!out.empty()) {
+    out.pop_back();
+  }
   return out;
 }
 
@@ -188,11 +207,13 @@ std::string FieldModifierRules() {
                            Shout(modifier.substr(space + 1)));
     const std::string_view scope =
         space == std::string_view::npos ? modifier : modifier.substr(0, space);
-    absl::StrAppend(&out, "            - match: '\\b(", pattern,
-                    "){{kw_boundary}}'\n", "              scope: keyword.modifier.",
-                    scope, ".a11flow\n");
+    absl::StrAppend(
+        &out, "            - match: '\\b(", pattern, "){{kw_boundary}}'\n",
+        "              scope: keyword.modifier.", scope, ".a11flow\n");
   }
-  if (!out.empty()) out.pop_back();
+  if (!out.empty()) {
+    out.pop_back();
+  }
   return out;
 }
 
@@ -635,7 +656,9 @@ std::string Quoted(absl::Span<const std::string_view> words,
       absl::StrAppend(&out, line, "\n", indent);
       line.clear();
     }
-    if (!line.empty()) absl::StrAppend(&line, " ");
+    if (!line.empty()) {
+      absl::StrAppend(&line, " ");
+    }
     absl::StrAppend(&line, piece);
   }
   absl::StrAppend(&out, line);
@@ -653,17 +676,18 @@ std::string QuotedOne(std::string_view word) {
 /// three-line call, and a table that grows past the margin from running off it.
 std::string Call(absl::Span<const std::string_view> words,
                  std::string_view assigned_to) {
-  const std::string one_line =
+  std::string one_line =
       absl::StrCat("_keywords(", Quoted(words, "", 1000), ")");
-  if (assigned_to.size() + one_line.size() <= 79) return one_line;
+  if (assigned_to.size() + one_line.size() <= 79) {
+    return one_line;
+  }
   return absl::StrCat("_keywords(\n    ", Quoted(words, "    "), "\n)");
 }
 
 std::string Sublime() {
   const std::vector<std::string_view> statements = StatementKeywords();
   const std::vector<std::string_view> clauses =
-      Except(vocabulary::OrderedClauseWords(), absl::MakeConstSpan(
-                                                   &kElse, 1));
+      Except(vocabulary::OrderedClauseWords(), absl::MakeConstSpan(&kElse, 1));
   const std::vector<std::string_view> modifiers =
       Split(vocabulary::OrderedModifiers());
   const std::vector<std::string_view> constants =
@@ -673,7 +697,9 @@ std::string Sublime() {
   const std::vector<std::string_view> operators = OperatorWords();
   std::vector<std::string_view> bare;
   for (const std::string_view stage : vocabulary::Stages()) {
-    if (vocabulary::BareStages().contains(stage)) bare.push_back(stage);
+    if (vocabulary::BareStages().contains(stage)) {
+      bare.push_back(stage);
+    }
   }
   std::vector<std::string_view> sources;
   for (const std::string_view word : vocabulary::SourceWords()) {
@@ -694,9 +720,8 @@ std::string Sublime() {
           {"@HEADER_WORDS@",
            Inline(std::vector<std::string_view>{"as", "default"})},
           {"@DESCRIBE@", One("describe")},
-          {"@BINDING_VERBS@",
-           Inline(absl::MakeConstSpan(kBindingVerbs.data(),
-                                      kBindingVerbs.size()))},
+          {"@BINDING_VERBS@", Inline(absl::MakeConstSpan(
+                                  kBindingVerbs.data(), kBindingVerbs.size()))},
           {"@STATEMENTS@", Wrapped(statements, "          ")},
           {"@CLAUSES@", Inline(clauses)},
           {"@NODES@", One("nodes")},
@@ -725,7 +750,8 @@ std::string Sublime() {
 /// comes from `vocabulary`. What differs is the audience -- this one colours
 /// prose about flows rather than a file being edited, so it stops at what a
 /// reader of a documentation page sees and leaves the error states out.
-constexpr std::string_view kPygmentsTemplate = R"PY(# Copyright 2026 The A11 Authors.
+constexpr std::string_view kPygmentsTemplate =
+    R"PY(# Copyright 2026 The A11 Authors.
 
 """Syntax highlighting for the A11 Flow language, as a Pygments lexer.
 
@@ -1094,7 +1120,9 @@ std::string Pygments() {
   const std::vector<std::string_view> operators = OperatorWords();
   std::vector<std::string_view> bare;
   for (const std::string_view stage : vocabulary::Stages()) {
-    if (vocabulary::BareStages().contains(stage)) bare.push_back(stage);
+    if (vocabulary::BareStages().contains(stage)) {
+      bare.push_back(stage);
+    }
   }
   std::vector<std::string_view> sources;
   for (const std::string_view word : vocabulary::SourceWords()) {
@@ -1109,10 +1137,10 @@ std::string Pygments() {
           {"@STRUCT@", QuotedOne("struct")},
           {"@DIRECTIONS@",
            Call(std::vector<std::string_view>{"in", "out"}, "DIRECTIONS = ")},
-          {"@PORT_MODIFIERS@", Call(vocabulary::OrderedPortModifiers(),
-                                    "PORT_MODIFIERS = ")},
-          {"@FIELD_MODIFIERS@", Call(vocabulary::OrderedFieldModifiers(),
-                                     "FIELD_MODIFIERS = ")},
+          {"@PORT_MODIFIERS@",
+           Call(vocabulary::OrderedPortModifiers(), "PORT_MODIFIERS = ")},
+          {"@FIELD_MODIFIERS@",
+           Call(vocabulary::OrderedFieldModifiers(), "FIELD_MODIFIERS = ")},
           {"@TYPES@", Call(vocabulary::OrderedTypeNames(), "TYPES = ")},
           {"@HEADER@", QuotedOne("header")},
           {"@HEADER_WORDS@",
@@ -1127,8 +1155,7 @@ std::string Pygments() {
           {"@NODES@", QuotedOne("nodes")},
           {"@NODE@", QuotedOne("node")},
           {"@TRY@", QuotedOne("try")},
-          {"@VERBS@",
-           Quoted(std::vector<std::string_view>{"run", "call"}, "")},
+          {"@VERBS@", Quoted(std::vector<std::string_view>{"run", "call"}, "")},
           {"@VIA@", QuotedOne("via")},
           {"@MODIFIERS@", Call(modifiers, "MODIFIERS = ")},
           {"@STAGES@", Call(vocabulary::Stages(), "STAGES = ")},
@@ -1379,7 +1406,8 @@ std::string VsCode() {
       Split(vocabulary::OrderedModifiers());
   std::vector<std::string_view> port_and_field =
       Split(vocabulary::OrderedPortModifiers());
-  for (const std::string_view word : Split(vocabulary::OrderedFieldModifiers())) {
+  for (const std::string_view word :
+       Split(vocabulary::OrderedFieldModifiers())) {
     if (std::find(port_and_field.begin(), port_and_field.end(), word) ==
         port_and_field.end()) {
       port_and_field.push_back(word);

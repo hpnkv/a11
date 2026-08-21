@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/net/http/connection_pool.h"
-
 #include <atomic>
 #include <memory>
 #include <string>
@@ -16,6 +14,7 @@
 
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
+#include "a11/net/http/connection_pool.h"
 #include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 
@@ -33,11 +32,12 @@ class CountingServer {
   CountingServer() {
     auto server = Http2Server::Create(
         "127.0.0.1", 0,
-        [this](HttpRequest request,
-               std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        [this](
+            const HttpRequest& request,
+            const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
           ++requests_;
-          const absl::Status status =
-              response->SendResponse(200, {}, absl::StrCat("ok:", request.path));
+          const absl::Status status = response->SendResponse(
+              200, {}, absl::StrCat("ok:", request.path));
           return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
         });
     server_ = server.ok() ? *server : nullptr;
@@ -50,7 +50,9 @@ class CountingServer {
   }
 
   [[nodiscard]] bool ok() const { return server_ != nullptr; }
+
   [[nodiscard]] std::uint16_t port() const { return server_->port(); }
+
   [[nodiscard]] int requests() const { return requests_.load(); }
 
   [[nodiscard]] ParsedUrl origin() const {
@@ -209,7 +211,8 @@ TEST(HttpConnectionPoolTest, RejectsAnOriginWithoutAHostOrPort) {
   const std::shared_ptr<HttpConnectionPool> pool = HttpConnectionPool::Create();
   ParsedUrl empty;
   empty.scheme = "http";
-  EXPECT_TRUE(absl::IsInvalidArgument(pool->Acquire(empty, {}).Await().status()));
+  EXPECT_TRUE(
+      absl::IsInvalidArgument(pool->Acquire(empty, {}).Await().status()));
 }
 
 }  // namespace

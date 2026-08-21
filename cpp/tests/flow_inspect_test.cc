@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/inspect.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
@@ -10,6 +8,7 @@
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
 
+#include "a11/flow/inspect.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
 
@@ -44,6 +43,7 @@ TEST(FlowInspect, SaysWhenNothingUsesSomethingTheFlowDeclared) {
     std::string_view code;
     std::string_view severity;
   };
+
   const Case cases[] = {
       // A `try` is a promise to handle a failure; not reading the status is the
       // flow breaking that promise.
@@ -81,12 +81,12 @@ TEST(FlowInspect, SaysWhenNothingUsesSomethingTheFlowDeclared) {
 TEST(FlowInspect, ATryWhoseStatusIsReadIsFine) {
   // Three ways of reading it, and each one has to count -- otherwise the fix the
   // finding suggests does not clear it.
-  for (const std::string_view read : {"  wait x\n", "  s = wait x\n  s -> c\n",
-                                      "  status x -> c\n"}) {
-    const std::string source =
-        absl::StrCat("flow f {\n  in a: string\n  out b: string\n"
-                     "  out c: object\n  x = try run act(p: a)\n",
-                     read, "  x.out -> b\n}\n");
+  for (const std::string_view read :
+       {"  wait x\n", "  s = wait x\n  s -> c\n", "  status x -> c\n"}) {
+    const std::string source = absl::StrCat(
+        "flow f {\n  in a: string\n  out b: string\n"
+        "  out c: object\n  x = try run act(p: a)\n",
+        read, "  x.out -> b\n}\n");
     for (const Diagnostic& diagnostic : Findings(source)) {
       EXPECT_NE(diagnostic.code, "flow.unused.try-status") << source;
     }
@@ -94,9 +94,9 @@ TEST(FlowInspect, ATryWhoseStatusIsReadIsFine) {
 }
 
 TEST(FlowInspect, TheIndexEveryLoopBindsIsNotSomethingTheAuthorForgot) {
-  const std::vector<std::string> codes =
-      Codes("flow f { in a: string stream\n out b: string\n"
-            " for word in a { word -> b } }");
+  const std::vector<std::string> codes = Codes(
+      "flow f { in a: string stream\n out b: string\n"
+      " for word in a { word -> b } }");
   for (const std::string& code : codes) {
     EXPECT_NE(code, "flow.unused.loop-variable");
   }
@@ -129,7 +129,7 @@ TEST(FlowInspect, WorksOutWhatAStageCanPossiblyDo) {
   // And the sequences that are perfectly ordinary.
   for (const std::string_view fine :
        {"a | first 3 | truncate 200 -> b", "a | collect | truncate 20 -> b",
-        "a | where it != \"\" | map it | join \",\" -> b",
+        R"(a | where it != "" | map it | join "," -> b)",
         "a | group it | map join(it, \" \") -> b",
         "a | batch 4 | collect -> b"}) {
     const std::string source = absl::StrCat(
@@ -185,7 +185,8 @@ TEST(FlowInspect, EveryCodeItProducesIsPublished) {
       " x.out -> b }",
       "flow f { in a: string\n out b: string\n out forgotten: string\n"
       " a -> b }",
-      "flow f { in a: string stream\n out b: string\n a | collect | drop 3 -> b }",
+      "flow f { in a: string stream\n out b: string\n a | collect | drop 3 -> "
+      "b }",
       "flow f { in a: string stream\n out b: string\n"
       " for w in a parallel 0 { w -> b } }",
       "flow f { in a: string\n out b: string\n nodes empty\n a -> b }",

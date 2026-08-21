@@ -46,8 +46,8 @@ Diagnostic DiagnosticFromJsonValue(const nlohmann::json& value);
 /// is echoed so a batch of these can be concatenated and still say what each
 /// was about. `counts` is there so a gate can be written without walking the
 /// list.
-nlohmann::json DiagnosticsToJsonValue(
-    std::string_view source, absl::Span<const Diagnostic> diagnostics);
+nlohmann::json DiagnosticsToJsonValue(std::string_view source,
+                                      absl::Span<const Diagnostic> diagnostics);
 
 /// The envelope, serialised with a trailing newline and two-space indent.
 std::string DiagnosticsToJson(std::string_view source,

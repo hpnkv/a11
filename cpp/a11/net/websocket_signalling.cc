@@ -1,6 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/websocket_signalling.h"
 
 #include <algorithm>
@@ -30,6 +29,7 @@
 #include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/internal/binary_channel.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/internal/http2_websocket_channel.h"
 #include "a11/net/signalling.h"
 #include "thread/boost_primitives.h"
@@ -132,7 +132,7 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
             "WebSocket signalling connect deadline exceeded"));
   }
   if (!on_message) {
-    on_message = [](SignallingMessage) {
+    on_message = [](const SignallingMessage&) {
       return a11::ReadyTask();
     };
   }
@@ -172,72 +172,76 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
   internal::BinaryChannelCallbacks callbacks{
       .on_open =
           [weak]() {
-            std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr) {
+            std::shared_ptr<State> held_state = weak.lock();
+            if (held_state == nullptr) {
               return;
             }
-            std::shared_ptr<WebSocketSignallingClient> client;
+            std::shared_ptr<WebSocketSignallingClient> held_client;
             {
-              thread::MutexLock lock(&state->mu);
-              if (state->closed) {
+              thread::MutexLock lock(&held_state->mu);
+              if (held_state->closed) {
                 return;
               }
-              state->connected = true;
-              client = std::move(state->pending_client);
+              held_state->connected = true;
+              held_client = std::move(held_state->pending_client);
             }
-            if (client != nullptr) {
-              (void)state->startup_promise->SetValue(std::move(client));
+            if (held_client != nullptr) {
+              (void)held_state->startup_promise->SetValue(
+                  std::move(held_client));
             }
           },
       .on_message =
-          [weak](std::string raw) {
-            std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr) {
+          [weak](const std::string& raw) {
+            std::shared_ptr<State> held_state = weak.lock();
+            if (held_state == nullptr) {
               return;
             }
             absl::StatusOr<SignallingMessage> message =
                 SignallingMessage::FromJson(raw);
             if (!message.ok()) {
-              Fail(state, message.status());
+              Fail(held_state, message.status());
               return;
             }
             bool start = false;
             bool wrong_recipient = false;
             {
-              thread::MutexLock lock(&state->mu);
-              if (state->closed) {
+              thread::MutexLock lock(&held_state->mu);
+              if (held_state->closed) {
                 return;
               }
               if (!message->recipient.empty() &&
-                  message->recipient != state->identity) {
+                  message->recipient != held_state->identity) {
                 wrong_recipient = true;
               } else {
-                state->incoming.push_back(std::move(*message));
-                if (!state->pumping) {
-                  state->pumping = true;
+                held_state->incoming.push_back(std::move(*message));
+                if (!held_state->pumping) {
+                  held_state->pumping = true;
                   start = true;
                 }
               }
             }
             if (wrong_recipient) {
-              Fail(state, absl::PermissionDeniedError(
-                              "Signalling message has the wrong recipient"));
+              Fail(held_state,
+                   absl::PermissionDeniedError(
+                       "Signalling message has the wrong recipient"));
               return;
             }
             if (start) {
-              a11::Schedule([state]() { Pump(state); });
+              a11::Schedule([held_state]() { Pump(held_state); });
             }
           },
       .on_error =
           [weak](absl::Status status) {
-            if (std::shared_ptr<State> state = weak.lock(); state != nullptr) {
-              Fail(state, std::move(status));
+            if (std::shared_ptr<State> held_state = weak.lock();
+                held_state != nullptr) {
+              Fail(held_state, std::move(status));
             }
           },
       .on_closed =
           [weak]() {
-            if (std::shared_ptr<State> state = weak.lock(); state != nullptr) {
-              Fail(state,
+            if (std::shared_ptr<State> held_state = weak.lock();
+                held_state != nullptr) {
+              Fail(held_state,
                    absl::UnavailableError("Signalling WebSocket was closed"));
             }
           },
@@ -271,7 +275,7 @@ void WebSocketSignallingClient::Pump(const std::shared_ptr<State>& state) {
       state->incoming.pop_front();
       callback = state->on_message;
     }
-    const absl::Status status = callback(std::move(message)).Await().status();
+    absl::Status status = callback(std::move(message)).Await().status();
     if (!status.ok()) {
       Fail(state, std::move(status));
       return;
@@ -434,55 +438,63 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
           state->options.bind_address, state->options.port,
           [weak](HttpRequest request,
                  std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
-            std::shared_ptr<State> state = weak.lock();
-            if (state == nullptr)
+            std::shared_ptr<State> held_state = weak.lock();
+            if (held_state == nullptr) {
               return a11::FailedTask(
                   absl::CancelledError("Signalling server stopped"));
+            }
             if (request.method != "CONNECT" ||
                 request.protocol != "websocket" ||
-                !absl::StartsWith(request.path, state->options.path_prefix) ||
-                request.path.size() <= state->options.path_prefix.size()) {
+                !absl::StartsWith(request.path,
+                                  held_state->options.path_prefix) ||
+                request.path.size() <= held_state->options.path_prefix.size()) {
               absl::Status status = response->SendResponse(
                   404, {{"content-type", "text/plain; charset=utf-8"}},
                   "Signalling endpoint not found");
               return status.ok() ? a11::ReadyTask() : a11::FailedTask(status);
             }
             std::string identity =
-                request.path.substr(state->options.path_prefix.size());
+                request.path.substr(held_state->options.path_prefix.size());
             const size_t suffix = identity.find_first_of("?#");
-            if (suffix != std::string::npos)
+            if (suffix != std::string::npos) {
               identity.erase(suffix);
+            }
             absl::Status validation = data::ValidateName(identity);
-            if (!validation.ok())
+            if (!validation.ok()) {
               return a11::FailedTask(validation);
+            }
 
             absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
                 internal::MakeHttp2WebSocketServerChannel(
                     std::move(request), std::move(response),
-                    state->options.max_message_size);
-            if (!channel.ok())
+                    held_state->options.max_message_size);
+            if (!channel.ok()) {
               return a11::FailedTask(channel.status());
+            }
             std::weak_ptr<internal::BinaryChannel> weak_channel = *channel;
             absl::StatusOr<std::shared_ptr<SignallingEndpoint>> endpoint =
-                state->service->Connect(
+                held_state->service->Connect(
                     identity, [weak_channel](SignallingMessage message) {
-                      std::shared_ptr<internal::BinaryChannel> channel =
+                      std::shared_ptr<internal::BinaryChannel> held_channel =
                           weak_channel.lock();
-                      if (channel == nullptr) {
+                      if (held_channel == nullptr) {
                         return a11::FailedTask(absl::UnavailableError(
                             "Signalling WebSocket disconnected"));
                       }
                       absl::StatusOr<std::string> encoded = message.ToJson();
-                      if (!encoded.ok())
+                      if (!encoded.ok()) {
                         return a11::FailedTask(encoded.status());
-                      absl::Status sent = channel->Send(std::move(*encoded));
+                      }
+                      absl::Status sent =
+                          held_channel->Send(std::move(*encoded));
                       return sent.ok() ? a11::ReadyTask()
                                        : a11::FailedTask(sent);
                     });
-            if (!endpoint.ok())
+            if (!endpoint.ok()) {
               return a11::FailedTask(endpoint.status());
+            }
 
-            std::weak_ptr<State> state_weak = state;
+            std::weak_ptr<State> state_weak = held_state;
             const std::string pinned_identity = identity;
             std::weak_ptr<SignallingEndpoint> endpoint_weak = *endpoint;
             internal::BinaryChannelCallbacks callbacks{
@@ -492,36 +504,40 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
                      pinned_identity](std::string raw) {
                       absl::StatusOr<SignallingMessage> message =
                           SignallingMessage::FromJson(raw);
-                      std::shared_ptr<SignallingEndpoint> endpoint =
+                      std::shared_ptr<SignallingEndpoint> held_endpoint =
                           endpoint_weak.lock();
-                      if (!message.ok() || endpoint == nullptr ||
+                      if (!message.ok() || held_endpoint == nullptr ||
                           (!message->sender.empty() &&
                            message->sender != pinned_identity)) {
-                        if (std::shared_ptr<State> state = state_weak.lock();
-                            state != nullptr)
-                          Remove(state, pinned_identity);
+                        if (std::shared_ptr<State> alive = state_weak.lock();
+                            alive != nullptr) {
+                          Remove(alive, pinned_identity);
+                        }
                         return;
                       }
                       message->sender = pinned_identity;
-                      if (!endpoint->Send(std::move(*message)).ok()) {
-                        if (std::shared_ptr<State> state = state_weak.lock();
-                            state != nullptr)
-                          Remove(state, pinned_identity);
+                      if (!held_endpoint->Send(std::move(*message)).ok()) {
+                        if (std::shared_ptr<State> alive = state_weak.lock();
+                            alive != nullptr) {
+                          Remove(alive, pinned_identity);
+                        }
                       }
                     },
                 .on_error =
                     [state_weak, pinned_identity](absl::Status status) {
                       LOG(ERROR) << "Signalling WebSocket for "
                                  << pinned_identity << " failed: " << status;
-                      if (std::shared_ptr<State> state = state_weak.lock();
-                          state != nullptr)
-                        Remove(state, pinned_identity);
+                      if (std::shared_ptr<State> alive = state_weak.lock();
+                          alive != nullptr) {
+                        Remove(alive, pinned_identity);
+                      }
                     },
                 .on_closed =
                     [state_weak, pinned_identity]() {
-                      if (std::shared_ptr<State> state = state_weak.lock();
-                          state != nullptr)
-                        Remove(state, pinned_identity);
+                      if (std::shared_ptr<State> alive = state_weak.lock();
+                          alive != nullptr) {
+                        Remove(alive, pinned_identity);
+                      }
                     },
                 .on_buffered_amount_low = []() {},
             };
@@ -531,19 +547,19 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
               return a11::FailedTask(validation);
             }
             {
-              thread::MutexLock lock(&state->mu);
-              if (!state->running) {
+              thread::MutexLock lock(&held_state->mu);
+              if (!held_state->running) {
                 (void)(*endpoint)->Close();
                 return a11::FailedTask(
                     absl::CancelledError("Signalling server stopped"));
               }
-              state->connections.insert_or_assign(
+              held_state->connections.insert_or_assign(
                   identity, State::Connection{.channel = *channel,
                                               .endpoint = *endpoint});
             }
             validation = (*channel)->Open();
             if (!validation.ok()) {
-              Remove(state, identity);
+              Remove(held_state, identity);
               return a11::FailedTask(validation);
             }
             return a11::ReadyTask();
@@ -563,7 +579,7 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
 }
 
 void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
-                                       std::string identity) {
+                                       const std::string& identity) {
   State::Connection connection;
   {
     thread::MutexLock lock(&state->mu);

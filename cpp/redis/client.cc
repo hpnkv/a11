@@ -910,7 +910,7 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     std::vector<QueuedCommand> commands;
     commands.swap(queued_commands);
     for (QueuedCommand& command : commands) {
-      SendCommand(std::move(command.request));
+      SendCommand(command.request);
     }
     for (auto& [channel, state] : channels) {
       EnsureSubscribed(channel, &state);
@@ -933,10 +933,10 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
       queued_commands.push_back(QueuedCommand{.request = std::move(request)});
       return;
     }
-    SendCommand(std::move(request));
+    SendCommand(request);
   }
 
-  void SendCommand(std::shared_ptr<CommandRequest> request) {
+  void SendCommand(const std::shared_ptr<CommandRequest>& request) {
     if (request->completed.load(std::memory_order_acquire)) {
       return;
     }
@@ -1007,7 +1007,7 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     channel->command_sent = true;
   }
 
-  void RemoveSubscription(std::string channel_name,
+  void RemoveSubscription(const std::string& channel_name,
                           const Subscription::State* listener) {
     const auto found = channels.find(channel_name);
     if (found == channels.end()) {
@@ -1303,7 +1303,7 @@ a11::Future<Reply> Client::Eval(std::string script,
   }
   std::vector<std::string> command;
   command.reserve(keys.size() + arguments.size() + 3);
-  command.push_back("EVAL");
+  command.emplace_back("EVAL");
   command.push_back(std::move(script));
   command.push_back(std::to_string(keys.size()));
   for (std::string& key : keys) {

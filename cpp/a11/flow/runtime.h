@@ -50,21 +50,27 @@ class CompiledProgram {
   static absl::StatusOr<std::shared_ptr<CompiledProgram>> Compile(
       std::string source, std::string source_name = {});
 
-  const Program& program() const { return resolved_.program; }
-  const std::string& source() const { return source_; }
-  const std::string& source_name() const { return source_name_; }
-  const std::vector<Diagnostic>& diagnostics() const {
+  [[nodiscard]] const Program& program() const { return resolved_.program; }
+
+  [[nodiscard]] const std::string& source() const { return source_; }
+
+  [[nodiscard]] const std::string& source_name() const { return source_name_; }
+
+  [[nodiscard]] const std::vector<Diagnostic>& diagnostics() const {
     return resolved_.diagnostics;
   }
 
   /// The flows in the order they were declared.
-  const std::vector<ResolvedFlow>& flows() const { return resolved_.flows; }
+  [[nodiscard]] const std::vector<ResolvedFlow>& flows() const {
+    return resolved_.flows;
+  }
 
   /// The flow of this name, or `nullptr`. Never the entry flow.
-  const ResolvedFlow* absl_nullable Flow(std::string_view name) const;
+  [[nodiscard]] const ResolvedFlow* absl_nullable Flow(
+      std::string_view name) const;
 
   /// The file's entry point -- `flow { ... }` -- or `nullptr`.
-  const ResolvedFlow* absl_nullable Entry() const;
+  [[nodiscard]] const ResolvedFlow* absl_nullable Entry() const;
 
  private:
   CompiledProgram() = default;

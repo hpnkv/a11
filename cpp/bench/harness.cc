@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <numeric>
@@ -14,6 +13,7 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
+#include <cmath>
 #include <nlohmann/json.hpp>
 
 #if defined(__APPLE__)
@@ -38,8 +38,7 @@ std::map<std::string, double> RateMetrics(std::int64_t elapsed_ns,
                                           std::int64_t iterations,
                                           std::int64_t per_op_items,
                                           std::int64_t per_op_bytes) {
-  const double seconds =
-      std::max(static_cast<double>(elapsed_ns) / 1e9, 1e-9);
+  const double seconds = std::max(static_cast<double>(elapsed_ns) / 1e9, 1e-9);
   std::map<std::string, double> metrics{
       {"ops_per_s", static_cast<double>(iterations) / seconds},
       {"ns_per_op",
@@ -62,25 +61,37 @@ constexpr struct {
   const char* label;
   const char* metric;
 } kColumns[] = {
-    {"ops/s", "ops_per_s"},     {"items/s", "items_per_s"},
-    {"p50 us", "p50_us"},       {"p99 us", "p99_us"},
-    {"MiB/s", "mib_per_s"},     {"bytes ea", "bytes_each"},
-    {"cores", "cores_busy"},    {"cpu us/op", "cpu_us_per_op"},
+    {"ops/s", "ops_per_s"},  {"items/s", "items_per_s"},
+    {"p50 us", "p50_us"},    {"p99 us", "p99_us"},
+    {"MiB/s", "mib_per_s"},  {"bytes ea", "bytes_each"},
+    {"cores", "cores_busy"}, {"cpu us/op", "cpu_us_per_op"},
 };
 
 std::string RenderCell(double value, const std::string& metric) {
   if (metric == "ops_per_s" || metric == "items_per_s") {
-    if (value >= 1e6) return absl::StrFormat("%.2fM", value / 1e6);
-    if (value >= 1e3) return absl::StrFormat("%.1fk", value / 1e3);
+    if (value >= 1e6) {
+      return absl::StrFormat("%.2fM", value / 1e6);
+    }
+    if (value >= 1e3) {
+      return absl::StrFormat("%.1fk", value / 1e3);
+    }
     return absl::StrFormat("%.0f", value);
   }
   if (metric == "bytes_each") {
-    if (value >= 1048576.0) return absl::StrFormat("%.2fM", value / 1048576.0);
-    if (value >= 1024.0) return absl::StrFormat("%.1fK", value / 1024.0);
+    if (value >= 1048576.0) {
+      return absl::StrFormat("%.2fM", value / 1048576.0);
+    }
+    if (value >= 1024.0) {
+      return absl::StrFormat("%.1fK", value / 1024.0);
+    }
     return absl::StrFormat("%.0f", value);
   }
-  if (value >= 1000.0) return absl::StrFormat("%.0f", value);
-  if (value >= 10.0) return absl::StrFormat("%.1f", value);
+  if (value >= 1000.0) {
+    return absl::StrFormat("%.0f", value);
+  }
+  if (value >= 10.0) {
+    return absl::StrFormat("%.1f", value);
+  }
   return absl::StrFormat("%.3f", value);
 }
 
@@ -94,7 +105,9 @@ std::string Label(const Result& result) {
 
 }  // namespace
 
-void Recorder::Add(Result result) { results_.push_back(std::move(result)); }
+void Recorder::Add(Result result) {
+  results_.push_back(std::move(result));
+}
 
 void Recorder::PrintTable(const std::string& only_suite) const {
   if (results_.empty()) {
@@ -107,7 +120,9 @@ void Recorder::PrintTable(const std::string& only_suite) const {
         results_.begin(), results_.end(), [&](const Result& result) {
           return result.metrics.find(column.metric) != result.metrics.end();
         });
-    if (any) present.emplace_back(column.label, column.metric);
+    if (any) {
+      present.emplace_back(column.label, column.metric);
+    }
   }
   // Then anything recorded that kColumns does not name, rather than dropping it.
   // A metric a suite went to the trouble of measuring and does not appear is
@@ -118,11 +133,11 @@ void Recorder::PrintTable(const std::string& only_suite) const {
   std::vector<std::string> extras;
   for (const Result& result : results_) {
     for (const auto& [metric, value] : result.metrics) {
-      const bool known =
-          std::any_of(present.begin(), present.end(),
-                      [&](const auto& entry) { return entry.second == metric; });
-      if (known || std::find(extras.begin(), extras.end(), metric) !=
-                       extras.end()) {
+      const bool known = std::any_of(
+          present.begin(), present.end(),
+          [&](const auto& entry) { return entry.second == metric; });
+      if (known ||
+          std::find(extras.begin(), extras.end(), metric) != extras.end()) {
         continue;
       }
       extras.push_back(metric);
@@ -143,8 +158,7 @@ void Recorder::PrintTable(const std::string& only_suite) const {
     if (!only_suite.empty() && result.suite != only_suite) {
       continue;
     }
-    if (std::find(suites.begin(), suites.end(), result.suite) ==
-        suites.end()) {
+    if (std::find(suites.begin(), suites.end(), result.suite) == suites.end()) {
       suites.push_back(result.suite);
     }
   }
@@ -157,15 +171,17 @@ void Recorder::PrintTable(const std::string& only_suite) const {
     std::printf("\n[%s]\n%s\n%s\n", suite.c_str(), header.c_str(),
                 std::string(header.size(), '-').c_str());
     for (const Result& result : results_) {
-      if (result.suite != suite) continue;
+      if (result.suite != suite) {
+        continue;
+      }
       std::string row = absl::StrFormat("%-*s", width, Label(result));
       for (const auto& [label, metric] : present) {
         const auto found = result.metrics.find(metric);
         absl::StrAppend(
-            &row, absl::StrFormat(
-                      "%12s", found == result.metrics.end()
-                                  ? "-"
-                                  : RenderCell(found->second, metric)));
+            &row,
+            absl::StrFormat("%12s", found == result.metrics.end()
+                                        ? "-"
+                                        : RenderCell(found->second, metric)));
       }
       std::printf("%s\n", row.c_str());
       if (!result.note.empty()) {
@@ -201,13 +217,17 @@ bool Recorder::WriteJson(const std::string& path) const {
     });
   }
   std::ofstream out(path);
-  if (!out) return false;
+  if (!out) {
+    return false;
+  }
   out << payload.dump(2) << "\n";
   return out.good();
 }
 
 std::map<std::string, double> Percentiles(std::vector<double> samples_ns) {
-  if (samples_ns.empty()) return {};
+  if (samples_ns.empty()) {
+    return {};
+  }
   std::sort(samples_ns.begin(), samples_ns.end());
   const auto at = [&](double fraction) {
     const auto index = static_cast<size_t>(std::max(
@@ -222,8 +242,9 @@ std::map<std::string, double> Percentiles(std::vector<double> samples_ns) {
       {"p99_us", at(0.99)},
       {"max_us", samples_ns.back() / 1000.0},
       {"mean_us", total / static_cast<double>(samples_ns.size()) / 1000.0},
-      {"ops_per_s",
-       total > 0 ? static_cast<double>(samples_ns.size()) / (total / 1e9) : 0.0},
+      {"ops_per_s", total > 0
+                        ? static_cast<double>(samples_ns.size()) / (total / 1e9)
+                        : 0.0},
   };
   return stats;
 }
@@ -231,7 +252,9 @@ std::map<std::string, double> Percentiles(std::vector<double> samples_ns) {
 std::map<std::string, double> Throughput(
     const std::function<void(std::int64_t)>& operation, std::int64_t iterations,
     std::int64_t warmup, std::int64_t per_op_items, std::int64_t per_op_bytes) {
-  for (std::int64_t index = 0; index < warmup; ++index) operation(index);
+  for (std::int64_t index = 0; index < warmup; ++index) {
+    operation(index);
+  }
   const std::int64_t started = NowNs();
   for (std::int64_t index = 0; index < iterations; ++index) {
     operation(warmup + index);
@@ -242,7 +265,9 @@ std::map<std::string, double> Throughput(
 std::map<std::string, double> Latency(
     const std::function<void(std::int64_t)>& operation, std::int64_t iterations,
     std::int64_t warmup) {
-  for (std::int64_t index = 0; index < warmup; ++index) operation(index);
+  for (std::int64_t index = 0; index < warmup; ++index) {
+    operation(index);
+  }
   std::vector<double> samples;
   samples.reserve(static_cast<size_t>(iterations));
   for (std::int64_t index = 0; index < iterations; ++index) {
@@ -260,13 +285,17 @@ std::uint64_t CurrentRssBytes() {
   proc_taskinfo info{};
   const int written =
       proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, sizeof(info));
-  if (written != sizeof(info)) return 0;
+  if (written != sizeof(info)) {
+    return 0;
+  }
   return info.pti_resident_size;
 #elif defined(__linux__)
   std::ifstream statm("/proc/self/statm");
   long pages_total = 0;
   long pages_resident = 0;
-  if (!(statm >> pages_total >> pages_resident)) return 0;
+  if (!(statm >> pages_total >> pages_resident)) {
+    return 0;
+  }
   return static_cast<std::uint64_t>(pages_resident) *
          static_cast<std::uint64_t>(sysconf(_SC_PAGE_SIZE));
 #else
@@ -288,10 +317,9 @@ double MemorySlope(const std::function<void(std::int64_t)>& make,
   // Least squares over the later points only: the first stage absorbs whatever
   // the allocator had already reserved.
   const std::vector<std::pair<double, double>> usable =
-      points.size() > 2
-          ? std::vector<std::pair<double, double>>(points.begin() + 1,
-                                                   points.end())
-          : points;
+      points.size() > 2 ? std::vector<std::pair<double, double>>(
+                              points.begin() + 1, points.end())
+                        : points;
   double mean_x = 0;
   double mean_y = 0;
   for (const auto& [x, y] : usable) {
@@ -310,19 +338,19 @@ double MemorySlope(const std::function<void(std::int64_t)>& make,
     std::vector<std::string> rendered;
     rendered.reserve(points.size());
     for (const auto& [x, y] : points) {
-      rendered.push_back(
-          absl::StrFormat("%.0f:%.0fK", x, y / 1024.0));
+      rendered.push_back(absl::StrFormat("%.0f:%.0fK", x, y / 1024.0));
     }
     *trail = absl::StrCat(usable.size(), "-point fit over ",
                           absl::StrJoin(rendered, " "));
   }
-  if (variance == 0) return 0.0;
+  if (variance == 0) {
+    return 0.0;
+  }
   return std::max(covariance / variance, 0.0);
 }
 
 std::int64_t Scaled(std::int64_t count, double scale, std::int64_t floor) {
-  return std::max(static_cast<std::int64_t>(
-                      static_cast<double>(count) * scale),
+  return std::max(static_cast<std::int64_t>(static_cast<double>(count) * scale),
                   floor);
 }
 

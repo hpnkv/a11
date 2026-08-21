@@ -26,13 +26,13 @@ ActionSchema Schema(std::string name) {
 }
 
 ActionHandler OkHandler() {
-  return [](std::shared_ptr<Action>) {
+  return [](const std::shared_ptr<Action>&) {
     return a11::SubmitTask([]() -> absl::Status { return absl::OkStatus(); });
   };
 }
 
 ActionHandler FailHandler() {
-  return [](std::shared_ptr<Action>) {
+  return [](const std::shared_ptr<Action>&) {
     return a11::SubmitTask(
         []() -> absl::Status { return absl::DataLossError("boom"); });
   };
@@ -143,7 +143,7 @@ TEST_F(ActionSpanTest, FailingHandlerRecordsErrorStatus) {
 TEST_F(ActionSpanTest, ExposesOwnTraceAndSpanIds) {
   std::string handler_trace_id;
   std::string handler_span_id;
-  ActionHandler capture = [&](std::shared_ptr<Action> action) {
+  ActionHandler capture = [&](const std::shared_ptr<Action>& action) {
     return a11::SubmitTask([&, action]() -> absl::Status {
       handler_trace_id = action->TraceId();
       handler_span_id = action->SpanId();
@@ -170,7 +170,7 @@ TEST_F(ActionSpanTest, ExposesOwnTraceAndSpanIds) {
 }
 
 TEST_F(ActionSpanTest, UserSetSpanStatusIsNotOverridden) {
-  ActionHandler mark_error = [](std::shared_ptr<Action> action) {
+  ActionHandler mark_error = [](const std::shared_ptr<Action>& action) {
     return a11::SubmitTask([action]() -> absl::Status {
       action->SetSpanStatus(obs::SpanStatus::kError, "boom");
       return absl::OkStatus();  // action itself succeeds
@@ -192,7 +192,7 @@ TEST_F(ActionSpanTest, UserSetSpanStatusIsNotOverridden) {
 
 TEST_F(ActionSpanTest, UntracedActionHasEmptyIds) {
   std::string trace_id = "unset";
-  ActionHandler capture = [&](std::shared_ptr<Action> action) {
+  ActionHandler capture = [&](const std::shared_ptr<Action>& action) {
     return a11::SubmitTask([&, action]() -> absl::Status {
       trace_id = action->TraceId();
       return absl::OkStatus();

@@ -25,12 +25,6 @@
  *   a11_bench --json native.json    # records the Python runner can diff
  */
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <csignal>
 #include <cstdint>
@@ -49,14 +43,20 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <arpa/inet.h>
 #include <boost/fiber/fiber.hpp>
 #include <boost/fiber/operations.hpp>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <nlohmann/json.hpp>
+#include <sys/socket.h>
+#include <unistd.h>
 // The raw-webrtc reference row drives libdatachannel directly, with no A11
 // between it and the data channel; a11/net/webrtc_wire_stream.h only
 // forward-declares these.
@@ -87,6 +87,7 @@
 #include "a11/service/service.h"
 #include "a11/service/session.h"
 #include "a11/stores/local_chunk_store.h"
+#include "absl/strings/match.h"
 #include "bench/harness.h"
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
@@ -102,7 +103,21 @@ namespace {
 std::string g_only;
 
 bool Wanted(std::string_view name) {
-  return g_only.empty() || name.find(g_only) != std::string::npos;
+  return g_only.empty() || absl::StrContains(name, g_only);
+}
+
+/// An environment knob as an integer, or nullopt when unset or not a number.
+///
+/// Every tuning variable in this file goes through here rather than through
+/// `std::atoi`, which reads a typo as zero -- and a benchmark quietly run with
+/// a knob at zero is a measurement of the wrong thing.
+std::optional<int> EnvironmentInt(const char* name) {
+  const char* setting = std::getenv(name);
+  int value = 0;
+  if (setting == nullptr || !absl::SimpleAtoi(setting, &value)) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 absl::Time Deadline() {
@@ -116,10 +131,12 @@ data::NodeFragment Fragment(std::uint32_t seq, const std::string& payload,
 }
 
 std::string Human(std::int64_t size) {
-  if (size >= 1048576)
+  if (size >= 1048576) {
     return absl::StrCat(size / 1048576, "M");
-  if (size >= 1024)
+  }
+  if (size >= 1024) {
     return absl::StrCat(size / 1024, "K");
+  }
   return absl::StrCat(size, "B");
 }
 
@@ -162,8 +179,7 @@ void DataSuite(Recorder& recorder, double scale) {
                      std::string(encoded.status().message()).c_str());
         continue;
       }
-      const std::int64_t wire_bytes =
-          static_cast<std::int64_t>(encoded->data.size());
+      const auto wire_bytes = static_cast<std::int64_t>(encoded->data.size());
       const std::int64_t iterations =
           Scaled(size <= 1024 ? 200000 : 20000, scale, 100);
       const std::string label =
@@ -179,7 +195,7 @@ void DataSuite(Recorder& recorder, double scale) {
                         iterations, iterations / 10, 1, wire_bytes),
                     .params = {{"repr", label}, {"size", Human(size)}}});
 
-      const data::Chunk source = *encoded;
+      const data::Chunk& source = *encoded;
       recorder.Add({.suite = "data",
                     .name = "from_chunk",
                     .metrics = Throughput(
@@ -207,10 +223,10 @@ void DataSuite(Recorder& recorder, double scale) {
             .continued = true});
       }
       absl::StatusOr<data::Bytes> encoded = message.ToMsgpack();
-      if (!encoded.ok())
+      if (!encoded.ok()) {
         continue;
-      const std::int64_t wire_bytes =
-          static_cast<std::int64_t>(encoded->size());
+      }
+      const auto wire_bytes = static_cast<std::int64_t>(encoded->size());
       const std::int64_t iterations = Scaled(
           std::max<std::int64_t>(
               400000 / (fragments * std::max<std::int64_t>(size / 64, 1)), 200),
@@ -227,7 +243,7 @@ void DataSuite(Recorder& recorder, double scale) {
                     .params = {{"frags", absl::StrCat(fragments)},
                                {"size", Human(size)}}});
 
-      const data::Bytes source = *encoded;
+      const data::Bytes& source = *encoded;
       recorder.Add({.suite = "data",
                     .name = "wire_from_msgpack",
                     .metrics = Throughput(
@@ -356,11 +372,13 @@ void StoresSuite(Recorder& recorder, double scale) {
         [&](std::int64_t) {
           auto batch = store->Next(Deadline(), static_cast<size_t>(limit))
                            .Await(Deadline());
-          if (!batch.ok())
+          if (!batch.ok()) {
             return;
+          }
           for (const auto& fragment : *batch) {
-            if (fragment.has_value())
+            if (fragment.has_value()) {
               ++drained;
+            }
           }
         },
         count / limit, 0, limit, limit * 256);
@@ -383,8 +401,9 @@ void StoresSuite(Recorder& recorder, double scale) {
           for (std::int64_t index = 0; index < n; ++index) {
             auto store =
                 stores::LocalChunkStore::Create(absl::StrCat("empty-", made++));
-            if (store.ok())
+            if (store.ok()) {
               held.push_back(*store);
+            }
           }
         },
         std::vector<std::int64_t>(6, stage), &trail);
@@ -450,8 +469,9 @@ void NodesSuite(Recorder& recorder, double scale) {
                       [&](std::int64_t index) {
                         auto store = stores::LocalChunkStore::Create(
                             absl::StrCat("created-", index));
-                        if (!store.ok())
+                        if (!store.ok()) {
                           return;
+                        }
                         auto node = nodes::AsyncNode::Create(*store);
                         (void)node;
                       },
@@ -488,8 +508,9 @@ void NodesSuite(Recorder& recorder, double scale) {
     const auto metrics = Throughput(
         [&](std::int64_t) {
           auto fragment = node->NextFragment().Await(Deadline());
-          if (fragment.ok() && fragment->has_value())
+          if (fragment.ok() && fragment->has_value()) {
             ++seen;
+          }
         },
         count, 0, 1, static_cast<std::int64_t>(token.data.size()));
     recorder.Add({.suite = "nodes",
@@ -509,11 +530,13 @@ void NodesSuite(Recorder& recorder, double scale) {
           for (std::int64_t index = 0; index < n; ++index) {
             auto store = stores::LocalChunkStore::Create(
                 absl::StrCat("resident-", made++));
-            if (!store.ok())
+            if (!store.ok()) {
               continue;
+            }
             auto node = nodes::AsyncNode::Create(*store);
-            if (node.ok())
+            if (node.ok()) {
               held.push_back(*node);
+            }
           }
         },
         std::vector<std::int64_t>(6, stage), &trail);
@@ -571,27 +594,29 @@ actions::ActionSchema EchoSchema() {
 // was lost; below it, the server side is where the work stopped.
 std::atomic<std::int64_t> g_echo_handler_replies{0};
 
-
 actions::ActionHandler EchoHandler() {
   return [](std::shared_ptr<actions::Action> action) {
     return a11::SubmitTask([action = std::move(action)]() -> absl::Status {
       auto input = action->GetInput("input");
-      if (!input.ok())
+      if (!input.ok()) {
         return input.status();
+      }
       auto chunk = (*input)->NextChunk().Await();
-      if (!chunk.ok())
+      if (!chunk.ok()) {
         return chunk.status();
+      }
       if (!chunk->has_value()) {
         return absl::FailedPreconditionError("echo input ended early");
       }
       auto output = action->GetOutput("output");
-      if (!output.ok())
+      if (!output.ok()) {
         return output.status();
-      const absl::Status written = (*output)
-                                       ->PutChunk(std::move(**chunk),
-                                                  std::nullopt, true)
-                                       .Await()
-                                       .status();
+      }
+      const absl::Status written =
+          (*output)
+              ->PutChunk(std::move(**chunk), std::nullopt, true)
+              .Await()
+              .status();
       if (written.ok()) {
         g_echo_handler_replies.fetch_add(1, std::memory_order_relaxed);
       }
@@ -631,7 +656,7 @@ actions::ActionSchema WideSchema(int width) {
 /// A handler that spawns a fibre and finishes, mirroring a Python coroutine
 /// handler: the interesting part is the spawn, not the body.
 actions::ActionHandler FiberNoopHandler() {
-  return [](std::shared_ptr<actions::Action>) {
+  return [](const std::shared_ptr<actions::Action>&) {
     return a11::SubmitTask([]() -> absl::Status { return absl::OkStatus(); });
   };
 }
@@ -639,7 +664,7 @@ actions::ActionHandler FiberNoopHandler() {
 /// A handler that is already finished when it is handed back. No fibre, no
 /// scheduling -- whatever an action costs with this is the lifecycle alone.
 actions::ActionHandler InlineNoopHandler() {
-  return [](std::shared_ptr<actions::Action>) {
+  return [](const std::shared_ptr<actions::Action>&) {
     return a11::ReadyTask();
   };
 }
@@ -696,11 +721,14 @@ void ActionsSuite(Recorder& recorder, double scale) {
                       [&, noop](std::int64_t index) {
                         auto created = actions::Action::Create(
                             portless, absl::StrCat("portless-", index), noop);
-                        if (!created.ok())
+                        if (!created.ok()) {
                           return;
-                        std::shared_ptr<actions::Action> action = *created;
-                        if (!action->Run().ok())
+                        }
+                        const std::shared_ptr<actions::Action>& action =
+                            *created;
+                        if (!action->Run().ok()) {
                           return;
+                        }
                         auto done = action->Wait().Await(Deadline());
                         (void)done;
                       },
@@ -726,22 +754,26 @@ void ActionsSuite(Recorder& recorder, double scale) {
                     [&](std::int64_t index) {
                       auto created = actions::Action::Create(
                           schema, absl::StrCat("local-", index), handler);
-                      if (!created.ok())
+                      if (!created.ok()) {
                         return;
-                      std::shared_ptr<actions::Action> action = *created;
+                      }
+                      const std::shared_ptr<actions::Action>& action = *created;
                       auto input = action->GetInput("input", false);
-                      if (!input.ok())
+                      if (!input.ok()) {
                         return;
+                      }
                       auto put = (*input)
                                      ->PutChunk(data::Chunk{.data = "payload"},
                                                 std::nullopt, true)
                                      .Await(Deadline());
                       (void)put;
-                      if (!action->Run().ok())
+                      if (!action->Run().ok()) {
                         return;
+                      }
                       auto output = action->GetOutput("output", false);
-                      if (!output.ok())
+                      if (!output.ok()) {
                         return;
+                      }
                       auto chunk = (*output)->NextChunk().Await(Deadline());
                       (void)chunk;
                       auto done = action->Wait().Await(Deadline());
@@ -765,7 +797,7 @@ void ActionsSuite(Recorder& recorder, double scale) {
     // and then failed, or wrote some and exited -- and it is the only way this
     // row prices finalising 2*width real nodes.
     const actions::ActionHandler noop =
-        [width](std::shared_ptr<actions::Action> action) -> a11::Task {
+        [width](const std::shared_ptr<actions::Action>& action) -> a11::Task {
       for (int index = 0; index < width; ++index) {
         auto in = action->GetInput(absl::StrCat("in", index), false);
         (void)in;
@@ -783,11 +815,13 @@ void ActionsSuite(Recorder& recorder, double scale) {
              [&](std::int64_t index) {
                auto created = actions::Action::Create(
                    wide, absl::StrCat("wide-", width, "-", index), noop);
-               if (!created.ok())
+               if (!created.ok()) {
                  return;
-               std::shared_ptr<actions::Action> action = *created;
-               if (!action->Run().ok())
+               }
+               const std::shared_ptr<actions::Action>& action = *created;
+               if (!action->Run().ok()) {
                  return;
+               }
                auto done = action->Wait().Await(Deadline());
                (void)done;
              },
@@ -808,20 +842,23 @@ void ActionsSuite(Recorder& recorder, double scale) {
                  stores::LocalChunkStore::Create(absl::StrCat("np-a-", index));
              auto store_b =
                  stores::LocalChunkStore::Create(absl::StrCat("np-b-", index));
-             if (!store_a.ok() || !store_b.ok())
+             if (!store_a.ok() || !store_b.ok()) {
                return;
+             }
              auto first = nodes::AsyncNode::Create(*store_a);
              auto second = nodes::AsyncNode::Create(*store_b);
-             if (!first.ok() || !second.ok())
+             if (!first.ok() || !second.ok()) {
                return;
+             }
              auto wrote = (*first)
                               ->PutChunk(data::Chunk{.data = "payload"},
                                          std::nullopt, true)
                               .Await(Deadline());
              (void)wrote;
              auto read = (*first)->NextChunk().Await(Deadline());
-             if (!read.ok() || !read->has_value())
+             if (!read.ok() || !read->has_value()) {
                return;
+             }
              auto echoed = (*second)
                                ->PutChunk(std::move(**read), std::nullopt, true)
                                .Await(Deadline());
@@ -958,17 +995,17 @@ void SchedulingSuite(Recorder& recorder, double scale) {
   {
     const absl::Time base = absl::Now() + absl::Hours(1);
     std::atomic<std::int64_t> step{0};
-    recorder.Add(
-        {.suite = "scheduling",
-         .name = "post_at_earliest",
-         .metrics = Latency(
-             [&](std::int64_t) {
-               thread::PostAt(base - absl::Microseconds(step.fetch_add(
-                                         1, std::memory_order_relaxed)),
-                              [] {});
-             },
-             iterations / 4, iterations / 40),
-         .params = {}});
+    recorder.Add({.suite = "scheduling",
+                  .name = "post_at_earliest",
+                  .metrics = Latency(
+                      [&](std::int64_t) {
+                        thread::PostAt(
+                            base - absl::Microseconds(step.fetch_add(
+                                       1, std::memory_order_relaxed)),
+                            [] {});
+                      },
+                      iterations / 4, iterations / 40),
+                  .params = {}});
   }
 
   // The whole thing, for comparison against the rows above.
@@ -1076,7 +1113,7 @@ struct BenchPair {
   // connection rather than a configured one. The live-MTU row is the only user:
   // its whole point is that the value is applied to an association that is
   // already up, which is not something a factory can do.
-  std::function<void()> after_start;
+  std::function<void()> after_start = {};
 };
 
 // The slot is where the factory publishes the accepted peer, so the echo can
@@ -1346,9 +1383,8 @@ void MeasureStreamThroughput(Recorder& recorder, double scale,
   if (warmup > 0) {
     pump(warmup);
   }
-  auto metrics =
-      Throughput([&](std::int64_t) { pump(messages); }, 1, 0, messages,
-                 messages * size);
+  auto metrics = Throughput([&](std::int64_t) { pump(messages); }, 1, 0,
+                            messages, messages * size);
   if (stalled) {
     // The stream's status distinguishes the two things a stall can be: a
     // transport that failed (and says why) from one that is merely slow.
@@ -1414,10 +1450,9 @@ std::optional<BenchPair> WebSocketPair(
   // single-packet one. A11_BENCH_WS_SPLIT prices that: it is a wire-format
   // decision shared with the other languages' clients, so the number is worth
   // having before anyone changes the default.
-  const char* ws_split = std::getenv("A11_BENCH_WS_SPLIT");
-  if (ws_split != nullptr) {
-    const size_t split = static_cast<size_t>(std::max(1024, std::atoi(ws_split)));
-    options.framing.split_size = split;
+  if (const std::optional<int> ws_split = EnvironmentInt("A11_BENCH_WS_SPLIT");
+      ws_split.has_value()) {
+    options.framing.split_size = static_cast<size_t>(std::max(1024, *ws_split));
   }
   // HTTP/1.1 on both sides. What this row should price is WebSocket framing,
   // not ALPN, and offering h2 to a listener that does not serve it costs the
@@ -1435,8 +1470,9 @@ std::optional<BenchPair> WebSocketPair(
   const auto accepted = std::make_shared<std::shared_ptr<net::WireStream>>();
   absl::StatusOr<std::shared_ptr<net::WebSocketWireServer>> server =
       net::WebSocketWireServer::Create(
-          [peer_slot, accepted, shared_server, shared_done](
-              std::shared_ptr<net::WebSocketWireStream> stream) -> a11::Task {
+          [peer_slot, accepted, shared_server,
+           shared_done](const std::shared_ptr<net::WebSocketWireStream>& stream)
+              -> a11::Task {
             // Accepting here is what sends the 101.
             *accepted = stream;
             *peer_slot = stream;
@@ -1458,18 +1494,16 @@ std::optional<BenchPair> WebSocketPair(
   client_options.framing = options.framing;
   absl::StatusOr<std::shared_ptr<net::WebSocketWireStream>> client =
       net::WebSocketWireStream::CreateClient(
-          absl::StrCat("ws://127.0.0.1:", *port, "/bench"), {},
-          client_options);
+          absl::StrCat("ws://127.0.0.1:", *port, "/bench"), {}, client_options);
   if (!client.ok()) {
     std::fprintf(stderr, "  skip websocket: %s\n",
                  std::string(client.status().message()).c_str());
     (*server)->Stop().IgnoreError();
     return std::nullopt;
   }
-  const std::shared_ptr<net::WebSocketWireStream> holder = *client;
-  const std::shared_ptr<net::WebSocketWireServer> listener = *server;
-  return BenchPair{.client = holder,
-                   .close = [holder, listener, accepted] {
+  const std::shared_ptr<net::WebSocketWireStream>& holder = *client;
+  const std::shared_ptr<net::WebSocketWireServer>& listener = *server;
+  return BenchPair{.client = holder, .close = [holder, listener, accepted] {
                      holder->HalfClose().IgnoreError();
                      (void)holder->DrainOutgoingMessages().Await(Deadline());
                      listener->Stop().IgnoreError();
@@ -1492,12 +1526,9 @@ std::optional<BenchPair> HttpSseVariantPair(
     net::OnDone on_done) {
   net::HttpSseOptions client_options;
   client_options.outbound = outbound;
-  if (const char* posts = std::getenv("A11_BENCH_SSE_POSTS");
-      posts != nullptr) {
-    const int parsed = std::atoi(posts);
-    if (parsed > 0) {
-      client_options.max_concurrent_posts = static_cast<size_t>(parsed);
-    }
+  if (const std::optional<int> posts = EnvironmentInt("A11_BENCH_SSE_POSTS");
+      posts.value_or(0) > 0) {
+    client_options.max_concurrent_posts = static_cast<size_t>(*posts);
   }
   const auto shared_server =
       std::make_shared<net::OnMessage>(std::move(on_server));
@@ -1507,7 +1538,7 @@ std::optional<BenchPair> HttpSseVariantPair(
       net::HttpSseServer::Create(
           "127.0.0.1", 0,
           [peer_slot, accepted, shared_server, shared_done](
-              std::shared_ptr<net::HttpSseServerWireStream> stream)
+              const std::shared_ptr<net::HttpSseServerWireStream>& stream)
               -> a11::Task {
             *accepted = stream;
             *peer_slot = stream;
@@ -1528,10 +1559,9 @@ std::optional<BenchPair> HttpSseVariantPair(
     (*server)->Stop().IgnoreError();
     return std::nullopt;
   }
-  const std::shared_ptr<net::HttpSseClientWireStream> holder = *client;
-  const std::shared_ptr<net::HttpSseServer> listener = *server;
-  return BenchPair{.client = holder,
-                   .close = [holder, listener, accepted] {
+  const std::shared_ptr<net::HttpSseClientWireStream>& holder = *client;
+  const std::shared_ptr<net::HttpSseServer>& listener = *server;
+  return BenchPair{.client = holder, .close = [holder, listener, accepted] {
                      holder->HalfClose().IgnoreError();
                      (void)holder->DrainOutgoingMessages().Await(Deadline());
                      listener->Stop().IgnoreError();
@@ -1559,10 +1589,9 @@ std::optional<BenchPair> HttpSseStreamPair(
 // rendezvous server, but everything below it is real: ICE, DTLS, SCTP. The
 // accept runs on its own fibre because it does not return until the peer
 // connection is up, and the callback it runs in is on the negotiation path.
-std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
-                                          std::weak_ptr<net::WireStream>* peer_slot,
-                                          net::OnMessage on_server,
-                                          net::OnDone on_done) {
+std::optional<BenchPair> WebRtcVariantPair(
+    bool set_mtu_live, std::weak_ptr<net::WireStream>* peer_slot,
+    net::OnMessage on_server, net::OnDone on_done) {
   const std::shared_ptr<net::SignallingService> signalling =
       net::SignallingService::Create();
   const auto shared_server =
@@ -1573,18 +1602,17 @@ std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
   // how many packets a 64K message becomes and how they stripe across the
   // channels. A11_BENCH_RTC_SPLIT sweeps it.
   net::WebRtcConfiguration configuration;
-  const char* split = std::getenv("A11_BENCH_RTC_SPLIT");
-  if (split != nullptr) {
+  if (const std::optional<int> split = EnvironmentInt("A11_BENCH_RTC_SPLIT");
+      split.has_value()) {
     configuration.channel_split_size =
-        static_cast<size_t>(std::max(1024, std::atoi(split)));
+        static_cast<size_t>(std::max(1024, *split));
   }
   // The SCTP path MTU, which the raw-webrtc rows establish is worth ~3x at
   // 64 KiB and has a silent cliff above ~4 KiB. Same variable as those rows so
   // one sweep drives both and the A11 and bare columns stay comparable.
-  const char* mtu = std::getenv("A11_BENCH_RTC_MTU");
+  const std::optional<int> mtu = EnvironmentInt("A11_BENCH_RTC_MTU");
   const size_t requested_mtu =
-      mtu != nullptr && std::atoi(mtu) > 0 ? static_cast<size_t>(std::atoi(mtu))
-                                           : 0;
+      mtu.value_or(0) > 0 ? static_cast<size_t>(*mtu) : 0;
   // `webrtc` configures the MTU at construction; `webrtc-live-mtu` leaves the
   // configuration at the 1280 default and applies the same value *after* both
   // ends are up. The two rows must agree, and that agreement is the only direct
@@ -1597,16 +1625,17 @@ std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
   absl::StatusOr<std::shared_ptr<net::WebRtcWireServer>> server =
       net::WebRtcWireServer::Create(
           "bench-server", signalling,
-          [peer_slot, accepted, shared_server, shared_done](
-              std::shared_ptr<net::WebRtcWireStream> stream) -> a11::Task {
+          [peer_slot, accepted, shared_server,
+           shared_done](const std::shared_ptr<net::WebRtcWireStream>& stream)
+              -> a11::Task {
             *accepted = stream;
             *peer_slot = stream;
-            return a11::SubmitTask([stream, shared_server,
-                                    shared_done]() -> absl::Status {
-              return stream->Accept(*shared_server, *shared_done)
-                  .Await(Deadline())
-                  .status();
-            });
+            return a11::SubmitTask(
+                [stream, shared_server, shared_done]() -> absl::Status {
+                  return stream->Accept(*shared_server, *shared_done)
+                      .Await(Deadline())
+                      .status();
+                });
           },
           configuration);
   if (!server.ok()) {
@@ -1623,8 +1652,8 @@ std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
     (*server)->Stop().IgnoreError();
     return std::nullopt;
   }
-  const std::shared_ptr<net::WebRtcWireStream> holder = *client;
-  const std::shared_ptr<net::WebRtcWireServer> listener = *server;
+  const std::shared_ptr<net::WebRtcWireStream>& holder = *client;
+  const std::shared_ptr<net::WebRtcWireServer>& listener = *server;
   std::function<void()> after_start;
   if (!set_mtu_live && configuration.path_mtu_discovery && requested_mtu == 0) {
     // Wait for discovery to settle before measuring. The row has always claimed
@@ -1691,15 +1720,16 @@ std::optional<BenchPair> WebRtcVariantPair(bool set_mtu_live,
       }
     };
   }
-  return BenchPair{.client = holder,
-                   .close =
-                       [holder, listener, accepted, signalling] {
-                         holder->HalfClose().IgnoreError();
-                         (void)holder->DrainOutgoingMessages().Await(Deadline());
-                         listener->Stop().IgnoreError();
-                         accepted->reset();
-                       },
-                   .after_start = std::move(after_start)};
+  return BenchPair{
+      .client = holder,
+      .close =
+          [holder, listener, accepted, signalling] {
+            holder->HalfClose().IgnoreError();
+            (void)holder->DrainOutgoingMessages().Await(Deadline());
+            listener->Stop().IgnoreError();
+            accepted->reset();
+          },
+      .after_start = std::move(after_start)};
 }
 
 std::optional<BenchPair> WebRtcPair(std::weak_ptr<net::WireStream>* peer_slot,
@@ -1996,8 +2026,8 @@ void MeasureLoopbackThroughput(Recorder& recorder, double scale,
           }
           size_t offset = 0;
           while (offset < payload.size()) {
-            const ssize_t put =
-                ::write(client, payload.data() + offset, payload.size() - offset);
+            const ssize_t put = ::write(client, payload.data() + offset,
+                                        payload.size() - offset);
             if (put <= 0) {
               broken = true;
               return;
@@ -2049,13 +2079,10 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
   // 1280, so every message is fragmented to 1172-byte chunks whatever the path
   // can carry -- 57 DTLS records and 57 datagrams for one 64 KiB message.
   const auto env_size = [](const char* name) -> std::optional<size_t> {
-    const char* value = std::getenv(name);
-    if (value == nullptr) {
-      return std::nullopt;
-    }
-    const int parsed = std::atoi(value);
-    return parsed > 0 ? std::optional<size_t>(static_cast<size_t>(parsed))
-                      : std::nullopt;
+    const std::optional<int> parsed = EnvironmentInt(name);
+    return parsed.value_or(0) > 0
+               ? std::optional<size_t>(static_cast<size_t>(*parsed))
+               : std::nullopt;
   };
   if (const std::optional<size_t> mtu = env_size("A11_BENCH_RTC_MTU")) {
     configuration.mtu = *mtu;
@@ -2069,7 +2096,7 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
       settings.sendBufferSize = 32 * 1024 * 1024;
       settings.maxBurst = burst;
       settings.initialCongestionWindow = cwnd;
-      rtc::SetSctpSettings(std::move(settings));
+      rtc::SetSctpSettings(settings);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "  raw-webrtc: sctp settings: %s\n", error.what());
     }
@@ -2083,8 +2110,10 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
     bool peer_open = false;
     bool failed = false;
   };
+
   const auto sync = std::make_shared<Sync>();
-  const auto peer_channel = std::make_shared<std::shared_ptr<rtc::DataChannel>>();
+  const auto peer_channel =
+      std::make_shared<std::shared_ptr<rtc::DataChannel>>();
 
   std::shared_ptr<rtc::PeerConnection> client;
   std::shared_ptr<rtc::PeerConnection> server;
@@ -2126,28 +2155,27 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
   // The echo half, on whatever thread libdatachannel delivers on -- the same
   // place A11's own callback runs, so the comparison keeps that term.
   server->onDataChannel([sync, peer_channel, pipelined](
-                            std::shared_ptr<rtc::DataChannel> accepted) {
+                            const std::shared_ptr<rtc::DataChannel>& accepted) {
     *peer_channel = accepted;
     std::weak_ptr<rtc::DataChannel> weak = accepted;
-    accepted->onMessage(
-        [weak, pipelined](rtc::message_variant message) {
-          std::shared_ptr<rtc::DataChannel> reply = weak.lock();
-          if (reply == nullptr) {
-            return;
-          }
-          try {
-            if (pipelined) {
-              // One byte of credit per arriving message, exactly as the A11
-              // throughput row's peer sends, so the reverse direction does not
-              // distort the rate.
-              (void)reply->send(rtc::binary{std::byte{'y'}});
-            } else if (const rtc::binary* binary =
-                           std::get_if<rtc::binary>(&message);
-                       binary != nullptr) {
-              (void)reply->send(*binary);
-            }
-          } catch (...) {}
-        });
+    accepted->onMessage([weak, pipelined](rtc::message_variant message) {
+      std::shared_ptr<rtc::DataChannel> reply = weak.lock();
+      if (reply == nullptr) {
+        return;
+      }
+      try {
+        if (pipelined) {
+          // One byte of credit per arriving message, exactly as the A11
+          // throughput row's peer sends, so the reverse direction does not
+          // distort the rate.
+          (void)reply->send(rtc::binary{std::byte{'y'}});
+        } else if (const rtc::binary* binary =
+                       std::get_if<rtc::binary>(&message);
+                   binary != nullptr) {
+          (void)reply->send(*binary);
+        }
+      } catch (...) {}
+    });
     thread::MutexLock lock(&sync->mu);
     sync->peer_open = true;
     sync->cv.SignalAll();
@@ -2169,7 +2197,7 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
     sync->failed = true;
     sync->cv.SignalAll();
   });
-  channel->onMessage([sync](rtc::message_variant) {
+  channel->onMessage([sync](const rtc::message_variant&) {
     thread::MutexLock lock(&sync->mu);
     ++sync->arrivals;
     sync->cv.SignalAll();
@@ -2297,12 +2325,9 @@ void WireSuite(Recorder& recorder, double scale) {
   using Factory = std::optional<BenchPair> (*)(std::weak_ptr<net::WireStream>*,
                                                net::OnMessage, net::OnDone);
   const std::vector<std::pair<std::string, Factory>> transports = {
-      {"in-process", InProcessPair},
-      {"websocket", WebSocketPair},
-      {"sse", HttpSsePair},
-      {"sse-stream", HttpSseStreamPair},
-      {"webrtc", WebRtcPair},
-      {"webrtc-live-mtu", WebRtcLiveMtuPair}};
+      {"in-process", InProcessPair}, {"websocket", WebSocketPair},
+      {"sse", HttpSsePair},          {"sse-stream", HttpSseStreamPair},
+      {"webrtc", WebRtcPair},        {"webrtc-live-mtu", WebRtcLiveMtuPair}};
   // A11_BENCH_TRANSPORTS restricts the row set to a comma-separated subset.
   // Iterating on one transport otherwise pays for all five, and the ones that
   // are not being changed are the slowest.
@@ -2384,7 +2409,7 @@ void ServerSuite(Recorder& recorder, double scale) {
 
     // Every accepted connection becomes a session on the one service, which is
     // the shape a real server has: one process, one registry, many peers.
-    std::shared_ptr<service::Service> serving = *service;
+    const std::shared_ptr<service::Service>& serving = *service;
     net::WebSocketServerOptions options;
     options.path = "/bench";
     options.bind_address = "127.0.0.1";
@@ -2393,8 +2418,8 @@ void ServerSuite(Recorder& recorder, double scale) {
     options.http2_options.enable_h2c = false;
     absl::StatusOr<std::shared_ptr<net::WebSocketWireServer>> server =
         net::WebSocketWireServer::Create(
-            [serving](std::shared_ptr<net::WebSocketWireStream> stream)
-                -> a11::Task {
+            [serving](
+                std::shared_ptr<net::WebSocketWireStream> stream) -> a11::Task {
               // Reported, not discarded. Swallowing this is what made the first
               // version of this suite hang: a failed accept leaves the client
               // waiting for a peer that never arrived, and every thread in the
@@ -2520,9 +2545,8 @@ void ServerSuite(Recorder& recorder, double scale) {
               if (const absl::Status dispatched =
                       (*call)->Call().Await(stage_deadline).status();
                   !dispatched.ok()) {
-                return absl::Status(dispatched.code(),
-                                    absl::StrCat("stage=call ",
-                                                 dispatched.message()));
+                return {dispatched.code(),
+                        absl::StrCat("stage=call ", dispatched.message())};
               }
               absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> input =
                   (*call)->GetInput("input");
@@ -2535,13 +2559,13 @@ void ServerSuite(Recorder& recorder, double scale) {
               // rejected on the wire, where it surfaces as a reply that never
               // comes rather than as an error at the put.
               if (!(*input)
-                       ->PutChunk(data::Chunk{.metadata =
-                                                  data::ChunkMetadata{
-                                                      .mimetype =
-                                                          "application/"
-                                                          "octet-stream"},
-                                              .data = "ping"},
-                                  std::nullopt, true)
+                       ->PutChunk(
+                           data::Chunk{.metadata =
+                                           data::ChunkMetadata{
+                                               .mimetype = "application/"
+                                                           "octet-stream"},
+                                       .data = "ping"},
+                           std::nullopt, true)
                        .Await(absl::Now() + kStageTimeout)
                        .ok()) {
                 return absl::InternalError("stage=put-input timed out");
@@ -2551,9 +2575,10 @@ void ServerSuite(Recorder& recorder, double scale) {
               // the ordering that concurrency produces by accident -- a busier
               // client reads later -- so forcing it turns a 16-client race into
               // a one-client experiment.
-              if (const char* delay = std::getenv("A11_BENCH_READ_DELAY_MS");
-                  delay != nullptr) {
-                thread::SleepFor(absl::Milliseconds(std::atoi(delay)));
+              if (const std::optional<int> delay =
+                      EnvironmentInt("A11_BENCH_READ_DELAY_MS");
+                  delay.has_value()) {
+                thread::SleepFor(absl::Milliseconds(*delay));
               }
               absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> output =
                   (*call)->GetOutput("output");
@@ -2570,28 +2595,29 @@ void ServerSuite(Recorder& recorder, double scale) {
               const absl::StatusOr<std::optional<data::Chunk>> replied =
                   (*output)->NextChunk().Await(absl::Now() + kStageTimeout);
               if (!replied.ok() || !replied->has_value()) {
-                return absl::Status(
-                    replied.ok() ? absl::StatusCode::kDataLoss : replied.status().code(),
+                return {
+                    replied.ok() ? absl::StatusCode::kDataLoss
+                                 : replied.status().code(),
                     absl::StrCat("stage=read-output ",
                                  replied.ok() ? "the reply ended before a chunk"
-                                              : replied.status().message()));
+                                              : replied.status().message())};
               }
               if (const absl::Status finished =
-                      (*call)->Wait().Await(absl::Now() + kStageTimeout).status();
+                      (*call)
+                          ->Wait()
+                          .Await(absl::Now() + kStageTimeout)
+                          .status();
                   !finished.ok()) {
-                return absl::Status(
-                    finished.code(),
-                    absl::StrCat("stage=wait ", finished.message()));
+                return {finished.code(),
+                        absl::StrCat("stage=wait ", finished.message())};
               }
               completed.fetch_add(1, std::memory_order_relaxed);
-              const std::int64_t now_nanos =
-                  absl::ToUnixNanos(absl::Now());
+              const std::int64_t now_nanos = absl::ToUnixNanos(absl::Now());
               std::int64_t seen =
                   last_completion_unix_nanos.load(std::memory_order_relaxed);
               while (now_nanos > seen &&
                      !last_completion_unix_nanos.compare_exchange_weak(
-                         seen, now_nanos, std::memory_order_relaxed)) {
-              }
+                         seen, now_nanos, std::memory_order_relaxed)) {}
             }
             return absl::OkStatus();
           },
@@ -2618,22 +2644,22 @@ void ServerSuite(Recorder& recorder, double scale) {
       }
     }
     for (const std::string& text : driver_errors) {
-      std::fprintf(stderr,
-                   "  server[%d clients]: driver failed: %s"
-                   " (client round-trips=%lld, server replies written=%lld)\n",
-                   clients, text.c_str(),
-                   static_cast<long long>(
-                       completed.load(std::memory_order_relaxed)),
-                   static_cast<long long>(
-                       g_echo_handler_replies.load(std::memory_order_relaxed)));
+      std::fprintf(
+          stderr,
+          "  server[%d clients]: driver failed: %s"
+          " (client round-trips=%lld, server replies written=%lld)\n",
+          clients, text.c_str(),
+          static_cast<long long>(completed.load(std::memory_order_relaxed)),
+          static_cast<long long>(
+              g_echo_handler_replies.load(std::memory_order_relaxed)));
     }
     // Printed so a fibre or scheduling census can be divided by it. Counters
     // like A11_POOL_STATS are process-wide and include connection setup, so the
     // honest way to get a per-operation figure is to run two scales and divide
     // the differences -- which needs the operation count, not just the rate.
-    std::fprintf(stderr, "  server[%d clients]: completed=%lld\n", clients,
-                 static_cast<long long>(
-                     completed.load(std::memory_order_relaxed)));
+    std::fprintf(
+        stderr, "  server[%d clients]: completed=%lld\n", clients,
+        static_cast<long long>(completed.load(std::memory_order_relaxed)));
     const std::int64_t last_nanos =
         last_completion_unix_nanos.load(std::memory_order_relaxed);
     const absl::Duration elapsed =
@@ -2699,20 +2725,22 @@ actions::ActionSchema FlowEchoSchema() {
 }
 
 actions::ActionHandler FlowEchoHandler() {
-  return actions::MakeAsyncActionHandler([](std::shared_ptr<actions::Action>
-                                                action) -> absl::Status {
-    ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> input,
-                          action->GetInput("text"));
-    ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> output,
-                          action->GetOutput("out"));
-    ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> chunk,
-                          input->NextChunk().Await());
-    data::Chunk reply = chunk.has_value()
-                            ? *chunk
-                            : data::Chunk{.metadata = data::ChunkMetadata{
-                                              .mimetype = "text/plain"}};
-    return output->Finalize(std::move(reply), {.wait = true}).Await().status();
-  });
+  return actions::MakeAsyncActionHandler(
+      [](const std::shared_ptr<actions::Action>& action) -> absl::Status {
+        ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> input,
+                              action->GetInput("text"));
+        ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> output,
+                              action->GetOutput("out"));
+        ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> chunk,
+                              input->NextChunk().Await());
+        data::Chunk reply = chunk.has_value()
+                                ? *chunk
+                                : data::Chunk{.metadata = data::ChunkMetadata{
+                                                  .mimetype = "text/plain"}};
+        return output->Finalize(std::move(reply), {.wait = true})
+            .Await()
+            .status();
+      });
 }
 
 std::shared_ptr<actions::ActionRegistry> FlowRegistry() {
@@ -2803,16 +2831,19 @@ FlowRun RunOneFlow(
   };
   if (prefilled) {
     ran.status = feed();
-    if (!ran.status.ok())
+    if (!ran.status.ok()) {
       return ran;
+    }
   }
   ran.status = (*action)->Run().status();
-  if (!ran.status.ok())
+  if (!ran.status.ok()) {
     return ran;
+  }
   if (!prefilled) {
     ran.status = feed();
-    if (!ran.status.ok())
+    if (!ran.status.ok()) {
       return ran;
+    }
   }
   // Drained as the caller would: an output nobody reads stalls its writer.
   for (auto& [port, node] : outputs) {
@@ -2823,10 +2854,12 @@ FlowRun RunOneFlow(
         ran.status = chunk.status();
         break;
       }
-      if (!chunk->has_value())
+      if (!chunk->has_value()) {
         break;
-      if (!(*chunk)->IsNull())
+      }
+      if (!(*chunk)->IsNull()) {
         ++ran.values_out;
+      }
     }
   }
   if (ran.status.ok()) {
@@ -2877,7 +2910,7 @@ void FlowSuite(Recorder& recorder, double scale) {
   const std::int64_t calls = Scaled(400, scale, 20);
   const actions::ActionSchema echo = FlowEchoSchema();
   const actions::ActionHandler echo_handler = FlowEchoHandler();
-  if (Wanted("action_direct"))
+  if (Wanted("action_direct")) {
     recorder.Add(
         {.suite = "flow",
          .name = "action_direct",
@@ -2886,16 +2919,19 @@ void FlowSuite(Recorder& recorder, double scale) {
                absl::StatusOr<std::shared_ptr<actions::Action>> action =
                    actions::Action::Create(echo, absl::StrCat("echo-", index),
                                            echo_handler);
-               if (!action.ok())
+               if (!action.ok()) {
                  return;
+               }
                absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> out =
                    (*action)->GetOutput("out", false);
-               if (!out.ok() || !(*action)->Run().ok())
+               if (!out.ok() || !(*action)->Run().ok()) {
                  return;
+               }
                absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> in =
                    (*action)->GetInput("text", false);
-               if (!in.ok())
+               if (!in.ok()) {
                  return;
+               }
                (void)(*in)
                    ->Finalize(TextChunk("payload"), {.wait = true})
                    .Await();
@@ -2907,14 +2943,17 @@ void FlowSuite(Recorder& recorder, double scale) {
          .params = {{"steps", "0"}},
          .note =
              "no flow involved -- the baseline the flow is charged against"});
+  }
 
   for (const int steps : {1, 2, 8}) {
-    if (!Wanted("flow_run"))
+    if (!Wanted("flow_run")) {
       break;
+    }
     absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
         flow::CompiledProgram::Compile(ChainSource(steps), "bench.flow");
-    if (!program.ok())
+    if (!program.ok()) {
       continue;
+    }
     const std::string name = absl::StrCat("chain", steps);
     std::map<std::string, double> metrics = Latency(
         [&](std::int64_t index) {
@@ -2989,12 +3028,14 @@ void FlowSuite(Recorder& recorder, double scale) {
 
   // Per-stage cost, which is what says whether stages pace themselves.
   for (const int stages : {1, 2, 4, 8}) {
-    if (!Wanted("pipe_stages"))
+    if (!Wanted("pipe_stages")) {
       break;
+    }
     absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
         flow::CompiledProgram::Compile(StageSource(stages), "bench.flow");
-    if (!program.ok())
+    if (!program.ok()) {
       continue;
+    }
     constexpr int kValues = 256;
     std::vector<std::string> values;
     values.reserve(kValues);
@@ -3022,8 +3063,9 @@ void FlowSuite(Recorder& recorder, double scale) {
   // A loop with a call per pass: the shape of a real composition, and the one
   // place `parallel` decides whether the passes overlap.
   for (const int parallel : {1, 4, 16}) {
-    if (!Wanted("for_each_call"))
+    if (!Wanted("for_each_call")) {
       break;
+    }
     const std::string source = absl::StrCat(
         "flow fanned", parallel, " {\n", "  in items: string stream required\n",
         "  out result: string stream\n", "  for item in items parallel ",
@@ -3031,8 +3073,9 @@ void FlowSuite(Recorder& recorder, double scale) {
         "    r.out -> result\n", "  }\n}\n");
     absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
         flow::CompiledProgram::Compile(source, "bench.flow");
-    if (!program.ok())
+    if (!program.ok()) {
       continue;
+    }
     constexpr int kValues = 32;
     std::vector<std::string> values;
     values.reserve(kValues);
@@ -3060,7 +3103,7 @@ void FlowSuite(Recorder& recorder, double scale) {
   // Compilation, for the same document the Python suite compiles.
   const std::int64_t compiles = Scaled(2000, scale, 50);
   const std::string chain = ChainSource(2);
-  if (Wanted("compile_source"))
+  if (Wanted("compile_source")) {
     recorder.Add(
         {.suite = "flow",
          .name = "compile_source",
@@ -3073,6 +3116,7 @@ void FlowSuite(Recorder& recorder, double scale) {
              compiles, compiles / 10, 1,
              static_cast<std::int64_t>(chain.size())),
          .params = {{"doc", "chain2"}, {"bytes", absl::StrCat(chain.size())}}});
+  }
 }
 
 // ---------------------------------------------------------------------------

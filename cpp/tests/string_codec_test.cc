@@ -23,10 +23,9 @@
 #include <string_view>
 
 #include <absl/status/status.h>
-#include <absl/strings/escaping.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/escaping.h>
 #include <gtest/gtest.h>
-
 #include <nlohmann/json.hpp>
 
 #include "a11/data/serialization.h"
@@ -35,7 +34,9 @@
 namespace a11::data {
 namespace {
 
-SerializationRegistry& Registry() { return GlobalSerializationRegistry(); }
+SerializationRegistry& Registry() {
+  return GlobalSerializationRegistry();
+}
 
 TEST(StringCodecTest, AStringIsBytesByDefaultAndCarriesNoTag) {
   const std::string value = "hello";
@@ -116,18 +117,18 @@ TEST(StringCodecTest, TextPlainRefusesBytesThatArePeersCannotDecode) {
 
 TEST(StringCodecTest, ValidMultiByteTextIsAccepted) {
   const std::string cases[] = {
-      "",                            // empty is valid
-      "ascii",                       //
-      "\xc2\xa3",                    // U+00A3, two bytes
-      "\xe2\x82\xac",                // U+20AC, three bytes
-      "\xf0\x9f\x92\xa1",            // U+1F4A1, four bytes
+      "",                  // empty is valid
+      "ascii",             //
+      "\xc2\xa3",          // U+00A3, two bytes
+      "\xe2\x82\xac",      // U+20AC, three bytes
+      "\xf0\x9f\x92\xa1",  // U+1F4A1, four bytes
       "mixed \xc2\xa3 and \xf0\x9f\x92\xa1",
   };
   for (const std::string& value : cases) {
     absl::StatusOr<Chunk> chunk =
         Registry().ToChunk<std::string>(value, std::string(kTextMimetype));
-    ASSERT_TRUE(chunk.ok()) << absl::CHexEscape(value) << ": "
-                            << chunk.status();
+    ASSERT_TRUE(chunk.ok())
+        << absl::CHexEscape(value) << ": " << chunk.status();
     absl::StatusOr<std::string> decoded =
         Registry().FromChunk<std::string>(*chunk);
     ASSERT_TRUE(decoded.ok()) << decoded.status();

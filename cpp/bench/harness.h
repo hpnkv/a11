@@ -37,8 +37,8 @@ struct Result {
   /** Unit lives in the key: `_us`, `_per_s`, `_bytes`, `bytes_each`. */
   std::map<std::string, double> metrics;
   /** What distinguishes two runs of the same benchmark. */
-  std::map<std::string, std::string> params;
-  std::string note;
+  std::map<std::string, std::string> params = {};
+  std::string note = {};
 };
 
 /** @brief Collects results and writes them out. */
@@ -55,9 +55,9 @@ class Recorder {
   void PrintTable(const std::string& suite = "") const;
 
   /** @brief Write the shared JSON record shape to `path`. */
-  bool WriteJson(const std::string& path) const;
+  [[nodiscard]] bool WriteJson(const std::string& path) const;
 
-  const std::vector<Result>& results() const { return results_; }
+  [[nodiscard]] const std::vector<Result>& results() const { return results_; }
 
  private:
   std::vector<Result> results_;

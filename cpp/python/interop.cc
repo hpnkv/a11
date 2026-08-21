@@ -9,7 +9,6 @@
 #include <utility>
 
 #include <Python.h>
-#include <pythread.h>
 #include <absl/base/no_destructor.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
@@ -21,6 +20,7 @@
 #include <pybind11_abseil/absl_casters.h>
 #include <pybind11_abseil/compat/status_from_py_exc.h>
 #include <pybind11_abseil/status_casters.h>
+#include <pythread.h>
 
 #include "a11/status.h"
 #include "python/native_types.h"
@@ -113,9 +113,9 @@ absl::StatusOr<std::shared_ptr<PythonLoop>> PythonLoop::Capture() {
   }
   py::gil_scoped_acquire acquire;
   try {
-    return Adopt(py::module_::import("asyncio")
-                     .attr("get_event_loop_policy")()
-                     .attr("get_event_loop")());
+    return Adopt(
+        py::module_::import("asyncio").attr("get_event_loop_policy")().attr(
+            "get_event_loop")());
   } catch (py::error_already_set& error) {
     return StatusFromPythonException(error);
   } catch (const std::exception& error) {
@@ -184,7 +184,7 @@ PythonLoop::~PythonLoop() {
 absl::StatusOr<std::shared_ptr<PythonLoop::Cancellation>> PythonLoop::Schedule(
     const py::object& awaitable, const py::object& completion) const {
   try {
-    py::object loop = py::reinterpret_borrow<py::object>(loop_);
+    auto loop = py::reinterpret_borrow<py::object>(loop_);
     py::object cancellation = py::module_::import("a11._asyncio")
                                   .attr("_schedule_awaitable_threadsafe")(
                                       loop, awaitable, completion);
@@ -246,13 +246,13 @@ absl::Status StatusFromPython(const py::handle& value) {
     py::object ground_status = py::module_::import("a11.status").attr("Status");
     if (py::isinstance(value, ground_status)) {
       const int code = value.attr("code").cast<int>();
-      const std::string message = value.attr("message").cast<std::string>();
+      const auto message = value.attr("message").cast<std::string>();
       py::object details_object = value.attr("details");
-      std::string details_json = py::module_::import("json")
-                                     .attr("dumps")(details_object)
-                                     .cast<std::string>();
+      auto details_json = py::module_::import("json")
+                              .attr("dumps")(details_object)
+                              .cast<std::string>();
       nlohmann::json details = nlohmann::json::parse(details_json);
-      return MakeStatus(CanonicalStatusCode(code), message, std::move(details));
+      return MakeStatus(CanonicalStatusCode(code), message, details);
     }
     return value.cast<absl::Status>();
   } catch (py::error_already_set& error) {
@@ -290,7 +290,7 @@ absl::Status StatusFromPythonException(py::error_already_set& error) {
       PyErr_Clear();
       return status;
     }
-    const std::string message = py::str(exception).cast<std::string>();
+    const auto message = py::str(exception).cast<std::string>();
     error.restore();
     PyErr_Clear();
     return absl::UnknownError(message);
@@ -398,7 +398,7 @@ absl::StatusOr<data::ByteMap> ByteMapFromPython(const py::handle& value,
     }
     data::ByteMap result;
     for (const py::handle raw_item : items) {
-      const py::tuple item = py::cast<py::tuple>(raw_item);
+      const auto item = py::cast<py::tuple>(raw_item);
       if (item.size() != 2 || !py::isinstance<py::str>(item[0]) ||
           !py::isinstance<py::bytes>(item[1])) {
         return absl::InvalidArgumentError(

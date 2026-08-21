@@ -36,10 +36,10 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.duplicate", Family::kBarrier, Severity::kWeakWarning,
              "A second 'wait' or 'drain' on something this body already holds "
              "for."},
-    CodeInfo{"flow.barrier.duplicate-carry", Family::kBarrier,
-             Severity::kError, "A repeat carries the same name twice."},
-    CodeInfo{"flow.barrier.duplicate-until", Family::kBarrier,
-             Severity::kError, "A loop is given a second stop condition."},
+    CodeInfo{"flow.barrier.duplicate-carry", Family::kBarrier, Severity::kError,
+             "A repeat carries the same name twice."},
+    CodeInfo{"flow.barrier.duplicate-until", Family::kBarrier, Severity::kError,
+             "A loop is given a second stop condition."},
     CodeInfo{"flow.barrier.until-outside-repeat", Family::kBarrier,
              Severity::kError,
              "An 'until' or 'while' ends a 'repeat' or a 'for', and there is "
@@ -74,15 +74,17 @@ constexpr std::array kCodes = {
              "A port is declared twice in one direction."},
     CodeInfo{"flow.form.duplicate-struct", Family::kForm, Severity::kError,
              "Two structs in one file are declared with the same name."},
-    CodeInfo{"flow.form.duration-unit", Family::kForm, Severity::kError,
-             "A number carrying a suffix that is not one of the duration units."},
+    CodeInfo{
+        "flow.form.duration-unit", Family::kForm, Severity::kError,
+        "A number carrying a suffix that is not one of the duration units."},
     CodeInfo{"flow.form.empty-range", Family::kForm, Severity::kError,
              "A range that bounds nothing, or whose bounds are the wrong way "
              "round."},
     CodeInfo{"flow.form.field-constraint", Family::kForm, Severity::kError,
              "A field constraint that cannot apply to what the field holds: "
              "'unique' on one value, 'matching' on a number."},
-    CodeInfo{"flow.form.field-modifier-order", Family::kForm, Severity::kWarning,
+    CodeInfo{"flow.form.field-modifier-order", Family::kForm,
+             Severity::kWarning,
              "A field's modifiers are written out of the order they read in."},
     CodeInfo{"flow.form.field-type-mismatch", Family::kForm, Severity::kError,
              "A field's default or 'one of' value is not a value of the type "
@@ -93,9 +95,10 @@ constexpr std::array kCodes = {
              "A 'logf' written without a format to fill."},
     CodeInfo{"flow.form.log-value", Family::kForm, Severity::kError,
              "A 'log' written without anything to log."},
-    CodeInfo{"flow.form.missing-field", Family::kForm, Severity::kError,
-             "A value of a declared shape leaves out a field the shape requires "
-             "and gives no default for."},
+    CodeInfo{
+        "flow.form.missing-field", Family::kForm, Severity::kError,
+        "A value of a declared shape leaves out a field the shape requires "
+        "and gives no default for."},
     CodeInfo{"flow.form.node-parentheses", Family::kForm, Severity::kError,
              "Making a node takes parentheses: 'node()' or 'node(id)'."},
     CodeInfo{"flow.form.not-json-representable", Family::kForm,
@@ -165,9 +168,10 @@ constexpr std::array kCodes = {
              "Something that is not a call is asked to stop."},
     CodeInfo{"flow.name.not-a-stream", Family::kName, Severity::kError,
              "Something that cannot be read is used as a pipeline source."},
-    CodeInfo{"flow.name.not-advanceable", Family::kName, Severity::kError,
-             "'advance' names something other than a value a 'let' bound, which "
-             "is the only thing with a next value."},
+    CodeInfo{
+        "flow.name.not-advanceable", Family::kName, Severity::kError,
+        "'advance' names something other than a value a 'let' bound, which "
+        "is the only thing with a next value."},
     CodeInfo{"flow.name.not-writable", Family::kName, Severity::kError,
              "A stream is written somewhere that cannot be written: an 'in' "
              "port, a call's output, a barrier."},
@@ -191,9 +195,11 @@ constexpr std::array kCodes = {
              Severity::kError,
              "A counted 'skip' applied to something that is not a port or a "
              "node; '| drop n' is the one that drops from a pipeline."},
-    CodeInfo{"flow.syntax.constant-required", Family::kSyntax,
-             Severity::kError,
+    CodeInfo{"flow.syntax.constant-required", Family::kSyntax, Severity::kError,
              "An expression where the grammar requires a constant."},
+    CodeInfo{"flow.syntax.nesting-too-deep", Family::kSyntax, Severity::kError,
+             "Brackets, blocks or bodies nested deeper than the parser will "
+             "descend."},
     CodeInfo{"flow.syntax.statement-end", Family::kSyntax, Severity::kError,
              "More text after a complete statement; one statement per line."},
     CodeInfo{"flow.syntax.unclosed", Family::kSyntax, Severity::kError,
@@ -204,8 +210,9 @@ constexpr std::array kCodes = {
              Severity::kError,
              "A character the language has no meaning for anywhere."},
     CodeInfo{"flow.syntax.unterminated-string", Family::kSyntax,
-             Severity::kError, "A string that is not closed before its line "
-                               "ends."},
+             Severity::kError,
+             "A string that is not closed before its line "
+             "ends."},
     CodeInfo{"flow.unused.barrier-name", Family::kUnused,
              Severity::kWeakWarning,
              "A barrier bound to a name nothing reads; the flow still waits "
@@ -268,18 +275,34 @@ std::string_view FamilyName(Family family) {
 }
 
 Severity SeverityFromName(std::string_view name) {
-  if (name == "warning") return Severity::kWarning;
-  if (name == "weak-warning") return Severity::kWeakWarning;
-  if (name == "information") return Severity::kInformation;
+  if (name == "warning") {
+    return Severity::kWarning;
+  }
+  if (name == "weak-warning") {
+    return Severity::kWeakWarning;
+  }
+  if (name == "information") {
+    return Severity::kInformation;
+  }
   return Severity::kError;
 }
 
 Family FamilyFromName(std::string_view name) {
-  if (name == "form") return Family::kForm;
-  if (name == "name") return Family::kName;
-  if (name == "sequence") return Family::kSequence;
-  if (name == "barrier") return Family::kBarrier;
-  if (name == "unused") return Family::kUnused;
+  if (name == "form") {
+    return Family::kForm;
+  }
+  if (name == "name") {
+    return Family::kName;
+  }
+  if (name == "sequence") {
+    return Family::kSequence;
+  }
+  if (name == "barrier") {
+    return Family::kBarrier;
+  }
+  if (name == "unused") {
+    return Family::kUnused;
+  }
   return Family::kSyntax;
 }
 
@@ -288,12 +311,14 @@ absl::Span<const CodeInfo> KnownCodes() {
 }
 
 const CodeInfo* absl_nullable FindCode(std::string_view code) {
-  const auto found = std::lower_bound(
-      kCodes.begin(), kCodes.end(), code,
-      [](const CodeInfo& entry, std::string_view key) {
-        return entry.code < key;
-      });
-  if (found == kCodes.end() || found->code != code) return nullptr;
+  const auto found =
+      std::lower_bound(kCodes.begin(), kCodes.end(), code,
+                       [](const CodeInfo& entry, std::string_view key) {
+                         return entry.code < key;
+                       });
+  if (found == kCodes.end() || found->code != code) {
+    return nullptr;
+  }
   return &*found;
 }
 
@@ -301,15 +326,17 @@ LineIndex::LineIndex(std::string_view source)
     : length_(source.size()), source_(source) {
   line_starts_.push_back(0);
   for (size_t index = 0; index < source.size(); ++index) {
-    if (source[index] == '\n') line_starts_.push_back(index + 1);
+    if (source[index] == '\n') {
+      line_starts_.push_back(index + 1);
+    }
   }
 }
 
 Position LineIndex::At(size_t offset) const {
   const size_t clamped = std::min(offset, length_);
   // The last line whose first byte is at or before the offset.
-  const auto after = std::upper_bound(line_starts_.begin(), line_starts_.end(),
-                                      clamped);
+  const auto after =
+      std::upper_bound(line_starts_.begin(), line_starts_.end(), clamped);
   const size_t index =
       static_cast<size_t>(std::distance(line_starts_.begin(), after)) - 1;
   Position position;
@@ -320,7 +347,9 @@ Position LineIndex::At(size_t offset) const {
   // it in disagreement. Continuation bytes are the middles of characters.
   int column = 1;
   for (size_t at = line_starts_[index]; at < clamped; ++at) {
-    if ((static_cast<unsigned char>(source_[at]) & 0xC0) != 0x80) ++column;
+    if ((static_cast<unsigned char>(source_[at]) & 0xC0) != 0x80) {
+      ++column;
+    }
   }
   position.column = column;
   return position;
@@ -334,9 +363,13 @@ Range LineIndex::Between(size_t start, size_t end) const {
 }
 
 size_t LineIndex::LineStart(int line) const {
-  if (line <= 1) return 0;
+  if (line <= 1) {
+    return 0;
+  }
   const size_t index = static_cast<size_t>(line) - 1;
-  if (index >= line_starts_.size()) return length_;
+  if (index >= line_starts_.size()) {
+    return length_;
+  }
   return line_starts_[index];
 }
 
@@ -347,7 +380,9 @@ void SortDiagnostics(std::vector<Diagnostic>& diagnostics) {
                        return left.range.start.offset <
                               right.range.start.offset;
                      }
-                     if (left.code != right.code) return left.code < right.code;
+                     if (left.code != right.code) {
+                       return left.code < right.code;
+                     }
                      return left.message < right.message;
                    });
 }

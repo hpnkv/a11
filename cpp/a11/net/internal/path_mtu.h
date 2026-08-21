@@ -181,7 +181,9 @@ struct PathMtuProber {
    * affect the protocol, and a reliable retransmission of an oversized packet
    * blocks its channel indefinitely instead.
    */
-  std::function<std::optional<bool>(size_t payload, absl::Time deadline)> probe;
+  std::function<std::optional<bool>(size_t payload, absl::Time deadline)>
+      probe = {};
+
   /**
    * @brief Sends @p count probes back to back and reports how many returned.
    *
@@ -221,11 +223,13 @@ struct PathMtuProber {
    * it rides on, which SCTP already unwinds. Left in the interface because a
    * transport whose reliability layer does *not* recover would need it.
    */
-  std::function<void()> pause;
+  std::function<void()> pause = {};
+
   /// @see pause
-  std::function<void()> resume;
+  std::function<void()> resume = {};
+
   /// The path cannot carry the base MTU. Terminal; the caller aborts the stream.
-  std::function<void(absl::Status)> fail;
+  std::function<void(absl::Status)> fail = {};
 };
 
 /**

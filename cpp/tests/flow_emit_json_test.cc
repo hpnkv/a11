@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/flow/emit_json.h"
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/emit_json.h"
 
 namespace a11::flow {
 namespace {
@@ -37,7 +36,8 @@ Diagnostic Example() {
 
 TEST(FlowDiagnosticsJson, CarriesEverythingAFrontendNeeds) {
   const std::vector<Diagnostic> diagnostics = {Example()};
-  const nlohmann::json value = DiagnosticsToJsonValue("research.flow", diagnostics);
+  const nlohmann::json value =
+      DiagnosticsToJsonValue("research.flow", diagnostics);
 
   EXPECT_EQ(value["format"], "flow.diagnostics/v1");
   EXPECT_EQ(value["source"], "research.flow");
@@ -88,7 +88,8 @@ TEST(FlowDiagnosticsJson, RoundTripsThroughItsOwnReader) {
   // The plugin and any CI script read the envelope back with this, so the two
   // halves have to agree exactly.
   const Diagnostic original = Example();
-  const Diagnostic read = DiagnosticFromJsonValue(DiagnosticToJsonValue(original));
+  const Diagnostic read =
+      DiagnosticFromJsonValue(DiagnosticToJsonValue(original));
 
   EXPECT_EQ(read.code, original.code);
   EXPECT_EQ(read.severity, original.severity);
@@ -157,7 +158,7 @@ TEST(FlowCodesJson, MatchesTheTableEveryLanguageReads) {
   // as `testdata/serial_tags.json`: the C++ owns it, and the Python CLI and any
   // editor read it back rather than keeping a second list. Regenerate with
   //
-  //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test \
+  //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test
   //       --gtest_filter=FlowCodesJson.MatchesTheTableEveryLanguageReads
   const std::filesystem::path path = GoldenCodesPath();
   const std::string generated = CodesToJsonValue().dump(2) + "\n";
@@ -181,7 +182,8 @@ TEST(FlowCodesJson, MatchesTheTableEveryLanguageReads) {
 
 TEST(FlowSarif, IsAValidLogWithDocumentedRules) {
   const std::vector<Diagnostic> diagnostics = {Example()};
-  const nlohmann::json log = DiagnosticsToSarifValue("research.flow", diagnostics);
+  const nlohmann::json log =
+      DiagnosticsToSarifValue("research.flow", diagnostics);
 
   EXPECT_EQ(log["version"], "2.1.0");
   ASSERT_EQ(log["runs"].size(), 1u);
@@ -202,8 +204,9 @@ TEST(FlowSarif, IsAValidLogWithDocumentedRules) {
   EXPECT_EQ(region["startColumn"], 12);
   EXPECT_EQ(region["charOffset"], 40);
   EXPECT_EQ(region["charLength"], 6);
-  EXPECT_EQ(result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
-            "research.flow");
+  EXPECT_EQ(
+      result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+      "research.flow");
 }
 
 TEST(FlowDiagnosticText, ReadsLikeEveryOtherCompiler) {

@@ -47,21 +47,21 @@ class HostObject {
   virtual ~HostObject() = default;
 
   /// The tag the host knows this type by, for a message.
-  virtual std::string Tag() const = 0;
+  [[nodiscard]] virtual std::string Tag() const = 0;
   /// What `as_text` gives: what the value is *on the wire*, not its repr.
-  virtual std::string Text() const = 0;
+  [[nodiscard]] virtual std::string Text() const = 0;
   /// Whether the value counts as true.
-  virtual bool Truthy() const = 0;
+  [[nodiscard]] virtual bool Truthy() const = 0;
   /// How many things it holds, where that means anything.
-  virtual std::optional<size_t> Size() const = 0;
+  [[nodiscard]] virtual std::optional<size_t> Size() const = 0;
   /// `value.name`, or a null value when there is no such field. Reading a field
   /// a producer did not send answers nothing rather than failing, which is what
   /// lets a flow say `if not thing.field`.
-  virtual Value Field(std::string_view name) const = 0;
+  [[nodiscard]] virtual Value Field(std::string_view name) const = 0;
   /// `value[key]`.
-  virtual Value Element(const Value& key) const = 0;
+  [[nodiscard]] virtual Value Element(const Value& key) const = 0;
   /// Whether this is the same value as `other`, by the host's own equality.
-  virtual bool Equals(const HostObject& other) const = 0;
+  [[nodiscard]] virtual bool Equals(const HostObject& other) const = 0;
 };
 
 /// One Flow value.
@@ -104,6 +104,7 @@ class Value {
   Value() = default;
 
   static Value Null() { return {}; }
+
   static Value Bool(bool value);
   static Value Integer(std::int64_t value);
   static Value Double(double value);
@@ -118,37 +119,50 @@ class Value {
   /// The value a `Constant` -- a literal, or a folded literal expression -- is.
   static Value Of(const syntax::Constant& constant);
 
-  Kind kind() const { return kind_; }
+  [[nodiscard]] Kind kind() const { return kind_; }
 
-  bool IsNull() const { return kind_ == Kind::kNull; }
-  bool IsNumber() const {
+  [[nodiscard]] bool IsNull() const { return kind_ == Kind::kNull; }
+
+  [[nodiscard]] bool IsNumber() const {
     return kind_ == Kind::kInteger || kind_ == Kind::kDouble;
   }
-  bool IsTimelike() const {
+
+  [[nodiscard]] bool IsTimelike() const {
     return kind_ == Kind::kDuration || kind_ == Kind::kTime;
   }
+
   /// Whether the value is one the language itself can take apart: a string or a
   /// byte string, which index and slice but are not containers of values.
-  bool IsTextlike() const {
+  [[nodiscard]] bool IsTextlike() const {
     return kind_ == Kind::kString || kind_ == Kind::kBytes;
   }
 
-  bool boolean() const { return boolean_; }
-  std::int64_t integer() const { return integer_; }
-  double number() const { return number_; }
-  const std::string& text() const { return *text_; }
-  const std::vector<Value>& items() const { return *items_; }
-  const Pairs& pairs() const { return *pairs_; }
-  absl::Duration duration() const { return duration_; }
-  absl::Time time() const { return time_; }
-  const data::Chunk& chunk() const { return *chunk_; }
-  const HostObject& host() const { return *host_; }
-  const std::shared_ptr<const HostObject>& host_object() const {
+  [[nodiscard]] bool boolean() const { return boolean_; }
+
+  [[nodiscard]] std::int64_t integer() const { return integer_; }
+
+  [[nodiscard]] double number() const { return number_; }
+
+  [[nodiscard]] const std::string& text() const { return *text_; }
+
+  [[nodiscard]] const std::vector<Value>& items() const { return *items_; }
+
+  [[nodiscard]] const Pairs& pairs() const { return *pairs_; }
+
+  [[nodiscard]] absl::Duration duration() const { return duration_; }
+
+  [[nodiscard]] absl::Time time() const { return time_; }
+
+  [[nodiscard]] const data::Chunk& chunk() const { return *chunk_; }
+
+  [[nodiscard]] const HostObject& host() const { return *host_; }
+
+  [[nodiscard]] const std::shared_ptr<const HostObject>& host_object() const {
     return host_;
   }
 
   /// The value at `key` of an object, or `nullptr`.
-  const Value* absl_nullable Get(std::string_view key) const;
+  [[nodiscard]] const Value* absl_nullable Get(std::string_view key) const;
 
   /// Whether the two values are equal, as `==` in a flow decides it.
   friend bool operator==(const Value& left, const Value& right);
@@ -210,7 +224,11 @@ class HostBridge {
       absl::Span<const data::Chunk* const> chunks) {
     std::vector<absl::StatusOr<Value>> values;
     values.reserve(chunks.size());
-    for (const data::Chunk* chunk : chunks) values.push_back(FromChunk(*chunk));
+    for (const data::Chunk* chunk : chunks) {
+      {
+        values.push_back(FromChunk(*chunk));
+      }
+    }
     return values;
   }
 
@@ -416,7 +434,7 @@ struct EvalContext {
   /// The shapes the program declared, for a cast written inside an expression.
   const Program* absl_nullable shapes = nullptr;
 
-  CoerceContext Coercion() const { return {bridge, shapes}; }
+  [[nodiscard]] CoerceContext Coercion() const { return {bridge, shapes}; }
 };
 
 /// Evaluate one expression.

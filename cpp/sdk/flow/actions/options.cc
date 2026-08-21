@@ -90,9 +90,8 @@ bool Options::Has(std::string_view key) const {
 absl::Status Options::Wrong(std::string_view key,
                             std::string_view expected) const {
   const nlohmann::json& value = value_.at(std::string(key));
-  return absl::InvalidArgumentError(absl::StrCat(path_, ".", key, " must be ",
-                                                 expected, ", got ",
-                                                 Describe(value)));
+  return absl::InvalidArgumentError(absl::StrCat(
+      path_, ".", key, " must be ", expected, ", got ", Describe(value)));
 }
 
 absl::StatusOr<bool> Options::Bool(std::string_view key, bool fallback) const {
@@ -138,8 +137,8 @@ absl::StatusOr<std::uint64_t> Options::Bytes(std::string_view key,
   }
   ABSL_ASSIGN_OR_RETURN(const std::int64_t value, Int(key, 0));
   if (value < 0) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        path_, ".", key, " must not be negative, got ", value));
+    return absl::InvalidArgumentError(
+        absl::StrCat(path_, ".", key, " must not be negative, got ", value));
   }
   return static_cast<std::uint64_t>(value);
 }
@@ -159,7 +158,7 @@ absl::StatusOr<std::string> Options::String(std::string_view key,
 absl::StatusOr<std::string> Options::Enum(
     std::string_view key, std::string_view fallback,
     const std::vector<std::string_view>& allowed) const {
-  ABSL_ASSIGN_OR_RETURN(const std::string value, String(key, fallback));
+  ABSL_ASSIGN_OR_RETURN(std::string value, String(key, fallback));
   if (std::find(allowed.begin(), allowed.end(), value) == allowed.end()) {
     return absl::InvalidArgumentError(
         absl::StrCat(path_, ".", key, " must be one of ",
@@ -188,9 +187,8 @@ absl::StatusOr<std::vector<std::string>> Options::StringList(
   names.reserve(value.size());
   for (const nlohmann::json& element : value) {
     if (!element.is_string()) {
-      return absl::InvalidArgumentError(
-          absl::StrCat(path_, ".", key, " must hold strings, got ",
-                       Describe(element)));
+      return absl::InvalidArgumentError(absl::StrCat(
+          path_, ".", key, " must hold strings, got ", Describe(element)));
     }
     names.push_back(element.get<std::string>());
   }
@@ -206,9 +204,9 @@ absl::StatusOr<absl::Duration> Options::Duration(
   if (value.is_number()) {
     const double seconds = value.get<double>();
     if (seconds < 0) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          path_, ".", key,
-          " must not be negative; leave it out to mean no limit"));
+      return absl::InvalidArgumentError(
+          absl::StrCat(path_, ".", key,
+                       " must not be negative; leave it out to mean no limit"));
     }
     return absl::Seconds(seconds);
   }
@@ -218,9 +216,9 @@ absl::StatusOr<absl::Duration> Options::Duration(
   ABSL_ASSIGN_OR_RETURN(const absl::Duration parsed,
                         ParseDuration(value.get<std::string>()));
   if (parsed < absl::ZeroDuration()) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        path_, ".", key,
-        " must not be negative; leave it out to mean no limit"));
+    return absl::InvalidArgumentError(
+        absl::StrCat(path_, ".", key,
+                     " must not be negative; leave it out to mean no limit"));
   }
   return parsed;
 }
@@ -291,8 +289,7 @@ absl::StatusOr<absl::Duration> ParseDuration(std::string_view text) {
       }
     }
     const std::string_view number = trimmed.substr(began, at - began);
-    while (at < trimmed.size() &&
-           (trimmed[at] == ' ' || trimmed[at] == '\t')) {
+    while (at < trimmed.size() && (trimmed[at] == ' ' || trimmed[at] == '\t')) {
       ++at;
     }
     const std::size_t word = at;
@@ -321,8 +318,9 @@ absl::StatusOr<absl::Duration> ParseDuration(std::string_view text) {
       sign = -1.0;
     }
     double magnitude = 0.0;
-    if (!absl::SimpleAtod(absl::StripPrefix(absl::StripPrefix(number, "-"), "+"),
-                          &magnitude)) {
+    if (!absl::SimpleAtod(
+            absl::StripPrefix(absl::StripPrefix(number, "-"), "+"),
+            &magnitude)) {
       return refuse();
     }
     total += magnitude * scale;

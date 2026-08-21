@@ -6,14 +6,14 @@
 // line, a number in the middle of prose. The point of the syntax is that those
 // are one-liners, so if a test here needs explaining the syntax is wrong.
 
-#include "a11/flow/pattern.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
+
+#include "a11/flow/pattern.h"
 
 namespace a11::flow::pattern {
 namespace {
@@ -22,15 +22,19 @@ namespace {
 /// `<no match>`. Names make the expectations read like the pattern.
 std::string Taken(std::string_view pattern, std::string_view subject) {
   const Compiled compiled = Compile(pattern);
-  if (!compiled.ok()) return absl::StrCat("<error: ", compiled.error, ">");
+  if (!compiled.ok()) {
+    return absl::StrCat("<error: ", compiled.error, ">");
+  }
   const auto captures = Match(compiled.pattern, subject);
-  if (!captures.has_value()) return "<no match>";
+  if (!captures.has_value()) {
+    return "<no match>";
+  }
   std::vector<std::string> parts;
   for (size_t index = 0; index < captures->size(); ++index) {
     const Hole& hole = compiled.pattern.holes[index];
-    parts.push_back(absl::StrCat(hole.name.empty() ? std::to_string(index)
-                                                   : hole.name,
-                                 "=", (*captures)[index].text));
+    parts.push_back(
+        absl::StrCat(hole.name.empty() ? std::to_string(index) : hole.name, "=",
+                     (*captures)[index].text));
   }
   return absl::StrJoin(parts, " ");
 }

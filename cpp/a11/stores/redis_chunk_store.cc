@@ -86,7 +86,7 @@ absl::Status ScriptFailure(std::string_view code, std::string_view message) {
   } else {
     return ProtocolError(absl::StrCat("unknown script status code ", code));
   }
-  return absl::Status(status_code, std::string(message));
+  return {status_code, std::string(message)};
 }
 
 absl::StatusOr<std::string_view> StringAt(
@@ -568,7 +568,7 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
            fragments)]() mutable -> absl::StatusOr<std::vector<std::uint32_t>> {
         constexpr size_t kArgumentsPerFragment = 5;
         constexpr size_t kCommandOverhead = 16;
-        const size_t maximum_arguments =
+        const auto maximum_arguments =
             static_cast<size_t>(std::numeric_limits<int>::max());
         if (fragments.size() >
             (maximum_arguments - kCommandOverhead) / kArgumentsPerFragment) {
@@ -581,7 +581,7 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
         absl::flat_hash_set<std::uint32_t> explicit_sequences;
         std::vector<std::string> arguments;
         arguments.reserve(3 + fragments.size() * kArgumentsPerFragment);
-        arguments.push_back("put");
+        arguments.emplace_back("put");
         arguments.push_back(node_id);
         arguments.push_back(std::to_string(fragments.size()));
 
@@ -605,7 +605,7 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
         }
 
         for (const data::NodeFragment& fragment : fragments) {
-          const data::Chunk& chunk = std::get<data::Chunk>(fragment.data);
+          const auto& chunk = std::get<data::Chunk>(fragment.data);
           ABSL_ASSIGN_OR_RETURN(data::Bytes encoded, chunk.ToMsgpack());
           data::Chunk tombstone{
               .metadata = chunk.metadata,
@@ -618,10 +618,10 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
           arguments.push_back(fragment.seq.has_value()
                                   ? std::to_string(*fragment.seq)
                                   : std::string());
-          arguments.push_back(fragment.continued ? "0" : "1");
-          arguments.push_back(chunk.data.size() > options.inline_data_threshold
-                                  ? "redis"
-                                  : "inline");
+          arguments.emplace_back(fragment.continued ? "0" : "1");
+          arguments.emplace_back(
+              chunk.data.size() > options.inline_data_threshold ? "redis"
+                                                                : "inline");
           arguments.push_back(std::move(encoded));
           arguments.push_back(std::move(encoded_tombstone));
         }

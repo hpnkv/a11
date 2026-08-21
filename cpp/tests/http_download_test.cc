@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/net/http/download.h"
-
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/concurrency/future.h"
+#include "a11/net/http/download.h"
 #include "a11/net/http2.h"
 
 namespace a11::net {
@@ -37,8 +36,9 @@ class DownloadTestServer {
   DownloadTestServer() {
     server_ = Http2Server::Create(
         "127.0.0.1", 0,
-        [this](HttpRequest request,
-               std::shared_ptr<Http2ResponseWriter> response) -> a11::Task {
+        [this](
+            const HttpRequest& request,
+            const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
           ++served_;
           absl::Status status;
           if (request.path == "/model.bin") {
@@ -55,7 +55,9 @@ class DownloadTestServer {
   }
 
   [[nodiscard]] bool ok() const { return server_.ok(); }
+
   [[nodiscard]] int served() const { return served_; }
+
   [[nodiscard]] std::string Url(std::string_view path) const {
     return absl::StrCat("http://127.0.0.1:", (*server_)->port(), path);
   }
@@ -69,14 +71,15 @@ class DownloadTestServer {
 class HttpDownloadTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    root_ = std::filesystem::temp_directory_path() /
-            absl::StrCat("a11-download-test-",
-                         ::testing::UnitTest::GetInstance()
-                             ->current_test_info()
-                             ->name());
+    root_ =
+        std::filesystem::temp_directory_path() /
+        absl::StrCat(
+            "a11-download-test-",
+            ::testing::UnitTest::GetInstance()->current_test_info()->name());
     std::error_code ignored;
     std::filesystem::remove_all(root_, ignored);
   }
+
   void TearDown() override {
     std::error_code ignored;
     std::filesystem::remove_all(root_, ignored);
@@ -187,7 +190,8 @@ TEST_F(HttpDownloadTest, ADigestMismatchFailsAndLeavesNothingBehind) {
   const std::filesystem::path destination = root_ / "model.bin";
   DownloadOptions options;
   options.destination = destination;
-  options.expected_sha1 = std::string("00000000000000000000000000000000000000ff");
+  options.expected_sha1 =
+      std::string("00000000000000000000000000000000000000ff");
 
   const auto path = Download(server.Url("/model.bin"), options).Await(Soon());
   ASSERT_FALSE(path.ok());

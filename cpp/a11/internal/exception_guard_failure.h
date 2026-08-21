@@ -37,7 +37,7 @@ struct Failure<absl::StatusOr<T>> {
 
 template <>
 struct Failure<void> {
-  static void From(absl::Status status);
+  static void From(const absl::Status& status);
 };
 
 }  // namespace a11::exception_guard::internal

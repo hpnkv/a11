@@ -123,7 +123,7 @@ class ByteReassembler {
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
   Impl* absl_nonnull GetImpl();
-  const Impl* absl_nonnull GetImpl() const;
+  [[nodiscard]] const Impl* absl_nonnull GetImpl() const;
 
   alignas(kImplAlignment) std::byte impl_[kImplSize];
 };

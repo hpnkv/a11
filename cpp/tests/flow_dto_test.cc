@@ -23,6 +23,7 @@ ResolveResult Check(std::string_view source) {
 
 std::vector<std::string> Codes(const std::vector<Diagnostic>& diagnostics) {
   std::vector<std::string> codes;
+  codes.reserve(diagnostics.size());
   for (const Diagnostic& diagnostic : diagnostics) {
     codes.push_back(diagnostic.code);
   }
@@ -37,6 +38,7 @@ bool Has(const std::vector<std::string>& codes, std::string_view code) {
 
 std::string Joined(const std::vector<Diagnostic>& diagnostics) {
   std::vector<std::string> messages;
+  messages.reserve(diagnostics.size());
   for (const Diagnostic& diagnostic : diagnostics) {
     messages.push_back(diagnostic.message);
   }
@@ -153,7 +155,8 @@ TEST(FlowDto, AShapeOutranksARegistryTagOfTheSameName) {
       "  a -> b\n}\n");
   EXPECT_TRUE(Joined(result.diagnostics).empty()) << Joined(result.diagnostics);
   const FlowPlan* flow = result.program.Flow("f");
-  EXPECT_EQ(flow->Port("a", syntax::PortDirection::kInput)->type, "AudioBuffer");
+  EXPECT_EQ(flow->Port("a", syntax::PortDirection::kInput)->type,
+            "AudioBuffer");
   EXPECT_EQ(flow->Port("b", syntax::PortDirection::kOutput)->type,
             "a11.sdk.AudioBuffer");
 }
@@ -161,11 +164,12 @@ TEST(FlowDto, AShapeOutranksARegistryTagOfTheSameName) {
 TEST(FlowDto, AShapeMayNotBeNamedAfterABuiltInType) {
   const ResolveResult result =
       Check("struct string {\n  a: string\n}\nflow f { in x: string }\n");
-  EXPECT_TRUE(Has(Codes(result.diagnostics), "flow.form.struct-shadows-builtin"));
+  EXPECT_TRUE(
+      Has(Codes(result.diagnostics), "flow.form.struct-shadows-builtin"));
   // And the built-in still means what it always did.
-  EXPECT_EQ(result.program.Flow("f")->Port("x", syntax::PortDirection::kInput)
-                ->type,
-            "string");
+  EXPECT_EQ(
+      result.program.Flow("f")->Port("x", syntax::PortDirection::kInput)->type,
+      "string");
 }
 
 TEST(FlowDto, SaysWhichConstraintsCannotApply) {
@@ -173,6 +177,7 @@ TEST(FlowDto, SaysWhichConstraintsCannotApply) {
     std::string_view field;
     std::string_view code;
   };
+
   const Case cases[] = {
       {"a: string unique", "flow.form.field-constraint"},
       {"a: number matching \"x\"", "flow.form.field-constraint"},
@@ -261,13 +266,12 @@ TEST(FlowDto, AFileOfShapesAloneIsAFileOfTypes) {
 }
 
 TEST(FlowDto, FieldsLineUpTheWayPortsDo) {
-  const std::string formatted =
-      Format(
-          "struct D {\n  describe \"d\"\n"
-          "  id: string required \"the id\"\n"
-          "  longer: number 0..1 default 0.5\n"
-          "  s: string one of [\"a\",\"b\"]\n}\n")
-          .formatted;
+  const std::string formatted = Format(
+                                    "struct D {\n  describe \"d\"\n"
+                                    "  id: string required \"the id\"\n"
+                                    "  longer: number 0..1 default 0.5\n"
+                                    "  s: string one of [\"a\",\"b\"]\n}\n")
+                                    .formatted;
   // `id` is also a call modifier; inside a shape it is a field name, and a
   // formatter that read it as a modifier would indent it as a continuation.
   EXPECT_NE(formatted.find("  id:     string required"), std::string::npos)
@@ -289,6 +293,7 @@ TEST(FlowDto, OffersTheShapesItsFileDeclaresWhereATypeGoes) {
       "flow f {\n  in x: \n}\n";
   const CompleteResult result = CompleteAt(source, source.find("in x: ") + 6);
   std::vector<std::string> names;
+  names.reserve(result.proposals.size());
   for (const Proposal& proposal : result.proposals) {
     names.push_back(proposal.name);
   }
@@ -304,14 +309,15 @@ TEST(FlowDto, OffersAShapesFieldsInsideItsValue) {
       "struct Source {\n  id: string required\n  url: string\n}\n"
       "flow f {\n  in x: string stream required\n  out y: Source stream\n"
       "  x | map Source{} -> y\n}\n";
-  const CompleteResult result =
-      CompleteAt(source, source.find("Source{}") + 7);
+  const CompleteResult result = CompleteAt(source, source.find("Source{}") + 7);
   std::vector<std::string> names;
   for (const Proposal& proposal : result.proposals) {
     EXPECT_EQ(proposal.kind, ProposalKind::kField);
     names.push_back(proposal.name);
     // A key is quoted and takes the colon that has to follow it.
-    if (proposal.name == "id") EXPECT_EQ(proposal.insert, "\"id\": ");
+    if (proposal.name == "id") {
+      EXPECT_EQ(proposal.insert, "\"id\": ");
+    }
   }
   EXPECT_EQ(absl::StrJoin(names, ","), "id,url");
 }
@@ -321,6 +327,7 @@ TEST(FlowDto, OffersWhatAFieldMaySayAboutItself) {
   const CompleteResult result =
       CompleteAt(source, source.find("a: string ") + 10);
   std::vector<std::string> names;
+  names.reserve(result.proposals.size());
   for (const Proposal& proposal : result.proposals) {
     names.push_back(proposal.name);
   }
@@ -338,7 +345,9 @@ TEST(FlowLet, BindsAValueThatStandsWhereAnExpressionDoes) {
   ASSERT_EQ(result.flows.size(), 1u);
   const Symbol* value = nullptr;
   for (const Symbol& symbol : result.flows[0].symbols) {
-    if (symbol.name == "code") value = &symbol;
+    if (symbol.name == "code") {
+      value = &symbol;
+    }
   }
   ASSERT_NE(value, nullptr);
   EXPECT_EQ(value->kind, SymbolKind::kValue);

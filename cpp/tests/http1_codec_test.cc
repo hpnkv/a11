@@ -146,8 +146,8 @@ TEST(Http1CodecTest, DecodesTrailerSectionSplitAcrossFeeds) {
   // A trailer line arriving in pieces is the ordinary case on a slow link.
   ASSERT_TRUE(decoder.Feed("2\r\nhi\r\n0\r\nx-dig", &out, &complete).ok());
   EXPECT_FALSE(complete);
-  ASSERT_TRUE(decoder.Feed("est: abc\r\nx-count: 2\r\n\r\n", &out, &complete)
-                  .ok());
+  ASSERT_TRUE(
+      decoder.Feed("est: abc\r\nx-count: 2\r\n\r\n", &out, &complete).ok());
   EXPECT_TRUE(complete);
   EXPECT_EQ(out, "hi");
   EXPECT_EQ(GetHttpHeader(decoder.trailers(), "x-digest"), "abc");

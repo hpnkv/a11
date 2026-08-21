@@ -11,7 +11,6 @@
 #include <absl/base/thread_annotations.h>
 #include <absl/status/status.h>
 #include <absl/strings/str_cat.h>
-
 #include <opentelemetry/exporters/memory/in_memory_span_data.h>
 #include <opentelemetry/exporters/memory/in_memory_span_exporter.h>
 #include <opentelemetry/exporters/ostream/span_exporter_factory.h>
@@ -101,7 +100,7 @@ std::string TraceIdHex(const otel::trace::TraceId& id) {
   }
   char buf[2 * otel::trace::TraceId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 std::string SpanIdHex(const otel::trace::SpanId& id) {
@@ -110,7 +109,7 @@ std::string SpanIdHex(const otel::trace::SpanId& id) {
   }
   char buf[2 * otel::trace::SpanId::kSize];
   id.ToLowerBase16(buf);
-  return std::string(buf, sizeof(buf));
+  return {buf, sizeof(buf)};
 }
 
 RecordedSpan Convert(const otel_sdk::SpanData& data) {
@@ -262,8 +261,8 @@ absl::Status Configure(const ProviderOptions& options) {
 
   std::vector<std::unique_ptr<otel_sdk::SpanProcessor>> processors;
   processors.push_back(std::move(processor));
-  auto context = otel_sdk::TracerContextFactory::Create(std::move(processors),
-                                                        resource);
+  auto context =
+      otel_sdk::TracerContextFactory::Create(std::move(processors), resource);
   auto provider =
       std::make_shared<otel_sdk::TracerProvider>(std::move(context));
 

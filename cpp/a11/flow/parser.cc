@@ -87,7 +87,9 @@ class ParserImpl {
     // both.
     tokens_.reserve(tokens.size());
     for (const Token& token : tokens) {
-      if (token.kind != TokenKind::kComment) tokens_.push_back(token);
+      if (token.kind != TokenKind::kComment) {
+        tokens_.push_back(token);
+      }
     }
     if (tokens_.empty() || tokens_.back().kind != TokenKind::kEnd) {
       Token end;
@@ -110,68 +112,83 @@ class ParserImpl {
  private:
   // -- token helpers ---------------------------------------------------------
 
-  const Token& Current() const { return tokens_[position_]; }
+  [[nodiscard]] const Token& Current() const { return tokens_[position_]; }
 
-  const Token& Peek(size_t offset = 1) const {
+  [[nodiscard]] const Token& Peek(size_t offset = 1) const {
     return tokens_[std::min(position_ + offset, tokens_.size() - 1)];
   }
 
   const Token& Advance() {
     const Token& token = tokens_[position_];
-    if (token.kind != TokenKind::kEnd) ++position_;
+    if (token.kind != TokenKind::kEnd) {
+      ++position_;
+    }
     return token;
   }
 
-  bool At(TokenKind kind) const { return Current().kind == kind; }
+  [[nodiscard]] bool At(TokenKind kind) const { return Current().kind == kind; }
 
   /// The token at `offset` as a keyword, or `""` if it is not a word.
   ///
   /// A word written in one case throughout reads as its lower-case self, so
   /// `FOR` and `for` are the same keyword and `For` is a name.
-  std::string Keyword(size_t offset = 0) const {
+  [[nodiscard]] std::string Keyword(size_t offset = 0) const {
     const Token& token = offset == 0 ? Current() : Peek(offset);
-    if (!token.IsWord()) return "";
+    if (!token.IsWord()) {
+      return "";
+    }
     return vocabulary::Canonical(token.text);
   }
 
-  bool AtWord(std::string_view word) const {
+  [[nodiscard]] bool AtWord(std::string_view word) const {
     return Current().IsWord() && Keyword() == word;
   }
 
-  bool AtWord(std::string_view first, std::string_view second) const {
-    if (!Current().IsWord()) return false;
+  [[nodiscard]] bool AtWord(std::string_view first,
+                            std::string_view second) const {
+    if (!Current().IsWord()) {
+      return false;
+    }
     const std::string word = Keyword();
     return word == first || word == second;
   }
 
   void SkipNewlines() {
-    while (At(TokenKind::kNewline)) ++position_;
+    while (At(TokenKind::kNewline)) {
+      ++position_;
+    }
   }
 
   /// Whether the next real token is one of `kinds`, past line breaks.
   ///
   /// This is what lets a long pipeline wrap: a line ending just before `|` or
   /// `->` is a continuation, not the end of the statement.
-  bool ContinuesWith(TokenKind kind) const {
+  [[nodiscard]] bool ContinuesWith(TokenKind kind) const {
     size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
     return Peek(offset).kind == kind;
   }
 
   bool AcceptToken(TokenKind kind) {
-    if (Current().kind != kind) return false;
+    if (Current().kind != kind) {
+      return false;
+    }
     Advance();
     return true;
   }
 
   bool AcceptWord(std::string_view word) {
-    if (!AtWord(word)) return false;
+    if (!AtWord(word)) {
+      return false;
+    }
     Advance();
     return true;
   }
 
   /// What is actually here, for a message.
-  std::string Found() const {
+  [[nodiscard]] std::string Found() const {
     return Quoted(Current().text.empty() ? "end of file" : Current().text);
   }
 
@@ -213,9 +230,9 @@ class ParserImpl {
       Advance();
       return true;
     }
-    ReportHere("flow.syntax.unexpected",
-               absl::StrCat("Expected ", Quoted(word), ", found ", Found(),
-                            "."));
+    ReportHere(
+        "flow.syntax.unexpected",
+        absl::StrCat("Expected ", Quoted(word), ", found ", Found(), "."));
     return false;
   }
 
@@ -247,8 +264,12 @@ class ParserImpl {
   /// the language is one statement per line: whatever went wrong, the next line
   /// is a statement again, so a mistake costs its own line and nothing more.
   void Recover() {
-    while (!Current().EndsStatement()) Advance();
-    if (At(TokenKind::kNewline)) SkipNewlines();
+    while (!Current().EndsStatement()) {
+      Advance();
+    }
+    if (At(TokenKind::kNewline)) {
+      SkipNewlines();
+    }
   }
 
   /// Require the end of a statement: a line break, a `}`, or the file.
@@ -257,7 +278,9 @@ class ParserImpl {
       SkipNewlines();
       return;
     }
-    if (At(TokenKind::kRightBrace) || At(TokenKind::kEnd)) return;
+    if (At(TokenKind::kRightBrace) || At(TokenKind::kEnd)) {
+      return;
+    }
     ReportHere("flow.syntax.statement-end",
                absl::StrCat("Unexpected ", Found(),
                             " after a complete statement; one statement per "
@@ -270,6 +293,59 @@ class ParserImpl {
     auto node = std::make_unique<T>();
     node->location = syntax::LocationOf(token);
     return node;
+  }
+
+  /**
+   * @brief How deep a document may nest before the parser stops descending.
+   *
+   * The parse is recursive descent, so the call depth follows the input's
+   * nesting -- and A11 runs its work on pooled fibres whose stacks are fixed
+   * and small (see thread/thread_pool.cc). Without a bound, `[[[[[...]]]]]` in
+   * a file is a stack overflow rather than a diagnostic, and a flow can arrive
+   * from anywhere: an editor buffer, a `scan` of a repository, a request.
+   *
+   * 128 is far past anything written by hand and far short of the smallest
+   * fibre stack. Every walker downstream -- the resolver, the JSON emitters,
+   * the formatter -- inherits the bound, because what they descend is the tree
+   * this built.
+   */
+  static constexpr int kMaxNesting = 128;
+
+  /// Counts one level of descent, and gives it back on the way out.
+  class Descent {
+   public:
+    explicit Descent(ParserImpl& parser) : parser_(&parser) {
+      ++parser_->depth_;
+    }
+
+    ~Descent() { --parser_->depth_; }
+
+    Descent(const Descent&) = delete;
+    Descent& operator=(const Descent&) = delete;
+    Descent(Descent&&) = delete;
+    Descent& operator=(Descent&&) = delete;
+
+   private:
+    ParserImpl* parser_;
+  };
+
+  /// Whether the parser has descended as far as it will go.
+  ///
+  /// Reports once per document: past the bound every construct would say the
+  /// same thing, and a reader needs the first one.
+  bool TooDeep() {
+    if (depth_ <= kMaxNesting) {
+      return false;
+    }
+    if (!reported_too_deep_) {
+      reported_too_deep_ = true;
+      Report("flow.syntax.nesting-too-deep",
+             absl::StrCat("This nests more than ", kMaxNesting,
+                          " levels deep, which is deeper than the language "
+                          "reads. Give the inner part a name and refer to it."),
+             Current());
+    }
+    return true;
   }
 
   /// A stand-in for a value that could not be read.
@@ -289,20 +365,26 @@ class ParserImpl {
         const Token& keyword = Advance();
         result_.dtos.push_back(ParseDto(keyword));
         SkipNewlines();
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
         continue;
       }
       if (!ExpectWord("flow")) {
         // Not a declaration at all. The line is skipped rather than read as
         // one, so a stray statement outside a flow costs one diagnostic.
         Recover();
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
         continue;
       }
       const Token& keyword = tokens_[position_ - 1];
       result_.flows.push_back(ParseFlow(keyword));
       SkipNewlines();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     if (result_.flows.empty() && result_.dtos.empty()) {
       ReportHere("flow.syntax.unexpected",
@@ -346,7 +428,9 @@ class ParserImpl {
         Recover();
       }
       EndStatement();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     AcceptToken(TokenKind::kRightBrace);
     flow_name_ = outer_flow;
@@ -373,7 +457,9 @@ class ParserImpl {
           vocabulary::OrderedFieldModifiers();
       int rank = 0;
       for (size_t index = 0; index < order.size(); ++index) {
-        if (order[index] == modifier) rank = static_cast<int>(index);
+        if (order[index] == modifier) {
+          rank = static_cast<int>(index);
+        }
       }
       if (rank < reached) {
         // Reached at least one modifier to be out of order with, so the index
@@ -392,10 +478,14 @@ class ParserImpl {
       const Token& at = Current();
       if (At(TokenKind::kRange) || At(TokenKind::kNumber) ||
           At(TokenKind::kDuration)) {
-        if (!ParseFieldRange(*field)) break;
+        if (!ParseFieldRange(*field)) {
+          break;
+        }
         continue;
       }
-      if (!Current().IsWord()) break;
+      if (!Current().IsWord()) {
+        break;
+      }
       const std::string word = Keyword();
       if (word == "required") {
         Advance();
@@ -422,7 +512,8 @@ class ParserImpl {
         } else {
           ReportHere("flow.syntax.unexpected",
                      absl::StrCat("Expected a quoted pattern after 'matching', "
-                                  "found ", Found(), "."));
+                                  "found ",
+                                  Found(), "."));
         }
         continue;
       }
@@ -465,7 +556,9 @@ class ParserImpl {
     if (!At(TokenKind::kRange)) {
       const Token& low = Advance();
       std::optional<syntax::Constant> minimum = BoundOf(low);
-      if (!minimum.has_value()) return false;
+      if (!minimum.has_value()) {
+        return false;
+      }
       if (!At(TokenKind::kRange)) {
         Report("flow.syntax.unexpected",
                absl::StrCat("Expected '..' after ", Quoted(low.text),
@@ -505,7 +598,9 @@ class ParserImpl {
     if (token.kind == TokenKind::kDuration) {
       return syntax::Constant::Duration(token.duration);
     }
-    if (token.kind != TokenKind::kNumber) return std::nullopt;
+    if (token.kind != TokenKind::kNumber) {
+      return std::nullopt;
+    }
     return token.is_integer
                ? syntax::Constant::Integer(static_cast<long long>(token.number))
                : syntax::Constant::Double(token.number);
@@ -525,7 +620,7 @@ class ParserImpl {
     }
     if (constant->kind != syntax::Constant::Kind::kList) {
       Report("flow.form.one-of-not-a-list",
-             "'one of' takes a list: write 'one of [\"a\", \"b\"]'.", at,
+             R"('one of' takes a list: write 'one of ["a", "b"]'.)", at,
              Severity::kError, Family::kForm);
       return;
     }
@@ -583,7 +678,9 @@ class ParserImpl {
         declaration->body.push_back(ParseStatement());
       }
       EndStatement();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     AcceptToken(TokenKind::kRightBrace);
     flow_name_ = outer_flow;
@@ -610,16 +707,17 @@ class ParserImpl {
       // These used to come first. Say so, rather than report the type after
       // them as a statement that has no business being here.
       Report("flow.form.port-modifier-order",
-             absl::StrCat(Quoted(port->type.name),
-                          " follows the type: write '", port->name.text,
-                          ": TYPE ", port->type.name, "'."),
+             absl::StrCat(Quoted(port->type.name), " follows the type: write '",
+                          port->name.text, ": TYPE ", port->type.name, "'."),
              TokenAt(port->type.location), Severity::kError, Family::kForm);
       if (written == "stream") {
         port->unary = false;
       } else {
         port->required = true;
       }
-      if (Current().IsWord() || At(TokenKind::kString)) port->type = ParseType();
+      if (Current().IsWord() || At(TokenKind::kString)) {
+        port->type = ParseType();
+      }
     }
     while (true) {
       if (AcceptWord("stream")) {
@@ -635,10 +733,14 @@ class ParserImpl {
   }
 
   /// Whether a `describe` has its string, here or on the line below.
-  bool DescribeFollows() const {
-    if (Peek().kind == TokenKind::kString) return true;
+  [[nodiscard]] bool DescribeFollows() const {
+    if (Peek().kind == TokenKind::kString) {
+      return true;
+    }
     size_t offset = 1;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
     return offset > 1 && Peek(offset).kind == TokenKind::kString &&
            Peek(offset + 1).EndsStatement();
   }
@@ -654,20 +756,30 @@ class ParserImpl {
   /// statement in this language at all.
   std::string ParseDescription() {
     std::string value;
-    if (At(TokenKind::kString)) value = ParseStringRun();
+    if (At(TokenKind::kString)) {
+      value = ParseStringRun();
+    }
     // Then every following line that holds nothing but strings. Prose that says
     // anything outgrows one line, and a lone string on a line is not a
     // statement in this language -- so a paragraph written as a stack of them
     // is one description, and there is nothing else it could be.
     while (true) {
       size_t offset = 0;
-      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-      if (offset == 0 || Peek(offset).kind != TokenKind::kString) break;
+      while (Peek(offset).kind == TokenKind::kNewline) {
+        ++offset;
+      }
+      if (offset == 0 || Peek(offset).kind != TokenKind::kString) {
+        break;
+      }
       // A run of strings on the line is still one description, so what has to
       // end the statement is what follows the *last* of them.
       size_t past = offset;
-      while (Peek(past).kind == TokenKind::kString) ++past;
-      if (!Peek(past).EndsStatement()) break;
+      while (Peek(past).kind == TokenKind::kString) {
+        ++past;
+      }
+      if (!Peek(past).EndsStatement()) {
+        break;
+      }
       SkipNewlines();
       absl::StrAppend(&value, ParseStringRun());
     }
@@ -714,11 +826,14 @@ class ParserImpl {
     type.name = ParseDottedName("a port type").text;
     // Brackets with something inside them are the parameters a generic type is
     // given; empty ones are the `T[]` sugar, and are read by the loop below.
-    if (At(TokenKind::kLeftBracket) && Peek().kind != TokenKind::kRightBracket) {
+    if (At(TokenKind::kLeftBracket) &&
+        Peek().kind != TokenKind::kRightBracket) {
       Advance();
       while (true) {
         type.parameters.push_back(ParseType());
-        if (!AcceptToken(TokenKind::kComma)) break;
+        if (!AcceptToken(TokenKind::kComma)) {
+          break;
+        }
       }
       Expect(TokenKind::kRightBracket, "']' after the type parameters");
     }
@@ -761,10 +876,14 @@ class ParserImpl {
     }
     std::string alias = header->name;
     for (char& letter : alias) {
-      if (letter == '-' || letter == '.') letter = '_';
+      if (letter == '-' || letter == '.') {
+        letter = '_';
+      }
     }
     header->alias = Word{alias, syntax::LocationOf(keyword)};
-    if (AcceptWord("as")) header->alias = ExpectName("a header alias");
+    if (AcceptWord("as")) {
+      header->alias = ExpectName("a header alias");
+    }
     if (AcceptWord("default")) {
       const Token& at = Current();
       NodePtr value = ParseExpression();
@@ -786,7 +905,9 @@ class ParserImpl {
 
   std::vector<NodePtr> ParseBlock() {
     std::vector<NodePtr> body;
-    if (!Expect(TokenKind::kLeftBrace)) return body;
+    if (!Expect(TokenKind::kLeftBrace)) {
+      return body;
+    }
     SkipNewlines();
     while (!At(TokenKind::kRightBrace)) {
       if (At(TokenKind::kEnd)) {
@@ -796,7 +917,9 @@ class ParserImpl {
       const size_t before = position_;
       body.push_back(ParseStatement());
       EndStatement();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     Advance();
     return body;
@@ -810,8 +933,10 @@ class ParserImpl {
   /// keys are strings followed by `:`, and a spread is only ever a record's.
   /// Everything else opens statements. `{}` is the empty record, because
   /// somebody writes that and nobody writes an empty block.
-  bool OpensBlock() const {
-    if (!At(TokenKind::kLeftBrace)) return false;
+  [[nodiscard]] bool OpensBlock() const {
+    if (!At(TokenKind::kLeftBrace)) {
+      return false;
+    }
     switch (Peek().kind) {
       case TokenKind::kRightBrace:
       case TokenKind::kSpread:
@@ -832,8 +957,10 @@ class ParserImpl {
   }
 
   /// Whether a statement-opening word is used as a keyword here.
-  bool OpensStatement(std::string_view word) const {
-    if (!OpensStatementWord(word)) return false;
+  [[nodiscard]] bool OpensStatement(std::string_view word) const {
+    if (!OpensStatementWord(word)) {
+      return false;
+    }
     // `skip -> out` and `wait | count -> n` treat the word as a name.
     switch (Peek().kind) {
       case TokenKind::kArrow:
@@ -849,6 +976,13 @@ class ParserImpl {
   }
 
   NodePtr ParseStatement() {
+    const Descent descent(*this);
+    if (TooDeep()) {
+      // Past the bound nothing more can be read, and the caller's loop needs a
+      // token consumed or it spins.
+      Advance();
+      return MakeError(Current(), "a statement");
+    }
     const Token& keyword = Current();
     if (keyword.IsWord()) {
       const std::string word = Keyword();
@@ -904,6 +1038,9 @@ class ParserImpl {
           syntax::Wait* wait = nullptr;
           if (of) {
             held = ParseWaitOf(keyword);
+            // Built by ParseWaitOf one line up, so its kind is not in
+            // question.
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
             wait = static_cast<syntax::Wait*>(held.get());
           } else {
             auto one = Make<syntax::Wait>(keyword);
@@ -911,10 +1048,14 @@ class ParserImpl {
             wait = one.get();
             held = std::move(one);
           }
-          if (AcceptWord("timeout")) wait->timeout = ExpectDuration();
+          if (AcceptWord("timeout")) {
+            wait->timeout = ExpectDuration();
+          }
           // `wait first of a, b -> n` writes the winner's number, exactly as a
           // pipe writes a value. Only a race has one to write.
-          if (ContinuesWith(TokenKind::kArrow)) SkipNewlines();
+          if (ContinuesWith(TokenKind::kArrow)) {
+            SkipNewlines();
+          }
           if (AcceptToken(TokenKind::kArrow)) {
             wait->targets.push_back(ParseReference());
             while (AcceptToken(TokenKind::kComma)) {
@@ -949,8 +1090,12 @@ class ParserImpl {
           abort->target = ParseReference();
           // The same tail `fail` takes, because it is the same question: which
           // status, and what to say about it.
-          if (!AtStatementEnd()) abort->code = ParseExpression();
-          if (!AtStatementEnd()) abort->message = ParseExpression();
+          if (!AtStatementEnd()) {
+            abort->code = ParseExpression();
+          }
+          if (!AtStatementEnd()) {
+            abort->message = ParseExpression();
+          }
           abort->after = ParseAfter();
           return abort;
         }
@@ -962,8 +1107,12 @@ class ParserImpl {
           log->after = ParseAfter();
           return log;
         }
-        if (word == "for") return ParseForEach();
-        if (word == "repeat") return ParseRepeat();
+        if (word == "for") {
+          return ParseForEach();
+        }
+        if (word == "repeat") {
+          return ParseRepeat();
+        }
         if (word == "until" || word == "while") {
           Advance();
           auto until = Make<syntax::Until>(keyword);
@@ -971,7 +1120,9 @@ class ParserImpl {
           until->stop_when = word == "until";
           return until;
         }
-        if (word == "if") return ParseIf();
+        if (word == "if") {
+          return ParseIf();
+        }
         if (word == "nodes") {
           Advance();
           auto nodes = Make<syntax::Nodes>(keyword);
@@ -986,8 +1137,8 @@ class ParserImpl {
 
       if (Peek().kind == TokenKind::kEqual) {
         auto bind = Make<syntax::Bind>(keyword);
-        bind->name = Word{std::string(Advance().text),
-                          syntax::LocationOf(keyword)};
+        bind->name =
+            Word{std::string(Advance().text), syntax::LocationOf(keyword)};
         Advance();
         if (AtWord("node")) {
           bind->value = ParseNode();
@@ -1020,15 +1171,17 @@ class ParserImpl {
 
       if (Peek().kind == TokenKind::kCarry) {
         auto carry = Make<syntax::Carry>(keyword);
-        carry->name = Word{std::string(Advance().text),
-                           syntax::LocationOf(keyword)};
+        carry->name =
+            Word{std::string(Advance().text), syntax::LocationOf(keyword)};
         Advance();
         carry->pipeline = ParsePipeline();
         return carry;
       }
     }
 
-    if (OpensBlock()) return ParseBlockStatement(keyword, /*tolerant=*/false);
+    if (OpensBlock()) {
+      return ParseBlockStatement(keyword, /*tolerant=*/false);
+    }
 
     return ParsePipeStatement(keyword, /*tolerant=*/false);
   }
@@ -1041,8 +1194,12 @@ class ParserImpl {
     auto pipe = Make<syntax::Pipe>(keyword);
     pipe->tolerant = tolerant;
     pipe->pipeline = ParsePipeline();
-    if (ContinuesWith(TokenKind::kArrow)) SkipNewlines();
-    if (!Expect(TokenKind::kArrow, "'->' and a destination port")) return pipe;
+    if (ContinuesWith(TokenKind::kArrow)) {
+      SkipNewlines();
+    }
+    if (!Expect(TokenKind::kArrow, "'->' and a destination port")) {
+      return pipe;
+    }
     pipe->targets.push_back(ParseReference());
     while (AcceptToken(TokenKind::kComma)) {
       SkipNewlines();
@@ -1057,21 +1214,27 @@ class ParserImpl {
   /// What tells `try run foo(..)` from `try foo.out -> dest`. Deliberately not a
   /// "word followed by `(`" test: `try zip(a, b) -> dest` is a pipe whose source
   /// is a source word, and that heuristic would read it as a call.
-  bool NextWordIsCallVerb() const {
+  [[nodiscard]] bool NextWordIsCallVerb() const {
     // From 1, because `Peek(0)` is `Current()` -- the `try` itself. `NextWordIs`
     // starts at 0 and so asks about the current token despite its name, which
     // is a trap worth not falling into twice.
     size_t offset = 1;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
     const Token& token = Peek(offset);
-    if (!token.IsWord()) return false;
+    if (!token.IsWord()) {
+      return false;
+    }
     const std::string word = vocabulary::Canonical(token.text);
     return word == "run" || word == "call";
   }
 
-  bool NextWordIs(std::string_view word) const {
+  [[nodiscard]] bool NextWordIs(std::string_view word) const {
     size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
     const Token& token = Peek(offset);
     return token.IsWord() && token.text == word;
   }
@@ -1095,8 +1258,8 @@ class ParserImpl {
       Report("flow.form.wait-of-one",
              absl::StrCat("'wait ", first ? "first" : "all",
                           " of' waits on several subjects; with one, write "
-                          "'wait ", first ? "first" : "all",
-                          "'s subject on its own."),
+                          "'wait ",
+                          first ? "first" : "all", "'s subject on its own."),
              keyword, Severity::kWarning, Family::kForm);
     }
     return wait;
@@ -1147,15 +1310,23 @@ class ParserImpl {
   /// Whether the tokens ahead are `name (, name)* of`, unparenthesized -- the
   /// one shape of an output group that has to be the entire `skip` list, since
   /// without brackets nothing else says where its names stop.
-  bool AtOutputGroupWithoutParens() const {
-    if (!Current().IsWord()) return false;
+  [[nodiscard]] bool AtOutputGroupWithoutParens() const {
+    if (!Current().IsWord()) {
+      return false;
+    }
     size_t offset = 0;
     while (true) {
-      if (Peek(offset).kind != TokenKind::kWord) return false;
+      if (Peek(offset).kind != TokenKind::kWord) {
+        return false;
+      }
       ++offset;
-      if (Peek(offset).kind != TokenKind::kComma) break;
+      if (Peek(offset).kind != TokenKind::kComma) {
+        break;
+      }
       ++offset;
-      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) {
+        ++offset;
+      }
     }
     return Peek(offset).IsWord() && Peek(offset).text == "of";
   }
@@ -1188,7 +1359,9 @@ class ParserImpl {
       Expect(TokenKind::kRightParen);
       return target;
     }
-    if (bracketed) Expect(TokenKind::kRightParen);
+    if (bracketed) {
+      Expect(TokenKind::kRightParen);
+    }
     ExpectWord("of");
     target.call = ExpectName("the call these outputs belong to");
     return target;
@@ -1213,20 +1386,36 @@ class ParserImpl {
   /// `(o1, o2 of act)`) rather than an ordinary parenthesized expression or
   /// pipeline value (`(a | count)`), by looking past it without consuming
   /// anything.
-  bool LooksLikeParenthesizedOutputGroup() const {
+  [[nodiscard]] bool LooksLikeParenthesizedOutputGroup() const {
     size_t offset = 1;  // past '('
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-    if (Peek(offset).kind != TokenKind::kWord) return false;
-    while (true) {
-      if (Peek(offset).kind != TokenKind::kWord) return false;
+    while (Peek(offset).kind == TokenKind::kNewline) {
       ++offset;
-      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-      if (Peek(offset).IsWord() && Peek(offset).text == "of") return true;
-      if (Peek(offset).kind != TokenKind::kComma) break;
-      ++offset;
-      while (Peek(offset).kind == TokenKind::kNewline) ++offset;
     }
-    if (Peek(offset).kind != TokenKind::kRightParen) return false;
+    if (Peek(offset).kind != TokenKind::kWord) {
+      return false;
+    }
+    while (true) {
+      if (Peek(offset).kind != TokenKind::kWord) {
+        return false;
+      }
+      ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) {
+        ++offset;
+      }
+      if (Peek(offset).IsWord() && Peek(offset).text == "of") {
+        return true;
+      }
+      if (Peek(offset).kind != TokenKind::kComma) {
+        break;
+      }
+      ++offset;
+      while (Peek(offset).kind == TokenKind::kNewline) {
+        ++offset;
+      }
+    }
+    if (Peek(offset).kind != TokenKind::kRightParen) {
+      return false;
+    }
     ++offset;
     return Peek(offset).IsWord() && Peek(offset).text == "of";
   }
@@ -1234,8 +1423,12 @@ class ParserImpl {
   /// `fail`, `fail thing`, or `fail code thing`.
   NodePtr ParseFail(const Token& keyword) {
     auto fail = Make<syntax::Fail>(keyword);
-    if (!AtStatementEnd()) fail->code = ParseExpression();
-    if (!AtStatementEnd()) fail->message = ParseExpression();
+    if (!AtStatementEnd()) {
+      fail->code = ParseExpression();
+    }
+    if (!AtStatementEnd()) {
+      fail->message = ParseExpression();
+    }
     fail->after = ParseAfter();
     return fail;
   }
@@ -1262,8 +1455,7 @@ class ParserImpl {
           break;
         default: {
           const Token& level = Advance();
-          tail.level =
-              Word{std::string(level.text), syntax::LocationOf(level)};
+          tail.level = Word{std::string(level.text), syntax::LocationOf(level)};
           break;
         }
       }
@@ -1280,7 +1472,9 @@ class ParserImpl {
       }
       while (!AtStatementEnd() && !AtStageEnd()) {
         tail.arguments.push_back(ParseExpression());
-        if (!AcceptToken(TokenKind::kComma)) break;
+        if (!AcceptToken(TokenKind::kComma)) {
+          break;
+        }
       }
       return tail;
     }
@@ -1315,7 +1509,7 @@ class ParserImpl {
   }
 
   /// Whether a stage's argument has run out: the next `|`, `->` or line.
-  bool AtStageEnd() const {
+  [[nodiscard]] bool AtStageEnd() const {
     return At(TokenKind::kPipe) || At(TokenKind::kArrow);
   }
 
@@ -1336,20 +1530,26 @@ class ParserImpl {
       return node;
     }
     Advance();
-    if (!At(TokenKind::kRightParen)) node->id = ParseExpression();
+    if (!At(TokenKind::kRightParen)) {
+      node->id = ParseExpression();
+    }
     Expect(TokenKind::kRightParen);
-    if (AcceptWord("in")) node->node_map = ExpectName("a node map name");
+    if (AcceptWord("in")) {
+      node->node_map = ExpectName("a node map name");
+    }
     return node;
   }
 
-  bool AtStatementEnd() const {
+  [[nodiscard]] bool AtStatementEnd() const {
     return Current().EndsStatement() || AtWord("after");
   }
 
   /// A trailing `after a, b` on a statement that is not a call.
   std::vector<Word> ParseAfter() {
     std::vector<Word> names;
-    if (!AcceptWord("after")) return names;
+    if (!AcceptWord("after")) {
+      return names;
+    }
     names.push_back(ExpectName("a step name"));
     while (At(TokenKind::kComma) && Peek().kind == TokenKind::kWord) {
       Advance();
@@ -1372,7 +1572,9 @@ class ParserImpl {
       const BlockHeader header(this);
       loop->pipeline = ParsePipeline();
     }
-    if (AcceptWord("parallel")) loop->parallel = ExpectCount();
+    if (AcceptWord("parallel")) {
+      loop->parallel = ExpectCount();
+    }
     loop->body = ParseBlock();
     loop->after = ParseAfter();
     return loop;
@@ -1389,7 +1591,9 @@ class ParserImpl {
       const BlockHeader header(this);
       repeat->start = ParseExpression();
     }
-    if (AcceptWord("max")) repeat->max_iterations = ExpectCount();
+    if (AcceptWord("max")) {
+      repeat->max_iterations = ExpectCount();
+    }
     repeat->body = ParseBlock();
     repeat->after = ParseAfter();
     return repeat;
@@ -1404,7 +1608,9 @@ class ParserImpl {
       branch->condition = ParseExpression();
     }
     branch->then_body = ParseBlock();
-    if (ContinuesWith(TokenKind::kWord) && NextWordIs("else")) SkipNewlines();
+    if (ContinuesWith(TokenKind::kWord) && NextWordIs("else")) {
+      SkipNewlines();
+    }
     if (AcceptWord("else")) {
       if (AtWord("if")) {
         branch->else_body.push_back(ParseIf());
@@ -1424,10 +1630,9 @@ class ParserImpl {
     switch (Current().kind) {
       case TokenKind::kNumber: {
         const Token& token = Advance();
-        return token.is_integer
-                   ? syntax::Constant::Integer(
-                         static_cast<long long>(token.number))
-                   : syntax::Constant::Double(token.number);
+        return token.is_integer ? syntax::Constant::Integer(
+                                      static_cast<long long>(token.number))
+                                : syntax::Constant::Double(token.number);
       }
       case TokenKind::kString:
         return syntax::Constant::String(std::string(Advance().string_value));
@@ -1504,11 +1709,15 @@ class ParserImpl {
       call->args.push_back(std::move(argument));
       SkipNewlines();
       if (!AcceptToken(TokenKind::kComma)) {
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
         break;
       }
       SkipNewlines();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     Expect(TokenKind::kRightParen);
     call->modifiers = ParseModifiers();
@@ -1520,11 +1729,17 @@ class ParserImpl {
   /// Modifiers read well on a line of their own, so a break before one
   /// continues the call -- unless what follows looks like a statement in its
   /// own right, which is what a port called `timeout` left of a `->` is.
-  bool ContinuesWithModifier() const {
+  [[nodiscard]] bool ContinuesWithModifier() const {
     size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-    if (offset == 0) return false;
-    if (!vocabulary::ModifierWords().contains(Keyword(offset))) return false;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
+    if (offset == 0) {
+      return false;
+    }
+    if (!vocabulary::ModifierWords().contains(Keyword(offset))) {
+      return false;
+    }
     switch (Peek(offset + 1).kind) {
       case TokenKind::kArrow:
       case TokenKind::kPipe:
@@ -1539,8 +1754,12 @@ class ParserImpl {
   syntax::CallModifiersPtr ParseModifiers() {
     auto modifiers = Make<syntax::CallModifiers>(Current());
     while (true) {
-      if (ContinuesWithModifier()) SkipNewlines();
-      if (!vocabulary::ModifierWords().contains(Keyword())) break;
+      if (ContinuesWithModifier()) {
+        SkipNewlines();
+      }
+      if (!vocabulary::ModifierWords().contains(Keyword())) {
+        break;
+      }
       const Token& word = Advance();
       const std::string modifier = vocabulary::Canonical(word.text);
       if (modifier == "tee") {
@@ -1560,15 +1779,17 @@ class ParserImpl {
       } else if (modifier == "forward") {
         // `forward headers "a", "b"`: send the call the headers this flow was
         // given, without naming a value for each.
-        if (!ExpectWord("headers")) continue;
+        if (!ExpectWord("headers")) {
+          continue;
+        }
         while (true) {
           if (!At(TokenKind::kString)) {
-            ReportHere("flow.syntax.unexpected",
-                       absl::StrCat("Expected a header name, found ", Found(),
-                                    "."));
+            ReportHere(
+                "flow.syntax.unexpected",
+                absl::StrCat("Expected a header name, found ", Found(), "."));
             break;
           }
-          modifiers->forward.push_back(std::string(Advance().string_value));
+          modifiers->forward.emplace_back(Advance().string_value);
           if (At(TokenKind::kComma) && Peek().kind == TokenKind::kString) {
             Advance();
             continue;
@@ -1578,9 +1799,9 @@ class ParserImpl {
       } else if (modifier == "with") {
         while (true) {
           if (!At(TokenKind::kString)) {
-            ReportHere("flow.syntax.unexpected",
-                       absl::StrCat("Expected a header name, found ", Found(),
-                                    "."));
+            ReportHere(
+                "flow.syntax.unexpected",
+                absl::StrCat("Expected a header name, found ", Found(), "."));
             break;
           }
           std::string header = std::string(Advance().string_value);
@@ -1634,8 +1855,10 @@ class ParserImpl {
   }
 
   /// Whether a stage that may go without its pipe starts here.
-  bool AtBareStage() const {
-    if (!vocabulary::BareStages().contains(Keyword())) return false;
+  [[nodiscard]] bool AtBareStage() const {
+    if (!vocabulary::BareStages().contains(Keyword())) {
+      return false;
+    }
     // `then` and `where` take an operand, so a bare one at the end of a
     // statement is a name that happens to be spelled like a stage.
     switch (Peek().kind) {
@@ -1651,11 +1874,17 @@ class ParserImpl {
   }
 
   /// Whether a line break is followed by a bare `then`/`where`.
-  bool ContinuesWithBareStage() const {
+  [[nodiscard]] bool ContinuesWithBareStage() const {
     size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
-    if (offset == 0) return false;
-    if (!vocabulary::BareStages().contains(Keyword(offset))) return false;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
+    if (offset == 0) {
+      return false;
+    }
+    if (!vocabulary::BareStages().contains(Keyword(offset))) {
+      return false;
+    }
     switch (Peek(offset + 1).kind) {
       case TokenKind::kArrow:
       case TokenKind::kPipe:
@@ -1732,11 +1961,17 @@ class ParserImpl {
         // each. Nothing follows a stage but another stage, a destination or the
         // end of the statement, so what tells them apart is what *cannot* start
         // an expression.
-        if (StageArgumentFollows()) stage->argument = ParseExpression();
+        if (StageArgumentFollows()) {
+          stage->argument = ParseExpression();
+        }
         break;
       case vocabulary::StageArgument::kSortKey:
-        if (AcceptWord("by")) stage->argument = ParseExpression();
-        if (AcceptWord("desc")) stage->descending = true;
+        if (AcceptWord("by")) {
+          stage->argument = ParseExpression();
+        }
+        if (AcceptWord("desc")) {
+          stage->descending = true;
+        }
         break;
       case vocabulary::StageArgument::kFold:
         ParseFoldArgument(*stage);
@@ -1757,7 +1992,7 @@ class ParserImpl {
 
   /// Whether an optional stage argument was written, rather than the stage
   /// ending here.
-  bool StageArgumentFollows() const {
+  [[nodiscard]] bool StageArgumentFollows() const {
     switch (Current().kind) {
       case TokenKind::kNewline:
       case TokenKind::kEnd:
@@ -1793,7 +2028,8 @@ class ParserImpl {
       const Token& brace = Current();
       const syntax::NodePtr record = ParseObjectLiteral();
       std::optional<syntax::Constant> folded =
-          record == nullptr ? std::nullopt : syntax::ConstantValue(record.get());
+          record == nullptr ? std::nullopt
+                            : syntax::ConstantValue(record.get());
       if (folded.has_value()) {
         stage.start = *std::move(folded);
       } else {
@@ -1822,8 +2058,8 @@ class ParserImpl {
              Current(), Severity::kError, Family::kForm);
       return;
     }
-    stage.carried = ExpectName(absl::StrCat("a name for what the ", spelled,
-                                            " carries"));
+    stage.carried =
+        ExpectName(absl::StrCat("a name for what the ", spelled, " carries"));
     if (!Expect(TokenKind::kComma,
                 "',' and the expression that folds one value in")) {
       return;
@@ -1867,7 +2103,8 @@ class ParserImpl {
       Report("flow.form.unordered-without-parallel",
              absl::StrCat("'unordered' says a parallel stage may finish its "
                           "values in any order, so it needs 'parallel n'. "
-                          "Without it, '", stage.name,
+                          "Without it, '",
+                          stage.name,
                           "' sees one value at a time and the order is the "
                           "one it was given."),
              keyword, Severity::kWarning, Family::kForm);
@@ -1877,7 +2114,8 @@ class ParserImpl {
       Report("flow.form.into-without-try",
              absl::StrCat("'into' says where a *tolerated* failure goes, so "
                           "the stage has to be a 'try': "
-                          "`try ", stage.name, " ... into failures`."),
+                          "`try ",
+                          stage.name, " ... into failures`."),
              keyword, Severity::kError, Family::kForm);
     }
   }
@@ -1898,10 +2136,10 @@ class ParserImpl {
   NodePtr ParseReference() {
     const Token& at = Current();
     NodePtr node = ParsePostfix();
-    if (syntax::IsAnyOf(node.get(),
-                        {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
-                         syntax::NodeKind::kOutcome,
-                         syntax::NodeKind::kError})) {
+    if (syntax::IsAnyOf(
+            node.get(),
+            {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
+             syntax::NodeKind::kOutcome, syntax::NodeKind::kError})) {
       return node;
     }
     Report("flow.syntax.unexpected",
@@ -1911,9 +2149,11 @@ class ParserImpl {
   }
 
   /// How many newlines sit between here and the next token that is not one.
-  size_t NewlinesAhead() const {
+  [[nodiscard]] size_t NewlinesAhead() const {
     size_t offset = 0;
-    while (Peek(offset).kind == TokenKind::kNewline) ++offset;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
     return offset;
   }
 
@@ -1934,30 +2174,48 @@ class ParserImpl {
   /// Only ever *consumes* newlines when the token after them is the one asked
   /// for, so a `}` on the next line is still a `}`.
   bool WrapsTo(TokenKind kind) {
-    if (brackets_ == 0 || At(kind)) return false;
+    if (brackets_ == 0 || At(kind)) {
+      return false;
+    }
     const size_t ahead = NewlinesAhead();
-    if (ahead == 0 || Peek(ahead).kind != kind) return false;
+    if (ahead == 0 || Peek(ahead).kind != kind) {
+      return false;
+    }
     SkipNewlines();
     return true;
   }
 
   bool WrapsToWord(std::string_view word) {
-    if (brackets_ == 0 || AtWord(word)) return false;
+    if (brackets_ == 0 || AtWord(word)) {
+      return false;
+    }
     const size_t ahead = NewlinesAhead();
-    if (ahead == 0 || Keyword(ahead) != word) return false;
+    if (ahead == 0 || Keyword(ahead) != word) {
+      return false;
+    }
     SkipNewlines();
     return true;
   }
 
   bool WrapsToComparison() {
-    if (brackets_ == 0 || IsComparison(Current().kind)) return false;
+    if (brackets_ == 0 || IsComparison(Current().kind)) {
+      return false;
+    }
     const size_t ahead = NewlinesAhead();
-    if (ahead == 0 || !IsComparison(Peek(ahead).kind)) return false;
+    if (ahead == 0 || !IsComparison(Peek(ahead).kind)) {
+      return false;
+    }
     SkipNewlines();
     return true;
   }
 
-  NodePtr ParseExpression() { return ParseOr(); }
+  NodePtr ParseExpression() {
+    const Descent descent(*this);
+    if (TooDeep()) {
+      return MakeError(Current(), "a value");
+    }
+    return ParseOr();
+  }
 
   NodePtr ParseOr() {
     NodePtr left = ParseAnd();
@@ -2076,7 +2334,9 @@ class ParserImpl {
         : parser_(parser), outer_(parser->brace_literals_) {
       parser_->brace_literals_ = false;
     }
+
     ~BlockHeader() { parser_->brace_literals_ = outer_; }
+
     BlockHeader(const BlockHeader&) = delete;
     BlockHeader& operator=(const BlockHeader&) = delete;
 
@@ -2097,10 +2357,12 @@ class ParserImpl {
       parser_->brace_literals_ = true;
       ++parser_->brackets_;
     }
+
     ~Bracketed() {
       parser_->brace_literals_ = outer_;
       --parser_->brackets_;
     }
+
     Bracketed(const Bracketed&) = delete;
     Bracketed& operator=(const Bracketed&) = delete;
 
@@ -2134,7 +2396,9 @@ class ParserImpl {
       // the brackets cannot be mistaken for an index.
       if (At(TokenKind::kLeftBrace) && brace_literals_) {
         std::optional<std::string> name = syntax::DottedName(node.get());
-        if (!name.has_value()) return node;
+        if (!name.has_value()) {
+          return node;
+        }
         auto typed = std::make_unique<syntax::TypedValue>();
         typed->location = node->location;
         typed->type.location = node->location;
@@ -2178,10 +2442,10 @@ class ParserImpl {
     if (At(TokenKind::kNumber)) {
       Advance();
       auto literal = Make<syntax::Literal>(token);
-      literal->value = token.is_integer
-                           ? syntax::Constant::Integer(
-                                 static_cast<long long>(token.number))
-                           : syntax::Constant::Double(token.number);
+      literal->value =
+          token.is_integer
+              ? syntax::Constant::Integer(static_cast<long long>(token.number))
+              : syntax::Constant::Double(token.number);
       return literal;
     }
     if (At(TokenKind::kDuration)) {
@@ -2227,16 +2491,22 @@ class ParserImpl {
                                                      : ParseExpression());
         SkipNewlines();
         if (!AcceptToken(TokenKind::kComma)) {
-          if (position_ == before) Advance();
+          if (position_ == before) {
+            Advance();
+          }
           break;
         }
         SkipNewlines();
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
       }
       Expect(TokenKind::kRightBracket);
       return list;
     }
-    if (At(TokenKind::kLeftBrace)) return ParseObjectLiteral();
+    if (At(TokenKind::kLeftBrace)) {
+      return ParseObjectLiteral();
+    }
     if (Current().IsWord()) {
       const std::string spelled(Advance().text);
       const std::string word = vocabulary::Canonical(spelled);
@@ -2245,8 +2515,12 @@ class ParserImpl {
         literal->value = syntax::Constant::Bool(word == "true");
         return literal;
       }
-      if (word == "null") return Make<syntax::Literal>(token);
-      if (word == "it") return Make<syntax::It>(token);
+      if (word == "null") {
+        return Make<syntax::Literal>(token);
+      }
+      if (word == "it") {
+        return Make<syntax::It>(token);
+      }
       // `zip(a, b)` reads several streams in step and `interleave(a, b)` reads
       // them at once. Both are spelled like a function and parsed apart from
       // one, because their arguments are streams: see [syntax::Zip].
@@ -2268,11 +2542,15 @@ class ParserImpl {
           zip->sources.push_back(ParseExpression());
           SkipNewlines();
           if (!AcceptToken(TokenKind::kComma)) {
-            if (position_ == before) Advance();
+            if (position_ == before) {
+              Advance();
+            }
             break;
           }
           SkipNewlines();
-          if (position_ == before) Advance();
+          if (position_ == before) {
+            Advance();
+          }
         }
         Expect(TokenKind::kRightParen);
         if (zip->sources.empty()) {
@@ -2309,11 +2587,15 @@ class ParserImpl {
           builtin->args.push_back(ParseExpression());
           SkipNewlines();
           if (!AcceptToken(TokenKind::kComma)) {
-            if (position_ == before) Advance();
+            if (position_ == before) {
+              Advance();
+            }
             break;
           }
           SkipNewlines();
-          if (position_ == before) Advance();
+          if (position_ == before) {
+            Advance();
+          }
         }
         Expect(TokenKind::kRightParen);
         return builtin;
@@ -2356,7 +2638,9 @@ class ParserImpl {
   NodePtr ParseObjectLiteral() {
     const Token& brace = Current();
     auto object = Make<syntax::ObjectLiteral>(brace);
-    if (!Expect(TokenKind::kLeftBrace)) return object;
+    if (!Expect(TokenKind::kLeftBrace)) {
+      return object;
+    }
     result_.value_braces.push_back(brace.start);
     const Bracketed brackets(this);
     SkipNewlines();
@@ -2371,11 +2655,15 @@ class ParserImpl {
         object->pairs.emplace_back(std::string(), ParseSpread());
         SkipNewlines();
         if (!AcceptToken(TokenKind::kComma)) {
-          if (position_ == before) Advance();
+          if (position_ == before) {
+            Advance();
+          }
           break;
         }
         SkipNewlines();
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
         continue;
       }
       std::string key;
@@ -2388,11 +2676,15 @@ class ParserImpl {
       object->pairs.emplace_back(std::move(key), ParseExpression());
       SkipNewlines();
       if (!AcceptToken(TokenKind::kComma)) {
-        if (position_ == before) Advance();
+        if (position_ == before) {
+          Advance();
+        }
         break;
       }
       SkipNewlines();
-      if (position_ == before) Advance();
+      if (position_ == before) {
+        Advance();
+      }
     }
     Expect(TokenKind::kRightBrace);
     return object;
@@ -2403,8 +2695,10 @@ class ParserImpl {
       const Token& token = Advance();
       return Word{std::string(token.string_value), syntax::LocationOf(token)};
     }
-    const Word first = ExpectName(what);
-    if (first.Empty()) return first;
+    Word first = ExpectName(what);
+    if (first.Empty()) {
+      return first;
+    }
     Word dotted = first;
     while (At(TokenKind::kDot) && Peek().kind == TokenKind::kWord) {
       Advance();
@@ -2418,7 +2712,7 @@ class ParserImpl {
   /// The token a location came from, for a report that has only the location.
   ///
   /// Cheap enough: the range is all [Report] reads out of it.
-  Token TokenAt(const Location& location) const {
+  [[nodiscard]] Token TokenAt(const Location& location) const {
     Token token;
     token.start = location.start;
     token.end = location.end;
@@ -2434,6 +2728,10 @@ class ParserImpl {
   bool brace_literals_ = true;
   /// How many brackets deep this is, where a line break ends nothing.
   int brackets_ = 0;
+  /// How many levels of recursive descent are on the stack; see kMaxNesting.
+  int depth_ = 0;
+  /// Whether the nesting bound has already been reported for this document.
+  bool reported_too_deep_ = false;
   /// The flow being read, so every diagnostic says which one it is in.
   std::string flow_name_;
   ParseResult result_;
@@ -2441,11 +2739,15 @@ class ParserImpl {
 
 }  // namespace
 
-bool ParseResult::HasErrors() const { return FirstError() != nullptr; }
+bool ParseResult::HasErrors() const {
+  return FirstError() != nullptr;
+}
 
 const Diagnostic* absl_nullable ParseResult::FirstError() const {
   for (const Diagnostic& diagnostic : diagnostics) {
-    if (diagnostic.severity == Severity::kError) return &diagnostic;
+    if (diagnostic.severity == Severity::kError) {
+      return &diagnostic;
+    }
   }
   return nullptr;
 }

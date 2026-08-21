@@ -22,7 +22,9 @@ bool Injects(std::string_view value) {
 bool Has(const HttpHeaders& headers, std::string_view name) {
   for (const auto& [existing, unused] : headers) {
     (void)unused;
-    if (existing.size() != name.size()) continue;
+    if (existing.size() != name.size()) {
+      continue;
+    }
     bool same = true;
     for (size_t index = 0; index < name.size(); ++index) {
       const char left = existing[index] >= 'A' && existing[index] <= 'Z'
@@ -36,7 +38,9 @@ bool Has(const HttpHeaders& headers, std::string_view name) {
         break;
       }
     }
-    if (same) return true;
+    if (same) {
+      return true;
+    }
   }
   return false;
 }
@@ -44,7 +48,9 @@ bool Has(const HttpHeaders& headers, std::string_view name) {
 /// Sets @p name only where the route has not already spoken for it.
 void SetUnlessPresent(HttpHeaders* absl_nonnull headers, std::string_view name,
                       std::string value) {
-  if (Has(*headers, name)) return;
+  if (Has(*headers, name)) {
+    return;
+  }
   SetHttpHeader(headers, std::string(name), std::move(value));
 }
 
@@ -80,7 +86,9 @@ absl::Status ServerHeaderOptions::Validate() const {
 
 void ApplyCorsHeaders(const CorsOptions& options,
                       HttpHeaders* absl_nonnull headers) {
-  if (!options.enabled || options.allow_origin.empty()) return;
+  if (!options.enabled || options.allow_origin.empty()) {
+    return;
+  }
   SetUnlessPresent(headers, "access-control-allow-origin",
                    options.allow_origin);
   if (options.allow_origin != "*") {

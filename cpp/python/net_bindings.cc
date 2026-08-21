@@ -52,7 +52,7 @@ size_t SizeOption(const py::handle& value, size_t maximum, const char* name) {
       ThrowStatus(absl::InvalidArgumentError(std::string(name) +
                                              " must be non-negative"));
     }
-    const std::uint64_t converted = value.cast<std::uint64_t>();
+    const auto converted = value.cast<std::uint64_t>();
     if (converted > maximum) {
       ThrowStatus(absl::OutOfRangeError(std::string(name) +
                                         " exceeds its supported range"));
@@ -71,14 +71,14 @@ absl::Duration MessageTimeoutOption(const py::handle& value) {
   }
   try {
     if (py::isinstance<py::int_>(value)) {
-      const py::int_ integer = py::reinterpret_borrow<py::int_>(value);
+      const auto integer = py::reinterpret_borrow<py::int_>(value);
       if (py::cast<bool>(integer.attr("__lt__")(0))) {
         return absl::InfiniteDuration();
       }
       return absl::Milliseconds(integer.cast<std::int64_t>());
     }
     if (py::isinstance<py::float_>(value)) {
-      const double number = value.cast<double>();
+      const auto number = value.cast<double>();
       if (number == -std::numeric_limits<double>::infinity() ||
           number < -1e-8) {
         return absl::InfiniteDuration();
@@ -479,8 +479,7 @@ void BindNet(py::module_& module) {
              "A live stream: never cached, and not to be buffered.")
       .value("VOLATILE", net::CachePolicy::kVolatile,
              "A document that may change at any time: revalidate before reuse.")
-      .value("UNSET", net::CachePolicy::kUnset,
-             "Say nothing about caching.");
+      .value("UNSET", net::CachePolicy::kUnset, "Say nothing about caching.");
 
   py::class_<net::CorsOptions>(module, "CorsOptions")
       .def(py::init<>(), "Construct permissive cross-origin options.")
@@ -634,7 +633,8 @@ void BindNet(py::module_& module) {
             // appears -- and no `asyncio.wait_for` above it can fire, because
             // the loop it needs is the thing that is blocked. It hung
             // `wire/one_way_throughput` on both event loops.
-            CheckStatus(WithoutGil([&] { return self.Send(std::move(message)); }));
+            CheckStatus(
+                WithoutGil([&] { return self.Send(std::move(message)); }));
           },
           R"doc(Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters the ordered outbound queue and the transport applies backpressure.
 
@@ -822,8 +822,7 @@ Examples:
              std::optional<net::WireStreamOptions> first_options,
              std::optional<net::WireStreamOptions> second_options) {
             return ValueOrThrow(net::InProcessWireStream::CreatePair(
-                std::move(options), std::move(first_options),
-                std::move(second_options)));
+                options, first_options, second_options));
           },
           "Create a connected pair of in-process wire streams that talk to "
           "each other directly in memory, with no network involved. One "
@@ -849,8 +848,7 @@ Examples:
          std::optional<net::WireStreamOptions> first_options,
          std::optional<net::WireStreamOptions> second_options) {
         return ValueOrThrow(net::InProcessWireStream::CreatePair(
-            std::move(options), std::move(first_options),
-            std::move(second_options)));
+            options, first_options, second_options));
       },
       "Create a connected pair of in-process wire streams (free-function form "
       "of InProcessWireStream.create_pair).",
@@ -937,7 +935,7 @@ Examples:
                     ? value.attr("items")()
                     : py::object(value);
             for (const py::handle item : entries) {
-              py::sequence pair = py::reinterpret_borrow<py::sequence>(item);
+              auto pair = py::reinterpret_borrow<py::sequence>(item);
               if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||
                   !py::isinstance<py::str>(pair[1])) {
                 ThrowStatus(absl::InvalidArgumentError(
@@ -965,10 +963,10 @@ Examples:
                                                         "WebSocketWireStream")
       .def_static(
           "connect",
-          [](std::string url, net::WireStreamOptions options,
+          [](const std::string& url, net::WireStreamOptions options,
              net::WebSocketClientOptions websocket_options) {
             return ValueOrThrow(net::WebSocketWireStream::CreateClient(
-                std::move(url), options, std::move(websocket_options)));
+                url, options, std::move(websocket_options)));
           },
           "Open a client WebSocket connection to url and return a WireStream "
           "over it. This is the standard way for an agent to dial out to a "
@@ -992,11 +990,12 @@ Examples:
                      "Server-side GET /actions on this same port, for whoever "
                      "has the port number but not an A11 client. Point it at a "
                      "service with Service.expose_descriptors_on.")
-      .def_readwrite("headers", &net::WebSocketServerOptions::headers,
-                     "Response-header policy for this port's HTTP surface: the "
-                     "Server header, cross-origin access and cache hints. A 404 "
-                     "and a GET /actions are ordinary HTTP responses even on a "
-                     "port whose business is upgrades.")
+      .def_readwrite(
+          "headers", &net::WebSocketServerOptions::headers,
+          "Response-header policy for this port's HTTP surface: the "
+          "Server header, cross-origin access and cache hints. A 404 "
+          "and a GET /actions are ordinary HTTP responses even on a "
+          "port whose business is upgrades.")
       .def_readwrite("framing", &net::WebSocketServerOptions::framing,
                      "Channel framing options for accepted streams.")
       .def_readwrite("http2_options",
@@ -1036,8 +1035,8 @@ Examples:
             return ValueWithoutGil([&] {
               return net::WebSocketWireServer::Create(
                   [callback = std::move(*callback)](
-                      std::shared_ptr<net::WebSocketWireStream> stream) {
-                    return callback->Call(std::move(stream));
+                      const std::shared_ptr<net::WebSocketWireStream>& stream) {
+                    return callback->Call(stream);
                   },
                   std::move(options));
             });

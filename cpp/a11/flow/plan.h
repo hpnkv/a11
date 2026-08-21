@@ -75,10 +75,11 @@ struct DtoPlan {
   syntax::Location location;
 
   /// The field of this name, or `nullptr`.
-  const FieldPlan* absl_nullable Field(std::string_view field_name) const;
+  [[nodiscard]] const FieldPlan* absl_nullable Field(
+      std::string_view field_name) const;
 
   /// Every field name, in declaration order, for a message that lists them.
-  std::vector<std::string> FieldNames() const;
+  [[nodiscard]] std::vector<std::string> FieldNames() const;
 };
 
 /// One declared header.
@@ -146,17 +147,18 @@ struct FlowPlan {
   syntax::Location location;
 
   /// The port with this name and direction, or `nullptr`.
-  const PortPlan* absl_nullable Port(std::string_view port_name,
-                                     syntax::PortDirection direction) const;
+  [[nodiscard]] const PortPlan* absl_nullable Port(
+      std::string_view port_name, syntax::PortDirection direction) const;
 
   /// Whether a port of this name is declared in that direction.
-  bool HasPort(std::string_view port_name,
-               syntax::PortDirection direction) const {
+  [[nodiscard]] bool HasPort(std::string_view port_name,
+                             syntax::PortDirection direction) const {
     return Port(port_name, direction) != nullptr;
   }
 
   /// Every port name in one direction, sorted, for a message that lists them.
-  std::vector<std::string> PortNames(syntax::PortDirection direction) const;
+  [[nodiscard]] std::vector<std::string> PortNames(
+      syntax::PortDirection direction) const;
 };
 
 /// Every flow and shape one source file declares.
@@ -173,13 +175,13 @@ struct Program {
 
   /// The flow of this name, or `nullptr`. Never returns the entry flow: an
   /// empty name matches nothing, so a `run`/`call` cannot reach it.
-  const FlowPlan* absl_nullable Flow(std::string_view name) const;
+  [[nodiscard]] const FlowPlan* absl_nullable Flow(std::string_view name) const;
 
   /// The file's entry point, or `nullptr` when it declares none.
-  const FlowPlan* absl_nullable Entry() const;
+  [[nodiscard]] const FlowPlan* absl_nullable Entry() const;
 
   /// The shape of this name, or `nullptr`.
-  const DtoPlan* absl_nullable Dto(std::string_view name) const;
+  [[nodiscard]] const DtoPlan* absl_nullable Dto(std::string_view name) const;
 };
 
 /// The `format` field of the plan envelope.

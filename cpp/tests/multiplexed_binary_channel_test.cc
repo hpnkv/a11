@@ -54,6 +54,7 @@ class FakeMember final : public BinaryChannel {
   }
 
   absl::StatusOr<size_t> BufferedAmount() const override { return 0; }
+
   absl::StatusOr<bool> IsOpen() const override { return open_; }
 
   absl::Status Close() override {
@@ -100,11 +101,10 @@ struct Received {
 };
 
 BinaryChannelCallbacks CollectInto(const std::shared_ptr<Received>& received) {
-  return BinaryChannelCallbacks{
-      .on_message = [received](std::string message) {
-        thread::MutexLock lock(&received->mu);
-        received->messages.push_back(std::move(message));
-      }};
+  return BinaryChannelCallbacks{.on_message = [received](std::string message) {
+    thread::MutexLock lock(&received->mu);
+    received->messages.push_back(std::move(message));
+  }};
 }
 
 // The pin. A frame is the payload followed by the 8-byte little-endian sequence:
@@ -115,9 +115,8 @@ BinaryChannelCallbacks CollectInto(const std::shared_ptr<Received>& received) {
 TEST(MultiplexedBinaryChannelTest, FramesThePayloadWithASequenceSuffix) {
   auto member = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =
-      MultiplexedBinaryChannel::Create({member}, {},
-                                       MultiplexedChannelOptions{
-                                           .target_channels = 1});
+      MultiplexedBinaryChannel::Create(
+          {member}, {}, MultiplexedChannelOptions{.target_channels = 1});
   auto received = std::make_shared<Received>();
   ASSERT_TRUE(channel->SetCallbacks(CollectInto(received)).ok());
   ASSERT_TRUE(channel->Open().ok());
@@ -137,9 +136,8 @@ TEST(MultiplexedBinaryChannelTest, DeliversInSendOrderAcrossMembers) {
   auto first = std::make_shared<FakeMember>();
   auto second = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =
-      MultiplexedBinaryChannel::Create({first, second}, {},
-                                       MultiplexedChannelOptions{
-                                           .target_channels = 2});
+      MultiplexedBinaryChannel::Create(
+          {first, second}, {}, MultiplexedChannelOptions{.target_channels = 2});
   auto received = std::make_shared<Received>();
   ASSERT_TRUE(channel->SetCallbacks(CollectInto(received)).ok());
   ASSERT_TRUE(channel->Open().ok());
@@ -162,9 +160,8 @@ TEST(MultiplexedBinaryChannelTest, DeliversInSendOrderAcrossMembers) {
 TEST(MultiplexedBinaryChannelTest, CarriesAnEmptyPayload) {
   auto member = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =
-      MultiplexedBinaryChannel::Create({member}, {},
-                                       MultiplexedChannelOptions{
-                                           .target_channels = 1});
+      MultiplexedBinaryChannel::Create(
+          {member}, {}, MultiplexedChannelOptions{.target_channels = 1});
   auto received = std::make_shared<Received>();
   ASSERT_TRUE(channel->SetCallbacks(CollectInto(received)).ok());
   ASSERT_TRUE(channel->Open().ok());
@@ -186,15 +183,15 @@ TEST(MultiplexedBinaryChannelTest, CarriesAnEmptyPayload) {
 TEST(MultiplexedBinaryChannelTest, FailsOnAFrameWithoutItsSequence) {
   auto member = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =
-      MultiplexedBinaryChannel::Create({member}, {},
-                                       MultiplexedChannelOptions{
-                                           .target_channels = 1});
+      MultiplexedBinaryChannel::Create(
+          {member}, {}, MultiplexedChannelOptions{.target_channels = 1});
   auto failure = std::make_shared<absl::Status>();
   ASSERT_TRUE(channel
                   ->SetCallbacks(BinaryChannelCallbacks{
-                      .on_error = [failure](absl::Status status) {
-                        *failure = std::move(status);
-                      }})
+                      .on_error =
+                          [failure](absl::Status status) {
+                            *failure = std::move(status);
+                          }})
                   .ok());
   ASSERT_TRUE(channel->Open().ok());
 
@@ -209,9 +206,9 @@ TEST(MultiplexedBinaryChannelTest, ReroutesPacketsFromAFailedMember) {
   auto failing = std::make_shared<FakeMember>();
   auto healthy = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =
-      MultiplexedBinaryChannel::Create({failing, healthy}, {},
-                                       MultiplexedChannelOptions{
-                                           .target_channels = 2});
+      MultiplexedBinaryChannel::Create(
+          {failing, healthy}, {},
+          MultiplexedChannelOptions{.target_channels = 2});
   auto received = std::make_shared<Received>();
   ASSERT_TRUE(channel->SetCallbacks(CollectInto(received)).ok());
   ASSERT_TRUE(channel->Open().ok());

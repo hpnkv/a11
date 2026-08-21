@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/json_codec.h"
-#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/signalling.h"
 
 #include <deque>
@@ -22,6 +20,8 @@
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
+#include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/status.h"
 #include "thread/boost_primitives.h"
 
@@ -313,7 +313,7 @@ absl::Status SignallingService::Route(
     }
   }
   if (start_pump) {
-    a11::Schedule([recipient]() { Pump(std::move(recipient)); });
+    a11::Schedule([recipient]() { Pump(recipient); });
   }
   return absl::OkStatus();
 }

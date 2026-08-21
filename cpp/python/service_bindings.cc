@@ -72,9 +72,9 @@ class PythonSessionCallback {
   }
 
   template <typename... Args>
-  a11::Task Call(Args&&... args) const {
+  [[nodiscard]] a11::Task Call(Args&&... args) const {
     py::gil_scoped_acquire acquire;
-    py::function callable = py::reinterpret_borrow<py::function>(callable_);
+    auto callable = py::reinterpret_borrow<py::function>(callable_);
     return CallPythonAsync<a11::Unit>(loop_, callable,
                                       std::forward<Args>(args)...);
   }
@@ -99,7 +99,7 @@ size_t SessionSizeOption(const py::handle& value, const char* name) {
       ThrowStatus(absl::InvalidArgumentError(
           std::string(name) + " must be a non-negative integer"));
     }
-    const std::uint64_t converted = value.cast<std::uint64_t>();
+    const auto converted = value.cast<std::uint64_t>();
     if (converted > std::numeric_limits<size_t>::max()) {
       ThrowStatus(absl::OutOfRangeError(std::string(name) +
                                         " exceeds its supported range"));
@@ -123,10 +123,9 @@ absl::StatusOr<SessionCallbacks> MakeSessionCallbacks(
     }
     result.on_message = [callback = std::move(*callback)](
                             std::optional<data::WireMessage> message,
-                            std::shared_ptr<net::WireStream> stream,
-                            std::shared_ptr<service::Session> session) {
-      return callback->Call(std::move(message), std::move(stream),
-                            std::move(session));
+                            const std::shared_ptr<net::WireStream>& stream,
+                            const std::shared_ptr<service::Session>& session) {
+      return callback->Call(std::move(message), stream, session);
     };
   }
   if (!on_done.is_none()) {
@@ -136,9 +135,9 @@ absl::StatusOr<SessionCallbacks> MakeSessionCallbacks(
       return callback.status();
     }
     result.on_done = [callback = std::move(*callback)](
-                         std::shared_ptr<net::WireStream> stream,
-                         std::shared_ptr<service::Session> session) {
-      return callback->Call(std::move(stream), std::move(session));
+                         const std::shared_ptr<net::WireStream>& stream,
+                         const std::shared_ptr<service::Session>& session) {
+      return callback->Call(stream, session);
     };
   }
   return result;
@@ -147,7 +146,7 @@ absl::StatusOr<SessionCallbacks> MakeSessionCallbacks(
 absl::StatusOr<service::StreamMode> StreamModeFromPython(
     const py::object& value) {
   if (py::isinstance<py::str>(value)) {
-    const std::string mode = value.cast<std::string>();
+    const auto mode = value.cast<std::string>();
     if (mode == "start") {
       return service::StreamMode::kStart;
     }
@@ -290,7 +289,6 @@ auto ValueWithoutGil(Operation&& operation) {
   return ValueOrThrow(std::move(result));
 }
 
-
 }  // namespace
 
 void BindService(py::module_& module) {
@@ -409,15 +407,17 @@ void BindService(py::module_& module) {
            "messages stream in.")
       .def_property(
           "node_map", &service::Session::GetNodeMap,
-          [](service::Session& self, std::shared_ptr<nodes::NodeMap> node_map) {
-            ThrowIfNotOk(self.SetNodeMap(std::move(node_map)));
+          [](service::Session& self,
+             const std::shared_ptr<nodes::NodeMap>& node_map) {
+            ThrowIfNotOk(self.SetNodeMap(node_map));
           },
           "The NodeMap backing this session's node state; assigning replaces "
           "it.")
       .def(
           "set_node_map",
-          [](service::Session& self, std::shared_ptr<nodes::NodeMap> node_map) {
-            ThrowIfNotOk(self.SetNodeMap(std::move(node_map)));
+          [](service::Session& self,
+             const std::shared_ptr<nodes::NodeMap>& node_map) {
+            ThrowIfNotOk(self.SetNodeMap(node_map));
           },
           "Replace the NodeMap backing this session's node state, raising on "
           "failure. Active actions are rebound, but existing fragments are "
@@ -430,16 +430,16 @@ void BindService(py::module_& module) {
       .def_property(
           "action_registry", &service::Session::GetActionRegistry,
           [](service::Session& self,
-             std::shared_ptr<actions::ActionRegistry> registry) {
-            ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
+             const std::shared_ptr<actions::ActionRegistry>& registry) {
+            ThrowIfNotOk(self.SetActionRegistry(registry));
           },
           "The ActionRegistry used to resolve action messages; "
           "assigning replaces it.")
       .def(
           "set_action_registry",
           [](service::Session& self,
-             std::shared_ptr<actions::ActionRegistry> registry) {
-            ThrowIfNotOk(self.SetActionRegistry(std::move(registry)));
+             const std::shared_ptr<actions::ActionRegistry>& registry) {
+            ThrowIfNotOk(self.SetActionRegistry(registry));
           },
           "Replace the ActionRegistry used to resolve incoming action "
           "messages, raising on failure. Active actions are rebound for "
@@ -495,8 +495,9 @@ void BindService(py::module_& module) {
           "dispatch_node_fragment",
           [](const std::shared_ptr<service::Session>& self,
              data::NodeFragment fragment) {
-            return FutureToPython(WithoutGil(
-                [&] { return self->DispatchNodeFragment(std::move(fragment)); }));
+            return FutureToPython(WithoutGil([&] {
+              return self->DispatchNodeFragment(std::move(fragment));
+            }));
           },
           "Dispatch a node fragment into the session's NodeMap and return an "
           "awaitable resolving to the applied revision. Fragments are applied "
@@ -529,8 +530,8 @@ void BindService(py::module_& module) {
                   "action must be an Action instance")));
             }
             auto dispatched = action.cast<std::shared_ptr<actions::Action>>();
-            return FutureToPython(WithoutGil(
-                [&] { return self->DispatchAction(std::move(dispatched)); }));
+            return FutureToPython(
+                WithoutGil([&] { return self->DispatchAction(dispatched); }));
           },
           "Dispatch an already-constructed Action to run within the session, "
           "returning an awaitable for its handling.",
@@ -704,7 +705,8 @@ Examples:
                       -> py::object { return py::none(); });
             }
             return FutureToPythonAs<ReceivedMessage>(
-                WithoutGil([&] { return self->ReceiveWithStreamId(*converted); }),
+                WithoutGil(
+                    [&] { return self->ReceiveWithStreamId(*converted); }),
                 [](const std::optional<service::ReceivedSessionMessage>& value)
                     -> py::object {
                   if (!value.has_value()) {
@@ -740,26 +742,26 @@ Examples:
   // --- Service: what a peer can call, decoupled from where it listens ------
 
   py::class_<service::ServiceOptions>(module, "ServiceOptions")
-      .def(py::init([](std::optional<service::SessionOptions> session_options,
-                       bool copy_registry_per_connection,
-                       const py::typing::Optional<
-                           PyMapping<py::str, py::bytes>>& session_headers,
-                       const py::typing::Optional<NativeDuration>&
-                           drain_timeout) {
-             service::ServiceOptions options;
-             if (session_options.has_value()) {
-               options.session_options = *session_options;
-             }
-             options.copy_registry_per_connection =
-                 copy_registry_per_connection;
-             options.session_headers =
-                 ValueOrThrow(ByteMapFromPython(session_headers));
-             if (!drain_timeout.is_none()) {
-               options.drain_timeout =
-                   ValueOrThrow(DurationFromPython(drain_timeout, false));
-             }
-             return options;
-           }),
+      .def(py::init(
+               [](std::optional<service::SessionOptions> session_options,
+                  bool copy_registry_per_connection,
+                  const py::typing::Optional<PyMapping<py::str, py::bytes>>&
+                      session_headers,
+                  const py::typing::Optional<NativeDuration>& drain_timeout) {
+                 service::ServiceOptions options;
+                 if (session_options.has_value()) {
+                   options.session_options = *session_options;
+                 }
+                 options.copy_registry_per_connection =
+                     copy_registry_per_connection;
+                 options.session_headers =
+                     ValueOrThrow(ByteMapFromPython(session_headers));
+                 if (!drain_timeout.is_none()) {
+                   options.drain_timeout =
+                       ValueOrThrow(DurationFromPython(drain_timeout, false));
+                 }
+                 return options;
+               }),
            "Construct service options; all parameters are keyword-only.",
            py::kw_only(), py::arg("session_options") = std::nullopt,
            py::arg("copy_registry_per_connection") = false,
@@ -780,8 +782,7 @@ Examples:
           [](service::ServiceOptions& options,
              const py::typing::Optional<PyMapping<py::str, py::bytes>>&
                  headers) {
-            options.session_headers =
-                ValueOrThrow(ByteMapFromPython(headers));
+            options.session_headers = ValueOrThrow(ByteMapFromPython(headers));
           },
           "Headers stamped on every session the service creates.")
       .def_property(
@@ -805,20 +806,21 @@ Examples:
   py::classh<service::Service>(module, "Service", py::dynamic_attr())
       .def(py::init([](std::shared_ptr<actions::ActionRegistry> action_registry,
                        const py::object& on_connection,
-                       std::optional<service::ServiceOptions> options) {
+                       const std::optional<service::ServiceOptions>& options) {
              service::OnServiceConnection hook;
              if (!on_connection.is_none()) {
                // The same mechanism `on_stream_message` uses: capture the
                // asyncio loop now, and hand the call back to it from whichever
                // fiber accepts the connection. So a Python hook -- the gateway's
                // registry copy and tool-bridge bind -- stays plain Python.
-               std::shared_ptr<PythonSessionCallback> callback = ValueOrThrow(
-                   PythonSessionCallback::Create(on_connection,
-                                                 "on_connection"));
-               hook = [callback](std::shared_ptr<service::Session> session,
-                                 std::shared_ptr<net::WireStream> stream)
+               std::shared_ptr<PythonSessionCallback> callback =
+                   ValueOrThrow(PythonSessionCallback::Create(on_connection,
+                                                              "on_connection"));
+               hook = [callback](
+                          const std::shared_ptr<service::Session>& session,
+                          const std::shared_ptr<net::WireStream>& stream)
                    -> a11::Task {
-                 return callback->Call(std::move(session), std::move(stream));
+                 return callback->Call(session, stream);
                };
              }
              return ValueOrThrow(service::Service::Create(
@@ -875,7 +877,7 @@ Examples:
             return FutureToPython(WithoutGil(
                 [&] { return self->Serve(std::move(stream), converted); }));
           },
-          "Serve a stream in the given mode (\"start\" or \"accept\").",
+          R"(Serve a stream in the given mode ("start" or "accept").)",
           py::arg("stream"), py::arg("mode") = "accept")
       .def(
           "start_stream_handler",
@@ -887,7 +889,7 @@ Examples:
             return ValueWithoutGil([&self, &stream, &mode] {
               const service::StreamMode converted =
                   ValueOrThrow(StreamModeFromPython(mode));
-              return self->StartStreamHandler(std::move(stream), converted);
+              return self->StartStreamHandler(stream, converted);
             });
           },
           "Begin serving a stream and return its session immediately.",
@@ -900,13 +902,11 @@ Examples:
             CallWithoutGil([&self, &session_id, &stream, &mode] {
               const service::StreamMode converted =
                   ValueOrThrow(StreamModeFromPython(mode));
-              return self->AddStreamToSession(session_id, std::move(stream),
-                                              converted);
+              return self->AddStreamToSession(session_id, stream, converted);
             });
           },
           "Attach another transport to an existing session.",
-          py::arg("session_id"), py::arg("stream"),
-          py::arg("mode") = "accept")
+          py::arg("session_id"), py::arg("stream"), py::arg("mode") = "accept")
       .def("session_ids", &service::Service::SessionIds,
            "The ids of the sessions currently being served.")
       .def(
@@ -924,8 +924,7 @@ Examples:
             return ValueOrThrow(self->GetSessionForStream(stream_id));
           },
           "The session serving this stream.", py::arg("stream_id"))
-      .def_property_readonly("session_count",
-                             &service::Service::SessionCount,
+      .def_property_readonly("session_count", &service::Service::SessionCount,
                              "How many sessions are being served.")
       .def_property_readonly("accepting", &service::Service::accepting,
                              "Whether new connections are still admitted.")
@@ -935,9 +934,8 @@ Examples:
       .def(
           "set_action_registry",
           [](const std::shared_ptr<service::Service>& self,
-             std::shared_ptr<actions::ActionRegistry> action_registry) {
-            ThrowIfNotOk(
-                self->SetActionRegistry(std::move(action_registry)));
+             const std::shared_ptr<actions::ActionRegistry>& action_registry) {
+            ThrowIfNotOk(self->SetActionRegistry(action_registry));
           },
           "Replace the registry new connections are built from, without "
           "interrupting any stream.",

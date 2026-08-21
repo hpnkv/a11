@@ -10,7 +10,9 @@ namespace a11::flow::graph {
 namespace {
 
 void Push(std::vector<RefId>& into, RefId ref) {
-  if (ref != kNone) into.push_back(ref);
+  if (ref != kNone) {
+    into.push_back(ref);
+  }
 }
 
 /// Whether a ref could ever be written by this flow, which is what makes it a
@@ -59,7 +61,9 @@ std::string_view StepKindName(StepKind kind) {
 
 std::vector<RefId> FlowGraph::Upstreams(RefId ref) const {
   std::vector<RefId> found;
-  if (ref == kNone) return found;
+  if (ref == kNone) {
+    return found;
+  }
   const Ref& one = refs[ref];
   if (one.kind == RefKind::kDerived) {
     Push(found, one.source);
@@ -71,20 +75,28 @@ std::vector<RefId> FlowGraph::Upstreams(RefId ref) const {
   // produces it -- which is what makes the existing materialise-and-replay
   // analysis apply to one without knowing what a zip is.
   if (one.kind == RefKind::kZip || one.kind == RefKind::kMerge) {
-    for (const RefId source : one.sources) Push(found, source);
+    for (const RefId source : one.sources) {
+      Push(found, source);
+    }
   }
   return found;
 }
 
 std::vector<RefId> FlowGraph::ValueRefs(RefId ref) const {
   std::vector<RefId> found;
-  if (ref == kNone) return found;
+  if (ref == kNone) {
+    return found;
+  }
   const Ref& one = refs[ref];
   if (one.kind == RefKind::kExpr && one.expr != kNone) {
-    for (const RefId read : exprs[one.expr].refs) Push(found, read);
+    for (const RefId read : exprs[one.expr].refs) {
+      Push(found, read);
+    }
   }
   if (one.kind == RefKind::kDerived && one.stage.expr != kNone) {
-    for (const RefId read : exprs[one.stage.expr].refs) Push(found, read);
+    for (const RefId read : exprs[one.stage.expr].refs) {
+      Push(found, read);
+    }
   }
   return found;
 }
@@ -103,7 +115,9 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
       // A counted `skip` is not a reader at all: the values are already gone,
       // taken where the stream is produced, so reading here would claim a slot
       // this step was never counted for.
-      if (!one.count.has_value()) Push(found, one.source);
+      if (!one.count.has_value()) {
+        Push(found, one.source);
+      }
       break;
     case StepKind::kWait:
     case StepKind::kDrain:
@@ -114,7 +128,9 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
       if (one.subjects.empty()) {
         Push(found, one.outcome);
       } else {
-        for (const RefId subject : one.subjects) Push(found, subject);
+        for (const RefId subject : one.subjects) {
+          Push(found, subject);
+        }
       }
       break;
     case StepKind::kForEach:
@@ -130,10 +146,16 @@ std::vector<RefId> FlowGraph::ValueSources(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
   auto add = [&](ExprId expr) {
-    if (expr == kNone) return;
-    for (const RefId read : exprs[expr].refs) Push(found, read);
+    if (expr == kNone) {
+      return;
+    }
+    for (const RefId read : exprs[expr].refs) {
+      Push(found, read);
+    }
   };
-  for (const auto& [header, expr] : one.headers) add(expr);
+  for (const auto& [header, expr] : one.headers) {
+    add(expr);
+  }
   add(one.action_id);
   add(one.code);
   add(one.message);
@@ -144,7 +166,9 @@ std::vector<RefId> FlowGraph::ValueSources(StepId step) const {
 std::vector<RefId> FlowGraph::Destinations(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
-  if (one.kind == StepKind::kPipe) Push(found, one.destination);
+  if (one.kind == StepKind::kPipe) {
+    Push(found, one.destination);
+  }
   return found;
 }
 
@@ -154,15 +178,21 @@ std::vector<RefId> FlowGraph::StageDestinations(StepId step) const {
   // several deep: `items | try map f into bad | where it.ok`. The chain is
   // finite and built bottom-up, so walking it needs no cycle guard.
   std::vector<RefId> pending = Sources(step);
-  for (const RefId ref : ValueSources(step)) pending.push_back(ref);
+  for (const RefId ref : ValueSources(step)) {
+    pending.push_back(ref);
+  }
   while (!pending.empty()) {
     const RefId ref = pending.back();
     pending.pop_back();
-    if (ref == kNone || ref >= refs.size()) continue;
+    if (ref == kNone || ref >= refs.size()) {
+      continue;
+    }
     if (refs[ref].kind == RefKind::kDerived) {
       Push(found, refs[ref].stage.failures);
     }
-    for (const RefId up : Upstreams(ref)) pending.push_back(up);
+    for (const RefId up : Upstreams(ref)) {
+      pending.push_back(up);
+    }
   }
   return found;
 }
@@ -170,22 +200,32 @@ std::vector<RefId> FlowGraph::StageDestinations(StepId step) const {
 std::vector<RefId> FlowGraph::Observed(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
-  if (one.kind != StepKind::kWait && one.kind != StepKind::kDrain) return found;
+  if (one.kind != StepKind::kWait && one.kind != StepKind::kDrain) {
+    return found;
+  }
   // A barrier on a node watches it without writing it: the node still has to be
   // ended, and this is the statement that says when.
-  if (one.outcome == kNone) return found;
+  if (one.outcome == kNone) {
+    return found;
+  }
   const Ref& outcome = refs[one.outcome];
-  if (outcome.kind == RefKind::kStatus) Push(found, outcome.subject);
+  if (outcome.kind == RefKind::kStatus) {
+    Push(found, outcome.subject);
+  }
   return found;
 }
 
 std::vector<BodyId> FlowGraph::NestedBodies(BodyId body) const {
   std::vector<BodyId> found;
-  if (body == kNone) return found;
+  if (body == kNone) {
+    return found;
+  }
   for (const StepId step : bodies[body].steps) {
     for (const BodyId nested : steps[step].bodies) {
       found.push_back(nested);
-      for (const BodyId deeper : NestedBodies(nested)) found.push_back(deeper);
+      for (const BodyId deeper : NestedBodies(nested)) {
+        found.push_back(deeper);
+      }
     }
   }
   return found;
@@ -200,14 +240,24 @@ absl::flat_hash_set<RefId> RefsUsedIn(const FlowGraph& flow,
                                       const std::vector<BodyId>& bodies) {
   absl::flat_hash_set<RefId> found;
   const std::function<void(RefId)> walk = [&](RefId ref) {
-    if (ref == kNone || !found.insert(ref).second) return;
-    for (const RefId up : flow.Upstreams(ref)) walk(up);
-    for (const RefId value : flow.ValueRefs(ref)) walk(value);
+    if (ref == kNone || !found.insert(ref).second) {
+      return;
+    }
+    for (const RefId up : flow.Upstreams(ref)) {
+      walk(up);
+    }
+    for (const RefId value : flow.ValueRefs(ref)) {
+      walk(value);
+    }
   };
   for (const BodyId body : bodies) {
     for (const StepId step : flow.bodies[body].steps) {
-      for (const RefId ref : flow.Sources(step)) walk(ref);
-      for (const RefId ref : flow.ValueSources(step)) walk(ref);
+      for (const RefId ref : flow.Sources(step)) {
+        walk(ref);
+      }
+      for (const RefId ref : flow.ValueSources(step)) {
+        walk(ref);
+      }
     }
   }
   return found;
@@ -219,21 +269,41 @@ std::vector<RefId> NodeRefsIn(const FlowGraph& flow, BodyId body) {
   absl::flat_hash_set<RefId> seen;
   absl::flat_hash_set<RefId> visited;
   const std::function<void(RefId)> walk = [&](RefId ref) {
-    if (ref == kNone || !visited.insert(ref).second) return;
+    if (ref == kNone || !visited.insert(ref).second) {
+      return;
+    }
     const Ref& one = flow.refs[ref];
     if (one.kind == RefKind::kNode && one.owner == body) {
-      if (seen.insert(ref).second) found.push_back(ref);
+      if (seen.insert(ref).second) {
+        found.push_back(ref);
+      }
     }
-    if (one.kind == RefKind::kNodeId) walk(one.subject);
-    if (one.kind == RefKind::kStatus) walk(one.subject);
-    for (const RefId up : flow.Upstreams(ref)) walk(up);
-    for (const RefId value : flow.ValueRefs(ref)) walk(value);
+    if (one.kind == RefKind::kNodeId) {
+      walk(one.subject);
+    }
+    if (one.kind == RefKind::kStatus) {
+      walk(one.subject);
+    }
+    for (const RefId up : flow.Upstreams(ref)) {
+      walk(up);
+    }
+    for (const RefId value : flow.ValueRefs(ref)) {
+      walk(value);
+    }
   };
   for (const StepId step : flow.bodies[body].steps) {
-    for (const RefId ref : flow.Sources(step)) walk(ref);
-    for (const RefId ref : flow.ValueSources(step)) walk(ref);
-    for (const RefId ref : flow.Destinations(step)) walk(ref);
-    for (const RefId ref : flow.Observed(step)) walk(ref);
+    for (const RefId ref : flow.Sources(step)) {
+      walk(ref);
+    }
+    for (const RefId ref : flow.ValueSources(step)) {
+      walk(ref);
+    }
+    for (const RefId ref : flow.Destinations(step)) {
+      walk(ref);
+    }
+    for (const RefId ref : flow.Observed(step)) {
+      walk(ref);
+    }
   }
   return found;
 }
@@ -246,7 +316,9 @@ std::vector<RefId> DestsWrittenIn(const FlowGraph& flow,
   for (const BodyId body : bodies) {
     for (const StepId step : flow.bodies[body].steps) {
       for (const RefId ref : flow.Destinations(step)) {
-        if (seen.insert(ref).second) found.push_back(ref);
+        if (seen.insert(ref).second) {
+          found.push_back(ref);
+        }
       }
     }
   }
@@ -258,7 +330,9 @@ std::vector<RefId> DestsWrittenIn(const FlowGraph& flow,
 Analysis Analyse(const FlowGraph& flow, BodyId body) {
   Analysis analysis;
   analysis.body = body;
-  if (body == kNone) return analysis;
+  if (body == kNone) {
+    return analysis;
+  }
 
   const std::vector<BodyId> nested_bodies = flow.NestedBodies(body);
   const absl::flat_hash_set<RefId> nested = RefsUsedIn(flow, nested_bodies);
@@ -269,13 +343,21 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   std::vector<RefId> owned;
   absl::flat_hash_set<RefId> is_owned;
   auto note = [&](RefId ref) {
-    if (ref == kNone || flow.refs[ref].owner != body) return;
-    if (is_owned.insert(ref).second) owned.push_back(ref);
+    if (ref == kNone || flow.refs[ref].owner != body) {
+      return;
+    }
+    if (is_owned.insert(ref).second) {
+      owned.push_back(ref);
+    }
     ++local[ref];
   };
   auto own = [&](RefId ref) {
-    if (ref == kNone || flow.refs[ref].owner != body) return;
-    if (is_owned.insert(ref).second) owned.push_back(ref);
+    if (ref == kNone || flow.refs[ref].owner != body) {
+      return;
+    }
+    if (is_owned.insert(ref).second) {
+      owned.push_back(ref);
+    }
   };
 
   // A *value* read of a ref does not get a reader of its own. Every value read
@@ -290,14 +372,22 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   // is the count that has to be exactly right or the flow hangs.
   absl::flat_hash_set<RefId> valued;
   auto value_read = [&](RefId ref) {
-    if (ref == kNone) return;
+    if (ref == kNone) {
+      return;
+    }
     own(ref);
-    if (valued.insert(ref).second) note(ref);
+    if (valued.insert(ref).second) {
+      note(ref);
+    }
   };
 
   for (const StepId step : flow.bodies[body].steps) {
-    for (const RefId ref : flow.Sources(step)) note(ref);
-    for (const RefId ref : flow.ValueSources(step)) value_read(ref);
+    for (const RefId ref : flow.Sources(step)) {
+      note(ref);
+    }
+    for (const RefId ref : flow.ValueSources(step)) {
+      value_read(ref);
+    }
   }
 
   // A node's id is computed once per pass however many steps name the node, so
@@ -305,11 +395,17 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   analysis.nodes = NodeRefsIn(flow, body);
   for (const RefId node : analysis.nodes) {
     const ExprId id_expr = flow.refs[node].id_expr;
-    if (id_expr == kNone) continue;
-    for (const RefId ref : flow.exprs[id_expr].refs) note(ref);
+    if (id_expr == kNone) {
+      continue;
+    }
+    for (const RefId ref : flow.exprs[id_expr].refs) {
+      note(ref);
+    }
   }
 
-  for (const RefId ref : nested) own(ref);
+  for (const RefId ref : nested) {
+    own(ref);
+  }
 
   // A derived or computed stream reads its own upstream, so the upstream needs
   // a reader for it. A ref is always built from refs created before it, so
@@ -319,18 +415,30 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   while (true) {
     RefId next = kNone;
     for (const RefId ref : owned) {
-      if (settled.contains(ref)) continue;
-      if (next == kNone || ref > next) next = ref;
+      if (settled.contains(ref)) {
+        continue;
+      }
+      if (next == kNone || ref > next) {
+        next = ref;
+      }
     }
-    if (next == kNone) break;
+    if (next == kNone) {
+      break;
+    }
     settled.insert(next);
     const auto found = local.find(next);
     const int reads = found == local.end() ? 0 : found->second;
-    if (reads == 0 && !nested.contains(next)) continue;
-    for (const RefId up : flow.Upstreams(next)) note(up);
+    if (reads == 0 && !nested.contains(next)) {
+      continue;
+    }
+    for (const RefId up : flow.Upstreams(next)) {
+      note(up);
+    }
     // A stage's own expression reads for a value, and shares the one cursor
     // with every other value read of the same ref.
-    for (const RefId value : flow.ValueRefs(next)) value_read(value);
+    for (const RefId value : flow.ValueRefs(next)) {
+      value_read(value);
+    }
     // `owned` may have grown; the loop picks the new highest next time round.
   }
 
@@ -351,22 +459,30 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
 
   absl::flat_hash_set<RefId> is_destination;
   auto count_writer = [&](RefId ref) {
-    if (ref == kNone || flow.refs[ref].owner != body) return;
-    if (is_destination.insert(ref).second) analysis.destinations.push_back(ref);
+    if (ref == kNone || flow.refs[ref].owner != body) {
+      return;
+    }
+    if (is_destination.insert(ref).second) {
+      analysis.destinations.push_back(ref);
+    }
     ++analysis.writers[ref];
   };
 
   for (const StepId step : flow.bodies[body].steps) {
     std::vector<RefId> held;
     for (const RefId ref : flow.Destinations(step)) {
-      if (flow.refs[ref].owner == body) held.push_back(ref);
+      if (flow.refs[ref].owner == body) {
+        held.push_back(ref);
+      }
       count_writer(ref);
     }
     // A `try ... into failures` writes from inside a stream this step reads, so
     // the stream's failures hold that node open exactly as the step's own
     // destination does.
     for (const RefId ref : flow.StageDestinations(step)) {
-      if (flow.refs[ref].owner == body) held.push_back(ref);
+      if (flow.refs[ref].owner == body) {
+        held.push_back(ref);
+      }
       count_writer(ref);
     }
     for (const RefId ref : flow.Observed(step)) {
@@ -383,7 +499,9 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
       std::vector<BodyId> deep;
       for (const BodyId one : inner) {
         deep.push_back(one);
-        for (const BodyId deeper : flow.NestedBodies(one)) deep.push_back(deeper);
+        for (const BodyId deeper : flow.NestedBodies(one)) {
+          deep.push_back(deeper);
+        }
       }
       // A loop or a branch writing an outer node counts as one writer of it for
       // as long as it runs, however many of its passes write.

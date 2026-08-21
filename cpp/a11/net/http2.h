@@ -87,14 +87,14 @@ struct HttpRequest {
 
 /** @brief Status line and headers of an HTTP/2 response, without the body. */
 struct HttpResponseHead {
-  int status = 0;       ///< Numeric HTTP response status.
-  HttpHeaders headers;  ///< Response headers, preserving repetitions.
+  int status = 0;            ///< Numeric HTTP response status.
+  HttpHeaders headers = {};  ///< Response headers, preserving repetitions.
 };
 
 /** @brief A fully buffered HTTP/2 response: head plus complete body. */
 struct HttpResponse {
   HttpResponseHead head;  ///< Status and headers.
-  std::string body;       ///< Complete response body.
+  std::string body = {};  ///< Complete response body.
 };
 
 class Http2ResponseStream;
@@ -137,8 +137,8 @@ struct Http2TlsOptions {
 struct Http2Options {
   /** @brief Client-side HTTP protocol preference / downgrade policy. */
   enum class ProtocolPreference {
-    kAuto,    ///< Prefer HTTP/2, fall back to HTTP/1.1 (ALPN order / downgrade).
-    kHttp2,   ///< Require HTTP/2 (h2 over TLS, prior-knowledge h2c cleartext).
+    kAuto,   ///< Prefer HTTP/2, fall back to HTTP/1.1 (ALPN order / downgrade).
+    kHttp2,  ///< Require HTTP/2 (h2 over TLS, prior-knowledge h2c cleartext).
     kHttp11,  ///< Require HTTP/1.1.
   };
 
@@ -313,6 +313,7 @@ class Http2DuplexStream
                          "HTTP/2 duplex stream cancelled"));
   /** @return An awaitable that resolves when the duplex stream is done. */
   a11::Task Done() const;
+
   /**
    * @brief The read half, for the parts of a response this facade does not
    *        forward.
@@ -325,6 +326,7 @@ class Http2DuplexStream
   [[nodiscard]] const std::shared_ptr<Http2ResponseStream>& response() const {
     return response_;
   }
+
   /** @return The HTTP/2 stream identifier. */
   [[nodiscard]] std::int32_t stream_id() const;
 
@@ -437,7 +439,7 @@ class Http2Server : public std::enable_shared_from_this<Http2Server> {
    */
   static absl::StatusOr<std::shared_ptr<Http2Server>> Create(
       std::string bind_address, std::uint16_t port, Http2RequestHandler handler,
-      Http2Options options = {});
+      const Http2Options& options = {});
 
   ~Http2Server();
 
@@ -481,7 +483,7 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
    * @return An awaitable that resolves to the connected client.
    */
   static a11::Future<std::shared_ptr<Http2Client>> Connect(
-      std::string host, std::uint16_t port, Http2Options options = {});
+      std::string host, std::uint16_t port, const Http2Options& options = {});
 
   ~Http2Client();
 
@@ -560,7 +562,7 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
       32;                                                 // padding and slack
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
-  Http2Client(std::string host, std::uint16_t port, Http2Options options,
+  Http2Client(std::string host, std::uint16_t port, const Http2Options& options,
               std::shared_ptr<internal::HttpTransport> connection);
 
   Impl* absl_nonnull state();

@@ -115,8 +115,7 @@ std::optional<std::size_t> FindHeaderBlockEnd(std::string_view data) {
   return best + width;
 }
 
-absl::StatusOr<Http1RequestHead> ParseRequestHead(
-    std::string_view head_block) {
+absl::StatusOr<Http1RequestHead> ParseRequestHead(std::string_view head_block) {
   ABSL_ASSIGN_OR_RETURN(std::vector<std::string_view> lines,
                         SplitLines(head_block));
   const std::vector<std::string_view> parts =
@@ -241,8 +240,7 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
           }
           line = absl::StripAsciiWhitespace(line);
           std::uint64_t size = 0;
-          if (line.empty() ||
-              !absl::SimpleHexAtoi(std::string(line), &size)) {
+          if (line.empty() || !absl::SimpleHexAtoi(std::string(line), &size)) {
             return absl::InvalidArgumentError(
                 absl::StrCat("Invalid chunk size: ", line));
           }
@@ -264,9 +262,9 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
             // delivered by this point.
             std::string name(line.substr(0, colon));
             absl::AsciiStrToLower(&name);
-            trailers_.emplace_back(
-                std::move(name),
-                std::string(absl::StripAsciiWhitespace(line.substr(colon + 1))));
+            trailers_.emplace_back(std::move(name),
+                                   std::string(absl::StripAsciiWhitespace(
+                                       line.substr(colon + 1))));
           }
           pending_.clear();
         }
@@ -291,8 +289,7 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
           pending_.clear();
           state_ = State::kSize;
         } else if (pending_.size() > 2) {
-          return absl::InvalidArgumentError(
-              "Missing CRLF after chunk data");
+          return absl::InvalidArgumentError("Missing CRLF after chunk data");
         }
         break;
       }
@@ -308,7 +305,7 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
 
 std::string EncodeChunk(std::string_view data) {
   if (data.empty()) {
-    return std::string();
+    return {};
   }
   return absl::StrCat(absl::Hex(data.size()), kCrlf, data, kCrlf);
 }
@@ -341,8 +338,7 @@ std::string SerializeResponse(int status, const HttpHeaders& headers,
                               std::string_view reason) {
   const std::string_view phrase =
       reason.empty() ? DefaultReasonPhrase(status) : reason;
-  std::string out =
-      absl::StrCat("HTTP/1.1 ", status, " ", phrase, kCrlf);
+  std::string out = absl::StrCat("HTTP/1.1 ", status, " ", phrase, kCrlf);
   AppendHeaderBlock(headers, &out);
   absl::StrAppend(&out, kCrlf);
   return out;
@@ -353,9 +349,8 @@ std::string ComputeWebSocketAccept(std::string_view key) {
   std::array<unsigned char, SHA_DIGEST_LENGTH> digest{};
   SHA1(reinterpret_cast<const unsigned char*>(input.data()), input.size(),
        digest.data());
-  return absl::Base64Escape(
-      std::string_view(reinterpret_cast<const char*>(digest.data()),
-                       digest.size()));
+  return absl::Base64Escape(std::string_view(
+      reinterpret_cast<const char*>(digest.data()), digest.size()));
 }
 
 std::string GenerateWebSocketKey() {

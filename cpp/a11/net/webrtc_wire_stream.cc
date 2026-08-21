@@ -78,7 +78,7 @@ absl::Status InitializeSctp() {
       // opened, so it is startup latency rather than throughput and is left
       // alone.)
       settings.maxBurst = 128;
-      rtc::SetSctpSettings(std::move(settings));
+      rtc::SetSctpSettings(settings);
       status = absl::OkStatus();
     } catch (const std::exception& error) {
       status = ExternalException(error, "Configuring WebRTC SCTP");
@@ -162,7 +162,7 @@ absl::Status ClientStatus(const std::shared_ptr<ClientPeerContext>& context) {
 }
 
 a11::Task HandleClientSignal(const std::shared_ptr<ClientPeerContext>& context,
-                             SignallingMessage message) {
+                             const SignallingMessage& message) {
   absl::Status status;
   std::shared_ptr<rtc::PeerConnection> connection;
   {
@@ -444,10 +444,10 @@ absl::StatusOr<std::shared_ptr<WebRtcWireStream>> WebRtcWireStream::Create(
 }
 
 absl::StatusOr<std::shared_ptr<WebRtcWireStream>>
-WebRtcWireStream::CreateClient(std::string identity, std::string peer_identity,
-                               std::shared_ptr<SignallingService> signalling,
-                               WebRtcConfiguration configuration,
-                               WireStreamOptions options) {
+WebRtcWireStream::CreateClient(
+    std::string identity, std::string peer_identity,
+    const std::shared_ptr<SignallingService>& signalling,
+    const WebRtcConfiguration& configuration, WireStreamOptions options) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
   if (signalling == nullptr) {
     return absl::InvalidArgumentError(
@@ -455,17 +455,18 @@ WebRtcWireStream::CreateClient(std::string identity, std::string peer_identity,
   }
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<SignallingEndpoint> endpoint,
-      signalling->Connect(std::move(identity),
-                          [](SignallingMessage) { return a11::ReadyTask(); }));
+      signalling->Connect(std::move(identity), [](const SignallingMessage&) {
+        return a11::ReadyTask();
+      }));
   return CreateClient(std::move(peer_identity), std::move(endpoint),
-                      std::move(configuration), options);
+                      configuration, options);
 }
 
 absl::StatusOr<std::shared_ptr<WebRtcWireStream>>
-WebRtcWireStream::CreateClient(std::string peer_identity,
-                               std::shared_ptr<SignallingTransport> signalling,
-                               WebRtcConfiguration configuration,
-                               WireStreamOptions options) {
+WebRtcWireStream::CreateClient(
+    std::string peer_identity,
+    const std::shared_ptr<SignallingTransport>& signalling,
+    const WebRtcConfiguration& configuration, WireStreamOptions options) {
   if (signalling == nullptr) {
     return absl::InvalidArgumentError(
         "WebRTC signalling transport must not be null");
@@ -501,12 +502,12 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
   }
   std::weak_ptr<ClientPeerContext> weak = context;
   absl::Status validation =
-      signalling->SetOnMessage([weak](SignallingMessage message) {
-        std::shared_ptr<ClientPeerContext> context = weak.lock();
-        if (context == nullptr) {
+      signalling->SetOnMessage([weak](const SignallingMessage& message) {
+        std::shared_ptr<ClientPeerContext> held_context = weak.lock();
+        if (held_context == nullptr) {
           return a11::ReadyTask();
         }
-        return HandleClientSignal(context, std::move(message));
+        return HandleClientSignal(held_context, message);
       });
   if (!validation.ok()) {
     (void)signalling->Close();
@@ -514,34 +515,34 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
   }
   std::shared_ptr<rtc::DataChannel> data_channel;
   try {
-    connection->onLocalDescription([weak](rtc::Description description) {
-      std::shared_ptr<ClientPeerContext> context = weak.lock();
-      if (context == nullptr) {
+    connection->onLocalDescription([weak](const rtc::Description& description) {
+      std::shared_ptr<ClientPeerContext> held_context = weak.lock();
+      if (held_context == nullptr) {
         return;
       }
       SignallingMessage message{.type = SignallingMessageType::kDescription,
-                                .sender = context->identity,
-                                .recipient = context->peer_identity,
+                                .sender = held_context->identity,
+                                .recipient = held_context->peer_identity,
                                 .description = description.generateSdp("\r\n"),
                                 .description_type = description.typeString()};
-      absl::Status sent = context->endpoint->Send(std::move(message));
+      absl::Status sent = held_context->endpoint->Send(std::move(message));
       if (!sent.ok()) {
-        FailClient(context, sent);
+        FailClient(held_context, sent);
       }
     });
-    connection->onLocalCandidate([weak](rtc::Candidate candidate) {
-      std::shared_ptr<ClientPeerContext> context = weak.lock();
-      if (context == nullptr) {
+    connection->onLocalCandidate([weak](const rtc::Candidate& candidate) {
+      std::shared_ptr<ClientPeerContext> held_context = weak.lock();
+      if (held_context == nullptr) {
         return;
       }
       SignallingMessage message{.type = SignallingMessageType::kCandidate,
-                                .sender = context->identity,
-                                .recipient = context->peer_identity,
+                                .sender = held_context->identity,
+                                .recipient = held_context->peer_identity,
                                 .candidate = std::string(candidate),
                                 .mid = candidate.mid()};
-      absl::Status sent = context->endpoint->Send(std::move(message));
+      absl::Status sent = held_context->endpoint->Send(std::move(message));
       if (!sent.ok()) {
-        FailClient(context, sent);
+        FailClient(held_context, sent);
       }
     });
     connection->onStateChange([weak](rtc::PeerConnection::State state) {
@@ -549,9 +550,9 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
           state != rtc::PeerConnection::State::Closed) {
         return;
       }
-      if (std::shared_ptr<ClientPeerContext> context = weak.lock();
-          context != nullptr) {
-        FailClient(context,
+      if (std::shared_ptr<ClientPeerContext> held_context = weak.lock();
+          held_context != nullptr) {
+        FailClient(held_context,
                    state == rtc::PeerConnection::State::Failed
                        ? absl::UnavailableError("WebRTC peer connection failed")
                        : absl::CancelledError("WebRTC peer connection closed"));
@@ -586,13 +587,14 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
     std::weak_ptr<rtc::PeerConnection> weak_connection = connection;
     internal::MemberChannelFactory factory = [weak_connection]()
         -> absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> {
-      std::shared_ptr<rtc::PeerConnection> connection = weak_connection.lock();
-      if (connection == nullptr) {
-        return absl::UnavailableError("WebRTC peer connection is gone");
+      std::shared_ptr<rtc::PeerConnection> held_connection =
+          weak_connection.lock();
+      if (held_connection == nullptr) {
+        return absl::UnavailableError("WebRTC peer held_connection is gone");
       }
       std::shared_ptr<rtc::DataChannel> channel;
       try {
-        channel = connection->createDataChannel(NewDataChannelId());
+        channel = held_connection->createDataChannel(NewDataChannelId());
       } catch (const std::exception& error) {
         return ExternalException(error, "Creating replenishment data channel");
       } catch (...) {
@@ -640,7 +642,7 @@ WebRtcWireStream::CreateClient(std::string peer_identity,
     FailClient(context, status);
     return status;
   } catch (...) {
-    const absl::Status status =
+    absl::Status status =
         absl::UnknownError("Configuring WebRTC client raised an exception");
     FailClient(context, status);
     return status;
@@ -741,56 +743,55 @@ void WebRtcWireStream::StartPathMtuDiscovery(
                   : absl::FailedPreconditionError(
                         "WebRTC association would not take a path MTU");
       },
-      .probe_burst =
-          [connection, next_probe_id](
-              size_t payload, int count,
-              absl::Time deadline) -> std::optional<int> {
-            // `payload` is the chunk space the search wants on the wire. A padded
-            // HEARTBEAT of that size is the probe: any conforming peer answers it,
-            // and the stack needs no MTU change to send one, so nothing about the
-            // stream is disturbed.
-            //
-            // Sent back to back without waiting for each answer, so the burst is in
-            // flight together. That is the point: probes that wait for each other
-            // are each isolated, and a size that survives only in isolation is
-            // exactly the false positive this has to reject.
-            const std::uint32_t before = connection->pathMtuProbeAckCount();
-            std::uint32_t last = 0;
-            int sent = 0;
-            for (int index = 0; index < count; ++index) {
-              const std::uint32_t id =
-                  next_probe_id->fetch_add(1, std::memory_order_relaxed);
-              bool ok = false;
-              try {
-                ok = connection->sendPathMtuProbe(payload, id);
-              } catch (...) {
-                ok = false;
-              }
-              if (!ok) {
-                break;
-              }
-              last = id;
-              ++sent;
-            }
-            if (sent == 0) {
-              return std::nullopt;  // No association yet: no evidence.
-            }
-            // Polled: the acknowledgement is consumed by SCTP itself, so there is
-            // nothing to wait on. Requiring the *last* id as well as the count is
-            // what stops a late answer from an earlier burst standing in for a
-            // probe of this one.
-            while (absl::Now() < deadline) {
-              const std::uint32_t acked = connection->pathMtuProbeAckCount();
-              if ((acked - before >= static_cast<std::uint32_t>(sent)) &&
-                  (connection->acknowledgedPathMtuProbe() == last)) {
-                return sent;
-              }
-              thread::SleepFor(absl::Milliseconds(1));
-            }
-            const std::uint32_t acked = connection->pathMtuProbeAckCount();
-            return static_cast<int>(std::min<std::uint32_t>(
-                acked - before, static_cast<std::uint32_t>(sent)));
-          },
+      .probe_burst = [connection, next_probe_id](
+                         size_t payload, int count,
+                         absl::Time deadline) -> std::optional<int> {
+        // `payload` is the chunk space the search wants on the wire. A padded
+        // HEARTBEAT of that size is the probe: any conforming peer answers it,
+        // and the stack needs no MTU change to send one, so nothing about the
+        // stream is disturbed.
+        //
+        // Sent back to back without waiting for each answer, so the burst is in
+        // flight together. That is the point: probes that wait for each other
+        // are each isolated, and a size that survives only in isolation is
+        // exactly the false positive this has to reject.
+        const std::uint32_t before = connection->pathMtuProbeAckCount();
+        std::uint32_t last = 0;
+        int sent = 0;
+        for (int index = 0; index < count; ++index) {
+          const std::uint32_t id =
+              next_probe_id->fetch_add(1, std::memory_order_relaxed);
+          bool ok = false;
+          try {
+            ok = connection->sendPathMtuProbe(payload, id);
+          } catch (...) {
+            ok = false;
+          }
+          if (!ok) {
+            break;
+          }
+          last = id;
+          ++sent;
+        }
+        if (sent == 0) {
+          return std::nullopt;  // No association yet: no evidence.
+        }
+        // Polled: the acknowledgement is consumed by SCTP itself, so there is
+        // nothing to wait on. Requiring the *last* id as well as the count is
+        // what stops a late answer from an earlier burst standing in for a
+        // probe of this one.
+        while (absl::Now() < deadline) {
+          const std::uint32_t acked = connection->pathMtuProbeAckCount();
+          if ((acked - before >= static_cast<std::uint32_t>(sent)) &&
+              (connection->acknowledgedPathMtuProbe() == last)) {
+            return sent;
+          }
+          thread::SleepFor(absl::Milliseconds(1));
+        }
+        const std::uint32_t acked = connection->pathMtuProbeAckCount();
+        return static_cast<int>(std::min<std::uint32_t>(
+            acked - before, static_cast<std::uint32_t>(sent)));
+      },
   };
   discovery = std::make_shared<internal::PathMtuDiscovery>(
       BuildPathMtuOptions(configuration), std::move(prober));
@@ -888,7 +889,7 @@ struct WebRtcWireServer::State {
 };
 
 absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
-    std::string identity, std::shared_ptr<SignallingService> signalling,
+    std::string identity, const std::shared_ptr<SignallingService>& signalling,
     OnWebRtcStream on_stream, WebRtcConfiguration configuration,
     WireStreamOptions stream_options) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(identity));
@@ -901,15 +902,17 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
   // for this identity could not have been addressed before it existed.
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<SignallingEndpoint> endpoint,
-      signalling->Connect(std::move(identity),
-                          [](SignallingMessage) { return a11::ReadyTask(); }));
+      signalling->Connect(std::move(identity), [](const SignallingMessage&) {
+        return a11::ReadyTask();
+      }));
   return Create(std::move(endpoint), std::move(on_stream),
                 std::move(configuration), stream_options);
 }
 
 absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
-    std::shared_ptr<SignallingTransport> signalling, OnWebRtcStream on_stream,
-    WebRtcConfiguration configuration, WireStreamOptions stream_options) {
+    const std::shared_ptr<SignallingTransport>& signalling,
+    OnWebRtcStream on_stream, WebRtcConfiguration configuration,
+    WireStreamOptions stream_options) {
   if (signalling == nullptr) {
     return absl::InvalidArgumentError(
         "WebRTC signalling transport must not be null");
@@ -931,13 +934,13 @@ absl::StatusOr<std::shared_ptr<WebRtcWireServer>> WebRtcWireServer::Create(
     // cannot observe a partially initialized server.
     thread::MutexLock lock(&state->mu);
     state->endpoint = signalling;
-    const absl::Status installed =
-        signalling->SetOnMessage([weak](SignallingMessage message) {
-          std::shared_ptr<State> state = weak.lock();
-          if (state == nullptr) {
+    absl::Status installed =
+        signalling->SetOnMessage([weak](const SignallingMessage& message) {
+          std::shared_ptr<State> held_state = weak.lock();
+          if (held_state == nullptr) {
             return a11::ReadyTask();
           }
-          return OnSignal(state, std::move(message));
+          return OnSignal(held_state, message);
         });
     if (!installed.ok()) {
       return installed;
@@ -957,7 +960,7 @@ WebRtcWireServer::~WebRtcWireServer() {
 }
 
 a11::Task WebRtcWireServer::OnSignal(const std::shared_ptr<State>& state,
-                                     SignallingMessage message) {
+                                     const SignallingMessage& message) {
   absl::Status status;
   if (message.type == SignallingMessageType::kDescription &&
       message.description_type == "offer") {
@@ -1025,20 +1028,20 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
   std::weak_ptr<ServerPeerContext> weak_context = context;
   try {
     connection->onLocalDescription([weak_state, peer = message.sender](
-                                       rtc::Description description) {
-      std::shared_ptr<State> state = weak_state.lock();
-      if (state == nullptr) {
+                                       const rtc::Description& description) {
+      std::shared_ptr<State> held_state = weak_state.lock();
+      if (held_state == nullptr) {
         return;
       }
       std::shared_ptr<SignallingTransport> endpoint;
       std::string identity;
       {
-        thread::MutexLock lock(&state->mu);
-        if (!state->running) {
+        thread::MutexLock lock(&held_state->mu);
+        if (!held_state->running) {
           return;
         }
-        endpoint = state->endpoint;
-        identity = state->identity;
+        endpoint = held_state->endpoint;
+        identity = held_state->identity;
       }
       SignallingMessage reply{.type = SignallingMessageType::kDescription,
                               .sender = std::move(identity),
@@ -1047,24 +1050,24 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
                               .description_type = description.typeString()};
       absl::Status sent = endpoint->Send(std::move(reply));
       if (!sent.ok()) {
-        ReportPeerError(state, peer, sent);
+        ReportPeerError(held_state, peer, sent);
       }
     });
     connection->onLocalCandidate(
-        [weak_state, peer = message.sender](rtc::Candidate candidate) {
-          std::shared_ptr<State> state = weak_state.lock();
-          if (state == nullptr) {
+        [weak_state, peer = message.sender](const rtc::Candidate& candidate) {
+          std::shared_ptr<State> held_state = weak_state.lock();
+          if (held_state == nullptr) {
             return;
           }
           std::shared_ptr<SignallingTransport> endpoint;
           std::string identity;
           {
-            thread::MutexLock lock(&state->mu);
-            if (!state->running) {
+            thread::MutexLock lock(&held_state->mu);
+            if (!held_state->running) {
               return;
             }
-            endpoint = state->endpoint;
-            identity = state->identity;
+            endpoint = held_state->endpoint;
+            identity = held_state->identity;
           }
           SignallingMessage reply{.type = SignallingMessageType::kCandidate,
                                   .sender = std::move(identity),
@@ -1073,54 +1076,56 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
                                   .mid = candidate.mid()};
           absl::Status sent = endpoint->Send(std::move(reply));
           if (!sent.ok()) {
-            ReportPeerError(state, peer, sent);
+            ReportPeerError(held_state, peer, sent);
           }
         });
     connection->onStateChange(
         [weak_state, peer = message.sender](rtc::PeerConnection::State status) {
           if (status == rtc::PeerConnection::State::Failed) {
-            if (std::shared_ptr<State> state = weak_state.lock();
-                state != nullptr) {
+            if (std::shared_ptr<State> held_state = weak_state.lock();
+                held_state != nullptr) {
               ReportPeerError(
-                  state, peer,
+                  held_state, peer,
                   absl::UnavailableError("WebRTC peer connection failed"));
             }
           } else if (status == rtc::PeerConnection::State::Closed) {
-            if (std::shared_ptr<State> state = weak_state.lock();
-                state != nullptr) {
-              thread::MutexLock lock(&state->mu);
-              state->peers.erase(peer);
+            if (std::shared_ptr<State> held_state = weak_state.lock();
+                held_state != nullptr) {
+              thread::MutexLock lock(&held_state->mu);
+              held_state->peers.erase(peer);
             }
           }
         });
     connection->onDataChannel([weak_state, weak_context](
-                                  std::shared_ptr<rtc::DataChannel> channel) {
-      std::shared_ptr<State> state = weak_state.lock();
-      std::shared_ptr<ServerPeerContext> context = weak_context.lock();
-      if (state == nullptr || context == nullptr || channel == nullptr) {
+                                  const std::shared_ptr<rtc::DataChannel>&
+                                      channel) {
+      std::shared_ptr<State> held_state = weak_state.lock();
+      std::shared_ptr<ServerPeerContext> held_context = weak_context.lock();
+      if (held_state == nullptr || held_context == nullptr ||
+          channel == nullptr) {
         return;
       }
       std::shared_ptr<SignallingTransport> endpoint;
       OnWebRtcStream callback;
-      WebRtcConfiguration configuration;
+      WebRtcConfiguration wanted_configuration;
       WireStreamOptions options;
       {
-        thread::MutexLock lock(&state->mu);
-        if (!state->running) {
+        thread::MutexLock lock(&held_state->mu);
+        if (!held_state->running) {
           try {
             channel->close();
           } catch (...) {}
           return;
         }
-        endpoint = state->endpoint;
-        callback = state->on_stream;
-        configuration = state->configuration;
-        options = state->stream_options;
+        endpoint = held_state->endpoint;
+        callback = held_state->on_stream;
+        wanted_configuration = held_state->configuration;
+        options = held_state->stream_options;
       }
       absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> wrapped =
           internal::MakeRtcBinaryChannel(channel);
       if (!wrapped.ok()) {
-        ReportPeerError(state, context->identity, wrapped.status());
+        ReportPeerError(held_state, held_context->identity, wrapped.status());
         return;
       }
       std::string id;
@@ -1134,25 +1139,26 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
       std::shared_ptr<internal::MultiplexedBinaryChannel> multiplex;
       bool first = false;
       {
-        thread::MutexLock lock(&context->mu);
-        if (context->failed) {
+        thread::MutexLock lock(&held_context->mu);
+        if (held_context->failed) {
           try {
             channel->close();
           } catch (...) {}
           return;
         }
-        if (context->multiplex == nullptr) {
-          const size_t max_channels =
-              configuration.max_channels == 0 ? 1 : configuration.max_channels;
-          context->multiplex = internal::MultiplexedBinaryChannel::Create(
+        if (held_context->multiplex == nullptr) {
+          const size_t max_channels = wanted_configuration.max_channels == 0
+                                          ? 1
+                                          : wanted_configuration.max_channels;
+          held_context->multiplex = internal::MultiplexedBinaryChannel::Create(
               {*wrapped}, /*factory=*/{},
               internal::MultiplexedChannelOptions{.target_channels =
                                                       max_channels});
-          context->data_channel = channel;
-          multiplex = context->multiplex;
+          held_context->data_channel = channel;
+          multiplex = held_context->multiplex;
           first = true;
         } else {
-          multiplex = context->multiplex;
+          multiplex = held_context->multiplex;
         }
       }
       if (!first) {
@@ -1164,28 +1170,28 @@ absl::Status WebRtcWireServer::HandleOffer(const std::shared_ptr<State>& state,
         }
         return;
       }
-      ChannelWireStream::OpenOperation open = [context]() {
-        return ServerPeerStatus(context);
+      ChannelWireStream::OpenOperation open = [held_context]() {
+        return ServerPeerStatus(held_context);
       };
       absl::StatusOr<std::shared_ptr<WebRtcWireStream>> stream =
           WebRtcWireStream::BuildMultiplexedStream(
-              multiplex, channel, context->connection, std::move(endpoint),
+              multiplex, channel, held_context->connection, std::move(endpoint),
               std::move(id), ChannelEndpointRole::kServer, options,
-              std::move(open), configuration.channel_split_size,
-              configuration.mtu.value_or(kWebRtcBaseMtu));
+              std::move(open), wanted_configuration.channel_split_size,
+              wanted_configuration.mtu.value_or(kWebRtcBaseMtu));
       if (!stream.ok()) {
-        ReportPeerError(state, context->identity, stream.status());
+        ReportPeerError(held_state, held_context->identity, stream.status());
         return;
       }
       {
-        thread::MutexLock lock(&context->mu);
-        context->stream = *stream;
+        thread::MutexLock lock(&held_context->mu);
+        held_context->stream = *stream;
       }
       // Discovery needs nothing from the peer: a probe is a padded SCTP
       // HEARTBEAT, which any conforming peer answers on its own. No channel, no
       // capability, no responder.
-      if (configuration.path_mtu_discovery) {
-        (*stream)->StartPathMtuDiscovery(configuration, multiplex);
+      if (wanted_configuration.path_mtu_discovery) {
+        (*stream)->StartPathMtuDiscovery(wanted_configuration, multiplex);
       }
 
       a11::Schedule(

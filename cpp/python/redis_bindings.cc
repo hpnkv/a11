@@ -34,7 +34,7 @@ std::string RedisBytes(const py::handle& value, const char* name) {
     if (py::isinstance<py::bytes>(value) ||
         PyByteArray_Check(value.ptr()) != 0 ||
         PyMemoryView_Check(value.ptr()) != 0) {
-      const py::object borrowed = py::reinterpret_borrow<py::object>(value);
+      const auto borrowed = py::reinterpret_borrow<py::object>(value);
       return py::bytes(borrowed).cast<std::string>();
     }
     ThrowStatus(absl::InvalidArgumentError(std::string(name) +
@@ -77,7 +77,7 @@ absl::Time RedisDeadline(const py::handle& value) {
   return ValueOrThrow(TimeFromPython(value));
 }
 
-void CheckStatus(absl::Status status) {
+void CheckStatus(const absl::Status& status) {
   if (!status.ok()) {
     ThrowStatus(status);
   }
@@ -216,7 +216,7 @@ void BindRedis(py::module_& module) {
            "Raise if these connection options are invalid.")
       .def_static(
           "from_url",
-          [](std::string url) {
+          [](const std::string& url) {
             return ValueOrThrow(redis::ClientOptions::FromUrl(url));
           },
           "Parse a `redis://[user:password@]host[:port][/database]` URL.",

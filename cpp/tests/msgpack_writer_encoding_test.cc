@@ -40,9 +40,10 @@ std::string ViaJson(const nlohmann::json& value) {
 
 TEST(MsgpackWriterEncodingTest, UnsignedIntegersMatchAcrossEverySizeClass) {
   const std::vector<std::uint64_t> values = {
-      0,       1,          127,        128,        255,
-      256,     65535,      65536,      4294967295, 4294967296,
-      1'700'000'000'000'000ULL,  // a microsecond timestamp, the real case
+      0, 1, 127, 128, 255, 256, 65535, 65536, 4294967295, 4294967296,
+      // Plain literals, no digit separators: clang-format has been seen to read
+      // 1'700'000'000'000'000 as character literals when reflowing this region.
+      1700000000000000ULL,  // a microsecond timestamp, the real case
       std::numeric_limits<std::uint64_t>::max()};
   for (const std::uint64_t value : values) {
     MsgpackWriter writer;
@@ -54,9 +55,20 @@ TEST(MsgpackWriterEncodingTest, UnsignedIntegersMatchAcrossEverySizeClass) {
 
 TEST(MsgpackWriterEncodingTest, SignedIntegersMatchAcrossEverySizeClass) {
   const std::vector<std::int64_t> values = {
-      0,    1,      127,    128,     -1,      -32,
-      -33,  -128,   -129,   -32768,  -32769,  -2147483648LL,
-      -2147483649LL, std::numeric_limits<std::int64_t>::min(),
+      0,
+      1,
+      127,
+      128,
+      -1,
+      -32,
+      -33,
+      -128,
+      -129,
+      -32768,
+      -32769,
+      -2147483648LL,
+      -2147483649LL,
+      std::numeric_limits<std::int64_t>::min(),
       std::numeric_limits<std::int64_t>::max()};
   for (const std::int64_t value : values) {
     MsgpackWriter writer;
@@ -67,9 +79,9 @@ TEST(MsgpackWriterEncodingTest, SignedIntegersMatchAcrossEverySizeClass) {
 }
 
 TEST(MsgpackWriterEncodingTest, StringsMatchAcrossEverySizeClass) {
-  for (const size_t length : {size_t{0}, size_t{1}, size_t{31}, size_t{32},
-                             size_t{255}, size_t{256}, size_t{65535},
-                             size_t{65536}}) {
+  for (const size_t length :
+       {size_t{0}, size_t{1}, size_t{31}, size_t{32}, size_t{255}, size_t{256},
+        size_t{65535}, size_t{65536}}) {
     const std::string value(length, 'x');
     MsgpackWriter writer;
     writer.PackString(value);
@@ -80,11 +92,12 @@ TEST(MsgpackWriterEncodingTest, StringsMatchAcrossEverySizeClass) {
 
 TEST(MsgpackWriterEncodingTest, BinaryMatchesAcrossEverySizeClass) {
   for (const size_t length : {size_t{0}, size_t{1}, size_t{255}, size_t{256},
-                             size_t{65535}, size_t{65536}}) {
+                              size_t{65535}, size_t{65536}}) {
     const std::string value(length, '\x7f');
     MsgpackWriter writer;
     writer.PackBinary(value);
-    EXPECT_EQ(writer.TakeBytes(), ViaJson(Binary(value))) << "length " << length;
+    EXPECT_EQ(writer.TakeBytes(), ViaJson(Binary(value)))
+        << "length " << length;
   }
 }
 
@@ -105,8 +118,8 @@ TEST(MsgpackWriterEncodingTest, NilAndBooleansMatch) {
 TEST(MsgpackWriterEncodingTest, ArrayOfBinaryRecordsMatches) {
   // The shape WireMessage uses for its fragment and action lists: an array
   // header followed by one binary field per element.
-  for (const size_t count : {size_t{0}, size_t{1}, size_t{15}, size_t{16},
-                             size_t{17}}) {
+  for (const size_t count :
+       {size_t{0}, size_t{1}, size_t{15}, size_t{16}, size_t{17}}) {
     nlohmann::json array = nlohmann::json::array();
     MsgpackWriter writer;
     writer.PackArrayHeader(count);
@@ -129,9 +142,9 @@ TEST(MsgpackWriterEncodingTest, MapOfBinaryValuesMatches) {
     writer.PackMapHeader(count);
     for (size_t index = 0; index < count; ++index) {
       // Zero-padded so lexical and numeric order agree for this fixture.
-      const std::string key = "k" + std::string(2 - std::to_string(index).size(),
-                                                '0') +
-                              std::to_string(index);
+      const std::string key =
+          "k" + std::string(2 - std::to_string(index).size(), '0') +
+          std::to_string(index);
       const std::string value = "v" + std::to_string(index);
       writer.PackString(key);
       writer.PackBinary(value);

@@ -36,7 +36,7 @@ absl::StatusCode CanonicalStatusCode(int value) {
 
 nlohmann::json JsonFromPython(const py::handle& value) {
   try {
-    const std::string encoded =
+    const auto encoded =
         py::module_::import("json").attr("dumps")(value).cast<std::string>();
     return nlohmann::json::parse(encoded);
   } catch (py::error_already_set& error) {
@@ -50,14 +50,13 @@ py::object JsonToPython(const nlohmann::json& value) {
   return py::module_::import("json").attr("loads")(value.dump());
 }
 
-absl::Status MakeNativeStatus(int code, std::string message,
+absl::Status MakeNativeStatus(int code, const std::string& message,
                               const py::handle& details) {
   nlohmann::json converted = JsonFromPython(details);
   if (!converted.is_array()) {
     ThrowStatus(absl::InvalidArgumentError("status details must be a list"));
   }
-  return MakeStatus(CanonicalStatusCode(code), std::move(message),
-                    std::move(converted));
+  return MakeStatus(CanonicalStatusCode(code), message, converted);
 }
 
 void SetStatusCode(NativeStatus& status, int code) {
@@ -66,9 +65,9 @@ void SetStatusCode(NativeStatus& status, int code) {
                               StatusDetails(status.value()));
 }
 
-void SetStatusMessage(NativeStatus& status, std::string message) {
-  status.value() = MakeStatus(status.value().code(), std::move(message),
-                              StatusDetails(status.value()));
+void SetStatusMessage(NativeStatus& status, const std::string& message) {
+  status.value() =
+      MakeStatus(status.value().code(), message, StatusDetails(status.value()));
 }
 
 void SetStatusDetails(NativeStatus& status,
@@ -116,10 +115,10 @@ std::int64_t TimeNanosecondsOrThrow(absl::Time value) {
 
 void BindCore(py::module_& module) {
   py::class_<NativeStatus>(module, "Status", py::dynamic_attr())
-      .def(py::init([](int code, std::string message, py::object details) {
-             return NativeStatus(
-                 MakeNativeStatus(code, std::move(message), details));
-           }),
+      .def(py::init(
+               [](int code, std::string message, const py::object& details) {
+                 return NativeStatus(MakeNativeStatus(code, message, details));
+               }),
            "Creates a status from a canonical code, message, and details list.",
            py::arg("code") = 0, py::arg("message") = "OK",
            py::arg("details") = py::list())

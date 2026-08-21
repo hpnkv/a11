@@ -80,7 +80,7 @@ class FailFirstCloseStore final : public ChunkStore {
 
   absl::StatusOr<std::string> GetId() const override { return store_->GetId(); }
 
-  const std::vector<absl::Status>& close_statuses() const {
+  [[nodiscard]] const std::vector<absl::Status>& close_statuses() const {
     return close_statuses_;
   }
 
@@ -251,13 +251,14 @@ TEST(ChunkStoreWriterTest, FailedGracefulCloseCanBeRetriedAsAbort) {
 TEST(ChunkStoreWriterTest, TeesOnlyStoreConfirmedFragments) {
   auto pair = *net::InProcessWireStream::CreatePair();
   auto receiver = *net::WireStreamWithRecv::Create(pair.second);
-  ASSERT_TRUE(
-      pair.first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver->Accept().Await().ok());
 
   auto store = *LocalChunkStore::Create("writer-tee");
@@ -283,13 +284,14 @@ TEST(ChunkStoreWriterTest, TeesOnlyStoreConfirmedFragments) {
 TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {
   auto pair = *net::InProcessWireStream::CreatePair();
   auto receiver = *net::WireStreamWithRecv::Create(pair.second);
-  ASSERT_TRUE(
-      pair.first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver->Accept().Await().ok());
 
   auto store = *LocalChunkStore::Create("writer-close-tee");

@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -42,9 +42,11 @@ namespace {
 class Document : public TextIndex {
  public:
   Document() = default;
+
   explicit Document(std::string text) : TextIndex(std::move(text)) {}
 
-  int Version() const { return version_; }
+  [[nodiscard]] int Version() const { return version_; }
+
   void SetVersion(int version) { version_ = version; }
 
  private:
@@ -56,11 +58,16 @@ class Document : public TextIndex {
 /// The legend, in the standard names, so a client with no A11-specific theme
 /// still colours a flow sensibly.
 constexpr std::array kTokenTypes = {
-    std::string_view("comment"),  std::string_view("string"),
-    std::string_view("number"),   std::string_view("keyword"),
-    std::string_view("function"), std::string_view("type"),
-    std::string_view("enumMember"), std::string_view("operator"),
-    std::string_view("namespace"), std::string_view("property"),
+    std::string_view("comment"),
+    std::string_view("string"),
+    std::string_view("number"),
+    std::string_view("keyword"),
+    std::string_view("function"),
+    std::string_view("type"),
+    std::string_view("enumMember"),
+    std::string_view("operator"),
+    std::string_view("namespace"),
+    std::string_view("property"),
     std::string_view("variable"),
     // Ports use the standard semantic-token type for parameters.
     std::string_view("parameter"),
@@ -129,11 +136,15 @@ nlohmann::json SemanticTokenData(const Document& document) {
   const std::string& text = document.Text();
   for (const SemanticToken& token : semantic) {
     const int type = TokenTypeOf(token.kind);
-    if (type < 0) continue;
+    if (type < 0) {
+      continue;
+    }
     size_t start = token.start;
     while (start < token.end) {
       size_t stop = text.find('\n', start);
-      if (stop == std::string::npos || stop > token.end) stop = token.end;
+      if (stop == std::string::npos || stop > token.end) {
+        stop = token.end;
+      }
       if (stop > start) {
         const auto [line, character] = document.PositionOf(start);
         const auto [end_line, end_character] = document.PositionOf(stop);
@@ -198,14 +209,19 @@ int CompletionItemKind(ProposalKind kind) {
 std::string Snippet(const Proposal& proposal) {
   std::string out;
   const std::string& insert = proposal.insert;
-  const size_t caret = proposal.caret < 0
-                           ? insert.size()
-                           : static_cast<size_t>(proposal.caret);
+  const size_t caret =
+      proposal.caret < 0 ? insert.size() : static_cast<size_t>(proposal.caret);
   for (size_t at = 0; at <= insert.size(); ++at) {
-    if (at == caret) absl::StrAppend(&out, "$0");
-    if (at == insert.size()) break;
+    if (at == caret) {
+      absl::StrAppend(&out, "$0");
+    }
+    if (at == insert.size()) {
+      break;
+    }
     const char letter = insert[at];
-    if (letter == '$' || letter == '}' || letter == '\\') out.push_back('\\');
+    if (letter == '$' || letter == '}' || letter == '\\') {
+      out.push_back('\\');
+    }
     out.push_back(letter);
   }
   return out;
@@ -224,9 +240,13 @@ class Server {
       // A client that sent something unreadable is a client with a bug, and
       // there is nobody to tell: no id, no method, nothing to answer.
       message = nlohmann::json::parse(body, nullptr, false);
-      if (message.is_discarded()) continue;
+      if (message.is_discarded()) {
+        continue;
+      }
       Dispatch(message);
-      if (exited_) return 0;
+      if (exited_) {
+        return 0;
+      }
     }
     // The stream ended. A client that meant to stop said `shutdown` first.
     return shutdown_ ? 0 : 1;
@@ -239,25 +259,32 @@ class Server {
     std::string line;
     bool saw_header = false;
     while (std::getline(in_, line)) {
-      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
       if (line.empty()) {
-        if (!saw_header) continue;  // A stray blank line before any header.
+        if (!saw_header) {
+          continue;  // A stray blank line before any header.
+        }
         break;
       }
       saw_header = true;
       const size_t colon = line.find(':');
-      if (colon == std::string::npos) continue;
-      const std::string name =
-          absl::AsciiStrToLower(absl::StripAsciiWhitespace(
-              std::string_view(line).substr(0, colon)));
+      if (colon == std::string::npos) {
+        continue;
+      }
+      const std::string name = absl::AsciiStrToLower(
+          absl::StripAsciiWhitespace(std::string_view(line).substr(0, colon)));
       const std::string_view value =
           absl::StripAsciiWhitespace(std::string_view(line).substr(colon + 1));
       if (name == "content-length") {
-        length = static_cast<size_t>(std::strtoull(std::string(value).c_str(),
-                                                   nullptr, 10));
+        length = static_cast<size_t>(
+            std::strtoull(std::string(value).c_str(), nullptr, 10));
       }
     }
-    if (!saw_header) return false;
+    if (!saw_header) {
+      return false;
+    }
     body.assign(length, '\0');
     in_.read(body.data(), static_cast<std::streamsize>(length));
     return in_.gcount() == static_cast<std::streamsize>(length);
@@ -270,7 +297,9 @@ class Server {
   }
 
   void Answer(const nlohmann::json& request, nlohmann::json result) {
-    if (!request.contains("id")) return;  // A notification wants no answer.
+    if (!request.contains("id")) {
+      return;  // A notification wants no answer.
+    }
     Send(nlohmann::json{{"jsonrpc", "2.0"},
                         {"id", request.at("id")},
                         {"result", std::move(result)}});
@@ -282,16 +311,20 @@ class Server {
                         {"params", std::move(params)}});
   }
 
-  const Document* Find(const nlohmann::json& params) const {
+  [[nodiscard]] const Document* Find(const nlohmann::json& params) const {
     const std::string uri = Uri(params);
     const auto found = documents_.find(uri);
     return found == documents_.end() ? nullptr : &found->second;
   }
 
   static std::string Uri(const nlohmann::json& params) {
-    if (!params.is_object()) return "";
+    if (!params.is_object()) {
+      return "";
+    }
     const auto document = params.find("textDocument");
-    if (document == params.end() || !document->is_object()) return "";
+    if (document == params.end() || !document->is_object()) {
+      return "";
+    }
     return document->value("uri", std::string());
   }
 
@@ -309,10 +342,12 @@ class Server {
       std::error_code error;
       const std::filesystem::path absolute =
           std::filesystem::absolute(std::filesystem::path(path), error);
-      if (!error) return FileUri(absolute.string());
+      if (!error) {
+        return FileUri(absolute.string());
+      }
     }
     for (const char c : path) {
-      const unsigned char byte = static_cast<unsigned char>(c);
+      const auto byte = static_cast<unsigned char>(c);
       const bool plain = absl::ascii_isalnum(byte) || c == '/' || c == '-' ||
                          c == '_' || c == '.' || c == '~';
       if (plain) {
@@ -341,16 +376,18 @@ class Server {
   static nlohmann::json RangeOf(const Document& document, const Range& range) {
     const auto [start_line, start_character] =
         document.PositionOf(range.start.offset);
-    const auto [end_line, end_character] = document.PositionOf(range.end.offset);
+    const auto [end_line, end_character] =
+        document.PositionOf(range.end.offset);
     return nlohmann::json{
-        {"start", nlohmann::json{{"line", start_line},
-                                 {"character", start_character}}},
-        {"end", nlohmann::json{{"line", end_line},
-                               {"character", end_character}}},
+        {"start",
+         nlohmann::json{{"line", start_line}, {"character", start_character}}},
+        {"end",
+         nlohmann::json{{"line", end_line}, {"character", end_character}}},
     };
   }
 
-  nlohmann::json EditOf(const Document& document, const Edit& edit) const {
+  [[nodiscard]] nlohmann::json EditOf(const Document& document,
+                                      const Edit& edit) const {
     Range range;
     range.start.offset = edit.start;
     range.end.offset = edit.end;
@@ -394,7 +431,9 @@ class Server {
       }
     }
     nlohmann::json params{{"uri", uri}, {"diagnostics", list}};
-    if (document.Version() != 0) params["version"] = document.Version();
+    if (document.Version() != 0) {
+      params["version"] = document.Version();
+    }
     Notify("textDocument/publishDiagnostics", std::move(params));
   }
 
@@ -415,8 +454,9 @@ class Server {
 
   void Dispatch(const nlohmann::json& message) {
     const std::string method = message.value("method", std::string());
-    const nlohmann::json params =
-        message.contains("params") ? message.at("params") : nlohmann::json::object();
+    const nlohmann::json params = message.contains("params")
+                                      ? message.at("params")
+                                      : nlohmann::json::object();
 
     if (method == "initialize") {
       ReadClientCapabilities(message.value("params", nlohmann::json::object()));
@@ -462,12 +502,16 @@ class Server {
         documents_[uri] = std::move(held);
       }
       const auto found = documents_.find(uri);
-      if (found != documents_.end()) Publish(uri, found->second);
+      if (found != documents_.end()) {
+        Publish(uri, found->second);
+      }
       return;
     }
     if (method == "textDocument/didSave") {
       const auto found = documents_.find(Uri(params));
-      if (found != documents_.end()) Publish(found->first, found->second);
+      if (found != documents_.end()) {
+        Publish(found->first, found->second);
+      }
       return;
     }
     if (method == "textDocument/didClose") {
@@ -495,8 +539,8 @@ class Server {
         Answer(message, nlohmann::json::array());
         return;
       }
-      const nlohmann::json answer = Handle(nlohmann::json{
-          {"method", "format"}, {"source", document->Text()}});
+      const nlohmann::json answer = Handle(
+          nlohmann::json{{"method", "format"}, {"source", document->Text()}});
       nlohmann::json edits = nlohmann::json::array();
       if (answer.value("ok", false)) {
         for (const nlohmann::json& edit : answer.at("result").at("edits")) {
@@ -540,7 +584,9 @@ class Server {
       // A notification: no `id`, so no answer, and the documents already open
       // are re-checked because what the world contains may change what is wrong
       // with them.
-      for (const auto& [uri, document] : documents_) Publish(uri, document);
+      for (const auto& [uri, document] : documents_) {
+        Publish(uri, document);
+      }
       return;
     }
     if (method == "a11flow/scan") {
@@ -557,7 +603,8 @@ class Server {
       // not a document the server has, so it is asked about as text. Without this
       // a client would have to run a second process for it, and the two would
       // then disagree about the world the moment one of them was sent a context.
-      nlohmann::json relayed = params.is_object() ? params : nlohmann::json::object();
+      nlohmann::json relayed =
+          params.is_object() ? params : nlohmann::json::object();
       if (!relayed.contains("context") && !known_.Empty()) {
         // What this session knows, so a fragment is checked against the same
         // world its file's `.flow` siblings are.
@@ -570,15 +617,20 @@ class Server {
     }
     // Anything else: an unknown request still needs an answer, or a client waits
     // for one for ever.
-    if (message.contains("id")) Answer(message, nlohmann::json());
+    if (message.contains("id")) {
+      Answer(message, nlohmann::json());
+    }
   }
 
-  size_t OffsetIn(const Document& document, const nlohmann::json& params,
-                  std::string_view key = "position") const {
+  [[nodiscard]] size_t OffsetIn(const Document& document,
+                                const nlohmann::json& params,
+                                std::string_view key = "position") const {
     const auto position = params.find(key);
-    if (position == params.end() || !position->is_object()) return 0;
+    if (position == params.end() || !position->is_object()) {
+      return 0;
+    }
     return document.ByteOfPosition(position->value("line", 0),
-                             position->value("character", 0));
+                                   position->value("character", 0));
   }
 
   void Complete(const nlohmann::json& message, const nlohmann::json& params) {
@@ -635,9 +687,13 @@ class Server {
         // it follows, so nothing is added here; with no type in front of it that
         // space would be a leading one, and is taken off.
         absl::StrAppend(&detail, proposal.tail);
-        if (!detail.empty() && detail.front() == ' ') detail.erase(0, 1);
+        if (!detail.empty() && detail.front() == ' ') {
+          detail.erase(0, 1);
+        }
       }
-      if (!detail.empty()) item["detail"] = detail;
+      if (!detail.empty()) {
+        item["detail"] = detail;
+      }
       // The reference text beside the list, which is the same text a hover over
       // the finished word gives. The language works it out for every proposal it
       // has one for; dropping it here was why this client's popup was empty
@@ -659,7 +715,8 @@ class Server {
     return std::string(4 - std::min<size_t>(4, key.size()), '0') + key;
   }
 
-  void CodeActions(const nlohmann::json& message, const nlohmann::json& params) {
+  void CodeActions(const nlohmann::json& message,
+                   const nlohmann::json& params) {
     const Document* document = Find(params);
     nlohmann::json actions = nlohmann::json::array();
     if (document == nullptr) {
@@ -676,9 +733,13 @@ class Server {
           // rather than another analysis -- and a fix an editor applies is
           // exactly the edits the language wrote down.
           const auto data = diagnostic.find("data");
-          if (data == diagnostic.end() || !data->is_object()) continue;
+          if (data == diagnostic.end() || !data->is_object()) {
+            continue;
+          }
           const auto fixes = data->find("fixes");
-          if (fixes == data->end() || !fixes->is_array()) continue;
+          if (fixes == data->end() || !fixes->is_array()) {
+            continue;
+          }
           for (const nlohmann::json& fix : *fixes) {
             nlohmann::json edits = fix.value("edits", nlohmann::json::array());
             actions.push_back(nlohmann::json{
@@ -711,11 +772,10 @@ class Server {
       Answer(message, nlohmann::json());
       return;
     }
-    Answer(message,
-           nlohmann::json{
-               {"contents", nlohmann::json{{"kind", "markdown"},
-                                           {"value", about.markdown}}},
-               {"range", RangeOf(*document, about.range)}});
+    Answer(message, nlohmann::json{
+                        {"contents", nlohmann::json{{"kind", "markdown"},
+                                                    {"value", about.markdown}}},
+                        {"range", RangeOf(*document, about.range)}});
   }
 
   void DocumentSymbols(const nlohmann::json& message,
@@ -752,9 +812,9 @@ class Server {
     // in a `.py` two directories away is now a jump rather than a search.
     if (about.origin.has_value()) {
       Answer(message,
-             nlohmann::json{
-                 {"uri", FileUri(about.origin->file)},
-                 {"range", PositionAt(about.origin->line, about.origin->column)}});
+             nlohmann::json{{"uri", FileUri(about.origin->file)},
+                            {"range", PositionAt(about.origin->line,
+                                                 about.origin->column)}});
       return;
     }
     // A word that is not a name at all -- a stage, a keyword -- has no location.
@@ -770,12 +830,17 @@ class Server {
     for (const DocumentSymbol& child : symbol.children) {
       children.push_back(SymbolJson(document, child));
     }
-    nlohmann::json value{{"name", symbol.name},
-                         {"kind", SymbolItemKind(symbol.kind)},
-                         {"range", RangeOf(document, symbol.range)},
-                         {"selectionRange", RangeOf(document, symbol.selection)}};
-    if (!symbol.detail.empty()) value["detail"] = symbol.detail;
-    if (!children.empty()) value["children"] = std::move(children);
+    nlohmann::json value{
+        {"name", symbol.name},
+        {"kind", SymbolItemKind(symbol.kind)},
+        {"range", RangeOf(document, symbol.range)},
+        {"selectionRange", RangeOf(document, symbol.selection)}};
+    if (!symbol.detail.empty()) {
+      value["detail"] = symbol.detail;
+    }
+    if (!children.empty()) {
+      value["children"] = std::move(children);
+    }
     return value;
   }
 
@@ -811,15 +876,25 @@ class Server {
   /// What the client said it can render, for the fields that are opt-in.
   void ReadClientCapabilities(const nlohmann::json& params) {
     label_details_ = false;
-    if (!params.is_object()) return;
+    if (!params.is_object()) {
+      return;
+    }
     const auto capabilities = params.find("capabilities");
-    if (capabilities == params.end() || !capabilities->is_object()) return;
+    if (capabilities == params.end() || !capabilities->is_object()) {
+      return;
+    }
     const auto document = capabilities->find("textDocument");
-    if (document == capabilities->end() || !document->is_object()) return;
+    if (document == capabilities->end() || !document->is_object()) {
+      return;
+    }
     const auto completion = document->find("completion");
-    if (completion == document->end() || !completion->is_object()) return;
+    if (completion == document->end() || !completion->is_object()) {
+      return;
+    }
     const auto item = completion->find("completionItem");
-    if (item == completion->end() || !item->is_object()) return;
+    if (item == completion->end() || !item->is_object()) {
+      return;
+    }
     label_details_ = item->value("labelDetailsSupport", false);
   }
 
@@ -840,7 +915,9 @@ class Server {
       if (const auto paths = params.find("paths");
           paths != params.end() && paths->is_array()) {
         for (const nlohmann::json& one : *paths) {
-          if (one.is_string()) roots.push_back(one.get<std::string>());
+          if (one.is_string()) {
+            roots.push_back(one.get<std::string>());
+          }
         }
       }
     }
@@ -853,14 +930,15 @@ class Server {
     }
     const discover::Result found = discover::Discover(roots);
     known_ = known_.MergedWith(found.found);
-    for (const auto& [uri, document] : documents_) Publish(uri, document);
+    for (const auto& [uri, document] : documents_) {
+      Publish(uri, document);
+    }
     if (message.contains("id")) {
       Answer(message,
-             nlohmann::json{
-                 {"actions", found.found.actions().size()},
-                 {"files_read", found.files_read},
-                 {"reached_file_limit", found.reached_file_limit},
-                 {"too_large", found.too_large}});
+             nlohmann::json{{"actions", found.found.actions().size()},
+                            {"files_read", found.files_read},
+                            {"reached_file_limit", found.reached_file_limit},
+                            {"too_large", found.too_large}});
     }
   }
 
@@ -871,7 +949,9 @@ class Server {
   /// the rest of the session sees it -- rather than repeating a catalogue of a
   /// hundred actions on every keystroke.
   void SetContext(const nlohmann::json& params) {
-    if (!params.is_object()) return;
+    if (!params.is_object()) {
+      return;
+    }
     const catalogue::Catalogue given = catalogue::Catalogue::FromJson(params);
     known_ = params.value("replace", false)
                  ? given
@@ -880,44 +960,45 @@ class Server {
 
   static nlohmann::json Capabilities() {
     nlohmann::json types = nlohmann::json::array();
-    for (const std::string_view type : kTokenTypes) types.push_back(type);
+    for (const std::string_view type : kTokenTypes) {
+      types.push_back(type);
+    }
     return nlohmann::json{
         {"capabilities",
          nlohmann::json{
              // Full sync: see `didChange`.
-             {"textDocumentSync", nlohmann::json{{"openClose", true},
-                                                 {"change", 1},
-                                                 {"save", true}}},
+             {"textDocumentSync",
+              nlohmann::json{
+                  {"openClose", true}, {"change", 1}, {"save", true}}},
              {"documentFormattingProvider", true},
              {"documentSymbolProvider", true},
              {"definitionProvider", true},
              {"declarationProvider", true},
              {"typeDefinitionProvider", true},
              {"hoverProvider", true},
-             {"codeActionProvider", nlohmann::json{{"codeActionKinds",
-                                                    nlohmann::json::array(
-                                                        {"quickfix"})}}},
+             {"codeActionProvider",
+              nlohmann::json{
+                  {"codeActionKinds", nlohmann::json::array({"quickfix"})}}},
              {"completionProvider",
-              nlohmann::json{{"triggerCharacters",
-                              // `(` and `,` are what open an argument list and
-                              // what separate one argument from the next, so both
-                              // are positions where the answer is "these ports".
-                              // Without them, typing `run act(` asked for nothing
-                              // and the ports of the action being called -- the
-                              // thing hardest to remember -- were the one list
-                              // that needed Ctrl+Space to see.
-                              nlohmann::json::array(
-                                  {".", "|", ":", ">", " ", "(", ","})},
-                             {"resolveProvider", false}}},
+              nlohmann::json{
+                  {"triggerCharacters",
+                   // `(` and `,` are what open an argument list and
+                   // what separate one argument from the next, so both
+                   // are positions where the answer is "these ports".
+                   // Without them, typing `run act(` asked for nothing
+                   // and the ports of the action being called -- the
+                   // thing hardest to remember -- were the one list
+                   // that needed Ctrl+Space to see.
+                   nlohmann::json::array({".", "|", ":", ">", " ", "(", ","})},
+                  {"resolveProvider", false}}},
              {"semanticTokensProvider",
               nlohmann::json{
-                  {"legend", nlohmann::json{{"tokenTypes", types},
-                                            {"tokenModifiers",
-                                             nlohmann::json::array()}}},
+                  {"legend",
+                   nlohmann::json{{"tokenTypes", types},
+                                  {"tokenModifiers", nlohmann::json::array()}}},
                   {"full", true}}},
          }},
-        {"serverInfo",
-         nlohmann::json{{"name", "a11-flow"}, {"version", "1"}}},
+        {"serverInfo", nlohmann::json{{"name", "a11-flow"}, {"version", "1"}}},
     };
   }
 

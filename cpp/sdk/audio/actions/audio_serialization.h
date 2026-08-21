@@ -41,9 +41,9 @@
 
 #include "a11/data/serial_tags.h"
 #include "a11/data/serializable.h"
-#include "a11/json_codec.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 #include "sdk/audio/actions/audio_events.h"
 #include "sdk/audio/audio_buffer.h"
 #include "sdk/audio/audio_input.h"
@@ -136,8 +136,8 @@ absl::Status RegisterAudioTypes(a11::data::SerializationRegistry& registry);
 
 /// Encode a JSON-serializable value into a tagged @c application/json chunk.
 template <typename T>
-  requires a11::data::JsonSerializable<T>
-absl::StatusOr<a11::data::Chunk> EncodeJsonChunk(const T& value) {
+requires a11::data::JsonSerializable<T> absl::StatusOr<a11::data::Chunk>
+EncodeJsonChunk(const T& value) {
   absl::StatusOr<nlohmann::json> json = A11ToJson(value);
   if (!json.ok()) {
     return json.status();
@@ -153,8 +153,8 @@ absl::StatusOr<a11::data::Chunk> EncodeJsonChunk(const T& value) {
 /// Decode a JSON-serializable value from a chunk, accepting either the JSON or
 /// (JSON-derived) MessagePack representation.
 template <typename T>
-  requires a11::data::JsonSerializable<T>
-absl::StatusOr<T> DecodeJsonChunk(const a11::data::Chunk& chunk) {
+requires a11::data::JsonSerializable<T> absl::StatusOr<T> DecodeJsonChunk(
+    const a11::data::Chunk& chunk) {
   absl::StatusOr<nlohmann::json> json =
       absl::StartsWith(chunk.GetMimetype(), a11::data::kMsgpackMimetype)
           ? a11::UnpackMsgpack(chunk.data, "encoded value")
@@ -170,7 +170,8 @@ absl::StatusOr<a11::data::Chunk> EncodeAudioBufferChunk(
     const AudioBuffer& value);
 
 /// Decode an AudioBuffer from a @c application/x-msgpack chunk.
-absl::StatusOr<AudioBuffer> DecodeAudioBufferChunk(const a11::data::Chunk& chunk);
+absl::StatusOr<AudioBuffer> DecodeAudioBufferChunk(
+    const a11::data::Chunk& chunk);
 
 }  // namespace a11::sdk::audio
 

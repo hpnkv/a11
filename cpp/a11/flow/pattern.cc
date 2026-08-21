@@ -21,9 +21,11 @@ namespace {
 bool IsSpace(char letter) {
   return absl::ascii_isspace(static_cast<unsigned char>(letter));
 }
+
 bool IsDigit(char letter) {
   return absl::ascii_isdigit(static_cast<unsigned char>(letter));
 }
+
 bool IsAlnum(char letter) {
   return absl::ascii_isalnum(static_cast<unsigned char>(letter));
 }
@@ -47,19 +49,23 @@ size_t FlatRun(std::string_view subject, size_t at) {
 /// is something a pattern has to say, or `a={a} b={b}` would quietly match `a=1`
 /// on one line and `b=2` on the next. Everything else matches itself, exactly.
 std::optional<size_t> MatchLiteral(std::string_view literal,
-                                  std::string_view subject, size_t at) {
+                                   std::string_view subject, size_t at) {
   size_t index = 0;
   while (index < literal.size()) {
     if (IsSpace(literal[index])) {
       bool breaks = false;
       while (index < literal.size() && IsSpace(literal[index])) {
-        if (literal[index] == '\n') breaks = true;
+        if (literal[index] == '\n') {
+          breaks = true;
+        }
         ++index;
       }
       const size_t before = at;
       at += FlatRun(subject, at);
       if (breaks) {
-        if (at >= subject.size() || subject[at] != '\n') return std::nullopt;
+        if (at >= subject.size() || subject[at] != '\n') {
+          return std::nullopt;
+        }
         ++at;
         at += FlatRun(subject, at);
       } else if (at == before) {
@@ -126,27 +132,38 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
       return LineEnd(subject, at);
     case HoleType::kWord: {
       size_t end = at;
-      while (end < subject.size() && !IsSpace(subject[end])) ++end;
+      while (end < subject.size() && !IsSpace(subject[end])) {
+        ++end;
+      }
       return end;
     }
     case HoleType::kInt:
     case HoleType::kNumber: {
       size_t end = at;
-      if (end < subject.size() && (subject[end] == '-' || subject[end] == '+')) {
+      if (end < subject.size() &&
+          (subject[end] == '-' || subject[end] == '+')) {
         ++end;
       }
       const size_t digits = end;
-      while (end < subject.size() && IsDigit(subject[end])) ++end;
-      if (end == digits) return std::nullopt;
+      while (end < subject.size() && IsDigit(subject[end])) {
+        ++end;
+      }
+      if (end == digits) {
+        return std::nullopt;
+      }
       if (type == HoleType::kNumber && end < subject.size() &&
           subject[end] == '.') {
         const size_t point = end;
         ++end;
         const size_t after = end;
-        while (end < subject.size() && IsDigit(subject[end])) ++end;
+        while (end < subject.size() && IsDigit(subject[end])) {
+          ++end;
+        }
         // A trailing point is not part of the number: `1.` in "1. two" is the
         // number and the full stop, which is what a reader means by it.
-        if (end == after) end = point;
+        if (end == after) {
+          end = point;
+        }
       }
       return end;
     }
@@ -183,18 +200,24 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
 ///   the rest of its line.
 bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
                size_t at, std::vector<Capture>& captures) {
-  if (piece >= pattern.pieces.size()) return true;
+  if (piece >= pattern.pieces.size()) {
+    return true;
+  }
   const Pattern::Piece& one = pattern.pieces[piece];
 
   if (!one.is_hole) {
     const std::optional<size_t> next = MatchLiteral(one.literal, subject, at);
-    if (!next.has_value()) return false;
+    if (!next.has_value()) {
+      return false;
+    }
     return MatchFrom(pattern, piece + 1, subject, *next, captures);
   }
 
   const auto take = [&](size_t end) {
     captures.push_back(Capture{subject.substr(at, end - at)});
-    if (MatchFrom(pattern, piece + 1, subject, end, captures)) return true;
+    if (MatchFrom(pattern, piece + 1, subject, end, captures)) {
+      return true;
+    }
     captures.pop_back();
     return false;
   };
@@ -202,14 +225,20 @@ bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
   const Shape shape = ShapeOf(one.hole.type);
   const std::optional<size_t> run = TypedRun(one.hole.type, subject, at);
   if (shape == Shape::kExact) {
-    if (!run.has_value() || *run <= at) return false;
+    if (!run.has_value() || *run <= at) {
+      return false;
+    }
     return take(*run);
   }
   if (shape == Shape::kRun) {
-    if (!run.has_value() || *run <= at) return false;
+    if (!run.has_value() || *run <= at) {
+      return false;
+    }
     // Longest first, giving back one character at a time.
     for (size_t end = *run; end > at; --end) {
-      if (take(end)) return true;
+      if (take(end)) {
+        return true;
+      }
     }
     return false;
   }
@@ -223,7 +252,9 @@ bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
     return stop > at && take(stop);
   }
   for (size_t end = at + 1; end <= stop; ++end) {
-    if (take(end)) return true;
+    if (take(end)) {
+      return true;
+    }
   }
   return false;
 }
@@ -264,14 +295,18 @@ std::optional<HoleType> HoleTypeFromName(std::string_view name) {
       HoleType::kJson,
   };
   for (const HoleType type : kAll) {
-    if (HoleTypeName(type) == name) return type;
+    if (HoleTypeName(type) == name) {
+      return type;
+    }
   }
   return std::nullopt;
 }
 
 bool Pattern::AllNamed() const {
   for (const Hole& hole : holes) {
-    if (hole.name.empty()) return false;
+    if (hole.name.empty()) {
+      return false;
+    }
   }
   return !holes.empty();
 }
@@ -281,7 +316,9 @@ Compiled Compile(std::string_view text) {
   std::string literal;
   absl::flat_hash_set<std::string> named;
   const auto flush = [&] {
-    if (literal.empty()) return;
+    if (literal.empty()) {
+      return;
+    }
     Pattern::Piece piece;
     piece.literal = std::move(literal);
     literal.clear();
@@ -346,10 +383,11 @@ Compiled Compile(std::string_view text) {
     if (!name.empty()) {
       for (const char inner : name) {
         if (!IsAlnum(inner) && inner != '_' && inner != '-') {
-          return fail(absl::StrCat("'", name,
-                                   "' is not a field name: a hole is named with "
-                                   "letters, digits, '_' and '-'."),
-                      opened);
+          return fail(
+              absl::StrCat("'", name,
+                           "' is not a field name: a hole is named with "
+                           "letters, digits, '_' and '-'."),
+              opened);
         }
       }
       if (!named.insert(std::string(name)).second) {
@@ -385,13 +423,17 @@ Compiled Compile(std::string_view text) {
 
 std::optional<std::vector<Capture>> Match(const Pattern& pattern,
                                           std::string_view subject) {
-  if (pattern.pieces.empty()) return std::nullopt;
+  if (pattern.pieces.empty()) {
+    return std::nullopt;
+  }
   std::vector<Capture> captures;
   // Searching, so the pattern may begin anywhere: the earliest fit wins, which
   // is the one a reader means by "the line has this in it".
   for (size_t start = 0; start <= subject.size(); ++start) {
     captures.clear();
-    if (MatchFrom(pattern, 0, subject, start, captures)) return captures;
+    if (MatchFrom(pattern, 0, subject, start, captures)) {
+      return captures;
+    }
   }
   return std::nullopt;
 }

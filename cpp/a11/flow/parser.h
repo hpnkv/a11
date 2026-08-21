@@ -41,12 +41,12 @@ struct ParseResult {
   /// literal, so the first hugs its brace and the second takes a space.
   std::vector<size_t> tagged_braces;
 
-  bool HasErrors() const;
+  [[nodiscard]] bool HasErrors() const;
 
   /// The first error in source order, or `nullptr`. This is what a strict
   /// caller turns into a refusal: `flow.loads` raises the Python
   /// `FlowSyntaxError` built from exactly this.
-  const Diagnostic* absl_nullable FirstError() const;
+  [[nodiscard]] const Diagnostic* absl_nullable FirstError() const;
 };
 
 /// Parse Flow source.

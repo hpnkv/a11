@@ -135,7 +135,7 @@ absl::StatusOr<Encoding> EncodingFromName(std::string_view name) {
     return Encoding::kMsgpack;
   }
   return absl::InvalidArgumentError(absl::StrCat(
-      "options.encoding must be \"json\" or \"msgpack\", got '", name, "'"));
+      R"(options.encoding must be "json" or "msgpack", got ')", name, "'"));
 }
 
 absl::StatusOr<data::Chunk> ValueChunk(const nlohmann::json& value,
@@ -373,9 +373,9 @@ absl::StatusOr<OutputPorts> OutputPorts::Open(
   // meant to skip a port and is instead about to wait on one.
   for (const std::string& name : omitted) {
     if (!schema.outputs.contains(name)) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "options.omit names '", name, "', which is not an output of ",
-          schema.name));
+      return absl::InvalidArgumentError(
+          absl::StrCat("options.omit names '", name,
+                       "', which is not an output of ", schema.name));
     }
   }
 
@@ -403,9 +403,9 @@ Sink OutputPorts::operator[](std::string_view name) {
     }
   }
   if (misuse_.ok()) {
-    misuse_ = absl::InternalError(
-        absl::StrCat("no output port named '", name, "'; this action declares ",
-                     absl::StrJoin(Names(), ", ")));
+    misuse_ = absl::InternalError(absl::StrCat("no output port named '", name,
+                                               "'; this action declares ",
+                                               absl::StrJoin(Names(), ", ")));
   }
   return {};
 }
@@ -480,25 +480,26 @@ actions::ActionPortSchema Port(std::string_view name, std::string_view type,
                                std::string_view description, bool required,
                                bool unary) {
   return actions::ActionPortSchema{.name = std::string(name),
-                                  .type = std::string(type),
-                                  .description = std::string(description),
-                                  .required = required,
-                                  .unary = unary};
+                                   .type = std::string(type),
+                                   .description = std::string(description),
+                                   .required = required,
+                                   .unary = unary};
 }
 
-std::string JsonType() { return std::string(data::kJsonMimetype); }
+std::string JsonType() {
+  return std::string(data::kJsonMimetype);
+}
 
 absl::StatusOr<Encoding> EncodingOption(const Options& options) {
-  ABSL_ASSIGN_OR_RETURN(const std::string name,
-                        options.Enum("encoding", "json",
-                                     {"json", "msgpack", "packb"}));
+  ABSL_ASSIGN_OR_RETURN(
+      const std::string name,
+      options.Enum("encoding", "json", {"json", "msgpack", "packb"}));
   return EncodingFromName(name);
 }
 
 absl::StatusOr<OutputPorts> OpenOutputs(
     const std::shared_ptr<actions::Action>& action, const Options& options) {
-  ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted,
-                        options.Omit());
+  ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> omitted, options.Omit());
   ABSL_ASSIGN_OR_RETURN(const Encoding encoding, EncodingOption(options));
   return OutputPorts::Open(action, omitted, encoding);
 }

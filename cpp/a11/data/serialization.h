@@ -102,9 +102,9 @@ class TypedChunkObject final : public ChunkObject {
         registry_(std::move(registry)) {}
 
   [[nodiscard]] std::string_view tag() const override { return tag_; }
-  [[nodiscard]] std::string_view mimetype() const override {
-    return mimetype_;
-  }
+
+  [[nodiscard]] std::string_view mimetype() const override { return mimetype_; }
+
   [[nodiscard]] const void* absl_nonnull address() const override {
     return &value_;
   }
@@ -175,13 +175,14 @@ class SerializationRegistry {
    * @return OK on success, or an error (e.g. when @p serializer is empty).
    */
   template <typename T>
-  absl::Status RegisterSerializer(std::string type_name, std::string mimetype,
+  absl::Status RegisterSerializer(std::string type_name,
+                                  const std::string& mimetype,
                                   Serializer<T> serializer) {
     if (!serializer) {
       return absl::InvalidArgumentError("serializer must be callable");
     }
     return RegisterSerializerErased(
-        typeid(T), std::move(type_name), std::move(mimetype),
+        typeid(T), std::move(type_name), mimetype,
         [serializer = std::move(serializer)](
             const void* absl_nonnull value) -> absl::StatusOr<Chunk> {
           if (value == nullptr) {
@@ -193,7 +194,7 @@ class SerializationRegistry {
           // own codecs cannot, and compile to a plain call. See
           // a11/exception_guard.h.
           absl::StatusOr<Chunk> chunk;
-          const absl::Status raised = exception_guard::Attempt(
+          absl::Status raised = exception_guard::Attempt(
               [&] { chunk = serializer(*static_cast<const T*>(value)); },
               "serializer");
           if (!raised.ok()) {
@@ -213,18 +214,19 @@ class SerializationRegistry {
    * @return OK on success, or an error (e.g. when @p deserializer is empty).
    */
   template <typename T>
-  absl::Status RegisterDeserializer(std::string type_name, std::string mimetype,
+  absl::Status RegisterDeserializer(std::string type_name,
+                                    const std::string& mimetype,
                                     Deserializer<T> deserializer) {
     if (!deserializer) {
       return absl::InvalidArgumentError("deserializer must be callable");
     }
     return RegisterDeserializerErased(
-        typeid(T), std::move(type_name), std::move(mimetype),
+        typeid(T), std::move(type_name), mimetype,
         [deserializer = std::move(deserializer)](
             const Chunk& chunk) -> absl::StatusOr<std::any> {
           // See RegisterSerializer above for why the guard sits here.
           absl::StatusOr<T> result;
-          const absl::Status raised = exception_guard::Attempt(
+          absl::Status raised = exception_guard::Attempt(
               [&] { result = deserializer(chunk); }, "deserializer");
           if (!raised.ok()) {
             return raised;
@@ -251,13 +253,13 @@ class SerializationRegistry {
    * @return OK on success, or the first error encountered.
    */
   template <typename T>
-  absl::Status Register(std::string type_name, std::string mimetype,
-                        Serializer<T> serializer,
+  absl::Status Register(const std::string& type_name,
+                        const std::string& mimetype, Serializer<T> serializer,
                         Deserializer<T> deserializer) {
     ABSL_RETURN_IF_ERROR(
-        RegisterSerializer<T>(type_name, mimetype, serializer));
-    // Copies rather than moves: the rollback below names the serializer by the
-    // same tag and media type, and a moved-from string would ask
+        RegisterSerializer<T>(type_name, mimetype, std::move(serializer)));
+    // Borrowed rather than moved: the rollback below names the serializer by
+    // the same tag and media type, and a moved-from string would ask
     // RemoveSerializer to remove something that was never registered -- leaving
     // the half of the pair this call added behind, which is the one thing the
     // rollback exists to prevent.
@@ -309,9 +311,9 @@ class SerializationRegistry {
     // below is what that looks like from here.
     T* absl_nullable value = std::any_cast<T>(&result);
     if (value == nullptr) {
-      return absl::InternalError(absl::StrCat(
-          "A deserializer produced ", result.type().name(),
-          ", which is not the requested ", typeid(T).name()));
+      return absl::InternalError(
+          absl::StrCat("A deserializer produced ", result.type().name(),
+                       ", which is not the requested ", typeid(T).name()));
     }
     return std::move(*value);
   }
@@ -337,15 +339,15 @@ class SerializationRegistry {
   static constexpr size_t kImplAlignment = alignof(std::max_align_t);
 
   Impl* absl_nonnull GetImpl();
-  const Impl* absl_nonnull GetImpl() const;
+  [[nodiscard]] const Impl* absl_nonnull GetImpl() const;
 
   absl::Status RegisterSerializerErased(std::type_index type,
                                         std::string type_name,
-                                        std::string mimetype,
+                                        const std::string& mimetype,
                                         ErasedSerializer serializer);
   absl::Status RegisterDeserializerErased(std::type_index type,
                                           std::string type_name,
-                                          std::string mimetype,
+                                          const std::string& mimetype,
                                           ErasedDeserializer deserializer);
   void RemoveSerializer(std::type_index type, std::string_view type_name,
                         std::string_view mimetype);
@@ -366,11 +368,13 @@ SerializationRegistry& GlobalSerializationRegistry();
 template <typename T>
 absl::StatusOr<Bytes> TypedChunkObject<T>::Encode() const {
   if (registry_ == nullptr) {
-    return absl::FailedPreconditionError(absl::StrCat(
-        "a chunk carrying a ", tag_,
-        " was asked for its bytes, but no serialization registry came with it"));
+    return absl::FailedPreconditionError(
+        absl::StrCat("a chunk carrying a ", tag_,
+                     " was asked for its bytes, but no serialization registry "
+                     "came with it"));
   }
-  ABSL_ASSIGN_OR_RETURN(Chunk encoded, registry_->ToChunk<T>(value_, mimetype_));
+  ABSL_ASSIGN_OR_RETURN(Chunk encoded,
+                        registry_->ToChunk<T>(value_, mimetype_));
   return std::move(encoded.data);
 }
 

@@ -51,7 +51,8 @@ TEST(FibreReapingTest, CancellingAFinishedTaskIsSafe) {
       ran.store(true, std::memory_order_relaxed);
       return absl::OkStatus();
     });
-    ASSERT_TRUE(task.Await(absl::Now() + kDeadline).ok()) << "attempt " << attempt;
+    ASSERT_TRUE(task.Await(absl::Now() + kDeadline).ok())
+        << "attempt " << attempt;
     EXPECT_TRUE(ran.load(std::memory_order_relaxed));
     // After completion, and deliberately without waiting for a reap.
     (void)task.Cancel();

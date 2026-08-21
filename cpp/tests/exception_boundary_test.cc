@@ -24,10 +24,9 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
-#include <gtest/gtest.h>
-
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <gtest/gtest.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
@@ -40,9 +39,8 @@ namespace a11 {
 namespace {
 
 data::WireMessage OneFragment() {
-  return data::WireMessage{
-      .node_fragments = {data::NodeFragment{.id = "n",
-                                            .data = data::Chunk{.data = "x"}}}};
+  return data::WireMessage{.node_fragments = {data::NodeFragment{
+                               .id = "n", .data = data::Chunk{.data = "x"}}}};
 }
 
 TEST(ExceptionBoundaryTest, AThrowingOnMessageAbortsTheStreamNotTheProcess) {
@@ -52,7 +50,7 @@ TEST(ExceptionBoundaryTest, AThrowingOnMessageAbortsTheStreamNotTheProcess) {
 
   ASSERT_TRUE(server
                   ->Accept(
-                      [](std::optional<data::WireMessage>) -> a11::Task {
+                      [](const std::optional<data::WireMessage>&) -> a11::Task {
                         throw std::runtime_error("from on_message");
                       },
                       []() -> a11::Task { return a11::ReadyTask(); })
@@ -60,7 +58,7 @@ TEST(ExceptionBoundaryTest, AThrowingOnMessageAbortsTheStreamNotTheProcess) {
                   .status()
                   .ok());
   ASSERT_TRUE(client
-                  ->Start([](std::optional<data::WireMessage>)
+                  ->Start([](const std::optional<data::WireMessage>&)
                               -> a11::Task { return a11::ReadyTask(); },
                           []() -> a11::Task { return a11::ReadyTask(); })
                   .Await()
@@ -86,9 +84,11 @@ TEST(ExceptionBoundaryTest, AThrowingOnMessageAbortsTheStreamNotTheProcess) {
 
 TEST(ExceptionBoundaryTest, AThrowingCodecBecomesAnErrorStatus) {
   data::SerializationRegistry registry;
+
   struct Thrower {
     int value = 0;
   };
+
   ASSERT_TRUE(registry
                   .RegisterSerializer<Thrower>(
                       "thrower", "application/x-test",
@@ -127,7 +127,7 @@ TEST(ExceptionBoundaryTest, AThrowingActionHandlerFailsTheAction) {
   absl::StatusOr<std::shared_ptr<actions::Action>> action =
       actions::Action::Create(
           schema, "thrower",
-          [](std::shared_ptr<actions::Action>) -> a11::Task {
+          [](const std::shared_ptr<actions::Action>&) -> a11::Task {
             throw std::runtime_error("from handler");
           });
   ASSERT_TRUE(action.ok()) << action.status();

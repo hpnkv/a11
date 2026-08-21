@@ -43,7 +43,7 @@ struct AudioInputOptions {
   /// Human-readable input device name to capture from. When non-empty it takes
   /// precedence over @c device_index and is resolved to an index in Open();
   /// empty selects by @c device_index (or the default input device).
-  std::string device_name;
+  std::string device_name = {};
   /// Requested sample rate in hertz, or 0 to use the device default.
   double sample_rate = 0.0;
   /// Requested channel count, or 0 to use the device's input channel count.
@@ -132,7 +132,7 @@ class AudioInput : public std::enable_shared_from_this<AudioInput> {
  public:
   /// Resolve the device and validate options without starting capture.
   static absl::StatusOr<std::shared_ptr<AudioInput>> Open(
-      AudioInputOptions options);
+      const AudioInputOptions& options);
 
   AudioInput(const AudioInput&) = delete;
   AudioInput& operator=(const AudioInput&) = delete;

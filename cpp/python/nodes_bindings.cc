@@ -52,13 +52,12 @@ class PythonFactory {
   }
 
   absl::StatusOr<std::shared_ptr<stores::ChunkStore>> Call(
-      std::string node_id) {
+      const std::string& node_id) {
     py::gil_scoped_acquire acquire;
     try {
-      py::function function = py::reinterpret_borrow<py::function>(function_);
-      py::object value = function(std::move(node_id));
-      std::shared_ptr<stores::ChunkStore> store =
-          value.cast<std::shared_ptr<stores::ChunkStore>>();
+      auto function = py::reinterpret_borrow<py::function>(function_);
+      py::object value = function(node_id);
+      auto store = value.cast<std::shared_ptr<stores::ChunkStore>>();
       // A shared_ptr keeps the C++ trampoline alive, but pybind11 override
       // lookup also needs the corresponding Python instance.  Retain factory
       // results for the NodeMap lifetime so a temporary Python store remains
@@ -136,8 +135,8 @@ void BindNodes(py::module_& module) {
              }
              auto owner = std::make_shared<PythonFactory>(factory);
              return ValueOrThrow(
-                 nodes::NodeMap::Create([owner](std::string node_id) {
-                   return owner->Call(std::move(node_id));
+                 nodes::NodeMap::Create([owner](const std::string& node_id) {
+                   return owner->Call(node_id);
                  }));
            }),
            "Creates a node map, optionally backed by a chunk-store factory "
@@ -146,8 +145,8 @@ void BindNodes(py::module_& module) {
       .def(
           "get",
           [](nodes::NodeMap& self, std::string node_id) {
-            return ValueOrThrow(WithoutGil(
-                [&] { return self.Get(std::move(node_id)); }));
+            return ValueOrThrow(
+                WithoutGil([&] { return self.Get(std::move(node_id)); }));
           },
           "Returns the node for the given id, creating it if it does not "
           "already exist.",
@@ -416,7 +415,8 @@ void BindNodes(py::module_& module) {
             absl::StatusOr<absl::Duration> converted =
                 DurationFromPython(timeout);
             if (!converted.ok()) {
-              return FutureToPython(a11::FailedFuture<Batch>(converted.status()));
+              return FutureToPython(
+                  a11::FailedFuture<Batch>(converted.status()));
             }
             return FutureToPython(WithoutGil(
                 [&] { return self->NextFragments(limit, *converted); }));

@@ -19,11 +19,15 @@ class Channel;
 namespace a11::net::internal {
 
 struct BinaryChannelCallbacks {
-  std::function<void()> on_open;
-  std::function<void(std::string)> on_message;
-  std::function<void(absl::Status)> on_error;
-  std::function<void()> on_closed;
-  std::function<void()> on_buffered_amount_low;
+  std::function<void()> on_open = {};
+
+  std::function<void(std::string)> on_message = {};
+
+  std::function<void(absl::Status)> on_error = {};
+
+  std::function<void()> on_closed = {};
+
+  std::function<void()> on_buffered_amount_low = {};
 };
 
 // A small dependency-neutral boundary around message-oriented transports.
@@ -63,6 +67,7 @@ class BinaryChannel {
     (void)status;
     return Close();
   }
+
   [[nodiscard]] virtual void* absl_nullable GetImpl() const = 0;
 };
 

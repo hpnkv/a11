@@ -298,10 +298,10 @@ struct ChunkStoreWriter::State
 
     a11::Future<std::vector<std::uint32_t>> pending;
     pending = store->PutMany(std::move(fragments));
-    InstallWrite(std::move(pending), generation);
+    InstallWrite(pending, generation);
   }
 
-  void InstallWrite(a11::Future<std::vector<std::uint32_t>> pending,
+  void InstallWrite(const a11::Future<std::vector<std::uint32_t>>& pending,
                     std::uint64_t generation) {
     bool cancel = false;
     {

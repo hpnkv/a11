@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/obs/tracer.h"
-
 #include <optional>
 #include <string>
 
@@ -12,6 +10,7 @@
 #include "a11/obs/provider.h"
 #include "a11/obs/span.h"
 #include "a11/obs/trace_context.h"
+#include "a11/obs/tracer.h"
 
 namespace a11::obs {
 namespace {

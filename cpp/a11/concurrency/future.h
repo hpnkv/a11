@@ -430,9 +430,8 @@ inline Task FailedTask(absl::Status status) {
  *   A Future for @p transform's result, cancellable through to @p future.
  */
 template <typename T, typename Fn>
-auto Then(Future<T> future, Fn transform)
-    -> Future<typename std::invoke_result_t<
-        Fn, const absl::StatusOr<T>&>::value_type> {
+auto Then(const Future<T>& future, Fn transform) -> Future<
+    typename std::invoke_result_t<Fn, const absl::StatusOr<T>&>::value_type> {
   using Result = std::invoke_result_t<Fn, const absl::StatusOr<T>&>;
   using U = typename Result::value_type;
 
@@ -442,14 +441,13 @@ auto Then(Future<T> future, Fn transform)
 
   Promise<U> promise;
   Future<U> continued = promise.future();
-  promise
-      .SetCancellationCallback([future]() mutable { (void)future.Cancel(); })
+  promise.SetCancellationCallback([future]() mutable { (void)future.Cancel(); })
       .IgnoreError();
-  future.OnReady([promise = std::move(promise),
-                  transform = std::move(transform)](
-                     const absl::StatusOr<T>& result) mutable {
-    promise.SetResult(transform(result)).IgnoreError();
-  });
+  future.OnReady(
+      [promise = std::move(promise), transform = std::move(transform)](
+          const absl::StatusOr<T>& result) mutable {
+        promise.SetResult(transform(result)).IgnoreError();
+      });
   return continued;
 }
 

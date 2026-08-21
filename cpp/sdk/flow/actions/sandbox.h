@@ -138,6 +138,7 @@ class Sandbox {
 
   /** @brief Whether anything will actually be enforced. */
   [[nodiscard]] bool active() const { return kind_ != SandboxKind::kNone; }
+
   /** @brief Which mechanism this is. */
   [[nodiscard]] SandboxKind kind() const { return kind_; }
 
@@ -161,7 +162,8 @@ class Sandbox {
    * branch on the platform.
    */
   [[nodiscard]] std::vector<std::string> WrapCommand(
-      std::string_view program, const std::vector<std::string>& arguments) const;
+      std::string_view program,
+      const std::vector<std::string>& arguments) const;
 
   /** @brief The program to exec, after WrapCommand. */
   [[nodiscard]] std::string WrapProgram(std::string_view program) const;

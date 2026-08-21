@@ -27,16 +27,17 @@ TEST(InProcessWireStreamTest, DeliversMessagesAndOrderedHalfClose) {
   std::vector<std::optional<data::WireMessage>> received;
   std::atomic<bool> first_done = false;
   std::atomic<bool> second_done = false;
-  ASSERT_TRUE(
-      first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&first_done]() {
-                first_done = true;
-                return a11::ReadyTask();
-              })
-          .Await()
-          .ok());
+  ASSERT_TRUE(first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&first_done]() {
+                        first_done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(second
                   ->Accept(
                       [&received](std::optional<data::WireMessage> message) {
@@ -96,44 +97,43 @@ TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
   thread::Mutex mu;
   thread::CondVar cv;
   std::vector<int> seen;
-  ASSERT_TRUE(
-      sender
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
-  ASSERT_TRUE(receiver
-                  ->Accept(
-                      [&](std::optional<data::WireMessage> message) {
-                        if (message.has_value() &&
-                            !message->node_fragments.empty()) {
-                          thread::MutexLock lock(&mu);
-                          // Every fragment, not every message: the sender folds
-                          // whatever is already queued into one message, so a
-                          // delivery can carry many fragments and the order
-                          // being checked is theirs.
-                          for (const data::NodeFragment& fragment :
-                               message->node_fragments) {
-                            seen.push_back(
-                                static_cast<int>(fragment.seq.value_or(0)));
-                          }
-                          cv.SignalAll();
-                        }
+  ASSERT_TRUE(sender
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
                         return a11::ReadyTask();
                       },
                       [] { return a11::ReadyTask(); })
                   .Await()
                   .ok());
+  ASSERT_TRUE(
+      receiver
+          ->Accept(
+              [&](std::optional<data::WireMessage> message) {
+                if (message.has_value() && !message->node_fragments.empty()) {
+                  thread::MutexLock lock(&mu);
+                  // Every fragment, not every message: the sender folds
+                  // whatever is already queued into one message, so a
+                  // delivery can carry many fragments and the order
+                  // being checked is theirs.
+                  for (const data::NodeFragment& fragment :
+                       message->node_fragments) {
+                    seen.push_back(static_cast<int>(fragment.seq.value_or(0)));
+                  }
+                  cv.SignalAll();
+                }
+                return a11::ReadyTask();
+              },
+              [] { return a11::ReadyTask(); })
+          .Await()
+          .ok());
 
   for (int index = 0; index < kMessages; ++index) {
-    data::WireMessage message{
-        .node_fragments = {{
-            .id = "node",
-            .data = data::Chunk{.data = "payload"},
-            .seq = static_cast<std::uint32_t>(index),
-            .continued = true,
-        }}};
+    data::WireMessage message{.node_fragments = {{
+                                  .id = "node",
+                                  .data = data::Chunk{.data = "payload"},
+                                  .seq = static_cast<std::uint32_t>(index),
+                                  .continued = true,
+                              }}};
     ASSERT_TRUE(sender->Send(std::move(message)).ok()) << index;
   }
 
@@ -171,13 +171,14 @@ TEST(InProcessWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   thread::CondVar cv;
   std::vector<std::vector<int>> seen(kSenders);
   int total = 0;
-  ASSERT_TRUE(
-      sender
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
+  ASSERT_TRUE(sender
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(receiver
                   ->Accept(
                       [&](std::optional<data::WireMessage> message) {
@@ -243,23 +244,25 @@ TEST(InProcessWireStreamTest, CommunicatesAbortStatus) {
   auto first = pair.first;
   auto second = pair.second;
   std::atomic<bool> done = false;
-  ASSERT_TRUE(
-      first
-          ->Start(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [] { return a11::ReadyTask(); })
-          .Await()
-          .ok());
-  ASSERT_TRUE(
-      second
-          ->Accept(
-              [](std::optional<data::WireMessage>) { return a11::ReadyTask(); },
-              [&done] {
-                done = true;
-                return a11::ReadyTask();
-              })
-          .Await()
-          .ok());
+  ASSERT_TRUE(first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
+  ASSERT_TRUE(second
+                  ->Accept(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [&done] {
+                        done = true;
+                        return a11::ReadyTask();
+                      })
+                  .Await()
+                  .ok());
   ASSERT_TRUE(first->Abort(absl::DataLossError("corrupt")).ok());
   const absl::Time limit = absl::Now() + absl::Seconds(5);
   while (!done && absl::Now() < limit) {

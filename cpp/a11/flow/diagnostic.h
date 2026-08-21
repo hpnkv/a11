@@ -147,16 +147,16 @@ class LineIndex {
   explicit LineIndex(std::string_view source);
 
   /// The position at a byte offset, clamped to the end of the source.
-  Position At(size_t offset) const;
+  [[nodiscard]] Position At(size_t offset) const;
 
   /// A range from two byte offsets.
-  Range Between(size_t start, size_t end) const;
+  [[nodiscard]] Range Between(size_t start, size_t end) const;
 
   /// How many lines the source has, counting a trailing partial line.
-  size_t LineCount() const { return line_starts_.size(); }
+  [[nodiscard]] size_t LineCount() const { return line_starts_.size(); }
 
   /// The byte offset the 1-based `line` starts at, clamped to the source.
-  size_t LineStart(int line) const;
+  [[nodiscard]] size_t LineStart(int line) const;
 
  private:
   size_t length_ = 0;

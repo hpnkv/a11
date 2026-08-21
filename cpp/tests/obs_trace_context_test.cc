@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/obs/trace_context.h"
-
 #include <optional>
 #include <string>
 
@@ -9,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/data/types.h"
+#include "a11/obs/trace_context.h"
 
 namespace a11::obs {
 namespace {
@@ -29,9 +28,9 @@ TEST(TraceContextTest, AbsentHeadersYieldNoContext) {
 }
 
 TEST(TraceContextTest, ParsesValidTraceparent) {
-  const auto result = ExtractTraceContext(Headers(
-      {{std::string(kTraceparentHeader),
-        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}}));
+  const auto result = ExtractTraceContext(
+      Headers({{std::string(kTraceparentHeader),
+                "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}}));
   ASSERT_TRUE(result.ok());
   ASSERT_TRUE(result->has_value());
   EXPECT_EQ((*result)->trace_id, "0af7651916cd43dd8448eb211c80319c");

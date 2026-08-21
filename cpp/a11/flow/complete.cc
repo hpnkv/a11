@@ -20,6 +20,7 @@
 #include "a11/flow/syntax.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "absl/strings/match.h"
 
 namespace a11::flow {
 namespace {
@@ -49,10 +50,14 @@ bool BoundaryKind(TokenKind kind) {
 /// pushes every other item off the screen. The first sentence is what a reader
 /// scanning the list actually uses, and hover shows the rest.
 std::string Summary(std::string_view description) {
-  if (description.empty()) return "";
+  if (description.empty()) {
+    return "";
+  }
   std::string_view first = description.substr(0, description.find('\n'));
   const size_t stop = first.find(". ");
-  if (stop != std::string_view::npos) first = first.substr(0, stop + 1);
+  if (stop != std::string_view::npos) {
+    first = first.substr(0, stop + 1);
+  }
   constexpr size_t kWidest = 72;
   if (first.size() > kWidest) {
     return absl::StrCat(" ", first.substr(0, kWidest - 1), "...");
@@ -148,7 +153,8 @@ class Completer {
  public:
   Completer(std::string_view source, size_t offset,
             const catalogue::Catalogue& known)
-      : source_(source), offset_(offset < source.size() ? offset : source.size()),
+      : source_(source),
+        offset_(offset < source.size() ? offset : source.size()),
         known_(known) {
     LexResult lexed = Lex(source_, LexOptions{.keep_comments = true});
     tokens_ = std::move(lexed.tokens);
@@ -158,17 +164,23 @@ class Completer {
   }
 
   /// Whether this text is a flow body rather than a file of flows.
-  bool IsFragment() const {
-    if (!parsed_.flows.empty() || !parsed_.dtos.empty()) return false;
+  [[nodiscard]] bool IsFragment() const {
+    if (!parsed_.flows.empty() || !parsed_.dtos.empty()) {
+      return false;
+    }
     for (const Token& token : tokens_) {
-      if (token.kind == TokenKind::kEnd) break;
+      if (token.kind == TokenKind::kEnd) {
+        break;
+      }
       if (token.kind == TokenKind::kNewline ||
           token.kind == TokenKind::kComment) {
         continue;
       }
       // The first thing that is not a blank line: a fragment is anything that
       // is not somebody part-way through typing a declaration.
-      if (!token.IsWord()) return true;
+      if (!token.IsWord()) {
+        return true;
+      }
       const std::string word = vocabulary::Canonical(token.text);
       return word != "flow" && word != "struct";
     }
@@ -179,7 +191,9 @@ class Completer {
     CompleteResult result;
     result.prefix = prefix_;
     result.prefix_start = prefix_start_;
-    if (blocked_) return result;
+    if (blocked_) {
+      return result;
+    }
     Propose();
     result.proposals = std::move(proposals_);
     return result;
@@ -202,18 +216,23 @@ class Completer {
     for (size_t index = 0; index < tokens_.size(); ++index) {
       const Token& token = tokens_[index];
       cut_ = index;
-      if (token.kind == TokenKind::kEnd) break;
+      if (token.kind == TokenKind::kEnd) {
+        break;
+      }
       if (token.end <= offset_) {
         cut_ = index + 1;
         continue;
       }
-      if (token.start >= offset_) break;
+      if (token.start >= offset_) {
+        break;
+      }
       // The caret is inside this token. A word or a number is one being typed,
       // and the completion is about what may stand where it stands; anything
       // else -- inside a string, a comment, or half of a `->` -- is a place
       // where offering the language's words would be noise.
       if (token.IsWord() || token.kind == TokenKind::kNumber) {
-        prefix_ = std::string(source_.substr(token.start, offset_ - token.start));
+        prefix_ =
+            std::string(source_.substr(token.start, offset_ - token.start));
         prefix_start_ = token.start;
       } else {
         blocked_ = true;
@@ -255,7 +274,9 @@ class Completer {
           open_braces_.pop_back();
         }
       }
-      if (BoundaryKind(kind)) statement_start_ = index + 1;
+      if (BoundaryKind(kind)) {
+        statement_start_ = index + 1;
+      }
     }
     // The lexer drops a trailing run of line breaks, because a break with
     // nothing after it ends nothing -- which is right for a parser and wrong
@@ -263,75 +284,97 @@ class Completer {
     // only record of that break is the text itself.
     const size_t tail = cut_ == 0 ? 0 : tokens_[cut_ - 1].end;
     if (tail <= offset_ &&
-        source_.substr(tail, offset_ - tail).find('\n') != std::string_view::npos) {
+        absl::StrContains(source_.substr(tail, offset_ - tail), '\n')) {
       statement_start_ = cut_;
     }
     for (size_t index = statement_start_; index < cut_; ++index) {
-      if (tokens_[index].kind != TokenKind::kComment) line_.push_back(index);
+      if (tokens_[index].kind != TokenKind::kComment) {
+        line_.push_back(index);
+      }
     }
     // The flow the caret is in: the last one declared above it. A file being
     // typed usually has its problem in the flow at the bottom, and a
     // declaration that has not been closed yet still owns everything after it.
     for (const ResolvedFlow& flow : resolved_.flows) {
-      if (flow.declaration == nullptr) continue;
-      if (flow.declaration->location.start <= offset_) flow_ = &flow;
+      if (flow.declaration == nullptr) {
+        continue;
+      }
+      if (flow.declaration->location.start <= offset_) {
+        flow_ = &flow;
+      }
     }
   }
 
   // -- the token before the caret ---------------------------------------------
 
-  const Token* Previous(size_t back = 0) const {
-    if (line_.size() <= back) return nullptr;
+  [[nodiscard]] const Token* Previous(size_t back = 0) const {
+    if (line_.size() <= back) {
+      return nullptr;
+    }
     return &tokens_[line_[line_.size() - 1 - back]];
   }
 
   /// The canonical form of the word before the caret, or empty if it is not
   /// one.
-  std::string PreviousWord(size_t back = 0) const {
+  [[nodiscard]] std::string PreviousWord(size_t back = 0) const {
     const Token* token = Previous(back);
-    if (token == nullptr || !token->IsWord()) return "";
+    if (token == nullptr || !token->IsWord()) {
+      return "";
+    }
     return vocabulary::Canonical(token->text);
   }
 
-  bool PreviousIs(TokenKind kind) const {
+  [[nodiscard]] bool PreviousIs(TokenKind kind) const {
     const Token* token = Previous();
     return token != nullptr && token->kind == kind;
   }
 
   /// The first word of the statement holding `index`, canonicalised.
-  std::string StatementWordAt(size_t index) const {
+  [[nodiscard]] std::string StatementWordAt(size_t index) const {
     size_t start = index;
-    while (start > 0 && !BoundaryKind(tokens_[start - 1].kind)) --start;
+    while (start > 0 && !BoundaryKind(tokens_[start - 1].kind)) {
+      --start;
+    }
     for (size_t at = start; at <= index; ++at) {
       const Token& token = tokens_[at];
-      if (token.kind == TokenKind::kComment) continue;
+      if (token.kind == TokenKind::kComment) {
+        continue;
+      }
       return token.IsWord() ? vocabulary::Canonical(token.text) : "";
     }
     return "";
   }
 
   /// Whether the caret is inside a block one of these words opened.
-  bool InsideBlockOf(std::string_view word) const {
+  [[nodiscard]] bool InsideBlockOf(std::string_view word) const {
     for (const size_t brace : open_braces_) {
-      if (StatementWordAt(brace) == word) return true;
+      if (StatementWordAt(brace) == word) {
+        return true;
+      }
     }
     return false;
   }
 
   /// Whether anything on this line is one of these kinds.
-  bool LineHas(TokenKind kind) const {
+  [[nodiscard]] bool LineHas(TokenKind kind) const {
     for (const size_t index : line_) {
-      if (tokens_[index].kind == kind) return true;
+      if (tokens_[index].kind == kind) {
+        return true;
+      }
     }
     return false;
   }
 
   /// How many parentheses on this line are still open.
-  int OpenParens() const {
+  [[nodiscard]] int OpenParens() const {
     int depth = 0;
     for (const size_t index : line_) {
-      if (tokens_[index].kind == TokenKind::kLeftParen) ++depth;
-      if (tokens_[index].kind == TokenKind::kRightParen) --depth;
+      if (tokens_[index].kind == TokenKind::kLeftParen) {
+        ++depth;
+      }
+      if (tokens_[index].kind == TokenKind::kRightParen) {
+        --depth;
+      }
     }
     return depth;
   }
@@ -341,14 +384,20 @@ class Completer {
   /// Read off the tokens rather than the resolved plan on purpose: the
   /// statement the caret is in is usually half-written, and the word after
   /// `run` is there long before the step it belongs to resolves to anything.
-  std::string CalledAction() const {
+  [[nodiscard]] std::string CalledAction() const {
     for (size_t at = 0; at + 1 < line_.size(); ++at) {
       const Token& word = tokens_[line_[at]];
-      if (!word.IsWord()) continue;
+      if (!word.IsWord()) {
+        continue;
+      }
       const std::string canonical = vocabulary::Canonical(word.text);
-      if (canonical != "run" && canonical != "call") continue;
+      if (canonical != "run" && canonical != "call") {
+        continue;
+      }
       const Token& next = tokens_[line_[at + 1]];
-      if (next.IsWord()) return std::string(next.text);
+      if (next.IsWord()) {
+        return std::string(next.text);
+      }
     }
     return "";
   }
@@ -442,10 +491,12 @@ class Completer {
     Add("null", ProposalKind::kConstant);
     // `it` is the value a stage is looking at, so it means nothing where there
     // is no value in hand -- a condition, a header, an argument.
-    if (with_it) Add("it", ProposalKind::kConstant);
+    if (with_it) {
+      Add("it", ProposalKind::kConstant);
+    }
   }
 
-  ProposalKind KindOf(const Symbol& symbol) const {
+  [[nodiscard]] ProposalKind KindOf(const Symbol& symbol) const {
     switch (symbol.kind) {
       case SymbolKind::kInputPort:
       case SymbolKind::kOutputPort:
@@ -470,15 +521,17 @@ class Completer {
   }
 
   /// The type a port symbol was declared with, for the grey text beside it.
-  std::string TypeOf(const Symbol& symbol) const {
-    if (flow_ == nullptr) return "";
+  [[nodiscard]] std::string TypeOf(const Symbol& symbol) const {
+    if (flow_ == nullptr) {
+      return "";
+    }
     if (symbol.kind != SymbolKind::kInputPort &&
         symbol.kind != SymbolKind::kOutputPort) {
       return "";
     }
     const syntax::PortDirection direction =
         symbol.kind == SymbolKind::kInputPort ? syntax::PortDirection::kInput
-                                             : syntax::PortDirection::kOutput;
+                                              : syntax::PortDirection::kOutput;
     const PortPlan* port = flow_->plan.Port(symbol.name, direction);
     return port == nullptr ? "" : port->declared;
   }
@@ -490,34 +543,52 @@ class Completer {
   /// exists would be offering to write something that cannot resolve.
   template <typename Predicate>
   void AddNames(Predicate accept) {
-    if (flow_ == nullptr) return;
+    if (flow_ == nullptr) {
+      return;
+    }
     const size_t statement =
         line_.empty() ? offset_ : tokens_[line_.front()].start;
     for (const Symbol& symbol : flow_->symbols) {
-      if (symbol.location.start > offset_) continue;
+      if (symbol.location.start > offset_) {
+        continue;
+      }
       // Nor a name this very statement is binding: `let x = ` should not offer
       // `x`, and a flow reads in order, so nothing bound here is in scope yet.
-      if (symbol.location.start >= statement) continue;
-      if (!accept(symbol)) continue;
+      if (symbol.location.start >= statement) {
+        continue;
+      }
+      if (!accept(symbol)) {
+        continue;
+      }
       Add(symbol.name, KindOf(symbol), "", TypeOf(symbol));
     }
   }
 
   /// The flow a call names, if it is one of this file's.
-  const FlowPlan* FlowNamed(std::string_view name) const {
+  [[nodiscard]] const FlowPlan* FlowNamed(std::string_view name) const {
     return resolved_.program.Flow(name);
   }
 
   /// The ports of a called flow, offered as `step.port`.
   void AddCallPorts(syntax::PortDirection direction) {
-    if (flow_ == nullptr) return;
+    if (flow_ == nullptr) {
+      return;
+    }
     for (const Symbol& symbol : flow_->symbols) {
-      if (symbol.kind != SymbolKind::kCall) continue;
-      if (symbol.location.start > offset_) continue;
+      if (symbol.kind != SymbolKind::kCall) {
+        continue;
+      }
+      if (symbol.location.start > offset_) {
+        continue;
+      }
       const FlowPlan* target = FlowNamed(symbol.action);
-      if (target == nullptr) continue;
+      if (target == nullptr) {
+        continue;
+      }
       for (const PortPlan& port : target->ports) {
-        if (port.direction != direction) continue;
+        if (port.direction != direction) {
+          continue;
+        }
         Add(absl::StrCat(symbol.name, ".", port.name), ProposalKind::kPort,
             port.required ? " (required)" : "", port.declared);
       }
@@ -544,7 +615,9 @@ class Completer {
     // Inside a value of a declared shape, the fields of that shape are what the
     // keys may be -- which is the one place the language knows the keys of an
     // object it is looking at.
-    if (ProposeShapeField()) return;
+    if (ProposeShapeField()) {
+      return;
+    }
 
     if (PreviousIs(TokenKind::kPipe)) {
       AddStages();
@@ -567,13 +640,23 @@ class Completer {
     // half is a statement position, so the ordinary list would be noise.
     if (!line_.empty() && tokens_[line_.front()].IsWord() &&
         vocabulary::Canonical(tokens_[line_.front()].text) == "let") {
-      if (LineHas(TokenKind::kEqual)) ProposeSources();
+      if (LineHas(TokenKind::kEqual)) {
+        ProposeSources();
+      }
       return;
     }
-    if (ProposeDeclaration()) return;
-    if (ProposeCall()) return;
-    if (ProposeAfterWord()) return;
-    if (ProposeExpression()) return;
+    if (ProposeDeclaration()) {
+      return;
+    }
+    if (ProposeCall()) {
+      return;
+    }
+    if (ProposeAfterWord()) {
+      return;
+    }
+    if (ProposeExpression()) {
+      return;
+    }
     if (line_.empty()) {
       ProposeStatement();
       return;
@@ -583,7 +666,9 @@ class Completer {
     // to something else.
     if (Previous() != nullptr && Previous()->IsWord() && line_.size() == 1) {
       for (const std::string_view stage : vocabulary::Stages()) {
-        if (!vocabulary::BareStages().contains(stage)) continue;
+        if (!vocabulary::BareStages().contains(stage)) {
+          continue;
+        }
         Add(std::string(stage), ProposalKind::kStage,
             StageTail(*vocabulary::StageTakes(stage)));
       }
@@ -596,8 +681,10 @@ class Completer {
   /// name and the word before *that* is `struct`; "directly" is the depth
   /// being one, since a value written in a field is not a place a field may be
   /// declared.
-  bool InDtoBody() const {
-    if (open_braces_.size() != 1) return false;
+  [[nodiscard]] bool InDtoBody() const {
+    if (open_braces_.size() != 1) {
+      return false;
+    }
     const size_t brace = open_braces_.front();
     return brace >= 2 && tokens_[brace - 1].IsWord() &&
            tokens_[brace - 2].IsWord() &&
@@ -610,7 +697,9 @@ class Completer {
       Add("describe", ProposalKind::kDeclaration, " \"...\"");
       return;
     }
-    if (!LineHas(TokenKind::kColon)) return;  // naming the field
+    if (!LineHas(TokenKind::kColon)) {
+      return;  // naming the field
+    }
     if (PreviousIs(TokenKind::kColon)) {
       AddTypes();
       return;
@@ -620,17 +709,19 @@ class Completer {
     if (previous == "matching" || previous == "default" || previous == "of") {
       return;
     }
-    for (const std::string_view modifier : vocabulary::OrderedFieldModifiers()) {
+    for (const std::string_view modifier :
+         vocabulary::OrderedFieldModifiers()) {
       bool present = false;
       for (const size_t index : line_) {
         const Token& token = tokens_[index];
-        if (token.IsWord() &&
-            vocabulary::Canonical(token.text) ==
-                modifier.substr(0, modifier.find(' '))) {
+        if (token.IsWord() && vocabulary::Canonical(token.text) ==
+                                  modifier.substr(0, modifier.find(' '))) {
           present = true;
         }
       }
-      if (present) continue;
+      if (present) {
+        continue;
+      }
       Add(std::string(modifier), ProposalKind::kPortModifier,
           FieldModifierTail(modifier));
     }
@@ -638,9 +729,15 @@ class Completer {
 
   /// What a field modifier takes, as grey text after it.
   static std::string FieldModifierTail(std::string_view modifier) {
-    if (modifier == "matching") return " \"pattern\"";
-    if (modifier == "one of") return " [values]";
-    if (modifier == "default") return " value";
+    if (modifier == "matching") {
+      return " \"pattern\"";
+    }
+    if (modifier == "one of") {
+      return " [values]";
+    }
+    if (modifier == "default") {
+      return " value";
+    }
     return "";
   }
 
@@ -650,9 +747,13 @@ class Completer {
   /// True when it answered, so the ordinary expression rules do not also run:
   /// inside those braces a bare word is a key and nothing else.
   bool ProposeShapeField() {
-    if (open_braces_.empty()) return false;
+    if (open_braces_.empty()) {
+      return false;
+    }
     const size_t brace = open_braces_.back();
-    if (brace == 0 || !tokens_[brace - 1].IsWord()) return false;
+    if (brace == 0 || !tokens_[brace - 1].IsWord()) {
+      return false;
+    }
     // The dotted tag of `a11.sdk.AudioBuffer{` is several tokens; walk back
     // over them so a registered type's fields are offered the way a shape's
     // are.
@@ -671,14 +772,22 @@ class Completer {
       // and the catalogue records it in the same form -- so this is one code
       // path rather than two.
       const catalogue::TypeInfo* known = known_.Type(named);
-      if (known != nullptr) shape = &known->shape;
+      if (known != nullptr) {
+        shape = &known->shape;
+      }
     }
-    if (shape == nullptr) return false;
+    if (shape == nullptr) {
+      return false;
+    }
     // Past a key's `:` the value is an ordinary expression again.
     for (const size_t index : line_) {
-      if (tokens_[index].kind == TokenKind::kColon) return false;
+      if (tokens_[index].kind == TokenKind::kColon) {
+        return false;
+      }
     }
-    if (PreviousIs(TokenKind::kColon)) return false;
+    if (PreviousIs(TokenKind::kColon)) {
+      return false;
+    }
     for (const FieldPlan& field : shape->fields) {
       Proposal proposal;
       proposal.name = field.name;
@@ -696,7 +805,9 @@ class Completer {
   /// What follows a `.`: only what the thing before it actually has.
   void ProposeMembers() {
     const Token* base = Previous(1);
-    if (base == nullptr || !base->IsWord() || flow_ == nullptr) return;
+    if (base == nullptr || !base->IsWord() || flow_ == nullptr) {
+      return;
+    }
     // `it` is the value a stage is looking at, so what it has is whatever the
     // stage before said it would be.
     if (vocabulary::Canonical(base->text) == "it") {
@@ -705,20 +816,28 @@ class Completer {
     }
     const Symbol* symbol = nullptr;
     for (const Symbol& candidate : flow_->symbols) {
-      if (candidate.name == base->text) symbol = &candidate;
+      if (candidate.name == base->text) {
+        symbol = &candidate;
+      }
     }
-    if (symbol == nullptr) return;
+    if (symbol == nullptr) {
+      return;
+    }
     switch (symbol->kind) {
       case SymbolKind::kCall: {
         // Offer outputs before inputs, followed by the call status.
         const FlowPlan* target = FlowNamed(symbol->action);
         if (target != nullptr) {
           for (const PortPlan& port : target->ports) {
-            if (port.direction != syntax::PortDirection::kOutput) continue;
+            if (port.direction != syntax::PortDirection::kOutput) {
+              continue;
+            }
             Add(port.name, ProposalKind::kPort, "", port.declared);
           }
           for (const PortPlan& port : target->ports) {
-            if (port.direction != syntax::PortDirection::kInput) continue;
+            if (port.direction != syntax::PortDirection::kInput) {
+              continue;
+            }
             Add(port.name, ProposalKind::kPort,
                 port.required ? " (required)" : "", port.declared);
           }
@@ -737,7 +856,9 @@ class Completer {
         return;
       default:
         // Infer fields only from a match pattern or declared struct.
-        if (AddPatternFields(symbol->pattern)) return;
+        if (AddPatternFields(symbol->pattern)) {
+          return;
+        }
         AddShapeFields(ShapeOfSymbol(*symbol));
         return;
     }
@@ -745,8 +866,10 @@ class Completer {
 
   /// The struct a name carries, where the file said which: a port declared with
   /// one, or a value read from such a port.
-  std::string ShapeOfSymbol(const Symbol& symbol) const {
-    if (flow_ == nullptr) return "";
+  [[nodiscard]] std::string ShapeOfSymbol(const Symbol& symbol) const {
+    if (flow_ == nullptr) {
+      return "";
+    }
     for (const syntax::PortDirection direction :
          {syntax::PortDirection::kOutput, syntax::PortDirection::kInput}) {
       if (const PortPlan* port = flow_->plan.Port(symbol.name, direction);
@@ -759,17 +882,20 @@ class Completer {
 
   /// The fields of a declared struct, where `named` is one.
   bool AddShapeFields(const std::string& named) {
-    if (named.empty()) return false;
+    if (named.empty()) {
+      return false;
+    }
     const DtoPlan* shape = resolved_.program.Dto(named);
     if (shape == nullptr) {
       // A registry tag is a shape too, and the host knows its fields.
       const catalogue::TypeInfo* type = known_.Type(named);
-      if (type == nullptr) return false;
+      if (type == nullptr) {
+        return false;
+      }
       shape = &type->shape;
     }
     for (const FieldPlan& field : shape->fields) {
-      Add(field.name, ProposalKind::kField,
-          field.required ? " (required)" : "",
+      Add(field.name, ProposalKind::kField, field.required ? " (required)" : "",
           field.declared.empty() ? field.type : field.declared);
     }
     return !shape->fields.empty();
@@ -781,12 +907,18 @@ class Completer {
   /// they are written in the pattern that made it. A positional pattern names
   /// nothing, so there is nothing to offer for one.
   bool AddPatternFields(const std::string& text) {
-    if (text.empty()) return false;
+    if (text.empty()) {
+      return false;
+    }
     const pattern::Compiled compiled = pattern::Compile(text);
-    if (!compiled.ok()) return false;
+    if (!compiled.ok()) {
+      return false;
+    }
     bool any = false;
     for (const pattern::Hole& hole : compiled.pattern.holes) {
-      if (hole.name.empty()) continue;
+      if (hole.name.empty()) {
+        continue;
+      }
       Add(hole.name, ProposalKind::kField, "",
           std::string(pattern::HoleTypeName(hole.type)));
       any = true;
@@ -797,14 +929,22 @@ class Completer {
   /// Return the nearest preceding `match` pattern on the caret's line.
   ///
   /// Token scanning supports incomplete `map it.` and `where it.` expressions.
-  std::string PatternBeforeCaret() const {
+  [[nodiscard]] std::string PatternBeforeCaret() const {
     const size_t first = line_.empty() ? 0 : line_.front();
     for (size_t at = cut_; at > first; --at) {
       const size_t index = at - 1;
-      if (index + 1 >= tokens_.size()) continue;
-      if (!tokens_[index].IsWord()) continue;
-      if (vocabulary::Canonical(tokens_[index].text) != "match") continue;
-      if (tokens_[index + 1].kind != TokenKind::kString) return "";
+      if (index + 1 >= tokens_.size()) {
+        continue;
+      }
+      if (!tokens_[index].IsWord()) {
+        continue;
+      }
+      if (vocabulary::Canonical(tokens_[index].text) != "match") {
+        continue;
+      }
+      if (tokens_[index + 1].kind != TokenKind::kString) {
+        return "";
+      }
       // The *value*, not the slice: `text` still has its quotes round it, and a
       // stray quote after a `rest` hole makes the pattern one nothing can
       // follow.
@@ -844,18 +984,25 @@ class Completer {
 
   /// A port or header declaration: the type, and then what it is like.
   bool ProposeDeclaration() {
-    if (line_.empty()) return false;
+    if (line_.empty()) {
+      return false;
+    }
     const Token& head = tokens_[line_.front()];
-    if (!head.IsWord()) return false;
+    if (!head.IsWord()) {
+      return false;
+    }
     const std::string word = vocabulary::Canonical(head.text);
     if (word == "in" || word == "out") {
-      if (!LineHas(TokenKind::kColon)) return true;  // naming the port
+      if (!LineHas(TokenKind::kColon)) {
+        return true;  // naming the port
+      }
       if (PreviousIs(TokenKind::kColon)) {
         AddTypes();
         return true;
       }
       // Past the type: what the port says about itself, minus what it has said.
-      for (const std::string_view modifier : vocabulary::OrderedPortModifiers()) {
+      for (const std::string_view modifier :
+           vocabulary::OrderedPortModifiers()) {
         bool present = false;
         for (const size_t index : line_) {
           const Token& token = tokens_[index];
@@ -863,14 +1010,20 @@ class Completer {
             present = true;
           }
         }
-        if (!present) Add(std::string(modifier), ProposalKind::kPortModifier);
+        if (!present) {
+          Add(std::string(modifier), ProposalKind::kPortModifier);
+        }
       }
       return true;
     }
     if (word == "header") {
       const std::string previous = PreviousWord();
-      if (previous == "as" || previous == "default") return true;
-      if (!LineHas(TokenKind::kString)) return true;
+      if (previous == "as" || previous == "default") {
+        return true;
+      }
+      if (!LineHas(TokenKind::kString)) {
+        return true;
+      }
       for (const std::string_view part : {"as", "default"}) {
         bool present = false;
         for (const size_t index : line_) {
@@ -879,12 +1032,18 @@ class Completer {
             present = true;
           }
         }
-        if (!present) Add(std::string(part), ProposalKind::kDeclaration);
+        if (!present) {
+          Add(std::string(part), ProposalKind::kDeclaration);
+        }
       }
       return true;
     }
-    if (word == "nodes" && line_.size() == 1) return true;  // naming the map
-    if (word == "describe") return true;
+    if (word == "nodes" && line_.size() == 1) {
+      return true;  // naming the map
+    }
+    if (word == "describe") {
+      return true;
+    }
     return false;
   }
 
@@ -914,20 +1073,26 @@ class Completer {
       };
       absl::flat_hash_set<std::string> offered;
       for (const FlowPlan& candidate : resolved_.program.flows) {
-        if (flow_ != nullptr && candidate.name == flow_->plan.name) continue;
+        if (flow_ != nullptr && candidate.name == flow_->plan.name) {
+          continue;
+        }
         offered.insert(candidate.name);
         offer(candidate.name, candidate.description, ProposalKind::kFlow,
               FlowMarkdown(candidate));
       }
       for (const catalogue::ActionInfo& action : known_.actions()) {
-        if (offered.contains(action.name)) continue;
+        if (offered.contains(action.name)) {
+          continue;
+        }
         offer(action.name, action.description, ProposalKind::kCall,
               ActionMarkdown(action));
       }
       return true;
     }
     const std::string action = CalledAction();
-    if (action.empty()) return false;
+    if (action.empty()) {
+      return false;
+    }
     if (OpenParens() > 0) {
       if (PreviousIs(TokenKind::kLeftParen) || PreviousIs(TokenKind::kComma)) {
         ProposeArguments(action);
@@ -935,7 +1100,9 @@ class Completer {
       }
       return false;  // a value: the expression rules have it
     }
-    if (!LineHas(TokenKind::kRightParen)) return false;
+    if (!LineHas(TokenKind::kRightParen)) {
+      return false;
+    }
     // After the arguments: the modifiers, and the operand of the one just
     // given.
     if (previous == "via") {
@@ -968,14 +1135,18 @@ class Completer {
     const auto given = [&](std::string_view port) {
       for (const size_t index : line_) {
         const Token& token = tokens_[index];
-        if (token.IsWord() && token.text == port) return true;
+        if (token.IsWord() && token.text == port) {
+          return true;
+        }
       }
       return false;
     };
     const auto offer = [&](std::string_view name, std::string_view type,
                            bool required, bool unary,
                            std::string_view description) {
-      if (given(name)) return;
+      if (given(name)) {
+        return;
+      }
       Proposal proposal;
       proposal.name = std::string(name);
       proposal.kind = ProposalKind::kPort;
@@ -986,9 +1157,13 @@ class Completer {
       // description, so the ports that have to be written were the ones the
       // list said least about -- which is backwards: what a port is for is the
       // question, and whether it is required is the aside.
-      if (required) absl::StrAppend(&proposal.tail, " (required)");
+      if (required) {
+        absl::StrAppend(&proposal.tail, " (required)");
+      }
       if (!description.empty()) {
-        if (required) absl::StrAppend(&proposal.tail, " —");
+        if (required) {
+          absl::StrAppend(&proposal.tail, " —");
+        }
         absl::StrAppend(&proposal.tail, Summary(description));
       }
       // A stream port is written differently from a single value, so the type
@@ -1003,7 +1178,9 @@ class Completer {
 
     if (const FlowPlan* target = FlowNamed(action); target != nullptr) {
       for (const PortPlan& port : target->ports) {
-        if (port.direction != syntax::PortDirection::kInput) continue;
+        if (port.direction != syntax::PortDirection::kInput) {
+          continue;
+        }
         offer(port.name, port.declared.empty() ? port.type : port.declared,
               port.required, port.unary, port.description);
       }
@@ -1013,10 +1190,14 @@ class Completer {
     // the catalogue is for. Required first, since those are the ones that have
     // to be written.
     const catalogue::ActionInfo* known = known_.Action(action);
-    if (known == nullptr) return;
+    if (known == nullptr) {
+      return;
+    }
     for (const bool required : {true, false}) {
       for (const catalogue::PortInfo& port : known->inputs) {
-        if (port.required != required) continue;
+        if (port.required != required) {
+          continue;
+        }
         offer(port.name, port.type, port.required, port.unary,
               port.description);
       }
@@ -1026,7 +1207,9 @@ class Completer {
   /// The words that take a named thing after them, wherever they stand.
   bool ProposeAfterWord() {
     const std::string previous = PreviousWord();
-    if (previous.empty()) return false;
+    if (previous.empty()) {
+      return false;
+    }
     if (previous == "fail") {
       AddStatusCodes();
       return true;
@@ -1080,7 +1263,9 @@ class Completer {
   /// readable.
   bool ProposeExpression() {
     const Token* previous = Previous();
-    if (previous == nullptr) return false;
+    if (previous == nullptr) {
+      return false;
+    }
     bool value_wanted = false;
     switch (previous->kind) {
       case TokenKind::kEqualEqual:
@@ -1117,8 +1302,7 @@ class Completer {
       }
       // `sort` is followed by its own two words before any expression, and
       // `by` is what puts a value after it.
-      if (stage.has_value() &&
-          *stage == vocabulary::StageArgument::kSortKey) {
+      if (stage.has_value() && *stage == vocabulary::StageArgument::kSortKey) {
         Add("by", ProposalKind::kModifier);
         Add("desc", ProposalKind::kModifier);
       }
@@ -1145,7 +1329,9 @@ class Completer {
       AddCallTargets();
       return true;
     }
-    if (!value_wanted) return false;
+    if (!value_wanted) {
+      return false;
+    }
     AddFunctions();
     AddConstants(in_stage);
     ProposeSources();
@@ -1174,13 +1360,17 @@ class Completer {
     };
     absl::flat_hash_set<std::string> offered;
     for (const FlowPlan& candidate : resolved_.program.flows) {
-      if (flow_ != nullptr && candidate.name == flow_->plan.name) continue;
+      if (flow_ != nullptr && candidate.name == flow_->plan.name) {
+        continue;
+      }
       offered.insert(candidate.name);
       offer(candidate.name, candidate.description, ProposalKind::kFlow,
             FlowMarkdown(candidate));
     }
     for (const catalogue::ActionInfo& action : known_.actions()) {
-      if (offered.contains(action.name)) continue;
+      if (offered.contains(action.name)) {
+        continue;
+      }
       offer(action.name, action.description, ProposalKind::kCall,
             ActionMarkdown(action));
     }
@@ -1192,10 +1382,13 @@ class Completer {
     for (const std::string_view statement : vocabulary::OrderedStatements()) {
       // A loop tail belongs to a `repeat`, and saying so anywhere else would be
       // offering to write something that cannot compile.
-      if ((statement == "until" || statement == "while") && !in_repeat) continue;
+      if ((statement == "until" || statement == "while") && !in_repeat) {
+        continue;
+      }
       Add(std::string(statement), ProposalKind::kStatement);
     }
-    for (const std::string_view declaration : vocabulary::OrderedDeclarations()) {
+    for (const std::string_view declaration :
+         vocabulary::OrderedDeclarations()) {
       // The declarations that open a line. `flow` opens a file rather than a
       // statement in one, and the rest of them stand in the middle of a
       // declaration they cannot begin: `as` and `default` belong to a header,
@@ -1250,9 +1443,10 @@ class Completer {
 CompleteResult CompleteAt(std::string_view source, size_t offset,
                           const catalogue::Catalogue& known) {
   Completer completer(source, offset, known);
-  if (!completer.IsFragment()) return completer.Run();
-  const std::string wrapped =
-      absl::StrCat(kFragmentPrefix, source, "\n}");
+  if (!completer.IsFragment()) {
+    return completer.Run();
+  }
+  const std::string wrapped = absl::StrCat(kFragmentPrefix, source, "\n}");
   CompleteResult result =
       Completer(wrapped, offset + kFragmentPrefix.size(), known).Run();
   result.prefix_start = result.prefix_start >= kFragmentPrefix.size()

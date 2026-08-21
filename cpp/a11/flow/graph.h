@@ -373,16 +373,16 @@ struct FlowGraph {
   BodyId root = kNone;
 
   /// The refs this one reads *as streams* to produce itself.
-  std::vector<RefId> Upstreams(RefId ref) const;
+  [[nodiscard]] std::vector<RefId> Upstreams(RefId ref) const;
   /// The refs this one reads for their first value to produce itself.
-  std::vector<RefId> ValueRefs(RefId ref) const;
+  [[nodiscard]] std::vector<RefId> ValueRefs(RefId ref) const;
 
   /// The refs a step reads as streams, one entry per independent read.
-  std::vector<RefId> Sources(StepId step) const;
+  [[nodiscard]] std::vector<RefId> Sources(StepId step) const;
   /// The refs a step reads for one value each.
-  std::vector<RefId> ValueSources(StepId step) const;
+  [[nodiscard]] std::vector<RefId> ValueSources(StepId step) const;
   /// The refs a step writes, one entry per independent writer.
-  std::vector<RefId> Destinations(StepId step) const;
+  [[nodiscard]] std::vector<RefId> Destinations(StepId step) const;
   /// The refs the *stages* a step reads write to: a `try ... into failures`.
   ///
   /// A stage is part of a stream rather than of a statement, so its destination
@@ -390,11 +390,11 @@ struct FlowGraph {
   /// itself. Counted as a writer beside [Destinations] and released with the
   /// step, which is what closes a failure stream exactly once however many
   /// values went to it.
-  std::vector<RefId> StageDestinations(StepId step) const;
+  [[nodiscard]] std::vector<RefId> StageDestinations(StepId step) const;
   /// Written refs a step only watches, without writing them itself.
-  std::vector<RefId> Observed(StepId step) const;
+  [[nodiscard]] std::vector<RefId> Observed(StepId step) const;
   /// Every body inside this one, at any depth.
-  std::vector<BodyId> NestedBodies(BodyId body) const;
+  [[nodiscard]] std::vector<BodyId> NestedBodies(BodyId body) const;
 };
 
 /// Who reads and who writes each ref a body owns.
@@ -452,7 +452,7 @@ class GraphBuilder {
   }
 
   /// Whether the ref already in the graph carries at most one value.
-  bool Carries(RefId ref) const {
+  [[nodiscard]] bool Carries(RefId ref) const {
     return ref != kNone && ref < flow_->refs.size() && flow_->refs[ref].unary;
   }
 
@@ -463,7 +463,11 @@ class GraphBuilder {
   /// again, so a stage that joins that set is counted here without being
   /// taught.
   static bool StageMakesOne(const Stage& stage) {
-    if (vocabulary::ReducingStages().contains(stage.name)) return true;
+    if (vocabulary::ReducingStages().contains(stage.name)) {
+      {
+        return true;
+      }
+    }
     return stage.name == "first" && stage.count == 1;
   }
 
@@ -479,14 +483,12 @@ class GraphBuilder {
   /// `then` make more. Anything the language gains is assumed not to preserve
   /// the count until it says so, which is the safe direction.
   static bool StagePreservesCount(const Stage& stage) {
-    static const auto* const kPerValue =
-        new absl::flat_hash_set<std::string>{
-            "map",  "at",       "truncate", "text", "json",     "packb",
-            "strformat", "where", "mime",   "distinct", "first", "last",
-            "drop", "log",      "logf",     "scan",
-            // `sort` reorders and keeps every value; `timeout` and `pace` say
-            // *when* a value may pass and change nothing about which do.
-            "sort", "timeout", "pace"};
+    static const auto* const kPerValue = new absl::flat_hash_set<std::string>{
+        "map", "at", "truncate", "text", "json", "packb", "strformat", "where",
+        "mime", "distinct", "first", "last", "drop", "log", "logf", "scan",
+        // `sort` reorders and keeps every value; `timeout` and `pace` say
+        // *when* a value may pass and change nothing about which do.
+        "sort", "timeout", "pace"};
     return kPerValue->contains(stage.name);
   }
 
@@ -523,7 +525,11 @@ class GraphBuilder {
         // so one round is only certain when every source has at most one value.
         ref.unary = !ref.sources.empty();
         for (const RefId source : ref.sources) {
-          if (!Carries(source)) ref.unary = false;
+          if (!Carries(source)) {
+            {
+              ref.unary = false;
+            }
+          }
         }
         break;
       case RefKind::kMerge:
@@ -546,7 +552,11 @@ class GraphBuilder {
     const BodyId body = step.body;
     flow_->steps.push_back(std::move(step));
     const StepId id = flow_->steps.size() - 1;
-    if (body != kNone) flow_->bodies[body].steps.push_back(id);
+    if (body != kNone) {
+      {
+        flow_->bodies[body].steps.push_back(id);
+      }
+    }
     return id;
   }
 
@@ -556,7 +566,9 @@ class GraphBuilder {
   }
 
   Ref& ref(RefId id) { return flow_->refs[id]; }
+
   Step& step(StepId id) { return flow_->steps[id]; }
+
   Expr& expr(ExprId id) { return flow_->exprs[id]; }
 
  private:

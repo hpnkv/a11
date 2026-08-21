@@ -16,12 +16,14 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/strip.h>
 
+#include "absl/strings/match.h"
+
 namespace a11::net {
 namespace {
 
 /** @return Whether @p host needs bracketing in an authority (an IPv6 literal). */
 bool IsIpV6Literal(std::string_view host) {
-  return host.find(':') != std::string_view::npos;
+  return absl::StrContains(host, ':');
 }
 
 /**
@@ -111,7 +113,7 @@ bool ParsedUrl::secure() const {
 }
 
 std::string ParsedUrl::authority() const {
-  const std::string bracketed =
+  std::string bracketed =
       IsIpV6Literal(host) ? absl::StrCat("[", host, "]") : host;
   if (port == 0 || port == DefaultPortForScheme(scheme)) {
     return bracketed;
@@ -148,8 +150,8 @@ std::uint16_t DefaultPortForScheme(std::string_view scheme) {
 absl::StatusOr<ParsedUrl> ParseUrl(std::string_view url) {
   const size_t separator = url.find("://");
   if (separator == std::string_view::npos) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "URL must be absolute, with a scheme and \"://\": ", url));
+    return absl::InvalidArgumentError(
+        absl::StrCat("URL must be absolute, with a scheme and \"://\": ", url));
   }
   ParsedUrl parsed;
   parsed.scheme = absl::AsciiStrToLower(url.substr(0, separator));
@@ -186,7 +188,7 @@ absl::StatusOr<ParsedUrl> ResolveReference(const ParsedUrl& base,
   if (reference.empty()) {
     return absl::InvalidArgumentError("URL reference is empty");
   }
-  if (reference.find("://") != std::string_view::npos) {
+  if (absl::StrContains(reference, "://")) {
     return ParseUrl(reference);
   }
   if (absl::StartsWith(reference, "//")) {

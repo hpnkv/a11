@@ -2,8 +2,6 @@
 
 #include "a11/data/json.h"
 
-#include "a11/json_codec.h"
-
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -20,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 
 namespace a11::data {
 namespace {
@@ -448,11 +447,9 @@ absl::StatusOr<WireMessage> WireMessageFromJsonValue(const Json& value) {
       result.node_fragments.push_back(std::move(fragment));
     }
   }
-  if (const Json* actions = GetOptional(value, "actions");
-      actions != nullptr) {
+  if (const Json* actions = GetOptional(value, "actions"); actions != nullptr) {
     if (!actions->is_array()) {
-      return absl::InvalidArgumentError(
-          "WireMessage.actions must be an array");
+      return absl::InvalidArgumentError("WireMessage.actions must be an array");
     }
     result.actions.reserve(actions->size());
     for (const Json& item : *actions) {

@@ -94,7 +94,7 @@ CapabilitiesBuilder SystemCapabilities();
  *         can still be fixed.
  */
 absl::Status RegisterFlowActions(actions::ActionRegistry& registry,
-                                 CapabilitiesPtr capabilities);
+                                 const CapabilitiesPtr& capabilities);
 
 /**
  * @brief Registers only the actions that need no capability.

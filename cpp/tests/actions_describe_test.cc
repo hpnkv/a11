@@ -1,7 +1,5 @@
 // Copyright 2026 The A11 Authors.
 
-#include "a11/actions/describe.h"
-
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,6 +13,7 @@
 
 #include "a11/actions/action.h"
 #include "a11/actions/builtins.h"
+#include "a11/actions/describe.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -45,7 +44,7 @@ ActionSchema SampleSchema() {
   ActionPortSchema hidden;
   hidden.name = "hidden";
   hidden.type = "text/plain";
-  hidden.autofills.push_back(std::nullopt);
+  hidden.autofills.emplace_back(std::nullopt);
   schema.inputs.emplace("hidden", hidden);
 
   ActionPortSchema lines;
@@ -65,7 +64,7 @@ ActionSchema SampleSchema() {
 }
 
 ActionHandler NoopHandler() {
-  return [](std::shared_ptr<Action>) {
+  return [](const std::shared_ptr<Action>&) {
     return a11::SubmitTask([]() -> absl::Status { return absl::OkStatus(); });
   };
 }
@@ -74,7 +73,9 @@ const nlohmann::json& FindPort(const nlohmann::json& ports,
                                std::string_view name) {
   static const nlohmann::json kNone = nlohmann::json::object();
   for (const nlohmann::json& one : ports) {
-    if (one.value("name", "") == name) return one;
+    if (one.value("name", "") == name) {
+      return one;
+    }
   }
   ADD_FAILURE() << "no port named " << name << " in " << ports.dump();
   return kNone;
@@ -133,8 +134,7 @@ TEST(SchemaFromDescriptionTest, RoundTripsWhatCanTravel) {
   const ActionSchema original = SampleSchema();
   const nlohmann::json described =
       SchemaToJson(original, /*runnable=*/true, PortView::kAll);
-  const absl::StatusOr<ActionSchema> rebuilt =
-      SchemaFromJson(described);
+  const absl::StatusOr<ActionSchema> rebuilt = SchemaFromJson(described);
   ASSERT_TRUE(rebuilt.ok()) << rebuilt.status();
 
   EXPECT_EQ(rebuilt->name, original.name);
@@ -182,8 +182,7 @@ TEST(DescribeSchemaTest, NeverWritesAUserFacingFlag) {
 
 TEST(ParseDescribeRequestTest, AbsentIsTheDefaultRequest) {
   for (const std::string_view encoded : {"", "  ", "null", "{}"}) {
-    const absl::StatusOr<SchemaQuery> request =
-        ParseSchemaQuery(encoded);
+    const absl::StatusOr<SchemaQuery> request = ParseSchemaQuery(encoded);
     ASSERT_TRUE(request.ok()) << encoded << ": " << request.status();
     EXPECT_TRUE(request->names.empty());
     EXPECT_FALSE(request->include_reserved);
@@ -255,8 +254,7 @@ TEST(DescribeRegistryTest, DescribesWhatIsRegistered) {
   peer_only.name = "on_the_peer";
   ASSERT_TRUE(registry->Register("on_the_peer", peer_only).ok());
 
-  const nlohmann::json described =
-      RegistryToJson(*registry, SchemaQuery{});
+  const nlohmann::json described = RegistryToJson(*registry, SchemaQuery{});
   EXPECT_EQ(described["format"], "a11.actions/v1");
   ASSERT_EQ(described["actions"].size(), 2U);
   // Sorted, so the document is diffable between calls.
@@ -336,9 +334,8 @@ TEST(BuiltinActionsTest, AreListedAndSurviveACopy) {
   ASSERT_TRUE(registry->Register("sample", SampleSchema(), NoopHandler()).ok());
 
   const std::vector<std::string> names = registry->ListRegisteredActions();
-  EXPECT_EQ(std::count(names.begin(), names.end(),
-                       std::string(kListActionsName)),
-            1);
+  EXPECT_EQ(
+      std::count(names.begin(), names.end(), std::string(kListActionsName)), 1);
 
   const std::shared_ptr<ActionRegistry> copy = registry->Copy();
   EXPECT_TRUE(copy->IsRegistered(kListActionsName));
@@ -349,11 +346,10 @@ TEST(BuiltinActionsTest, CannotBeShadowedOrRemoved) {
   const auto registry = std::make_shared<ActionRegistry>();
   ActionSchema impostor = SampleSchema();
   impostor.name = std::string(kListActionsName);
-  EXPECT_EQ(registry
-                ->Register(std::string(kListActionsName), impostor,
-                           NoopHandler())
-                .code(),
-            absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(
+      registry->Register(std::string(kListActionsName), impostor, NoopHandler())
+          .code(),
+      absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(registry->Unregister(kListActionsName).code(),
             absl::StatusCode::kInvalidArgument);
   // Still the real one.
@@ -367,8 +363,7 @@ TEST(BuiltinActionsTest, AreHiddenFromAListingByDefault) {
   const auto registry = std::make_shared<ActionRegistry>();
   ASSERT_TRUE(registry->Register("sample", SampleSchema(), NoopHandler()).ok());
 
-  const nlohmann::json described =
-      RegistryToJson(*registry, SchemaQuery{});
+  const nlohmann::json described = RegistryToJson(*registry, SchemaQuery{});
   ASSERT_EQ(described["actions"].size(), 1U);
   EXPECT_EQ(described["actions"][0]["name"], "sample");
 
@@ -383,43 +378,60 @@ absl::StatusOr<std::string> RunBuiltin(
     const std::shared_ptr<ActionRegistry>& registry, std::string_view name,
     std::string_view input_port, std::string_view input,
     std::string_view output_port) {
-  absl::StatusOr<std::shared_ptr<Action>> action =
-      registry->MakeAction(name);
-  if (!action.ok()) return action.status();
+  absl::StatusOr<std::shared_ptr<Action>> action = registry->MakeAction(name);
+  if (!action.ok()) {
+    return action.status();
+  }
   if (!input.empty()) {
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> in =
         (*action)->GetInput(std::string(input_port));
-    if (!in.ok()) return in.status();
+    if (!in.ok()) {
+      return in.status();
+    }
     data::Chunk chunk;
     data::ChunkMetadata metadata;
     metadata.mimetype = std::string(data::kTextMimetype);
     chunk.metadata = std::move(metadata);
     chunk.data = std::string(input);
     absl::StatusOr<a11::Unit> put = (*in)->Finalize(std::move(chunk)).Await();
-    if (!put.ok()) return put.status();
+    if (!put.ok()) {
+      return put.status();
+    }
   } else {
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> in =
         (*action)->GetInput(std::string(input_port));
-    if (!in.ok()) return in.status();
+    if (!in.ok()) {
+      return in.status();
+    }
     absl::StatusOr<a11::Unit> done = (*in)->Finalize().Await();
-    if (!done.ok()) return done.status();
+    if (!done.ok()) {
+      return done.status();
+    }
   }
   absl::StatusOr<std::shared_ptr<Action>> started = (*action)->Run();
-  if (!started.ok()) return started.status();
+  if (!started.ok()) {
+    return started.status();
+  }
   absl::StatusOr<std::shared_ptr<Action>> finished =
       (*action)->Wait(absl::Seconds(10)).Await();
-  if (!finished.ok()) return finished.status();
+  if (!finished.ok()) {
+    return finished.status();
+  }
 
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> out =
       (*action)->GetOutput(std::string(output_port));
-  if (!out.ok()) return out.status();
-  absl::StatusOr<std::optional<data::Chunk>> chunk = (*out)->NextChunk().Await();
-  if (!chunk.ok()) return chunk.status();
+  if (!out.ok()) {
+    return out.status();
+  }
+  absl::StatusOr<std::optional<data::Chunk>> chunk =
+      (*out)->NextChunk().Await();
+  if (!chunk.ok()) {
+    return chunk.status();
+  }
   if (!chunk->has_value()) {
     return absl::InternalError("the builtin wrote nothing");
   }
-  if (absl::Status materialized = (*chunk)->Materialize();
-      !materialized.ok()) {
+  if (absl::Status materialized = (*chunk)->Materialize(); !materialized.ok()) {
     return materialized;
   }
   return (*chunk)->data;

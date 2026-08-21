@@ -183,7 +183,7 @@ class Http2WebSocketChannel final
             "HTTP/2 WebSocket message exceeds its configured limit");
       }
     }
-    return WriteFrame(kBinary, std::move(bytes));
+    return WriteFrame(kBinary, bytes);
   }
 
   absl::StatusOr<size_t> BufferedAmount() const override { return 0; }
@@ -259,9 +259,8 @@ class Http2WebSocketChannel final
         HttpResponseHead head,
         duplex->Headers().Await(config.http2_options.deadline));
     if (head.status < 200 || head.status >= 300) {
-      return absl::Status(
-          StatusCodeFromHttp(head.status),
-          absl::StrCat("HTTP/2 WebSocket CONNECT returned ", head.status));
+      return {StatusCodeFromHttp(head.status),
+              absl::StrCat("HTTP/2 WebSocket CONNECT returned ", head.status)};
     }
     thread::MutexLock lock(&mu_);
     client_ = std::move(client);
@@ -362,7 +361,7 @@ class Http2WebSocketChannel final
     }
 
     for (std::string& pong : actions.pongs) {
-      ABSL_RETURN_IF_ERROR(WriteFrame(kPong, std::move(pong)));
+      ABSL_RETURN_IF_ERROR(WriteFrame(kPong, pong));
     }
     for (std::string& message : actions.messages) {
       std::function<void(std::string)> callback;
@@ -382,7 +381,7 @@ class Http2WebSocketChannel final
         close_sent_ = true;
       }
       if (reply) {
-        ABSL_RETURN_IF_ERROR(WriteFrame(kClose, std::move(*actions.close)));
+        ABSL_RETURN_IF_ERROR(WriteFrame(kClose, *actions.close));
       }
       ABSL_RETURN_IF_ERROR(FinishTransport());
       CompleteClose();
@@ -394,9 +393,8 @@ class Http2WebSocketChannel final
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     size_t consumed = 0;
     while (input_.size() - consumed >= 2) {
-      const std::uint8_t first = static_cast<unsigned char>(input_[consumed]);
-      const std::uint8_t second =
-          static_cast<unsigned char>(input_[consumed + 1]);
+      const auto first = static_cast<unsigned char>(input_[consumed]);
+      const auto second = static_cast<unsigned char>(input_[consumed + 1]);
       const bool final = (first & 0x80U) != 0;
       const std::uint8_t opcode = first & 0x0fU;
       if ((first & 0x70U) != 0) {
@@ -527,7 +525,7 @@ class Http2WebSocketChannel final
     return absl::OkStatus();
   }
 
-  absl::Status WriteFrame(std::uint8_t opcode, std::string payload) {
+  absl::Status WriteFrame(std::uint8_t opcode, const std::string& payload) {
     thread::MutexLock write_lock(&write_mu_);
     const bool masked = role_ == Role::kClient;
     std::string frame;

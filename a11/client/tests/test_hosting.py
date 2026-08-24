@@ -11,29 +11,29 @@ rather than trusted to look right.
 
 from __future__ import annotations
 
+import pytest
+
 from a11 import net
 from a11.client.hosting import hosted_configuration
 
 
-def test_ice_is_not_multiplexed_by_default():
-    """Because a relayed host has concurrent connections as its normal case.
+def test_ice_is_multiplexed_by_default():
+    """One UDP port for every peer that converges on a hosted agent.
 
-    A muxed socket routes by source address, and every relayed packet arrives
-    from the TURN server's address -- so a second concurrent connection
-    completes its handshake and then receives nothing. Measured against the
-    deployed exchange: 2 failures in 4 with muxing on, 0 in 6 with it off.
+    The dialling side must then not multiplex, which is what the exchange
+    relay does.
     """
     configuration = hosted_configuration()
 
-    assert not configuration.enable_ice_udp_mux
+    assert configuration.enable_ice_udp_mux
     assert list(configuration.stun_servers) == []
     assert list(configuration.turn_servers) == []
 
 
-def test_multiplexing_is_available_for_a_single_peer_host():
-    configuration = hosted_configuration(multiplex_ice=True)
+def test_multiplexing_can_be_turned_off():
+    configuration = hosted_configuration(multiplex_ice=False)
 
-    assert configuration.enable_ice_udp_mux
+    assert not configuration.enable_ice_udp_mux
 
 
 def test_stun_and_turn_are_separated():
@@ -133,3 +133,115 @@ def test_the_gateway_client_asks_for_http_1_1():
     # And the deadline bounds the handshake, never the stream.
     assert options.handshake_deadline == deadline
     assert options.http2_options.deadline != deadline
+
+
+class _FakeClaim:
+    """Just the parts of a claim the rebind decision reads."""
+
+    def __init__(self, expires_at: float | None) -> None:
+        self.ice_servers = (
+            [
+                {"urls": ["stun:stun.example:3478"]},
+                {
+                    "urls": ["turn:turn.example:3478"],
+                    "username": f"{int(expires_at)}:a-claim",
+                    "credential": "p",
+                    "expires_at": expires_at,
+                },
+            ]
+            if expires_at is not None
+            else [{"urls": ["stun:stun.example:3478"]}]
+        )
+
+
+def _endpoint() -> "hosting.HostedEndpoint":
+    from a11.client import hosting
+
+    return hosting.HostedEndpoint.__new__(hosting.HostedEndpoint)
+
+
+@pytest.mark.asyncio
+async def test_a_lapsing_credential_triggers_one_rebind():
+    """The bug this exists for: a renewed claim never reaching the listener.
+
+    A TURN credential is checked against the expiry in its own username, so
+    once it passes the host cannot gather a relayed candidate -- while
+    signalling stays up and presence stays online. It presents as an agent that
+    worked for an hour and then stopped.
+    """
+    import time as time_module
+
+    from a11.client import hosting
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    rebinds: list[int] = []
+
+    async def on_rebind() -> None:
+        rebinds.append(1)
+
+    endpoint.on_rebind = on_rebind
+    now = time_module.time()
+
+    # Bound credentials nearly out, and a renewal has produced newer ones.
+    endpoint._bound_expiry = now + 30
+    endpoint.claim = _FakeClaim(now + 3600)
+    await endpoint._rebind_if_lapsing()
+    assert rebinds == [1]
+
+    # Now that the listener holds the fresh expiry, it must settle.
+    await endpoint._rebind_if_lapsing()
+    assert rebinds == [1]
+
+
+@pytest.mark.asyncio
+async def test_no_rebind_while_the_bound_credential_has_time():
+    import time as time_module
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    rebinds: list[int] = []
+
+    async def on_rebind() -> None:
+        rebinds.append(1)
+
+    endpoint.on_rebind = on_rebind
+    now = time_module.time()
+    endpoint._bound_expiry = now + 3600
+    endpoint.claim = _FakeClaim(now + 7200)
+
+    await endpoint._rebind_if_lapsing()
+
+    assert rebinds == []
+
+
+@pytest.mark.asyncio
+async def test_no_rebind_when_renewal_has_not_produced_newer_credentials():
+    """Rebinding to the same expiry would drop connections and fix nothing."""
+    import time as time_module
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    rebinds: list[int] = []
+
+    async def on_rebind() -> None:
+        rebinds.append(1)
+
+    endpoint.on_rebind = on_rebind
+    now = time_module.time()
+    endpoint._bound_expiry = now + 10
+    endpoint.claim = _FakeClaim(now + 10)
+
+    await endpoint._rebind_if_lapsing()
+
+    assert rebinds == []
+
+
+def test_credentials_expire_at_takes_the_earliest():
+    endpoint = _endpoint()
+    endpoint.claim = _FakeClaim(1000.0)
+    endpoint.claim.ice_servers.append(
+        {"urls": ["turn:other.example:3478"], "expires_at": 500.0}
+    )
+
+    assert endpoint.credentials_expire_at() == 500.0

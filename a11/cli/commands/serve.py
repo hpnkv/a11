@@ -486,6 +486,41 @@ def _sse_options(args: argparse.Namespace) -> net.HttpSseOptions:
     return options
 
 
+def _follow_the_claim(
+    endpoint: Any, service: "a11.Service", live: dict[str, Any]
+) -> None:
+    """Keep the WebRTC listener on the claim's *current* transport and servers.
+
+    Both of the things `HostedEndpoint` maintains outlive the listener bound to
+    them: a reconnected signalling socket is a different transport, and a
+    renewed claim carries different relay credentials. A listener built once at
+    start-up holds neither, and the resulting failure is silent -- signalling
+    up, presence online, new connections quietly not completing.
+
+    Rebinding replaces the listener, which drops the peer connections the old
+    one was carrying. The relay's grace period turns that into latency for a
+    caller rather than an error, and the alternative is being unreachable.
+    """
+
+    async def rebind() -> None:
+        previous = live.get("webrtc")
+        live["webrtc"] = webrtc(
+            endpoint.transport, endpoint.webrtc_configuration()
+        )(service)
+        if previous is not None:
+            try:
+                previous.stop()
+            except Exception:  # noqa: BLE001 - the old listener may be gone
+                logging.debug("the previous listener did not stop", exc_info=True)
+        logging.info("[serve] rebound the WebRTC listener")
+
+    async def on_transport(_transport) -> None:
+        await rebind()
+
+    endpoint.on_rebind = rebind
+    endpoint.on_transport = on_transport
+
+
 async def _signalling_client(
     args: argparse.Namespace,
 ) -> net.WebSocketSignallingClient:
@@ -629,6 +664,8 @@ async def serve(args: argparse.Namespace) -> int:
     try:
         async with serving(service, *listeners.values()) as started:
             live = dict(zip(listeners, started))
+            if endpoint is not None:
+                _follow_the_claim(endpoint, service, live)
             urls = _endpoint_urls(args, live)
             for name, url in urls.items():
                 logging.info("[serve] listening on %s (%s)", url, name)

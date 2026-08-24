@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import datetime
 import socket
+import time
 from typing import Any
 
 from absl import logging
@@ -37,6 +38,10 @@ MAX_RECONNECT_BACKOFF = 30.0
 #: Renewal is scheduled from the claim's own `renew_after`; this bounds how
 #: long the loop sleeps between checks so a clock change cannot strand it.
 RENEW_POLL_SECONDS = 30.0
+#: How long before the bound relay credentials lapse to rebuild the listener.
+#: Comfortably more than one poll interval, so the rebind never races the
+#: expiry it exists to stay ahead of.
+REBIND_MARGIN_SECONDS = 120.0
 
 
 def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
@@ -68,7 +73,7 @@ def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
 def hosted_configuration(
     ice_servers: "list[dict] | None" = None,
     *,
-    multiplex_ice: bool = False,
+    multiplex_ice: bool = True,
 ) -> "net.WebRtcConfiguration":
     """How a hosted agent should negotiate with peers that dial it.
 
@@ -79,27 +84,23 @@ def hosted_configuration(
     completes -- with nothing in either log saying why. Prefer
     `HostedEndpoint.webrtc_configuration()`, which reads the live claim.
 
-    ## Why ICE is *not* multiplexed by default
+    ## Multiplexed ICE
 
-    Multiplexing every peer connection onto one UDP port is appealing for a
-    hosted agent -- it is the side several peers converge on, and one
-    predictable port is friendlier to a NAT than an ephemeral port each. It is
-    also, for a relayed agent, broken.
+    Every peer connection shares one UDP port. A hosted agent is the side
+    several peers converge on -- a caller through the relay, a second caller, a
+    discovery question -- and one predictable port is both cheaper and, behind
+    a NAT, likelier to be reachable than an ephemeral port each.
 
-    A muxed socket routes an incoming packet by its **source address**. When a
-    connection is relayed, every packet from every peer arrives from the *TURN
-    server's* address, so two concurrent connections are indistinguishable at
-    the socket: the second completes its handshake and then receives nothing.
-    Measured against the deployed exchange, a host with muxing on answered a
-    discovery question 2 times in 4, each failure costing the full timeout,
-    while the same host with muxing off answered 6 for 6 in about a second. A
-    relayed agent has concurrent connections as its normal condition -- a
-    caller, a second caller, a discovery question -- so this is not an edge.
+    Only one end of a pair may do this: a muxed socket routes an incoming
+    packet by its source address, so if the dialling side multiplexed too, its
+    several connections would arrive from one address and collide. The exchange
+    relay therefore does not (see `a11x.relay.dialler`).
 
-    `multiplex_ice=True` is available for a host that knows it will have one
-    peer at a time and wants the single port. It is not the default because the
-    failure it causes is silent: a handshake that completes and then delivers
-    nothing looks exactly like an agent that has stopped answering.
+    `multiplex_ice=False` turns it off. Worth knowing before reaching for it:
+    muxing was suspected of breaking relayed discovery and, on measurement,
+    exonerated. With the response cache defeated and TURN quota no longer
+    binding, a muxed host and an unmuxed one failed at indistinguishable rates
+    -- so if relayed dials are timing out, this is not the knob.
     """
     configuration = net.WebRtcConfiguration()
     configuration.enable_ice_udp_mux = multiplex_ice
@@ -165,8 +166,15 @@ class HostedEndpoint:
         self._fatal: Status | None = None
         self._connected = asyncio.Event()
         #: Called with the new transport whenever one is established, so a
-        #: service can rebind its listener. Set by `serve_hosted`.
+        #: service can rebind its listener.
         self.on_transport: Any = None
+        #: Awaited, with no arguments, when the listener's WebRTC configuration
+        #: has gone stale and must be rebuilt -- see `_rebind_if_lapsing`. A
+        #: host that does not set this stops being reachable an hour in.
+        self.on_rebind: Any = None
+        #: The credential expiry the live listener was built with, so staleness
+        #: is judged against what is *bound* rather than what is merely known.
+        self._bound_expiry: float | None = None
 
     @property
     def transport(self):
@@ -178,14 +186,29 @@ class HostedEndpoint:
         """Whether this endpoint is currently registered for signalling."""
         return self._transport is not None and self._transport.connected()
 
+    def credentials_expire_at(self) -> float | None:
+        """When the claim's relay credentials lapse, or None without any.
+
+        The earliest expiry across the ICE servers, because one lapsed entry is
+        enough to lose the candidate that was carrying the traffic.
+        """
+        if self.claim is None:
+            return None
+        expiries = [
+            float(entry["expires_at"])
+            for entry in self.claim.ice_servers
+            if entry.get("expires_at")
+        ]
+        return min(expiries) if expiries else None
+
     def webrtc_configuration(self) -> "net.WebRtcConfiguration":
         """How to negotiate, using the ICE servers this claim came with.
 
-        Read it after `start`, and read it again after a renewal: TURN
-        credentials are derived against an expiry, so a configuration built
-        from a lapsed claim is refused by the TURN server rather than ignored.
+        Records the expiry it was built with, so `on_rebind` can fire before
+        the listener holding it goes quietly unreachable.
         """
         ice_servers = self.claim.ice_servers if self.claim is not None else []
+        self._bound_expiry = self.credentials_expire_at()
         return hosted_configuration(ice_servers)
 
     async def __aenter__(self) -> "HostedEndpoint":
@@ -309,6 +332,8 @@ class HostedEndpoint:
                     exc.status.message,
                 )
 
+            await self._rebind_if_lapsing()
+
             if self.connected:
                 backoff = MIN_RECONNECT_BACKOFF
                 continue
@@ -326,6 +351,40 @@ class HostedEndpoint:
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, MAX_RECONNECT_BACKOFF)
+
+    async def _rebind_if_lapsing(self) -> None:
+        """Rebuild the listener before the credentials it holds expire.
+
+        A renewal mints new relay credentials, but a listener already bound
+        keeps the old ones -- and a TURN credential is checked against the
+        expiry embedded in its username, so once that passes the host can no
+        longer gather a relayed candidate. Nothing fails loudly: signalling
+        stays up, presence stays online, and new connections simply stop
+        completing. It presents as "it worked for a while and then stopped",
+        an hour in, which is the default claim lifetime.
+
+        Rebinding is deferred until the bound credentials are nearly out rather
+        than done on every renewal, because it costs the peer connections the
+        old listener was carrying. The relay's grace period hides that from
+        callers, but it is not free, so once an hour beats twice.
+        """
+        if self.on_rebind is None or self._bound_expiry is None:
+            return
+        if self._bound_expiry - time.time() > REBIND_MARGIN_SECONDS:
+            return
+        fresh = self.credentials_expire_at()
+        if fresh is None or fresh <= self._bound_expiry:
+            # A renewal has not yet produced newer credentials; rebinding to
+            # the same expiry would drop connections and fix nothing.
+            return
+
+        logging.info(
+            "rebinding %s: relay credentials lapse in %.0fs",
+            self.identity,
+            self._bound_expiry - time.time(),
+        )
+        await self.on_rebind()
+        self._bound_expiry = fresh
 
     async def _renew_if_due(self) -> None:
         """Renew when the claim says it is time, and not before."""
@@ -361,6 +420,7 @@ class HostedEndpoint:
 
 __all__ = [
     "CONNECT_TIMEOUT",
+    "REBIND_MARGIN_SECONDS",
     "MAX_RECONNECT_BACKOFF",
     "MIN_RECONNECT_BACKOFF",
     "HostedEndpoint",

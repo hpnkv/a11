@@ -10,6 +10,13 @@ it here.
 from __future__ import annotations
 
 from a11.cli.app import Command
+from a11.cli.commands.account import (
+    IDENTITY_COMMAND,
+    LOGIN_COMMAND,
+    LOGOUT_COMMAND,
+    REGISTER_COMMAND,
+    WHOAMI_COMMAND,
+)
 from a11.cli.commands.chat import CHAT_COMMAND
 from a11.cli.commands.discover import DISCOVER_COMMAND
 from a11.cli.commands.flow import FLOW_COMMAND
@@ -21,7 +28,12 @@ COMMANDS: list[Command] = [
     DISCOVER_COMMAND,
     FLOW_COMMAND,
     GATEWAY_COMMAND,
+    IDENTITY_COMMAND,
+    LOGIN_COMMAND,
+    LOGOUT_COMMAND,
+    REGISTER_COMMAND,
     SERVE_COMMAND,
+    WHOAMI_COMMAND,
 ]
 
 __all__ = ["COMMANDS"]

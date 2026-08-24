@@ -150,6 +150,7 @@ __all__: list[str] = [
     "Session",
     "SessionOptions",
     "SessionWithRecv",
+    "SignallingAdmission",
     "SignallingEndpoint",
     "SignallingMessage",
     "SignallingMessageType",
@@ -1693,6 +1694,29 @@ class AsyncNode:
     ) -> collections.abc.AsyncIterator[NodeFragment]:
         """
         Async-iterate raw fragments until the stream ends.
+        """
+
+    def iter_values(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: Duration | None = None,
+        mimetype_patterns: str | typing.Sequence[str] = "",
+    ) -> collections.abc.AsyncIterator[typing.Any]:
+        """
+        Async-iterate deserialized values, a batch of fragments per await.
+
+        The batched counterpart to `async for value in node`, which reads one
+        fragment per await and so pays an event-loop turn per value -- on a
+        selector loop that turn is a syscall, and it dominates everything else
+        about a value. This asks for `ITER_BATCH` fragments at a time, exactly
+        as `iter_fragments` does, and deserializes each.
+
+        Prefer this whenever the whole stream is being consumed here. Keep
+        `async for` when something else may read the same node: fragments in
+        this iterator's batch have already left the reader, so abandoning it
+        part way through a batch abandons them -- the same hazard
+        `iter_fragments` carries, and the reason `__anext__` was left reading
+        one at a time.
         """
 
     def iter_with_deadline(self, deadline: Time):
@@ -4246,6 +4270,14 @@ class HttpSseOptions:
     def connect_endpoint(self, arg0: str) -> None: ...
 
     @property
+    def connect_endpoint_prefix(self) -> str:
+        """
+        Server-side: also accept a connect POST anywhere under this prefix. Empty by default, which serves exactly one endpoint. Set it to serve many on one port and read the rest of the path from HttpSseWireStream.request_path in your on_connect handler. Must start and end with '/'.
+        """
+    @connect_endpoint_prefix.setter
+    def connect_endpoint_prefix(self, arg0: str) -> None: ...
+
+    @property
     def describe(self) -> DescribeEndpointOptions:
         """
         Server-side GET /actions. Point it at a service with Service.expose_descriptors_on.
@@ -4377,6 +4409,12 @@ class HttpSseWireStream(WireStream):
     def wait_for_http_headers(self) -> asyncio.Future[None]:
         """
         Await the exchange of HTTP headers for the SSE connection. Because SSE wire streams connect asynchronously, await this future before reading response headers or assuming the stream is live.
+        """
+
+    @property
+    def request_path(self) -> str:
+        """
+        The path a server stream was accepted on, query string included, or empty for a client stream. On a server accepting under HttpSseOptions.connect_endpoint_prefix this is the only place the rest of the path survives.
         """
 
 class InProcessWireStream(WireStream):
@@ -6626,6 +6664,32 @@ class SessionWithRecv(Session):
             ```
         """
 
+class SignallingAdmission:
+    def __repr__(self) -> str: ...
+    @property
+    def headers(self) -> list[tuple[str, str]]:
+        """
+        Request headers as sent, as a list of (name, value) pairs.
+        """
+
+    @property
+    def identity(self) -> str:
+        """
+        Identity the peer is asking to register under.
+        """
+
+    @property
+    def path(self) -> str:
+        """
+        Full request path, query string included.
+        """
+
+    @property
+    def query(self) -> str:
+        """
+        The part of the path after '?', without it.
+        """
+
 class SignallingEndpoint(SignallingTransport):
     pass
 
@@ -6784,6 +6848,11 @@ class SignallingService:
     def contains(self, identity: str) -> bool:
         """
         Return whether the given identity is currently connected.
+        """
+
+    def deliver(self, message: SignallingMessage) -> None:
+        """
+        Deliver a message to a locally connected recipient, as though it had been routed from an endpoint of this service. This is the ingress half of a federated signalling fabric: pair it with WebSocketSignallingServerOptions.on_unroutable, which is the egress half, to make several servers behave as one. Raises NOT_FOUND when the recipient is not connected here.
         """
 
     def identities(self) -> list[str]:
@@ -7169,6 +7238,11 @@ class Status:
     ) -> dict[int, dict]:
         """
         Build FastAPI response documentation for portable status codes.
+
+        The examples are plain JSON documents rather than `Status` values.
+        FastAPI serialises the whole OpenAPI document with pydantic, and a
+        native `Status` inside it is not something pydantic can serialise --
+        which made `app.openapi()` fail for any route that documented one.
         """
 
     @staticmethod
@@ -7741,6 +7815,14 @@ class WebSocketClientOptions:
     def framing(self, arg0: ChannelFramingOptions) -> None: ...
 
     @property
+    def handshake_deadline(self) -> Time:
+        """
+        Absolute deadline for the handshake alone. Bounds reaching a silent peer without bounding the session that follows.
+        """
+    @handshake_deadline.setter
+    def handshake_deadline(self, arg1: Time | None) -> None: ...
+
+    @property
     def headers(self) -> list[tuple[str, str]]:
         """
         Extra HTTP headers sent on the WebSocket handshake, as a list of (name, value) string pairs.
@@ -7826,6 +7908,14 @@ class WebSocketServerOptions:
     def path(self, arg0: str) -> None: ...
 
     @property
+    def path_prefix(self) -> str:
+        """
+        Also accept any path under this prefix, as well as `path`. Empty by default, which serves exactly one endpoint. Set it to serve many on one port -- one per agent, say -- and read the rest of the path from WebSocketWireStream.request_path in your on_stream handler. Must start and end with '/'.
+        """
+    @path_prefix.setter
+    def path_prefix(self, arg0: str) -> None: ...
+
+    @property
     def port(self) -> int:
         """
         TCP port to listen on; 0 selects an ephemeral port.
@@ -7878,6 +7968,16 @@ class WebSocketSignallingClientOptions:
     def deadline(self, arg1: Time | None) -> None: ...
 
     @property
+    def headers(self) -> list[tuple[str, str]]:
+        """
+        Extra HTTP headers sent on the signalling handshake, as a mapping or a list of (name, value) pairs. This is how a client presents credentials to a signalling server that authenticates; without it the only place to put one is the URL's query string, where it ends up in logs.
+        """
+    @headers.setter
+    def headers(
+        self, arg1: collections.abc.Mapping[str, str] | list[tuple[str, str]]
+    ) -> None: ...
+
+    @property
     def http2_options(self) -> Http2Options:
         """
         HTTP/2 transport options used for the connection.
@@ -7905,6 +8005,11 @@ class WebSocketSignallingServer:
 
     def __enter__(self) -> WebSocketSignallingServer: ...
     def __exit__(self, exc_type, exc, traceback) -> None: ...
+    def disconnect(self, identity: str) -> None:
+        """
+        Close one identity's connection, if this server holds it. The counterpart to admission: whatever authorised a registration can be withdrawn, and the socket has to go with it rather than surviving until its next message. Raises NOT_FOUND when this server is not holding that identity.
+        """
+
     def get_impl(self) -> typing_extensions.CapsuleType | None:
         """
         Opaque capsule around the native implementation, for interop.
@@ -7977,6 +8082,38 @@ class WebSocketSignallingServerOptions:
     def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
+    def on_admit(self) -> None:
+        """
+        Async callable deciding whether a peer may register, given a SignallingAdmission. Raise a StatusException to refuse: its code becomes the HTTP status of the refused upgrade, so the peer is told why instead of getting a socket that closes immediately. Runs once per connection, before the WebSocket upgrade.
+        """
+    @on_admit.setter
+    def on_admit(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def on_departed(self) -> None:
+        """
+        Synchronous callable invoked with an identity whose connection has gone, for presence bookkeeping. Called from a transport thread, so it must not block; marshal anything slow onto your own loop.
+        """
+    @on_departed.setter
+    def on_departed(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def on_message(self) -> None:
+        """
+        Synchronous callable invoked with each inbound SignallingMessage before it is routed. Mutating the message changes what is routed; raising a StatusException refuses that one message, which is reported to its sender as an error message and leaves the connection open. Synchronous because signalling is ordered per connection and an async hook would reorder it.
+        """
+    @on_message.setter
+    def on_message(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def on_unroutable(self) -> None:
+        """
+        Synchronous callable offered each message whose recipient is not connected to this server. Return normally once it has been handed to whatever will carry it elsewhere -- the other half is SignallingService.deliver on the instance that holds the recipient -- or raise to say it is undeliverable, which its sender is told.
+        """
+    @on_unroutable.setter
+    def on_unroutable(self, arg1: typing.Any) -> None: ...
+
+    @property
     def path_prefix(self) -> str:
         """
         URL path prefix the server listens on.
@@ -7991,6 +8128,14 @@ class WebSocketSignallingServerOptions:
         """
     @port.setter
     def port(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def replace_existing(self) -> bool:
+        """
+        Whether a new registration displaces a live one for the same identity. Off by default, which answers ALREADY_EXISTS. Set it when on_admit already decides which of two claimants is legitimate; without it a host that restarted cannot take its own identity back until the socket its dead predecessor left behind is noticed.
+        """
+    @replace_existing.setter
+    def replace_existing(self, arg0: bool) -> None: ...
 
 class WebSocketWireServer:
     @staticmethod
@@ -8034,6 +8179,18 @@ class WebSocketWireStream(WireStream):
     ) -> WebSocketWireStream:
         """
         Open a client WebSocket connection to url and return a WireStream over it. This is the standard way for an agent to dial out to a remote A11 endpoint; the returned stream is then driven asynchronously via start()/send(). Tune transport buffering with options and the handshake (headers, framing, HTTP/2, TLS) with websocket_options.
+        """
+
+    @property
+    def request_headers(self) -> list[tuple[str, str]]:
+        """
+        The headers the accepted request carried, as (name, value) pairs, or empty for a client stream. A per-connection credential arrives here, which is what lets a server authenticate a stream rather than a port.
+        """
+
+    @property
+    def request_path(self) -> str:
+        """
+        The path this stream was accepted on, query string included, or empty for a client stream. On a server accepting under WebSocketServerOptions.path_prefix this is the only place the rest of the path survives, and so the only way one port can serve more than one thing.
         """
 
 class WireMessage:

@@ -9,6 +9,13 @@ endpoints; `WebSocketSignallingServer` and
 `WebSocketSignallingClient` are the WebSocket-transported implementations
 you deploy when the peers are on different machines.
 
+A server exposed beyond one process usually needs to say who may register and
+what may be sent. `WebSocketSignallingServerOptions` carries four optional
+hooks for that -- ``on_admit`` (given a `SignallingAdmission`), ``on_message``,
+``on_unroutable`` and ``on_departed`` -- and `SignallingService.deliver` is the
+ingress that pairs with ``on_unroutable`` when several servers act as one
+fabric. A11 supplies the slots; the policy is the deployment's.
+
 The classes exported here are the native ``a11._native`` signalling types; this
 module attaches their (synchronous) context-manager protocols via
 [attach_protocol][a11._native_protocol.attach_protocol], so a service,
@@ -19,6 +26,7 @@ server stops/closes itself when its ``with`` block ends.
 from a11 import _native
 from a11._native_protocol import attach_protocol
 
+from a11._native import SignallingAdmission
 from a11._native import SignallingMessageType
 from a11._native import SignallingMessage
 from a11._native import SignallingTransport
@@ -65,11 +73,36 @@ class _WebSocketSignallingServerProtocol:
         self.stop()
 
 
+def client_options() -> "WebSocketSignallingClientOptions":
+    """Options for registering with a signalling server over HTTP/1.1.
+
+    A signalling WebSocket is one long-lived request, and reverse proxies do
+    not carry it over HTTP/2: RFC 8441's extended CONNECT is unimplemented by
+    nginx and most of its peers, which answer the handshake with a bare `400`.
+    A client left on its default preference therefore reaches a native server
+    directly and fails the moment one is put behind an ingress -- so ask for
+    HTTP/1.1, which both a proxy and A11's own server accept.
+
+    `client_preference` is what decides it. Clearing `enable_h2`/`enable_h2c`
+    reads like it should be enough and is not: the WebSocket client still
+    offered h2 and still got the `400`, so both are set here and the
+    preference is the one doing the work.
+    """
+    options = WebSocketSignallingClientOptions()
+    options.http2_options.client_preference = (
+        _native.HttpProtocolPreference.HTTP11
+    )
+    options.http2_options.enable_h2 = False
+    options.http2_options.enable_h2c = False
+    return options
+
+
 attach_protocol(SignallingService, _SignallingServiceProtocol)
 attach_protocol(SignallingTransport, _SignallingTransportProtocol)
 attach_protocol(WebSocketSignallingServer, _WebSocketSignallingServerProtocol)
 
 for _class in (
+    SignallingAdmission,
     SignallingMessageType,
     SignallingMessage,
     SignallingTransport,
@@ -84,6 +117,7 @@ for _class in (
 
 
 __all__ = [
+    "SignallingAdmission",
     "SignallingEndpoint",
     "SignallingMessage",
     "SignallingMessageType",
@@ -93,4 +127,5 @@ __all__ = [
     "WebSocketSignallingClientOptions",
     "WebSocketSignallingServer",
     "WebSocketSignallingServerOptions",
+    "client_options",
 ]

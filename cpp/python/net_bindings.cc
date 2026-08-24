@@ -37,14 +37,6 @@
 namespace a11::python {
 namespace {
 
-// The HTTP header pairs a handshake sends, as they read back.
-using PyHeaderPairs = py::typing::List<py::typing::Tuple<py::str, py::str>>;
-
-// And as one may be *given*: pairs, or a mapping of name to value. Annotated
-// rather than converted, because the setter does that itself.
-using PyHeadersLike =
-    PyLike<py::typing::Union<PyMapping<py::str, py::str>, PyHeaderPairs>>;
-
 size_t SizeOption(const py::handle& value, size_t maximum, const char* name) {
   try {
     if (!py::isinstance<py::int_>(value) ||
@@ -922,28 +914,11 @@ Examples:
       .def_property(
           "headers",
           [](const net::WebSocketClientOptions& options) -> PyHeaderPairs {
-            py::list result;
-            for (const auto& [name, value] : options.headers) {
-              result.append(py::make_tuple(name, value));
-            }
-            return result;
+            return HeaderPairsToPython(options.headers);
           },
           [](net::WebSocketClientOptions& options, const PyHeadersLike& value) {
-            net::HttpHeaders headers;
-            py::object entries =
-                PyMapping_Check(value.ptr()) != 0 && py::hasattr(value, "items")
-                    ? value.attr("items")()
-                    : py::object(value);
-            for (const py::handle item : entries) {
-              auto pair = py::reinterpret_borrow<py::sequence>(item);
-              if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||
-                  !py::isinstance<py::str>(pair[1])) {
-                ThrowStatus(absl::InvalidArgumentError(
-                    "WebSocket headers must contain pairs of strings"));
-              }
-              headers.emplace_back(pair[0].cast<std::string>(),
-                                   pair[1].cast<std::string>());
-            }
+            net::HttpHeaders headers = ValueOrThrow(
+                HeaderPairsFromPython(value, "WebSocket headers"));
             CheckStatus(net::ValidateHttpHeaders(headers));
             options.headers = std::move(headers);
           },
@@ -952,6 +927,17 @@ Examples:
       .def_readwrite("framing", &net::WebSocketClientOptions::framing,
                      "Channel framing options controlling message splitting "
                      "and buffering.")
+      .def_property(
+          "handshake_deadline",
+          [](const net::WebSocketClientOptions& options) -> NativeTime {
+            return NativeTime(options.handshake_deadline);
+          },
+          [](net::WebSocketClientOptions& options,
+             const py::typing::Optional<NativeTime>& value) {
+            options.handshake_deadline = ValueOrThrow(TimeFromPython(value));
+          },
+          "Absolute deadline for the handshake alone. Bounds reaching a "
+          "silent peer without bounding the session that follows.")
       .def(
           "validate",
           [](const net::WebSocketClientOptions& options) {
@@ -975,7 +961,26 @@ Examples:
           "options and the handshake (headers, framing, HTTP/2, TLS) with "
           "websocket_options.",
           py::arg("url"), py::arg("options") = net::WireStreamOptions{},
-          py::arg("websocket_options") = net::WebSocketClientOptions{});
+          py::arg("websocket_options") = net::WebSocketClientOptions{})
+      .def_property_readonly(
+          "request_path",
+          [](const net::WebSocketWireStream& self) {
+            return self.GetRequestPath();
+          },
+          "The path this stream was accepted on, query string included, or "
+          "empty for a client stream. On a server accepting under "
+          "WebSocketServerOptions.path_prefix this is the only place the rest "
+          "of the path survives, and so the only way one port can serve more "
+          "than one thing.")
+      .def_property_readonly(
+          "request_headers",
+          [](const net::WebSocketWireStream& self) -> PyHeaderPairs {
+            return HeaderPairsToPython(self.GetRequestHeaders());
+          },
+          "The headers the accepted request carried, as (name, value) pairs, "
+          "or empty for a client stream. A per-connection credential arrives "
+          "here, which is what lets a server authenticate a stream rather "
+          "than a port.");
 
   py::class_<net::WebSocketServerOptions>(module, "WebSocketServerOptions")
       .def(py::init<>(), "Construct default WebSocket server options.")
@@ -1003,6 +1008,13 @@ Examples:
                      "HTTP/2 transport options, including TLS settings.")
       .def_readwrite("port", &net::WebSocketServerOptions::port,
                      "TCP port to listen on; 0 selects an ephemeral port.")
+      .def_readwrite(
+          "path_prefix", &net::WebSocketServerOptions::path_prefix,
+          "Also accept any path under this prefix, as well as `path`. Empty "
+          "by default, which serves exactly one endpoint. Set it to serve "
+          "many on one port -- one per agent, say -- and read the rest of the "
+          "path from WebSocketWireStream.request_path in your on_stream "
+          "handler. Must start and end with '/'.")
       .def_readwrite("bind_address", &net::WebSocketServerOptions::bind_address,
                      "Local address the server binds to.")
       .def_property(

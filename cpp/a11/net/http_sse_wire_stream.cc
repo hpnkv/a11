@@ -205,10 +205,34 @@ struct HttpSseWireStream::State {
   bool suppress_outbound_terminal ABSL_GUARDED_BY(mu) = false;
   std::optional<absl::Status> transport_status ABSL_GUARDED_BY(mu);
   HttpHeaders request_headers ABSL_GUARDED_BY(mu);
+  // The path a server stream was accepted on. Written once, before the stream
+  // reaches on_connect; the only thing distinguishing two streams on a
+  // prefix-served port.
+  std::string request_path ABSL_GUARDED_BY(mu);
   std::optional<HttpHeaders> response_headers ABSL_GUARDED_BY(mu);
   const std::shared_ptr<a11::Promise<a11::Unit>> headers_promise;
   const a11::Task headers_future;
 };
+
+namespace {
+
+/**
+ * Whether @p path (already stripped of its query) is a connect endpoint.
+ *
+ * The exact endpoint is matched as it always was; a prefix matches anything
+ * strictly beneath it, which is how one port serves many streams.
+ */
+bool MatchesConnectEndpoint(std::string_view path,
+                            const HttpSseOptions& options) {
+  if (path == options.connect_endpoint) {
+    return true;
+  }
+  return !options.connect_endpoint_prefix.empty() &&
+         absl::StartsWith(path, options.connect_endpoint_prefix) &&
+         path.size() > options.connect_endpoint_prefix.size();
+}
+
+}  // namespace
 
 absl::Status HttpSseOptions::Validate() const {
   ABSL_RETURN_IF_ERROR(stream_options.Validate());
@@ -216,6 +240,12 @@ absl::Status HttpSseOptions::Validate() const {
   if (connect_endpoint.empty() || connect_endpoint.front() != '/') {
     return absl::InvalidArgumentError(
         "connect_endpoint must be an absolute path");
+  }
+  if (!connect_endpoint_prefix.empty() &&
+      (connect_endpoint_prefix.front() != '/' ||
+       connect_endpoint_prefix.back() != '/')) {
+    return absl::InvalidArgumentError(
+        "connect_endpoint_prefix must start and end with '/'");
   }
   if (message_endpoint.empty() || message_endpoint.front() != '/' ||
       !absl::StrContains(message_endpoint, "{id}")) {
@@ -475,6 +505,11 @@ void* absl_nullable HttpSseWireStream::GetImpl() const {
 HttpHeaders HttpSseWireStream::GetHttpRequestHeaders() const {
   thread::MutexLock lock(&state_->mu);
   return state_->request_headers;
+}
+
+std::string HttpSseWireStream::GetRequestPath() const {
+  thread::MutexLock lock(&state_->mu);
+  return state_->request_path;
 }
 
 std::optional<HttpHeaders> HttpSseWireStream::GetHttpResponseHeaders() const {
@@ -1375,8 +1410,9 @@ a11::Task HttpSseServer::HandleRequest(
   std::string described;
   const bool is_describe =
       MatchDescribePath(path, state->options.describe, &described);
+  const bool is_connect = MatchesConnectEndpoint(path, state->options);
   if (IsPreflight(state->options.headers.cors, request.method) &&
-      (path == state->options.connect_endpoint || is_describe ||
+      (is_connect || is_describe ||
        MatchMessagePath(path, state->options.message_endpoint).ok())) {
     return StatusTask(
         response->SendResponse(204, ServerHeaders(state->options)));
@@ -1389,7 +1425,7 @@ a11::Task HttpSseServer::HandleRequest(
       return std::move(*answered);
     }
   }
-  if (request.method == "POST" && path == state->options.connect_endpoint) {
+  if (request.method == "POST" && is_connect) {
     return HandleConnect(state, std::move(request), std::move(response));
   }
   if (request.method == "POST") {
@@ -1431,6 +1467,7 @@ a11::Task HttpSseServer::HandleConnect(
     {
       thread::MutexLock lock(&base_state->mu);
       base_state->request_headers = request.headers;
+      base_state->request_path = request.path;
       base_state->response_headers =
           ServerHeaders(state->options, CachePolicy::kStream);
     }

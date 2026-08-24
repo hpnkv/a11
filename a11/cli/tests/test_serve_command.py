@@ -440,21 +440,41 @@ async def test_webrtc_without_an_identity_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_signalling_credential_is_refused_not_dropped(
-    tmp_path: Path,
+async def test_a_signalling_credential_travels_on_the_handshake(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Silently unauthenticated is the one outcome worse than an error."""
-    _module(tmp_path, "serve_rtc_c", _REGISTRY_SOURCE)
-    with pytest.raises(ServeError, match="not wired up yet"):
-        await serve(
-            _args(
-                "serve_rtc_c",
-                webrtc=True,
-                webrtc_signalling_server="ws://127.0.0.1:1",
-                webrtc_signalling_identity="server",
-                webrtc_signalling_authorization="Bearer token",
-            )
+    """A credential given must reach the server, not be quietly dropped.
+
+    It used to be refused outright, because A11's signalling client could not
+    send headers. It can, so the flag is honoured -- and this asserts the
+    honouring rather than the refusal, because "silently unauthenticated" is
+    still the one outcome worse than an error.
+    """
+    from a11.cli.commands.serve import _signalling_client
+
+    captured: dict[str, object] = {}
+
+    async def fake_connect(url, identity, on_message, options):
+        captured["url"] = url
+        captured["identity"] = identity
+        captured["headers"] = dict(options.headers)
+        return object()
+
+    monkeypatch.setattr(
+        net.WebSocketSignallingClient, "connect", fake_connect
+    )
+    await _signalling_client(
+        _args(
+            "unused",
+            webrtc=True,
+            webrtc_signalling_server="ws://127.0.0.1:1",
+            webrtc_signalling_identity="server",
+            webrtc_signalling_authorization="Bearer token",
         )
+    )
+
+    assert captured["identity"] == "server"
+    assert captured["headers"]["authorization"] == "Bearer token"
 
 
 # --- Serving, for real -------------------------------------------------------

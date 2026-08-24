@@ -200,13 +200,23 @@ async def read_paths(scale: float) -> list[Result]:
 
 @benchmark(SUITE, "read_batching_headroom")
 async def read_batching_headroom(scale: float) -> list[Result]:
-    """The node reader against the store underneath it, on the same data.
+    """Every read of the same data, one await at a time and in batches.
 
-    `ChunkStore.next` takes a `limit` and returns a batch, so a consumer can
-    pay one await for many fragments. `AsyncNode` has no batched read: every
-    value costs an await, and an await costs an event-loop turn. This measures
-    both on identical data so the gap is the headroom a batched node read
-    would recover.
+    An await costs an event-loop turn, so what a reader pays per value depends
+    mostly on how many values it gets per await. Four ways of reading the
+    identical stream:
+
+    * `AsyncNode.next_fragment` -- one fragment per await.
+    * `AsyncNode.next_fragments(64)` -- the node's *own* batched read.
+    * `ChunkStore.next(limit=1)` and `(limit=64)` -- the store underneath it.
+
+    **The node's batched read is the row that was missing**, and its absence
+    made this benchmark read as "`AsyncNode` has no batched read" -- which this
+    docstring said, and which has not been true since `next_fragments` landed.
+    Comparing a node's single read against a store's batch conflates two
+    different things: the cost of the layer, and the cost of the choice. With
+    all four rows the two separate, and the remaining node-against-store gap is
+    the reader's prefetch pump rather than the absence of an API.
     """
     count = _scaled(20_000, scale)
     chunk = types.Chunk(
@@ -241,6 +251,39 @@ async def read_batching_headroom(scale: float) -> list[Result]:
             {"via": "AsyncNode.next_fragment"},
         )
     ]
+
+    # The node's own batched read, on its own fresh node: the reader is a
+    # cursor, so draining it above would leave nothing to measure here.
+    batched_node = _fresh("headroom-node-batched")
+    for _index in range(count - 1):
+        await batched_node.put_chunk(chunk)
+    await batched_node.finalize(chunk, wait=True)
+
+    drained = 0
+    started = _time.perf_counter_ns()
+    while True:
+        batch = await batched_node.next_fragments(64)
+        drained += sum(1 for fragment in batch if fragment is not None)
+        if batch and batch[-1] is None:
+            break
+    batched_elapsed = (_time.perf_counter_ns() - started) / 1e9
+    results.append(
+        Result(
+            SUITE,
+            "read_batched",
+            {
+                "ops_per_s": drained / batched_elapsed,
+                "items_per_s": drained / batched_elapsed,
+                "p50_us": batched_elapsed / drained * 1e6,
+                "elapsed_s": batched_elapsed,
+            },
+            {"via": "AsyncNode.next_fragments(64)"},
+            note=(
+                f"{(drained / batched_elapsed) / (seen / node_elapsed):.2f}x"
+                " the node's one-at-a-time read, same layer, same data"
+            ),
+        )
+    )
 
     for limit in (1, 64):
         store = LocalChunkStore(f"headroom-store-{limit}")
@@ -279,10 +322,13 @@ async def read_batching_headroom(scale: float) -> list[Result]:
             )
         )
 
-    batched = results[-1].metrics["items_per_s"]
+    store_batched = results[-1].metrics["items_per_s"]
+    node_batched = results[1].metrics["items_per_s"]
     results[-1].note = (
-        f"{batched / results[0].metrics['items_per_s']:.0f}x the node's"
-        " one-at-a-time read, on the same data"
+        f"{store_batched / results[0].metrics['items_per_s']:.0f}x the node's"
+        f" one-at-a-time read and {store_batched / node_batched:.1f}x the"
+        " node's batched one -- the second ratio is the reader pump, the"
+        " first is that plus the batching"
     )
     return results
 

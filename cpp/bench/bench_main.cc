@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -518,6 +519,66 @@ void NodesSuite(Recorder& recorder, double scale) {
                   .metrics = metrics,
                   .params = {{"via", "AsyncNode::NextFragment"}},
                   .note = absl::StrCat(seen, " fragments read")});
+  }
+
+  {
+    // The node's batched read, which had no native row -- so the only figure
+    // for it came through the binding, and there was no way to tell the
+    // reader's own per-fragment cost from the crossing's. Same data, same
+    // fill, same fragment count as the row above: the two are a ratio.
+    const std::int64_t count = Scaled(100000, scale, 1000);
+    auto store = *stores::LocalChunkStore::Create("bench-read-batched");
+    auto node = *nodes::AsyncNode::Create(store);
+    for (std::int64_t index = 0; index < count; ++index) {
+      auto seq = node->PutChunk(token, std::nullopt, index == count - 1)
+                     .Await(Deadline());
+      (void)seq;
+    }
+    constexpr size_t kBatch = 64;
+    // One *fragment* per iteration, refilling from a batched read when the
+    // local buffer runs dry, so `per_op_items` is honestly 1 and the reported
+    // rate is fragments per second.
+    //
+    // Charging `iterations x kBatch` items instead -- one call per iteration,
+    // 64 items assumed per call -- overstated this row by 3.5x, because the
+    // node's batches are data-dependent and averaged 18 rather than 64. A
+    // batched read's item count is not known before the run, so it cannot be
+    // passed to `Throughput`; consuming one at a time from a batch is how a
+    // real reader uses it anyway.
+    std::deque<data::NodeFragment> pending;
+    std::int64_t seen = 0;
+    std::int64_t calls = 0;
+    bool ended = false;
+    const auto metrics = Throughput(
+        [&](std::int64_t) {
+          if (pending.empty() && !ended) {
+            auto batch = node->NextFragments(kBatch).Await(Deadline());
+            ++calls;
+            if (!batch.ok()) {
+              ended = true;
+              return;
+            }
+            for (auto& fragment : *batch) {
+              if (fragment.has_value()) {
+                pending.push_back(std::move(*fragment));
+              } else {
+                ended = true;
+              }
+            }
+          }
+          if (!pending.empty()) {
+            pending.pop_front();
+            ++seen;
+          }
+        },
+        count, 0, 1, static_cast<std::int64_t>(token.data.size()));
+    recorder.Add(
+        {.suite = "nodes",
+         .name = "read_batched",
+         .metrics = metrics,
+         .params = {{"via", "AsyncNode::NextFragments(64)"}},
+         .note = absl::StrCat(seen, " fragments in ", calls, " calls, mean ",
+                              calls > 0 ? seen / calls : 0, " per call")});
   }
 
   {

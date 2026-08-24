@@ -159,6 +159,26 @@ class SignallingService
    */
   absl::StatusOr<std::shared_ptr<SignallingEndpoint>> Connect(
       std::string identity, OnSignallingMessage on_message);
+  /**
+   * @brief Delivers a message to a locally connected recipient.
+   *
+   * The ingress half of a *federated* signalling fabric: Route() carries a
+   * message from an endpoint this service holds, and Deliver() carries one that
+   * arrived from somewhere else -- another process, another host -- and needs
+   * placing into the recipient's queue as though it had. Paired with
+   * WebSocketSignallingServerOptions::on_unroutable, which is the egress half,
+   * it lets several servers behave as one without either of them knowing how
+   * the messages travel between them.
+   *
+   * The message's `sender` is taken as given, because the caller is the only
+   * party that knows whether it was authenticated. A transport handing this
+   * untrusted input must set `sender` itself.
+   *
+   * @param message The message to deliver; its `recipient` selects the target.
+   * @return OK, `NOT_FOUND` when the recipient is not connected here, or the
+   *         recipient's terminal status when it is disconnecting.
+   */
+  absl::Status Deliver(SignallingMessage message);
   /** @return Whether the given identity is currently connected. */
   [[nodiscard]] bool Contains(std::string_view identity) const;
   /** @return The list of currently connected identities. */

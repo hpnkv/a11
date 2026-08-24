@@ -194,22 +194,30 @@ class _StatusConvenience(BaseModel):
     def get_fastapi_response_dict_for_codes(
         *codes: StatusCode,
     ) -> dict[int, dict]:
-        """Build FastAPI response documentation for portable status codes."""
+        """Build FastAPI response documentation for portable status codes.
+
+        The examples are plain JSON documents rather than `Status` values.
+        FastAPI serialises the whole OpenAPI document with pydantic, and a
+        native `Status` inside it is not something pydantic can serialise --
+        which made `app.openapi()` fail for any route that documented one.
+        """
         responses = {}
         for code in codes:
             responses[code.to_http_code()] = {
                 "model": Status,
                 "content": {
                     "application/json": {
-                        "example": _STATUS_EXAMPLES[code],
+                        "example": _STATUS_EXAMPLES[code].model_dump(
+                            mode="json"
+                        ),
                     }
                 },
             }
 
         validation_error_example = _STATUS_EXAMPLES[
             StatusCode.INVALID_ARGUMENT
-        ].model_copy()
-        validation_error_example.details = [
+        ].model_dump(mode="json")
+        validation_error_example["details"] = [
             {
                 "type": "missing",
                 "loc": ["body", "name"],
@@ -728,3 +736,16 @@ _STATUS_EXAMPLES = {
         message="Unrecoverable data loss or corruption",
     ),
 }
+
+
+# A `Status` is not a pydantic `BaseModel` -- it is the native class with a
+# pydantic core schema attached -- so `fastapi.encoders.jsonable_encoder` fell
+# through every branch it knows and ended at `vars(obj)`, which for a pybind11
+# object is empty. Any FastAPI service that answered errors as statuses was
+# therefore sending `{}` as the body, silently. Registering the exact type is
+# the documented extension point, and the exact-type lookup (unlike the
+# by-class-tuple one) is consulted at call time, so a registration made here
+# takes effect for every caller.
+fastapi.encoders.ENCODERS_BY_TYPE[Status] = lambda status: status.model_dump(
+    mode="json"
+)

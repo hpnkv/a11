@@ -189,11 +189,19 @@ async def loop_turn_anatomy(scale: float) -> list[Result]:
 
 @benchmark(SUITE, "await_pipelining")
 async def await_pipelining(scale: float) -> list[Result]:
-    """How much of the floor a caller wins back by having work in flight.
+    """What having work in flight does to the cheapest native call.
 
     The same native call, awaited one at a time and then with a window of them
-    outstanding. The ratio is the argument for writing `gather` rather than a
-    `for` loop at every A11 call site that has more than one thing to do.
+    outstanding.
+
+    **On this call it is a loss, and that is the finding.** `store.size()`
+    resolves on the loop's own thread, so a sequential `await` of it costs no
+    event-loop turn at all -- and `gather` then charges a Task per operation
+    against a call that takes about a microsecond. Pipelining is worth having
+    where the operation is *slower* than the machinery that overlaps it; below
+    a few microseconds the machinery is the cost. A caller with several cheap
+    native calls to make wants a batch entry point (`next(limit=64)`), not a
+    wider window.
     """
     iterations = _scaled(20_000, scale)
     store = LocalChunkStore("pipelining")
@@ -208,7 +216,20 @@ async def await_pipelining(scale: float) -> list[Result]:
         results.append(
             Result(SUITE, "native_await", metrics, {"in_flight": window})
         )
+    # Reported against the *sequential* row and signed, not as `best /
+    # sequential`. When the window never wins, that ratio is 1.0 -- taken from
+    # the sequential row being its own best -- which reads as "pipelining is
+    # neutral here" and is how a 5.8x regression at a window of 8 went
+    # unremarked in every recorded run.
     sequential = results[0].metrics["ops_per_s"]
-    best = max(result.metrics["ops_per_s"] for result in results)
-    results[-1].note = f"{best / sequential:.1f}x over one-at-a-time"
+    for result in results[1:]:
+        ratio = result.metrics["ops_per_s"] / sequential
+        result.note = (
+            f"{ratio:.2f}x sequential"
+            f" -- {'gain' if ratio >= 1.0 else 'LOSS'}"
+        )
+    best = max(result.metrics["ops_per_s"] for result in results[1:])
+    results[-1].note += (
+        f"; best window is {best / sequential:.2f}x one-at-a-time"
+    )
     return results

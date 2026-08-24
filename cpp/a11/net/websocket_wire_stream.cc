@@ -47,6 +47,29 @@ absl::StatusOr<ParsedUrl> ParseWebSocketUrl(std::string_view url) {
   return parsed;
 }
 
+/**
+ * Whether @p path addresses this server's WebSocket endpoint.
+ *
+ * The exact path is matched as it always was, query string and all, so a
+ * server that names one endpoint behaves exactly as before. A prefix matches
+ * anything strictly beneath it, with the query ignored -- an identity in the
+ * path is part of the route, and `?trace=1` is not.
+ */
+bool MatchesEndpoint(std::string_view path,
+                     const WebSocketServerOptions& options) {
+  if (path == options.path) {
+    return true;
+  }
+  if (options.path_prefix.empty()) {
+    return false;
+  }
+  const size_t query = path.find_first_of("?#");
+  const std::string_view route =
+      query == std::string_view::npos ? path : path.substr(0, query);
+  return absl::StartsWith(route, options.path_prefix) &&
+         route.size() > options.path_prefix.size();
+}
+
 }  // namespace
 
 absl::Status WebSocketClientOptions::Validate() const {
@@ -73,6 +96,7 @@ WebSocketWireStream::CreateClient(const std::string& url,
       .path = parsed.target(),
       .headers = std::move(websocket_options.headers),
       .http2_options = websocket_options.http2_options,
+      .handshake_deadline = websocket_options.handshake_deadline,
       .max_message_size = options.max_single_message_size,
   };
   ABSL_ASSIGN_OR_RETURN(
@@ -90,6 +114,10 @@ absl::StatusOr<std::shared_ptr<WebSocketWireStream>>
 WebSocketWireStream::CreateAccepted(
     HttpRequest request, std::shared_ptr<Http2ResponseWriter> response,
     WireStreamOptions options, ChannelFramingOptions framing) {
+  // Copied out before the request is moved into the channel: what was asked
+  // for is the only thing distinguishing two streams on a prefix-served port.
+  std::string request_path = request.path;
+  HttpHeaders request_headers = request.headers;
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::BinaryChannel> channel,
                         internal::MakeHttp2WebSocketServerChannel(
                             std::move(request), std::move(response),
@@ -98,14 +126,22 @@ WebSocketWireStream::CreateAccepted(
       std::shared_ptr<State> state,
       MakeState(std::move(channel), NewWebSocketId(),
                 ChannelEndpointRole::kServer, {}, options, framing));
-  return std::make_shared<WebSocketWireStream>(ConstructorToken{},
-                                               std::move(state));
+  auto stream = std::make_shared<WebSocketWireStream>(ConstructorToken{},
+                                                      std::move(state));
+  stream->request_path_ = std::move(request_path);
+  stream->request_headers_ = std::move(request_headers);
+  return stream;
 }
 
 absl::Status WebSocketServerOptions::Validate() const {
   if (path.empty() || path.front() != '/') {
     return absl::InvalidArgumentError(
         "WebSocket server path must start with '/'");
+  }
+  if (!path_prefix.empty() &&
+      (path_prefix.front() != '/' || path_prefix.back() != '/')) {
+    return absl::InvalidArgumentError(
+        "WebSocket server path_prefix must start and end with '/'");
   }
   if (bind_address.empty()) {
     return absl::InvalidArgumentError(
@@ -154,7 +190,7 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
             }
             if (request.method != "CONNECT" ||
                 request.protocol != "websocket" ||
-                request.path != active->options.path) {
+                !MatchesEndpoint(request.path, active->options)) {
               // A cross-origin preflight, for the routes below. A page that
               // cannot preflight cannot read the answer either.
               if (IsPreflight(active->options.headers.cors, request.method)) {

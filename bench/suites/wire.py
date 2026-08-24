@@ -251,8 +251,25 @@ async def one_way_throughput(scale: float) -> list[Result]:
 
     The sender does not wait for the receiver, so this measures the transport's
     sustained rate rather than its round-trip latency. The receiver counting
-    every message is what makes it honest -- a benchmark that only measures
+    every *fragment* is what makes it honest -- a benchmark that only measures
     `send` is measuring a queue.
+
+    **Fragments, not messages, and that is the whole reason this benchmark
+    exists as it does.** A transport is free to deliver the fragments of
+    several sends in one `WireMessage`: A11's in-process stream folds whatever
+    is already queued behind the message it is about to deliver, which is worth
+    having because an action costs `3 + 2 x ports` messages that mostly carry
+    three bytes of status. So `n` sends can arrive as fewer than `n` receives
+    with nothing lost at all.
+
+    An earlier version of this counted messages, waited for one receive per
+    send, and hung on the first transport whose peer sees concurrent sends --
+    SSE, whose POSTs land on the server's bridge from a fibre each, so a queue
+    forms and the merge has something to fold. It timed out at 20s and took the
+    two transports that had already passed down with it, which is why this row
+    has never appeared in a recorded run on either machine. Counting fragments
+    is not a workaround for that; it is the only count the transport contract
+    actually promises.
     """
     results = []
     for name, transport in TRANSPORTS.items():
@@ -267,7 +284,7 @@ async def one_way_throughput(scale: float) -> list[Result]:
                     payload = _message(b"x" * size)
 
                     # The sender is held to a bounded number of *unread*
-                    # messages, not merely told to yield now and then.
+                    # fragments, not merely told to yield now and then.
                     #
                     # Yield-pacing was tried and is not enough: yielding lets
                     # the loop run but does not make the receiver keep up, and
@@ -290,12 +307,24 @@ async def one_way_throughput(scale: float) -> list[Result]:
                     credit = asyncio.Semaphore(16)
 
                     async def drain(p=pair, c=count) -> int:
-                        for _ in range(c):
-                            await asyncio.wait_for(
+                        # Bounded by fragments seen, not iterations: one
+                        # receive may carry several, and waiting for `c`
+                        # receives is what used to hang here.
+                        seen = 0
+                        while seen < c:
+                            message = await asyncio.wait_for(
                                 p.server.receive(), timeout=_TIMEOUT
                             )
-                            credit.release()
-                        return c
+                            if message is None:
+                                break
+                            delivered = len(message.node_fragments) or 1
+                            seen += delivered
+                            # A credit per fragment released, so the sender's
+                            # window stays a window on unread fragments however
+                            # the transport packed them.
+                            for _ in range(delivered):
+                                credit.release()
+                        return seen
 
                     started = time.perf_counter_ns()
                     receiver = asyncio.ensure_future(drain())

@@ -240,8 +240,23 @@ async def start(
     action.run()
     for name, value in inputs.items():
         node = action.get_input(name, bind_stream=False)
-        for one in value if isinstance(value, (list, tuple)) else [value]:
-            await (await node.put(one))
+        # Enqueue every value first, then collect the confirmations.
+        #
+        # `await (await node.put(one))` charged two event-loop turns per value:
+        # one to enqueue and one to hear that the store had it. Enqueueing is
+        # what fixes the order -- the writer's queue is FIFO -- so the
+        # confirmations can be collected afterwards, and by then a store that
+        # answers inline has already answered, which makes the second await
+        # free rather than a turn. Failures are still reported, and still
+        # before the flow is allowed to proceed.
+        confirmations = [
+            await node.put(one)
+            for one in (
+                value if isinstance(value, (list, tuple)) else [value]
+            )
+        ]
+        for confirmation in confirmations:
+            await confirmation
         await node.finalize()
     for name in declared_inputs:
         if name not in inputs and name not in left_open:
@@ -306,8 +321,14 @@ async def invoke(
 
 
 async def _collect(node: AsyncNode) -> list[Any]:
+    # `iter_values`, not `async for value in node`: the latter reads one
+    # fragment per await and an await is an event-loop turn, so collecting a
+    # 4096-value output cost 4096 turns. Nothing else reads this node -- it is
+    # the flow's own output and this function exists to drain it whole -- so the
+    # batched iterator's one hazard (fragments already taken from the reader if
+    # the iteration is abandoned) cannot arise here.
     gathered: list[Any] = []
-    async for value in node:
+    async for value in node.iter_values():
         gathered.append(value)
     return gathered
 

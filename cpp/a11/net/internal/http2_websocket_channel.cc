@@ -247,17 +247,20 @@ class Http2WebSocketChannel final
       thread::MutexLock lock(&mu_);
       config = *client_config_;
     }
+    // Whichever comes first: a stream deadline the caller wants enforced
+    // throughout also bounds getting there.
+    const absl::Time opening =
+        std::min(config.handshake_deadline, config.http2_options.deadline);
     ABSL_ASSIGN_OR_RETURN(
         std::shared_ptr<Http2Client> client,
         Http2Client::Connect(config.host, config.port, config.http2_options)
-            .Await(config.http2_options.deadline));
+            .Await(opening));
     ABSL_ASSIGN_OR_RETURN(
         std::shared_ptr<Http2DuplexStream> duplex,
         client->ExtendedConnect("websocket", std::move(config.path),
                                 std::move(config.headers)));
-    ABSL_ASSIGN_OR_RETURN(
-        HttpResponseHead head,
-        duplex->Headers().Await(config.http2_options.deadline));
+    ABSL_ASSIGN_OR_RETURN(HttpResponseHead head,
+                          duplex->Headers().Await(opening));
     if (head.status < 200 || head.status >= 300) {
       return {StatusCodeFromHttp(head.status),
               absl::StrCat("HTTP/2 WebSocket CONNECT returned ", head.status)};

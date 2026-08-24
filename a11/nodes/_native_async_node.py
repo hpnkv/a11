@@ -125,6 +125,18 @@ async def _next_value_fragment(
             return None
 
 
+def _reader_is_ordered(node: AsyncNode) -> bool:
+    """Whether ``node``'s reader is ordered, without copying its options.
+
+    `get_reader_options` promises a copy, and a copy is a `model_dump` plus a
+    `deepcopy` plus a construction -- 3.80us against 0.377us for reading the
+    flag off the live object. That is charged once per `consume`, so a 16-port
+    action spent 55us deep-copying options to read sixteen booleans. Nothing is
+    mutated here, so reading the live object is safe.
+    """
+    return _native_reader_options.__get__(node, type(node)).ordered
+
+
 def _ensure_python_state(node: AsyncNode) -> None:
     state = node.__dict__
     state.setdefault(
@@ -714,7 +726,7 @@ class _AsyncNodeProtocol:
         empty, or holding nothing but a null final — yields ``None`` instead of
         raising. Requires an ordered reader.
         """
-        if not self.get_reader_options().ordered:
+        if not _reader_is_ordered(self):
             raise Status(
                 code=StatusCode.FAILED_PRECONDITION,
                 message="consume() requires an ordered reader.",
@@ -817,6 +829,53 @@ class _AsyncNodeProtocol:
                 if fragment is None:
                     return
                 yield fragment
+
+    async def iter_values(
+        self,
+        obj_type: type[T] | None = None,
+        timeout: timing.Duration | None = None,
+        mimetype_patterns: str | Sequence[str] = "",
+    ) -> AsyncIterator[Any]:
+        """Async-iterate deserialized values, a batch of fragments per await.
+
+        The batched counterpart to `async for value in node`, which reads one
+        fragment per await and so pays an event-loop turn per value -- on a
+        selector loop that turn is a syscall, and it dominates everything else
+        about a value. This asks for `ITER_BATCH` fragments at a time, exactly
+        as `iter_fragments` does, and deserializes each.
+
+        Prefer this whenever the whole stream is being consumed here. Keep
+        `async for` when something else may read the same node: fragments in
+        this iterator's batch have already left the reader, so abandoning it
+        part way through a batch abandons them -- the same hazard
+        `iter_fragments` carries, and the reason `__anext__` was left reading
+        one at a time.
+        """
+        _ensure_python_state(self)
+        patterns, resolved_type = _resolve_expected_types(
+            self, mimetype_patterns, obj_type
+        )
+        while True:
+            batch = await self.next_fragments(self.ITER_BATCH, timeout)
+            for fragment in batch:
+                if fragment is None:
+                    return
+                # The same rule `_next_value_fragment` applies one at a time: a
+                # null chunk is a marker rather than a value, and a *final* one
+                # ends the stream. Yielding them is how the first version of
+                # this returned a trailing `b''` on every flow output.
+                if fragment.get_chunk().is_null():
+                    if not fragment.continued:
+                        return
+                    continue
+                if resolved_type is types.NodeFragment:
+                    yield fragment
+                elif resolved_type is types.Chunk:
+                    yield fragment.get_chunk()
+                else:
+                    yield await _deserialize_fragment(
+                        self, fragment, patterns, resolved_type
+                    )
 
     async def iter_chunks(
         self, timeout: timing.Duration | None = None

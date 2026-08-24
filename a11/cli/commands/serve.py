@@ -77,6 +77,7 @@ from a11 import net
 from a11.cli import console as console_module
 from a11.cli.app import Command
 from a11.cli.signals import stop_on_signals
+from a11.status import StatusException
 
 #: Module symbol read when the target names none.
 DEFAULT_SYMBOL = "REGISTRY"
@@ -332,7 +333,39 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "--webrtc-signalling-authorization",
         default=None,
         metavar="CREDENTIAL",
-        help="Not wired up yet; supplying it is an error rather than ignored.",
+        help=(
+            "Bearer credential for the signalling handshake. Prefer --hosted,"
+            " which obtains one and keeps it fresh."
+        ),
+    )
+
+    hosted = parser.add_argument_group(
+        "hosted",
+        "Serve through an A11 exchange, reachable at a public URL without"
+        " accepting inbound connections.",
+    )
+    hosted.add_argument(
+        "--hosted",
+        default=None,
+        metavar="IDENTITY",
+        help=(
+            "Host under this identity on the exchange you are logged in to."
+            " Takes a claim, connects to signalling, and keeps both alive;"
+            " implies --webrtc."
+        ),
+    )
+    hosted.add_argument(
+        "--exchange",
+        default="",
+        metavar="URL",
+        help="Which exchange, when logged in to more than one.",
+    )
+    hosted.add_argument(
+        "--claim-ttl",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Claim lifetime to ask for; the exchange decides the maximum.",
     )
 
     http = parser.add_argument_group(
@@ -457,22 +490,57 @@ async def _signalling_client(
     args: argparse.Namespace,
 ) -> net.WebSocketSignallingClient:
     """Register with the signalling server the WebRTC group names."""
-    if args.webrtc_signalling_authorization is not None:
-        # Refused rather than dropped: an operator who passes a credential and
-        # gets an unauthenticated connection has been misled about what is
-        # protecting the endpoint.
-        raise ServeError(
-            "--webrtc-signalling-authorization is not wired up yet; A11's"
-            " signalling client cannot send credentials. Omit it, or use a"
-            " signalling server that does not require them."
-        )
     if not args.webrtc_signalling_server:
         raise ServeError("--webrtc needs --webrtc-signalling-server URL.")
     if not args.webrtc_signalling_identity:
         raise ServeError("--webrtc needs --webrtc-signalling-identity NAME.")
+    options = net.signalling.client_options()
+    if args.webrtc_signalling_authorization is not None:
+        options.headers = {
+            "authorization": args.webrtc_signalling_authorization
+        }
     return await net.WebSocketSignallingClient.connect(
-        args.webrtc_signalling_server, args.webrtc_signalling_identity
+        args.webrtc_signalling_server,
+        args.webrtc_signalling_identity,
+        None,
+        options,
     )
+
+
+async def _hosted_endpoint(args: argparse.Namespace):
+    """Take a claim on ``--hosted`` and connect, using the stored credential.
+
+    Returns the exchange client and the live `HostedEndpoint`; both are the
+    caller's to close. The endpoint keeps the claim renewed and the signalling
+    socket re-registered for as long as it lives, which is what makes a host
+    that runs for days stay reachable.
+    """
+    from a11.client.credentials import CredentialStore
+    from a11.client.exchange import ExchangeClient
+    from a11.client.hosting import HostedEndpoint
+
+    try:
+        credential = CredentialStore().require(args.exchange or None)
+    except StatusException as exc:
+        raise ServeError(exc.status.message) from exc
+
+    client = ExchangeClient(
+        credential.exchange, api_key=credential.api_key
+    )
+    endpoint = HostedEndpoint(
+        client,
+        args.hosted,
+        ttl_seconds=args.claim_ttl,
+        signalling_url=credential.signalling_url,
+    )
+    try:
+        await endpoint.start()
+    except StatusException as exc:
+        await client.aclose()
+        raise ServeError(
+            f"Could not host {args.hosted!r}: {exc.status.message}"
+        ) from exc
+    return client, endpoint
 
 
 def _endpoint_urls(
@@ -494,9 +562,18 @@ def _endpoint_urls(
         scheme = _scheme(args, "https", "http")
         urls["sse"] = f"{scheme}://{args.sse_host}:{live['sse'].port}"
     if "webrtc" in live:
-        urls["webrtc"] = (
-            f"{args.webrtc_signalling_server} as {live['webrtc'].identity}"
-        )
+        if args.hosted:
+            # What a caller would actually type, rather than where the
+            # signalling happens to be.
+            from a11.client.credentials import CredentialStore
+
+            stored = CredentialStore().get(args.exchange or None)
+            base = (stored.relay_ws_url if stored else "") or "wss://a11.to/ws"
+            urls["hosted"] = f"{base}/{args.hosted}"
+        else:
+            urls["webrtc"] = (
+                f"{args.webrtc_signalling_server} as {live['webrtc'].identity}"
+            )
     return urls
 
 
@@ -523,14 +600,27 @@ async def serve(args: argparse.Namespace) -> int:
         )
 
     signalling: net.WebSocketSignallingClient | None = None
+    endpoint = None
+    exchange_client = None
     listeners: dict[str, Any] = {}
-    if args.ws or implied:
+    if args.hosted:
+        # Hosting supplies the signalling transport, so the WebRTC listener is
+        # implied rather than asked for separately: `--hosted` without
+        # `--webrtc` should serve, not quietly do nothing.
+        exchange_client, endpoint = await _hosted_endpoint(args)
+        signalling = endpoint.transport
+        # From the endpoint, so the STUN and TURN servers the exchange issued
+        # with this claim are the ones actually used.
+        listeners["webrtc"] = webrtc(
+            signalling, endpoint.webrtc_configuration()
+        )
+    if args.ws or (implied and not args.hosted):
         listeners["ws"] = websocket(_websocket_options(args))
     if args.sse:
         listeners["sse"] = http_sse(
             args.sse_host, args.sse_port, _sse_options(args)
         )
-    if args.webrtc:
+    if args.webrtc and not args.hosted:
         signalling = await _signalling_client(args)
         listeners["webrtc"] = webrtc(signalling)
 
@@ -558,8 +648,14 @@ async def serve(args: argparse.Namespace) -> int:
     finally:
         # After `serving`, which stopped the WebRTC server and with it this
         # transport; closing twice is harmless and closing never is a leak.
-        if signalling is not None:
+        if endpoint is not None:
+            # Releases the claim as well as the socket, so the identity is
+            # free for a replacement immediately rather than at expiry.
+            await endpoint.aclose()
+        elif signalling is not None:
             signalling.close()
+        if exchange_client is not None:
+            await exchange_client.aclose()
     return 0
 
 

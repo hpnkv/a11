@@ -40,6 +40,33 @@ PROBE_CALL_TIMEOUT = timing.Duration.milliseconds(1500)
 CONNECT_TIMEOUT = timing.Duration.seconds(10)
 
 
+def websocket_client_options(
+    handshake_deadline: "timing.Time",
+) -> "net.WebSocketClientOptions":
+    """How this client speaks WebSocket: RFC 6455 over HTTP/1.1, always.
+
+    Two decisions live here, both of which have cost real debugging time.
+
+    **The protocol.** A gateway serves RFC 6455 over HTTP/1.1 and turns HTTP/2
+    off, and a reverse proxy in front of one cannot carry a WebSocket over
+    HTTP/2 at all -- nginx does not implement RFC 8441's extended CONNECT, so
+    it answers the handshake with a bare `400` before any credential is read,
+    which presents as a rejected token. `client_preference` is what decides
+    this; clearing `enable_h2`/`enable_h2c` is not sufficient on its own, as a
+    `wss://` connection kept offering h2 with both false.
+
+    **The deadline.** It bounds the handshake and must not land on
+    `http2_options.deadline`, which aborts the whole stream: a WebSocket is one
+    long-lived HTTP request, so a deadline there hangs the session up
+    mid-conversation rather than timing out a connect.
+    """
+    options = net.WebSocketClientOptions()
+    options.http2_options.client_preference = net.HttpProtocolPreference.HTTP11
+    options.http2_options.enable_h2 = False
+    options.http2_options.enable_h2c = False
+    options.handshake_deadline = handshake_deadline
+    return options
+
 
 class GatewayConnection:
     """One client session on one stream to a gateway.
@@ -92,17 +119,7 @@ class GatewayConnection:
         # ten seconds fail with "This endpoint has already terminated".
         handshake_deadline = timing.now() + (timeout or CONNECT_TIMEOUT)
         options = net.WireStreamOptions()  # no deadline: the stream lives on
-        # The gateway serves RFC 6455 WebSocket over HTTP/1.1 and turns HTTP/2
-        # off (see `a11 gateway`). A client left on its default preference tries
-        # prior-knowledge h2c first and gets its connection reset, so say plainly
-        # which protocol this is.
-        websocket_options = net.WebSocketClientOptions()
-        websocket_options.http2_options.enable_h2 = False
-        websocket_options.http2_options.enable_h2c = False
-        # A peer that accepts the TCP connection and then says nothing would
-        # otherwise stall this call forever, which is exactly what a non-gateway
-        # holding the port looks like.
-        websocket_options.http2_options.deadline = handshake_deadline
+        websocket_options = websocket_client_options(handshake_deadline)
         stream = net.WebSocketWireStream.connect(
             url, options, websocket_options=websocket_options
         )
@@ -271,4 +288,5 @@ __all__ = [
     "PROBE_CONNECT_TIMEOUT",
     "GatewayConnection",
     "open_gateway",
+    "websocket_client_options",
 ]

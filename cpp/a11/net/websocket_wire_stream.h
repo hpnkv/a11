@@ -45,6 +45,16 @@ struct WebSocketClientOptions {
   Http2Options http2_options;     ///< HTTP/2 connection and TLS policy.
   HttpHeaders headers;            ///< Extra WebSocket handshake headers.
   ChannelFramingOptions framing;  ///< Packet splitting and reassembly bounds.
+  /**
+   * @brief How long the handshake alone may take.
+   *
+   * What a caller almost always means by "connect timeout": bound reaching a
+   * peer that accepts the TCP connection and then says nothing, without
+   * bounding the session that follows. `http2_options.deadline` and
+   * `WireStreamOptions::deadline` both abort the stream when they pass, which
+   * for a long-lived session is a different request entirely.
+   */
+  absl::Time handshake_deadline = absl::InfiniteFuture();
 
   /** @return OK if the options are internally consistent. */
   absl::Status Validate() const;
@@ -77,6 +87,28 @@ class WebSocketWireStream final : public ChannelWireStream {
       const std::string& url, WireStreamOptions options = {},
       WebSocketClientOptions websocket_options = {});
 
+  /**
+   * @brief The path this stream was accepted on, query string included.
+   *
+   * Empty for a client stream, which knows where it dialled. On a server
+   * accepting under WebSocketServerOptions::path_prefix this is the only place
+   * the rest of the path survives, and so the only way a handler can serve
+   * more than one thing on one port.
+   */
+  [[nodiscard]] const std::string& GetRequestPath() const {
+    return request_path_;
+  }
+
+  /**
+   * @brief The headers the accepted request carried. Empty for a client.
+   *
+   * A per-connection credential arrives here, which is what lets a server
+   * authenticate a stream rather than a port.
+   */
+  [[nodiscard]] const HttpHeaders& GetRequestHeaders() const {
+    return request_headers_;
+  }
+
   explicit WebSocketWireStream(ConstructorToken, std::shared_ptr<State> state)
       : ChannelWireStream(std::move(state)) {}
 
@@ -84,6 +116,11 @@ class WebSocketWireStream final : public ChannelWireStream {
   static absl::StatusOr<std::shared_ptr<WebSocketWireStream>> CreateAccepted(
       HttpRequest request, std::shared_ptr<Http2ResponseWriter> response,
       WireStreamOptions options, ChannelFramingOptions framing);
+
+  // Set once, before the stream is handed to on_stream, and read-only after;
+  // no lock, because nothing ever writes them again.
+  std::string request_path_;
+  HttpHeaders request_headers_;
 
   friend class WebSocketWireServer;
 };
@@ -97,7 +134,16 @@ class WebSocketWireStream final : public ChannelWireStream {
  * settings.
  */
 struct WebSocketServerOptions {
-  std::string path = "/a11";               ///< WebSocket endpoint path.
+  std::string path = "/a11";  ///< Exact WebSocket endpoint path.
+  /**
+   * @brief Also accept anything under this prefix, as well as `path`.
+   *
+   * Empty by default, which serves exactly one endpoint. Set it to serve many
+   * on one port -- one per agent, say -- and read the rest of the path from
+   * WebSocketWireStream::GetRequestPath() in the `on_stream` handler. Must
+   * start and end with '/'.
+   */
+  std::string path_prefix;
   std::string bind_address = "127.0.0.1";  ///< Local listen address.
   std::uint16_t port = 0;  ///< Listen port; zero requests an ephemeral port.
   WireStreamOptions stream_options;  ///< Defaults for accepted streams.

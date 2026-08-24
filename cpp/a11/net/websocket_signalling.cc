@@ -32,10 +32,51 @@
 #include "a11/net/internal/exception_guarded_callbacks.h"
 #include "a11/net/internal/http2_websocket_channel.h"
 #include "a11/net/signalling.h"
+#include "a11/status.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::net {
 namespace {
+
+
+/// Answers a rejected upgrade with an HTTP status the peer can read.
+///
+/// A WebSocket that opens and immediately closes tells a client almost
+/// nothing; a 401 with a message tells it what to fix.
+a11::Task Reject(const std::shared_ptr<Http2ResponseWriter>& response,
+                 const absl::Status& status) {
+  const absl::Status sent = response->SendResponse(
+      StatusCodeToHttp(status.code()),
+      {{"content-type", "text/plain; charset=utf-8"}},
+      std::string(status.message()));
+  return sent.ok() ? a11::ReadyTask() : a11::FailedTask(sent);
+}
+
+/// Tells a sender that one of its messages went nowhere.
+///
+/// A refused or unroutable message is not a reason to close the sender's
+/// connection -- it addressed a peer that is absent, or tripped a policy -- so
+/// it gets an `error` message back and carries on.
+void ReportUndeliverable(
+    const std::weak_ptr<internal::BinaryChannel>& weak_channel,
+    const SignallingMessage& original, const absl::Status& reason) {
+  std::shared_ptr<internal::BinaryChannel> channel = weak_channel.lock();
+  if (channel == nullptr) {
+    return;
+  }
+  SignallingMessage report;
+  report.type = SignallingMessageType::kError;
+  report.sender = original.recipient;
+  report.recipient = original.sender;
+  report.error = reason;
+  absl::StatusOr<std::string> encoded = report.ToJson();
+  if (!encoded.ok()) {
+    LOG(ERROR) << "Could not encode a signalling error report: "
+               << encoded.status();
+    return;
+  }
+  (void)channel->Send(std::move(*encoded));
+}
 
 absl::StatusOr<std::string> IdentityUrl(std::string url,
                                         std::string_view identity) {
@@ -137,14 +178,18 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
     };
   }
   options.http2_options.tls.enabled = parsed->secure();
-  options.http2_options.deadline =
-      std::min(options.http2_options.deadline, options.deadline);
   internal::Http2WebSocketClientConfig config{
       .host = std::move(parsed->host),
       .port = parsed->port,
       .path = parsed->target(),
-      .headers = {},
+      .headers = std::move(options.headers),
       .http2_options = options.http2_options,
+      // The deadline bounds registering, not being registered. It used to be
+      // folded into `http2_options.deadline`, which meant a host that asked
+      // for a twenty-second handshake got a signalling socket that hung up
+      // twenty seconds after it opened -- presenting as an agent that went
+      // unreachable a moment after it appeared.
+      .handshake_deadline = options.deadline,
       .max_message_size = options.max_message_size,
   };
   absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
@@ -289,6 +334,13 @@ void WebSocketSignallingClient::Fail(const std::shared_ptr<State>& state,
     status = absl::UnknownError("Signalling WebSocket failed");
   }
   std::shared_ptr<internal::BinaryChannel> channel;
+  // Moved out rather than reset in place: `pending_client` is the only strong
+  // reference to a client whose connect never completed, and ~Client calls
+  // Close(), which takes this same mutex. Dropping it inside the guard is a
+  // self-deadlock the fibre scheduler reports as "resource deadlock avoided"
+  // -- which is what every refused signalling handshake used to do, including
+  // the plain 404 for an unknown path.
+  std::shared_ptr<WebSocketSignallingClient> pending;
   {
     thread::MutexLock lock(&state->mu);
     if (state->closed) {
@@ -298,9 +350,10 @@ void WebSocketSignallingClient::Fail(const std::shared_ptr<State>& state,
     state->connected = false;
     state->status = status;
     state->incoming.clear();
-    state->pending_client.reset();
+    pending = std::move(state->pending_client);
     channel = state->channel;
   }
+  pending.reset();
   (void)state->startup_promise->SetStatus(status);
   if (channel != nullptr) {
     (void)channel->ResetCallbacks();
@@ -350,6 +403,12 @@ absl::Status WebSocketSignallingClient::SetOnMessage(
 
 absl::Status WebSocketSignallingClient::Close() {
   std::shared_ptr<internal::BinaryChannel> channel;
+  // The state holds a strong reference to this client until its connect
+  // completes, so closing before that has to break the cycle -- and has to do
+  // it outside the guard, since dropping the last reference runs ~Client,
+  // which calls this. Reached re-entrantly from the destructor itself, the
+  // `closed` check above returns first, so the release below is a no-op there.
+  std::shared_ptr<WebSocketSignallingClient> pending;
   {
     thread::MutexLock lock(&state_->mu);
     if (state_->closed) {
@@ -358,8 +417,10 @@ absl::Status WebSocketSignallingClient::Close() {
     state_->closed = true;
     state_->connected = false;
     state_->status = absl::CancelledError("Signalling WebSocket closed");
+    pending = std::move(state_->pending_client);
     channel = state_->channel;
   }
+  pending.reset();
   (void)state_->startup_promise->SetStatus(
       absl::CancelledError("Signalling WebSocket closed"));
   if (channel == nullptr) {
@@ -461,108 +522,42 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
             }
             absl::Status validation = data::ValidateName(identity);
             if (!validation.ok()) {
-              return a11::FailedTask(validation);
+              return Reject(response, validation);
             }
 
-            absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
-                internal::MakeHttp2WebSocketServerChannel(
-                    std::move(request), std::move(response),
-                    held_state->options.max_message_size);
-            if (!channel.ok()) {
-              return a11::FailedTask(channel.status());
-            }
-            std::weak_ptr<internal::BinaryChannel> weak_channel = *channel;
-            absl::StatusOr<std::shared_ptr<SignallingEndpoint>> endpoint =
-                held_state->service->Connect(
-                    identity, [weak_channel](SignallingMessage message) {
-                      std::shared_ptr<internal::BinaryChannel> held_channel =
-                          weak_channel.lock();
-                      if (held_channel == nullptr) {
-                        return a11::FailedTask(absl::UnavailableError(
-                            "Signalling WebSocket disconnected"));
-                      }
-                      absl::StatusOr<std::string> encoded = message.ToJson();
-                      if (!encoded.ok()) {
-                        return a11::FailedTask(encoded.status());
-                      }
-                      absl::Status sent =
-                          held_channel->Send(std::move(*encoded));
-                      return sent.ok() ? a11::ReadyTask()
-                                       : a11::FailedTask(sent);
-                    });
-            if (!endpoint.ok()) {
-              return a11::FailedTask(endpoint.status());
+            if (!held_state->options.on_admit) {
+              return Register(held_state, std::move(identity),
+                              std::move(request), std::move(response));
             }
 
-            std::weak_ptr<State> state_weak = held_state;
-            const std::string pinned_identity = identity;
-            std::weak_ptr<SignallingEndpoint> endpoint_weak = *endpoint;
-            internal::BinaryChannelCallbacks callbacks{
-                .on_open = []() {},
-                .on_message =
-                    [state_weak, endpoint_weak,
-                     pinned_identity](std::string raw) {
-                      absl::StatusOr<SignallingMessage> message =
-                          SignallingMessage::FromJson(raw);
-                      std::shared_ptr<SignallingEndpoint> held_endpoint =
-                          endpoint_weak.lock();
-                      if (!message.ok() || held_endpoint == nullptr ||
-                          (!message->sender.empty() &&
-                           message->sender != pinned_identity)) {
-                        if (std::shared_ptr<State> alive = state_weak.lock();
-                            alive != nullptr) {
-                          Remove(alive, pinned_identity);
-                        }
-                        return;
-                      }
-                      message->sender = pinned_identity;
-                      if (!held_endpoint->Send(std::move(*message)).ok()) {
-                        if (std::shared_ptr<State> alive = state_weak.lock();
-                            alive != nullptr) {
-                          Remove(alive, pinned_identity);
-                        }
-                      }
-                    },
-                .on_error =
-                    [state_weak, pinned_identity](absl::Status status) {
-                      LOG(ERROR) << "Signalling WebSocket for "
-                                 << pinned_identity << " failed: " << status;
-                      if (std::shared_ptr<State> alive = state_weak.lock();
-                          alive != nullptr) {
-                        Remove(alive, pinned_identity);
-                      }
-                    },
-                .on_closed =
-                    [state_weak, pinned_identity]() {
-                      if (std::shared_ptr<State> alive = state_weak.lock();
-                          alive != nullptr) {
-                        Remove(alive, pinned_identity);
-                      }
-                    },
-                .on_buffered_amount_low = []() {},
+            std::string query;
+            if (const size_t mark = request.path.find('?');
+                mark != std::string::npos) {
+              query = request.path.substr(mark + 1);
+            }
+            SignallingAdmission admission{
+                .identity = identity,
+                .path = request.path,
+                .query = std::move(query),
+                .headers = request.headers,
             };
-            validation = (*channel)->SetCallbacks(std::move(callbacks));
-            if (!validation.ok()) {
-              (void)(*endpoint)->Close();
-              return a11::FailedTask(validation);
-            }
-            {
-              thread::MutexLock lock(&held_state->mu);
-              if (!held_state->running) {
-                (void)(*endpoint)->Close();
-                return a11::FailedTask(
-                    absl::CancelledError("Signalling server stopped"));
-              }
-              held_state->connections.insert_or_assign(
-                  identity, State::Connection{.channel = *channel,
-                                              .endpoint = *endpoint});
-            }
-            validation = (*channel)->Open();
-            if (!validation.ok()) {
-              Remove(held_state, identity);
-              return a11::FailedTask(validation);
-            }
-            return a11::ReadyTask();
+
+            // Admission runs before the upgrade, so a rejected peer gets an
+            // HTTP status it can read rather than a WebSocket that closes the
+            // moment it opens.
+            return a11::Then(
+                held_state->options.on_admit(std::move(admission)),
+                [held_state, identity = std::move(identity),
+                 request = std::move(request), response = std::move(response)](
+                    const absl::StatusOr<a11::Unit>& admitted) mutable
+                -> absl::StatusOr<a11::Unit> {
+                  if (!admitted.ok()) {
+                    return Reject(response, admitted.status()).Await();
+                  }
+                  return Register(held_state, std::move(identity),
+                                  std::move(request), std::move(response))
+                      .Await();
+                });
           },
           state->options.http2_options));
   {
@@ -576,6 +571,156 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
   };
 
   return std::make_shared<MakeSharedEnabler>(std::move(state));
+}
+
+a11::Task WebSocketSignallingServer::Register(
+    const std::shared_ptr<State>& held_state, std::string identity,
+    HttpRequest request, std::shared_ptr<Http2ResponseWriter> response) {
+  if (held_state->options.replace_existing) {
+    // The displaced connection goes first: SignallingService::Connect refuses
+    // an identity that is already registered, and a host taking its own name
+    // back after a crash would otherwise be locked out by the socket its dead
+    // predecessor left behind.
+    Remove(held_state, identity);
+  }
+
+  absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
+      internal::MakeHttp2WebSocketServerChannel(
+          std::move(request), std::move(response),
+          held_state->options.max_message_size);
+  if (!channel.ok()) {
+    return a11::FailedTask(channel.status());
+  }
+  std::weak_ptr<internal::BinaryChannel> weak_channel = *channel;
+  absl::StatusOr<std::shared_ptr<SignallingEndpoint>> endpoint =
+      held_state->service->Connect(
+          identity, [weak_channel](SignallingMessage message) {
+            std::shared_ptr<internal::BinaryChannel> held_channel =
+                weak_channel.lock();
+            if (held_channel == nullptr) {
+              return a11::FailedTask(
+                  absl::UnavailableError("Signalling WebSocket disconnected"));
+            }
+            absl::StatusOr<std::string> encoded = message.ToJson();
+            if (!encoded.ok()) {
+              return a11::FailedTask(encoded.status());
+            }
+            absl::Status sent = held_channel->Send(std::move(*encoded));
+            return sent.ok() ? a11::ReadyTask() : a11::FailedTask(sent);
+          });
+  if (!endpoint.ok()) {
+    return a11::FailedTask(endpoint.status());
+  }
+
+  std::weak_ptr<State> state_weak = held_state;
+  const std::string pinned_identity = identity;
+  std::weak_ptr<SignallingEndpoint> endpoint_weak = *endpoint;
+  internal::BinaryChannelCallbacks callbacks{
+      .on_open = []() {},
+      .on_message =
+          [state_weak, endpoint_weak, weak_channel,
+           pinned_identity](std::string raw) {
+            std::shared_ptr<State> alive = state_weak.lock();
+            std::shared_ptr<SignallingEndpoint> held_endpoint =
+                endpoint_weak.lock();
+            if (alive == nullptr || held_endpoint == nullptr) {
+              return;
+            }
+            absl::StatusOr<SignallingMessage> message =
+                SignallingMessage::FromJson(raw);
+            // A malformed frame, or one claiming to come from somebody else,
+            // is the connection misbehaving rather than one bad message.
+            if (!message.ok() || (!message->sender.empty() &&
+                                  message->sender != pinned_identity)) {
+              Remove(alive, pinned_identity);
+              return;
+            }
+            message->sender = pinned_identity;
+
+            if (alive->options.on_message) {
+              const absl::Status filtered =
+                  alive->options.on_message(&*message);
+              if (!filtered.ok()) {
+                ReportUndeliverable(weak_channel, *message, filtered);
+                return;
+              }
+            }
+
+            const absl::Status routed = held_endpoint->Send(*message);
+            if (routed.ok()) {
+              return;
+            }
+            if (absl::IsNotFound(routed)) {
+              // The recipient is not here. Somewhere else, perhaps: that is
+              // what on_unroutable is for. Either way the *sender* has done
+              // nothing wrong, so its connection survives and it is told.
+              absl::Status elsewhere = absl::NotFoundError(
+                  absl::StrCat("Signalling recipient is not connected: ",
+                               message->recipient));
+              if (alive->options.on_unroutable) {
+                elsewhere = alive->options.on_unroutable(*message);
+              }
+              if (!elsewhere.ok()) {
+                ReportUndeliverable(weak_channel, *message, elsewhere);
+              }
+              return;
+            }
+            Remove(alive, pinned_identity);
+          },
+      .on_error =
+          [state_weak, pinned_identity](absl::Status status) {
+            LOG(ERROR) << "Signalling WebSocket for " << pinned_identity
+                       << " failed: " << status;
+            if (std::shared_ptr<State> alive = state_weak.lock();
+                alive != nullptr) {
+              Remove(alive, pinned_identity);
+            }
+          },
+      .on_closed =
+          [state_weak, pinned_identity]() {
+            if (std::shared_ptr<State> alive = state_weak.lock();
+                alive != nullptr) {
+              Remove(alive, pinned_identity);
+            }
+          },
+      .on_buffered_amount_low = []() {},
+  };
+  absl::Status validation = (*channel)->SetCallbacks(std::move(callbacks));
+  if (!validation.ok()) {
+    (void)(*endpoint)->Close();
+    return a11::FailedTask(validation);
+  }
+  {
+    thread::MutexLock lock(&held_state->mu);
+    if (!held_state->running) {
+      (void)(*endpoint)->Close();
+      return a11::FailedTask(
+          absl::CancelledError("Signalling server stopped"));
+    }
+    held_state->connections.insert_or_assign(
+        identity,
+        State::Connection{.channel = *channel, .endpoint = *endpoint});
+  }
+  validation = (*channel)->Open();
+  if (!validation.ok()) {
+    Remove(held_state, identity);
+    return a11::FailedTask(validation);
+  }
+  return a11::ReadyTask();
+}
+
+absl::Status WebSocketSignallingServer::Disconnect(
+    std::string_view identity) {
+  const std::string name(identity);
+  {
+    thread::MutexLock lock(&state_->mu);
+    if (state_->connections.find(name) == state_->connections.end()) {
+      return absl::NotFoundError(
+          absl::StrCat("No signalling connection for ", name));
+    }
+  }
+  Remove(state_, name);
+  return absl::OkStatus();
 }
 
 void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
@@ -596,6 +741,9 @@ void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
   }
   if (connection.endpoint != nullptr) {
     (void)connection.endpoint->Close();
+  }
+  if (state->options.on_departed) {
+    state->options.on_departed(identity);
   }
 }
 

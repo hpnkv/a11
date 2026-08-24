@@ -80,6 +80,60 @@ class PythonSignallingCallback {
   std::shared_ptr<PythonLoop> loop_;
 };
 
+/**
+ * A Python callable invoked *synchronously*, from whichever thread calls it.
+ *
+ * The signalling server's per-message hooks are synchronous on purpose --
+ * an asynchronous filter would reorder a connection's messages -- so this
+ * takes the GIL, calls, and turns whatever happened into a Status. The
+ * callable must not block: it runs on a transport thread, ahead of the
+ * message it is deciding about.
+ */
+class PythonSyncCallback {
+ public:
+  static absl::StatusOr<std::shared_ptr<PythonSyncCallback>> Create(
+      const py::object& callable, const char* name) {
+    if (PyCallable_Check(callable.ptr()) == 0) {
+      return absl::InvalidArgumentError(std::string(name) +
+                                        " must be callable");
+    }
+    struct MakeSharedEnabler final : PythonSyncCallback {
+      explicit MakeSharedEnabler(PyObject* value) : PythonSyncCallback(value) {}
+    };
+    return std::make_shared<MakeSharedEnabler>(callable.inc_ref().ptr());
+  }
+
+  PythonSyncCallback(const PythonSyncCallback&) = delete;
+  PythonSyncCallback& operator=(const PythonSyncCallback&) = delete;
+
+  ~PythonSyncCallback() {
+    DeferredPythonRefs::Retire(std::exchange(callable_, nullptr));
+  }
+
+  /// Calls the callable and returns OK, or the status its exception carried.
+  template <typename... Args>
+  [[nodiscard]] absl::Status Call(Args&&... args) const {
+    py::gil_scoped_acquire acquire;
+    DeferredPythonRefs::Drain();
+    try {
+      auto callable = py::reinterpret_borrow<py::function>(callable_);
+      callable(std::forward<Args>(args)...);
+      return absl::OkStatus();
+    } catch (py::error_already_set& error) {
+      return StatusFromPythonException(error);
+    } catch (const std::exception& error) {
+      return absl::UnknownError(error.what());
+    } catch (...) {
+      return absl::UnknownError("A signalling hook raised an exception");
+    }
+  }
+
+ private:
+  explicit PythonSyncCallback(PyObject* callable) : callable_(callable) {}
+
+  PyObject* callable_ = nullptr;
+};
+
 net::OnSignallingMessage MakeSignallingCallback(
     const std::shared_ptr<PythonSignallingCallback>& callback) {
   return [callback](net::SignallingMessage message) {
@@ -416,6 +470,18 @@ void BindWebRtc(py::module_& module) {
           "Register an identity and its async inbound-message callback, "
           "returning a signalling endpoint.",
           py::arg("identity"), py::arg("on_message"))
+      .def(
+          "deliver",
+          [](net::SignallingService& self, net::SignallingMessage message) {
+            ThrowIfNotOk(self.Deliver(std::move(message)));
+          },
+          "Deliver a message to a locally connected recipient, as though it "
+          "had been routed from an endpoint of this service. This is the "
+          "ingress half of a federated signalling fabric: pair it with "
+          "WebSocketSignallingServerOptions.on_unroutable, which is the "
+          "egress half, to make several servers behave as one. Raises "
+          "NOT_FOUND when the recipient is not connected here.",
+          py::arg("message"))
       .def("contains", &net::SignallingService::Contains,
            "Return whether the given identity is currently connected.",
            py::arg("identity"))
@@ -645,6 +711,24 @@ void BindWebRtc(py::module_& module) {
                      &net::WebSocketSignallingClientOptions::max_message_size,
                      "Maximum inbound signalling message size in bytes.")
       .def_property(
+          "headers",
+          [](const net::WebSocketSignallingClientOptions& options)
+              -> PyHeaderPairs {
+            return HeaderPairsToPython(options.headers);
+          },
+          [](net::WebSocketSignallingClientOptions& options,
+             const PyHeadersLike& value) {
+            net::HttpHeaders headers = ValueOrThrow(HeaderPairsFromPython(
+                value, "Signalling handshake headers"));
+            ThrowIfNotOk(net::ValidateHttpHeaders(headers));
+            options.headers = std::move(headers);
+          },
+          "Extra HTTP headers sent on the signalling handshake, as a mapping "
+          "or a list of (name, value) pairs. This is how a client presents "
+          "credentials to a signalling server that authenticates; without it "
+          "the only place to put one is the URL's query string, where it ends "
+          "up in logs.")
+      .def_property(
           "deadline",
           [](const net::WebSocketSignallingClientOptions& options)
               -> NativeTime { return NativeTime(options.deadline); },
@@ -690,6 +774,23 @@ void BindWebRtc(py::module_& module) {
           },
           "Opaque capsule around the native implementation, for interop.");
 
+  py::class_<net::SignallingAdmission>(module, "SignallingAdmission")
+      .def_readonly("identity", &net::SignallingAdmission::identity,
+                    "Identity the peer is asking to register under.")
+      .def_readonly("path", &net::SignallingAdmission::path,
+                    "Full request path, query string included.")
+      .def_readonly("query", &net::SignallingAdmission::query,
+                    "The part of the path after '?', without it.")
+      .def_property_readonly(
+          "headers",
+          [](const net::SignallingAdmission& admission) -> PyHeaderPairs {
+            return HeaderPairsToPython(admission.headers);
+          },
+          "Request headers as sent, as a list of (name, value) pairs.")
+      .def("__repr__", [](const net::SignallingAdmission& admission) {
+        return "<SignallingAdmission identity=" + admission.identity + ">";
+      });
+
   py::class_<net::WebSocketSignallingServerOptions>(
       module, "WebSocketSignallingServerOptions")
       .def(py::init<>(),
@@ -717,6 +818,114 @@ void BindWebRtc(py::module_& module) {
       .def_readwrite("max_message_size",
                      &net::WebSocketSignallingServerOptions::max_message_size,
                      "Maximum inbound signalling message size in bytes.")
+      .def_readwrite(
+          "replace_existing",
+          &net::WebSocketSignallingServerOptions::replace_existing,
+          "Whether a new registration displaces a live one for the same "
+          "identity. Off by default, which answers ALREADY_EXISTS. Set it "
+          "when on_admit already decides which of two claimants is "
+          "legitimate; without it a host that restarted cannot take its own "
+          "identity back until the socket its dead predecessor left behind "
+          "is noticed.")
+      .def_property(
+          "on_admit",
+          [](const net::WebSocketSignallingServerOptions&) {
+            return py::none();
+          },
+          [](net::WebSocketSignallingServerOptions& options,
+             const py::object& callable) {
+            if (callable.is_none()) {
+              options.on_admit = nullptr;
+              return;
+            }
+            auto callback = ValueOrThrow(
+                PythonSignallingCallback::Create(callable, "on_admit"));
+            options.on_admit = [callback](net::SignallingAdmission admission) {
+              return callback->Call(std::move(admission));
+            };
+          },
+          "Async callable deciding whether a peer may register, given a "
+          "SignallingAdmission. Raise a StatusException to refuse: its code "
+          "becomes the HTTP status of the refused upgrade, so the peer is "
+          "told why instead of getting a socket that closes immediately. "
+          "Runs once per connection, before the WebSocket upgrade.")
+      .def_property(
+          "on_departed",
+          [](const net::WebSocketSignallingServerOptions&) {
+            return py::none();
+          },
+          [](net::WebSocketSignallingServerOptions& options,
+             const py::object& callable) {
+            if (callable.is_none()) {
+              options.on_departed = nullptr;
+              return;
+            }
+            auto callback = ValueOrThrow(
+                PythonSyncCallback::Create(callable, "on_departed"));
+            options.on_departed = [callback](std::string identity) {
+              const absl::Status status = callback->Call(std::move(identity));
+              if (!status.ok()) {
+                LOG(ERROR) << "A signalling on_departed hook failed: "
+                           << status;
+              }
+            };
+          },
+          "Synchronous callable invoked with an identity whose connection has "
+          "gone, for presence bookkeeping. Called from a transport thread, so "
+          "it must not block; marshal anything slow onto your own loop.")
+      .def_property(
+          "on_message",
+          [](const net::WebSocketSignallingServerOptions&) {
+            return py::none();
+          },
+          [](net::WebSocketSignallingServerOptions& options,
+             const py::object& callable) {
+            if (callable.is_none()) {
+              options.on_message = nullptr;
+              return;
+            }
+            auto callback = ValueOrThrow(
+                PythonSyncCallback::Create(callable, "on_message"));
+            options.on_message =
+                [callback](net::SignallingMessage* absl_nonnull message) {
+                  // The pointer is handed over as a pointer and converted
+                  // inside Call, which is where the GIL is held. Converting
+                  // here would build a Python object without it. pybind wraps
+                  // a raw pointer as a non-owning reference, so a hook that
+                  // rewrites a field rewrites the message that gets routed.
+                  return callback->Call(message);
+                };
+          },
+          "Synchronous callable invoked with each inbound SignallingMessage "
+          "before it is routed. Mutating the message changes what is routed; "
+          "raising a StatusException refuses that one message, which is "
+          "reported to its sender as an error message and leaves the "
+          "connection open. Synchronous because signalling is ordered per "
+          "connection and an async hook would reorder it.")
+      .def_property(
+          "on_unroutable",
+          [](const net::WebSocketSignallingServerOptions&) {
+            return py::none();
+          },
+          [](net::WebSocketSignallingServerOptions& options,
+             const py::object& callable) {
+            if (callable.is_none()) {
+              options.on_unroutable = nullptr;
+              return;
+            }
+            auto callback = ValueOrThrow(
+                PythonSyncCallback::Create(callable, "on_unroutable"));
+            options.on_unroutable =
+                [callback](const net::SignallingMessage& message) {
+                  return callback->Call(message);
+                };
+          },
+          "Synchronous callable offered each message whose recipient is not "
+          "connected to this server. Return normally once it has been handed "
+          "to whatever will carry it elsewhere -- the other half is "
+          "SignallingService.deliver on the instance that holds the "
+          "recipient -- or raise to say it is undeliverable, which its "
+          "sender is told.")
       .def(
           "validate",
           [](const net::WebSocketSignallingServerOptions& options) {
@@ -747,6 +956,19 @@ void BindWebRtc(py::module_& module) {
             CallWithoutGil([&self] { return self.Stop(); });
           },
           "Stop the server and close all client connections.")
+      .def(
+          "disconnect",
+          [](net::WebSocketSignallingServer& self,
+             const std::string& identity) {
+            CallWithoutGil(
+                [&self, &identity] { return self.Disconnect(identity); });
+          },
+          "Close one identity's connection, if this server holds it. The "
+          "counterpart to admission: whatever authorised a registration can "
+          "be withdrawn, and the socket has to go with it rather than "
+          "surviving until its next message. Raises NOT_FOUND when this "
+          "server is not holding that identity.",
+          py::arg("identity"))
       .def_property_readonly("port", &net::WebSocketSignallingServer::port,
                              "Port the server is listening on.")
       .def_property_readonly("running",

@@ -128,6 +128,16 @@ struct HttpSseOptions {
   Http2Options http2_options;  ///< Shared HTTP/2 transport and TLS policy.
   std::string connect_endpoint =
       std::string(kDefaultSseConnectEndpoint);  ///< SSE connect POST path.
+  /**
+   * Server-side: also accept a connect POST anywhere under this prefix.
+   *
+   * Empty by default, which serves exactly one endpoint. Set it to serve many
+   * on one port -- one per agent, say -- and read the rest of the path from
+   * HttpSseWireStream::GetRequestPath() in the `on_connect` handler. Must
+   * start and end with '/'. The message endpoint is unaffected: an outbound
+   * POST is correlated by the stream id it carries, not by its route.
+   */
+  std::string connect_endpoint_prefix;
   std::string message_endpoint =
       std::string(kDefaultSseMessageEndpoint);  ///< Outbound endpoint template.
   /// Client-side outbound delivery method; servers accept either.
@@ -188,6 +198,15 @@ class HttpSseWireStream
 
   /** @return The HTTP headers carried on the underlying SSE request. */
   [[nodiscard]] HttpHeaders GetHttpRequestHeaders() const;
+
+  /**
+   * @brief The path a server stream was accepted on, query string included.
+   *
+   * Empty for a client stream, which knows where it dialled. On a server
+   * accepting under HttpSseOptions::connect_endpoint_prefix this is the only
+   * place the rest of the path survives.
+   */
+  [[nodiscard]] std::string GetRequestPath() const;
   /** @return The negotiated SSE response headers, or nullopt if not yet
    * arrived. Prefer awaiting WaitForHttpHeaders() first. */
   [[nodiscard]] std::optional<HttpHeaders> GetHttpResponseHeaders() const;

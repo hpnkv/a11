@@ -269,6 +269,39 @@ absl::StatusOr<std::shared_ptr<SignallingEndpoint>> SignallingService::Connect(
   return std::make_shared<MakeSharedEnabler>(std::move(endpoint_state));
 }
 
+absl::Status SignallingService::Deliver(SignallingMessage message) {
+  ABSL_RETURN_IF_ERROR(message.Validate());
+  std::shared_ptr<SignallingEndpoint::State> recipient;
+  {
+    thread::MutexLock lock(&state_->mu);
+    if (state_->stopped) {
+      return absl::FailedPreconditionError("Signalling service is stopped");
+    }
+    const auto iterator = state_->endpoints.find(message.recipient);
+    if (iterator == state_->endpoints.end() ||
+        !(recipient = iterator->second.lock())) {
+      return absl::NotFoundError(absl::StrCat(
+          "Signalling recipient is not connected: ", message.recipient));
+    }
+  }
+  bool start_pump = false;
+  {
+    thread::MutexLock lock(&recipient->mu);
+    if (!recipient->connected) {
+      return recipient->status;
+    }
+    recipient->incoming.push_back(std::move(message));
+    if (!recipient->pumping) {
+      recipient->pumping = true;
+      start_pump = true;
+    }
+  }
+  if (start_pump) {
+    a11::Schedule([recipient]() { Pump(recipient); });
+  }
+  return absl::OkStatus();
+}
+
 absl::Status SignallingService::Route(
     const std::shared_ptr<SignallingEndpoint::State>& sender,
     SignallingMessage message) {

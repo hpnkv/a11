@@ -158,10 +158,19 @@ struct ChunkStoreReader::State
         buffer.pop_front();
       }
     }
-    // The buffer just lost fragments; let the pump refill it.
-    if (!taken.empty()) {
-      Wake();
-    }
+    // The buffer just lost fragments, and the next caller's own Drive() above
+    // is what refills it -- so no wake here.
+    //
+    // `Next` already reasons this way ("a wake would only re-enter an idle
+    // pump") for a read it served from the buffer, and the same holds with more
+    // force here: Drive() ran on this thread a few lines up, so everything the
+    // store could answer without waiting is already in the buffer, and what is
+    // left is outstanding fetches that will wake the pump themselves when they
+    // land. A wake per batch was costing a scheduler hop -- and, when it found
+    // no worker searching, an OS thread signal -- to schedule a pump pass whose
+    // work the next call does inline anyway. It is why the batched read
+    // measured *worse* per fragment than the one-at-a-time read it exists to
+    // beat: 1.41us against 0.865us.
     return taken;
   }
 
@@ -288,6 +297,7 @@ struct ChunkStoreReader::State
 
     std::vector<Wanted> to_issue;
     bool ordered = true;
+    bool terminal = false;
     {
       thread::MutexLock lock(&mu);
       queued = false;
@@ -324,9 +334,14 @@ struct ChunkStoreReader::State
         }
         fetches_in_flight += to_issue.size();
       }
+      terminal = status.has_value();
     }
     Complete(std::move(completions));
-    MaybeCompleteDone();
+    // As in FetchArrived: the predicate was already answered under the lock, so
+    // taking it again to re-ask is a per-pass acquisition for nothing.
+    if (terminal) {
+      MaybeCompleteDone();
+    }
     if (to_issue.empty()) {
       return false;
     }
@@ -391,12 +406,13 @@ struct ChunkStoreReader::State
    * @return Whether the caller should drive again immediately.
    */
   bool FetchArrived(std::uint64_t arrived_position, std::uint64_t generation,
-                    const absl::StatusOr<data::NodeFragment>& result,
+                    absl::StatusOr<data::NodeFragment> result,
                     bool inline_drive = false) {
     std::vector<Completion> completions;
     bool start_clear = false;
     std::uint32_t clear_seq = 0;
     std::uint64_t clear_generation = 0;
+    bool terminal = false;
     {
       thread::MutexLock lock(&mu);
       if (generation != fetch_generation) {
@@ -405,12 +421,45 @@ struct ChunkStoreReader::State
       if (fetches_in_flight > 0) {
         --fetches_in_flight;
       }
-      arrived.insert_or_assign(arrived_position, result);
-      DrainArrivedLocked(&completions, &start_clear, &clear_seq,
-                         &clear_generation);
+      // Straight through when this arrival is the one being waited for and
+      // nothing about it needs the reorder map's judgement.
+      //
+      // `arrived` exists to hold fetches that came back early, and with the
+      // fetch ceiling at 16 there really can be a queue. But an ordered reader
+      // over a store that answers inline gets its fetches back in the order it
+      // issued them, so the map's steady state is one entry, inserted and
+      // erased again in the same breath -- a red-black node allocated and freed
+      // per fragment, either side of a move in and a move out. Each condition
+      // below is one the map's own drain would have checked; failing any of
+      // them falls through to it, so there is still exactly one place that
+      // decides what an out-of-order, terminal, popped or malformed arrival
+      // means.
+      const bool straight_through =
+          !status.has_value() && !options.pop_chunks && arrived.empty() &&
+          arrived_position == position && result.ok() &&
+          result->seq.has_value();
+      if (straight_through) {
+        // Advances `position` and collects waiters, exactly as the drain would.
+        FinishFragmentLocked(std::move(*result), &completions);
+      } else {
+        // Moved, not copied: a fragment carries its id and its payload, so
+        // copying one into the reorder map and moving it straight back out cost
+        // a deep copy of every byte read. Taking the parameter by value lets
+        // the inline path move all the way through.
+        arrived.insert_or_assign(arrived_position, std::move(result));
+        DrainArrivedLocked(&completions, &start_clear, &clear_seq,
+                           &clear_generation);
+      }
+      terminal = status.has_value();
     }
     Complete(std::move(completions));
-    MaybeCompleteDone();
+    // Only when there is something for it to do. `MaybeCompleteDone` takes the
+    // mutex to test a predicate that cannot be true until the stream ends, and
+    // this is per fragment: the answer is already in hand from above, for free,
+    // while the lock was held.
+    if (terminal) {
+      MaybeCompleteDone();
+    }
 
     if (start_clear) {
       a11::Future<data::NodeFragment> pending;

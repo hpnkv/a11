@@ -1049,6 +1049,14 @@ void BindHttp(py::module_& module) {
                      "The underlying wire stream options.")
       .def_readwrite("http2_options", &net::HttpSseOptions::http2_options,
                      "The underlying HTTP/2 transport options.")
+      .def_readwrite(
+          "connect_endpoint_prefix",
+          &net::HttpSseOptions::connect_endpoint_prefix,
+          "Server-side: also accept a connect POST anywhere under this "
+          "prefix. Empty by default, which serves exactly one endpoint. Set "
+          "it to serve many on one port and read the rest of the path from "
+          "HttpSseWireStream.request_path in your on_connect handler. Must "
+          "start and end with '/'.")
       .def_readwrite("connect_endpoint", &net::HttpSseOptions::connect_endpoint,
                      "The endpoint path used to open the SSE connection.")
       .def_readwrite("message_endpoint", &net::HttpSseOptions::message_endpoint,
@@ -1084,6 +1092,15 @@ void BindHttp(py::module_& module) {
             return HttpHeadersToPython(self.GetHttpRequestHeaders());
           },
           "Return the HTTP headers carried on the underlying SSE request.")
+      .def_property_readonly(
+          "request_path",
+          [](const net::HttpSseWireStream& self) {
+            return self.GetRequestPath();
+          },
+          "The path a server stream was accepted on, query string included, "
+          "or empty for a client stream. On a server accepting under "
+          "HttpSseOptions.connect_endpoint_prefix this is the only place the "
+          "rest of the path survives.")
       .def(
           "get_http_response_headers",
           [](const net::HttpSseWireStream& self)

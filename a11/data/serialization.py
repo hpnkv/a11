@@ -156,7 +156,30 @@ def _parse_parameter_value(value: str) -> str:
 
 
 def _parse_mimetype(value: str, *, allow_patterns: bool) -> _Mimetype:
-    if not isinstance(value, str) or not value.strip():
+    """Parse a mimetype, memoised on the string.
+
+    Every chunk read parses its own mimetype, twice -- once to look up a
+    deserializer and once to decide whether every codec that could match is
+    one of ours -- and a parse is a split, a lower, two regex fullmatches and a
+    dataclass construction, about 0.77us. The vocabulary of mimetypes a process
+    sees is small and the result is a frozen dataclass nobody can mutate, so
+    the parse is cached rather than repeated.
+
+    Invalid values are deliberately *not* cached: `lru_cache` does not memoise
+    a raised exception, so a caller passing garbage re-parses each time and
+    cannot fill the cache with it.
+    """
+    if not isinstance(value, str):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Mimetype must be a non-empty string.",
+        ).to_exception()
+    return _parse_mimetype_cached(value, allow_patterns)
+
+
+@functools.lru_cache(maxsize=1024)
+def _parse_mimetype_cached(value: str, allow_patterns: bool) -> _Mimetype:
+    if not value.strip():
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message="Mimetype must be a non-empty string.",

@@ -228,6 +228,57 @@ class PyMapping : public py::object {
   using object::object;
 };
 
+/// The HTTP header pairs a handshake carries, as they read back.
+using PyHeaderPairs = py::typing::List<py::typing::Tuple<py::str, py::str>>;
+
+/**
+ * And as one may be *given*: pairs, or a mapping of name to value.
+ *
+ * Annotated rather than converted, because HeaderPairsFromPython() does the
+ * coercion and needs to see what the caller actually passed.
+ */
+using PyHeadersLike =
+    PyLike<py::typing::Union<PyMapping<py::str, py::str>, PyHeaderPairs>>;
+
+/// Render header pairs as the list of tuples Python reads them back as.
+inline PyHeaderPairs HeaderPairsToPython(
+    const std::vector<std::pair<std::string, std::string>>& headers) {
+  py::list result;
+  for (const auto& [name, value] : headers) {
+    result.append(py::make_tuple(name, value));
+  }
+  return result;
+}
+
+/**
+ * Read header pairs from a mapping or a sequence of pairs.
+ *
+ * Shared rather than repeated per binding: every handshake in A11 accepts
+ * headers the same two ways, and two copies of this loop would eventually
+ * accept different things.
+ *
+ * @return The pairs, or `INVALID_ARGUMENT` when the value is not either shape.
+ */
+inline absl::StatusOr<std::vector<std::pair<std::string, std::string>>>
+HeaderPairsFromPython(const py::handle& value, const char* absl_nonnull what) {
+  std::vector<std::pair<std::string, std::string>> headers;
+  py::object entries =
+      PyMapping_Check(value.ptr()) != 0 && py::hasattr(value, "items")
+          ? value.attr("items")()
+          : py::reinterpret_borrow<py::object>(value);
+  for (const py::handle item : entries) {
+    auto pair = py::reinterpret_borrow<py::sequence>(item);
+    if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||
+        !py::isinstance<py::str>(pair[1])) {
+      return absl::InvalidArgumentError(
+          std::string(what) + " must contain pairs of strings");
+    }
+    headers.emplace_back(pair[0].cast<std::string>(),
+                         pair[1].cast<std::string>());
+  }
+  return headers;
+}
+
 /**
  * The `a11.status.StatusCode` enum member a binding hands back.
  *

@@ -44,6 +44,7 @@
 #include "a11/flow/service.h"
 #include "a11/flow/tool/lsp.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/utf8.h"
 
 namespace a11::flow::tool {
 namespace {
@@ -568,16 +569,7 @@ int Complete(const Options& options) {
     int column = 1;
     while (offset < source.size() && column < options.column &&
            source[offset] != '\n') {
-      const auto lead = static_cast<unsigned char>(source[offset]);
-      size_t width = 1;
-      if (lead >= 0xF0) {
-        width = 4;
-      } else if (lead >= 0xE0) {
-        width = 3;
-      } else if (lead >= 0xC0) {
-        width = 2;
-      }
-      offset += width;
+      offset += utf8::SequenceWidth(source[offset]);
       ++column;
     }
   } else {

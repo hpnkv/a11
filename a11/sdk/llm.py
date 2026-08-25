@@ -1,7 +1,9 @@
 # Copyright 2026 The A11 Authors.
 
 import abc
+import asyncio
 import base64
+import dataclasses
 import enum
 import logging
 import re
@@ -9,6 +11,8 @@ import uuid
 from typing import Any, Callable, ClassVar, Literal
 
 import a11
+import pydantic_core
+
 from a11.data import serial_tags
 from a11.data.serialization import get_global_serialization_registry
 from a11.status import Status, StatusCode
@@ -666,3 +670,266 @@ def normalize_interaction(
         return normalize_by_shape(interaction)
 
     return normalizer(interaction)
+
+
+# --- The action-call bridge --------------------------------------------------
+#
+# Everything below is backend-independent: it turns a tool call a model asked
+# for into A11 action inputs, and action outputs back into text a model can
+# read. Each SDK client reconstructs a `ToolCall` from its own streaming shape
+# and then shares all of this.
+
+
+@dataclasses.dataclass
+class ToolCall:
+    """A tool call a model asked for, however its SDK spelled it."""
+
+    name: str
+    id: str
+    params: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+
+def stringify_content(content: Any) -> str:
+    """Flatten a tool-result payload into plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        if texts:
+            return "".join(texts)
+    return pydantic_core.to_json(content).decode()
+
+
+def encode_backend_value(value: Any) -> bytes:
+    """Encode a backend-specific metadata value as bytes.
+
+    `Interaction.backend_specific_metadata` is a `dict[str, bytes]`; scalars are
+    stored as their UTF-8 encoding and structured values (SDK models, dicts) as
+    their JSON encoding.
+    """
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode()
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    return pydantic_core.to_json(value)
+
+
+def decode_action_output_fragments(fragments: list[a11.NodeFragment]) -> Any:
+    """Decode one action's output fragments into a value per output port.
+
+    A single port named ``$`` is the action's whole result, so it is unwrapped
+    rather than reported as a one-key mapping.
+    """
+    grouped: dict[str, list[a11.NodeFragment]] = {}
+    for fragment in fragments:
+        grouped.setdefault(fragment.id, []).append(fragment)
+
+    values: dict[str, Any] = {}
+    for field_name, field_fragments in grouped.items():
+        # Null chunks close a stream and do not contribute a result value.
+        chunks = [fragment.get_chunk() for fragment in field_fragments]
+        decoded = [
+            a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
+        ]
+        if not decoded:
+            continue
+        values[field_name] = decoded[0] if len(decoded) == 1 else decoded
+
+    if list(values.keys()) == ["$"]:
+        return values["$"]
+    return values
+
+
+async def decoded_output_text(fragments: list[a11.NodeFragment]) -> str:
+    """One action's outputs as text, JSON-encoding anything that is not."""
+    content = decode_action_output_fragments(fragments)
+    if isinstance(content, str):
+        return content
+    return (await asyncio.to_thread(pydantic_core.to_json, content)).decode()
+
+
+class ActionCallAdapter:
+    """One model tool call, validated against the action schema it names."""
+
+    def __init__(self, tool_call: ToolCall, schema: a11.ActionSchema):
+        self._name = tool_call.name
+        self._call_id = tool_call.id
+        self._arguments = tool_call.params
+        self._schema = schema
+
+    @property
+    def action_message(self) -> a11.ActionMessage:
+        return a11.Action(self._schema, self._call_id).get_action_message()
+
+    async def get_action_inputs(self) -> list[a11.NodeFragment]:
+        inputs = list()
+        for key, value_list in self._arguments.items():
+            if not isinstance(value_list, list):
+                value_list = [value_list]
+
+            node = a11.AsyncNode.create("node")
+            for idx, value in enumerate(value_list):
+                await node.put(value, final=idx == len(value_list) - 1)
+            # Closed, not finalized: the last put above already marked finality
+            # (and an empty argument list has nothing to mark).
+            await node.close()
+
+            final_encountered = False
+            fragments = []
+            async for fragment in node.iter_fragments():
+                if not fragment.continued:
+                    final_encountered = True
+                fragment.id = key
+                fragments.append(fragment)
+
+            if not final_encountered:
+                fragments.append(None)
+
+            inputs.extend(fragments)
+
+        return inputs
+
+    @staticmethod
+    def _validate_tool_call_integrity(tool_call: ToolCall) -> ToolCall:
+        if not isinstance(tool_call.name, str):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Tool call name must be a string.",
+            ).to_exception()
+
+        if not isinstance(tool_call.id, str):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Tool call id must be a string.",
+            ).to_exception()
+
+        if not isinstance(tool_call.params, dict):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Tool call params must be a dictionary.",
+            ).to_exception()
+
+        for key in tool_call.params.keys():
+            if not isinstance(key, str):
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="Tool call parameter names must be strings.",
+                ).to_exception()
+
+        return tool_call
+
+    @staticmethod
+    def validate_against_schema(
+        tool_call: ToolCall,
+        schema: a11.ActionSchema,
+        validate_integrity: bool = True,
+    ) -> ToolCall:
+        if validate_integrity:
+            tool_call = ActionCallAdapter._validate_tool_call_integrity(
+                tool_call
+            )
+
+        if tool_call.name != schema.name:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"Tool call name must be {schema.name}.",
+            ).to_exception()
+
+        for actual_input in tool_call.params.keys():
+            if actual_input not in schema.inputs:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=f"Tool call has unexpected input {actual_input}.",
+                ).to_exception()
+
+        for expected_input_name, expected_input in schema.inputs.items():
+            if (
+                expected_input.required
+                and expected_input_name not in tool_call.params
+            ):
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        f"Tool call is missing input {expected_input_name}."
+                    ),
+                ).to_exception()
+
+        for expected_input_name, expected_input in schema.inputs.items():
+            if (
+                expected_input.autofills
+                and tool_call.params.get(expected_input_name) is not None
+            ):
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="Tool call is trying to fill a prefilled input.",
+                ).to_exception()
+
+        return tool_call
+
+    @staticmethod
+    def create(tool_call: ToolCall, schema: a11.ActionSchema):
+        tool_call = ActionCallAdapter._validate_tool_call_integrity(tool_call)
+        tool_call = ActionCallAdapter.validate_against_schema(
+            tool_call, schema, validate_integrity=False
+        )
+
+        return ActionCallAdapter(tool_call, schema)
+
+
+async def add_tool_calls_to_interaction(
+    tool_calls: list[ToolCall],
+    interaction: Interaction,
+    registry: a11.ActionRegistry,
+) -> None:
+    """Record each tool call, and its encoded inputs, on the interaction."""
+    for tool_call in tool_calls:
+        adapter = ActionCallAdapter.create(
+            tool_call,
+            registry.get_schema(tool_call.name),
+        )
+
+        interaction.action_calls.append(adapter.action_message)
+        if tool_call.id not in interaction.action_inputs:
+            interaction.action_inputs[tool_call.id] = []
+        interaction.action_inputs[tool_call.id].extend(
+            await adapter.get_action_inputs()
+        )
+
+
+async def build_tool_results(
+    executed: Any,
+    format_result: Callable[[str, str, str | None], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One provider-shaped result message per executed action call.
+
+    Decoding an action's outputs, and reporting a failure to the model
+    alongside the calls that succeeded, are the same job for every backend; only
+    the shape of the resulting message differs. ``format_result`` receives the
+    call id, the content as text, and the failure message when there was one.
+
+    Args:
+        executed: The `llm_tools.runner.ExecutedActions` to report on. Untyped
+            here because `runner` imports this module.
+        format_result: Builds one provider-shaped message.
+
+    Returns:
+        One message per executed call, in the order the calls were run.
+    """
+    results = []
+    for call_id, fragments in executed.outputs.items():
+        failure = executed.error_message(call_id)
+        content = (
+            failure
+            if failure is not None
+            else await decoded_output_text(fragments)
+        )
+        results.append(format_result(call_id, content, failure))
+    return results

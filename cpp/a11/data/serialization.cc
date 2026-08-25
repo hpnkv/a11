@@ -41,19 +41,11 @@ struct Mimetype {
 };
 
 std::string Trim(std::string_view input) {
-  while (!input.empty() &&
-         absl::ascii_isspace(static_cast<unsigned char>(input.front()))) {
-    input.remove_prefix(1);
-  }
-  while (!input.empty() &&
-         absl::ascii_isspace(static_cast<unsigned char>(input.back()))) {
-    input.remove_suffix(1);
-  }
-  return std::string(input);
+  return std::string(absl::StripAsciiWhitespace(input));
 }
 
 bool IsTokenChar(char value) {
-  if (std::isalnum(static_cast<unsigned char>(value)) != 0) {
+  if (absl::ascii_isalnum(static_cast<unsigned char>(value))) {
     return true;
   }
   constexpr std::string_view extra = "!#$%&'*+-.^_`|~";
@@ -213,60 +205,7 @@ absl::Status RegisterNative(SerializationRegistry* registry) {
       });
 }
 
-// Whether `text` is well-formed UTF-8.
-//
-// By the definition every other A11 language's string type enforces, which is
-// stricter than "the bytes are shaped like UTF-8": overlong encodings, surrogate
-// halves and anything above U+10FFFF are all rejected. Python's
-// `bytes.decode("utf-8")`, Kotlin's `String(bytes)` and JavaScript's
-// `TextDecoder` with `fatal` all refuse them, so a chunk carrying them is one a
-// peer cannot read -- and a value this side refuses to write is a much better
-// outcome than a session that dies one hop away.
-bool IsValidUtf8(std::string_view text) {
-  // The smallest code point each sequence length is allowed to encode; anything
-  // smaller is an overlong form of a shorter sequence.
-  static constexpr char32_t kSmallest[] = {0, 0, 0x80, 0x800, 0x10000};
-  size_t at = 0;
-  while (at < text.size()) {
-    const auto lead = static_cast<unsigned char>(text[at]);
-    size_t length = 0;
-    char32_t code_point = 0;
-    if (lead < 0x80U) {
-      ++at;
-      continue;
-    }
-    if ((lead & 0xE0U) == 0xC0U) {
-      length = 2;
-      code_point = lead & 0x1FU;
-    } else if ((lead & 0xF0U) == 0xE0U) {
-      length = 3;
-      code_point = lead & 0x0FU;
-    } else if ((lead & 0xF8U) == 0xF0U) {
-      length = 4;
-      code_point = lead & 0x07U;
-    } else {
-      // A continuation byte with no lead, or a 5-byte form that UTF-8 has not
-      // had since 2003.
-      return false;
-    }
-    if (text.size() - at < length) {
-      return false;
-    }
-    for (size_t index = 1; index < length; ++index) {
-      const auto continuation = static_cast<unsigned char>(text[at + index]);
-      if ((continuation & 0xC0U) != 0x80U) {
-        return false;
-      }
-      code_point = (code_point << 6U) | (continuation & 0x3FU);
-    }
-    if (code_point < kSmallest[length] || code_point > 0x10FFFFU ||
-        (code_point >= 0xD800U && code_point <= 0xDFFFU)) {
-      return false;
-    }
-    at += length;
-  }
-  return true;
-}
+using ::a11::IsValidUtf8;
 
 // Registers std::string under both self-describing media types.
 //

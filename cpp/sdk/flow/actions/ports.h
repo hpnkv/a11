@@ -365,6 +365,58 @@ std::string JsonType();
  */
 void AddDeadlineHeader(actions::ActionSchema& schema, std::string_view effect);
 
+/// Splits a byte stream into lines across chunk boundaries, for a `*_lines`
+/// port. Holds the tail of a line that has not ended yet.
+class LineSplitter {
+ public:
+  explicit LineSplitter(Sink sink) : sink_(sink) {}
+
+  absl::Status Feed(std::string_view piece) {
+    if (!sink_.present()) {
+      return absl::OkStatus();
+    }
+    pending_.append(piece);
+    std::size_t start = 0;
+    while (true) {
+      const std::size_t newline = pending_.find('\n', start);
+      if (newline == std::string::npos) {
+        break;
+      }
+      ABSL_RETURN_IF_ERROR(
+          Emit(std::string_view(pending_.data() + start, newline - start)));
+      start = newline + 1;
+    }
+    pending_.erase(0, start);
+    return absl::OkStatus();
+  }
+
+  /// A last line with no newline after it is still a line.
+  ///
+  /// @param final Ends the port on that last line, rather than leaving it for
+  ///   OutputPorts::Finish(). Worth passing where a reader is waiting on this
+  ///   port and the action still has other work to do.
+  absl::Status Flush(bool final = false) {
+    if (!sink_.present() || pending_.empty()) {
+      return absl::OkStatus();
+    }
+    const absl::Status written = Emit(pending_, final);
+    pending_.clear();
+    return written;
+  }
+
+ private:
+  absl::Status Emit(std::string_view line, bool final = false) {
+    // A file or a pipe written on Windows is still lines.
+    if (!line.empty() && line.back() == '\r') {
+      line.remove_suffix(1);
+    }
+    return sink_.PutText(line, final);
+  }
+
+  Sink sink_;
+  std::string pending_;
+};
+
 }  // namespace a11::sdk::flow
 
 #endif  // A11_SDK_FLOW_ACTIONS_PORTS_H_

@@ -35,6 +35,17 @@ export interface WireStreamOptions {
   messageTimeoutMs?: number | null;
   /** Absolute endpoint deadline, or `null` for none. */
   deadline?: WireDeadline;
+  /**
+   * Omit a fragment's mimetype when the fragment before it on the same node
+   * carried the same one, and mark the frame so the peer puts it back.
+   *
+   * Off by default, and a sending decision only: a receiver always expands a
+   * frame that says it was elided. Enable it when the peer is another build of
+   * this library, or any A11 endpoint that understands
+   * `x-a11-sticky-metadata` -- the C++ and Python runtimes do not, and would
+   * deliver chunks whose mimetype had been dropped.
+   */
+  stickyMetadata?: boolean;
 }
 
 /** Validated, default-filled form of {@link WireStreamOptions}. */
@@ -43,6 +54,7 @@ export interface NormalizedWireStreamOptions {
   maxSingleMessageSize: number;
   maxBufferedIncomingBytes: number;
   messageTimeoutMs: number | null;
+  stickyMetadata: boolean;
   deadline: number | null;
 }
 
@@ -148,8 +160,12 @@ function normalizeWireStreamOptionsUnchecked(
     maxBufferedIncomingBytes:
       options.maxBufferedIncomingBytes ?? 32 * 1024 * 1024,
     messageTimeoutMs: options.messageTimeoutMs ?? null,
+    stickyMetadata: options.stickyMetadata ?? false,
     deadline,
   };
+  if (typeof result.stickyMetadata !== 'boolean') {
+    return invalidArgumentError('stickyMetadata must be boolean.');
+  }
   if (
     !Number.isSafeInteger(result.maxBufferedIncomingMessages) ||
     result.maxBufferedIncomingMessages < 1 ||

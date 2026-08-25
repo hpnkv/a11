@@ -131,6 +131,13 @@ struct CodeInfo {
   std::string_view summary;
 };
 
+/// The first error in @p diagnostics, or `nullptr` if none is an error.
+///
+/// What every strict entry point turns into its one raised failure, so that
+/// "the first thing wrong with this file" means the same in each of them.
+const Diagnostic* absl_nullable FirstError(
+    absl::Span<const Diagnostic> diagnostics);
+
 /// Every diagnostic code the language can produce, sorted by code.
 absl::Span<const CodeInfo> KnownCodes();
 

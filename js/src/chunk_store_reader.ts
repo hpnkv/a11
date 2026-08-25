@@ -98,6 +98,14 @@ interface ReadRequest {
  * when inspecting interleaved network ingestion. The bounded prefetch buffer
  * lets consumers overlap storage latency without allocating a task or fiber
  * per node.
+ *
+ * **One fetch is in flight at a time, unlike native.** `ChunkStoreReader` in
+ * C++ keeps 16 behind a reorder buffer, which overlaps the latency of a store
+ * that answers slowly. Every store in this library is
+ * {@link LocalChunkStore} -- in memory, resolving on the microtask queue -- so
+ * there is no latency to overlap, and a reorder buffer would add ordering and
+ * end-of-sequence cases for a gain that cannot appear. Revisit this if a store
+ * with real per-read latency arrives, such as one backed by a fetch.
  */
 export class ChunkStoreReader {
   readonly store: ChunkStore;
@@ -178,6 +186,13 @@ export class ChunkStoreReader {
       }, timeoutMs);
     }
     this.pendingReads.push(request);
+    // Woken rather than driven on the caller's turn, deliberately. Native fills
+    // inline here (bench/FINDINGS.md, "Reader prefetch") because a scheduler hop
+    // there is a thread wake; in JavaScript it is a microtask, and the fetch it
+    // would skip ahead of is a promise that costs one anyway. Measured on
+    // `nodes/drain_live`: 467-473k inline against 453-470k woken, which is
+    // noise. Filling inline was tried and reverted -- it bought nothing and the
+    // caller would have had to guarantee it was not already inside `drive()`.
     this.wake();
     return request.deferred.promise;
   }

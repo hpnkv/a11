@@ -33,6 +33,11 @@ std::string NewUuid() {
       low & UINT64_C(0x0000ffffffffffff));
 }
 
+std::string NewStreamId(std::string_view prefix) {
+  return absl::StrFormat("%s%016x%016x", prefix, RandomUint64(),
+                         RandomUint64());
+}
+
 std::string NewShortId(int hex_digits) {
   hex_digits = std::clamp(hex_digits, 8, 16);
   const std::uint64_t value =

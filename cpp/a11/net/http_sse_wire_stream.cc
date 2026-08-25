@@ -87,7 +87,7 @@ absl::StatusOr<std::string> FormatMessageEndpoint(std::string endpoint,
 }
 
 std::string NewSseId() {
-  return absl::StrFormat("sse-%016x%016x", RandomUint64(), RandomUint64());
+  return NewStreamId("sse-");
 }
 
 absl::Status HttpStatusError(const HttpResponse& response,

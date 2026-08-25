@@ -2744,12 +2744,7 @@ bool ParseResult::HasErrors() const {
 }
 
 const Diagnostic* absl_nullable ParseResult::FirstError() const {
-  for (const Diagnostic& diagnostic : diagnostics) {
-    if (diagnostic.severity == Severity::kError) {
-      return &diagnostic;
-    }
-  }
-  return nullptr;
+  return flow::FirstError(diagnostics);
 }
 
 ParseResult Parse(std::string_view source) {

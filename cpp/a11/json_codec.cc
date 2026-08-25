@@ -2,8 +2,6 @@
 
 #include "a11/json_codec.h"
 
-#include <cstddef>
-#include <cstdint>
 #include <exception>
 #include <string>
 #include <string_view>
@@ -13,6 +11,8 @@
 #include <absl/status/statusor.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
+
+#include "a11/utf8.h"
 
 namespace a11 {
 namespace {
@@ -46,54 +46,9 @@ absl::StatusOr<Json> ParseJson(std::string_view encoded,
 }
 
 bool IsValidUtf8(std::string_view text) {
-  std::size_t at = 0;
-  while (at < text.size()) {
-    const auto lead = static_cast<unsigned char>(text[at]);
-    std::size_t width = 0;
-    std::uint32_t point = 0;
-    if (lead < 0x80) {
-      ++at;
-      continue;
-    }
-    if ((lead & 0xE0) == 0xC0) {
-      width = 2;
-      point = lead & 0x1FU;
-    } else if ((lead & 0xF0) == 0xE0) {
-      width = 3;
-      point = lead & 0x0FU;
-    } else if ((lead & 0xF8) == 0xF0) {
-      width = 4;
-      point = lead & 0x07U;
-    } else {
-      return false;  // a continuation byte or an invalid lead
-    }
-    if (at + width > text.size()) {
-      return false;
-    }
-    for (std::size_t index = 1; index < width; ++index) {
-      const auto next = static_cast<unsigned char>(text[at + index]);
-      if ((next & 0xC0) != 0x80) {
-        return false;
-      }
-      point = (point << 6) | (next & 0x3FU);
-    }
-    // Overlong encodings, surrogates and anything past the last code point are
-    // all invalid, and all of them are things the outside world will hand over.
-    if ((width == 2 && point < 0x80) || (width == 3 && point < 0x800) ||
-        (width == 4 && point < 0x10000) || point > 0x10FFFF ||
-        (point >= 0xD800 && point <= 0xDFFF)) {
-      return false;
-    }
-    at += width;
-  }
-  return true;
+  return utf8::IsValid(text);
 }
 
-/// The first string in @p value that is not valid UTF-8, or nullptr.
-///
-/// Iterative: this runs on whatever fibre is serializing, and A11's fibre
-/// stacks are fixed and small, so the depth of the document must not decide how
-/// much stack the check needs. The work list is on the heap.
 const Json* FindUnencodableString(const Json& value) {
   std::vector<const Json*> pending{&value};
   while (!pending.empty()) {

@@ -77,6 +77,41 @@ test('sticky mimetypes compress writes and expand ordered reads', async () => {
   assert.equal(read[2].data.metadata instanceof ChunkMetadata, true);
 });
 
+test('an unordered reader does not expand sticky mimetypes', async () => {
+  // The mirror of cpp ChunkStoreReaderTest.
+  // UnorderedReaderDoesNotExpandStickyMimetype. Expansion means "inherit from
+  // the preceding contiguous chunk", and arrival order does not establish which
+  // chunk that is -- so an unordered reader has to leave the elision alone
+  // rather than attribute a mimetype the writer never put there.
+  const store = LocalChunkStore.create('unordered-sticky');
+  assert.equal(isOk(store), true);
+  const put = await store.putMany([
+    new NodeFragment({
+      data: new Chunk({
+        metadata: new ChunkMetadata({ mimetype: 'text/plain' }),
+        data: new TextEncoder().encode('anchor'),
+      }),
+      seq: 0,
+      continued: true,
+    }),
+    new NodeFragment({
+      data: new Chunk({ data: new TextEncoder().encode('elided') }),
+      seq: 1,
+      continued: true,
+    }),
+  ]);
+  assert.deepEqual(put, [0, 1]);
+
+  const reader = ChunkStoreReader.create(store, {
+    ordered: false,
+    maxChunksToRead: 2,
+    stickyMimetype: true,
+  });
+  assert.equal(isOk(reader), true);
+  const read = [await reader.next(), await reader.next()];
+  assert.deepEqual(read.map((fragment) => fragment.data.mimetype), ['text/plain', '']);
+});
+
 test('byte chunking reassembles out-of-order interleaved messages', () => {
   const first = Uint8Array.from({ length: 137 }, (_, index) => index & 0xff);
   const second = Uint8Array.from(

@@ -3870,12 +3870,7 @@ bool ResolveResult::HasErrors() const {
 }
 
 const Diagnostic* absl_nullable ResolveResult::FirstError() const {
-  for (const Diagnostic& diagnostic : diagnostics) {
-    if (diagnostic.severity == Severity::kError) {
-      return &diagnostic;
-    }
-  }
-  return nullptr;
+  return flow::FirstError(diagnostics);
 }
 
 std::string_view SymbolKindName(SymbolKind kind) {

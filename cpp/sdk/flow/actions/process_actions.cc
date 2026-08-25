@@ -230,53 +230,6 @@ class Pipe {
   int write_end_ = -1;
 };
 
-/// Splits a byte stream into lines across chunk boundaries, for a `*_lines`
-/// port. Holds the tail of a line that has not ended yet.
-class LineSplitter {
- public:
-  explicit LineSplitter(Sink sink) : sink_(sink) {}
-
-  absl::Status Feed(std::string_view piece) {
-    if (!sink_.present()) {
-      return absl::OkStatus();
-    }
-    pending_.append(piece);
-    std::size_t start = 0;
-    while (true) {
-      const std::size_t newline = pending_.find('\n', start);
-      if (newline == std::string::npos) {
-        break;
-      }
-      ABSL_RETURN_IF_ERROR(
-          Emit(std::string_view(pending_.data() + start, newline - start)));
-      start = newline + 1;
-    }
-    pending_.erase(0, start);
-    return absl::OkStatus();
-  }
-
-  /// A last line with no newline after it is still a line.
-  absl::Status Flush() {
-    if (!sink_.present() || pending_.empty()) {
-      return absl::OkStatus();
-    }
-    const absl::Status written = Emit(pending_);
-    pending_.clear();
-    return written;
-  }
-
- private:
-  absl::Status Emit(std::string_view line) {
-    if (!line.empty() && line.back() == '\r') {
-      line.remove_suffix(1);
-    }
-    return sink_.PutText(line);
-  }
-
-  Sink sink_;
-  std::string pending_;
-};
-
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------

@@ -506,12 +506,6 @@ PyActionHandler ActionHandlerToPython(const actions::ActionHandler& handler) {
   return python->owner->callable();
 }
 
-void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
 std::shared_ptr<actions::Action> ReturnAction(
     const std::shared_ptr<actions::Action>& self, const absl::Status& status) {
   ThrowIfNotOk(status);

@@ -10,6 +10,8 @@
 
 #include <absl/types/span.h>
 
+#include "a11/utf8.h"
+
 namespace a11::flow {
 namespace {
 
@@ -306,6 +308,16 @@ Family FamilyFromName(std::string_view name) {
   return Family::kSyntax;
 }
 
+const Diagnostic* absl_nullable FirstError(
+    absl::Span<const Diagnostic> diagnostics) {
+  for (const Diagnostic& diagnostic : diagnostics) {
+    if (diagnostic.severity == Severity::kError) {
+      return &diagnostic;
+    }
+  }
+  return nullptr;
+}
+
 absl::Span<const CodeInfo> KnownCodes() {
   return absl::MakeConstSpan(kCodes.data(), kCodes.size());
 }
@@ -347,7 +359,7 @@ Position LineIndex::At(size_t offset) const {
   // it in disagreement. Continuation bytes are the middles of characters.
   int column = 1;
   for (size_t at = line_starts_[index]; at < clamped; ++at) {
-    if ((static_cast<unsigned char>(source_[at]) & 0xC0) != 0x80) {
+    if (!utf8::IsContinuation(source_[at])) {
       ++column;
     }
   }

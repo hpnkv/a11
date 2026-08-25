@@ -164,39 +164,6 @@ py::typing::Optional<py::capsule> ImplCapsule(void* pointer, const char* name) {
   return py::capsule(pointer, name);
 }
 
-void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
-template <typename Operation>
-void CallWithoutGil(Operation&& operation) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = std::forward<Operation>(operation)();
-  }
-  ThrowIfNotOk(status);
-}
-
-// Like CallWithoutGil, but for a blocking operation that yields an
-// absl::StatusOr<T>: the GIL is released while it runs, then the value is
-// unwrapped (or thrown) with the GIL re-held. Releasing is essential for calls
-// that block on the libuv loop (RunOnUv/RunStatusOnUv -> Future::Await): the uv
-// thread completes work by touching Python objects (FutureToPython callbacks,
-// py::object destructors) and must be able to take the GIL, so a caller that
-// blocked while holding it would deadlock the loop. Any argument conversion that
-// touches Python must happen before calling this, while the GIL is still held.
-template <typename Operation>
-auto ValueWithoutGil(Operation&& operation) {
-  auto result = [&] {
-    py::gil_scoped_release release;
-    return std::forward<Operation>(operation)();
-  }();
-  return ValueOrThrow(std::move(result));
-}
-
 /// A progress callback as Python sees it: `Callable[[int, int], None] | None`.
 using OnProgressPython =
     py::typing::Optional<py::typing::Callable<void(py::int_, py::int_)>>;

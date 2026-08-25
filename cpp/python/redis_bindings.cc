@@ -77,14 +77,8 @@ absl::Time RedisDeadline(const py::handle& value) {
   return ValueOrThrow(TimeFromPython(value));
 }
 
-void CheckStatus(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
 void ValidateClientOptions(const redis::ClientOptions& options) {
-  CheckStatus(options.Validate());
+  ThrowIfNotOk(options.Validate());
 }
 
 py::bytes ReplyBytes(const redis::Reply& reply) {
@@ -320,7 +314,7 @@ void BindRedis(py::module_& module) {
           "Subscribe and await Redis's acknowledgement.", py::arg("channel"),
           py::arg("deadline") = py::none())
       .def(
-          "close", [](redis::Client& self) { CheckStatus(self.Close()); },
+          "close", [](redis::Client& self) { ThrowIfNotOk(self.Close()); },
           "Begin an idempotent asynchronous disconnect.");
 
   module.def(
@@ -330,7 +324,7 @@ void BindRedis(py::module_& module) {
   module.def(
       "set_default_redis_client",
       [](std::shared_ptr<redis::Client> client) {
-        CheckStatus(redis::SetDefaultClient(std::move(client)));
+        ThrowIfNotOk(redis::SetDefaultClient(std::move(client)));
       },
       "Replace the process-global Redis client.", py::arg("client"));
   module.def("reset_default_redis_client", &redis::ResetDefaultClient,

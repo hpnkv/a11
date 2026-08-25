@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import dataclasses
 import traceback
 import uuid
 import warnings
@@ -13,7 +12,6 @@ from absl import logging
 
 import a11
 import ollama
-import pydantic_core
 
 from a11.status import Status, StatusCode, StatusException
 
@@ -26,26 +24,7 @@ from a11.sdk import llm
 from a11.sdk.llm_tools import runner
 
 
-def _stringify_content(content: Any) -> str:
-    """Flatten a tool-result content payload into plain text."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = [
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        if texts:
-            return "".join(texts)
-    return pydantic_core.to_json(content).decode()
-
-
-def _message_from_neutral_parts(
-    role: str, parts: list[Any]
-) -> dict[str, Any]:
+def _message_from_neutral_parts(role: str, parts: list[Any]) -> dict[str, Any]:
     """Fold the backend-neutral ``{"type": ...}`` part list into an Ollama
     message.
 
@@ -120,7 +99,7 @@ def _ollama_to_normalized(
                 llm.NormalizedPart(
                     type=llm.NormalizedContentType.TOOL_RESULT,
                     call_id=message.get("tool_name"),
-                    content=_stringify_content(message.get("content")),
+                    content=llm.stringify_content(message.get("content")),
                 )
             )
         return llm.NormalizedMessage(role=llm.Role.USER, parts=parts)
@@ -134,15 +113,11 @@ def _ollama_to_normalized(
     text = content.get("content")
     if isinstance(text, str) and text:
         parts.append(
-            llm.NormalizedPart(
-                type=llm.NormalizedContentType.TEXT, text=text
-            )
+            llm.NormalizedPart(type=llm.NormalizedContentType.TEXT, text=text)
         )
     for image in content.get("images") or []:
         parts.append(
-            llm.NormalizedPart(
-                type=llm.NormalizedContentType.IMAGE, data=image
-            )
+            llm.NormalizedPart(type=llm.NormalizedContentType.IMAGE, data=image)
         )
     for tool_call in content.get("tool_calls") or []:
         function = tool_call.get("function") or {}
@@ -334,9 +309,7 @@ class Conversation:
                     and part.name
                 ):
                     self._call_names[part.id] = part.name
-            messages = _ollama_from_normalized(
-                normalized, self._call_names.get
-            )
+            messages = _ollama_from_normalized(normalized, self._call_names.get)
         else:
             # Tagged as ours, or untagged (optimistically treated as native).
             messages = self._native_messages(interaction)
@@ -388,15 +361,6 @@ class Conversation:
         return [_clean_native_message(message)]
 
 
-@dataclasses.dataclass
-class _ToolCall:
-    """A tool call reconstructed from an Ollama message's `tool_calls`."""
-
-    name: str
-    id: str
-    params: dict[str, Any] = dataclasses.field(default_factory=dict)
-
-
 class _StreamAccumulator:
     """Reconstructs the assistant message from streamed chat chunks.
 
@@ -425,7 +389,7 @@ class _StreamAccumulator:
         self._base_id = base_id
         self._content = ""
         self._thinking = ""
-        self._tool_calls: list[_ToolCall] = []
+        self._tool_calls: list[llm.ToolCall] = []
         self._raw_tool_calls: list[dict[str, Any]] = []
 
     def add(self, message: Any) -> None:
@@ -439,7 +403,7 @@ class _StreamAccumulator:
             function = tool_call.function
             index = self._base_id + len(self._tool_calls)
             self._tool_calls.append(
-                _ToolCall(
+                llm.ToolCall(
                     name=function.name,
                     id=f"{self._prefix}_{index}",
                     params=dict(function.arguments or {}),
@@ -459,7 +423,7 @@ class _StreamAccumulator:
         return self._content
 
     @property
-    def tool_calls(self) -> list[_ToolCall]:
+    def tool_calls(self) -> list[llm.ToolCall]:
         return self._tool_calls
 
     def message_dict(self) -> dict[str, Any]:
@@ -475,210 +439,24 @@ class _StreamAccumulator:
         return message
 
 
-class ActionCallAdapter:
-    def __init__(
-        self,
-        tool_call: _ToolCall,
-        schema: a11.ActionSchema,
-    ):
-        self._name = tool_call.name
-        self._call_id = tool_call.id
-        self._arguments = tool_call.params
-        self._schema = schema
-
-    @property
-    def action_message(self) -> a11.ActionMessage:
-        return a11.Action(self._schema, self._call_id).get_action_message()
-
-    async def get_action_inputs(
-        self,
-    ) -> list[a11.NodeFragment]:
-        inputs = list()
-        for key, value_list in self._arguments.items():
-            if not isinstance(value_list, list):
-                value_list = [value_list]
-
-            node = a11.AsyncNode.create("node")
-            for idx, value in enumerate(value_list):
-                await node.put(value, final=idx == len(value_list) - 1)
-            # Closed, not finalized: the last put above already marked finality
-            # (and an empty argument list has nothing to mark).
-            await node.close()
-
-            final_encountered = False
-            fragments = []
-            async for fragment in node.iter_fragments():
-                if not fragment.continued:
-                    final_encountered = True
-                fragment.id = key
-                fragments.append(fragment)
-
-            if not final_encountered:
-                fragments.append(None)
-
-            inputs.extend(fragments)
-
-        return inputs
-
-    @staticmethod
-    def _validate_tool_call_integrity(
-        tool_call: _ToolCall,
-    ) -> _ToolCall:
-        if not isinstance(tool_call.name, str):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call name must be a string.",
-            ).to_exception()
-
-        if not isinstance(tool_call.id, str):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call id must be a string.",
-            ).to_exception()
-
-        if not isinstance(tool_call.params, dict):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call params must be a dictionary.",
-            ).to_exception()
-
-        for key in tool_call.params.keys():
-            if not isinstance(key, str):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=f"Tool call parameter names must be strings.",
-                ).to_exception()
-
-        return tool_call
-
-    @staticmethod
-    def validate_against_schema(
-        tool_call: _ToolCall,
-        schema: a11.ActionSchema,
-        validate_integrity: bool = True,
-    ) -> _ToolCall:
-        if validate_integrity:
-            tool_call = ActionCallAdapter._validate_tool_call_integrity(
-                tool_call
-            )
-
-        if tool_call.name != schema.name:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call name must be {schema.name}.",
-            ).to_exception()
-
-        for actual_input in tool_call.params.keys():
-            if actual_input not in schema.inputs:
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=f"Tool call has unexpected input {actual_input}.",
-                ).to_exception()
-
-        for expected_input_name, expected_input in schema.inputs.items():
-            if (
-                expected_input.required
-                and expected_input_name not in tool_call.params
-            ):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=(
-                        f"Tool call is missing input {expected_input_name}."
-                    ),
-                ).to_exception()
-
-        for expected_input_name, expected_input in schema.inputs.items():
-            expected_input: a11.ActionPortSchema
-            if (
-                expected_input.autofills
-                and tool_call.params.get(expected_input_name) is not None
-            ):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message="Tool call is trying to fill a prefilled input.",
-                ).to_exception()
-
-        return tool_call
-
-    @staticmethod
-    def create(tool_call: _ToolCall, schema: a11.ActionSchema):
-        tool_call = ActionCallAdapter._validate_tool_call_integrity(tool_call)
-        tool_call = ActionCallAdapter.validate_against_schema(
-            tool_call, schema, validate_integrity=False
-        )
-
-        return ActionCallAdapter(tool_call, schema)
-
-
-def _decode_action_output_fragments(
-    fragments: list[a11.NodeFragment],
-) -> Any:
-    grouped: dict[str, list[a11.NodeFragment]] = {}
-    for fragment in fragments:
-        grouped.setdefault(fragment.id, []).append(fragment)
-
-    values: dict[str, Any] = {}
-    for field_name, field_fragments in grouped.items():
-        # Null chunks close a stream and do not contribute a result value.
-        chunks = [fragment.get_chunk() for fragment in field_fragments]
-        decoded = [
-            a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
-        ]
-        if not decoded:
-            continue
-        values[field_name] = decoded[0] if len(decoded) == 1 else decoded
-
-    if list(values.keys()) == ["$"]:
-        return values["$"]
-    return values
-
-
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Turn each nested-action output or failure into a tool message."""
-    tool_results = []
-    for call_id, fragments in executed.outputs.items():
-        failure = executed.error_message(call_id)
-        if failure is not None:
-            content = f"Error: {failure}"
-        else:
-            content = _decode_action_output_fragments(fragments)
-            if not isinstance(content, str):
-                content = (
-                    await asyncio.to_thread(pydantic_core.to_json, content)
-                ).decode()
 
+    def as_tool_message(
+        call_id: str, content: str, failure: str | None
+    ) -> dict[str, Any]:
         message: dict[str, Any] = {
             "role": "tool",
-            "content": content,
+            "content": content if failure is None else f"Error: {failure}",
         }
         if call_names.get(call_id):
             message["tool_name"] = call_names[call_id]
+        return message
 
-        tool_results.append(message)
-
-    return tool_results
-
-
-async def _add_tool_calls_to_interaction(
-    tool_calls: list[_ToolCall],
-    interaction: llm.Interaction,
-    registry: a11.ActionRegistry,
-):
-    for tool_call in tool_calls:
-        adapter = ActionCallAdapter.create(
-            tool_call,
-            registry.get_schema(tool_call.name),
-        )
-
-        interaction.action_calls.append(adapter.action_message)
-        if tool_call.id not in interaction.action_inputs:
-            interaction.action_inputs[tool_call.id] = []
-        interaction.action_inputs[tool_call.id].extend(
-            await adapter.get_action_inputs()
-        )
+    return await llm.build_tool_results(executed, as_tool_message)
 
 
 def _build_usage_metadata(snapshot: Any | None) -> llm.UsageMetadata | None:
@@ -697,17 +475,6 @@ def _build_usage_metadata(snapshot: Any | None) -> llm.UsageMetadata | None:
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )
-
-
-def _encode_backend_value(value: Any) -> bytes:
-    """Encode a backend-specific metadata value as bytes."""
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, str):
-        return value.encode()
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(exclude_none=True)
-    return pydantic_core.to_json(value)
 
 
 def _build_backend_specific_metadata(snapshot: Any) -> dict[str, bytes]:
@@ -731,7 +498,7 @@ def _build_backend_specific_metadata(snapshot: Any) -> dict[str, bytes]:
     ):
         value = getattr(snapshot, field, None)
         if value is not None:
-            metadata[field] = _encode_backend_value(str(value))
+            metadata[field] = llm.encode_backend_value(str(value))
 
     return metadata
 
@@ -897,9 +664,7 @@ async def interact_with_ollama(action: a11.Action):
                     code=StatusCode.INTERNAL, message=str(exc)
                 ).to_exception() from exc
 
-            accumulator = _StreamAccumulator(
-                call_id_prefix, next_tool_call_id
-            )
+            accumulator = _StreamAccumulator(call_id_prefix, next_tool_call_id)
             snapshot = None
 
             async for chunk in stream:
@@ -937,7 +702,7 @@ async def interact_with_ollama(action: a11.Action):
                 usage_metadata=_build_usage_metadata(snapshot),
             )
             previous_interaction_id = interaction.id
-            await _add_tool_calls_to_interaction(
+            await llm.add_tool_calls_to_interaction(
                 tool_calls, interaction, action.get_registry()
             )
 
@@ -974,10 +739,8 @@ async def interact_with_ollama(action: a11.Action):
                 content=[
                     a11.to_chunk(
                         {
-                            "messages": (
-                                await _build_tool_results_from_outputs(
-                                    executed, call_names
-                                )
+                            "messages": await _build_tool_results_from_outputs(
+                                executed, call_names
                             )
                         }
                     )

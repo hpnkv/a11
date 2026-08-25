@@ -49,7 +49,7 @@ namespace a11::net {
 namespace {
 
 std::string NewDataChannelId() {
-  return absl::StrFormat("a11-%016x%016x", RandomUint64(), RandomUint64());
+  return NewStreamId("a11-");
 }
 
 absl::Status ExternalException(const std::exception& error,

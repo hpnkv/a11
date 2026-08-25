@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 
 import {
   Chunk,
+  ChunkMetadata,
   HttpSseClientWireStream,
   InProcessWireStream,
   NodeFragment,
@@ -22,9 +23,11 @@ import {
   isOk,
   unavailableError,
   okStatus,
+  utf8Encode,
+  elideStickyMetadata,
 } from '../dist/index.js';
 
-function messageWithByte(id, byte) {
+function messageWithByte(id, byte, headers) {
   return new WireMessage({
     nodeFragments: [new NodeFragment({
       id,
@@ -32,7 +35,23 @@ function messageWithByte(id, byte) {
       seq: 0,
       continued: false,
     })],
+    headers,
   });
+}
+
+/**
+ * A message that the sender's merge will not fold into its neighbours.
+ *
+ * The sender folds queued messages together when their headers match, so a
+ * fixture that needs to observe one frame per `send()` has to give each message
+ * a header no other message shares. Tests counting frames rather than fragments
+ * want this; the counter is what makes each call distinct, since two sends of
+ * the same node id would otherwise still merge.
+ */
+let fixtureHeaderCounter = 0;
+function unmergeableMessageWithByte(id, byte) {
+  const unique = `${id}-${++fixtureHeaderCounter}`;
+  return messageWithByte(id, byte, new Map([['x-fixture', utf8Encode(unique)]]));
 }
 
 test('in-process streams preserve messages, trailers, and abort details', async () => {
@@ -71,6 +90,220 @@ test('in-process streams preserve messages, trailers, and abort details', async 
   assert.equal(remoteFailure.code, StatusCode.UNAVAILABLE);
   assert.equal(remoteFailure.message, 'peer unavailable');
   assert.deepEqual(remoteFailure.details, [{ retry_after_ms: 25 }]);
+});
+
+test('the sender folds queued messages together without losing or reordering any', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // Queued together and header-compatible, so these fold into one frame. What
+  // must survive is every fragment, in order -- not the message boundaries.
+  for (let index = 0; index < 8; ++index) {
+    assert.equal(isOk(sender.send(messageWithByte(`n${index}`, index))), true);
+  }
+  const seen = [];
+  let receives = 0;
+  while (seen.length < 8) {
+    const message = await receiver.receive(1000);
+    assert.equal(isOk(message), true);
+    receives += 1;
+    for (const fragment of message.nodeFragments) seen.push(fragment.data.data[0]);
+  }
+  assert.deepEqual(seen, [0, 1, 2, 3, 4, 5, 6, 7]);
+  // Without this the test would still pass with the merge removed entirely,
+  // which is the one thing it exists to detect.
+  assert.ok(receives < 8, `8 sends arrived as ${receives} messages, so none folded`);
+  assert.equal(isOk(sender.halfClose()), true);
+  assert.equal(await receiver.receive(1000), null);
+});
+
+test('the sender does not fold messages whose headers differ', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // Headers are per-message and a merge cannot pick one set over another, so
+  // differing headers must keep the messages -- and their headers -- separate.
+  assert.equal(isOk(sender.send(unmergeableMessageWithByte('a', 1))), true);
+  assert.equal(isOk(sender.send(unmergeableMessageWithByte('b', 2))), true);
+  const first = await receiver.receive(1000);
+  assert.equal(isOk(first), true);
+  assert.equal(first.nodeFragments.length, 1);
+  assert.equal(first.nodeFragments[0].data.data[0], 1);
+  const second = await receiver.receive(1000);
+  assert.equal(isOk(second), true);
+  assert.equal(second.nodeFragments.length, 1);
+  assert.equal(second.nodeFragments[0].data.data[0], 2);
+  assert.notDeepEqual(
+    first.headers.get('x-fixture'),
+    second.headers.get('x-fixture'),
+  );
+});
+
+test('a half-close is never folded into the messages queued ahead of it', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // The closure barrier: data queued before a half-close is observed before the
+  // peer is told the direction ended, and the marker itself carries no payload.
+  assert.equal(isOk(sender.send(messageWithByte('before', 5))), true);
+  assert.equal(isOk(sender.halfClose(new Map([['x-a11-test', new Uint8Array([1])]]))), true);
+  const data = await receiver.receive(1000);
+  assert.equal(isOk(data), true);
+  assert.equal(data.nodeFragments[0].data.data[0], 5);
+  assert.equal(await receiver.receive(1000), null);
+  assert.deepEqual(receiver.getTrailers().get('x-a11-test'), new Uint8Array([1]));
+});
+
+test('messages at the merge ceiling pass through with their boundaries intact', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // The mirror of cpp WebSocketWireStreamTest.
+  // ReassemblesMultipleLargeChunkedMessagesInOrder: merging is for three-byte
+  // status markers, and a large payload gets nothing from it but a bigger frame
+  // to split again. Each of these is past the 64 KiB ceiling, so each must
+  // arrive as its own message with its payload whole.
+  const large = (byte) => new WireMessage({
+    nodeFragments: [new NodeFragment({
+      id: 'big',
+      data: new Chunk({ data: new Uint8Array(96 * 1024).fill(byte) }),
+      seq: 0,
+      continued: false,
+    })],
+  });
+  assert.equal(isOk(sender.send(large(1))), true);
+  assert.equal(isOk(sender.send(large(2))), true);
+  for (const expected of [1, 2]) {
+    const message = await receiver.receive(5000);
+    assert.equal(isOk(message), true);
+    assert.equal(message.nodeFragments.length, 1, 'a large message is not folded');
+    const payload = message.nodeFragments[0].data.data;
+    assert.equal(payload.byteLength, 96 * 1024);
+    assert.ok(payload.every((byte) => byte === expected), 'payload arrived whole');
+  }
+});
+
+test('sticky metadata elides repeated mimetypes and the peer restores them', async () => {
+  const pair = InProcessWireStream.createPair({ stickyMetadata: true });
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  const json = (seq) => new NodeFragment({
+    id: 'sticky',
+    data: new Chunk({
+      metadata: new ChunkMetadata({ mimetype: 'application/json' }),
+      data: new TextEncoder().encode(`{"seq":${seq}}`),
+    }),
+    seq,
+    continued: true,
+  });
+  const message = new WireMessage({ nodeFragments: [json(0), json(1), json(2)] });
+
+  // Asserted on the encoder directly, because the round trip below restores
+  // what it dropped and so cannot tell a working elision from no elision.
+  const elided = elideStickyMetadata(message);
+  assert.deepEqual(
+    elided.nodeFragments.map((fragment) => fragment.data.mimetype),
+    ['application/json', '', ''],
+  );
+  assert.equal(elided.headers.has('x-a11-sticky-metadata'), true);
+  assert.ok(
+    elided.approxBytes < message.approxBytes,
+    'eliding a repeated mimetype makes the frame smaller',
+  );
+
+  assert.equal(isOk(sender.send(message)), true);
+
+  const got = await receiver.receive(1000);
+  assert.equal(isOk(got), true);
+  assert.equal(got.nodeFragments.length, 3);
+  // Every fragment arrives with the mimetype, though only the first was sent
+  // carrying it. The marker header is consumed by the expansion.
+  assert.deepEqual(
+    got.nodeFragments.map((fragment) => fragment.data.mimetype),
+    ['application/json', 'application/json', 'application/json'],
+  );
+  assert.equal(got.headers.has('x-a11-sticky-metadata'), false);
+  // The caller's own message keeps its mimetypes: eliding is the transport's
+  // business and must not reach back into what the application still holds.
+  assert.deepEqual(
+    message.nodeFragments.map((fragment) => fragment.data.mimetype),
+    ['application/json', 'application/json', 'application/json'],
+  );
+});
+
+test('sticky metadata does not inherit across a sequence gap', async () => {
+  const pair = InProcessWireStream.createPair({ stickyMetadata: true });
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // Same rule as the chunk-store writer: a gap means the peer may never have
+  // seen the fragment that established the mimetype, so nothing is elided
+  // across one and the fragment after the gap keeps its own.
+  const fragment = (seq, mimetype) => new NodeFragment({
+    id: 'gapped',
+    data: new Chunk({
+      metadata: new ChunkMetadata({ mimetype }),
+      data: new TextEncoder().encode(`v${seq}`),
+    }),
+    seq,
+    continued: true,
+  });
+  assert.equal(isOk(sender.send(new WireMessage({
+    nodeFragments: [fragment(0, 'text/plain'), fragment(9, 'text/plain')],
+  }))), true);
+
+  const got = await receiver.receive(1000);
+  assert.equal(isOk(got), true);
+  assert.deepEqual(
+    got.nodeFragments.map((f) => f.data.mimetype),
+    ['text/plain', 'text/plain'],
+  );
+});
+
+test('sticky metadata is off by default, so a foreign peer sees every mimetype', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const sender = WireStreamWithRecv.create(pair[0]);
+  const receiver = WireStreamWithRecv.create(pair[1]);
+  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
+
+  // The default matters more than the feature: a C++ or Python peer does not
+  // know the marker header, and would deliver a chunk whose mimetype had been
+  // dropped. Nothing is elided unless the sender opted in.
+  const fragment = (seq) => new NodeFragment({
+    id: 'plain',
+    data: new Chunk({
+      metadata: new ChunkMetadata({ mimetype: 'text/plain' }),
+      data: new TextEncoder().encode(`v${seq}`),
+    }),
+    seq,
+    continued: true,
+  });
+  assert.equal(isOk(sender.send(new WireMessage({
+    nodeFragments: [fragment(0), fragment(1)],
+  }))), true);
+
+  const got = await receiver.receive(1000);
+  assert.equal(isOk(got), true);
+  assert.deepEqual(got.nodeFragments.map((f) => f.data.mimetype), ['text/plain', 'text/plain']);
+  assert.equal(got.headers.has('x-a11-sticky-metadata'), false);
 });
 
 test('WebSocket client runs the A11 channel framing over Node ws', async (t) => {
@@ -240,8 +473,11 @@ test('HTTP SSE client overlaps message POSTs and drains them before a half-close
   assert.equal(isOk(received), true);
   assert.equal(isOk(await received.start()), true);
 
+  // Distinct headers so the sender's merge leaves them as four messages: the
+  // property under test is that four POSTs are open at once, which a single
+  // folded message could not show.
   for (let index = 0; index < 4; ++index) {
-    assert.equal(isOk(received.send(messageWithByte(`m${index}`, index))), true);
+    assert.equal(isOk(received.send(unmergeableMessageWithByte(`m${index}`, index))), true);
   }
   for (let attempt = 0; attempt < 200 && open.length < 4; ++attempt) {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -578,8 +814,10 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
     (message) => message.descriptionType === 'offer',
   ));
 
-  assert.equal(isOk(stream.send(messageWithByte('rtc', 66))), true);
-  assert.equal(isOk(stream.send(messageWithByte('rtc', 67))), true);
+  // Distinct headers keep these two frames apart: the striping layout pinned
+  // below is per-frame, so folding them into one would leave nothing to compare.
+  assert.equal(isOk(stream.send(unmergeableMessageWithByte('rtc', 66))), true);
+  assert.equal(isOk(stream.send(unmergeableMessageWithByte('rtc', 67))), true);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(connection.channel.sent.length >= 2);
 

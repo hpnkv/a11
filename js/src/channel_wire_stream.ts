@@ -3,10 +3,11 @@ import {
   MINIMUM_BYTE_PACKET_SIZE,
   splitBytesIntoPackets,
 } from './byte_chunking.js';
-import { copyByteMap, type ByteMap, type ByteMapInput } from './bytes.js';
+import { byteMapsEqual, copyByteMap, type ByteMap, type ByteMapInput } from './bytes.js';
 import { Deferred, sleep } from './concurrency.js';
 import { WireMessage, makeHalfCloseMessage, validateName } from './data.js';
 import { decodeStatus, packStatus } from './status_codec.js';
+import { elideStickyMetadata, expandStickyMetadata } from './sticky_metadata.js';
 import {
   abortedError,
   deadlineExceededError,
@@ -165,12 +166,32 @@ function normalizeChannelFramingOptionsUnchecked(
   return result;
 }
 
+/**
+ * How much the sender will accumulate when folding queued messages together.
+ *
+ * Kept small on purpose, and matching `kMergeCeilingBytes` in
+ * `cpp/a11/net/channel_wire_stream.cc`. The gain is entirely in folding an
+ * action's three-byte status markers; a message already at the ceiling passes
+ * through untouched.
+ */
+const MERGE_CEILING_BYTES = 64 * 1024;
+
 type End = 'none' | 'half-close' | 'abort';
 
 interface Outbound {
-  bytes: Uint8Array;
   end: End;
   messageId: bigint;
+  /**
+   * The message to encode, kept unencoded so the sender can fold this entry
+   * together with the ones queued behind it and encode the result once.
+   */
+  message?: WireMessage;
+  /**
+   * Already-encoded bytes, used by the abort marker: it is built on a failure
+   * path that cannot report an encode error, so it encodes up front and never
+   * merges.
+   */
+  bytes?: Uint8Array;
 }
 
 interface Incoming {
@@ -340,9 +361,12 @@ export class ChannelWireStream implements WireStream {
       message = new WireMessage({ headers: normalized });
       end = normalized.has(ABORT_STATUS_HEADER) ? 'abort' : 'half-close';
     }
-    const bytes = message.toMsgpack();
-    if (!isOk(bytes)) return bytes;
-    if (bytes.byteLength > this.options.maxSingleMessageSize) {
+    // Sized from the estimate, not from an encode. Encoding here would be a
+    // second pass over every message the sender then folds together, and the
+    // native side does the same thing for the same reason: Send() rejects what
+    // it can judge structurally and the Sender owns the encode. The authoritative
+    // check against the encoded length is in the pump.
+    if (message.approxBytes > this.options.maxSingleMessageSize) {
       return outOfRangeError(
         'Outgoing WireMessage exceeds maxSingleMessageSize.',
       );
@@ -365,9 +389,9 @@ export class ChannelWireStream implements WireStream {
       this.status = abortedError('The stream was aborted by this endpoint.');
     }
     this.outgoing.push({
-      bytes,
       end,
       messageId: this.nextMessageId,
+      message,
     });
     this.nextMessageId = (this.nextMessageId + 1n) & 0xffff_ffff_ffff_ffffn;
     this.markActivity();
@@ -627,13 +651,102 @@ export class ChannelWireStream implements WireStream {
     queueMicrotask(() => void this.pumpOutgoing());
   }
 
+  /**
+   * Fold whatever is already queued behind @p outbound into it, and return the
+   * bytes to send.
+   *
+   * Nothing is ever held back to build a bigger frame: only messages *already*
+   * queued merge, so a lone message still goes out immediately. The whole gain
+   * is in folding together the three-byte status markers an action trails -- a
+   * dispatch status, a completion status, a close marker per port -- which is
+   * why the ceiling is low. Large data messages get nothing from it: they are
+   * already one frame per payload, merging them only builds a bigger frame to
+   * split again, and it would erase message boundaries a peer can reasonably
+   * expect to see preserved.
+   *
+   * The encode happens here rather than in `send()`, which is what makes the
+   * fold free: one encode of the merged message replaces one encode per part.
+   */
+  private mergeQueuedInto(outbound: Outbound): StatusOr<Uint8Array> {
+    const message = outbound.message;
+    if (message === undefined) {
+      // The abort marker, encoded when it was queued.
+      return outbound.bytes ?? internalError('Outbound entry carries no message.');
+    }
+    if (outbound.end !== 'none' || this.outgoing.length === 0) {
+      return this.encodeOutgoing(message);
+    }
+    // A peer configured below the ceiling would reject the merged frame, so the
+    // effective ceiling is whichever is smaller.
+    const ceiling = Math.min(
+      MERGE_CEILING_BYTES,
+      this.options.maxSingleMessageSize,
+    );
+    let approximate = message.approxBytes;
+    if (approximate >= ceiling) return this.encodeOutgoing(message);
+    // Accumulated separately rather than pushed into `message`: that object is
+    // the caller's, and `send()` does not otherwise take ownership of it.
+    const fragments = [...message.nodeFragments];
+    const actions = [...message.actions];
+    let merged = false;
+    while (this.outgoing.length > 0) {
+      const next = this.outgoing[0];
+      if (
+        next.end !== 'none' ||
+        next.message === undefined ||
+        !byteMapsEqual(next.message.headers, message.headers)
+      ) {
+        break;
+      }
+      const addition = next.message.approxBytes;
+      if (approximate + addition > ceiling) break;
+      approximate += addition;
+      this.outgoing.shift();
+      fragments.push(...next.message.nodeFragments);
+      actions.push(...next.message.actions);
+      merged = true;
+    }
+    if (!merged) return this.encodeOutgoing(message);
+    return this.encodeOutgoing(new WireMessage({
+      nodeFragments: fragments,
+      actions,
+      headers: message.headers,
+    }));
+  }
+
+  /**
+   * Encode one outgoing message and hold it to the endpoint's size limit.
+   *
+   * `send()` screens on WireMessage.approxBytes, which is an estimate; this is
+   * the authoritative check, and a message that fails it ends the stream rather
+   * than being reported to a caller that has already been told OK. A merged
+   * frame cannot reach here oversized -- the fold stops at the same limit.
+   */
+  private encodeOutgoing(message: WireMessage): StatusOr<Uint8Array> {
+    // After the fold, not before: folding is what collects a node's contiguous
+    // fragments into one frame, which is where there is anything to elide.
+    const bytes = (this.options.stickyMetadata
+      ? elideStickyMetadata(message)
+      : message).toMsgpack();
+    if (!isOk(bytes)) return bytes;
+    if (bytes.byteLength > this.options.maxSingleMessageSize) {
+      return outOfRangeError('Outgoing WireMessage exceeds maxSingleMessageSize.');
+    }
+    return bytes;
+  }
+
   private async pumpOutgoing(): Promise<void> {
     try {
       while (!this.finished && this.started && this.opened) {
         const outbound = this.outgoing.shift();
         if (outbound === undefined) break;
+        const bytes = this.mergeQueuedInto(outbound);
+        if (!isOk(bytes)) {
+          this.finish(bytes);
+          return;
+        }
         const packets = splitBytesIntoPackets(
-          outbound.bytes,
+          bytes,
           outbound.messageId,
           this.framing.splitSize,
         );
@@ -755,6 +868,11 @@ export class ChannelWireStream implements WireStream {
           return;
         }
         this.markActivity();
+        // Unconditional, and before `isHalfClose` is consulted: this is a no-op
+        // on a frame the peer did not elide, and a frame the peer *did* elide
+        // must be restored whatever this endpoint's own options say. It also
+        // removes the marker header, so a half-close is still recognised as one.
+        expandStickyMetadata(message);
         if (!message.isHalfClose) {
           if (this.remoteHalfClosed || this.remoteAborted) {
             this.forceAbort(

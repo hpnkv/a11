@@ -40,6 +40,7 @@
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "a11/stores/chunk_store_writer.h"
+#include "a11/utf8.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::flow {
@@ -2710,7 +2711,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         if (!bytes) {
           // Back off to the start of the character this would have split.
           while (take > 1 && at + take < text.size() &&
-                 (static_cast<unsigned char>(text[at + take]) & 0xC0) == 0x80) {
+                 utf8::IsContinuation(text[at + take])) {
             --take;
           }
         }

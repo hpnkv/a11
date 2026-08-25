@@ -97,9 +97,11 @@ class PythonSyncCallback {
       return absl::InvalidArgumentError(std::string(name) +
                                         " must be callable");
     }
+
     struct MakeSharedEnabler final : PythonSyncCallback {
       explicit MakeSharedEnabler(PyObject* value) : PythonSyncCallback(value) {}
     };
+
     return std::make_shared<MakeSharedEnabler>(callable.inc_ref().ptr());
   }
 
@@ -303,37 +305,6 @@ py::typing::Optional<py::capsule> PointerCapsule(void* pointer,
     return py::typing::Optional<py::capsule>(py::none());
   }
   return py::capsule(pointer, name);
-}
-
-void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
-template <typename Operation>
-void CallWithoutGil(Operation&& operation) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = std::forward<Operation>(operation)();
-  }
-  ThrowIfNotOk(status);
-}
-
-// Like CallWithoutGil, but for a blocking operation returning absl::StatusOr<T>:
-// releases the GIL while it runs, then unwraps the value (or throws) with the
-// GIL re-held. Blocking calls that reach Http2Server::Create (RunOnUv ->
-// Future::Await) must release the GIL, or the libuv loop thread deadlocks trying
-// to take the GIL to complete the work. Convert any Python arguments before
-// calling this, while the GIL is still held.
-template <typename Operation>
-auto ValueWithoutGil(Operation&& operation) {
-  auto result = [&] {
-    py::gil_scoped_release release;
-    return std::forward<Operation>(operation)();
-  }();
-  return ValueOrThrow(std::move(result));
 }
 
 }  // namespace
@@ -713,13 +684,11 @@ void BindWebRtc(py::module_& module) {
       .def_property(
           "headers",
           [](const net::WebSocketSignallingClientOptions& options)
-              -> PyHeaderPairs {
-            return HeaderPairsToPython(options.headers);
-          },
+              -> PyHeaderPairs { return HeaderPairsToPython(options.headers); },
           [](net::WebSocketSignallingClientOptions& options,
              const PyHeadersLike& value) {
-            net::HttpHeaders headers = ValueOrThrow(HeaderPairsFromPython(
-                value, "Signalling handshake headers"));
+            net::HttpHeaders headers = ValueOrThrow(
+                HeaderPairsFromPython(value, "Signalling handshake headers"));
             ThrowIfNotOk(net::ValidateHttpHeaders(headers));
             options.headers = std::move(headers);
           },

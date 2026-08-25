@@ -275,7 +275,7 @@ export class Action {
       }
       const settings = validateActionSettings(options.settings ?? {});
       if (!isOk(settings)) return settings;
-      const id = options.id || randomId('action-');
+      const id = options.id || randomId('a-');
       const validId = validateName(id);
       if (!isOk(validId)) return validId;
       const action = new Action(schema, options, id);
@@ -1308,7 +1308,7 @@ export class Action {
   private sendRemoteCancel(): Status {
     try {
       const cancel = new ActionMessage({
-        id: randomId('action-'),
+        id: randomId('a-'),
         name: CANCEL_ACTION_NAME,
         headers: new Map([[CANCEL_ACTION_HEADER, new TextEncoder().encode(this.id)]]),
       });

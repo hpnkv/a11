@@ -14,24 +14,27 @@
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
 #include <absl/strings/str_split.h>
 #include <absl/strings/string_view.h>
 
 #include "a11/data/types.h"
+#include "a11/percent.h"
 #include "absl/strings/match.h"
 
 namespace a11::obs {
 namespace {
-
-constexpr std::string_view kLowerHex = "0123456789abcdef";
 
 bool IsLowerHex(std::string_view value) {
   if (value.empty()) {
     return false;
   }
   for (const char c : value) {
-    if (!absl::StrContains(kLowerHex, c)) {
+    // Lower case only: a traceparent's ids are defined over `[0-9a-f]`, and
+    // accepting upper case here would let two spellings of one trace id
+    // through.
+    if (percent::HexDigit(c) < 0 || absl::ascii_isupper(c)) {
       return false;
     }
   }
@@ -40,20 +43,6 @@ bool IsLowerHex(std::string_view value) {
 
 bool AllZero(std::string_view hex) {
   return hex.find_first_not_of('0') == std::string_view::npos;
-}
-
-// Returns the numeric value 0-15 of a hex digit, or -1 if `c` is not one.
-int HexValue(char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
-  }
-  if (c >= 'a' && c <= 'f') {
-    return c - 'a' + 10;
-  }
-  if (c >= 'A' && c <= 'F') {
-    return c - 'A' + 10;
-  }
-  return -1;
 }
 
 // Looks up a header, returning its value only when present. Header names are
@@ -66,45 +55,6 @@ std::optional<std::string_view> Find(const data::ByteMap& headers,
     return std::nullopt;
   }
   return std::string_view(it->second);
-}
-
-// Percent-decodes a W3C baggage value. Invalid escapes are left verbatim,
-// matching the lenient posture propagators take on the value portion.
-std::string PercentDecode(std::string_view value) {
-  std::string out;
-  out.reserve(value.size());
-  for (size_t i = 0; i < value.size(); ++i) {
-    if (value[i] == '%' && i + 2 < value.size()) {
-      const int hi = HexValue(value[i + 1]);
-      const int lo = HexValue(value[i + 2]);
-      if (hi >= 0 && lo >= 0) {
-        out.push_back(static_cast<char>((hi << 4) | lo));
-        i += 2;
-        continue;
-      }
-    }
-    out.push_back(value[i]);
-  }
-  return out;
-}
-
-// Percent-encodes the characters W3C baggage disallows in a value.
-std::string PercentEncode(std::string_view value) {
-  std::string out;
-  out.reserve(value.size());
-  for (const char ch : value) {
-    const auto c = static_cast<unsigned char>(ch);
-    const bool unreserved =
-        absl::ascii_isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~';
-    if (unreserved) {
-      out.push_back(ch);
-    } else {
-      out.push_back('%');
-      out.push_back(kLowerHex[c >> 4]);
-      out.push_back(kLowerHex[c & 0x0F]);
-    }
-  }
-  return out;
 }
 
 absl::StatusOr<TraceContext> ParseTraceparent(std::string_view value) {
@@ -144,8 +94,8 @@ absl::StatusOr<TraceContext> ParseTraceparent(std::string_view value) {
   TraceContext context;
   context.trace_id = std::string(trace_id);
   context.span_id = std::string(span_id);
-  context.trace_flags =
-      static_cast<std::uint8_t>((HexValue(flags[0]) << 4) | HexValue(flags[1]));
+  context.trace_flags = static_cast<std::uint8_t>(
+      (percent::HexDigit(flags[0]) << 4) | percent::HexDigit(flags[1]));
   return context;
 }
 
@@ -174,7 +124,7 @@ absl::StatusOr<std::vector<BaggageEntry>> ParseBaggage(std::string_view value) {
       return absl::InvalidArgumentError("Baggage member has an empty key");
     }
     entry.value =
-        PercentDecode(absl::StripAsciiWhitespace(member.substr(eq + 1)));
+        percent::Decode(absl::StripAsciiWhitespace(member.substr(eq + 1)));
     entry.properties = std::string(absl::StripAsciiWhitespace(properties));
     entries.push_back(std::move(entry));
   }
@@ -221,12 +171,9 @@ absl::Status InjectTraceContext(const TraceContext& context,
     return absl::InvalidArgumentError("TraceContext has an invalid span-id");
   }
 
-  char flags[3];
-  flags[0] = kLowerHex[(context.trace_flags >> 4) & 0x0F];
-  flags[1] = kLowerHex[context.trace_flags & 0x0F];
-  flags[2] = '\0';
   headers[std::string(kTraceparentHeader)] =
-      absl::StrCat("00-", context.trace_id, "-", context.span_id, "-", flags);
+      absl::StrCat("00-", context.trace_id, "-", context.span_id, "-",
+                   absl::StrFormat("%02x", context.trace_flags));
 
   if (!context.tracestate.empty()) {
     headers[std::string(kTracestateHeader)] = context.tracestate;
@@ -239,7 +186,7 @@ absl::Status InjectTraceContext(const TraceContext& context,
     members.reserve(context.baggage.size());
     for (const BaggageEntry& entry : context.baggage) {
       std::string member =
-          absl::StrCat(entry.key, "=", PercentEncode(entry.value));
+          absl::StrCat(entry.key, "=", percent::Encode(entry.value));
       if (!entry.properties.empty()) {
         absl::StrAppend(&member, ";", entry.properties);
       }

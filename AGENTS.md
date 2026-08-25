@@ -11,6 +11,16 @@
   graph remain visible in `cpp/CMakeLists.txt`.
 - Concurrency types live directly in `namespace a11`, even though their files
   remain under `a11/concurrency/`. Do not recreate `a11::concurrency`.
+- Byte-level primitives that several unrelated components need are **header-only
+  inline** functions, so sharing them costs no link dependency: `a11/utf8.h`
+  (`IsContinuation`, `SequenceWidth`, `Utf16Units`, `IsValid`) and
+  `a11/percent.h` (`HexDigit`, `Decode`, `DecodeStrict`, `Encode`). That is what
+  lets `a11::flow_lang`, which links nothing but Abseil and nlohmann, use the
+  same UTF-8 rules as the serializer. Reach for these rather than open-coding a
+  lead-byte ladder or a `%xx` loop, and add new ones to
+  `cpp/tests/header_canary.cc`. The strict UTF-8 validator has one home,
+  `a11::IsValidUtf8` in `a11/json_codec.h`; `FindUnencodableString` beside it is
+  iterative on purpose, because fibre stacks are small and fixed.
 - Public stateful Python runtime types reuse the bound native class objects;
   do not add shadow Python implementations or facade subclasses for concrete
   native types. Attach thin, asynchronous, idiomatic protocols to the bound
@@ -20,6 +30,15 @@
   binary and schema values; they must not introduce a second public data model.
   Python serializers and deserializers continue to operate on those native
   values.
+- A Python reimplementation of logic the native library already has needs a
+  reason a caller can feel: pydantic and `IntEnum` ergonomics, the exception a
+  Python developer expects, duck typing a C++ signature cannot express. Parity
+  is not a reason. Where the only difference is language, delegate to the
+  binding and delete the copy — a second implementation is one that falls
+  behind, and the fix is to remove it rather than to test it. This does not
+  license collapsing the per-language *data tables* below (serial tags, status
+  chunks): those exist once per language because each language needs its own
+  literals, and `testdata/` pins them to each other.
 - Flow is the language whose programs are compositions of actions that are
   themselves actions. **The language lives in `cpp/a11/flow/`**: the lexer, the
   highlighter, the parser, the resolver, the inspector, the formatter, the
@@ -28,47 +47,47 @@
   `a11-flow` binary, and the IntelliJ plugin. Nothing about the language is
   implemented in Python: `a11/flow/plan.py` and `a11/flow/runtime.py` are glue over
   `a11._native.flow`, and `flow.loads` is the strict door onto it.
-  - The point of the move is that there is **one** implementation of each language
-    judgement. There is no lexer, parser, resolver, inspector or word list in
-    Kotlin, Python or a grammar file any more, and there must not be one again: a
-    second copy is a copy that falls behind, and the fix is to delete it rather
-    than test it. `a11/flow/tests/test_editor_support.py` now holds the *absence*
-    of those copies.
-  - The language tooling is `a11::flow_lang`, and it links **nothing but Abseil and
-    nlohmann**. No sockets, no nodes, no OpenSSL. That is what lets it ship as
-    `a11-flow` (a few megabytes, `A11_BUILD_FLOW_TOOL`) on platforms where the full
-    runtime is not built, so keep it that way. The executing half is the separate
-    `a11::flow_runtime` (`values.cc`, `runtime.cc`), which does link the node and
-    action layers — and `a11_flow_test`'s link line is the proof the language does
-    not.
-  - The runtime is **fibres over one monitor**: `thread::` primitives only (never
-    `std::mutex`), one lock and one condition variable per run, and blocking work
-    done with the lock released. That is what makes giving up on a run possible at
-    all — a pump waiting for a reader that will never come has to be woken. Every
-    fibre gets a stack an interpreter frame chain fits in, because any of them can
-    reach the `HostBridge`.
-  - `HostBridge` is the three questions only the host can answer: coerce a value
-    into a registered type, read one out of a chunk, write one into a chunk. The
-    Python bindings answer them against the Python registry -- which is where a
-    pydantic model actually lives -- and the standalone tool answers them with the
-    C++ registry. A `Value` the language cannot take apart is carried as an opaque
-    host object; the language only ever renders, indexes, compares or truth-tests
-    one.
-  - `cpp/a11/flow/service.cc` is the one service: a method name, a document, and an
-    envelope back. `a11-flow serve --protocol json|lsp`, `a11 flow serve` and
-    `a11._native.flow.request` are adapters over it, so a capability added there
-    reaches all of them. Add a method there rather than a special case in one
-    frontend.
-  - Problems are **diagnostics, not exceptions**: the parser and resolver collect
-    and recover, because an editor is looking at a file somebody is in the middle
-    of typing. A strict entry point turns the first error into the
-    `FlowSyntaxError` Python has always raised, with the same line, column and
-    message. Every code is published in `testdata/flow/codes.json`, generated from
-    the C++ table; the envelopes (`flow.diagnostics/v1` and friends, documented in
-    `doc/docs/guides/flow-tooling.md`) are additive — adding a field is not a
-    version change, and a reader must ignore what it does not know.
-  - A fix travels **with** the diagnostic, as edits. A frontend applies them blind;
-    nothing downstream re-derives what a repair should be.
+    - The point of the move is that there is **one** implementation of each language
+      judgement. There is no lexer, parser, resolver, inspector or word list in
+      Kotlin, Python or a grammar file any more, and there must not be one again: a
+      second copy is a copy that falls behind, and the fix is to delete it rather
+      than test it. `a11/flow/tests/test_editor_support.py` now holds the *absence*
+      of those copies.
+    - The language tooling is `a11::flow_lang`, and it links **nothing but Abseil and
+      nlohmann**. No sockets, no nodes, no OpenSSL. That is what lets it ship as
+      `a11-flow` (a few megabytes, `A11_BUILD_FLOW_TOOL`) on platforms where the full
+      runtime is not built, so keep it that way. The executing half is the separate
+      `a11::flow_runtime` (`values.cc`, `runtime.cc`), which does link the node and
+      action layers — and `a11_flow_test`'s link line is the proof the language does
+      not.
+    - The runtime is **fibres over one monitor**: `thread::` primitives only (never
+      `std::mutex`), one lock and one condition variable per run, and blocking work
+      done with the lock released. That is what makes giving up on a run possible at
+      all — a pump waiting for a reader that will never come has to be woken. Every
+      fibre gets a stack an interpreter frame chain fits in, because any of them can
+      reach the `HostBridge`.
+    - `HostBridge` is the three questions only the host can answer: coerce a value
+      into a registered type, read one out of a chunk, write one into a chunk. The
+      Python bindings answer them against the Python registry -- which is where a
+      pydantic model actually lives -- and the standalone tool answers them with the
+      C++ registry. A `Value` the language cannot take apart is carried as an opaque
+      host object; the language only ever renders, indexes, compares or truth-tests
+      one.
+    - `cpp/a11/flow/service.cc` is the one service: a method name, a document, and an
+      envelope back. `a11-flow serve --protocol json|lsp`, `a11 flow serve` and
+      `a11._native.flow.request` are adapters over it, so a capability added there
+      reaches all of them. Add a method there rather than a special case in one
+      frontend.
+    - Problems are **diagnostics, not exceptions**: the parser and resolver collect
+      and recover, because an editor is looking at a file somebody is in the middle
+      of typing. A strict entry point turns the first error into the
+      `FlowSyntaxError` Python has always raised, with the same line, column and
+      message. Every code is published in `testdata/flow/codes.json`, generated from
+      the C++ table; the envelopes (`flow.diagnostics/v1` and friends, documented in
+      `doc/docs/guides/flow-tooling.md`) are additive — adding a field is not a
+      version change, and a reader must ignore what it does not know.
+    - A fix travels **with** the diagnostic, as edits. A frontend applies them blind;
+      nothing downstream re-derives what a repair should be.
 - Flow must stay a layer *on* the public
   A11 surface, adding no runtime behaviour A11 does not already expose. A flow's
   semantics are the language's contract: steps run concurrently, every called
@@ -255,6 +274,17 @@
   alias griffe and type checkers resolve to the class), not `X = _native.X`
   (an opaque attribute assignment). Field-driven option structs stay with
   `a11._native_options.install_native_options`.
+- An LLM SDK client (`a11/sdk/<backend>/interact_with_*.py`) owns exactly what is
+  specific to its backend: the wire shapes, the streaming accumulator that
+  rebuilds a tool call from that SDK's events, and the request it builds. The
+  action-call bridge is **shared** and lives in `a11/sdk/llm.py` —
+  `ToolCall`, `ActionCallAdapter`, `add_tool_calls_to_interaction`,
+  `decode_action_output_fragments`, `build_tool_results`, `stringify_content`,
+  `encode_backend_value`. Turning a model's tool call into A11 action inputs, and
+  action outputs back into text, is not a per-backend judgement, and three copies
+  of it drifted apart before this was written down. A backend that shapes its
+  result message differently passes a formatter to `build_tool_results` rather
+  than reimplementing the loop.
 
 ## Documentation
 
@@ -270,17 +300,18 @@
   `from a11._native.flow import X` resolves with nothing added.
 - Python: Google-style docstrings. Write for a developer *building an AI agent* —
   explain the asynchronous, streaming intent and when to reach for a thing, not
-  just its mechanics. Maintain extended prose for the core surface (`ChunkStore`,
-  `WireStream` and implementations, `ChunkStoreReader`, `ChunkStoreWriter`,
-  `AsyncNode`, `Session`, `WebSocketSignallingServer`,
-  `WebSocketSignallingClient`); keep other symbols briefly but accurately
+  just its mechanics. Keep symbols briefly but accurately
   documented.
 - C++ / pybind11: give every `.def*` real parameter names (`py::arg("...")`, not
-  `arg0`) and a docstring; extended for the core surface, brief elsewhere. Prose
-  belongs in the C++ header doc-comments (`///` or `/** */`) where practical.
-  After changing bindings, rebuild the extension and regenerate the
-  `a11/_native/` stubs with `scripts/generate_stubs.py`; `--check` gates it in
-  CI.
+  `arg0`) and a docstring. Keep them brief and accurate. After changing
+  bindings, rebuild the extension and regenerate the `a11/_native/` stubs with
+  `scripts/generate_stubs.py`; `--check` gates it in CI.
+- Comments earn their place by saying something the code does not. Keep the ones
+  that explain concurrency correctness, a non-obvious performance choice, a wire
+  or format requirement, or a bug that a plainer-looking implementation
+  reintroduces — those are the comments that stop a future change from being
+  wrong. Narration of what the next line plainly does is noise; delete it rather
+  than maintain it.
 
 ## Dependencies, installation, and wheels
 

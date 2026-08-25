@@ -66,6 +66,18 @@ using internal::UvExecutor;
 
 namespace {
 
+/// Whether every byte of @p text is legal in a lowercase HTTP/2 token.
+///
+/// Field names and the extended-CONNECT `:protocol` share this rule: HTTP/2
+/// requires field names to be lowercase on the wire, so an upper-case byte is a
+/// protocol error rather than something to normalise.
+bool IsLowercaseToken(std::string_view text) {
+  return std::all_of(text.begin(), text.end(), [](unsigned char value) {
+    return value == '-' || value == '_' || value == '.' ||
+           absl::ascii_isdigit(value) || (value >= 'a' && value <= 'z');
+  });
+}
+
 /**
  * The connection-level HTTP/2 receive window.
  *
@@ -430,11 +442,7 @@ absl::Status ValidateHttpHeaders(const HttpHeaders& headers) {
       return absl::InvalidArgumentError(
           "Application HTTP headers must have non-pseudo field names");
     }
-    if (!std::all_of(name.begin(), name.end(), [](unsigned char character) {
-          return character == '-' || character == '_' || character == '.' ||
-                 std::isdigit(character) ||
-                 (character >= 'a' && character <= 'z');
-        })) {
+    if (!IsLowercaseToken(name)) {
       return absl::InvalidArgumentError(
           absl::StrCat("Invalid lowercase HTTP/2 field name: ", name));
     }
@@ -1070,10 +1078,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT requires a protocol");
     }
-    if (!std::all_of(protocol.begin(), protocol.end(), [](unsigned char value) {
-          return value == '-' || value == '_' || value == '.' ||
-                 std::isdigit(value) || (value >= 'a' && value <= 'z');
-        })) {
+    if (!IsLowercaseToken(protocol)) {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT protocol must be a lowercase token");
     }

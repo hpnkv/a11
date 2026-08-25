@@ -365,6 +365,29 @@ async function nodesSuite(scale) {
     `${seen} values`,
   );
 
+  // A consumer keeping pace with a live producer, which is the case the
+  // reader's inline fill exists for. `drain` above pre-fills the node, so its
+  // prefetch buffer is never empty and there is no scheduler hop to remove;
+  // here the reader is asked for a fragment that has only just been written.
+  const live = unwrap(await AsyncNode.create('bench-live'));
+  const liveCount = Math.max(Math.round(4000 * scale), 100);
+  const liveStarted = process.hrtime.bigint();
+  let liveSeen = 0;
+  for (let index = 0; index < liveCount; index += 1) {
+    await live.putChunk(chunk, null, index === liveCount - 1);
+    const fragment = await live.nextFragment();
+    if (!isOk(fragment) || fragment === null) break;
+    liveSeen += 1;
+  }
+  const liveElapsed = Number(process.hrtime.bigint() - liveStarted) / 1e9;
+  record(
+    'nodes',
+    'drain_live',
+    { ops_per_s: liveSeen / liveElapsed, items_per_s: liveSeen / liveElapsed, elapsed_s: liveElapsed },
+    { path: 'chunk' },
+    `${liveSeen} values`,
+  );
+
   const [nodeBytes, trail] = await memorySlope(
     async (n) => {
       const made = [];
@@ -419,6 +442,58 @@ async function wireSuite(scale) {
   }
   client.halfClose();
   await client.drainOutgoingMessages();
+
+  await concurrentDelivery(scale);
+}
+
+/**
+ * Messages sent with more than one in flight, which is the case the sender's
+ * merge exists for.
+ *
+ * `one_way_delivery` above awaits each message before sending the next, so
+ * nothing is ever queued behind anything and there is nothing to fold. The
+ * native finding this mirrors was +30% on *concurrent* action throughput, and a
+ * serial row cannot show it either way. Counted in fragments rather than
+ * received messages, because folding is precisely what makes those two differ.
+ */
+async function concurrentDelivery(scale) {
+  for (const inFlight of [1, 16, 128]) {
+    const [client, server] = unwrap(InProcessWireStream.createPair());
+    let fragments = 0;
+    let target = 0;
+    let resolveTarget = null;
+    await server.accept(
+      async (message) => {
+        if (message === null) return;
+        fragments += message.nodeFragments.length;
+        if (resolveTarget && fragments >= target) {
+          resolveTarget();
+          resolveTarget = null;
+        }
+      },
+      async () => {},
+    );
+    await client.start(async () => {}, async () => {});
+
+    const message = new WireMessage({
+      nodeFragments: [new NodeFragment({ id: 'bench', data: new Chunk({ data: new Uint8Array(64) }) })],
+    });
+    const iterations = Math.max(Math.round((4000 * scale) / inFlight), 20);
+    const metrics = await throughput(
+      async () => {
+        target = fragments + inFlight;
+        for (let index = 0; index < inFlight; index += 1) client.send(message);
+        if (fragments < target) await new Promise((resolve) => (resolveTarget = resolve));
+      },
+      { iterations, warmup: 10, perOpItems: inFlight },
+    );
+    record('wire', 'concurrent_delivery', metrics, {
+      transport: 'in-process',
+      in_flight: inFlight,
+    });
+    client.halfClose();
+    await client.drainOutgoingMessages();
+  }
 }
 
 const SUITES = {

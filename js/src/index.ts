@@ -27,6 +27,7 @@ export * from './schema_json.js';
 export * from './session.js';
 
 export * from './byte_chunking.js';
+export * from './sticky_metadata.js';
 export * from './wire_stream.js';
 export * from './channel_wire_stream.js';
 export * from './in_process_wire_stream.js';

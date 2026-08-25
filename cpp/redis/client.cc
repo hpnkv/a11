@@ -39,6 +39,7 @@
 #endif
 
 #include "a11/concurrency/future.h"
+#include "a11/percent.h"
 #include "redis/reply.h"
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
@@ -189,33 +190,7 @@ absl::StatusOr<int> ParseInteger(std::string_view value, std::string_view name,
 }
 
 absl::StatusOr<std::string> PercentDecode(std::string_view value) {
-  std::string decoded;
-  decoded.reserve(value.size());
-  constexpr std::string_view kHex = "0123456789abcdef";
-  for (size_t index = 0; index < value.size(); ++index) {
-    if (value[index] != '%') {
-      decoded.push_back(value[index]);
-      continue;
-    }
-    if (index + 2 >= value.size()) {
-      return absl::InvalidArgumentError(
-          "Truncated percent escape in Redis URL");
-    }
-    const char high =
-        absl::ascii_tolower(static_cast<unsigned char>(value[index + 1]));
-    const char low =
-        absl::ascii_tolower(static_cast<unsigned char>(value[index + 2]));
-    const size_t high_value = kHex.find(high);
-    const size_t low_value = kHex.find(low);
-    if (high_value == std::string_view::npos ||
-        low_value == std::string_view::npos) {
-      return absl::InvalidArgumentError("Invalid percent escape in Redis URL");
-    }
-    decoded.push_back(
-        static_cast<char>((high_value << 4U) | static_cast<size_t>(low_value)));
-    index += 2;
-  }
-  return decoded;
+  return percent::DecodeStrict(value, "Redis URL");
 }
 
 std::optional<std::string> EnvironmentValue(const char* name) {

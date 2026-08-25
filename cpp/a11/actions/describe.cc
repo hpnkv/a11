@@ -20,6 +20,7 @@
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/json_codec.h"
+#include "a11/percent.h"
 
 namespace a11::actions {
 namespace {
@@ -197,51 +198,6 @@ ActionHeaderSchema HeaderFromJson(const nlohmann::json& value) {
   return header;
 }
 
-/// One hex digit's value, or -1.
-int HexValue(char one) {
-  if (one >= '0' && one <= '9') {
-    return one - '0';
-  }
-  if (one >= 'a' && one <= 'f') {
-    return one - 'a' + 10;
-  }
-  if (one >= 'A' && one <= 'F') {
-    return one - 'A' + 10;
-  }
-  return -1;
-}
-
-/// A query-string value with `%xx` and `+` undone.
-///
-/// A pattern is a regex, and a regex is full of characters a client will have
-/// escaped. An undecodable `%` is passed through as itself rather than dropped,
-/// so a malformed query gives a "no such pattern" answer instead of a silently
-/// different one.
-std::string PercentDecode(std::string_view encoded) {
-  std::string decoded;
-  decoded.reserve(encoded.size());
-  for (std::size_t index = 0; index < encoded.size(); ++index) {
-    const char one = encoded[index];
-    if (one == '+') {
-      decoded.push_back(' ');
-      continue;
-    }
-    if (one != '%' || index + 2 >= encoded.size()) {
-      decoded.push_back(one);
-      continue;
-    }
-    const int high = HexValue(encoded[index + 1]);
-    const int low = HexValue(encoded[index + 2]);
-    if (high < 0 || low < 0) {
-      decoded.push_back(one);
-      continue;
-    }
-    decoded.push_back(static_cast<char>(high * 16 + low));
-    index += 2;
-  }
-  return decoded;
-}
-
 bool MatchesAnyPattern(const std::vector<std::string>& patterns,
                        std::string_view name) {
   const std::string subject(name);
@@ -343,7 +299,9 @@ absl::StatusOr<SchemaQuery> ParseSchemaQueryString(std::string_view query) {
     const std::string_view key = pair.substr(0, split);
     std::string value;
     if (split != std::string_view::npos) {
-      value = PercentDecode(pair.substr(split + 1));
+      // A query string is form-encoded, so `+` is a space. A pattern is a
+      // regex, and a regex is full of characters a client will have escaped.
+      value = percent::Decode(pair.substr(split + 1), /*plus_is_space=*/true);
     }
     if (key == "name") {
       if (!value.empty()) {

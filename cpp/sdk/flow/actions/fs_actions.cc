@@ -372,14 +372,13 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
   }
 
   const bool wants_text = text_out.present();
-  const bool wants_lines = lines_out.present();
   const bool wants_bytes = bytes_out.present();
 
   // On the heap. A fibre's stack is measured in kilobytes, so a 64 KiB buffer
   // as a local would run off the end of it and into whatever is next.
   std::string buffer(static_cast<std::size_t>(settings.chunk_bytes), '\0');
-  std::string whole;    // only when `text` is wanted
-  std::string pending;  // the tail of a line that has not ended yet
+  std::string whole;  // only when `text` is wanted
+  LineSplitter lines(lines_out);
   std::uint64_t total = 0;
 
   while (true) {
@@ -423,38 +422,15 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
     if (wants_text) {
       whole.append(piece);
     }
-    if (wants_lines) {
-      pending.append(piece);
-      std::size_t start = 0;
-      while (true) {
-        const std::size_t newline = pending.find('\n', start);
-        if (newline == std::string::npos) {
-          break;
-        }
-        std::string_view line(pending.data() + start, newline - start);
-        if (!line.empty() && line.back() == '\r') {
-          line.remove_suffix(1);  // a file written on Windows is still lines
-        }
-        if (const absl::Status written = lines_out.PutText(line);
-            !written.ok()) {
-          return finish(written);
-        }
-        start = newline + 1;
-      }
-      pending.erase(0, start);
+    if (const absl::Status written = lines.Feed(piece); !written.ok()) {
+      return finish(written);
     }
   }
 
-  if (wants_lines && !pending.empty()) {
-    // A last line with no newline after it is still a line.
-    std::string_view line(pending);
-    if (!line.empty() && line.back() == '\r') {
-      line.remove_suffix(1);
-    }
-    if (const absl::Status written = lines_out.PutText(line, /*final=*/true);
-        !written.ok()) {
-      return finish(written);
-    }
+  // `final`, so a flow reading `lines` sees the port end on the last line
+  // rather than waiting for the rest of this action.
+  if (const absl::Status written = lines.Flush(/*final=*/true); !written.ok()) {
+    return finish(written);
   }
   if (wants_text) {
     if (const absl::Status written = text_out.PutOnlyText(whole);

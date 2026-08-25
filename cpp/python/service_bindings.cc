@@ -259,36 +259,6 @@ absl::StatusOr<std::shared_ptr<service::SessionWithRecv>> CreateSessionWithRecv(
       std::move(registry));
 }
 
-void ThrowIfNotOk(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
-// Release the GIL around a blocking native call, then report its status. The uv
-// loop thread completes work by touching Python objects and must be able to take
-// the GIL, so blocking while holding it deadlocks the loop.
-template <typename Operation>
-void CallWithoutGil(Operation&& operation) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = std::forward<Operation>(operation)();
-  }
-  ThrowIfNotOk(status);
-}
-
-// As CallWithoutGil, for a blocking operation yielding an absl::StatusOr<T>.
-// Convert any Python arguments *before* calling: the GIL is not held inside.
-template <typename Operation>
-auto ValueWithoutGil(Operation&& operation) {
-  auto result = [&] {
-    py::gil_scoped_release release;
-    return std::forward<Operation>(operation)();
-  }();
-  return ValueOrThrow(std::move(result));
-}
-
 }  // namespace
 
 void BindService(py::module_& module) {

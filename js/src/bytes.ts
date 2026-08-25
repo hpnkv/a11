@@ -167,6 +167,23 @@ export function copyByteMap(values: ReadonlyMap<string, Uint8Array>): ByteMap {
   );
 }
 
+/** Whether two byte maps carry the same keys with byte-identical values. */
+export function byteMapsEqual(
+  left: ReadonlyMap<string, Uint8Array>,
+  right: ReadonlyMap<string, Uint8Array>,
+): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) {
+    const other = right.get(key);
+    if (other === undefined || other.byteLength !== value.byteLength) return false;
+    for (let index = 0; index < value.byteLength; index++) {
+      if (value[index] !== other[index]) return false;
+    }
+  }
+  return true;
+}
+
 /** Hex digits in a generated id: 48 random bits, matching C++ `NewShortId`. */
 const ID_HEX_DIGITS = 12;
 

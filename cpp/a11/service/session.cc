@@ -54,7 +54,7 @@ namespace {
 enum class Phase { kOpen, kClosing, kAborted };
 
 std::string NewSessionId() {
-  return absl::StrFormat("%016x%016x", RandomUint64(), RandomUint64());
+  return NewStreamId();
 }
 
 absl::Status SessionStreamAbortStatus() {

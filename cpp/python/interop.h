@@ -270,8 +270,8 @@ HeaderPairsFromPython(const py::handle& value, const char* absl_nonnull what) {
     auto pair = py::reinterpret_borrow<py::sequence>(item);
     if (pair.size() != 2 || !py::isinstance<py::str>(pair[0]) ||
         !py::isinstance<py::str>(pair[1])) {
-      return absl::InvalidArgumentError(
-          std::string(what) + " must contain pairs of strings");
+      return absl::InvalidArgumentError(std::string(what) +
+                                        " must contain pairs of strings");
     }
     headers.emplace_back(pair[0].cast<std::string>(),
                          pair[1].cast<std::string>());
@@ -458,6 +458,46 @@ T ValueOrThrow(absl::StatusOr<T> value) {
   }
   T result = std::move(value).value();
   return result;
+}
+
+/// Raises the Python status exception for @p status unless it is OK.
+inline void ThrowIfNotOk(const absl::Status& status) {
+  if (!status.ok()) {
+    ThrowStatus(status);
+  }
+}
+
+/**
+ * @brief Runs a blocking native operation with the GIL released.
+ *
+ * **Releasing is not an optimisation, it is required.** A call that blocks on
+ * the libuv loop (`RunOnUv`/`RunStatusOnUv` -> `Future::Await`) is completed by
+ * the uv thread, and completing it means touching Python objects --
+ * `FutureToPython` callbacks, `py::object` destructors -- which needs the GIL.
+ * A caller that blocked while holding it would deadlock the loop.
+ *
+ * Any argument conversion that touches Python must therefore happen *before*
+ * the call, while the GIL is still held.
+ */
+template <typename Operation>
+void CallWithoutGil(Operation&& operation) {
+  absl::Status status;
+  {
+    py::gil_scoped_release release;
+    status = std::forward<Operation>(operation)();
+  }
+  ThrowIfNotOk(status);
+}
+
+/// As CallWithoutGil, for an operation yielding an `absl::StatusOr<T>`; the
+/// value is unwrapped, or thrown, with the GIL re-held.
+template <typename Operation>
+auto ValueWithoutGil(Operation&& operation) {
+  auto result = [&] {
+    py::gil_scoped_release release;
+    return std::forward<Operation>(operation)();
+  }();
+  return ValueOrThrow(std::move(result));
 }
 
 // Keeps Python references safe even when the final C++ owner is released by

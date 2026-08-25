@@ -72,6 +72,20 @@ std::string NewUuid();
  */
 std::string NewShortId(int hex_digits = 12);
 
+/**
+ * @brief Generate a stream identifier: @p prefix and 128 random bits as hex.
+ *
+ * What every transport names a stream, a session or a data channel with. The
+ * prefix says which transport minted it, which is the difference between two
+ * ids in one log being confusing and being informative.
+ *
+ * Not cryptographically secure, for the same reason `NewUuid()` is not.
+ *
+ * @param prefix Written in front of the digits, e.g. `"ws-"`. May be empty.
+ * @return A freshly generated identifier.
+ */
+std::string NewStreamId(std::string_view prefix = "");
+
 }  // namespace a11
 
 #endif  // A11_UUID_H_

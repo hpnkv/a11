@@ -1,7 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
 import asyncio
-import dataclasses
 import traceback
 from typing import Any
 
@@ -100,23 +99,6 @@ def _content_to_steps(content: Any) -> list[dict[str, Any]]:
     ).to_exception()
 
 
-def _stringify_result(result: Any) -> str:
-    """Flatten a `function_result` payload into plain text."""
-    if result is None:
-        return ""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        texts = [
-            item.get("text", "")
-            for item in result
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
-        if texts:
-            return "".join(texts)
-    return pydantic_core.to_json(result).decode()
-
-
 def _normalized_parts_from_step(
     step: dict[str, Any],
 ) -> list[llm.NormalizedPart]:
@@ -155,7 +137,7 @@ def _normalized_parts_from_step(
             llm.NormalizedPart(
                 type=llm.NormalizedContentType.TOOL_RESULT,
                 call_id=step.get("call_id"),
-                content=_stringify_result(step.get("result")),
+                content=llm.stringify_content(step.get("result")),
             )
         ]
     # `thought` and server-tool steps carry no portable content.
@@ -408,15 +390,6 @@ class Conversation:
         return llm.Role.USER, _content_to_steps(content), server_id
 
 
-@dataclasses.dataclass
-class _ToolCall:
-    """A function call reconstructed from a Gemini `function_call` step."""
-
-    name: str
-    id: str
-    params: dict[str, Any] = dataclasses.field(default_factory=dict)
-
-
 class _StepAccumulator:
     """Reconstructs the model's steps from streamed Interactions events.
 
@@ -505,9 +478,9 @@ class _StepAccumulator:
         return steps
 
     @staticmethod
-    def tool_calls(steps: list[dict[str, Any]]) -> list[_ToolCall]:
+    def tool_calls(steps: list[dict[str, Any]]) -> list[llm.ToolCall]:
         return [
-            _ToolCall(
+            llm.ToolCall(
                 name=step["name"],
                 id=step["id"],
                 params=step.get("arguments", {}),
@@ -517,181 +490,15 @@ class _StepAccumulator:
         ]
 
 
-class ActionCallAdapter:
-    def __init__(
-        self,
-        tool_call: _ToolCall,
-        schema: a11.ActionSchema,
-    ):
-        self._name = tool_call.name
-        self._call_id = tool_call.id
-        self._arguments = tool_call.params
-        self._schema = schema
-
-    @property
-    def action_message(self) -> a11.ActionMessage:
-        return a11.Action(self._schema, self._call_id).get_action_message()
-
-    async def get_action_inputs(
-        self,
-    ) -> list[a11.NodeFragment]:
-        inputs = list()
-        for key, value_list in self._arguments.items():
-            if not isinstance(value_list, list):
-                value_list = [value_list]
-
-            node = a11.AsyncNode.create("node")
-            for idx, value in enumerate(value_list):
-                await node.put(value, final=idx == len(value_list) - 1)
-            # Closed, not finalized: the last put above already marked finality
-            # (and an empty argument list has nothing to mark).
-            await node.close()
-
-            final_encountered = False
-            fragments = []
-            async for fragment in node.iter_fragments():
-                if not fragment.continued:
-                    final_encountered = True
-                fragment.id = key
-                fragments.append(fragment)
-
-            if not final_encountered:
-                fragments.append(None)
-
-            inputs.extend(fragments)
-
-        return inputs
-
-    @staticmethod
-    def _validate_tool_call_integrity(
-        tool_call: _ToolCall,
-    ) -> _ToolCall:
-        if not isinstance(tool_call.name, str):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call name must be a string.",
-            ).to_exception()
-
-        if not isinstance(tool_call.id, str):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call id must be a string.",
-            ).to_exception()
-
-        if not isinstance(tool_call.params, dict):
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call params must be a dictionary.",
-            ).to_exception()
-
-        for key in tool_call.params.keys():
-            if not isinstance(key, str):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=f"Tool call parameter names must be strings.",
-                ).to_exception()
-
-        return tool_call
-
-    @staticmethod
-    def validate_against_schema(
-        tool_call: _ToolCall,
-        schema: a11.ActionSchema,
-        validate_integrity: bool = True,
-    ) -> _ToolCall:
-        if validate_integrity:
-            tool_call = ActionCallAdapter._validate_tool_call_integrity(
-                tool_call
-            )
-
-        if tool_call.name != schema.name:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message=f"Tool call name must be {schema.name}.",
-            ).to_exception()
-
-        for actual_input in tool_call.params.keys():
-            if actual_input not in schema.inputs:
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=f"Tool call has unexpected input {actual_input}.",
-                ).to_exception()
-
-        for expected_input_name, expected_input in schema.inputs.items():
-            if (
-                expected_input.required
-                and expected_input_name not in tool_call.params
-            ):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=(
-                        f"Tool call is missing input {expected_input_name}."
-                    ),
-                ).to_exception()
-
-        for expected_input_name, expected_input in schema.inputs.items():
-            expected_input: a11.ActionPortSchema
-            if (
-                expected_input.autofills
-                and tool_call.params.get(expected_input_name) is not None
-            ):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message="Tool call is trying to fill a prefilled input.",
-                ).to_exception()
-
-        return tool_call
-
-    @staticmethod
-    def create(tool_call: _ToolCall, schema: a11.ActionSchema):
-        tool_call = ActionCallAdapter._validate_tool_call_integrity(tool_call)
-        tool_call = ActionCallAdapter.validate_against_schema(
-            tool_call, schema, validate_integrity=False
-        )
-
-        return ActionCallAdapter(tool_call, schema)
-
-
-def _decode_action_output_fragments(
-    fragments: list[a11.NodeFragment],
-) -> Any:
-    grouped: dict[str, list[a11.NodeFragment]] = {}
-    for fragment in fragments:
-        grouped.setdefault(fragment.id, []).append(fragment)
-
-    values: dict[str, Any] = {}
-    for field_name, field_fragments in grouped.items():
-        # Null chunks close a stream and do not contribute a result value.
-        chunks = [fragment.get_chunk() for fragment in field_fragments]
-        decoded = [
-            a11.from_chunk(chunk) for chunk in chunks if not chunk.is_null()
-        ]
-        if not decoded:
-            continue
-        values[field_name] = decoded[0] if len(decoded) == 1 else decoded
-
-    if list(values.keys()) == ["$"]:
-        return values["$"]
-    return values
-
-
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Turn each nested-action output or failure into a function result."""
-    tool_results = []
-    for call_id, fragments in executed.outputs.items():
-        failure = executed.error_message(call_id)
-        if failure is not None:
-            content = failure
-        else:
-            content = _decode_action_output_fragments(fragments)
-            if not isinstance(content, str):
-                content = (
-                    await asyncio.to_thread(pydantic_core.to_json, content)
-                ).decode()
 
+    def as_function_result(
+        call_id: str, content: str, failure: str | None
+    ) -> dict[str, Any]:
         step: dict[str, Any] = {
             "type": "function_result",
             "call_id": call_id,
@@ -701,29 +508,9 @@ async def _build_tool_results_from_outputs(
             step["is_error"] = True
         if call_names.get(call_id):
             step["name"] = call_names[call_id]
+        return step
 
-        tool_results.append(step)
-
-    return tool_results
-
-
-async def _add_tool_calls_to_interaction(
-    tool_calls: list[_ToolCall],
-    interaction: llm.Interaction,
-    registry: a11.ActionRegistry,
-):
-    for tool_call in tool_calls:
-        adapter = ActionCallAdapter.create(
-            tool_call,
-            registry.get_schema(tool_call.name),
-        )
-
-        interaction.action_calls.append(adapter.action_message)
-        if tool_call.id not in interaction.action_inputs:
-            interaction.action_inputs[tool_call.id] = []
-        interaction.action_inputs[tool_call.id].extend(
-            await adapter.get_action_inputs()
-        )
+    return await llm.build_tool_results(executed, as_function_result)
 
 
 def _build_usage_metadata(usage: Any | None) -> llm.UsageMetadata | None:
@@ -740,22 +527,6 @@ def _build_usage_metadata(usage: Any | None) -> llm.UsageMetadata | None:
     )
 
 
-def _encode_backend_value(value: Any) -> bytes:
-    """Encode a backend-specific metadata value as bytes.
-
-    `Interaction.backend_specific_metadata` is a `dict[str, bytes]`; scalars are
-    stored as their UTF-8 encoding and structured values (SDK models, dicts) as
-    their JSON encoding.
-    """
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, str):
-        return value.encode()
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(exclude_none=True)
-    return pydantic_core.to_json(value)
-
-
 def _build_backend_specific_metadata(
     snapshot: Any,
     interaction_id: str | None,
@@ -767,12 +538,14 @@ def _build_backend_specific_metadata(
 
     server_id = getattr(snapshot, "id", None) or interaction_id
     if server_id:
-        metadata[_GEMINI_INTERACTION_ID] = _encode_backend_value(str(server_id))
+        metadata[_GEMINI_INTERACTION_ID] = llm.encode_backend_value(
+            str(server_id)
+        )
 
     for field in ("status", "service_tier", "object"):
         value = getattr(snapshot, field, None)
         if value is not None:
-            metadata[field] = _encode_backend_value(str(value))
+            metadata[field] = llm.encode_backend_value(str(value))
 
     return metadata
 
@@ -1000,7 +773,7 @@ async def interact_with_gemini(action: a11.Action):
                 usage_metadata=_build_usage_metadata(snapshot.usage),
             )
             previous_interaction_id = interaction.id
-            await _add_tool_calls_to_interaction(
+            await llm.add_tool_calls_to_interaction(
                 tool_calls, interaction, action.get_registry()
             )
 

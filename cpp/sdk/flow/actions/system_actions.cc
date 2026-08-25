@@ -89,7 +89,7 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
   }
 
   std::string buffer(static_cast<std::size_t>(chunk_bytes), '\0');
-  std::string pending;
+  LineSplitter line_splitter(lines);
   absl::Status trouble = absl::OkStatus();
 
   while (trouble.ok()) {
@@ -131,31 +131,14 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
         break;
       }
     }
-    if (lines.present()) {
-      pending.append(piece);
-      std::size_t start = 0;
-      while (trouble.ok()) {
-        const std::size_t newline = pending.find('\n', start);
-        if (newline == std::string::npos) {
-          break;
-        }
-        std::string_view line(pending.data() + start, newline - start);
-        if (!line.empty() && line.back() == '\r') {
-          line.remove_suffix(1);
-        }
-        trouble = lines.PutText(line);
-        start = newline + 1;
-      }
-      pending.erase(0, start);
+    trouble = line_splitter.Feed(piece);
+    if (!trouble.ok()) {
+      break;
     }
   }
 
-  if (trouble.ok() && lines.present() && !pending.empty()) {
-    std::string_view line(pending);
-    if (!line.empty() && line.back() == '\r') {
-      line.remove_suffix(1);
-    }
-    trouble = lines.PutText(line);
+  if (trouble.ok()) {
+    trouble = line_splitter.Flush();
   }
 
   absl::Status exit = stop->ExitStatus();

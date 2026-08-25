@@ -39,7 +39,7 @@ namespace {
 enum class End { kNone, kHalfClose, kAbort };
 
 std::string NewStreamId() {
-  return absl::StrFormat("%016x%016x", RandomUint64(), RandomUint64());
+  return NewStreamId();
 }
 
 absl::Status InvokeMessageCallback(const OnMessage& callback,

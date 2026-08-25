@@ -18,6 +18,7 @@
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/utf8.h"
 
 namespace a11::flow {
 namespace {
@@ -149,7 +150,7 @@ class Lexer {
       counted_column_ = 1;
     }
     while (counted_at_ < at) {
-      if ((static_cast<unsigned char>(source_[counted_at_]) & 0xC0) != 0x80) {
+      if (!utf8::IsContinuation(source_[counted_at_])) {
         // Count the character being left behind, not the one arrived at.
         ++counted_column_;
       }

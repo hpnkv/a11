@@ -105,37 +105,6 @@ void ValidateWireStreamOptions(const net::WireStreamOptions& options) {
   }
 }
 
-void CheckStatus(const absl::Status& status) {
-  if (!status.ok()) {
-    ThrowStatus(status);
-  }
-}
-
-template <typename Operation>
-void CallWithoutGil(Operation&& operation) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = std::forward<Operation>(operation)();
-  }
-  CheckStatus(status);
-}
-
-// Like CallWithoutGil, but for a blocking operation returning absl::StatusOr<T>:
-// releases the GIL while it runs, then unwraps the value (or throws) with the
-// GIL re-held. Blocking calls that reach Http2Server::Create (RunOnUv ->
-// Future::Await) must release the GIL, or the libuv loop thread deadlocks trying
-// to take the GIL to complete the work. Convert any Python arguments before
-// calling this, while the GIL is still held.
-template <typename Operation>
-auto ValueWithoutGil(Operation&& operation) {
-  auto result = [&] {
-    py::gil_scoped_release release;
-    return std::forward<Operation>(operation)();
-  }();
-  return ValueOrThrow(std::move(result));
-}
-
 net::OnMessage MakeOnMessage(
     const std::shared_ptr<AsyncPythonCallback>& callback) {
   return [callback](std::optional<data::WireMessage> message) {
@@ -490,7 +459,7 @@ void BindNet(py::module_& module) {
       .def(
           "validate",
           [](const net::CorsOptions& options) {
-            CheckStatus(options.Validate());
+            ThrowIfNotOk(options.Validate());
           },
           "Validate the options, raising on error.");
 
@@ -506,7 +475,7 @@ void BindNet(py::module_& module) {
       .def(
           "validate",
           [](const net::ServerHeaderOptions& options) {
-            CheckStatus(options.Validate());
+            ThrowIfNotOk(options.Validate());
           },
           "Validate the options, raising on error.");
 
@@ -602,7 +571,7 @@ void BindNet(py::module_& module) {
       .def(
           "validate",
           [](const net::ChannelFramingOptions& options) {
-            CheckStatus(options.Validate());
+            ThrowIfNotOk(options.Validate());
           },
           "Validate the framing options, raising on invalid configuration.");
 
@@ -625,7 +594,7 @@ void BindNet(py::module_& module) {
             // appears -- and no `asyncio.wait_for` above it can fire, because
             // the loop it needs is the thing that is blocked. It hung
             // `wire/one_way_throughput` on both event loops.
-            CheckStatus(
+            ThrowIfNotOk(
                 WithoutGil([&] { return self.Send(std::move(message)); }));
           },
           R"doc(Queue a message for asynchronous delivery to the peer. This call is non-blocking: the message enters the ordered outbound queue and the transport applies backpressure.
@@ -684,7 +653,7 @@ Examples:
             }
             // Without the GIL: half-closing queues a message the same way
             // `send` does, and takes the same locks.
-            CheckStatus(WithoutGil(
+            ThrowIfNotOk(WithoutGil(
                 [&] { return self->HalfClose(std::move(*converted)); }));
           },
           R"doc(Signal that this endpoint has finished sending, optionally attaching trailers. The stream stays open for inbound messages.
@@ -726,7 +695,7 @@ Examples:
             // Convert while the GIL is held, then abort without it: aborting
             // takes the stream's fibre-aware locks and wakes its pumps.
             absl::Status requested = StatusFromPython(status);
-            CheckStatus(
+            ThrowIfNotOk(
                 WithoutGil([&] { return self.Abort(std::move(requested)); }));
           },
           R"doc(Terminate the stream immediately with an error status, discarding buffered messages and propagating failure to the peer and pending receivers.
@@ -755,7 +724,7 @@ Examples:
             // own on_done. A Python on_done resolves on the asyncio loop, so
             // waiting for it with the GIL held is the deadlock in
             // gil-deadlock-on-blocking-port-accessors, one layer down.
-            CheckStatus(
+            ThrowIfNotOk(
                 WithoutGil([&] { return self->SetDeadline(*converted); }));
           },
           "Set an absolute wall-clock deadline after which the stream is "
@@ -917,9 +886,9 @@ Examples:
             return HeaderPairsToPython(options.headers);
           },
           [](net::WebSocketClientOptions& options, const PyHeadersLike& value) {
-            net::HttpHeaders headers = ValueOrThrow(
-                HeaderPairsFromPython(value, "WebSocket headers"));
-            CheckStatus(net::ValidateHttpHeaders(headers));
+            net::HttpHeaders headers =
+                ValueOrThrow(HeaderPairsFromPython(value, "WebSocket headers"));
+            ThrowIfNotOk(net::ValidateHttpHeaders(headers));
             options.headers = std::move(headers);
           },
           "Extra HTTP headers sent on the WebSocket handshake, as a list of "
@@ -941,7 +910,7 @@ Examples:
       .def(
           "validate",
           [](const net::WebSocketClientOptions& options) {
-            CheckStatus(options.Validate());
+            ThrowIfNotOk(options.Validate());
           },
           "Validate the client options, raising on invalid configuration.");
 
@@ -1029,7 +998,7 @@ Examples:
       .def(
           "validate",
           [](const net::WebSocketServerOptions& options) {
-            CheckStatus(options.Validate());
+            ThrowIfNotOk(options.Validate());
           },
           "Validate the server options, raising on invalid configuration.");
 

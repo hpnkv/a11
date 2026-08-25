@@ -34,7 +34,7 @@ namespace a11::net {
 namespace {
 
 std::string NewWebSocketId() {
-  return absl::StrFormat("ws-%016x%016x", RandomUint64(), RandomUint64());
+  return NewStreamId("ws-");
 }
 
 /** Parses a `ws`/`wss` URL, rejecting the schemes this transport cannot dial. */

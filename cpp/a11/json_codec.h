@@ -35,16 +35,28 @@ absl::StatusOr<nlohmann::json> ParseJson(std::string_view encoded,
  *
  * Public because the answer has to be available *before* nlohmann is asked. See
  * DumpJson for why asking nlohmann is not safe.
+ *
+ * Strict by the definition every other A11 language's string type enforces,
+ * which is stricter than "the bytes are shaped like UTF-8": overlong encodings,
+ * surrogate halves and anything above U+10FFFF are all rejected. Python's
+ * `bytes.decode("utf-8")`, Kotlin's `String(bytes)` and JavaScript's
+ * `TextDecoder` with `fatal` all refuse them, so a chunk carrying them is one a
+ * peer cannot read -- and a value this side refuses to write is a much better
+ * outcome than a session that dies one hop away.
  */
 bool IsValidUtf8(std::string_view text);
 
 /**
  * @brief The first string inside @p value that is not valid UTF-8, or nullptr.
  *
- * Recursive: the strings that come from outside are not only at the top level.
- * A response header's value and a directory entry's name are both fields of a
- * record, and both are exactly where something outside this process can put
- * arbitrary bytes.
+ * The strings that come from outside are not only at the top level: a response
+ * header's value and a directory entry's name are both fields of a record, and
+ * both are exactly where something outside this process can put arbitrary
+ * bytes.
+ *
+ * Iterative, not recursive: this runs on whatever fibre is serializing, and
+ * A11's fibre stacks are fixed and small, so the depth of the document must not
+ * decide how much stack the check needs.
  */
 const nlohmann::json* FindUnencodableString(const nlohmann::json& value);
 

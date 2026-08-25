@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "a11/utf8.h"
+
 namespace a11::flow {
 namespace {
 
@@ -38,23 +40,13 @@ TextIndex::TextIndex(std::string text) : text_(std::move(text)) {
 }
 
 std::pair<size_t, size_t> TextIndex::Step(size_t offset) const {
-  const auto lead = static_cast<unsigned char>(text_[offset]);
-  size_t width = 1;
-  size_t size = 1;
-  if (lead >= 0xF0) {
-    width = 4;
-    size = 2;
-  } else if (lead >= 0xE0) {
-    width = 3;
-  } else if (lead >= 0xC0) {
-    width = 2;
-  }
-  // A malformed sequence is one byte, so a document that is not quite UTF-8 is
-  // still indexed rather than walked off the end of.
+  size_t width = utf8::SequenceWidth(text_[offset]);
+  // A truncated sequence advances one byte, so a document that is not quite
+  // UTF-8 is still indexed rather than walked off the end of.
   if (offset + width > text_.size()) {
     width = 1;
   }
-  return {width, size};
+  return {width, utf8::Utf16Units(text_[offset])};
 }
 
 size_t TextIndex::LineEnd(size_t line) const {

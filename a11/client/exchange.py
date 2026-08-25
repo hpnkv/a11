@@ -172,8 +172,15 @@ class ExchangeClient:
         description: str = "",
         visibility: str = "private",
         organization: str = "",
+        scoped: bool = False,
     ) -> dict:
-        """Register a name to host under."""
+        """Register a name to host under.
+
+        ``scoped`` puts the organization's own name in front of ``name`` and
+        registers a disposable identity rather than reserving a global one --
+        which is only worth doing up front to say something about it, such as
+        making it public, since claiming a scoped name creates it anyway.
+        """
         return await self._request(
             "POST",
             "/v1/identities",
@@ -183,17 +190,53 @@ class ExchangeClient:
                 "description": description,
                 "visibility": visibility,
                 "organization": organization,
+                "scoped": scoped,
             },
         )
 
     async def claim(
         self, identity: str, *, holder: str = "", ttl_seconds: int | None = None
     ) -> Claim:
-        """Take the hosting claim on ``identity``."""
+        """Take the hosting claim on ``identity``.
+
+        A *scoped* identity -- `<organization>--<name>` -- need not have been
+        registered: the exchange creates it here, which is what makes hosting
+        one a single call.
+        """
         payload = await self._request(
             "POST",
             f"/v1/identities/{identity}/claim",
             json={"holder": holder, "ttl_seconds": ttl_seconds},
+        )
+        return Claim.from_response(payload)
+
+    async def claim_scoped(
+        self,
+        *,
+        name: str = "",
+        organization: str = "",
+        holder: str = "",
+        ttl_seconds: int | None = None,
+        visibility: str = "",
+    ) -> Claim:
+        """Get a scoped identity and the claim on it, in one call.
+
+        For a host that wants somewhere to be rather than a particular name:
+        without ``name`` the exchange picks one, and the granted identity comes
+        back on the claim. Scoped identities are disposable -- reclaimed once
+        nothing has hosted them for a while -- so this is the cheap way to put a
+        process on the exchange and the wrong way to publish an agent.
+        """
+        request: dict[str, Any] = {
+            "name": name,
+            "organization": organization,
+            "holder": holder,
+            "ttl_seconds": ttl_seconds,
+        }
+        if visibility:
+            request["visibility"] = visibility
+        payload = await self._request(
+            "POST", "/v1/identities/claim", json=request
         )
         return Claim.from_response(payload)
 

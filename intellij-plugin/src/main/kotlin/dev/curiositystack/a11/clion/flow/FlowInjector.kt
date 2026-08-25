@@ -18,8 +18,10 @@ import com.intellij.psi.PsiLanguageInjectionHost
  * follows from that.
  *
  * The trigger is the content, not a configuration: a string whose first real
- * word is `flow` followed by a name and a `{` is a flow, and nothing else
- * plausibly is. That makes it work in every IDE, for every host language with a
+ * word is `flow` followed by a `{`, with or without a name in between, is a
+ * flow, and nothing else plausibly is. The name is optional because a file's
+ * entry point is declared `flow { ... }` and travels in a string as readily as
+ * a named one. That makes it work in every IDE, for every host language with a
  * string literal, with nothing to set up. Where the content cannot say so --
  * a fragment, or a flow assembled from pieces -- IntelliLang's own markers still
  * apply, because this language is registered like any other:
@@ -60,14 +62,20 @@ class FlowInjector : MultiHostInjector {
     }
 
     companion object {
-        /** `flow a{}` is the shortest thing worth looking at. */
-        private const val MINIMUM_LENGTH = 8
+        /** `flow{}` is the shortest thing worth looking at. */
+        private const val MINIMUM_LENGTH = 6
 
         /** Past this, a string literal is not a flow somebody is reading. */
         private const val MAXIMUM_LENGTH = 200_000
 
+        /**
+         * `flow NAME {`, and `flow {` for a file's unnamed entry point.
+         *
+         * The name is one group, optional as a whole: dropping the `\s+` with
+         * it is what keeps `flowing {` from reading as an unnamed flow.
+         */
         private val DECLARATION = Regex(
-            """(?:flow|FLOW)\s+(?:[A-Za-z_$][A-Za-z0-9_$]*(?:-[A-Za-z0-9_$]+)*|"[^"\n]{1,200}")\s*\{""",
+            """(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$]*(?:-[A-Za-z0-9_$]+)*|"[^"\n]{1,200}"))?\s*\{""",
         )
 
         /**

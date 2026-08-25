@@ -63,6 +63,19 @@ class FlowInjectionTest : BasePlatformTestCase() {
         assertEquals(FlowLanguage, injected)
     }
 
+    fun testAnUnnamedFlowIsInjected() {
+        // A file's entry point is declared `flow { ... }`, and one written in a
+        // string is as worth reading as a named flow.
+        assertEquals(
+            FlowLanguage,
+            injectedLanguageIn("""<root note="flow { out done: bool }"/>"""),
+        )
+        assertEquals(
+            FlowLanguage,
+            injectedLanguageIn("""<root note="flow{ out done: bool }"/>"""),
+        )
+    }
+
     fun testProseThatMerelyMentionsAFlowIsNotInjected() {
         assertNull(
             injectedLanguageIn(
@@ -70,6 +83,11 @@ class FlowInjectionTest : BasePlatformTestCase() {
             ),
         )
         assertNull(injectedLanguageIn("""<root note="{not a flow at all}"/>"""))
+        // A word that merely starts with `flow` is not the keyword, which is
+        // what the name group being optional could otherwise cost.
+        assertNull(
+            injectedLanguageIn("""<root note="flowing { water: everywhere }"/>"""),
+        )
     }
 
     fun testTheInjectedFragmentIsHighlightedAsAFlow() {

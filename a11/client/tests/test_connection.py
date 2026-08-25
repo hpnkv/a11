@@ -142,3 +142,48 @@ def test_the_default_endpoint_matches_the_gateways_own_default():
     # all have to be the same string, or "no gateway" becomes a lie.
     assert DEFAULT_GATEWAY_URL == config.GatewayConfig().url
     assert DEFAULT_GATEWAY_URL == "ws://127.0.0.1:8011/a11"
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_transport_not_only_the_sending_half():
+    """A hang-up the peer can see.
+
+    A half-close alone says "I have finished sending" and leaves the
+    connection up, which a server cannot distinguish from a caller still
+    waiting for its answer. The exchange relay held a session open per call for
+    exactly that reason. So `aclose` closes the transport, and the peer's
+    stream reaches a terminal state.
+    """
+    accepted: asyncio.Queue = asyncio.Queue()
+    finished = asyncio.Event()
+
+    async def on_stream(stream):
+        await accepted.put(stream)
+        await stream.accept(lambda message: None, finished.set)
+
+    options = net.WebSocketServerOptions()
+    options.bind_address = "127.0.0.1"
+    options.port = 0
+    server = net.WebSocketWireServer.create(on_stream, options)
+    try:
+        connection = await GatewayConnection.connect(
+            f"ws://127.0.0.1:{server.port}/a11",
+            timeout=timing.Duration.seconds(5),
+        )
+        server_side = await asyncio.wait_for(accepted.get(), timeout=5)
+
+        await connection.aclose()
+
+        # The server sees end-of-input either way; what the abort adds is that
+        # the transport itself goes, which is what a relay needs in order to
+        # stop holding resources for a caller that has left.
+        await asyncio.wait_for(finished.wait(), timeout=5)
+        for _ in range(50):
+            if server_side.get_status().code != StatusCode.OK:
+                break
+            await asyncio.sleep(0.1)
+        assert server_side.get_status().code != StatusCode.OK, (
+            "the peer's stream never reached a terminal state"
+        )
+    finally:
+        server.stop()

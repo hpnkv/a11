@@ -99,6 +99,17 @@ std::vector<const ActionHeaderSchema*> SortedHeaders(
   return sorted;
 }
 
+/// The JSON Schema that says nothing, which is not worth writing down.
+///
+/// What a port with no stated type gets shown as anyway: an adapter offering a
+/// port with no `json_schema` to a model gives it `{"type": "object"}`, so a
+/// document carrying that spelled out says exactly what an absent field does,
+/// on every port whose type is a bare mapping.
+bool SaysNothing(const nlohmann::json& schema) {
+  return schema.is_object() && schema.size() == 1 &&
+         schema.value("type", "") == "object";
+}
+
 /// A port's `json_schema`, parsed if it parses.
 ///
 /// Carried as a JSON value rather than as the string it is stored as, so a
@@ -111,7 +122,7 @@ void AttachJsonSchema(nlohmann::json* target, const std::string& encoded) {
   }
   absl::StatusOr<nlohmann::json> parsed =
       a11::ParseJson(encoded, "port JSON Schema");
-  if (!parsed.ok()) {
+  if (!parsed.ok() || SaysNothing(*parsed)) {
     return;
   }
   (*target)["json_schema"] = *std::move(parsed);
@@ -122,12 +133,15 @@ nlohmann::json PortToJson(const ActionPortSchema& port, bool autofilled) {
   if (!port.description.empty()) {
     value["description"] = port.description;
   }
+  // Both flags are omitted when false, which is what ActionPortSchema itself
+  // defaults them to and so what a reader of this document fills in. See the
+  // warning on describe.h for the one place that default is not shared.
   if (port.required) {
     value["required"] = true;
   }
-  // Always explicit. See the warning on describe.h: the two port structs in
-  // this codebase disagree on what an absent `unary` means.
-  value["unary"] = port.unary;
+  if (port.unary) {
+    value["unary"] = true;
+  }
   if (autofilled) {
     value["autofilled"] = true;
   }
@@ -141,9 +155,9 @@ ActionPortSchema PortFromJson(const nlohmann::json& value) {
   port.type = Text(value, "type");
   port.description = Text(value, "description");
   port.required = Flag(value, "required", false);
-  // No fallback worth having: a document that omits `unary` was not written by
-  // this codec, and guessing is the bug the warning is about. False matches
-  // ActionPortSchema's own default, so a guess is at least consistent locally.
+  // False, which is what the writer omits the field for and what
+  // ActionPortSchema itself defaults to: a streaming port is the absent case on
+  // both sides of this codec.
   port.unary = Flag(value, "unary", false);
   // A `user_facing` flag from an older client is read and dropped. Narration
   // travels on the reserved log port, which no schema declares, so a port

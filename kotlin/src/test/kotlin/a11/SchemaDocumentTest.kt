@@ -50,9 +50,8 @@ class SchemaDocumentTest {
         assertEquals(listOf("command", "parameters"), schema.inputs.keys.sorted())
         assertTrue(schema.inputs["command"]!!.required)
         assertTrue(schema.inputs["command"]!!.unary)
-        // Streaming, and it has to survive: the port structs in A11 disagree on
-        // what an absent `unary` means, so a reader filling one in would invert
-        // this.
+        // Streaming, which is the absent case: `unary` is written only when
+        // true, and this side has to read it that way round.
         assertFalse(schema.outputs["output_lines"]!!.unary)
         assertTrue(schema.outputs["status"]!!.unary)
         assertEquals("$", schema.outputToJsonField["status"])
@@ -66,18 +65,20 @@ class SchemaDocumentTest {
     }
 
     @Test
-    fun `unary is always written, never omitted when false`() {
-        for (entry in fixture("callable")) {
-            for (key in listOf("inputs", "outputs")) {
-                for (port in entry[key] as? List<*> ?: emptyList<Any?>()) {
-                    val written = port as Map<*, *>
-                    assertTrue(
-                        written.containsKey("unary"),
-                        "${entry["name"]}.${written["name"]} omitted unary",
-                    )
-                }
-            }
-        }
+    fun `a defaulted port field is omitted, as the native writer omits it`() {
+        val schema = ok(schemaFromJson(fixture("callable")[0]))
+        val written = schemaToJson(schema, false)
+        fun port(key: String, name: String) = (written[key] as List<*>)
+            .map { it as Map<*, *> }
+            .single { it["name"] == name }
+
+        val streaming = port("outputs", "output_lines")
+        assertFalse(streaming.containsKey("unary"), "$streaming")
+        assertFalse(streaming.containsKey("required"), "$streaming")
+        // `{"type": "object"}` is what a port with no schema is shown as
+        // anyway, so writing it out would state nothing.
+        val untyped = port("inputs", "parameters")
+        assertFalse(untyped.containsKey("json_schema"), "$untyped")
     }
 
     @Test

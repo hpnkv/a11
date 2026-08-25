@@ -73,7 +73,7 @@ def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
 def hosted_configuration(
     ice_servers: "list[dict] | None" = None,
     *,
-    multiplex_ice: bool = True,
+    multiplex_ice: bool = False,
 ) -> "net.WebRtcConfiguration":
     """How a hosted agent should negotiate with peers that dial it.
 
@@ -83,24 +83,6 @@ def hosted_configuration(
     its cloud NAT's, neither can use the other's, and the handshake just never
     completes -- with nothing in either log saying why. Prefer
     `HostedEndpoint.webrtc_configuration()`, which reads the live claim.
-
-    ## Multiplexed ICE
-
-    Every peer connection shares one UDP port. A hosted agent is the side
-    several peers converge on -- a caller through the relay, a second caller, a
-    discovery question -- and one predictable port is both cheaper and, behind
-    a NAT, likelier to be reachable than an ephemeral port each.
-
-    Only one end of a pair may do this: a muxed socket routes an incoming
-    packet by its source address, so if the dialling side multiplexed too, its
-    several connections would arrive from one address and collide. The exchange
-    relay therefore does not (see `a11x.relay.dialler`).
-
-    `multiplex_ice=False` turns it off. Worth knowing before reaching for it:
-    muxing was suspected of breaking relayed discovery and, on measurement,
-    exonerated. With the response cache defeated and TURN quota no longer
-    binding, a muxed host and an unmuxed one failed at indistinguishable rates
-    -- so if relayed dials are timing out, this is not the knob.
     """
     configuration = net.WebRtcConfiguration()
     configuration.enable_ice_udp_mux = multiplex_ice
@@ -146,14 +128,20 @@ class HostedEndpoint:
     def __init__(
         self,
         client: ExchangeClient,
-        identity: str,
+        identity: str | None,
         *,
         holder: str = "",
         ttl_seconds: int | None = None,
         signalling_url: str = "",
+        organization: str = "",
     ) -> None:
         self._client = client
-        self.identity = identity
+        #: Empty until `start` when no identity was asked for: the exchange
+        #: picks a scoped one and this becomes whatever it granted. Everything
+        #: after the claim -- renewing, rebinding, releasing -- is keyed on this
+        #: name, so it has to be settled before anything connects.
+        self.identity = identity or ""
+        self._organization = organization
         self._holder = holder or default_holder()
         self._ttl = ttl_seconds
         self._signalling_url = signalling_url
@@ -168,10 +156,11 @@ class HostedEndpoint:
         #: Called with the new transport whenever one is established, so a
         #: service can rebind its listener.
         self.on_transport: Any = None
-        #: Awaited, with no arguments, when the listener's WebRTC configuration
-        #: has gone stale and must be rebuilt -- see `_rebind_if_lapsing`. A
-        #: host that does not set this stops being reachable an hour in.
-        self.on_rebind: Any = None
+        #: Awaited, with no arguments, before the current transport is dropped:
+        #: stop the listener bound to it. Pairs with `on_transport`, which
+        #: builds the replacement. A host that sets neither stops being
+        #: reachable an hour in -- see `_rebind_if_lapsing`.
+        self.on_drop_listener: Any = None
         #: The credential expiry the live listener was built with, so staleness
         #: is judged against what is *bound* rather than what is merely known.
         self._bound_expiry: float | None = None
@@ -221,15 +210,36 @@ class HostedEndpoint:
     async def start(self) -> None:
         """Take the claim, connect, and keep both alive.
 
+        With no identity asked for, the claim is taken on a scoped one the
+        exchange assigns -- and the name it granted is adopted here before
+        anything else uses it.
+
         Raises:
             StatusException: whatever the exchange said, when the first claim
                 or the first connection fails. A host that cannot start should
                 fail loudly rather than retry forever behind a healthy-looking
                 process.
         """
-        self.claim = await self._client.claim(
-            self.identity, holder=self._holder, ttl_seconds=self._ttl
-        )
+        if self.identity:
+            self.claim = await self._client.claim(
+                self.identity, holder=self._holder, ttl_seconds=self._ttl
+            )
+        else:
+            self.claim = await self._client.claim_scoped(
+                organization=self._organization,
+                holder=self._holder,
+                ttl_seconds=self._ttl,
+            )
+            self.identity = self.claim.identity
+            if not self.identity:
+                raise Status(
+                    code=StatusCode.INTERNAL,
+                    message=(
+                        "The exchange granted a claim without naming the"
+                        " identity it is on, so there is nothing to host."
+                    ),
+                ).to_exception()
+            logging.info("the exchange assigned the identity %s", self.identity)
         await self._connect()
         self._maintainer = asyncio.create_task(self._maintain())
 
@@ -332,7 +342,10 @@ class HostedEndpoint:
                     exc.status.message,
                 )
 
-            await self._rebind_if_lapsing()
+            try:
+                await self._rebind_if_lapsing()
+            except Exception:  # noqa: BLE001 - a hook may raise anything
+                logging.exception("could not rebind %s", self.identity)
 
             if self.connected:
                 backoff = MIN_RECONNECT_BACKOFF
@@ -340,14 +353,13 @@ class HostedEndpoint:
 
             self._connected.clear()
             logging.info("signalling for %s dropped; reconnecting", self.identity)
+            await self._relinquish()
             try:
                 await self._connect()
                 backoff = MIN_RECONNECT_BACKOFF
-            except StatusException as exc:
+            except Exception as exc:  # noqa: BLE001 - a transport may raise anything
                 logging.warning(
-                    "could not re-register %s: %s",
-                    self.identity,
-                    exc.status.message,
+                    "could not re-register %s: %s", self.identity, exc
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, MAX_RECONNECT_BACKOFF)
@@ -363,12 +375,19 @@ class HostedEndpoint:
         completing. It presents as "it worked for a while and then stopped",
         an hour in, which is the default claim lifetime.
 
-        Rebinding is deferred until the bound credentials are nearly out rather
-        than done on every renewal, because it costs the peer connections the
-        old listener was carrying. The relay's grace period hides that from
-        callers, but it is not free, so once an hour beats twice.
+        The whole signalling connection is replaced, not just the listener,
+        because a WebRTC server closes its transport when it stops (see
+        `a11.service.serving.webrtc`) -- so there is no way to hand a fresh
+        configuration to a new server on the *same* transport. The order is
+        therefore: drop the listener, reconnect, let `on_transport` build the
+        replacement against the current claim.
+
+        Deferred until the bound credentials are nearly out rather than done on
+        every renewal, because it costs the peer connections the old listener
+        was carrying. The relay's grace period turns that into latency for a
+        caller, but it is not free, so once an hour beats twice.
         """
-        if self.on_rebind is None or self._bound_expiry is None:
+        if self.on_drop_listener is None or self._bound_expiry is None:
             return
         if self._bound_expiry - time.time() > REBIND_MARGIN_SECONDS:
             return
@@ -383,8 +402,30 @@ class HostedEndpoint:
             self.identity,
             self._bound_expiry - time.time(),
         )
-        await self.on_rebind()
+        await self._relinquish()
+        await self._connect()
         self._bound_expiry = fresh
+
+    async def _relinquish(self) -> None:
+        """Let go of the listener and the transport it is bound to.
+
+        Always both, and in that order: a WebRTC server closes its transport
+        when it stops, so a listener kept across a reconnect holds a dead
+        socket, and a transport kept across a failed reconnect makes
+        `connected` lie.
+        """
+        if self.on_drop_listener is not None:
+            try:
+                await self.on_drop_listener()
+            except Exception:  # noqa: BLE001 - a hook may raise anything
+                logging.exception(
+                    "could not drop the listener for %s", self.identity
+                )
+        transport, self._transport = self._transport, None
+        if transport is not None:
+            with contextlib.suppress(Exception):
+                transport.close()
+        self._connected.clear()
 
     async def _renew_if_due(self) -> None:
         """Renew when the claim says it is time, and not before."""

@@ -14,9 +14,13 @@ package a11
  * which says whether the answering side holds a handler and so is the
  * registry's annotation on a schema rather than part of one.
  *
- * `unary` is always written explicitly, never omitted when false: the port
- * structs in A11 disagree on its default, so a reader that filled one in would
- * turn every streaming port into a unary one or the reverse.
+ * `required` and `unary` are written only when true, and a port's `json_schema`
+ * only when it says more than `{"type": "object"}` -- which is what an adapter
+ * shows a model for a port carrying no schema at all. Every reader fills in
+ * [ActionPortSchema]'s own defaults, so what is absent and what is spelled out
+ * mean the same thing. Those defaults are this document's and not A11's
+ * everywhere: `flow.catalogue/v1` defaults `unary` to true and omits it when
+ * true, the opposite convention for a different format.
  */
 
 /** The `format` field every schema document carries. */
@@ -25,15 +29,24 @@ const val SCHEMA_DOCUMENT_FORMAT = "a11.actions/v1"
 /** Which ports a written schema includes. */
 enum class PortView { CALLABLE, ALL }
 
+/**
+ * The JSON Schema that says nothing, which is not worth writing down.
+ *
+ * A port with no schema is shown to a model as `{"type": "object"}` anyway, so a
+ * document spelling that out states exactly what leaving it out does.
+ */
+private fun saysNothing(schema: Map<String, Any?>): Boolean =
+    schema.size == 1 && schema["type"] == "object"
+
 private fun portToJson(port: ActionPortSchema, autofilled: Boolean): Map<String, Any?> {
     val entry = LinkedHashMap<String, Any?>()
     entry["name"] = port.name
     entry["type"] = port.type
     if (port.description.isNotEmpty()) entry["description"] = port.description
     if (port.required) entry["required"] = true
-    entry["unary"] = port.unary
+    if (port.unary) entry["unary"] = true
     if (autofilled) entry["autofilled"] = true
-    if (port.jsonSchema != null) entry["json_schema"] = port.jsonSchema
+    port.jsonSchema?.let { if (!saysNothing(it)) entry["json_schema"] = it }
     return entry
 }
 
@@ -46,8 +59,8 @@ private fun portFromJson(entry: Map<*, *>): ActionPortSchema? {
         type = entry["type"] as? String ?: "application/json",
         description = entry["description"] as? String ?: "",
         required = entry["required"] == true,
-        // No fallback worth having: a document that omits `unary` was not
-        // written by this codec. False matches ActionPortSchema's own default.
+        // False when absent, which is what the writer omits the field for and
+        // what ActionPortSchema itself defaults to.
         unary = entry["unary"] == true,
         jsonSchema = entry["json_schema"] as? Map<String, Any?>,
     )

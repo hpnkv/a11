@@ -152,18 +152,36 @@ class GatewayConnection:
         await call.wait(PROBE_CALL_TIMEOUT)
 
     async def aclose(self) -> None:
-        """Half-close the stream, after letting queued messages go out.
+        """Finish sending, let the queue go out, then close the transport.
 
-        Half-close, then drain: the transport requires that order --
-        `drain_outgoing_messages` answers FAILED_PRECONDITION before a
+        Half-close, then drain, then abort, and the order is forced at each
+        step. `drain_outgoing_messages` answers FAILED_PRECONDITION before a
         half-close, because there is otherwise no point at which the outgoing
-        queue is final. Both are best effort; a peer that has already gone is not
-        a problem worth reporting on the way out.
+        queue is final; and the abort has to come after the drain or it
+        discards what was queued.
+
+        The abort is what actually closes the socket, and leaving it out was a
+        real bug rather than tidiness. A half-close says only "I have finished
+        sending" -- the connection stays up, and a peer has no way to tell that
+        from a caller still waiting for an answer. Against the exchange relay
+        that meant a session per call which nothing ever ended, each holding a
+        WebRTC leg to the agent, until the agent was swamped and answered
+        nobody.
+
+        `Status()` is OK, so this is a graceful close and not a failure
+        reported to the peer: a terminal status that is OK takes the
+        transport's ordinary close path, where a non-OK one would fail the
+        connection.
+
+        Every step is best effort. A peer that has already gone is not a
+        problem worth reporting on the way out.
         """
         with contextlib.suppress(Exception):
             self.stream.half_close()
         with contextlib.suppress(Exception):
             await self.stream.drain_outgoing_messages()
+        with contextlib.suppress(Exception):
+            self.stream.abort(Status())
 
     def action(self, name: str, schema: a11.ActionSchema | None = None):
         """Build a call on this connection's session and stream.

@@ -42,8 +42,8 @@ test('a native document reads into a schema and writes back unchanged', () => {
   assert.deepEqual([...schema.inputs.keys()].sort(), ['command', 'parameters']);
   assert.equal(schema.inputs.get('command').required, true);
   assert.equal(schema.inputs.get('command').unary, true);
-  // Streaming, and it has to survive: the port structs in A11 disagree on what
-  // an absent `unary` means, so a reader filling one in would invert this.
+  // Streaming, which is the absent case: `unary` is written only when true, and
+  // this side has to read it that way round.
   assert.equal(schema.outputs.get('output_lines').unary, false);
   assert.equal(schema.outputs.get('status').unary, true);
   assert.equal(schema.outputToJsonField.get('status'), '$');
@@ -59,16 +59,18 @@ test('a native document reads into a schema and writes back unchanged', () => {
   assert.deepEqual(written, entries[0]);
 });
 
-test('unary is always written, never omitted when false', () => {
-  const entries = schemasInDocument(fixture.callable);
-  for (const entry of entries) {
-    for (const port of [...(entry.inputs ?? []), ...(entry.outputs ?? [])]) {
-      assert.ok(
-        Object.hasOwn(port, 'unary'),
-        `${entry.name}.${port.name} omitted unary`,
-      );
-    }
-  }
+test('a defaulted port field is omitted, as the native writer omits it', () => {
+  const schema = schemaFromJson(schemasInDocument(fixture.callable)[0]);
+  const written = schemaToJson(schema, false);
+  const port = (ports, name) => ports.find((one) => one.name === name);
+
+  const streaming = port(written.outputs, 'output_lines');
+  assert.equal(Object.hasOwn(streaming, 'unary'), false);
+  assert.equal(Object.hasOwn(streaming, 'required'), false);
+  // `{"type": "object"}` is what a port with no schema is shown as anyway, so
+  // writing it out would state nothing.
+  const untyped = port(written.inputs, 'parameters');
+  assert.equal(Object.hasOwn(untyped, 'json_schema'), false);
 });
 
 test('a whole registry writes the document the native writer wrote', () => {

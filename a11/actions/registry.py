@@ -19,6 +19,12 @@ if TYPE_CHECKING:
     # needing them at run time, and the generated stub resolves them.
     from a11._native import ActionHandler, ActionSchema, NativeActionHandler
 
+    # Written out in full where it is used, because that is what the generated
+    # stub carries: a bare `FlowPlan` is not a name `a11._native`'s own stub can
+    # resolve, and the module path is. At type-check time only -- `a11.flow`
+    # imports this package, so importing it back at run time would be a cycle.
+    import a11.flow.plan
+
 ActionRegistry.__module__ = __name__
 
 _native_register = ActionRegistry.register
@@ -131,5 +137,95 @@ def _action(
 
 
 ActionRegistry.action = _action
+
+
+def _one_flow(source: str, source_name: str) -> a11.flow.plan.FlowPlan:
+    """The single flow ``source`` declares, or why it does not declare one.
+
+    A flow file may hold several flows that call each other, and a program's
+    entry point is a flow with no name at all. Neither is registrable under one
+    name, so both are refused here rather than resolved by picking a flow --
+    which would register the wrong one and say nothing about it. A file that is
+    genuinely several flows is what
+    [`Program.register_all`][a11.flow.plan.Program.register_all] is for.
+    """
+    from a11.flow.plan import compile_source
+
+    program = compile_source(source, source_name)
+    if program.has_entry:
+        raise ValueError(
+            f"The flow source for {source_name!r} declares a `flow {{ ... }}`"
+            " entry point, which has no name and so cannot be registered as an"
+            " action. Give the flow a name."
+        )
+    if len(program.names) != 1:
+        declared = ", ".join(program.names) or "none"
+        raise ValueError(
+            f"The flow source for {source_name!r} must declare exactly one flow"
+            f" to be registered under one name (declared: {declared}). Use"
+            " a11.flow.loads(...).register_all(registry) for a file of several."
+        )
+    return program[program.names[0]]
+
+
+def _flow(
+    self: ActionRegistry,
+    source: str,
+    *,
+    name: str | None = None,
+    source_name: str = "",
+) -> a11.flow.plan.FlowPlan:
+    """Register a Flow composition as an Action, deriving both halves from it.
+
+    What [`action`][a11.actions.registry.ActionRegistry.action] is for a
+    function, this is for a flow -- except that there is nothing to infer from
+    Python here. A flow declares its own ports and *is* its own handler, so the
+    text is the whole Action and this takes it as it stands:
+
+    ```python
+    registry = ActionRegistry()
+
+    greet = registry.flow('''
+        flow greet {
+          in  name:  string
+          out reply: string
+          "Hello, " then name then "!" -> reply
+          drain reply
+        }
+    ''')
+    ```
+
+    The source must declare exactly one flow, and a named one: a file of several
+    is [`register_all`][a11.flow.plan.Program.register_all]'s business, and a
+    `flow { ... }` entry point has no name to be called by.
+
+    Args:
+        source: The flow's text.
+        name: Action name to register under; defaults to the flow's own. The
+            schema is registered under this name too, so a peer asking what this
+            side serves is told the name it can actually call.
+        source_name: What to call the source in a diagnostic -- a file name,
+            usually. Defaults to the name it is registered under.
+
+    Returns:
+        The compiled [FlowPlan][a11.flow.plan.FlowPlan], which is also how to
+        run the composition here rather than through the registry.
+
+    Raises:
+        FlowSyntaxError: If the source will not compile.
+        ValueError: If it is not exactly one named flow.
+    """
+    plan = _one_flow(source, source_name or name or "<flow>")
+    schema = plan.schema
+    if name and name != schema.name:
+        # The name in the schema as well as the key it is filed under: a
+        # described action carries its schema's name, and a peer told one name
+        # and expected to call another has been told nothing useful.
+        schema = schema.model_copy(update={"name": name})
+    self.register(schema.name, schema, plan.handler)
+    return plan
+
+
+ActionRegistry.flow = _flow
 
 __all__ = ["ActionRegistry"]

@@ -46,6 +46,20 @@ async def summarize(prompt: str) -> str:
     return f"Summary: {prompt[:50]}..."
 ```
 
+A composition of actions needs no signature to read: a flow declares its own
+ports and is its own handler, so registering one takes the text and nothing else.
+
+```python
+greet = registry.flow("""
+flow greet {
+  in  name:  string
+  out reply: string
+  "Hello, " then name then "!" -> reply
+  drain reply
+}
+""")
+```
+
 ::: a11.actions.action.Action
 
 ## ActionRegistry

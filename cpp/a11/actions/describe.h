@@ -39,12 +39,19 @@
  * and no schema declares, so a port that had to say it was narration was
  * working around the absence of that. The flag is read and dropped.
  *
+ * **What is omitted when it is the default.** `required` and `unary` are
+ * written only when true, and a port's `json_schema` only when it says more than
+ * `{"type": "object"}` -- which is what an adapter shows a model for a port
+ * carrying no schema at all, so writing it out states nothing. Every reader here
+ * fills in ::a11::actions::ActionPortSchema's own defaults, so what is absent
+ * and what is spelled out mean the same thing.
+ *
  * @warning
- *   `unary` is always written explicitly, never omitted when false. The two
- *   port structs disagree on its default -- ::a11::actions::ActionPortSchema
- *   says `false`, ::a11::flow::catalogue::PortInfo says `true` -- so a reader
- *   that filled in a default would silently turn every streaming port into a
- *   unary one, or the reverse, depending on which side it was standing on.
+ *   Those defaults are this document's, not A11's everywhere.
+ *   ::a11::flow::catalogue::PortInfo defaults `unary` to `true` and its codec
+ *   omits the field when *true* -- the opposite convention, for a different
+ *   format. A port entry moved between the two documents without going through
+ *   a struct turns every streaming port into a unary one, or the reverse.
  */
 
 #ifndef A11_ACTIONS_DESCRIBE_H_

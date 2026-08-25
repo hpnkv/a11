@@ -1860,6 +1860,79 @@ async def test_a_flow_runs_a_sibling_that_is_in_no_registry(
     assert result == {"o": ["A", "B"]}
 
 
+# --- Registering one as an action --------------------------------------------
+
+
+GREET_SOURCE = """
+flow greet {
+  in  name:  string
+  out reply: string stream
+  "Hello, " then name then "!" -> reply
+  drain reply
+}
+"""
+
+
+@pytest.mark.asyncio
+async def test_registering_a_flow_makes_it_an_action(registry):
+    plan = registry.flow(GREET_SOURCE)
+
+    assert registry.is_registered("greet")
+    # Both halves come from the source: the schema the flow declares, and the
+    # handler that runs it.
+    assert set(registry.get_schema("greet").inputs) == {"name"}
+    assert plan.name == "greet"
+    assert await plan.invoke({"name": "Helena"}) == {
+        "reply": ["Hello, ", "Helena", "!"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_registering_a_flow_can_rename_it(registry):
+    plan = registry.flow(GREET_SOURCE, name="say-hello")
+
+    assert not registry.is_registered("greet")
+    # The name is in the schema too, not just the key it is filed under: a peer
+    # told one name and expected to call another has been told nothing useful.
+    assert registry.get_schema("say-hello").name == "say-hello"
+    # The flow keeps the name the source gave it, which is what a sibling flow
+    # in the same program would `run` it by.
+    assert plan.name == "greet"
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        # An entry flow has no name, on purpose: nothing can `run` or `call` it,
+        # so there is nothing to register it as.
+        (
+            "flow {\n  out done: bool\n  true -> done\n  drain done\n}",
+            "no name",
+        ),
+        # Which of the two would it be? `register_all` is the answer to a file
+        # of several, and picking one silently is not.
+        (
+            GREET_SOURCE + GREET_SOURCE.replace("greet", "greet-again"),
+            "exactly one flow",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_registering_a_flow_needs_one_named_flow(
+    registry, source, message
+):
+    with pytest.raises(ValueError, match=message):
+        registry.flow(source, name="greet")
+    assert not registry.is_registered("greet")
+
+
+@pytest.mark.asyncio
+async def test_registering_a_flow_reports_where_the_source_is_wrong(registry):
+    with pytest.raises(FlowSyntaxError) as raised:
+        registry.flow("flow greet {\n  in name: nonsense\n}")
+    assert raised.value.line == 2
+
+
 # --- then, where, strformat, and time ----------------------------------------
 
 

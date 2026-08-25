@@ -11,29 +11,32 @@ rather than trusted to look right.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from a11 import net
 from a11.client.hosting import hosted_configuration
 
 
-def test_ice_is_multiplexed_by_default():
-    """One UDP port for every peer that converges on a hosted agent.
+def test_ice_is_not_multiplexed_by_default():
+    """A muxed socket cannot tell two relayed peers apart.
 
-    The dialling side must then not multiplex, which is what the exchange
-    relay does.
+    Relayed packets all arrive from the TURN server's address, so the second
+    connection completes its handshake and then receives nothing. Measured on
+    the deployed exchange at 45s spacing: 3/6 and 2/5 multiplexed, 6/6 not.
     """
     configuration = hosted_configuration()
 
-    assert configuration.enable_ice_udp_mux
+    assert not configuration.enable_ice_udp_mux
     assert list(configuration.stun_servers) == []
     assert list(configuration.turn_servers) == []
 
 
-def test_multiplexing_can_be_turned_off():
-    configuration = hosted_configuration(multiplex_ice=False)
+def test_multiplexing_is_available_for_a_single_peer_host():
+    configuration = hosted_configuration(multiplex_ice=True)
 
-    assert not configuration.enable_ice_udp_mux
+    assert configuration.enable_ice_udp_mux
 
 
 def test_stun_and_turn_are_separated():
@@ -161,37 +164,78 @@ def _endpoint() -> "hosting.HostedEndpoint":
 
 
 @pytest.mark.asyncio
-async def test_a_lapsing_credential_triggers_one_rebind():
+async def test_a_lapsing_credential_rebinds_in_the_right_order():
     """The bug this exists for: a renewed claim never reaching the listener.
 
     A TURN credential is checked against the expiry in its own username, so
     once it passes the host cannot gather a relayed candidate -- while
     signalling stays up and presence stays online. It presents as an agent that
     worked for an hour and then stopped.
+
+    The order is asserted, not just the fact: a WebRTC server closes its
+    transport when it stops, so the listener must be dropped *before* the
+    reconnect that builds its replacement. Getting this backwards produced a
+    host that had neither.
     """
     import time as time_module
 
-    from a11.client import hosting
-
     endpoint = _endpoint()
     endpoint.identity = "agent"
-    rebinds: list[int] = []
+    endpoint._connected = asyncio.Event()
+    endpoint._transport = None
+    steps: list[str] = []
 
-    async def on_rebind() -> None:
-        rebinds.append(1)
+    async def drop_listener() -> None:
+        steps.append("dropped")
 
-    endpoint.on_rebind = on_rebind
+    async def connect() -> None:
+        steps.append("connected")
+
+    endpoint.on_drop_listener = drop_listener
+    endpoint._connect = connect
     now = time_module.time()
 
     # Bound credentials nearly out, and a renewal has produced newer ones.
     endpoint._bound_expiry = now + 30
     endpoint.claim = _FakeClaim(now + 3600)
     await endpoint._rebind_if_lapsing()
-    assert rebinds == [1]
+    assert steps == ["dropped", "connected"]
 
     # Now that the listener holds the fresh expiry, it must settle.
     await endpoint._rebind_if_lapsing()
-    assert rebinds == [1]
+    assert steps == ["dropped", "connected"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_drop_hook_does_not_stop_the_rebind():
+    """A listener that will not stop must not cost the host its reconnect.
+
+    The whole point of the rebind is to get a working transport back. If a
+    misbehaving hook could abort it, one bad listener would leave the host
+    unregistered -- the failure this is all here to prevent.
+    """
+    import time as time_module
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    endpoint._connected = asyncio.Event()
+    endpoint._transport = None
+    endpoint.claim = _FakeClaim(time_module.time() + 3600)
+    endpoint._bound_expiry = time_module.time() + 30
+    connected: list[str] = []
+
+    async def drop_listener() -> None:
+        raise RuntimeError("the listener would not stop")
+
+    async def connect() -> None:
+        connected.append("connected")
+
+    endpoint.on_drop_listener = drop_listener
+    endpoint._connect = connect
+
+    await endpoint._rebind_if_lapsing()
+
+    assert connected == ["connected"]
 
 
 @pytest.mark.asyncio
@@ -200,12 +244,14 @@ async def test_no_rebind_while_the_bound_credential_has_time():
 
     endpoint = _endpoint()
     endpoint.identity = "agent"
+    endpoint._connected = asyncio.Event()
+    endpoint._transport = None
     rebinds: list[int] = []
 
     async def on_rebind() -> None:
         rebinds.append(1)
 
-    endpoint.on_rebind = on_rebind
+    endpoint.on_drop_listener = on_rebind
     now = time_module.time()
     endpoint._bound_expiry = now + 3600
     endpoint.claim = _FakeClaim(now + 7200)
@@ -222,12 +268,14 @@ async def test_no_rebind_when_renewal_has_not_produced_newer_credentials():
 
     endpoint = _endpoint()
     endpoint.identity = "agent"
+    endpoint._connected = asyncio.Event()
+    endpoint._transport = None
     rebinds: list[int] = []
 
     async def on_rebind() -> None:
         rebinds.append(1)
 
-    endpoint.on_rebind = on_rebind
+    endpoint.on_drop_listener = on_rebind
     now = time_module.time()
     endpoint._bound_expiry = now + 10
     endpoint.claim = _FakeClaim(now + 10)
@@ -245,3 +293,155 @@ def test_credentials_expire_at_takes_the_earliest():
     )
 
     assert endpoint.credentials_expire_at() == 500.0
+
+
+@pytest.mark.asyncio
+async def test_a_refused_reconnect_is_retried_not_permanent():
+    """One transient 504 must not unregister a host for the rest of its life.
+
+    The transport is dropped before retrying. Keeping it meant `connected`
+    consulted an object that still claimed to be connected, so the loop
+    short-circuited on every later tick: one warning in the log, silence after
+    it, and an agent that never came back.
+    """
+    from a11.client import hosting
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    endpoint._connected = asyncio.Event()
+    endpoint.on_drop_listener = None
+
+    class DeadTransport:
+        """A socket that has gone but has not noticed."""
+
+        def connected(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            pass
+
+    endpoint._transport = DeadTransport()
+    assert endpoint.connected, "precondition: the stale transport looks alive"
+
+    await endpoint._relinquish()
+
+    assert not endpoint.connected
+    assert endpoint._transport is None
+
+
+# --- Being assigned an identity ----------------------------------------------
+
+
+class _FakeExchange:
+    """An exchange that records which claim call was made."""
+
+    def __init__(self, granted: str = "acme--3f19c2b4") -> None:
+        self.granted = granted
+        self.by_name: list[str] = []
+        self.scoped: list[dict] = []
+
+    async def claim(self, identity, *, holder="", ttl_seconds=None):
+        from a11.client.exchange import Claim
+
+        self.by_name.append(identity)
+        return Claim(
+            identity=identity,
+            token="t",
+            expires_at="",
+            renew_after="",
+            signalling_url="wss://signal.example/ws",
+            ice_servers=[],
+        )
+
+    async def claim_scoped(
+        self, *, name="", organization="", holder="", ttl_seconds=None
+    ):
+        from a11.client.exchange import Claim
+
+        self.scoped.append({"name": name, "organization": organization})
+        return Claim(
+            identity=self.granted,
+            token="t",
+            expires_at="",
+            renew_after="",
+            signalling_url="wss://signal.example/ws",
+            ice_servers=[],
+        )
+
+
+def _startable(client, identity):
+    """An endpoint whose connecting and maintaining are stubbed out."""
+    from a11.client import hosting
+
+    endpoint = hosting.HostedEndpoint(client, identity)
+    endpoint._connect = _noop_connect
+    return endpoint
+
+
+async def _noop_connect() -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_asking_for_no_identity_adopts_the_one_granted():
+    """Bare `--hosted`: the exchange picks, and the endpoint takes that name.
+
+    Everything after the claim -- renewing, rebinding, releasing -- is keyed on
+    `identity`, so an endpoint that kept it empty would renew nothing and
+    release nothing while looking healthy.
+    """
+    client = _FakeExchange()
+    endpoint = _startable(client, None)
+
+    await endpoint.start()
+    try:
+        assert endpoint.identity == "acme--3f19c2b4"
+        assert client.scoped == [{"name": "", "organization": ""}]
+        assert client.by_name == []
+    finally:
+        endpoint._stopped.set()
+        if endpoint._maintainer is not None:
+            endpoint._maintainer.cancel()
+
+
+@pytest.mark.asyncio
+async def test_a_named_identity_is_claimed_by_name():
+    client = _FakeExchange()
+    endpoint = _startable(client, "acme--staging")
+
+    await endpoint.start()
+    try:
+        assert endpoint.identity == "acme--staging"
+        assert client.by_name == ["acme--staging"]
+        assert client.scoped == []
+    finally:
+        endpoint._stopped.set()
+        if endpoint._maintainer is not None:
+            endpoint._maintainer.cancel()
+
+
+@pytest.mark.asyncio
+async def test_an_organization_is_passed_on_when_one_was_named():
+    client = _FakeExchange()
+    endpoint = _startable(client, None)
+    endpoint._organization = "acme"
+
+    await endpoint.start()
+    try:
+        assert client.scoped == [{"name": "", "organization": "acme"}]
+    finally:
+        endpoint._stopped.set()
+        if endpoint._maintainer is not None:
+            endpoint._maintainer.cancel()
+
+
+@pytest.mark.asyncio
+async def test_a_claim_that_names_no_identity_is_refused():
+    """Nothing to host is a failure, not a host that quietly serves nobody."""
+    from a11.status import StatusException
+
+    client = _FakeExchange(granted="")
+    endpoint = _startable(client, None)
+
+    with pytest.raises(StatusException):
+        await endpoint.start()

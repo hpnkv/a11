@@ -12,9 +12,13 @@
  * which says whether the answering side holds a handler and so is the
  * registry's annotation on a schema rather than part of one.
  *
- * `unary` is always written explicitly, never omitted when false: the port
- * structs in this codebase disagree on its default, so a reader that filled one
- * in would turn every streaming port into a unary one or the reverse.
+ * `required` and `unary` are written only when true, and a port's `json_schema`
+ * only when it says more than `{"type": "object"}` -- which is what an adapter
+ * shows a model for a port carrying no schema at all. Every reader fills in
+ * {@link ActionPortSchema}'s own defaults, so what is absent and what is spelled
+ * out mean the same thing. Those defaults are this document's and not A11's
+ * everywhere: `flow.catalogue/v1` defaults `unary` to true and omits it when
+ * true, the opposite convention for a different format.
  */
 
 import {
@@ -52,7 +56,7 @@ export interface PortEntry {
   type: string;
   description?: string;
   required?: boolean;
-  unary: boolean;
+  unary?: boolean;
   autofilled?: boolean;
   json_schema?: unknown;
 }
@@ -71,14 +75,32 @@ export interface SchemaDocument {
   actions: SchemaEntry[];
 }
 
+/**
+ * Whether a JSON Schema says nothing, and so is not worth writing down.
+ *
+ * A port with no schema is shown to a model as `{"type": "object"}` anyway, so a
+ * document spelling that out states exactly what leaving it out does.
+ */
+function saysNothing(schema: unknown): boolean {
+  return (
+    schema !== null &&
+    typeof schema === 'object' &&
+    !Array.isArray(schema) &&
+    Object.keys(schema).length === 1 &&
+    (schema as { type?: unknown }).type === 'object'
+  );
+}
+
 function portToJson(port: ActionPortSchema, autofilled: boolean): PortEntry {
-  const entry: PortEntry = { name: port.name, type: port.type, unary: port.unary };
+  const entry: PortEntry = { name: port.name, type: port.type };
   if (port.description) entry.description = port.description;
   if (port.required) entry.required = true;
+  if (port.unary) entry.unary = true;
   if (autofilled) entry.autofilled = true;
   if (port.jsonSchema) {
     try {
-      entry.json_schema = JSON.parse(port.jsonSchema);
+      const parsed: unknown = JSON.parse(port.jsonSchema);
+      if (!saysNothing(parsed)) entry.json_schema = parsed;
     } catch {
       // A schema nobody can read is worse than an absent one, which at least
       // reads as "no type information".
@@ -93,8 +115,8 @@ function portFromJson(entry: PortEntry): StatusOr<ActionPortSchema> {
     type: entry.type ?? 'application/json',
     description: entry.description ?? '',
     required: entry.required === true,
-    // No fallback worth having: a document that omits `unary` was not written
-    // by this codec. False matches ActionPortSchema's own default.
+    // False when absent, which is what the writer omits the field for and what
+    // ActionPortSchema itself defaults to.
     unary: entry.unary === true,
     jsonSchema:
       entry.json_schema === undefined || entry.json_schema === null

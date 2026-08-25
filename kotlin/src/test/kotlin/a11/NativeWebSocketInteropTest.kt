@@ -150,12 +150,18 @@ asyncio.run(main())
             val response = withTimeout(15_000) {
                 ask.getOutput("actions", bindStream = false).valueOrThrow().next(timeoutMs = 10_000)
             }
-            assertNotNull(response, "__list_actions__ produced no 'actions' output")
+            // The value, not the StatusOr around it: `next` answers `Ok(null)`
+            // at finality, so the read has to be unwrapped before it says
+            // whether anything arrived.
+            assertNotNull(
+                ok(response),
+                "__list_actions__ produced no 'actions' output",
+            )
 
             // And that this side can read what that side wrote. A document the
             // Kotlin reader cannot parse is the failure mode the four
             // hand-copied handshake schemas used to produce.
-            val document = response as Map<*, *>
+            val document = ok(response) as Map<*, *>
             assertEquals(SCHEMA_DOCUMENT_FORMAT, document["format"])
             val entries = ok(schemasInDocument(document))
             assertTrue(entries.isNotEmpty(), "the gateway described no actions")

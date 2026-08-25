@@ -88,6 +88,11 @@ DEFAULT_WS_PORT = 8011
 DEFAULT_WS_PATH = "/a11"
 DEFAULT_SSE_PORT = 8012
 
+#: What ``--hosted`` with no name means: let the exchange assign a scoped
+#: identity. A sentinel rather than an empty string, so "asked for any" and
+#: "did not ask" stay distinguishable in the parsed arguments.
+HOSTED_ANY = "*"
+
 
 class ServeError(Exception):
     """A configuration mistake worth a message rather than a traceback."""
@@ -259,6 +264,17 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         ),
     )
     console_module.add_plain_flag(parser)
+    parser.add_argument(
+        "--loglevel",
+        default=None,
+        metavar="LEVEL",
+        help=(
+            "Turn A11's logging on at this level, Python and native alike:"
+            " debug, info, warning, error, critical, or a number (negative"
+            " selects an Abseil VLOG tier). Off by default, which is why a"
+            " bring-up says nothing until you ask it to."
+        ),
+    )
 
     websocket = parser.add_argument_group(
         "websocket", "Serve the A11 protocol over WebSocket."
@@ -346,12 +362,25 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     hosted.add_argument(
         "--hosted",
+        nargs="?",
         default=None,
+        const=HOSTED_ANY,
         metavar="IDENTITY",
         help=(
             "Host under this identity on the exchange you are logged in to."
             " Takes a claim, connects to signalling, and keeps both alive;"
-            " implies --webrtc."
+            " implies --webrtc. Given without a name, the exchange assigns a"
+            " scoped identity of your organization -- disposable, and reclaimed"
+            " once nothing hosts it -- and the name it granted is printed."
+        ),
+    )
+    hosted.add_argument(
+        "--organization",
+        default="",
+        metavar="NAME",
+        help=(
+            "Which organization an assigned identity belongs to, when your"
+            " credential can act for more than one."
         ),
     )
     hosted.add_argument(
@@ -502,22 +531,33 @@ def _follow_the_claim(
     caller rather than an error, and the alternative is being unreachable.
     """
 
-    async def rebind() -> None:
-        previous = live.get("webrtc")
-        live["webrtc"] = webrtc(
-            endpoint.transport, endpoint.webrtc_configuration()
-        )(service)
+    # Imported here rather than read from the enclosing scope: the serving
+    # helpers are imported inside `_serve`, so a module-level function does not
+    # see them, and the failure surfaces only when a reconnect happens -- as
+    # `could not re-register <identity>: name 'webrtc' is not defined`, hours
+    # in, with the host left registered and serving nothing.
+    from a11.service.serving import webrtc
+
+    async def drop_listener() -> None:
+        previous = live.pop("webrtc", None)
         if previous is not None:
             try:
                 previous.stop()
-            except Exception:  # noqa: BLE001 - the old listener may be gone
-                logging.debug("the previous listener did not stop", exc_info=True)
-        logging.info("[serve] rebound the WebRTC listener")
+            except Exception:  # noqa: BLE001 - it may already be gone
+                logging.debug(
+                    "the previous listener did not stop", exc_info=True
+                )
 
-    async def on_transport(_transport) -> None:
-        await rebind()
+    async def on_transport(transport) -> None:
+        # A stopped WebRTC server closes its transport, so the listener is
+        # always built against the transport just handed over -- never against
+        # `endpoint.transport` read later, which may already have moved on.
+        live["webrtc"] = webrtc(
+            transport, endpoint.webrtc_configuration()
+        )(service)
+        logging.info("[serve] bound the WebRTC listener")
 
-    endpoint.on_rebind = rebind
+    endpoint.on_drop_listener = drop_listener
     endpoint.on_transport = on_transport
 
 
@@ -549,6 +589,9 @@ async def _hosted_endpoint(args: argparse.Namespace):
     caller's to close. The endpoint keeps the claim renewed and the signalling
     socket re-registered for as long as it lives, which is what makes a host
     that runs for days stay reachable.
+
+    ``--hosted`` with no name asks the exchange for a scoped identity instead of
+    naming one; which it granted is on the endpoint afterwards.
     """
     from a11.client.credentials import CredentialStore
     from a11.client.exchange import ExchangeClient
@@ -559,33 +602,41 @@ async def _hosted_endpoint(args: argparse.Namespace):
     except StatusException as exc:
         raise ServeError(exc.status.message) from exc
 
+    asked_for = None if args.hosted == HOSTED_ANY else args.hosted
     client = ExchangeClient(
         credential.exchange, api_key=credential.api_key
     )
     endpoint = HostedEndpoint(
         client,
-        args.hosted,
+        asked_for,
         ttl_seconds=args.claim_ttl,
         signalling_url=credential.signalling_url,
+        organization=getattr(args, "organization", ""),
     )
     try:
         await endpoint.start()
     except StatusException as exc:
         await client.aclose()
-        raise ServeError(
-            f"Could not host {args.hosted!r}: {exc.status.message}"
-        ) from exc
+        what = (
+            f"host {asked_for!r}"
+            if asked_for
+            else "be assigned an identity to host"
+        )
+        raise ServeError(f"Could not {what}: {exc.status.message}") from exc
     return client, endpoint
 
 
 def _endpoint_urls(
     args: argparse.Namespace,
     live: dict[str, Any],
+    identity: str = "",
 ) -> dict[str, str]:
     """How to reach each live listener, with the port it actually bound.
 
     Read back from the listener rather than from the options, so ``--ws-port 0``
-    reports the port it was given instead of the zero that was asked for.
+    reports the port it was given instead of the zero that was asked for -- and,
+    for a hosted endpoint, the identity it was *granted* rather than the one
+    asked for, which may have been "any".
     """
     urls: dict[str, str] = {}
     if "ws" in live:
@@ -599,12 +650,13 @@ def _endpoint_urls(
     if "webrtc" in live:
         if args.hosted:
             # What a caller would actually type, rather than where the
-            # signalling happens to be.
+            # signalling happens to be. The identity is the one the exchange
+            # granted, which is not what was asked for when it assigned it.
             from a11.client.credentials import CredentialStore
 
             stored = CredentialStore().get(args.exchange or None)
             base = (stored.relay_ws_url if stored else "") or "wss://a11.to/ws"
-            urls["hosted"] = f"{base}/{args.hosted}"
+            urls["hosted"] = f"{base}/{identity or args.hosted}"
         else:
             urls["webrtc"] = (
                 f"{args.webrtc_signalling_server} as {live['webrtc'].identity}"
@@ -666,7 +718,9 @@ async def serve(args: argparse.Namespace) -> int:
             live = dict(zip(listeners, started))
             if endpoint is not None:
                 _follow_the_claim(endpoint, service, live)
-            urls = _endpoint_urls(args, live)
+            urls = _endpoint_urls(
+                args, live, endpoint.identity if endpoint else ""
+            )
             for name, url in urls.items():
                 logging.info("[serve] listening on %s (%s)", url, name)
             console_module.print_fields(
@@ -696,9 +750,28 @@ async def serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _enable_logging(level: str | None) -> None:
+    """Turn A11's logging on at ``level``, or leave it off.
+
+    `enable` rather than `set_level`: the CLI is not an absl app, so nothing has
+    installed a handler or the native bridge, and setting a level alone would
+    leave every entry -- Python and C++ -- with nowhere to go.
+
+    Raises:
+        ServeError: For a level nobody can read, named so the fix is obvious.
+    """
+    if level is None:
+        return
+    try:
+        a11.logging.enable(level)
+    except (TypeError, ValueError) as error:
+        raise ServeError(f"--loglevel: {error}") from error
+
+
 async def _run(args: argparse.Namespace) -> int:
     console_module.set_plain(getattr(args, "plain", False))
     try:
+        _enable_logging(getattr(args, "loglevel", None))
         return await serve(args)
     except ServeError as error:
         console_module.console().print(

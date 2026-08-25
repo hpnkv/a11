@@ -51,6 +51,8 @@ ActionSchema SampleSchema() {
   lines.name = "lines";
   lines.type = "text/plain";
   lines.unary = false;
+  // The schema that says nothing, which the writer leaves out.
+  lines.json_schema = R"({"type":"object"})";
   schema.outputs.emplace("lines", lines);
 
   ActionHeaderSchema header;
@@ -103,19 +105,22 @@ TEST(DescribeSchemaTest, WritesEveryPortField) {
   EXPECT_EQ(described["output_to_json_field"]["lines"], "$");
 }
 
-TEST(DescribeSchemaTest, AlwaysStatesUnaryExplicitly) {
-  // The regression guard named in describe.h: ActionPortSchema defaults `unary`
-  // to false and flow.catalogue/v1's reader defaults it to true, so a document
-  // that omitted it would mean opposite things on the two sides of one wire.
+TEST(DescribeSchemaTest, OmitsWhatIsDefaulted) {
+  // Every reader here fills in ActionPortSchema's own defaults, so a false flag
+  // and an absent one are the same statement -- and a `{"type": "object"}`
+  // schema is what a port with none at all is shown as anyway.
   const nlohmann::json described =
       SchemaToJson(SampleSchema(), /*runnable=*/true);
-  for (const nlohmann::json& port : described["inputs"]) {
-    EXPECT_TRUE(port.contains("unary")) << port.dump();
-  }
-  for (const nlohmann::json& port : described["outputs"]) {
-    EXPECT_TRUE(port.contains("unary")) << port.dump();
-  }
-  EXPECT_FALSE(FindPort(described["outputs"], "lines")["unary"].get<bool>());
+  const nlohmann::json& lines = FindPort(described["outputs"], "lines");
+  EXPECT_FALSE(lines.contains("unary")) << lines.dump();
+  EXPECT_FALSE(lines.contains("required")) << lines.dump();
+  EXPECT_FALSE(lines.contains("json_schema")) << lines.dump();
+
+  // Said where it says something.
+  const nlohmann::json& command = FindPort(described["inputs"], "command");
+  EXPECT_TRUE(command["unary"].get<bool>());
+  EXPECT_TRUE(command["required"].get<bool>());
+  EXPECT_EQ(command["json_schema"]["type"], "string");
 }
 
 TEST(DescribeSchemaTest, HidesAutofilledInputsFromCallers) {
@@ -148,6 +153,10 @@ TEST(SchemaFromDescriptionTest, RoundTripsWhatCanTravel) {
   EXPECT_TRUE(command.unary);
   EXPECT_FALSE(command.json_schema.empty());
   EXPECT_FALSE(rebuilt->outputs.at("lines").unary);
+  // A schema that said nothing comes back absent rather than as itself, which
+  // is the one thing this round trip does not preserve and does not need to:
+  // both spellings mean "no type information".
+  EXPECT_TRUE(rebuilt->outputs.at("lines").json_schema.empty());
   EXPECT_EQ(rebuilt->output_to_json_field.at("lines"), "$");
 
   // Autofills deliberately do not travel: they are receiver-owned defaults, and

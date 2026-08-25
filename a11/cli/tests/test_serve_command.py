@@ -320,6 +320,100 @@ def test_a_file_missing_the_symbol_still_names_the_alternatives(
     assert f"{path}:registry" in str(raised.value)
 
 
+# --- Logging -----------------------------------------------------------------
+
+
+@pytest.fixture
+def restore_log_level():
+    """Put A11's log level back, so one test's flag is not everyone's.
+
+    `enable` is process-wide by design -- it installs a handler and pushes the
+    level into the native runtime -- so a test that turns logging on has to turn
+    it back off or the rest of the suite runs at DEBUG.
+    """
+    import logging as std_logging
+
+    before = a11.logging.get_level()
+    try:
+        yield
+    finally:
+        a11.logging.set_level(before or std_logging.WARNING)
+
+
+def test_a_log_level_turns_a11s_logging_on(restore_log_level) -> None:
+    import logging as std_logging
+
+    from a11.cli.commands.serve import _enable_logging
+
+    _enable_logging("debug")
+    assert a11.logging.get_level() == std_logging.DEBUG
+
+
+def test_no_log_level_leaves_logging_alone(restore_log_level) -> None:
+    from a11.cli.commands.serve import _enable_logging
+
+    before = a11.logging.get_level()
+    _enable_logging(None)
+    assert a11.logging.get_level() == before
+
+
+def test_an_unreadable_log_level_names_the_value(restore_log_level) -> None:
+    from a11.cli.commands.serve import _enable_logging
+
+    with pytest.raises(ServeError) as raised:
+        _enable_logging("lound")
+    assert "lound" in str(raised.value)
+
+
+def test_a_log_level_is_off_unless_asked_for() -> None:
+    assert _args().loglevel is None
+
+
+@pytest.mark.asyncio
+async def test_a_bad_log_level_fails_the_command(tmp_path: Path) -> None:
+    """Exit 2 rather than a traceback, like the command's other input errors."""
+    module = tmp_path / "quiet.py"
+    module.write_text(textwrap.dedent(_REGISTRY_SOURCE), encoding="utf-8")
+
+    assert await SERVE_COMMAND.run(_args(str(module), loglevel="lound")) == 2
+
+
+# --- Being hosted ------------------------------------------------------------
+
+
+def test_hosted_takes_a_name_or_asks_for_one() -> None:
+    from a11.cli.commands.serve import HOSTED_ANY
+
+    parser = argparse.ArgumentParser()
+    SERVE_COMMAND.configure(parser)
+
+    # Three distinguishable states: a name, "any name", and not hosted.
+    assert parser.parse_args(["m", "--hosted", "acme--staging"]).hosted == (
+        "acme--staging"
+    )
+    assert parser.parse_args(["m", "--hosted"]).hosted == HOSTED_ANY
+    assert parser.parse_args(["m"]).hosted is None
+
+
+def test_the_assigned_identity_is_what_gets_reported() -> None:
+    """The URL a caller would type, which is not what `--hosted` was given.
+
+    With a name assigned by the exchange, printing `args.hosted` would print the
+    sentinel -- a URL nobody can use, next to a host that is working.
+    """
+    from a11.cli.commands.serve import HOSTED_ANY, _endpoint_urls
+
+    class FakeListener:
+        identity = "unused"
+
+    urls = _endpoint_urls(
+        _args(hosted=HOSTED_ANY, exchange=""),
+        {"webrtc": FakeListener()},
+        "acme--3f19c2b4",
+    )
+    assert urls["hosted"].endswith("/acme--3f19c2b4")
+
+
 # --- HTTP protocol and TLS ---------------------------------------------------
 
 
@@ -751,3 +845,55 @@ async def test_serving_over_webrtc_through_a_signalling_server(
             client_signalling.close()
         signalling_server.stop()
         rendezvous.stop()
+
+
+@pytest.mark.asyncio
+async def test_following_the_claim_rebinds_on_a_new_transport():
+    """The hooks must run, not merely be wired.
+
+    They only fire on a reconnect or a credential renewal, so a plain
+    name error inside them stays invisible until a host has been up for hours
+    -- and then shows as `could not re-register <identity>: name 'webrtc' is
+    not defined`, with the host registered and serving nothing. Calling them
+    here is what makes that a test failure instead.
+    """
+    import a11
+    from a11.cli.commands.serve import _follow_the_claim
+
+    class FakeEndpoint:
+        on_drop_listener = None
+        on_transport = None
+        claim = None
+
+        def webrtc_configuration(self):
+            return net.WebRtcConfiguration()
+
+    stopped: list[str] = []
+
+    class FakeListener:
+        def stop(self) -> None:
+            stopped.append("stopped")
+
+    endpoint = FakeEndpoint()
+    service = a11.Service(action_registry=a11.ActionRegistry())
+    live: dict[str, object] = {"webrtc": FakeListener()}
+
+    _follow_the_claim(endpoint, service, live)
+    assert endpoint.on_drop_listener is not None
+    assert endpoint.on_transport is not None
+
+    await endpoint.on_drop_listener()
+    assert stopped == ["stopped"]
+    assert "webrtc" not in live
+
+    # And a new transport builds a replacement rather than raising.
+    service_signalling = net.SignallingService.create()
+    endpoint_a = service_signalling.connect("agent-a", lambda message: None)
+    try:
+        await endpoint.on_transport(endpoint_a)
+        assert live.get("webrtc") is not None
+    finally:
+        with contextlib.suppress(Exception):
+            live.pop("webrtc").stop()
+        endpoint_a.close()
+        service_signalling.stop()

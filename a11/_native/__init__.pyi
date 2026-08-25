@@ -3,6 +3,7 @@ Native C++ backend for A11
 """
 
 from __future__ import annotations
+import a11.flow.plan
 import a11.status
 import a11.stores.local_chunk_store
 import asyncio
@@ -1152,6 +1153,51 @@ class ActionRegistry:
     def copy(self, clear_autofills: bool = True) -> ActionRegistry:
         """
         Return a copy of the registry, optionally clearing autofills.
+        """
+
+    def flow(
+        self, source: str, *, name: str | None = None, source_name: str = ""
+    ) -> a11.flow.plan.FlowPlan:
+        """
+        Register a Flow composition as an Action, deriving both halves from it.
+
+        What [`action`][a11.actions.registry.ActionRegistry.action] is for a
+        function, this is for a flow -- except that there is nothing to infer from
+        Python here. A flow declares its own ports and *is* its own handler, so the
+        text is the whole Action and this takes it as it stands:
+
+        ```python
+        registry = ActionRegistry()
+
+        greet = registry.flow('''
+            flow greet {
+              in  name:  string
+              out reply: string
+              "Hello, " then name then "!" -> reply
+              drain reply
+            }
+        ''')
+        ```
+
+        The source must declare exactly one flow, and a named one: a file of several
+        is [`register_all`][a11.flow.plan.Program.register_all]'s business, and a
+        `flow { ... }` entry point has no name to be called by.
+
+        Args:
+            source: The flow's text.
+            name: Action name to register under; defaults to the flow's own. The
+                schema is registered under this name too, so a peer asking what this
+                side serves is told the name it can actually call.
+            source_name: What to call the source in a diagnostic -- a file name,
+                usually. Defaults to the name it is registered under.
+
+        Returns:
+            The compiled [FlowPlan][a11.flow.plan.FlowPlan], which is also how to
+            run the composition here rather than through the registry.
+
+        Raises:
+            FlowSyntaxError: If the source will not compile.
+            ValueError: If it is not exactly one named flow.
         """
 
     def get_handler(

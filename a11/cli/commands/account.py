@@ -294,6 +294,17 @@ def configure_identity(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Let anyone reach it through the relay, with no credential.",
     )
+    create.add_argument(
+        "--scoped",
+        action="store_true",
+        help=(
+            "Make a disposable identity of your organization --"
+            " <organization>--<name> -- rather than reserving a global name."
+            " Those are capped far more softly and are reclaimed once nothing"
+            " hosts them; hosting one creates it, so registering it here is"
+            " only for saying something about it up front, such as --public."
+        ),
+    )
     create.set_defaults(identity_command="create")
 
 
@@ -314,6 +325,7 @@ async def run_identity(args: argparse.Namespace) -> int:
                     args.name,
                     description=args.description,
                     visibility="public" if args.public else "private",
+                    scoped=getattr(args, "scoped", False),
                 )
                 console.print(f"Registered {created['name']}.")
                 console.print(f"  websocket  {created['relay_ws_url']}")

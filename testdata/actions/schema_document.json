@@ -15,9 +15,6 @@
             "unary": true
           },
           {
-            "json_schema": {
-              "type": "object"
-            },
             "name": "parameters",
             "type": "application/json",
             "unary": true
@@ -33,13 +30,9 @@
               "type": "string"
             },
             "name": "output_lines",
-            "type": "text/plain",
-            "unary": false
+            "type": "text/plain"
           },
           {
-            "json_schema": {
-              "type": "object"
-            },
             "name": "status",
             "type": "application/json",
             "unary": true
@@ -66,9 +59,6 @@
             "unary": true
           },
           {
-            "json_schema": {
-              "type": "object"
-            },
             "name": "parameters",
             "type": "application/json",
             "unary": true
@@ -84,13 +74,9 @@
               "type": "string"
             },
             "name": "output_lines",
-            "type": "text/plain",
-            "unary": false
+            "type": "text/plain"
           },
           {
-            "json_schema": {
-              "type": "object"
-            },
             "name": "status",
             "type": "application/json",
             "unary": true

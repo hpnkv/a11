@@ -38,10 +38,6 @@ namespace {
 
 enum class End { kNone, kHalfClose, kAbort };
 
-std::string NewStreamId() {
-  return NewStreamId();
-}
-
 absl::Status InvokeMessageCallback(const OnMessage& callback,
                                    std::optional<data::WireMessage> message) {
   // Unguarded on purpose: StartEndpoint adopts both callbacks through

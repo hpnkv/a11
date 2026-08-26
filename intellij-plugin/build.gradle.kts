@@ -61,6 +61,8 @@ kotlin {
 }
 
 intellijPlatform {
+    instrumentCode = false
+
     // CLion 2026.1 cannot run `traverseUI`, which is what this task does: CLion
     // overrides the starter to relaunch itself "with the Radler language plugin"
     // and builds the child command line with a `-D` flag where the executable

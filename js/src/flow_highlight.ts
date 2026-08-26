@@ -82,7 +82,7 @@ export const FLOW_LOG_LEVELS: readonly string[] = [
 ];
 
 /** Literals that are words, and the operators that are. */
-export const FLOW_CONSTANTS: readonly string[] = ['true', 'false', 'null'];
+export const FLOW_CONSTANTS: readonly string[] = ['true', 'false', 'null', '_'];
 export const FLOW_OPERATOR_WORDS: readonly string[] = ['and', 'or', 'not', 'in'];
 
 const KEYWORDS = new Set(FLOW_KEYWORDS);

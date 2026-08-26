@@ -33,6 +33,7 @@ page:
 | `nodes map` | declare a node map to keep traffic out of the session |
 | `source -> port, port` | pipe a stream into one or more node(s) |
 | `source \| stage \| stage -> port` | reshape it on the way |
+| `source \| stage -> _` | the same, keeping no result; `_` is not a name |
 | `skip source` | read a stream to its end and discard the values |
 | `skip n port` | drop a node's first `n` values, for every reader |
 | `s = wait x` | hold until `x` is finished, and say how it went |
@@ -77,7 +78,12 @@ first-class syntax here:
   action producing it. `skip 1 x.rows` is the other half: it takes the first
   value off the node itself, for *every* reader of it, which is how a header
   line stops being everybody's problem — `| drop 1` only trims the one reader
-  that says it. Several of them naming the same node add up. `| first 3`,
+  that says it. Several of them naming the same node add up. `-> _` is the
+  opposite end of the same idea: `skip` says the values were never wanted, `_`
+  says the *result* is not, and the pipeline making it still runs — so
+  `pages | map summarise(it) -> _` summarises every page and keeps nothing.
+  `_` is a destination and not a name: nothing may be bound to it and nothing
+  may be read out of it. `| first 3`,
   `| truncate 4000`, `| where it.ok` and
   `| mime "text/*"` throw values away *before* they reach the next step --
   which, when the next step is a model, is the difference between a cheap call
@@ -95,7 +101,12 @@ first-class syntax here:
   how a flow *reads* an outcome, because waiting and finding out are the same
   moment. `after` also takes a port or a node directly, meaning "once that
   stream is finished": `-> mic.control_events after sentence` stops the
-  microphone as soon as there is a sentence, with no barrier to name.
+  microphone as soon as there is a sentence, with no barrier to name. It holds
+  the whole statement, **arguments included** — `run act(p: now() - started)
+  after done` reads the clock once `done` has happened — so what a barriered
+  statement reports is what was true by the time it ran. A `wait` on a node the
+  flow *lends* rather than writes is the exception that is not a wait at all: it
+  ends the node, and at once, which is why the idiom is `drain n after <call>`.
 * **Nodes of a flow's own.** `x = node()` makes a stream the flow can write
   from several places and read back from one; `x = node(where-they-said)`
   attaches
@@ -172,8 +183,9 @@ statement  := [name "="] call
             | name "=" "node" "(" [expr] ")" ["in" name]
             | [name "="] "wait" reference ["timeout" duration]
             | [name "="] "drain" reference
-            | pipeline "->" reference ("," reference)*
+            | pipeline "->" destination ("," destination)*
             | "skip" (number reference | skip-target ("," skip-target)*)
+destination := reference | "_"      # `_` keeps nothing, and is not a name
 skip-target := pipeline
             | name ("," name)* "of" name   # or "(" name ("," name)* [ "of" name ] ")"
             | "cancel" name
@@ -368,6 +380,7 @@ flow NAME {
   N = node([ID]) [in MAP]                  # a stream of the flow's own
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
+  SOURCE | STAGE -> _                      # do the work, keep no result
   skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
   skip X                                   # every output of a call X
@@ -447,7 +460,11 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       see two different values rather than two copies of the first: reading the
       first value and ignoring the rest is exactly the mistake nobody finds out
       about. Which of them gets which value is not defined; `after` is how a flow
-      that cares says so. A stream the language can *prove* carries one value is
+      that cares says so — except *within* one statement, where there is no
+      `after` that could order two reads of one node against each other, and the
+      language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
+      it names a value, and a value is shared. A stream the language can *prove*
+      carries one value is
       the exception, and is shared rather than taken: a port that did not say
       `stream`, a header, a status, or a pipeline that reduced with `| collect`,
       `| count` or `| first 1`. Those promise one value, so a second arriving
@@ -627,7 +644,8 @@ STATUS: a record {"ok": bool, "code": "NOT_FOUND", "number": 5, "message": str}.
 Steps run concurrently; order comes from the data. Every output of a step is
 read, whether the flow uses it or not. Stages that shrink a stream (first,
 truncate, where) do so before the next step ever sees it, `skip N PORT` does it
-for every reader at once, and `nodes` blocks keep a step's traffic off the wire.
+for every reader at once, `-> _` performs a pipeline and keeps none of it, and
+`nodes` blocks keep a step's traffic off the wire.
 '''
 
 #: The conventional extension for a file of flows.

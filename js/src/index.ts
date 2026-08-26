@@ -36,4 +36,6 @@ export * from './signalling.js';
 export * from './webrtc_wire_stream.js';
 export * from './http_sse_wire_stream.js';
 
+export * from './flow_highlight.js';
+
 export * from './sdk/index.js';

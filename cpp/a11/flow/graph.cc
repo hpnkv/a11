@@ -98,6 +98,20 @@ std::vector<RefId> FlowGraph::ValueRefs(RefId ref) const {
       Push(found, read);
     }
   }
+  // A `| log`/`| logf` stage reads whatever it prints, the same way the
+  // statement does: `x | logf "%s at %s" it, started` is a value read of
+  // `started` per value going past, and one uncounted read of it is a stage
+  // told the stream has no reader slot left.
+  if (one.kind == RefKind::kDerived) {
+    for (const ExprId expr : one.stage.log.arguments) {
+      if (expr == kNone) {
+        continue;
+      }
+      for (const RefId read : exprs[expr].refs) {
+        Push(found, read);
+      }
+    }
+  }
   return found;
 }
 
@@ -160,6 +174,12 @@ std::vector<RefId> FlowGraph::ValueSources(StepId step) const {
   add(one.code);
   add(one.message);
   add(one.condition);
+  // What a `log`/`logf` prints. Not `message`: a log keeps its arguments in its
+  // own tail, so a `logf info "took %s" started` read nothing as far as the
+  // analysis could see and the stream it named got no reader slot.
+  for (const ExprId expr : one.log.arguments) {
+    add(expr);
+  }
   return found;
 }
 

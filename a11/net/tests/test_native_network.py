@@ -311,3 +311,48 @@ async def test_webrtc_server_accepts_peers_through_a_remote_signalling_server():
             client_signalling.close()
         signalling_server.stop()
         rendezvous.stop()
+
+
+def test_the_path_mtu_search_can_be_turned_off_and_bounded():
+    """Pinning the MTU is something a caller can say, not only a C++ default.
+
+    Path MTU discovery raises the association MTU once a burst of padded
+    heartbeats is acknowledged, and a burst of probes can be luckier than a
+    stream of data. When it is, packets at the raised size are dropped in
+    flight -- which produces no local send error, so the association sits
+    wedged until the black-hole detector notices. A peer on a path it cannot
+    characterise (a TURN relay, anything across the internet) wants to hold the
+    configured MTU instead, and until these were bound it had no way to ask.
+    """
+    configuration = _native.WebRtcConfiguration()
+    # The defaults the C++ header declares, so a change to either is visible
+    # here rather than only in whatever it breaks.
+    assert configuration.path_mtu_discovery is True
+    assert configuration.max_discovered_mtu == 9216
+    assert configuration.probe_timeout == a11.timing.Duration.milliseconds(500)
+    assert configuration.path_mtu_raise_interval == a11.timing.Duration.seconds(
+        600
+    )
+    assert (
+        configuration.path_mtu_startup_retry
+        == a11.timing.Duration.milliseconds(250)
+    )
+
+    # Pinned: discovery off, and the ceiling brought down to the floor so that
+    # even a build that ignored the flag could not raise above it.
+    configuration.path_mtu_discovery = False
+    configuration.mtu = 1280
+    configuration.max_discovered_mtu = 1280
+    configuration.validate()
+    assert configuration.path_mtu_discovery is False
+    assert configuration.max_discovered_mtu == 1280
+
+    # The timers are durations, and take what every other duration here takes.
+    configuration.probe_timeout = a11.timing.Duration.seconds(2)
+    configuration.path_mtu_raise_interval = a11.timing.Duration.seconds(60)
+    configuration.path_mtu_startup_retry = a11.timing.Duration.milliseconds(50)
+    configuration.validate()
+    assert configuration.probe_timeout == a11.timing.Duration.seconds(2)
+    assert configuration.path_mtu_raise_interval == a11.timing.Duration.seconds(
+        60
+    )

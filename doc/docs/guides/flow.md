@@ -64,7 +64,10 @@ one step that needs the client is the one written with `call`.
 
 `skip` reads an output port and keeps nothing. It is needed because an output
 nobody drains stalls the action producing it; saying it in the flow is how a
-composition stays explicit about what it is not interested in.
+composition stays explicit about what it is not interested in. Where the work on
+the way is the point and only the result is unwanted, `-> _` is the other half:
+`pages | map summarise(it) -> _` summarises every page and keeps nothing, where
+`skip pages` would not have looked at one.
 
 The `timeout` is the whole flow's patience for a sentence. If it runs out, the
 error propagates and the flow fails, which is the wanted behaviour: nobody said

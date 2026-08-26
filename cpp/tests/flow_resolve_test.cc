@@ -315,6 +315,8 @@ TEST(FlowResolve, EveryCodeItProducesIsPublished) {
       "flow f { in w: string stream\n for word in w { skip 1 word } }",
       "flow f { out a: string\n fail wat \"x\" }",
       "flow one { in a: string }\nflow one { in a: string }",
+      "flow f { out a: string\n _ -> a }",
+      "flow f { out a: string\n _ = node()\n \"x\" -> a }",
   };
   for (const std::string_view source : sources) {
     for (const Diagnostic& diagnostic : Check(source).diagnostics) {
@@ -472,6 +474,47 @@ TEST(FlowResolve, ItInALogStageIsTheValueInHand) {
   EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
                         "  if a { log it }\n  a -> b\n}\n")),
             (std::vector<std::string>{"flow.name.it-outside-stage"}));
+}
+
+TEST(FlowResolve, ADiscardIsADestinationAndNothingElse) {
+  // `-> _` is the whole of what `_` may say. It is not a name, so there is
+  // nowhere to bind it and nothing to read back out of it -- and each wrong
+  // position gets a message about the discard rather than about a name nothing
+  // declared, because `_` is a word of the grammar and not an identifier.
+  const auto codes = [](std::string_view body) {
+    return Codes(Check(absl::StrCat("flow f {\n  in a: string stream\n",
+                                    "  out b: string stream\n", body, "}\n")));
+  };
+  EXPECT_TRUE(codes("  a | count -> _\n").empty());
+  // Beside a real one, and twice: a discard is a reader like any other, so
+  // several of them are several readers and no more remarkable than that.
+  EXPECT_TRUE(codes("  a -> b, _\n").empty());
+  EXPECT_TRUE(codes("  a -> b\n  a -> _, _\n").empty());
+
+  const std::vector<std::string> read{"flow.name.discard-read"};
+  EXPECT_EQ(codes("  _ -> b\n"), read);
+  EXPECT_EQ(codes("  _.field -> b\n"), read);
+  EXPECT_EQ(codes("  a -> b\n  drain _\n"), read);
+  EXPECT_EQ(codes("  a -> b\n  wait _\n"), read);
+  // With an `after`, since an unconditional `abort` has a complaint of its own.
+  EXPECT_EQ(codes("  a -> b\n  abort _ after b\n"), read);
+  EXPECT_EQ(codes("  a -> b\n  skip _\n"), read);
+  EXPECT_EQ(codes("  a | map _ -> b\n"), read);
+  EXPECT_EQ(codes("  a | where _ == 1 -> b\n"), read);
+  EXPECT_EQ(codes("  for v in _ { v -> b }\n"), read);
+  EXPECT_EQ(codes("  a -> b\n  logf info \"%s\" status _ after b\n"), read);
+
+  // And nothing may be called `_`, wherever a name is introduced.
+  const std::vector<std::string> bound{"flow.name.discard-bound"};
+  EXPECT_EQ(codes("  _ = node()\n  a -> b\n"), bound);
+  EXPECT_EQ(codes("  a -> b\n  let _ = a\n"), bound);
+  EXPECT_EQ(codes("  _ = wait a\n  a -> b\n"), bound);
+  EXPECT_EQ(Codes(Check("flow f {\n  in _: string\n  out b: string\n"
+                        "  \"x\" -> b\n}\n")),
+            bound);
+  EXPECT_EQ(Codes(Check("flow f {\n  header \"x\" as _\n  out b: string\n"
+                        "  \"x\" -> b\n}\n")),
+            bound);
 }
 
 TEST(FlowResolve, ARepeatSaysWhenItStops) {
@@ -634,6 +677,67 @@ TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
         << "'done' named a " << graph::StepKindName(step.kind);
   }
   EXPECT_TRUE(found) << "no step was labelled 'done'";
+}
+
+TEST(FlowResolve, AnAfterHoldsTheArgumentsOfTheStatementItIsOn) {
+  // `after` holds the *statement*, and an argument is part of the statement: a
+  // feed that did not wait would read `now()` while the flow was starting and
+  // hand the call a value from before the thing it says it is after.
+  const std::string source =
+      "flow f {\n  in w: string\n  out o: string\n"
+      "  first = run t(p: w)\n  done = wait first\n"
+      "  second = run t(p: strformat(\"%s\", now())) after done\n"
+      "  second.out -> o\n  skip first.out\n}\n";
+  const ResolveResult result =
+      Resolve(source, Parse(source), /*build_graph=*/true);
+  EXPECT_TRUE(Codes(result).empty()) << Messages(result);
+  ASSERT_FALSE(result.flows.empty());
+  const graph::FlowGraph& flow = result.flows.front().graph;
+  graph::StepId barrier = graph::kNone;
+  for (graph::StepId step = 0; step < flow.steps.size(); ++step) {
+    if (flow.steps[step].label == "done") {
+      barrier = step;
+    }
+  }
+  ASSERT_NE(barrier, graph::kNone);
+  bool found = false;
+  for (const graph::Step& step : flow.steps) {
+    if (step.kind != graph::StepKind::kPipe ||
+        !step.label.ends_with("-> second.p")) {
+      continue;
+    }
+    found = true;
+    EXPECT_EQ(step.after, std::vector<graph::StepId>{barrier}) << step.label;
+  }
+  EXPECT_TRUE(found) << "no feed step for second.p";
+  // And the plan a reader is shown says the same thing.
+  for (const StepPlan& step : result.flows.front().plan.steps) {
+    if (step.kind == "pipe" && step.destination == "second.p") {
+      EXPECT_EQ(step.after, std::vector<std::string>{"done"});
+    }
+  }
+}
+
+TEST(FlowResolve, AnArgumentMayNotReadTheCallItsStatementWaitsFor) {
+  // Nothing could run: the feed will not read `first.out` until `first` has
+  // finished, and `first` cannot finish while nothing reads `first.out`.
+  EXPECT_EQ(Codes(Check("flow f {\n  in w: string\n  out o: string\n"
+                        "  first = run t(p: w)\n"
+                        "  second = run t(p: first.out) after first\n"
+                        "  second.out -> o\n}\n")),
+            (std::vector<std::string>{"flow.barrier.after-reads-subject"}));
+  // The same pipeline without the `after` is the ordinary way to write it.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in w: string\n  out o: string\n"
+                          "  first = run t(p: w)\n"
+                          "  second = run t(p: first.out)\n"
+                          "  second.out -> o\n}\n"))
+                  .empty());
+  // Waiting for something else while reading this one is fine.
+  EXPECT_TRUE(Codes(Check("flow f {\n  in w: string\n  out o: string\n"
+                          "  first = run t(p: w)\n  other = run t(p: w)\n"
+                          "  second = run t(p: first.out) after other\n"
+                          "  second.out -> o\n  skip other.out\n}\n"))
+                  .empty());
 }
 
 TEST(FlowResolve, APatternIsReadWhereItIsWritten) {

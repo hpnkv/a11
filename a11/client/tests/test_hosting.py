@@ -17,6 +17,7 @@ import pytest
 
 from a11 import net
 from a11.client.hosting import hosted_configuration
+from a11.status import Status, StatusCode
 
 
 def test_ice_is_not_multiplexed_by_default():
@@ -31,6 +32,30 @@ def test_ice_is_not_multiplexed_by_default():
     assert not configuration.enable_ice_udp_mux
     assert list(configuration.stun_servers) == []
     assert list(configuration.turn_servers) == []
+
+
+def test_a_hosted_agent_holds_its_mtu_rather_than_probing_upward():
+    """Discovery off, against the transport's own default, and deliberately.
+
+    A raised MTU whose packets are dropped in flight produces no send error, so
+    nothing reports it: the association wedges until the black-hole detector
+    notices. Observed as a flow run whose output stops mid-stream and never
+    resumes, about one run in six. A hosted agent is reached through a TURN
+    relay across the internet, which is the path least worth guessing about.
+    """
+    configuration = hosted_configuration()
+
+    assert configuration.path_mtu_discovery is False
+    # The ceiling comes down with it, so even a build that ignored the flag
+    # could not raise above the configured floor.
+    assert configuration.max_discovered_mtu == 1280
+
+
+def test_path_mtu_discovery_is_available_where_the_path_is_known():
+    configuration = hosted_configuration(discover_path_mtu=True)
+
+    assert configuration.path_mtu_discovery is True
+    assert configuration.max_discovered_mtu == 9216
 
 
 def test_multiplexing_is_available_for_a_single_peer_host():
@@ -445,3 +470,92 @@ async def test_a_claim_that_names_no_identity_is_refused():
 
     with pytest.raises(StatusException):
         await endpoint.start()
+
+
+# --- A credential that has stopped working -----------------------------------
+
+
+def _maintaining(status_code) -> "hosting.HostedEndpoint":
+    """An endpoint whose renewal always fails with ``status_code``."""
+    from a11.client import hosting
+
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    endpoint._connected = asyncio.Event()
+    endpoint._stopped = asyncio.Event()
+    endpoint._fatal = None
+    endpoint._transport = None
+    endpoint.on_drop_listener = None
+    endpoint._bound_expiry = None
+
+    async def refuse() -> None:
+        raise Status(code=status_code, message="The credential is not valid.").to_exception()
+
+    endpoint._renew_if_due = refuse
+    return endpoint
+
+
+@pytest.mark.parametrize(
+    "code",
+    [StatusCode.UNAUTHENTICATED, StatusCode.PERMISSION_DENIED],
+    ids=["unauthenticated", "permission-denied"],
+)
+@pytest.mark.asyncio
+async def test_a_credential_that_stopped_working_stops_hosting(code, monkeypatch):
+    """Rather than retrying it every thirty seconds for the life of the process.
+
+    The bug this exists for: a personal key was given to a long-running host,
+    the owner logged in again -- which revokes every live key of the same
+    `client_name` -- and the host then logged the same 401 twice a minute for
+    hours while presence, the listener and the log all went on saying
+    "hosting". A revoked key never becomes valid again, so retrying it can only
+    hide the one thing worth knowing.
+    """
+    from a11.client import hosting
+
+    monkeypatch.setattr(hosting, "RENEW_POLL_SECONDS", 0.01)
+    endpoint = _maintaining(code)
+
+    await asyncio.wait_for(endpoint._maintain(), timeout=5)
+
+    assert endpoint._stopped.is_set(), "hosting must stop, not loop"
+    assert endpoint.fatal is not None
+    assert endpoint.fatal.code == code
+    # And a caller waiting on it is told, without having to poll.
+    assert await asyncio.wait_for(endpoint.wait_stopped(), timeout=5) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_transient_renewal_failure_keeps_hosting(monkeypatch):
+    """The other half: UNAVAILABLE is the exchange having a moment.
+
+    Giving up on one of those would turn a blip into an outage needing a human.
+    """
+    from a11.client import hosting
+
+    monkeypatch.setattr(hosting, "RENEW_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(hosting, "MIN_RECONNECT_BACKOFF", 0.01)
+    monkeypatch.setattr(hosting, "MAX_RECONNECT_BACKOFF", 0.01)
+    endpoint = _maintaining(StatusCode.UNAVAILABLE)
+
+    # Reconnection is not what this is about: the loop reaches it because the
+    # fake has no transport, and a real re-register would need a live exchange.
+    async def reconnected() -> None:
+        return None
+
+    endpoint._connect = reconnected
+    calls = 0
+
+    async def refuse_then_stop() -> None:
+        nonlocal calls
+        calls += 1
+        if calls >= 3:
+            endpoint._stopped.set()
+        raise Status(code=StatusCode.UNAVAILABLE, message="try later").to_exception()
+
+    endpoint._renew_if_due = refuse_then_stop
+
+    await asyncio.wait_for(endpoint._maintain(), timeout=5)
+
+    assert calls >= 3, "it must keep trying"
+    assert endpoint.fatal is None, "a blip is not a reason to stop hosting"

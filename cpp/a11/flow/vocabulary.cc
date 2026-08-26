@@ -965,11 +965,14 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
         "in the past.",
         "llm = run ask_model(interactions: asked, config: {}) timeout 90s"}},
       {"after",
-       {"What has to have finished before the step starts.",
+       {"What has to have finished before the statement starts.",
         "one or more steps, ports or nodes",
         "Order in a flow comes from the data, so this is for the order the "
         "data does not imply: a log line that should read as the last word "
-        "about a step rather than a line racing it. It is also what lets a "
+        "about a step rather than a line racing it. It holds the whole "
+        "statement, arguments included, so `run act(p: now() - started) after "
+        "done` reads the clock once `done` has happened: what a barriered "
+        "statement reports is what was true by then. It is also what lets a "
         "`fail` or a `cancel` stand at the top of a body, by saying what it "
         "waits for. A named loop is a step like any other, so `after done` is "
         "how the rest of a flow waits for one.",
@@ -1186,6 +1189,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ConstantDocs() {
         "of those there is no value in hand for it to mean. It is a whole "
         "value, so `it.url` and `it[0]` read into it.",
         "hits | where it.ok | map it.url"}},
+      {"_",
+       {"The destination that keeps nothing.", "",
+        "Written where a pipe's destination goes, and nowhere else: `_` is not "
+        "a name, so nothing may be bound to it and nothing may be read back "
+        "out of it. The pipeline is still *performed*: every stage does its "
+        "work on every value, and the values are dropped at the end. That is "
+        "what tells it from `skip`, which says the values were never wanted "
+        "and may be taken off the stream where it is produced.",
+        "items | map expensive(it) -> _"}},
   };
   return *table;
 }
@@ -2213,7 +2225,7 @@ absl::Span<const std::string_view> OrderedStatusFields() {
 }
 
 const absl::flat_hash_set<std::string_view>& ConstantWords() {
-  static const auto* words = MakeSet({"true", "false", "null", "it"});
+  static const auto* words = MakeSet({"true", "false", "null", "it", "_"});
   return *words;
 }
 

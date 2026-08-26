@@ -2136,10 +2136,13 @@ class ParserImpl {
   NodePtr ParseReference() {
     const Token& at = Current();
     NodePtr node = ParsePostfix();
-    if (syntax::IsAnyOf(
-            node.get(),
-            {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
-             syntax::NodeKind::kOutcome, syntax::NodeKind::kError})) {
+    // `_` is reference-shaped and only a pipe's target may be one, so it is let
+    // through here and refused by the resolver -- which knows which of the
+    // several statements that read a reference this is.
+    if (syntax::IsAnyOf(node.get(),
+                        {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
+                         syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
+                         syntax::NodeKind::kError})) {
       return node;
     }
     Report("flow.syntax.unexpected",
@@ -2520,6 +2523,13 @@ class ParserImpl {
       }
       if (word == "it") {
         return Make<syntax::It>(token);
+      }
+      // `_` is the discard, and a word rather than punctuation only because
+      // that is how it is spelled. Read here so that every position it is
+      // *not* legal in gets a message saying so, rather than being told
+      // nothing declares a name it was never going to declare.
+      if (word == "_") {
+        return Make<syntax::Discard>(token);
       }
       // `zip(a, b)` reads several streams in step and `interleave(a, b)` reads
       // them at once. Both are spelled like a function and parsed apart from

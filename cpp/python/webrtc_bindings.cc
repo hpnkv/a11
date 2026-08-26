@@ -27,6 +27,7 @@
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
+#include "python/native_types.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::python {
@@ -536,6 +537,58 @@ void BindWebRtc(py::module_& module) {
           "Maximum number of WebRTC data channels an accepting server admits "
           "per peer connection. Surplus channels a client opens beyond this "
           "are refused. Defaults to 8. Has no effect on the dialing side.")
+      .def_readwrite(
+          "path_mtu_discovery", &net::WebRtcConfiguration::path_mtu_discovery,
+          "Whether to discover the path MTU by probing instead of holding "
+          "`mtu`. On by default, and worth turning off deliberately: discovery "
+          "raises the association MTU once a burst of padded SCTP heartbeats "
+          "is acknowledged, and a burst of probes can be luckier than a stream "
+          "of data. When it is, packets at the raised size are dropped in "
+          "flight -- which produces no local send error, so the association "
+          "sits wedged until the black-hole detector notices and falls back. "
+          "Set False to pin the MTU to `mtu`, which is what a peer on a path "
+          "it cannot characterise (a TURN relay, anything across the "
+          "internet) should do; it costs throughput and buys the absence of "
+          "that stall.")
+      .def_readwrite(
+          "max_discovered_mtu", &net::WebRtcConfiguration::max_discovered_mtu,
+          "Ceiling the search may raise the MTU to, in bytes. Defaults to "
+          "9216. Lowering it bounds how wrong discovery can be without "
+          "switching it off; setting it to `mtu` is another way of pinning.")
+      .def_property(
+          "probe_timeout",
+          [](const net::WebRtcConfiguration& self) -> NativeDuration {
+            return NativeDuration(self.probe_timeout);
+          },
+          [](net::WebRtcConfiguration& self, const py::handle& value) {
+            self.probe_timeout = ValueOrThrow(DurationFromPython(value, false));
+          },
+          "How long one probe has to be acknowledged before it counts as "
+          "lost. Defaults to 500ms.")
+      .def_property(
+          "path_mtu_raise_interval",
+          [](const net::WebRtcConfiguration& self) -> NativeDuration {
+            return NativeDuration(self.path_mtu_raise_interval);
+          },
+          [](net::WebRtcConfiguration& self, const py::handle& value) {
+            self.path_mtu_raise_interval =
+                ValueOrThrow(DurationFromPython(value, false));
+          },
+          "How long after the search settles before it tries to raise the MTU "
+          "again. Defaults to 10 minutes. A long interval is not a substitute "
+          "for turning discovery off: it bounds how often the stall can "
+          "happen, not whether it can.")
+      .def_property(
+          "path_mtu_startup_retry",
+          [](const net::WebRtcConfiguration& self) -> NativeDuration {
+            return NativeDuration(self.path_mtu_startup_retry);
+          },
+          [](net::WebRtcConfiguration& self, const py::handle& value) {
+            self.path_mtu_startup_retry =
+                ValueOrThrow(DurationFromPython(value, false));
+          },
+          "How long to wait before retrying while the SCTP association is not "
+          "yet available. Defaults to 250ms.")
       .def(
           "validate",
           [](const net::WebRtcConfiguration& configuration) {

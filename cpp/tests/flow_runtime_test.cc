@@ -397,6 +397,84 @@ flow ignore {
   EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
 }
 
+TEST(FlowRuntimeTest, ADiscardPerformsThePipelineAndKeepsNothing) {
+  // The difference between `-> _` and `skip`: a counted `skip` is elided, and a
+  // discard is *run*. What pins it is a stage with an observable effect --
+  // every value is logged, so the log says whether the pipeline was walked or
+  // thrown away whole.
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow ignore {
+  in  words: string stream
+  out done:  string
+  words | logf info "saw %s" it -> _
+  "finished" -> done
+}
+)",
+                                  "ignore", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
+  EXPECT_EQ(logs.sorted_texts(), Values({"saw a", "saw b"}));
+}
+
+TEST(FlowRuntimeTest, ADiscardIsAReaderLikeAnyOtherDestination) {
+  // A discard takes a reader slot, so the stream it reads still fans out to
+  // everything else reading it and every value still reaches the real
+  // destination. If it claimed no slot the other reader would be starved or
+  // the plan would be told the stream has more readers than it accounted for.
+  const Outcome outcome = RunFlow(R"(
+flow both {
+  in  words: string stream
+  out kept:  string stream
+  words -> kept
+  words | count -> _
+}
+)",
+                                  "both", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"a\"", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, ADiscardBesideAStreamingReaderDoesNotStallAtVolume) {
+  // The shape the console's own template has, and the one worth proving: one
+  // stream read twice, once by a *reducing* pipeline that keeps nothing and once
+  // straight through to a port. A bus slot holds `kQueueDepth` (8) items and
+  // then stops the producer for every reader, so a discard that consumed more
+  // slowly than the port would stall both in lockstep -- at which point the
+  // output stops mid-stream and the flow appears to hang. Many more values than
+  // the queue is deep, so a stall cannot hide in the first batch.
+  const int many = 500;
+  std::vector<std::string> sent;
+  sent.reserve(many);
+  for (int at = 0; at < many; ++at) {
+    sent.push_back(absl::StrCat("\"", at, "\""));
+  }
+  const Outcome outcome = RunFlow(R"(
+flow narrated {
+  in  words: string stream
+  out said:  string stream
+  words | join "" | count -> _
+  words -> said
+}
+)",
+                                  "narrated", {{"words", sent}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("said").size(), static_cast<size_t>(many));
+}
+
+TEST(FlowRuntimeTest, ADiscardMayStandBesideARealDestination) {
+  const Outcome outcome = RunFlow(R"(
+flow both {
+  in  words: string stream
+  out kept:  string stream
+  words -> kept, _
+}
+)",
+                                  "both", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"a\"", "\"b\""}));
+}
+
 TEST(FlowRuntimeTest, ForEachRunsABodyPerValue) {
   const Outcome outcome = RunFlow(R"(
 flow each {
@@ -1515,6 +1593,54 @@ flow narrated {
   const std::optional<LogCapture::Line> warned = logs.find("2 words in all");
   ASSERT_TRUE(warned.has_value());
   EXPECT_EQ(warned->level, "warning");
+}
+
+TEST(FlowRuntimeTest, ALogStatementMayPrintAValueItRead) {
+  // A log's arguments live in its own tail rather than in the `message` every
+  // other statement uses, and they were left out of the analysis -- so a log
+  // that named a stream was one uncounted reader of it and the flow died with
+  // "has no reader slot left" at run time, having compiled clean. Every case
+  // here is that bug: a `let`, a node, and a value read twice.
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow narrated {
+  in  words: string stream
+  out said:  string stream
+  let first-word = words | first 1
+  kept = node()
+  words -> kept
+  words -> said
+  logf info "started with %s" first-word after said
+  logf info "and again %s, %s" first-word, first-word after said
+  log kept after said
+}
+)",
+                                  "narrated", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
+  EXPECT_EQ(logs.sorted_texts(),
+            Values({"a", "and again a, a", "started with a"}));
+}
+
+TEST(FlowRuntimeTest, ALogStageMayPrintAValueBesideTheOneInHand) {
+  // The same hole on the stage side: `stage.log.arguments` was not among the
+  // refs a derived stream reads for a value. `it` is the value going past and
+  // needs no slot; `tag` is a stream and does.
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow narrated {
+  in  words: string stream
+  out said:  string stream
+  let tag = "run-1"
+  words | logf info "%s: %s" tag, it -> said
+}
+)",
+                                  "narrated", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
+  // One slot, one cursor, and `tag` carries one value -- so every pass reads
+  // the same tag rather than consuming a fresh one and ending the stream.
+  EXPECT_EQ(logs.sorted_texts(), Values({"run-1: a", "run-1: b"}));
 }
 
 // --- What this pass added ----------------------------------------------------

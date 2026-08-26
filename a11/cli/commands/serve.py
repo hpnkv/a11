@@ -24,6 +24,18 @@ async def summarise(document: str) -> str:
     ...
 ```
 
+## Or a whole Service
+
+The symbol may also be a [`Service`][a11.service.service.Service], which is how
+a backend that needs more than a registry gets served by this command rather
+than by a loop of its own. What "more" means in practice is an ``on_connection``
+hook: a registry copy per connection, a reverse-dispatch bridge onto it, a
+session the caller's own actions are registered on -- none of which a registry
+can carry, and all of which
+[`a11.demos.web_demos_server`][a11.demos.web_demos_server] needs. A `Service`
+arrives with its listeners still unbound, so every transport and `--hosted`
+below work on it unchanged.
+
 ## One service, however many endpoints
 
 Each ``--ws`` / ``--sse`` / ``--webrtc`` group adds a *listener*, and every
@@ -62,6 +74,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import dataclasses
 import importlib
 import importlib.util
 import os
@@ -187,8 +201,26 @@ def _load_from_path(module: str) -> types.ModuleType:
     return loaded
 
 
-def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
-    """Load ``MODULE[:SYMBOL]`` and return its registry.
+@dataclasses.dataclass(frozen=True)
+class Served:
+    """What a target resolved to, and where it came from.
+
+    Attributes:
+        registry: The actions to serve. Read off the service when the module
+            gave one, so the count this command prints is the same either way.
+        service: The module's own service, or ``None`` to build the plain one.
+        module_path: The module as it was named on the command line.
+        symbol: The symbol the above was read from.
+    """
+
+    registry: a11.ActionRegistry | None
+    service: Any | None
+    module_path: str
+    symbol: str
+
+
+def resolve_served(target: str) -> Served:
+    """Load ``MODULE[:SYMBOL]`` and return what it serves.
 
     Args:
         target: An import path (``pkg.subpkg.module``) or a path to a ``.py``
@@ -196,12 +228,14 @@ def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
             ``REGISTRY``. See `is_path_target` for how the two are told apart.
 
     Returns:
-        The registry, the module as it was named, and the symbol it came from.
+        The `Served` the symbol named -- a registry, or a whole service.
 
     Raises:
         ServeError: If the module cannot be loaded, has no such symbol, or the
-            symbol is not an `ActionRegistry`.
+            symbol is neither an `ActionRegistry` nor a `Service`.
     """
+    from a11.service.service import Service
+
     module_path, symbol = split_target(target)
     if not module_path:
         raise ServeError(
@@ -225,11 +259,13 @@ def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
     if found is None:
         # The near-miss is worth naming: a module written for its own
         # `asyncio.run` usually calls it `registry`, and the fix is a colon.
+        # A module whose symbols are lazy (PEP 562) lists none of them here,
+        # which costs a hint and nothing else.
         alternatives = sorted(
             name
             for name, value in vars(module).items()
             if not name.startswith("_")
-            and isinstance(value, a11.ActionRegistry)
+            and isinstance(value, (a11.ActionRegistry, Service))
         )
         hint = (
             f" Did you mean {module_path}:{alternatives[0]}?"
@@ -242,27 +278,66 @@ def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
         )
         raise ServeError(f"{module_path} has no {symbol!r}.{hint}")
 
-    if not isinstance(found, a11.ActionRegistry):
+    if isinstance(found, Service):
+        # Its own registry, which is the one its connections are built from --
+        # so `actions` below counts what a caller will actually find, including
+        # anything the module registered that a bare registry symbol omits.
+        return Served(found.action_registry, found, module_path, symbol)
+    if isinstance(found, a11.ActionRegistry):
+        return Served(found, None, module_path, symbol)
+    raise ServeError(
+        f"{module_path}:{symbol} is a {type(found).__name__}, not an"
+        " ActionRegistry or a Service."
+    )
+
+
+def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
+    """`resolve_served`, for a caller that wants the registry alone.
+
+    Raises:
+        ServeError: As `resolve_served`, and for a target that names a service
+            rather than a registry.
+    """
+    served = resolve_served(target)
+    if served.service is not None or served.registry is None:
+        # Strict about a service rather than handing back the registry inside
+        # it: what makes a service worth exporting is the per-connection hook,
+        # and a caller that took the registry alone would drop it silently.
         raise ServeError(
-            f"{module_path}:{symbol} is a {type(found).__name__}, not an"
-            " ActionRegistry."
+            f"{served.module_path}:{served.symbol} is a Service, and this"
+            " wants an ActionRegistry."
         )
-    return found, module_path, symbol
+    return served.registry, served.module_path, served.symbol
 
 
 # --- Flags -------------------------------------------------------------------
 
 
-def _configure(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "target",
-        metavar="MODULE[:SYMBOL]",
-        help=(
-            "Module holding the registry to serve: an import path"
-            " (mypkg.actions, mypkg.actions:TOOLS) or a path to a .py file"
-            f" (./demo/main.py). SYMBOL defaults to {DEFAULT_SYMBOL}."
-        ),
-    )
+def configure(
+    parser: argparse.ArgumentParser, *, with_target: bool = True
+) -> None:
+    """Declare this command's flags on ``parser``.
+
+    Args:
+        parser: The parser to add to.
+        with_target: Whether to add the positional target. A module that serves
+            *itself* through this machinery -- see
+            [`a11.demos.web_demos_server`][a11.demos.web_demos_server] -- knows
+            its own target and takes every transport flag below, so it asks for
+            the flags without the positional and fills `target` in itself.
+            Sharing the declaration is the point: one vocabulary of transport
+            flags, whichever entry point the user typed.
+    """
+    if with_target:
+        parser.add_argument(
+            "target",
+            metavar="MODULE[:SYMBOL]",
+            help=(
+                "Module holding the registry or service to serve: an import"
+                " path (mypkg.actions, mypkg.actions:TOOLS) or a path to a .py"
+                f" file (./demo/main.py). SYMBOL defaults to {DEFAULT_SYMBOL}."
+            ),
+        )
     console_module.add_plain_flag(parser)
     parser.add_argument(
         "--loglevel",
@@ -667,12 +742,37 @@ def _endpoint_urls(
 # --- Running -----------------------------------------------------------------
 
 
+async def _until_stopped_or_signalled(stop: Any, endpoint: Any) -> Any:
+    """Wait for a signal, or for hosting to fail for good; return the failure.
+
+    `None` when it was a signal, which is the ordinary ending.
+    """
+    if endpoint is None:
+        await stop.wait()
+        return None
+
+    signalled = asyncio.ensure_future(stop.wait())
+    hosting_stopped = asyncio.ensure_future(endpoint.wait_stopped())
+    try:
+        await asyncio.wait(
+            {signalled, hosting_stopped}, return_when=asyncio.FIRST_COMPLETED
+        )
+        return hosting_stopped.result() if hosting_stopped.done() else None
+    finally:
+        for task in (signalled, hosting_stopped):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+
 async def serve(args: argparse.Namespace) -> int:
     """Import the registry, bind the listeners, run until signalled."""
     from a11.service.serving import http_sse, serving, webrtc, websocket
 
-    registry, module_path, symbol = resolve_registry(args.target)
-    actions = registry.list_registered_actions()
+    served = resolve_served(args.target)
+    registry = served.registry
+    actions = registry.list_registered_actions() if registry else []
 
     # Nothing asked for means WebSocket: the point of the command is a running
     # service, and every transport being opt-in would make the short form do
@@ -711,7 +811,11 @@ async def serve(args: argparse.Namespace) -> int:
         signalling = await _signalling_client(args)
         listeners["webrtc"] = webrtc(signalling)
 
-    service = a11.Service(action_registry=registry)
+    # The module's own service when it gave one, because what makes it its own
+    # is the per-connection hook -- a registry copy, a bridge bound to the
+    # session -- and rebuilding it here from the registry alone would drop
+    # exactly that.
+    service = served.service or a11.Service(action_registry=registry)
     out = console_module.console()
     try:
         async with serving(service, *listeners.values()) as started:
@@ -725,8 +829,10 @@ async def serve(args: argparse.Namespace) -> int:
                 logging.info("[serve] listening on %s (%s)", url, name)
             console_module.print_fields(
                 {
-                    "module": module_path,
-                    "registry": symbol,
+                    "module": served.module_path,
+                    ("service" if served.service else "registry"): (
+                        served.symbol
+                    ),
                     "actions": len(actions),
                     **urls,
                 },
@@ -734,8 +840,21 @@ async def serve(args: argparse.Namespace) -> int:
                 target=out,
             )
             with stop_on_signals() as stop:
-                await stop.wait()
+                # Two ways this ends: somebody signals, or hosting stops for
+                # good. Without the second the command outlives the thing it
+                # exists to do -- a revoked credential leaves the WebSocket
+                # listener up, the exit code zero, and the identity
+                # unreachable, which is a failure that looks like success to
+                # everything watching.
+                halted = await _until_stopped_or_signalled(stop, endpoint)
             logging.info("[serve] stopping")
+            if halted is not None:
+                console_module.console().print(
+                    f"error: stopped hosting: {halted.message}",
+                    style="red",
+                    markup=False,
+                )
+                return 1
     finally:
         # After `serving`, which stopped the WebRTC server and with it this
         # transport; closing twice is harmless and closing never is a leak.
@@ -768,7 +887,13 @@ def _enable_logging(level: str | None) -> None:
         raise ServeError(f"--loglevel: {error}") from error
 
 
-async def _run(args: argparse.Namespace) -> int:
+async def run(args: argparse.Namespace) -> int:
+    """Serve what ``args`` asks for, reporting a mistake rather than raising.
+
+    Public because it is the whole command: a module that declares its flags
+    with `configure` runs them through here, and so gets the same reporting and
+    the same exit codes as ``a11 serve`` itself.
+    """
     console_module.set_plain(getattr(args, "plain", False))
     try:
         _enable_logging(getattr(args, "loglevel", None))
@@ -784,12 +909,12 @@ SERVE_COMMAND = Command(
     name="serve",
     help="Serve an Action registry from a module.",
     description=(
-        "Import a module, take its ActionRegistry, and expose it as an A11"
-        " service on the transports asked for -- WebSocket, HTTP SSE, WebRTC,"
-        " or any combination, all sharing one service."
+        "Import a module, take its ActionRegistry or Service, and expose it on"
+        " the transports asked for -- WebSocket, HTTP SSE, WebRTC, or any"
+        " combination, all sharing one service."
     ),
-    configure=_configure,
-    run=_run,
+    configure=configure,
+    run=run,
 )
 
 
@@ -797,9 +922,13 @@ __all__ = [
     "DEFAULT_SYMBOL",
     "SERVE_COMMAND",
     "ServeError",
+    "Served",
+    "configure",
     "http2_options",
     "is_path_target",
     "resolve_registry",
+    "resolve_served",
+    "run",
     "serve",
     "split_target",
 ]

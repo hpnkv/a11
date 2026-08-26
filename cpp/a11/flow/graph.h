@@ -273,6 +273,16 @@ struct Step {
   /// reads.
   RefId source = kNone;
   RefId destination = kNone;
+  /// `kPipe`: `-> _`, which reads the stream and keeps nothing.
+  ///
+  /// The opposite end of the language from a counted `skip`: that one is
+  /// *elided*, because the values were already taken where the stream is
+  /// produced and the step has nothing left to do. A discard is performed --
+  /// every stage on the pipeline runs, and the values are dropped only once
+  /// there is nowhere left for them to go. So this is a step with a reader slot
+  /// (see [FlowGraph::Sources]) and no destination at all: `destination` is
+  /// `kNone`, nothing counts as a writer of anything, and no data is kept.
+  bool discard = false;
   /// `kSkip`: `skip n port`, which claims no reader slot -- the count is
   /// applied where the stream is produced and this step has nothing left to do.
   std::optional<long long> count;

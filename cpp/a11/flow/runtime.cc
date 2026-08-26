@@ -3374,6 +3374,31 @@ absl::Status Scope::Execute(StepId step) {
     case StepKind::kCall:
       return runner_->RunCall(*this, step);
     case StepKind::kPipe: {
+      if (one.discard) {
+        // `-> _`. Deliberately not the shortcut a counted `skip` takes: the
+        // pipeline is *read*, so every stage on it does its work on every
+        // value, and the values are dropped only here, where there is nowhere
+        // left for them to go. Nothing is kept, and nothing else can see them.
+        ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
+        std::vector<ItemPtr> dropped;
+        dropped.reserve(kQueueDepth);
+        while (true) {
+          dropped.clear();
+          if (absl::Status read = reader->NextMany(dropped, kQueueDepth);
+              !read.ok()) {
+            // The same reading of `try` the writing path takes: a source that
+            // gave way is this statement's outcome rather than the flow's.
+            if (!one.tolerant) {
+              return read;
+            }
+            Record(step, read);
+            return absl::OkStatus();
+          }
+          if (dropped.empty()) {
+            return absl::OkStatus();
+          }
+        }
+      }
       ABSL_ASSIGN_OR_RETURN(Destination * destination,
                             DestinationOf(one.destination));
       ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));

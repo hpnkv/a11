@@ -768,6 +768,48 @@ async def test_headers_reach_a_called_action(registry):
 
 
 @pytest.mark.asyncio
+async def test_an_after_holds_the_arguments_of_its_statement(registry):
+    """An argument is read after the barrier, not while the flow starts.
+
+    The clock is the only value a flow can read that says *when* it was read, so
+    it is the only thing that can check this end to end. Asserted as a lower
+    bound: the call sleeps 200ms, so an argument read after it cannot report
+    less than that, however the run was scheduled.
+    """
+
+    async def slowly(action: Action) -> None:
+        await action["text"].consume(str, allow_none=True)
+        await asyncio.sleep(0.2)
+        await (await action["upper"].put("done"))
+
+    registry.register(
+        "slowly", UPPER.model_copy(update={"name": "slowly"}), slowly
+    )
+    result = await run_flow(
+        """
+        flow timed {
+          out took: string
+          started = node()
+          now() -> started
+
+          slow = run slowly(text: "go")
+          done = wait slow
+          skip slow.upper
+
+          measured = run text-upper(
+            text: strformat("%(ms)d", now() - started)
+          ) after done
+          measured.upper -> took
+        }
+        """,
+        registry,
+    )
+    # Before the arguments were held by the `after`, this was single digits: the
+    # feed read the clock while the flow was starting and the call waited.
+    assert int(result["took"]) >= 150
+
+
+@pytest.mark.asyncio
 async def test_after_and_wait_order_two_calls(registry):
     order: list[str] = []
 

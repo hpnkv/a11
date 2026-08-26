@@ -956,6 +956,10 @@ class Completer {
   void ProposeDestinations() {
     AddNames([](const Symbol& symbol) { return symbol.writable; });
     AddCallPorts(syntax::PortDirection::kInput);
+    // The one destination that is not a name, offered only here: `_` means
+    // nothing in any other position, so proposing it anywhere else would be
+    // proposing an error.
+    Add("_", ProposalKind::kConstant);
   }
 
   void ProposeSources() {

@@ -24,10 +24,13 @@ import {
     fromChunk,
     getToolDefinitions,
     isOk,
+    logRecordFromChunk,
+    logText,
     makeTextMessageInteraction,
     type AsyncNode,
     type Chunk,
     type Interaction,
+    type LogLevel,
     type PortValueSchemas,
     type Status,
     type WireStream,
@@ -191,6 +194,41 @@ export async function readPort(
         const next = need(await node.next({timeoutMs}));
         if (next === null) return;
         onValue(next);
+    }
+}
+
+/**
+ * Claim an action's log port, before it is dispatched.
+ *
+ * Every A11 action has one, reserved and not in its schema, which is why this is
+ * how a page follows a slow action: it works on anything, without the page and
+ * the action having agreed on a narration port first. `deep-research` used to
+ * publish a `user_log` output, and the cost of that was that every client had to
+ * be told its name and no other client could follow the run at all.
+ *
+ * Two rules, and the order of the calls in a page is how they are kept. Claim
+ * *before* `call()`, because a log written before anything holds the port goes to
+ * the server's own log and is gone. And read it with `readLogFrom` *alongside*
+ * the outputs rather than before them, because nothing finalizes a log port --
+ * the action's ending closes it.
+ */
+export async function claimLog(action: Action): Promise<AsyncNode> {
+    return need(await action.getLogNode());
+}
+
+/** Read lines from a log port claimed by `claimLog`. */
+export async function readLogFrom(
+    node: AsyncNode,
+    onLine: (line: string, level: LogLevel) => void,
+    timeoutMs = READ_TIMEOUT_MS,
+): Promise<void> {
+    for (; ;) {
+        const chunk = need(await node.nextChunk(timeoutMs));
+        if (chunk === null) return;
+        const record = logRecordFromChunk(chunk);
+        // Internal lines are A11 narrating its own dispatch: useful when
+        // debugging the runtime, noise in front of somebody reading a demo.
+        if (!record.internal) onLine(logText(record), record.level);
     }
 }
 

@@ -167,6 +167,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
           PairsJson(syntax::As<syntax::ObjectLiteral>(node)->pairs);
       break;
     case syntax::NodeKind::kIt:
+    case syntax::NodeKind::kDiscard:
       break;
     case syntax::NodeKind::kName:
       value["name"] = syntax::As<syntax::Name>(node)->name;

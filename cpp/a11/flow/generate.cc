@@ -59,16 +59,27 @@ std::string Shout(std::string_view word) {
 }
 
 /// `a|b|A|B`: an alternation of words in both spellings, on one line.
-std::string Inline(absl::Span<const std::string_view> words) {
+/// Each word and its shouted twin, once each.
+///
+/// A word with no letters in it -- `_` -- shouts to itself, and listing it
+/// twice would put a pointless duplicate in every generated pattern.
+std::vector<std::string> WithShouted(absl::Span<const std::string_view> words) {
   std::vector<std::string> parts;
   parts.reserve(words.size() * 2);
   for (const std::string_view word : words) {
     parts.emplace_back(word);
   }
   for (const std::string_view word : words) {
-    parts.push_back(Shout(word));
+    std::string shouted = Shout(word);
+    if (shouted != word) {
+      parts.push_back(std::move(shouted));
+    }
   }
-  return absl::StrJoin(parts, "|");
+  return parts;
+}
+
+std::string Inline(absl::Span<const std::string_view> words) {
+  return absl::StrJoin(WithShouted(words), "|");
 }
 
 /// The same alternation wrapped over lines, each continuation starting with the
@@ -78,14 +89,7 @@ std::string Inline(absl::Span<const std::string_view> words) {
 /// line carries none, because it is placed after whatever opened it.
 std::string Wrapped(absl::Span<const std::string_view> words,
                     std::string_view indent, size_t width = 70) {
-  std::vector<std::string> parts;
-  parts.reserve(words.size() * 2);
-  for (const std::string_view word : words) {
-    parts.emplace_back(word);
-  }
-  for (const std::string_view word : words) {
-    parts.push_back(Shout(word));
-  }
+  const std::vector<std::string> parts = WithShouted(words);
   std::string out;
   std::string line;
   for (size_t index = 0; index < parts.size(); ++index) {
@@ -690,8 +694,11 @@ std::string Sublime() {
       Except(vocabulary::OrderedClauseWords(), absl::MakeConstSpan(&kElse, 1));
   const std::vector<std::string_view> modifiers =
       Split(vocabulary::OrderedModifiers());
+  // `it` is scoped on its own below, as the pseudo-variable it is; `_` rides
+  // with the word literals, being a word of the grammar that stands for a place
+  // rather than a value.
   const std::vector<std::string_view> constants =
-      Except(std::vector<std::string_view>{"true", "false", "null", "it"},
+      Except(std::vector<std::string_view>{"true", "false", "null", "it", "_"},
              absl::MakeConstSpan(&kIt, 1));
   const std::vector<std::string_view> units = DurationUnits();
   const std::vector<std::string_view> operators = OperatorWords();
@@ -805,10 +812,13 @@ def _keywords(*names):
     """``flow|FLOW``: the two spellings of each word, as one alternation.
 
     A two-word entry keeps its space as ``\\s+``, so ``one of`` matches however
-    it is spaced.
+    it is spaced. A word with no letters in it -- ``_`` -- shouts to itself and
+    is listed once.
     """
-    spellings = [*names, *(name.upper() for name in names)]
-    return "|".join(name.replace(" ", r"\s+") for name in spellings)
+    shouted = [name.upper() for name in names if name.upper() != name]
+    return "|".join(
+        name.replace(" ", r"\s+") for name in [*names, *shouted]
+    )
 
 
 def _group(alternation):
@@ -1113,8 +1123,11 @@ std::string Pygments() {
       Except(vocabulary::OrderedClauseWords(), absl::MakeConstSpan(&kElse, 1));
   const std::vector<std::string_view> modifiers =
       Split(vocabulary::OrderedModifiers());
+  // `it` is scoped on its own below, as the pseudo-variable it is; `_` rides
+  // with the word literals, being a word of the grammar that stands for a place
+  // rather than a value.
   const std::vector<std::string_view> constants =
-      Except(std::vector<std::string_view>{"true", "false", "null", "it"},
+      Except(std::vector<std::string_view>{"true", "false", "null", "it", "_"},
              absl::MakeConstSpan(&kIt, 1));
   const std::vector<std::string_view> units = DurationUnits();
   const std::vector<std::string_view> operators = OperatorWords();

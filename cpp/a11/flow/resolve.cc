@@ -497,6 +497,8 @@ std::string Unparse(const Node* node) {
       return syntax::As<syntax::Name>(node)->name;
     case NodeKind::kIt:
       return "it";
+    case NodeKind::kDiscard:
+      return "_";
     case NodeKind::kAttr: {
       const auto* attr = syntax::As<syntax::Attr>(node);
       return absl::StrCat(Unparse(attr->base.get()), ".", attr->name);
@@ -1054,6 +1056,18 @@ class FlowResolver {
   // -- names -----------------------------------------------------------------
 
   void Define(Scope& scope, Symbol symbol) {
+    // The one place every name in a flow arrives -- a port, a header, a call, a
+    // node, a node map, a barrier, a `let`, a loop variable, a carry -- and so
+    // the one place `_` has to be turned away. Still defined after the
+    // complaint: the flow will not be run, and half a declaration is worse to
+    // resolve the rest of the file against than a whole one.
+    if (symbol.name == "_") {
+      Report("flow.name.discard-bound",
+             "'_' is the discard, not a name: it keeps nothing, so nothing can "
+             "be bound to it or read back out of it. Give this a name, or "
+             "write '-> _' where the values are to be thrown away.",
+             symbol.location);
+    }
     resolved_.symbols.push_back(std::move(symbol));
     scope.names[resolved_.symbols.back().name] = resolved_.symbols.size() - 1;
   }
@@ -1255,12 +1269,19 @@ class FlowResolver {
         const std::vector<std::string> after = ResolveAfter(pipe->after, scope);
         const std::vector<graph::StepId> held = after_waits_;
         for (const syntax::NodePtr& target : pipe->targets) {
-          const Ref destination = ResolveDestination(target.get(), scope);
+          // `-> _`: the one target that is not a destination. It is not
+          // resolved to anything, because there is nothing for it to be -- no
+          // ref, no writer, no bus. The step keeps its reader of the source and
+          // drops what it reads.
+          const bool discard = IsDiscard(target.get());
+          const Ref destination =
+              discard ? Ref{} : ResolveDestination(target.get(), scope);
+          const std::string written = discard ? "_" : destination.label;
           StepPlan step;
           step.kind = "pipe";
-          step.label = absl::StrCat(source.label, " -> ", destination.label);
+          step.label = absl::StrCat(source.label, " -> ", written);
           step.source = source.label;
-          step.destination = destination.label;
+          step.destination = written;
           step.after = after;
           step.location = pipe->location;
           if (builder_ != nullptr) {
@@ -1269,6 +1290,7 @@ class FlowResolver {
             graph::Step& one = builder_->step(made);
             one.source = source.node;
             one.destination = destination.node;
+            one.discard = discard;
             one.after = held;
             one.tolerant = pipe->tolerant;
           }
@@ -2520,6 +2542,67 @@ class FlowResolver {
 
   // -- calls -----------------------------------------------------------------
 
+  /// An argument that reads an output of the very call the statement waits for.
+  ///
+  /// The barrier holds the whole statement, arguments included, so this is a
+  /// flow that cannot start: the feed will not read `x.out` until `x` has
+  /// finished, and `x` cannot finish while nothing is reading `x.out`. Refused
+  /// rather than warned about, because there is no arrangement of it that runs
+  /// -- an author who means "everything it wrote, then hand it over" writes the
+  /// reduction (`x.out | collect`) and needs no `after` at all.
+  void CheckArgumentReadsAwaited(const syntax::Pipeline& pipeline,
+                                 const std::vector<syntax::Word>& after,
+                                 Scope& scope) {
+    if (after.empty()) {
+      return;
+    }
+    for (const syntax::Word& awaited : after) {
+      const Symbol* found = Find(scope, awaited.text);
+      if (found == nullptr || found->kind != SymbolKind::kCall) {
+        continue;
+      }
+      const syntax::Node* read = FindPortRead(pipeline, awaited.text);
+      if (read == nullptr) {
+        continue;
+      }
+      Report("flow.barrier.after-reads-subject",
+             absl::StrCat("This argument reads ", Quoted(Unparse(read)),
+                          " and the statement waits for ", Quoted(awaited.text),
+                          ", so neither can go first: the argument is not read "
+                          "until ",
+                          awaited.text, " has finished, and ", awaited.text,
+                          " cannot finish while nothing reads its output. Drop "
+                          "the 'after', or reduce the argument with "
+                          "'| collect'."),
+             read->location, Severity::kError, Family::kBarrier);
+      return;
+    }
+  }
+
+  /// The first `call.port` anywhere in `pipeline`, or null: a stage reads too.
+  ///
+  /// First *in the text*, because [syntax::VisitSubtree] promises only that a
+  /// parent is seen before its children and a diagnostic points somewhere
+  /// stable.
+  const syntax::Node* absl_nullable FindPortRead(
+      const syntax::Pipeline& pipeline, std::string_view call) {
+    const syntax::Node* found = nullptr;
+    syntax::VisitSubtree(pipeline, [&](const syntax::Node& node) {
+      const auto* attr = syntax::As<syntax::Attr>(&node);
+      if (attr == nullptr) {
+        return;
+      }
+      const auto* base = syntax::As<syntax::Name>(attr->base.get());
+      if (base == nullptr || base->name != call) {
+        return;
+      }
+      if (found == nullptr || node.location.start < found->location.start) {
+        found = &node;
+      }
+    });
+    return found;
+  }
+
   size_t ResolveCall(const syntax::CallExpression& call, Scope& scope,
                      std::string_view label, std::vector<StepPlan>& steps) {
     const std::string map = call.modifiers->node_map.Empty()
@@ -2588,6 +2671,13 @@ class FlowResolver {
       resolved_.symbols[index].step = made;
     }
     step.after = ResolveAfter(call.modifiers->after, scope, made);
+    // The statement's barrier, kept where the arguments can reach it: `after`
+    // holds the *statement*, and an argument is part of the statement, so the
+    // feeds wait for the same steps the call does. Copied out of the member
+    // before the arguments are resolved, because an argument may resolve an
+    // `after` of its own -- an inline `wait first of a, b` -- and overwrite it.
+    const std::vector<std::string> after = step.after;
+    const std::vector<graph::StepId> held = after_waits_;
     // The call first, then one pipe per argument feeding it -- the order
     // `a11.flow.plan` puts them in, and the order they read in.
     steps.push_back(std::move(step));
@@ -2595,6 +2685,8 @@ class FlowResolver {
       const Ref destination =
           CallPort(index, argument.port.text, syntax::PortDirection::kInput,
                    argument.port.location);
+      CheckArgumentReadsAwaited(*argument.pipeline, call.modifiers->after,
+                                scope);
       const Ref source = ResolvePipeline(*argument.pipeline, scope);
       StepPlan feed;
       feed.kind = "pipe";
@@ -2602,12 +2694,14 @@ class FlowResolver {
           absl::StrCat(source.label, " -> ", label, ".", argument.port.text);
       feed.source = source.label;
       feed.destination = absl::StrCat(label, ".", argument.port.text);
+      feed.after = after;
       feed.location = argument.port.location;
       if (builder_ != nullptr) {
         const graph::StepId pipe =
             NewStep(graph::StepKind::kPipe, feed.label, argument.port.location);
         builder_->step(pipe).source = source.node;
         builder_->step(pipe).destination = destination.node;
+        builder_->step(pipe).after = held;
       }
       steps.push_back(std::move(feed));
     }
@@ -3144,6 +3238,12 @@ class FlowResolver {
   /// wins, and anything left over reads into the record: `status x.ok` is the
   /// call's status asked whether it is ok, and `status x.out` is that port's.
   Ref ResolveOutcome(const Node* expression, Scope& scope) {
+    // `wait _`, `drain _`, `status _`: a discard is not a thing with an
+    // outcome, because it is not a thing.
+    if (IsDiscard(expression)) {
+      ReportDiscardRead(expression, "waited on");
+      return Ref{Ref::Kind::kUnknown, "_"};
+    }
     std::vector<std::string> path;
     const Node* cursor = expression;
     // A trailing field of the record belongs to the record, not to a port of
@@ -3327,7 +3427,46 @@ class FlowResolver {
     return false;
   }
 
+  /// Whether this is a bare `_`.
+  ///
+  /// Only where a pipe's target goes, and every other caller of
+  /// [ParseReference] asks this so it can say what is wrong rather than let
+  /// [ResolveDestination] or [ResolveSource] guess at it.
+  [[nodiscard]] static bool IsDiscard(const Node* absl_nullable expression) {
+    return expression != nullptr && expression->kind == NodeKind::kDiscard;
+  }
+
+  /// Refuse a `_` written anywhere it keeps nothing to give.
+  ///
+  /// @param doing How the statement would have used it: "read", "waited on".
+  void ReportDiscardRead(const Node* expression, std::string_view doing) {
+    Report("flow.name.discard-read",
+           absl::StrCat("'_' throws a stream away, so there is nothing here to "
+                        "be ",
+                        doing,
+                        ". It may only stand where a pipe's destination does, "
+                        "as in 'source | stage -> _'."),
+           expression->location);
+  }
+
+  /// True, having reported, where @p expression is a `_` that cannot stand
+  /// here. The shape every reference-reading statement uses to guard itself.
+  bool RefusedAsDiscard(const Node* absl_nullable expression,
+                        std::string_view doing) {
+    if (!IsDiscard(expression)) {
+      return false;
+    }
+    ReportDiscardRead(expression, doing);
+    return true;
+  }
+
   Ref ResolveDestination(const Node* expression, Scope& scope) {
+    if (IsDiscard(expression)) {
+      // Reached from the destinations that are not a pipe's target: a `drain`,
+      // an `abort`, a `try ... into`. A pipe's own target never gets here.
+      ReportDiscardRead(expression, "written");
+      return Ref{Ref::Kind::kUnknown, "_"};
+    }
     if (const auto* name = syntax::As<syntax::Name>(expression);
         name != nullptr) {
       Symbol* found = Find(scope, name->name);
@@ -3451,6 +3590,11 @@ class FlowResolver {
                  "and there is none here.",
                  expression->location);
         }
+        return;
+      case NodeKind::kDiscard:
+        // In an expression, and in whatever an expression is read into: an
+        // argument, a condition, a header, a `map`, a log's format argument.
+        ReportDiscardRead(expression, "read");
         return;
       case NodeKind::kLiteral:
       case NodeKind::kError:

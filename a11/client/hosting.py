@@ -43,6 +43,20 @@ RENEW_POLL_SECONDS = 30.0
 #: expiry it exists to stay ahead of.
 REBIND_MARGIN_SECONDS = 120.0
 
+#: Failures a retry cannot mend, so hosting stops instead of looping.
+#:
+#: `FAILED_PRECONDITION` is the claim: superseded, released or expired.
+#: `UNAUTHENTICATED` and `PERMISSION_DENIED` are the credential: a key that has
+#: been revoked or narrowed answers the same way for ever, and a host that
+#: retries it stays online-looking and unreachable until a person reads the log.
+_HOPELESS = frozenset(
+    {
+        StatusCode.FAILED_PRECONDITION,
+        StatusCode.UNAUTHENTICATED,
+        StatusCode.PERMISSION_DENIED,
+    }
+)
+
 
 def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
     """One `turn:`/`turns:` URL as A11 wants it -- parts, not a URL."""
@@ -74,6 +88,7 @@ def hosted_configuration(
     ice_servers: "list[dict] | None" = None,
     *,
     multiplex_ice: bool = False,
+    discover_path_mtu: bool = False,
 ) -> "net.WebRtcConfiguration":
     """How a hosted agent should negotiate with peers that dial it.
 
@@ -83,9 +98,27 @@ def hosted_configuration(
     its cloud NAT's, neither can use the other's, and the handshake just never
     completes -- with nothing in either log saying why. Prefer
     `HostedEndpoint.webrtc_configuration()`, which reads the live claim.
+
+    `discover_path_mtu` is **off** here, against the transport's own default,
+    and the reason is the whole point of the flag. Discovery raises the
+    association MTU once a burst of padded heartbeats is acknowledged; a burst
+    of probes can be luckier than a stream of data, and when it is, packets at
+    the raised size are dropped in flight. A silent drop produces no local send
+    error, so nothing reports it and the association sits wedged until the
+    black-hole detector notices -- observed as a flow run whose output stops
+    mid-stream and never resumes, about one run in six. A hosted agent is
+    reached *through a TURN relay across the internet*, which is exactly the
+    path whose MTU cannot be characterised, so it holds the configured one.
+    Pass True where both ends are on a network you know.
     """
     configuration = net.WebRtcConfiguration()
     configuration.enable_ice_udp_mux = multiplex_ice
+    configuration.path_mtu_discovery = discover_path_mtu
+    if not discover_path_mtu:
+        # Belt and braces: with the search off the ceiling is unused, and
+        # bringing it down to the floor means even a build that ignored the
+        # flag could not raise above what was configured.
+        configuration.max_discovered_mtu = configuration.mtu or 1280
 
     stun: list[str] = []
     turn: list[net.TurnServer] = []
@@ -330,10 +363,15 @@ class HostedEndpoint:
             try:
                 await self._renew_if_due()
             except StatusException as exc:
-                if exc.status.code == StatusCode.FAILED_PRECONDITION:
-                    # Superseded, released or expired: somebody else is this
+                if exc.status.code in _HOPELESS:
+                    # Two different endings, both final. FAILED_PRECONDITION is
+                    # superseded, released or expired: somebody else is this
                     # identity now, and pretending otherwise would have two
-                    # processes claiming to be one agent.
+                    # processes claiming to be one agent. UNAUTHENTICATED and
+                    # PERMISSION_DENIED are the credential itself: retrying a
+                    # revoked key produces the same 401 every thirty seconds
+                    # for as long as the process lives, while presence, the
+                    # listener and the log all go on saying "hosting".
                     await self._give_up(exc.status)
                     return
                 logging.warning(
@@ -446,10 +484,27 @@ class HostedEndpoint:
         )
 
     async def _give_up(self, status: Status) -> None:
-        """Stop hosting because the exchange says we are no longer the host."""
-        logging.error(
-            "no longer hosting %s: %s", self.identity, status.message
-        )
+        """Stop hosting for good, and say why in terms of what to do next."""
+        if status.code in (
+            StatusCode.UNAUTHENTICATED,
+            StatusCode.PERMISSION_DENIED,
+        ):
+            # Worth spelling out, because the cause is somewhere else entirely:
+            # `POST /v1/auth/login` revokes every live key of the same
+            # `client_name`, so a *personal* key given to a long-running host
+            # dies at its owner's next login. A host wants a key of its own.
+            logging.error(
+                "stopped hosting %s: %s. The credential this host holds is no"
+                " longer accepted -- a key is revoked when another login"
+                " supersedes it, so a long-running host wants a key of its own"
+                " rather than a person's. Issue one and restart.",
+                self.identity,
+                status.message,
+            )
+        else:
+            logging.error(
+                "no longer hosting %s: %s", self.identity, status.message
+            )
         self._fatal = status
         self._stopped.set()
         self._connected.clear()
@@ -457,6 +512,26 @@ class HostedEndpoint:
         if transport is not None:
             with contextlib.suppress(Exception):
                 transport.close()
+
+    # --- what a host that has stopped tells its caller -------------------
+
+    @property
+    def fatal(self) -> Status | None:
+        """Why hosting stopped for good, or `None` while it has not."""
+        return self._fatal
+
+    async def wait_stopped(self) -> Status | None:
+        """Wait until hosting has stopped for good, and say why.
+
+        For a caller whose whole job is to serve this endpoint: without it a
+        process goes on running -- its other listeners still up, its exit code
+        still zero -- while the hosted half of it is dead. See
+        [`a11 serve`][a11.cli.commands.serve.serve], which races this against
+        its signal handler so that a revoked credential ends the command
+        instead of being one warning in a log nobody is reading.
+        """
+        await self._stopped.wait()
+        return self._fatal
 
 
 __all__ = [

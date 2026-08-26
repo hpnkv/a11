@@ -1,12 +1,17 @@
 /**
  * "Deep research in Flow" guide demo.
  *
- * The page dispatches one action, `deep-research`, and reads three of its output
- * ports. That action is not code on the backend: it is the composition in
- * `a11/demos/deep_research.flow`, which plans the topic, investigates the parts of
- * it at the same time, and writes one report. The intermediate findings never
- * reach this page — the flow keeps them in a node map of its own — so what
- * crosses the socket is the plan, the narration, and the report.
+ * The page dispatches one action, `deep-research`, and reads two of its output
+ * ports plus its log. That action is not code on the backend: it is the
+ * composition in `a11/demos/deep_research.flow`, which plans the topic,
+ * investigates the parts of it at the same time, and writes one report. The
+ * intermediate findings never reach this page — the flow keeps them in a node
+ * map of its own — so what crosses the socket is the plan, the report, and the
+ * narration.
+ *
+ * The narration arrives on the action's **log**, not on a port of its own. Every
+ * action has one, so this is the reading that works for any action a page calls;
+ * a narration *port* only works for a client that has been told its name.
  */
 
 import {ActionPortSchema, ActionSchema} from '../src/index.js';
@@ -16,9 +21,11 @@ import {
   DEFAULT_SERVER_URL,
   LlmHeadersFor,
   addLine,
+  claimLog,
   connect,
   makeCall,
   need,
+  readLogFrom,
   readPort,
   showError,
   whileBusy,
@@ -37,7 +44,6 @@ const DEEP_RESEARCH_SCHEMA = new ActionSchema({
   outputs: {
     report: new ActionPortSchema({name: 'report', type: 'text/plain'}),
     plan: new ActionPortSchema({name: 'plan', type: 'text/plain'}),
-    user_log: new ActionPortSchema({name: 'user_log', type: 'text/plain'}),
   },
 });
 
@@ -63,15 +69,18 @@ class DeepResearchDemo {
       for (const [header, value] of LlmHeadersFor(this.backend.value)) {
         need(call.setHeader(header, value));
       }
+      // Claimed before dispatch, which is the only time it can be: a line
+      // logged before anything holds the port goes to the server's log.
+      const logs = await claimLog(call);
       need(await call.call());
 
       const topicInput = need(await call.getInput('topic'));
       need(await topicInput.finalize(topic));
 
-      // All three ports at once: the narration is the point of watching, and it
+      // Everything at once: the narration is the point of watching, and it
       // arrives while the report is still being written.
       await Promise.all([
-        readPort(call, 'user_log', (value) => addLine(this.log, String(value))),
+        readLogFrom(logs, (line, level) => addLine(this.log, line, level === 'info' ? '' : level)),
         readPort(call, 'plan', (value) => {
           const item = document.createElement('li');
           item.textContent = String(value);

@@ -172,6 +172,78 @@ TEST(FlowInspect, SaysWhenABarrierCannotDoAnything) {
             (std::vector<std::string>{}));
 }
 
+TEST(FlowInspect, SaysWhenAClockIsReadAtAMomentNothingPinsDown) {
+  // The mistake this is here for: written last, run first, so what it reports
+  // is the flow starting rather than how long the call took.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " started = node()\n now() -> started\n"
+                  " x = run act(p: a)\n wait x\n"
+                  " strformat(\"%s\", now() - started) -> b }"),
+            (std::vector<std::string>{"flow.barrier.unordered-clock"}));
+  // The same statement, ordered: this is what the flow meant.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " started = node()\n now() -> started\n"
+                  " x = run act(p: a)\n done = wait x\n"
+                  " strformat(\"%s\", now() - started) -> b after done }"),
+            (std::vector<std::string>{}));
+  // An argument is part of its statement, so it is asked the same question.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " started = node()\n now() -> started\n"
+                  " x = run act(p: strformat(\"%s\", now() - started))\n"
+                  " x.out -> b }"),
+            (std::vector<std::string>{"flow.barrier.unordered-clock"}));
+  // Stamping the start is the other half of the idiom, and needs no moment.
+  EXPECT_EQ(Codes("flow f { out b: string\n started = node()\n"
+                  " now() -> started\n started -> b }"),
+            (std::vector<std::string>{}));
+  // A header is there before the first statement, so reading the clock against
+  // one says nothing about when this ran.
+  EXPECT_EQ(Codes("flow f { out b: string\n header \"x-a11-deadline\" as by\n"
+                  " strformat(\"%s\", time(by) - now()) -> b }"),
+            (std::vector<std::string>{}));
+}
+
+TEST(FlowInspect, SaysWhenOneStatementReadsOneStreamTwiceForAValue) {
+  const std::vector<std::string> both{"flow.barrier.unordered-clock",
+                                      "flow.barrier.value-read-twice"};
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " started = node()\n now() -> started\n"
+                  " x = run act(p: a)\n wait x\n"
+                  " strformat(\"%s %s\", started, now() - started) -> b }"),
+            both);
+  // Ordered, and still two reads: the `after` says when the statement runs and
+  // cannot say which read inside it goes first.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " started = node()\n now() -> started\n"
+                  " x = run act(p: a)\n done = wait x\n"
+                  " strformat(\"%s %s\", started, started) -> b after done }"),
+            (std::vector<std::string>{"flow.barrier.value-read-twice"}));
+  // A port that did not say `stream` provably carries one value, so it is
+  // shared rather than taken and reading it twice is reading one value twice.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " strformat(\"%s %s\", a, a) -> b }"),
+            (std::vector<std::string>{}));
+}
+
+TEST(FlowInspect, SaysWhenAWaitEndsANodeRatherThanWaitingForIt) {
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " seen = node()\n"
+                  " w = run act(p: a) with \"x-a11-progress-node\": seen.id\n"
+                  " skip w.out\n seen -> b\n wait seen }"),
+            (std::vector<std::string>{"flow.barrier.wait-lends-node"}));
+  // Naming the step that fills it is the whole fix, and the documented idiom.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " seen = node()\n"
+                  " w = run act(p: a) with \"x-a11-progress-node\": seen.id\n"
+                  " skip w.out\n seen -> b\n drain seen after w }"),
+            (std::vector<std::string>{}));
+  // A node this flow writes is closed by its own last writer, so waiting for
+  // it is a wait.
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
+                  " seen = node()\n a -> seen\n seen -> b\n wait seen }"),
+            (std::vector<std::string>{}));
+}
+
 TEST(FlowInspect, SaysNothingAboutAFlowThatDoesNotResolve) {
   // An unknown name means every fact about what uses what is unreliable, and a
   // page of "nothing uses this" on top of the real problem is noise.

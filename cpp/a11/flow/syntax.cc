@@ -123,6 +123,8 @@ std::string_view NodeKindName(NodeKind kind) {
       return "spread";
     case NodeKind::kIt:
       return "it";
+    case NodeKind::kDiscard:
+      return "discard";
     case NodeKind::kName:
       return "name";
     case NodeKind::kAttr:
@@ -312,6 +314,7 @@ void VisitChildren(const Node& node,
     case NodeKind::kError:
     case NodeKind::kLiteral:
     case NodeKind::kIt:
+    case NodeKind::kDiscard:
     case NodeKind::kName:
     case NodeKind::kCancel:
     // What an `advance` holds is the name of a `let`, which is a word.

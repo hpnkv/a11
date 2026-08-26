@@ -67,6 +67,7 @@ flow NAME {
   N = node([ID]) [in MAP]                  # a stream of the flow's own
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
+  SOURCE | STAGE -> _                      # do the work, keep no result
   skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
   skip X                                   # every output of a call X
@@ -146,7 +147,11 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       see two different values rather than two copies of the first: reading the
       first value and ignoring the rest is exactly the mistake nobody finds out
       about. Which of them gets which value is not defined; `after` is how a flow
-      that cares says so. A stream the language can *prove* carries one value is
+      that cares says so — except *within* one statement, where there is no
+      `after` that could order two reads of one node against each other, and the
+      language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
+      it names a value, and a value is shared. A stream the language can *prove*
+      carries one value is
       the exception, and is shared rather than taken: a port that did not say
       `stream`, a header, a status, or a pipeline that reduced with `| collect`,
       `| count` or `| first 1`. Those promise one value, so a second arriving
@@ -326,7 +331,8 @@ STATUS: a record {"ok": bool, "code": "NOT_FOUND", "number": 5, "message": str}.
 Steps run concurrently; order comes from the data. Every output of a step is
 read, whether the flow uses it or not. Stages that shrink a stream (first,
 truncate, where) do so before the next step ever sees it, `skip N PORT` does it
-for every reader at once, and `nodes` blocks keep a step's traffic off the wire.
+for every reader at once, `-> _` performs a pipeline and keeps none of it, and
+`nodes` blocks keep a step's traffic off the wire.
 ```
 
 ## An example

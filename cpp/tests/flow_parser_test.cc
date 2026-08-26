@@ -282,6 +282,46 @@ TEST(FlowParser, LogIsStillANameWhereTheGrammarWantsOne) {
   EXPECT_EQ(BodyKinds(flow), (std::vector<std::string>{"pipe", "pipe"}));
 }
 
+TEST(FlowParser, UnderscoreOnItsOwnIsTheDiscardAndNotAName) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  in a: string stream\n"
+      "  out b: string stream\n"
+      "  a -> b, _\n"
+      "  a | count -> _\n"
+      "}\n");
+  EXPECT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  ASSERT_EQ(result.flows.size(), 1u);
+  const syntax::FlowDeclaration& flow = *result.flows.front();
+  ASSERT_EQ(flow.body.size(), 2u);
+  const auto* tee = As<syntax::Pipe>(flow.body[0].get());
+  ASSERT_NE(tee, nullptr);
+  ASSERT_EQ(tee->targets.size(), 2u);
+  EXPECT_EQ(tee->targets[0]->kind, NodeKind::kName);
+  EXPECT_EQ(tee->targets[1]->kind, NodeKind::kDiscard);
+  const auto* counted = As<syntax::Pipe>(flow.body[1].get());
+  ASSERT_NE(counted, nullptr);
+  ASSERT_EQ(counted->targets.size(), 1u);
+  EXPECT_EQ(counted->targets[0]->kind, NodeKind::kDiscard);
+
+  // Only `_` exactly: an underscore is an ordinary letter in a name, so a name
+  // that merely holds one -- or starts with one -- is still a name.
+  const ParseResult named = Parse(
+      "flow f {\n"
+      "  in _a: string stream\n"
+      "  out b_c: string stream\n"
+      "  _a -> b_c\n"
+      "}\n");
+  EXPECT_TRUE(named.diagnostics.empty())
+      << absl::StrJoin(Messages(named), "; ");
+  ASSERT_EQ(named.flows.size(), 1u);
+  const auto* piped = As<syntax::Pipe>(named.flows.front()->body[0].get());
+  ASSERT_NE(piped, nullptr);
+  EXPECT_EQ(piped->targets[0]->kind, NodeKind::kName);
+  EXPECT_EQ(As<syntax::Name>(piped->targets[0].get())->name, "b_c");
+}
+
 TEST(FlowParser, SkipTakesSeveralSubjectsAndACallsOutputsByName) {
   const ParseResult result = Parse(
       "flow f {\n"

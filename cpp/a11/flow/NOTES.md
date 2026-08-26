@@ -24,6 +24,9 @@ as `try STAGE [into DEST]`, and the per-value ones with
 Sources: a port, a node, a header, an expression, `status x`, `zip(a, b)`,
 `interleave(a, b)`.
 
+Destinations: a node, an `out` port, a call's input port, and `_` -- which
+performs the pipeline and keeps none of it.
+
 Expression functions: `len`, `keys`, `values`, `get`, `join`, `split`, `slice`,
 `replace`, `trim`, `lower`, `upper`, `contains`, `starts-with`, `ends-with`,
 `default`, `merge`, `to_chunk`, `from_chunk`, `now`, `text`, `json`, and the
@@ -92,6 +95,92 @@ one, or one several peers write — could be read in *arrival* order, which is a
 switch on the node's reader rather than anything the language says. Worth doing
 where a pipeline does not care about order at all, and it needs a seq on the item
 to be able to put things back.
+
+## Closed on 2026-08-25: what an `after` holds
+
+### An `after` holds the statement's arguments too
+
+`Y after X` ordered when `Y` *ran* and not when `Y`'s arguments were *read*, so
+`t = run act(p: strformat("%s", now() - started)) after done` reported 561us
+against a 300ms call: the call waited and the argument did not. A language change
+rather than a bug fix, and the direction is the one that makes the text true --
+what a barriered statement reports is what was true by the time it ran.
+
+Everything else already behaved. A step reads its sources inside `Scope::Execute`,
+which `RunStep` only reaches once `step.after` is satisfied, and `Bus::Pump` waits
+for a first reader on purpose. The leak was in the resolver: `ResolveCall` hung
+the `after` on the **call step** and then emitted one feed pipe per argument with
+none, so the feeds ran at once. They now carry the same barrier, which is what
+`kPipe` and `ResolveSkipTarget` already did for the several steps one statement
+becomes.
+
+The trap: copy `after_waits_` into a local *before* resolving the arguments. An
+argument may resolve an `after` of its own -- an inline `wait first of a, b` --
+and overwrite the member half way through the loop.
+
+Left alone deliberately, both noted rather than fixed:
+
+* An inline `wait first of` read as a value inside a barriered statement does not
+  inherit the barrier. `ResolveRaceValue` would have to know the enclosing
+  statement's barrier, and a pipe resolves its source *before* its `after`, so
+  the member is the previous statement's there -- a stale barrier silently
+  applied is worse than one not applied.
+* A materialised stream -- one read inside a loop or a branch -- is filled by
+  `Buffer::Fill`, spawned unconditionally in `Scope::Run`, so its producer starts
+  regardless of any `after`. It only shows when such a stream carries an
+  effectful stage (`| map now()`), and gating it the way `Bus::Pump` is gated
+  hangs a loop that runs zero passes and so never reads the replay. It needs its
+  own "nobody will read this" signal.
+
+### Four traps the language now names
+
+The measurements that came with the change, each now a published code:
+
+* `flow.barrier.unordered-clock` -- `now() - started -> elapsed` at the top of a
+  body reports 409us, because it runs at once with everything else. Fires only
+  when the clock is read *against* something the flow produced: `now() -> started`
+  is a start stamp and stays quiet.
+* `flow.barrier.wait-lends-node` -- `wait n` on a node the flow lends by `n.id`
+  rather than writes returned in 472us and the callee died with
+  `ChunkStoreWriter is closed`. `NodeOutcome` forces `Destination::End()` when the
+  node has no writers here, so the barrier is an *ending*. `drain n after <call>`
+  is the one that waits.
+* `flow.barrier.value-read-twice` -- one statement reading one node twice where a
+  value belongs takes two values off it: `"at=%s took=%s" started, now() - started`
+  prints an instant for `took`, and the other way round prints nothing for `at`.
+  Documented as undefined already; a `let` is the fix, because a value is shared.
+* `flow.barrier.after-reads-subject` -- the one the change created. An argument
+  reading an output of the call its own statement waits for cannot run at all
+  now: the feed will not read until the call has finished, and the call cannot
+  finish while nothing reads its output. An error, not a warning -- there is no
+  arrangement of it that works.
+
+## Closed on 2026-08-25: the discard
+
+### `-> _` -- do the work, keep nothing
+
+`skip` was the only way to say "I do not want this", and it says the wrong thing
+about a pipeline: `skip` is about *values nobody wanted*, so a counted one is
+taken off the stream where it is produced and the statement is elided entirely.
+There was no way to say "run this and keep no result", which is what
+`pages | map summarise(it) -> _` says. It is a `kPipe` step like any other, with
+`Step::discard` set, `destination` left at `kNone`, and a reader slot of its own:
+performed, unlike a counted `skip`, and holding nothing open, unlike a node.
+
+`_` is a node of the grammar (`syntax::Discard`) and not a name, following `it`:
+a word legal in exactly one position. It is refused as a source, a `wait`/`drain`
+/`abort`/`skip` subject, inside any expression, and as any declared name --
+`Resolver::Define` is the one place every name arrives, so one check there covers
+ports, headers, calls, nodes, node maps, barriers, `let`s, loop variables and
+carries. Two codes: `flow.name.discard-read` and `flow.name.discard-bound`.
+
+### A `log` may print something it read
+
+Not a language addition but a bug the language had all along: a `log`/`logf`
+keeps its arguments in `graph::LogTail::arguments`, which `Sources`/`ValueSources`
+did not enumerate. So a log naming a stream was an uncounted reader of it and the
+flow died at run time with "has no reader slot left", having compiled clean --
+which is why "how long did that take" had to be written as two timestamps.
 
 ## Closed on 2026-08-20, third pass: endings and failure
 

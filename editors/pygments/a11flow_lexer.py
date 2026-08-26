@@ -52,10 +52,13 @@ def _keywords(*names):
     """``flow|FLOW``: the two spellings of each word, as one alternation.
 
     A two-word entry keeps its space as ``\\s+``, so ``one of`` matches however
-    it is spaced.
+    it is spaced. A word with no letters in it -- ``_`` -- shouts to itself and
+    is listed once.
     """
-    spellings = [*names, *(name.upper() for name in names)]
-    return "|".join(name.replace(" ", r"\s+") for name in spellings)
+    shouted = [name.upper() for name in names if name.upper() != name]
+    return "|".join(
+        name.replace(" ", r"\s+") for name in [*names, *shouted]
+    )
 
 
 def _group(alternation):
@@ -146,7 +149,7 @@ STATUS_CODES = _keywords(
 LOG_LEVELS = _keywords("debug", "info", "warning", "error", "critical")
 
 #: Literals that are words.
-CONSTANTS = _keywords("true", "false", "null")
+CONSTANTS = _keywords("true", "false", "null", "_")
 
 #: Duration suffixes a number may carry, longest spelling first: a pattern that
 #: offered ``m`` before ``ms`` would read ``250ms`` as a number of metres.

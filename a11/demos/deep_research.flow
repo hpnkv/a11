@@ -17,9 +17,9 @@ flow plan-research {
   in  topic:     string required "What to research."
   out briefs:    string stream   "One instruction per investigation."
   out synthesis: string          "How to write the final report."
-  out user_log:  string stream   "What the planner is doing."
+  out narration: string stream   "Lines for the caller's log; see `deep-research`."
 
-  strformat("[plan] planning research on: %s", topic) -> user_log
+  strformat("[plan] planning research on: %s", topic) -> narration
 
   llm = run ask_model(
     interactions: topic | map a11.sdk.Interaction{
@@ -56,7 +56,7 @@ flow plan-research {
   lines.lines
     | where not starts-with(it, "FINALLY:")
     | strformat "[plan] brief: %s"
-    -> user_log
+    -> narration
 }
 
 flow investigate {
@@ -65,9 +65,9 @@ flow investigate {
   in  topic:    string required "What the whole research is about."
   in  brief:    string required "This investigation's instruction."
   out report:   string          "What it found."
-  out user_log: string stream   "What it is doing."
+  out narration: string stream  "Lines for the caller's log; see `deep-research`."
 
-  strformat("[investigate] %s", brief) -> user_log
+  strformat("[investigate] %s", brief) -> narration
 
   llm = run ask_model(
     interactions: brief | map a11.sdk.Interaction{
@@ -97,7 +97,7 @@ flow investigate {
   # `wait` is what makes this the last line about this investigation rather
   # than a line racing it.
   done = wait llm
-  strformat("[investigate] finished: %s", brief) -> user_log after done
+  strformat("[investigate] finished: %s", brief) -> narration after done
 }
 
 flow synthesise-findings {
@@ -107,9 +107,9 @@ flow synthesise-findings {
   in  brief:    string required        "How the report should be written."
   in  findings: string stream required "One report per investigation."
   out report:   string stream          "The report, as it is written."
-  out user_log: string stream          "What the synthesis is doing."
+  out narration: string stream         "Lines for the caller's log; see `deep-research`."
 
-  strformat("[synthesise] writing the report on: %s", topic) -> user_log
+  strformat("[synthesise] writing the report on: %s", topic) -> narration
 
   # One prompt out of every finding. `collect` waits for the investigations to
   # finish, which is the only barrier in the whole composition.
@@ -151,17 +151,24 @@ flow deep-research {
     Research a topic: plan it, investigate the parts of it at the same time,
     and write one report out of what came back.
 
-    `user_log` narrates the whole run, which is what a client shows while it
-    waits for `report`.
+    The run narrates itself to the action's **log**, not to an output port: a
+    client shows those lines while it waits for `report`, and it does not have
+    to have been told this composition's name for a narration port to know
+    where to look. Every A11 action has a log; only this one would have had a
+    `user_log`.
+
+    The lines are logged *here* rather than by the steps that write them,
+    because a nested action's log is its own -- it reaches the server's log and
+    not the caller's. So each step hands its lines up on a `narration` port,
+    which is plumbing between these flows and no part of what a caller sees.
     """
 
-  in  topic:    string required "What to research."
-  out report:   string stream   "The final report, as it is written."
-  out plan:     string stream   "The briefs the planner came up with."
-  out user_log: string stream   "What the research is doing, as it happens."
+  in  topic:  string required "What to research."
+  out report: string stream   "The final report, as it is written."
+  out plan:   string stream   "The briefs the planner came up with."
 
   planned = run plan-research(topic: topic)
-  planned.user_log -> user_log
+  for line in planned.narration { log info line }
   planned.briefs -> plan
 
   # Nothing in here is the caller's: the intermediate reports are written,
@@ -172,7 +179,7 @@ flow deep-research {
     for brief in planned.briefs parallel 3 {
       one = run investigate(topic: topic, brief: brief)
       one.report -> findings
-      one.user_log -> user_log
+      for line in one.narration { log info line }
     }
 
     written = run synthesise-findings(
@@ -181,6 +188,6 @@ flow deep-research {
       findings: findings,
     )
     written.report -> report
-    written.user_log -> user_log
+    for line in written.narration { log info line }
   }
 }

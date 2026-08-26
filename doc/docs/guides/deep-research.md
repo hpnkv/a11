@@ -7,7 +7,8 @@ text file. There is no orchestration code: the backend serves
 and the composition that puts them together is
 [Flow](../api/flow.md).
 
-The page dispatches one action, `deep-research`, and reads three of its ports.
+The page dispatches one action, `deep-research`, reads two of its ports and
+follows its log.
 
 !!! note "Before you start"
 
@@ -32,7 +33,9 @@ The page dispatches one action, `deep-research`, and reads three of its ports.
 ## Try it
 
 Give it a topic. The middle pane is the plan as the planner produces it, the right
-pane is `user_log`, and the report streams into the left pane as it is written.
+pane is the composition's **log** — every action has one, so a page follows a slow
+action without it and the action having agreed on a narration port first — and the
+report streams into the left pane as it is written.
 Watch the `[investigate]` lines: they overlap, because three investigations are in
 flight, and their intermediate reports never cross the socket.
 
@@ -62,7 +65,7 @@ flight, and their intermediate reports never cross the socket.
     <aside class="a11-pane" aria-label="Plan and activity">
       <header>plan port</header>
       <ol id="research-plan" class="a11-plan"></ol>
-      <header>user_log port</header>
+      <header>action log</header>
       <div id="research-log" class="a11-log"></div>
     </aside>
   </div>
@@ -84,13 +87,12 @@ synthesis at the end. Written as a flow it is four declarations:
 
 ```a11flow
 flow deep-research {
-  in  topic:    string required
-  out report:   string stream
-  out plan:     string stream
-  out user_log: string stream
+  in  topic:  string required
+  out report: string stream
+  out plan:   string stream
 
   planned = run plan-research(topic: topic)
-  planned.user_log -> user_log
+  for line in planned.narration { log info line }
   planned.briefs -> plan
 
   nodes research {
@@ -99,19 +101,25 @@ flow deep-research {
     for brief in planned.briefs parallel 3 {
       one = run investigate(topic: topic, brief: brief)
       one.report -> findings
-      one.user_log -> user_log
+      for line in one.narration { log info line }
     }
 
     written = run synthesise-findings(
       topic: topic, brief: planned.synthesis, findings: findings,
     )
     written.report -> report
-    written.user_log -> user_log
+    for line in written.narration { log info line }
   }
 }
 ```
 
 Four things in that are worth reading twice.
+
+**`log info line`** is where the narration goes: the action's own log, which every
+A11 action has, rather than an output port the caller has to be told the name of.
+The steps hand their lines up on a `narration` port because a *nested* action's
+log is its own — it reaches the server's log, not the caller's — so the
+composition does the logging on their behalf.
 
 **`for ... parallel 3`** is the fan-out. The planner's `briefs` port is still open
 when the loop starts reading it, so an investigation begins as soon as its brief
@@ -125,8 +133,9 @@ is not sent three intermediate reports to get one report back.
 **`findings = node()`** is where the investigations meet. A unary output port
 cannot be written by three loop passes; a node can, and one reader reads it back.
 
-**`user_log`** is narration. Every step writes to it, arrival order is the order
-things happened, and it is what the page shows while it waits.
+**`narration`** is how a step's lines reach the composition that logs them.
+Arrival order is the order things happened, and the page shows the log while it
+waits.
 
 ## 2. A model call, in a language with no model in it
 
@@ -155,6 +164,15 @@ Note what the flow does *not* say: which provider, which model, which key. A
 nested action is given its parent's `x-a11-` headers, so the page names the
 backend once, on the `deep-research` call, and every model call inside inherits
 it.
+
+Which leaves the composition with nothing to advertise, and that turned out to
+matter: a console offering a form built from an action's declared headers offered
+an empty one, and a `deep-research` called with no headers cannot be answered at
+all. So the demo server registers these four flows with `RESEARCH_HEADERS` —
+provider, model and base URL, each carrying the local ollama value as its
+`default`. A header default is *applied* when the caller omits it, so the effect
+is a composition that answers with no configuration and still routes anywhere
+the caller asks it to.
 
 `ask_model` is `interact_with_llm` without the conversation recording (the demo
 server registers both). A step of a composition is not a chat turn — recorded,
@@ -209,16 +227,24 @@ const DEEP_RESEARCH_SCHEMA = new ActionSchema({
     outputs: {
         report: new ActionPortSchema({name: 'report', type: 'text/plain'}),
         plan: new ActionPortSchema({name: 'plan', type: 'text/plain'}),
-        user_log: new ActionPortSchema({name: 'user_log', type: 'text/plain'}),
     },
 });
 ```
 
-All three outputs are read at once, because they fill at once:
+The log is not declared, because it is not in any action's schema: every action
+has one, and it is claimed rather than named. Claim it *before* dispatch, since a
+line logged before anything holds the port goes to the server's log instead:
+
+```ts
+const logs = await claimLog(call);
+need(await call.call());
+```
+
+Then everything is read at once, because it all fills at once:
 
 ```ts
 await Promise.all([
-    readPort(call, 'user_log', (value) => addLine(log, String(value))),
+    readLogFrom(logs, (line) => addLine(log, line)),
     readPort(call, 'plan', (value) => addPlanItem(String(value))),
     readPort(call, 'report', (value) => appendReport(String(value))),
 ]);

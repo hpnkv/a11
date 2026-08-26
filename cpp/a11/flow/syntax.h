@@ -133,6 +133,7 @@ enum class NodeKind {
   kObjectLiteral,
   kSpread,
   kIt,
+  kDiscard,
   kName,
   kAttr,
   kIndex,
@@ -266,6 +267,15 @@ struct ObjectLiteral : NodeOf<NodeKind::kObjectLiteral> {
 
 /// `it` -- the value a `where`/`map`/`group` stage is looking at.
 struct It : NodeOf<NodeKind::kIt> {};
+
+/// `_` -- the destination that keeps nothing.
+///
+/// Written where a pipe's target goes and nowhere else: `_` is not a name, so
+/// nothing may be bound to it and nothing may be read from it. A node of the
+/// grammar rather than a name the resolver happens not to find, for the same
+/// reason [It] is one -- the position it is legal in is part of the language,
+/// and a wrong position should say what is wrong rather than "unknown".
+struct Discard : NodeOf<NodeKind::kDiscard> {};
 
 /// A bare name: a port, a call, a loop variable, a header alias.
 struct Name : NodeOf<NodeKind::kName> {

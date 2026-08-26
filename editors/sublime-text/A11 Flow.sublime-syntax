@@ -404,7 +404,7 @@ contexts:
       scope: constant.language.log-level.a11flow
 
   literals:
-    - match: '\b(true|false|null|TRUE|FALSE|NULL){{kw_boundary}}'
+    - match: '\b(true|false|null|_|TRUE|FALSE|NULL){{kw_boundary}}'
       scope: constant.language.a11flow
     # A number with a duration unit: 500ns, 250ms, 30s, 5m, 1h. Longest first,
     # so `250ms` is milliseconds rather than a number of metres.

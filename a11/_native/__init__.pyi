@@ -7699,6 +7699,14 @@ class WebRtcConfiguration:
     def max_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
+    def max_discovered_mtu(self) -> int:
+        """
+        Ceiling the search may raise the MTU to, in bytes. Defaults to 9216. Lowering it bounds how wrong discovery can be without switching it off; setting it to `mtu` is another way of pinning.
+        """
+    @max_discovered_mtu.setter
+    def max_discovered_mtu(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
     def max_message_size(self) -> int | None:
         """
         Advertised local libdatachannel message size ceiling.
@@ -7715,6 +7723,30 @@ class WebRtcConfiguration:
     def mtu(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
+    def path_mtu_discovery(self) -> bool:
+        """
+        Whether to discover the path MTU by probing instead of holding `mtu`. On by default, and worth turning off deliberately: discovery raises the association MTU once a burst of padded SCTP heartbeats is acknowledged, and a burst of probes can be luckier than a stream of data. When it is, packets at the raised size are dropped in flight -- which produces no local send error, so the association sits wedged until the black-hole detector notices and falls back. Set False to pin the MTU to `mtu`, which is what a peer on a path it cannot characterise (a TURN relay, anything across the internet) should do; it costs throughput and buys the absence of that stall.
+        """
+    @path_mtu_discovery.setter
+    def path_mtu_discovery(self, arg0: bool) -> None: ...
+
+    @property
+    def path_mtu_raise_interval(self) -> Duration:
+        """
+        How long after the search settles before it tries to raise the MTU again. Defaults to 10 minutes. A long interval is not a substitute for turning discovery off: it bounds how often the stall can happen, not whether it can.
+        """
+    @path_mtu_raise_interval.setter
+    def path_mtu_raise_interval(self, arg1: typing.Any) -> None: ...
+
+    @property
+    def path_mtu_startup_retry(self) -> Duration:
+        """
+        How long to wait before retrying while the SCTP association is not yet available. Defaults to 250ms.
+        """
+    @path_mtu_startup_retry.setter
+    def path_mtu_startup_retry(self, arg1: typing.Any) -> None: ...
+
+    @property
     def preferred_port_range(self) -> tuple[int, int] | None:
         """
         Optional (min, max) local port range for ICE.
@@ -7723,6 +7755,14 @@ class WebRtcConfiguration:
     def preferred_port_range(
         self, arg0: tuple[typing.SupportsInt, typing.SupportsInt] | None
     ) -> None: ...
+
+    @property
+    def probe_timeout(self) -> Duration:
+        """
+        How long one probe has to be acknowledged before it counts as lost. Defaults to 500ms.
+        """
+    @probe_timeout.setter
+    def probe_timeout(self, arg1: typing.Any) -> None: ...
 
     @property
     def stun_servers(self) -> list[str]:

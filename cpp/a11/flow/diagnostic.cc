@@ -27,6 +27,10 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.after-order", Family::kBarrier, Severity::kWarning,
              "An 'after' names a step written further down the flow, or names "
              "the statement it is on."},
+    CodeInfo{"flow.barrier.after-reads-subject", Family::kBarrier,
+             Severity::kError,
+             "An argument reads an output of the call its own statement waits "
+             "for, so neither the argument nor the call can go first."},
     CodeInfo{"flow.barrier.cancel-after-wait", Family::kBarrier,
              Severity::kWarning,
              "A call is cancelled after this body already waited for it, so "
@@ -42,6 +46,10 @@ constexpr std::array kCodes = {
              "A repeat carries the same name twice."},
     CodeInfo{"flow.barrier.duplicate-until", Family::kBarrier, Severity::kError,
              "A loop is given a second stop condition."},
+    CodeInfo{"flow.barrier.unordered-clock", Family::kBarrier,
+             Severity::kWarning,
+             "A statement reads the clock against something the flow produced, "
+             "with no 'after' to say when it runs."},
     CodeInfo{"flow.barrier.until-outside-repeat", Family::kBarrier,
              Severity::kError,
              "An 'until' or 'while' ends a 'repeat' or a 'for', and there is "
@@ -49,6 +57,14 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.until-parallel", Family::kBarrier, Severity::kError,
              "An 'until' is written on a loop whose passes run in parallel, "
              "where there is no one pass for it to ask about."},
+    CodeInfo{"flow.barrier.value-read-twice", Family::kBarrier,
+             Severity::kWarning,
+             "One statement reads one stream twice where a value belongs, so "
+             "the two reads take turns on it rather than seeing one value."},
+    CodeInfo{"flow.barrier.wait-lends-node", Family::kBarrier,
+             Severity::kWarning,
+             "A 'wait' or 'drain' on a node nothing in the flow writes: it "
+             "ends the node at once rather than waiting for it."},
     CodeInfo{"flow.barrier.wrong-carry", Family::kBarrier, Severity::kError,
              "A carry names something other than what its repeat carries."},
     CodeInfo{"flow.form.advance-in-loop", Family::kForm, Severity::kError,
@@ -161,6 +177,13 @@ constexpr std::array kCodes = {
              "'zip' reads streams in step, so it takes at least one."},
     CodeInfo{"flow.name.call-as-stream", Family::kName, Severity::kError,
              "A call used where one of its ports was meant."},
+    CodeInfo{"flow.name.discard-bound", Family::kName, Severity::kError,
+             "'_' used as a name: bound to a statement, declared as a port, or "
+             "given to a loop. It is the discard, not a name."},
+    CodeInfo{"flow.name.discard-read", Family::kName, Severity::kError,
+             "'_' read: as a pipeline source, as something to wait on, drain "
+             "or abort, or inside an expression. It keeps nothing, so there is "
+             "nothing there to read."},
     CodeInfo{"flow.name.it-outside-stage", Family::kName, Severity::kError,
              "'it' outside the 'where', 'map' or 'group' stage whose value it "
              "names."},

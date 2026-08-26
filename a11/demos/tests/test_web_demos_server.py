@@ -14,15 +14,20 @@ conversation store -- with no network and no model.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
+import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 import pytest_asyncio
 
 import a11
 from a11 import net, timing
+from a11.cli.commands import serve as serve_command
 from a11.demos import web_demos_server as demos
 from a11.gateway import conversation_actions, conversations
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
@@ -325,26 +330,43 @@ async def test_deep_research_plans_investigates_and_synthesises(
     # headers -- which is why the flow says nothing about providers at all.
     research.set_header(LlmHeaders.PROVIDER.value, b"ollama")
     research.set_header(LlmHeaders.MODEL.value, b"fake")
+    # Claimed before the call, which is when the port has to be held: a log
+    # written before anything reads it goes to the process sink and is gone.
+    # The composition narrates itself *here* and on no output port, which is
+    # what lets a client that knows nothing about it -- the console at
+    # a11.to/ui, showing it in its log panel -- follow a slow run.
+    log_node = research.get_log_node()
     await research.call()
     await research["topic"].finalize("fibers and nodes")
 
     report: list[str] = []
     plan: list[str] = []
-    log: list[str] = []
+    logged: list[str] = []
+
+    async def collect_logs() -> None:
+        # A separate task, never awaited to completion: nothing finalizes the
+        # log port, so this only ends when the reader is cancelled.
+        async for chunk in log_node.iter_chunks(
+            timeout=timing.Duration.seconds(_TIMEOUT)
+        ):
+            logged.append(str(bytes(chunk.data), "utf-8", "replace"))
 
     async def collect(port: str, into: list[str]) -> None:
         async for value in research[port]:
             into.append(str(value))
 
+    narrating = asyncio.ensure_future(collect_logs())
     await asyncio.wait_for(
         asyncio.gather(
             collect("report", report),
             collect("plan", plan),
-            collect("user_log", log),
         ),
         timeout=_TIMEOUT,
     )
     await asyncio.wait_for(research.wait(), timeout=_TIMEOUT)
+    narrating.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await narrating
 
     # The planner's briefs, minus the one about writing the report.
     assert plan == [
@@ -371,11 +393,54 @@ async def test_deep_research_plans_investigates_and_synthesises(
     assert [summary async for summary in listing["conversations"]] == []
     await asyncio.wait_for(listing.wait(), timeout=_TIMEOUT)
 
-    # The narration a page shows while it waits, from every step.
-    narrated = "\n".join(log)
+    # The narration a page shows while it waits, from every step -- all of it on
+    # the reserved log port, and none of it on an output the caller has to know
+    # the name of.
+    narrated = "\n".join(logged)
     assert "[plan] planning research on: fibers and nodes" in narrated
     assert "[investigate] Find out what a node is." in narrated
     assert "[synthesise] writing the report on: fibers and nodes" in narrated
+    assert "user_log" not in research.get_schema().outputs
+
+
+def test_the_research_flows_advertise_the_local_ollama(
+    tmp_path: pathlib.Path,
+):
+    """Registered with the provider filled in, so the console can just call it.
+
+    A flow declares no headers -- a composition is configured by the call that
+    started it -- so the console had no field to fill and an unconfigured call
+    failed with "no provider". These are *this deployment's* answer to that,
+    which is why they are added at registration and not in the `.flow` file.
+
+    A default here is applied and not merely advertised, so what this pins is
+    the whole behaviour: the value reaches the action, and the console reads the
+    same value out of the schema to put in front of somebody.
+    """
+    store = conversations.ConversationStore(tmp_path)
+    registry = demos.make_registry(store, text_to_image=False)
+
+    for name in demos.deep_research_program().names:
+        headers = registry.get_schema(name).headers
+        for header, expected in demos.OLLAMA_DEFAULTS.items():
+            assert bytes(headers[header].default) == expected.encode(), name
+        # Declared with no default: a local provider needs none, and a key with
+        # a default would be a key nobody meant to send.
+        assert headers[LlmHeaders.API_KEY].default is None
+
+    # The compiled program is untouched: it is the file, and the file says
+    # nothing about providers. Anything checking a flow's ports against it --
+    # the browser declares `deep-research`'s by hand -- keeps working.
+    for name in demos.deep_research_program().names:
+        assert not dict(demos.deep_research_program()[name].schema.headers)
+
+    # And the chat guide's action is left exactly as it was: a turn there is
+    # routed by what the page sends, and a default would silently answer from
+    # somewhere else when it sent nothing.
+    for name in ("interact_with_llm", "ask_model"):
+        headers = registry.get_schema(name).headers
+        assert LlmHeaders.BASE_URL not in headers
+        assert headers[LlmHeaders.PROVIDER].default is None
 
 
 # --- The browser-tools guide -------------------------------------------------
@@ -451,6 +516,112 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
     assert "set_color" in fake.tools_offered
     # The handler ran here, with the arguments the model chose.
     assert ran == [([2], ["#ff0044"])]
+
+
+# --- Being served by `a11 serve` ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_module_is_a_target_a11_serve_can_resolve(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole of how this is started: one symbol `a11 serve` reads.
+
+    And it has to be the *service*, not the registry: each connection here gets
+    a copy with the caller's own tools registered on it, which is an
+    `on_connection` hook and cannot travel on a registry.
+
+    Resolved with a loop running, as the command does it: building a native
+    `Service` needs one, and without it this passes alone and fails after any
+    test that has already used a loop.
+    """
+    monkeypatch.setattr(demos, "_SERVICE", None)
+    monkeypatch.setenv(demos.CONVERSATION_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv(demos.TEXT_TO_IMAGE_ENV, "0")
+
+    served = serve_command.resolve_served(demos.TARGET)
+    assert served.service is not None
+    assert "interact_with_llm" in served.registry.list_registered_actions()
+    # The store went where it was told, rather than into the user's cache.
+    assert (tmp_path / "conversations.sqlite").exists()
+
+
+def test_the_service_is_not_built_by_importing_the_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Importing must not create a conversation store on disk.
+
+    Which is why the symbol is lazy: `python -m` imports this module before its
+    own flags -- the ones that say *where* the store goes -- have been read, so
+    a service built at import would record into the wrong place and a second one
+    would be built for the right one. In a subprocess because "what a fresh
+    import does" is not answerable in a process that has already done it.
+    """
+    root = tmp_path / "unwanted"
+    environment = dict(
+        os.environ, **{demos.CONVERSATION_ROOT_ENV: str(root)}
+    )
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import a11.demos.web_demos_server as d; print(d._SERVICE)",
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=_TIMEOUT,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert finished.stdout.strip() == "None"
+    assert not root.exists()
+
+
+def test_the_hosting_flags_are_a11_serves_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One vocabulary of transport flags, whichever entry point was typed.
+
+    The two defaults that differ are the ones the guides quote, so a page whose
+    instructions say 9010 is right.
+    """
+    parser = argparse.ArgumentParser()
+    demos._configure(parser)
+    args = parser.parse_args(["--ws", "--hosted", "demoserver"])
+
+    assert args.target == demos.TARGET
+    assert (args.ws_port, args.ws_path) == (demos.DEFAULT_PORT, demos.DEFAULT_PATH)
+    assert args.hosted == "demoserver"
+
+
+def test_its_own_flags_reach_the_service_through_the_environment(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--conversation-root` has to arrive before the symbol is read."""
+    monkeypatch.setattr(demos, "_SERVICE", None)
+    monkeypatch.delenv(demos.CONVERSATION_ROOT_ENV, raising=False)
+    monkeypatch.delenv(demos.TEXT_TO_IMAGE_ENV, raising=False)
+    ran: list[argparse.Namespace] = []
+
+    async def fake_run(args: argparse.Namespace) -> int:
+        # Read where the real command reads it: inside the loop, because a
+        # native Service binds to the loop it is built on.
+        ran.append(args)
+        actions = demos.SERVICE.action_registry.list_registered_actions()
+        assert "text_to_image" not in actions
+        assert "deep-research" in actions
+        return 0
+
+    monkeypatch.setattr(serve_command, "run", fake_run)
+    code = demos.main(
+        ["--conversation-root", str(tmp_path / "here"), "--no-text-to-image"]
+    )
+
+    assert code == 0
+    assert ran and ran[0].target == demos.TARGET
+    assert os.environ[demos.CONVERSATION_ROOT_ENV] == str(tmp_path / "here")
+    assert os.environ[demos.TEXT_TO_IMAGE_ENV] == "0"
 
 
 # --- The transport the pages use ---------------------------------------------

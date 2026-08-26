@@ -121,7 +121,7 @@
       "name": "constant.other.log-level.a11flow"
     },
     "constant": {
-      "match": "\\b(false|it|null|true|FALSE|IT|NULL|TRUE)\\b",
+      "match": "\\b(_|false|it|null|true|FALSE|IT|NULL|TRUE)\\b",
       "name": "constant.language.a11flow"
     },
     "word-operator": {

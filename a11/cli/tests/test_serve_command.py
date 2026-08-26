@@ -30,6 +30,7 @@ from a11.cli.commands.serve import (
     http2_options,
     is_path_target,
     resolve_registry,
+    resolve_served,
     serve,
     split_target,
 )
@@ -152,6 +153,83 @@ def test_a_symbol_of_the_wrong_type_is_refused(tmp_path: Path) -> None:
 def test_an_empty_target_is_refused() -> None:
     with pytest.raises(ServeError, match="give a module to serve"):
         resolve_registry(":REGISTRY")
+
+
+# --- A whole Service, rather than a registry ---------------------------------
+
+
+_SERVICE_SOURCE = """
+import a11
+
+REGISTRY = a11.ActionRegistry()
+ACCEPTED = []
+
+@REGISTRY.action
+async def shout(text: str) -> str:
+    \"\"\"Shout a line.\"\"\"
+    return text.upper()
+
+async def prepare(session, stream):
+    ACCEPTED.append(session.get_id())
+
+SERVICE = a11.Service(action_registry=REGISTRY, on_connection=prepare)
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_service_symbol_is_served_as_it_was_built(
+    tmp_path: Path,
+) -> None:
+    """The point of allowing one: its per-connection hook comes with it.
+
+    A registry cannot carry an `on_connection`, so a backend that specialises
+    each connection -- a registry copy, a bridge bound to the session -- can
+    only be served by this command if the command takes the service itself.
+
+    Resolved inside the loop, as the command does: a native service binds to the
+    loop it was built on, so a module that builds one at import wants importing
+    from somewhere a loop is running.
+    """
+    _module(tmp_path, "serve_service", _SERVICE_SOURCE)
+
+    served = resolve_served("serve_service:SERVICE")
+    assert served.symbol == "SERVICE"
+    assert served.service is not None
+    # And the count the command prints comes off the service's own registry.
+    assert _own(served.registry) == ["shout"]
+
+
+@pytest.mark.asyncio
+async def test_a_registry_symbol_leaves_the_service_to_be_built(
+    tmp_path: Path,
+) -> None:
+    _module(tmp_path, "serve_registry_only", _SERVICE_SOURCE)
+
+    served = resolve_served("serve_registry_only:REGISTRY")
+    assert served.service is None
+    assert _own(served.registry) == ["shout"]
+
+
+@pytest.mark.asyncio
+async def test_asking_for_a_registry_and_finding_a_service_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Rather than quietly handing back the registry inside it.
+
+    Which would drop the hook that made the service worth exporting, and the
+    caller would never know it had been dropped.
+    """
+    _module(tmp_path, "serve_service_strict", _SERVICE_SOURCE)
+
+    with pytest.raises(ServeError, match="is a Service"):
+        resolve_registry("serve_service_strict:SERVICE")
+
+
+def test_something_that_is_neither_names_both(tmp_path: Path) -> None:
+    _module(tmp_path, "serve_neither", "REGISTRY = 3\n")
+
+    with pytest.raises(ServeError, match="not an ActionRegistry or a Service"):
+        resolve_served("serve_neither")
 
 
 # --- A file path instead of an import path ------------------------------------
@@ -897,3 +975,67 @@ async def test_following_the_claim_rebinds_on_a_new_transport():
             live.pop("webrtc").stop()
         endpoint_a.close()
         service_signalling.stop()
+
+
+# --- Hosting that has stopped for good ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_serving_ends_when_hosting_stops_for_good() -> None:
+    """A command whose only job is a hosted identity must not outlive it.
+
+    Before this, a revoked credential left the process running with its
+    WebSocket listener up and its exit code zero, while the identity it was
+    hosting was unreachable -- a failure that looks like success to a
+    supervisor, to a health check and to whoever is reading the log.
+    """
+    from a11.cli.commands.serve import _until_stopped_or_signalled
+
+    class NeverSignalled:
+        async def wait(self) -> None:
+            await asyncio.Event().wait()
+
+    class Revoked:
+        async def wait_stopped(self):
+            return a11.Status(
+                code=a11.StatusCode.UNAUTHENTICATED,
+                message="The credential presented is not valid.",
+            )
+
+    halted = await asyncio.wait_for(
+        _until_stopped_or_signalled(NeverSignalled(), Revoked()), timeout=5
+    )
+
+    assert halted is not None
+    assert halted.code == a11.StatusCode.UNAUTHENTICATED
+
+
+@pytest.mark.asyncio
+async def test_a_signal_is_still_the_ordinary_ending() -> None:
+    """And it reports no failure, so the exit code stays zero."""
+    from a11.cli.commands.serve import _until_stopped_or_signalled
+
+    class Signalled:
+        async def wait(self) -> None:
+            return None
+
+    class Healthy:
+        async def wait_stopped(self):
+            await asyncio.Event().wait()
+
+    halted = await asyncio.wait_for(
+        _until_stopped_or_signalled(Signalled(), Healthy()), timeout=5
+    )
+
+    assert halted is None
+
+
+@pytest.mark.asyncio
+async def test_without_hosting_there_is_only_the_signal() -> None:
+    from a11.cli.commands.serve import _until_stopped_or_signalled
+
+    class Signalled:
+        async def wait(self) -> None:
+            return None
+
+    assert await _until_stopped_or_signalled(Signalled(), None) is None

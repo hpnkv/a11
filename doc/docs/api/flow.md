@@ -217,6 +217,22 @@ values unread, in either order, because the count belongs to the node and is
 summed while the flow is compiled. It takes a port or a node, not a pipeline:
 there is no front to take values off a thing each reader derives for itself.
 
+`-> _` is the third of these, and the one that does the work. `skip` says the
+values were never wanted, and a counted one is taken off the stream before
+anybody sees it; `_` says the *result* is not wanted, and the pipeline that
+produced it still runs:
+
+```a11flow
+pages | map summarise(it) | logf info "summarised %s" it.url -> _
+```
+
+Every page is summarised and every line is logged; nothing is kept afterwards.
+Written where a destination goes and nowhere else — `_` is not a name, so
+nothing may be bound to it and nothing may be read back out of it. `_ = node()`,
+`_ | count -> n`, `drain _` and `in _: string` are each refused while the flow is
+compiled. It may stand beside a real destination (`a -> b, _`), where it is
+simply one more reader that keeps nothing.
+
 ### Putting a stream back together
 
 `| group EXPR` is `batch` with a question instead of a count: values gather into
@@ -418,9 +434,23 @@ clock, and the arithmetic is the arithmetic A11's own types allow:
 ```a11flow
 started = node()
 now() -> started
-took = now() - started            # instant - instant is a duration
-if took > 30s { fail deadline_exceeded strformat("gave up after %s", took) }
+work = run slow-thing(input: pages)
+done = wait work
+let took = now() - started        # instant - instant is a duration
+strformat("took %s", took) -> log after done
 ```
+
+The `after` is not decoration. Steps run concurrently, so a statement that reads
+the clock and nothing else runs *at once* — written last and measuring the flow
+starting. `now() -> started` needs no barrier because a start is whenever the
+flow started; anything that reads the clock *against* something the flow produced
+is a measurement, and a measurement needs a moment. The language says so
+(`flow.barrier.unordered-clock`) rather than letting it report microseconds.
+
+An `after` holds the whole statement, its **arguments included**: in
+`run act(p: now() - started) after done` the argument is read once `done` has
+happened, not while the flow is starting. So a barriered statement reports what
+was true by the time it ran, which is what it reads like.
 
 `+` and `-` are the only arithmetic the language has, and they exist for this:
 a composition cannot otherwise say how long it took. A bare number beside a
@@ -530,6 +560,13 @@ reader = run take-notes(pages: page.text) with "x-a11-progress-node": seen.id
 seen -> progress
 drain seen after reader          # the flow lent the node; the flow ends it
 ```
+
+The `after` on that last line is the whole of it. Nothing in the flow writes
+`seen`, so nothing in the flow would close it either — which means the barrier is
+what closes it, and a barrier with nothing to wait for closes it *at once*,
+leaving whoever was lent `seen.id` with a shut writer. `wait seen` on its own is
+that mistake wearing the word "wait", and the language says so
+(`flow.barrier.wait-lends-node`).
 
 ## Failures a flow expects
 

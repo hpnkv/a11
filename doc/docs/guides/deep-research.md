@@ -233,7 +233,8 @@ exposes the same `deep-research` action boundary as the Python handler.
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="research-demo" class="a11-demo">
   <div class="a11-toolbar">
-    <input id="research-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <input id="research-server" class="wide" aria-label="Demo server URL"
+           value="wss://a11.to/ws/demoserver">
     <select id="research-provider" aria-label="Provider">
       <option value="ollama">Ollama</option>
       <option value="claude">Claude</option>

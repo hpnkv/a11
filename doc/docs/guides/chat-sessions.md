@@ -10,7 +10,7 @@ the same interface, configured via headers.
 !!! note "Before you start"
 
     The demo on this page talks to the hosted backend at
-    `wss://a11.services:9443/a11-demos`, which runs an Ollama beside itself — so the
+    `wss://a11.to/ws/demoserver`, which runs an Ollama beside itself — so the
     default (Ollama, `glm-4.7-flash`, base URL `http://127.0.0.1:11434`) answers
     without a key. The process serving the action resolves the base URL, so
     `127.0.0.1` refers to that backend host. Claude and Gemini need a key.
@@ -44,7 +44,8 @@ there, on a port of its own, while `text_output` streams the answer.
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="chat-demo" class="a11-demo">
   <div class="a11-toolbar">
-    <input id="chat-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <input id="chat-server" class="wide" aria-label="Demo server URL"
+           value="wss://a11.to/ws/demoserver">
     <select id="chat-provider" aria-label="Provider">
       <option value="ollama">Ollama</option>
       <option value="claude">Claude</option>

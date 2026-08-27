@@ -47,12 +47,12 @@ export const READ_TIMEOUT_MS = 300_000;
 /**
  * The hosted demo backend the guides point at.
  *
- * A locally run `python -m a11.demos.web_demos_server` is
- * `ws://127.0.0.1:9010/a11-demos`, which the same field accepts — as does the
- * `https://`/`http://` spelling of either, which [connect] rewrites, because a
- * service address and its WebSocket URL name the same endpoint.
+ * The default is the exchange's WebSocket relay for the hosted `demoserver`
+ * identity. A locally run `python -m a11.demos.web_demos_server` is
+ * `ws://127.0.0.1:9010/a11-demos`, which the same field accepts. The
+ * `https://` or `http://` spelling also works because [connect] rewrites it.
  */
-export const DEFAULT_SERVER_URL = 'wss://a11.services:9443/a11-demos';
+export const DEFAULT_SERVER_URL = 'wss://a11.to/ws/demoserver';
 
 // --- The backend a turn is answered by --------------------------------------
 

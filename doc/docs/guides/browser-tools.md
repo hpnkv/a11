@@ -9,7 +9,7 @@ touches the canvas; and the model sees three ordinary A11 actions.
 
 !!! note "Before you start"
 
-    The demo talks to `wss://a11.services:9443/a11-demos`, which runs an Ollama
+    The demo talks to `wss://a11.to/ws/demoserver`, which runs an Ollama
     beside itself, so the default needs no key; Claude and Gemini want one. To run
     the backend yourself:
 
@@ -35,7 +35,8 @@ tool narrated; the model's own sentence arrives underneath the canvas.
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="tools-demo" class="a11-demo">
   <div class="a11-toolbar">
-    <input id="tools-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <input id="tools-server" class="wide" aria-label="Demo server URL"
+           value="wss://a11.to/ws/demoserver">
     <select id="tools-provider" aria-label="Provider">
       <option value="ollama">Ollama</option>
       <option value="claude">Claude</option>

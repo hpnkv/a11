@@ -41,7 +41,8 @@ step, from the `progress` port; the image appears when `image` closes.
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="media-demo" class="a11-demo">
   <div class="a11-toolbar">
-    <input id="media-server" class="wide" aria-label="Demo server URL" value="wss://a11.services:9443/a11-demos">
+    <input id="media-server" class="wide" aria-label="Demo server URL"
+           value="wss://a11.to/ws/demoserver">
     <input id="media-steps" type="number" min="1" max="100" aria-label="Steps" value="20">
     <input id="media-seed" aria-label="Seed" placeholder="seed (optional)">
   </div>

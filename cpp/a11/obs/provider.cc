@@ -165,8 +165,6 @@ void ShutdownLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(g_mu) {
   }
   // The now shut-down provider stays installed as the global (its tracers
   // simply produce non-recording spans); a later Configure() replaces it.
-  // Deliberately not setting a null provider, which would make
-  // GetTracerProvider() return null for any ungated caller.
   g_provider.reset();
   g_in_memory.reset();
   g_baggage_keys.clear();

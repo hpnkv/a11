@@ -68,8 +68,7 @@ void InvokeFutureCallback(
     const absl::StatusOr<T>& result) {
   // A completion callback belongs to whoever called OnReady, and so does this
   // instantiation: if their callback can throw, their translation unit has
-  // exceptions and Attempt catches there. A11's own callbacks cannot throw and
-  // compile to a plain call. See a11/exception_guard.h.
+  // exceptions and Attempt catches there.
   const absl::Status raised = exception_guard::Attempt(
       [&] { callback(result); }, "Future completion callback");
   if (!raised.ok()) {

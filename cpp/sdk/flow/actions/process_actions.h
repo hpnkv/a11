@@ -35,10 +35,8 @@
  * ### Stopping one
  *
  * Cancelling the action, or its deadline passing, sends `SIGTERM`, waits
- * `options.grace` for the process to attend to it, and then sends `SIGKILL`.
- * That order is the whole point: a program that flushes its output on `SIGTERM`
- * gets the chance to, and one that ignores it still goes away. A flow can also
- * ask directly:
+ * `options.grace` for graceful shutdown, and then sends `SIGKILL`. Programs may
+ * flush output during the grace period. A flow can also request a signal:
  *
  * @code{.a11flow}
  *   {"command": "signal", "signal": "HUP"} -> server.control_events

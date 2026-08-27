@@ -249,8 +249,7 @@ extern "C" void SqliteUpdateHook(void* context, int /*operation*/,
  * One writer thread with the single write connection, plus N reader threads
  * each owning their own read connection. Because a connection belongs to
  * exactly one thread, none of them needs a lock. Task queues use `std::mutex`
- * and `std::condition_variable` deliberately: these threads never run fibers,
- * so the fiber-aware `thread::` primitives would be the wrong tool here.
+ * and `std::condition_variable` because these threads never run fibers.
  */
 class SqliteDatabase::Workers {
  public:
@@ -454,24 +453,6 @@ absl::Status SqliteDatabase::ApplySchema(SqliteConnection& connection) {
   // `nodes` carries everything answerable without touching a fragment: the
   // cursors, the closure state and the cached size, so Size() and GetFinalSeq()
   // are single-row reads.
-  //
-  // `fragments` deliberately decomposes a Chunk into columns rather than
-  // storing an opaque blob, so ordinary SQL can filter on owner, timestamp or
-  // node reference. Three subtleties:
-  //   * `storage` discriminates inline bytes from an externalized blob file
-  //     from a Chunk's own semantic `ref` -- Chunk::Validate() makes `ref` and
-  //     `data` mutually exclusive, but says nothing about which kind of `ref`.
-  //   * `final_marker` records what the writer asked for. The `continued` flag
-  //     handed back to callers is always recomputed from `nodes.final_seq`,
-  //     because a later batch can move finality.
-  //   * `timestamp` is always populated (defaulting to now) so it is a usable
-  //     index key, while `timestamp_explicit` preserves whether the metadata
-  //     originally carried one.
-  //
-  // No ON DELETE CASCADE: foreign-key actions compile to VDBE sub-programs that
-  // re-enter sqlite3VdbeExec, which is real C-stack recursion inside
-  // sqlite3_step. Deletes clear fragments explicitly, which they must do anyway
-  // to collect blob filenames for unlinking.
   return connection.Execute(R"sql(
     CREATE TABLE IF NOT EXISTS nodes (
       id          TEXT    PRIMARY KEY,
@@ -607,10 +588,7 @@ absl::Status SqliteDatabase::RunWrite(
             if (touched.ok()) {
               status = connection.Execute("COMMIT");
               if (status.ok()) {
-                // The commit hook is the authoritative confirmation. A COMMIT
-                // that returned OK without firing it would mean SQLite ended
-                // the statement some other way, and publishing a wakeup for a
-                // transaction that never landed is worse than failing loudly.
+                // The commit hook is the authoritative confirmation.
                 if (!hooks->committed.load(std::memory_order_acquire)) {
                   status = absl::InternalError(
                       "SQLite commit completed without firing the commit hook");
@@ -687,12 +665,7 @@ void SqliteDatabase::NotifyNodes(const std::vector<std::string>& node_ids) {
 
 void SqliteDatabase::PollCrossProcess() {
   // SQLite bumps PRAGMA data_version on a connection whenever *another*
-  // connection -- in this or any other process -- commits. One integer read per
-  // tick tells us whether anything changed at all; when it did, every parked
-  // reader is woken and re-reads. That is generous rather than precise, which
-  // is the right trade for a path that only runs when explicitly enabled.
-  // The next tick re-reads the interval from the revived database, so the
-  // timer does not need to carry it.
+  // connection -- in this or any other process -- commits.
   const std::weak_ptr<SqliteDatabase> weak = weak_from_this();
   thread::PostAt(absl::Now() + options_.cross_process_poll_interval, [weak] {
     const std::shared_ptr<SqliteDatabase> database = weak.lock();

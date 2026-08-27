@@ -55,6 +55,8 @@ struct Word {
   [[nodiscard]] bool Empty() const { return text.empty(); }
 };
 
+// A value the language can write out in full: what a literal is, and what
+// folding a literal expression gives.
 /// A value the language can write out in full: what a literal is, and what
 /// folding a literal expression gives.
 ///
@@ -97,6 +99,8 @@ struct Constant {
 /// The spelling of a constant's kind in the output formats.
 std::string_view ConstantKindName(Constant::Kind kind);
 
+// The type of a port, or of a value being made one: `string`,
+// `list[a11.NodeFragment]`, `"audio/wav"`.
 /// The type of a port, or of a value being made one: `string`,
 /// `list[a11.NodeFragment]`, `"audio/wav"`.
 ///
@@ -200,6 +204,7 @@ struct NodeOf : Node {
   NodeOf() { kind = K; }
 };
 
+// `node` as a `T`, or `nullptr` if it is something else.
 /// `node` as a `T`, or `nullptr` if it is something else.
 ///
 /// The one way to go from a node to a construct: it checks the kind, so a
@@ -395,6 +400,7 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `parallel n`: how many values this stage may be working on at once. One
   /// means the stage sees them one at a time, which is the default.
   int parallel = 1;
+  // Whether the values leave in the order they arrived.
   /// Whether the values leave in the order they arrived. True unless
   /// `unordered` was written: a parallel stage finishes its values out of
   /// order and puts them back in order on the way out, so everything after it
@@ -487,6 +493,8 @@ struct Bind : NodeOf<NodeKind::kBind> {
 /// is*, and that is worth a word at the front of the line where a reader
 /// scanning the left margin sees it. It reads as one, too: `let code = ...`.
 struct Let : NodeOf<NodeKind::kLet> {
+  // One name is the value; several take it apart -- `let name, age = user` by
+  // field, `let first, second = pair` by position.
   /// One name is the value; several take it apart -- `let name, age = user` by
   /// field, `let first, second = pair` by position. Which of the two is meant
   /// is a question about the value rather than about the text, so it is
@@ -502,14 +510,13 @@ struct Let : NodeOf<NodeKind::kLet> {
   }
 };
 
+// `[try] { ...
 /// `[try] { ... }` -- a block of statements that runs as one thing.
 ///
-/// Everything in a flow's body runs at once, which is the point of it; a block
-/// is how a flow says "these together, and *this* is what came of them". Inside
-/// it the ordinary rules hold, so its own statements are concurrent with each
-/// other and a condition in it blocks only what is in it. Bound to a name it
-/// reads as a status, exactly as a call does, and `try` is what says a failure
-/// inside is the flow's to handle rather than the end of it.
+/// Statements in a flow body run concurrently. A block groups their outcome.
+/// Its own statements remain concurrent, and a condition blocks only statements
+/// within the block. A bound block yields a status. With `try`, the flow
+/// handles a block failure; otherwise the failure ends the flow.
 struct Block : NodeOf<NodeKind::kBlock> {
   bool tolerant = false;
   std::vector<NodePtr> body;
@@ -517,9 +524,7 @@ struct Block : NodeOf<NodeKind::kBlock> {
 
 /// `advance name` -- rebind a `let` value to the *next* value of its stream.
 ///
-/// The concise form of writing the `let` again for the value after the one it
-/// has. What it buys is the guarantee a second `let` cannot give on its own:
-/// which value each use of the name sees.
+/// Rebinds the existing name so each use has a defined position in the stream.
 struct Advance : NodeOf<NodeKind::kAdvance> {
   Word name;
 };
@@ -534,8 +539,10 @@ struct Pipe : NodeOf<NodeKind::kPipe> {
   PipelinePtr pipeline;
   std::vector<NodePtr> targets;
   std::vector<Word> after;
-  /// `try source -> dest`: a failure arriving from the source, or refused by the
-  /// destination, is a value this flow reads rather than the end of it.
+  // `try source -> dest`: a failure arriving from the source, or refused by the
+  // destination, is a value this flow reads rather than the end of it.
+  /// `try source -> dest`: a failure arriving from the source, or refused by
+  /// the destination, is a value this flow reads rather than the end of it.
   ///
   /// The same word `try run` uses, for the same reason: without it the failure
   /// is the flow's. `try` on a *stage* is a different and narrower thing -- it
@@ -558,6 +565,8 @@ struct SkipTarget {
   std::vector<Word> outputs;
 };
 
+// `skip pipeline, pipeline, ...` -- read streams to their end and discard the
+// values, one or more at a time.
 /// `skip pipeline, pipeline, ...` -- read streams to their end and discard the
 /// values, one or more at a time.
 ///
@@ -570,6 +579,7 @@ struct Skip : NodeOf<NodeKind::kSkip> {
   std::optional<long long> count;
 };
 
+// `wait subject` -- hold until a call, or a node this flow writes, is finished.
 /// `wait subject` -- hold until a call, or a node this flow writes, is
 /// finished.
 ///
@@ -586,6 +596,7 @@ struct Wait : NodeOf<NodeKind::kWait> {
   bool race = false;
   std::optional<absl::Duration> timeout;
   std::vector<Word> after;
+  // `wait first of a, b -> n`: where the winner's number goes.
   /// `wait first of a, b -> n`: where the winner's number goes.
   ///
   /// A race *is* a value -- which of them won, counted from zero -- so it is
@@ -634,12 +645,11 @@ struct Log : NodeOf<NodeKind::kLog> {
   std::vector<Word> after;
 };
 
+// `for name[, name...] in pipeline [parallel n] { ...
 /// `for name[, name...] in pipeline [parallel n] { ... }`.
 ///
-/// Several names take the value apart by position -- `for url, title in
-/// zip(urls, titles)` -- which is what makes `zip` worth having: the
-/// alternative is one name and `it[0]` everywhere, and a tuple whose parts have
-/// names reads like the two streams it came from.
+/// Several names unpack the value by position, as in
+/// `for url, title in zip(urls, titles)`.
 struct ForEach : NodeOf<NodeKind::kForEach> {
   std::vector<Word> variables;
   PipelinePtr pipeline;
@@ -664,13 +674,12 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// Empty where the repeat carries nothing.
   Word variable;
   NodePtr start;
+  // `max n`, where one was written.
   /// `max n`, where one was written. Nothing means no bound: the loop runs
   /// until its `until`/`while` says to stop.
   ///
-  /// There used to be a default of 16 here, which meant a `repeat` whose
-  /// condition never held stopped after sixteen passes and reported *success*.
-  /// A silent bound presented as a clean finish is worse than either an honest
-  /// loop or an honest error, so a bound is now only ever the author's.
+  /// There is no implicit safety bound: only an author-written `max` may end a
+  /// repeat independently of its condition.
   std::optional<int> max_iterations;
   std::vector<NodePtr> body;
   /// What has to have finished before the loop starts. See ForEach::after.
@@ -750,7 +759,7 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
    * Whether this is the file's entry point: `flow { ... }`, with no name.
    *
    * A file may hold one. It is what an interpreter runs when handed the file,
-   * and it is deliberately **not** addressable: a flow with no name cannot be
+   * and it is not addressable: a flow with no name cannot be
    * the target of a `run` or a `call`, which is what stops a program's entry
    * point from being something a library flow reaches into or something that
    * recurses into itself.
@@ -809,6 +818,7 @@ struct FieldDeclaration : NodeOf<NodeKind::kFieldDeclaration> {
 
 using FieldDeclarationPtr = std::unique_ptr<FieldDeclaration>;
 
+// One `struct name { ...
 /// One `struct name { ... }` declaration: a shape a port may be typed with.
 ///
 /// A sibling of [FlowDeclaration] rather than something inside one, because a
@@ -822,6 +832,8 @@ struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
 
 using DtoDeclarationPtr = std::unique_ptr<DtoDeclaration>;
 
+// The constant `node` folds to, or `nullopt` where it is not one all the way
+// down.
 /// The constant `node` folds to, or `nullopt` where it is not one all the way
 /// down.
 ///
@@ -847,11 +859,11 @@ void VisitChildren(const Node& node,
 ///
 /// Iterative, with the work list on the heap. A pass that walked the tree by
 /// calling itself from a VisitChildren callback would put the document's
-/// nesting on the call stack, and A11's work runs on pooled fibres whose stacks
-/// are fixed and small -- so the tree's shape must not decide how much stack a
-/// pass needs. The parser bounds nesting as well (see kMaxNesting there); this
-/// is the other half, and the one that does not depend on where the tree came
-/// from.
+/// nesting on the call stack, and A11's work runs on pooled fibres whose
+/// stacks are fixed and small -- so the tree's shape must not decide how much
+/// stack a pass needs. The parser bounds nesting as well (see kMaxNesting
+/// there); this is the other half, and the one that does not depend on where
+/// the tree came from.
 ///
 /// Order is unspecified beyond "parents before children": use VisitChildren
 /// directly if a pass needs source order.

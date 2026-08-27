@@ -1,21 +1,18 @@
 # Copyright 2026 The A11 Authors.
 
-"""Workload-shaped throughput: what A11 costs on the calls people actually make.
+"""Measure A11 overhead in representative agent workloads.
 
-The other suites measure A11 in isolation, which is the only way to attribute a
-cost -- but it leaves the question a roadmap actually turns on unanswered: *on a
-real agent turn, is A11 the thing that is slow?* This suite answers it by
-running the two workloads the toolkit exists for, with the expensive part held
-still.
+The suite holds the expensive backend work constant and measures two common
+workloads:
 
 * **`interact_with_llm`** with a fake provider registered in place of a real
   one. No network and no model, so what remains is exactly A11: routing the
   call, four output ports, and one chunk per token through a node. Swept
   against token count, because a turn that streams two thousand tokens pays the
   per-token cost two thousand times and nothing else changes.
-* **the bash tool** against a real `bash`, which is the honest shape of a
-  local tool: a process, a command, and output lines back over a port. Swept
-  against output-line count for the same reason.
+* **the bash tool** against a real `bash`:
+* a process, a command, and output lines
+  returned over a port. Results vary by output-line count.
 
 Both report A11's share as a fraction. A tool call where A11 is 4% of the wall
 clock is not worth optimising; one where it is 70% is.
@@ -49,10 +46,9 @@ def _scaled(count: int, scale: float) -> int:
 def _install_fake_provider(tokens: int, thoughts: int = 0):
     """Register a provider that streams `tokens` chunks and nothing else.
 
-    Returns the provider key to ask for. The handler is deliberately the
-    minimum a real provider handler does -- write the tokens, write one
-    interaction, close every port -- so what it measures is the routing action
-    and the ports, not a mock's own cleverness.
+    Returns the provider key. The handler performs the minimum provider work:
+    write tokens, write one interaction, and close every port. This isolates
+    routing and port overhead.
     """
     from a11.sdk import interact_with_llm as illm
     from a11.sdk.llm import Interaction
@@ -88,9 +84,10 @@ async def _one_turn(read: str = "text_output") -> int:
     action.set_header(LlmHeaders.PROVIDER.value, b"bench")
     action = action.run()
     await action["interactions"].finalize(
-        a11.to_chunk(
-            {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-        )
+        a11.to_chunk({
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+        })
     )
     await action["config"].finalize()
     await action["tools"].finalize()
@@ -272,9 +269,9 @@ async def bash_tool(scale: float) -> list[Result]:
         )
         fixed = results[0].metrics["p50_us"]
         per_line = (results[2].metrics["p50_us"] - fixed) / 499
-        results[2].note = (
-            f"{per_line:.0f}us per output line above the fixed cost"
-        )
+        results[
+            2
+        ].note = f"{per_line:.0f}us per output line above the fixed cost"
 
         await _drive(
             registry, "shell_exit", headers={SHELL_ID_HEADER: shell_id}

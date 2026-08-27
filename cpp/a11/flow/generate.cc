@@ -82,6 +82,8 @@ std::string Inline(absl::Span<const std::string_view> words) {
   return absl::StrJoin(WithShouted(words), "|");
 }
 
+// The same alternation wrapped over lines, each continuation starting with the
+// `|` -- which is how a long list of words stays readable in a YAML pattern.
 /// The same alternation wrapped over lines, each continuation starting with the
 /// `|` -- which is how a long list of words stays readable in a YAML pattern.
 ///
@@ -223,10 +225,10 @@ std::string FieldModifierRules() {
 
 /// The Sublime grammar, with `@NAME@` where a list of words goes.
 ///
-/// The structure is hand-written because it is a judgement about the language --
-/// that `run` pushes a context expecting an action name, that a bare `then` is a
-/// stage only with an operand after it -- and the words are not, because they are
-/// a table that already exists.
+/// The structure is hand-written because it is a judgement about the language
+/// -- that `run` pushes a context expecting an action name, that a bare `then`
+/// is a stage only with an operand after it -- and the words are not, because
+/// they are a table that already exists.
 constexpr std::string_view kSublimeTemplate = R"(%YAML 1.2
 ---
 # Syntax highlighting for the A11 Flow language (see cpp/a11/flow/ in the A11
@@ -245,8 +247,8 @@ constexpr std::string_view kSublimeTemplate = R"(%YAML 1.2
 #
 # Every keyword may be written in lower case or UPPER CASE, but not Mixed, which
 # is exactly what the patterns below accept: a word matches as a keyword only if
-# it is uniformly cased, so `For` highlights as a name just as the compiler reads
-# it as one.
+# it is uniformly cased, so `For` highlights as a name just as the compiler
+# reads it as one.
 name: A11 Flow
 file_extensions: [flow]
 scope: source.a11flow
@@ -601,8 +603,8 @@ contexts:
       scope: constant.numeric.a11flow
 
   strings:
-    # `"""..."""` first, so three quotes are not read as an empty string and a
-    # quote. A line break inside one is content, which is the whole point of it.
+    # Match `"""..."""` first so three quotes are not read as an empty string
+    # followed by a quote. Block strings may contain line breaks.
     - match: '"""'
       scope: punctuation.definition.string.begin.a11flow
       push:
@@ -752,8 +754,8 @@ std::string Sublime() {
 
 /// The Pygments lexer, with `@NAME@` where a list of words goes.
 ///
-/// The same split as the Sublime template: the states and what pushes what are a
-/// judgement about the language and are written here, and every word in them
+/// The same split as the Sublime template: the states and what pushes what are
+/// a judgement about the language and are written here, and every word in them
 /// comes from `vocabulary`. What differs is the audience -- this one colours
 /// prose about flows rather than a file being edited, so it stops at what a
 /// reader of a documentation page sees and leaves the error states out.
@@ -984,8 +986,8 @@ class A11FlowLexer(RegexLexer):
         ],
         "string": [
             # `"""..."""` first, so three quotes are not read as
-            # an empty string and a quote. A line break inside one is content,
-            # which is the whole point of it.
+            # an empty string followed by a quote. Block strings may contain
+            # line breaks.
             (r'"""', String, "block-string"),
             (r'"', String, "quoted-string"),
         ],
@@ -1350,12 +1352,12 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
 /// The injection grammar: the same words, inside a host language's strings.
 ///
 /// **Why a separate file.** VSCode injects one grammar into another by
-/// `injectTo` on the injected grammar, not by a rule in the host's, so this is a
-/// grammar of its own. And it answers a different question first: whether a
-/// string is a flow at all. The rule is the one the IntelliJ injector uses -- a
-/// string whose first real word is `flow`, followed by a name and a `{` -- so the
-/// same fragment is recognised in both editors and prose merely mentioning a flow
-/// is recognised in neither.
+/// `injectTo` on the injected grammar, not by a rule in the host's, so this is
+/// a grammar of its own. And it answers a different question first: whether a
+/// string is a flow at all. The rule is the one the IntelliJ injector uses --
+/// a string whose first real word is `flow`, followed by a name and a `{` --
+/// so the same fragment is recognised in both editors and prose merely
+/// mentioning a flow is recognised in neither.
 ///
 /// Only the multi-line quotes. A flow is at least a `flow x { .. }`, which does
 /// not fit on one line of anybody's string, so injecting into every `"..."` in
@@ -1396,9 +1398,9 @@ constexpr std::string_view kVsCodeInjectionTemplate = R"JSON({
 
 std::string VsCode() {
   const std::vector<std::string_view> units = DurationUnits();
-  // Every declaration word, and the two spellings of each. `in`/`out` are in the
-  // list as well as in the port-type rule above it: the rule that pushes wins by
-  // being tried first, and a bare `in` is still the declaration word.
+  // Every declaration word, and the two spellings of each. `in`/`out` are in
+  // the list as well as in the port-type rule above it: the rule that pushes
+  // wins by being tried first, and a bare `in` is still the declaration word.
   const std::vector<std::string_view> declarations =
       Split(vocabulary::OrderedDeclarations());
   std::vector<std::string_view> statements;

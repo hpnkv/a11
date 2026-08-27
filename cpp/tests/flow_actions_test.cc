@@ -63,9 +63,6 @@ class Workspace {
     std::error_code error;
     fs::create_directories(root_, error);
     // Canonical, because the actions report canonical paths and are right to:
-    // on a Mac /var is a symlink to /private/var, so a test that compared
-    // against the spelling it passed in would be asserting that symlinks are
-    // not resolved -- which is the property the sandbox depends on.
     root_ = fs::weakly_canonical(root_, error);
   }
 
@@ -214,12 +211,8 @@ TEST(FlowOptionsTest, ReadsTheDeadlineHeaderInBothUnits) {
 }
 
 // --- the deadline watcher ----------------------------------------------------
-//
-// The watcher is a libuv timer on A11's one loop rather than a fibre parked in a
-// timed Select, so what these check is the two things that swap could get wrong:
-// a deadline that passes with nobody asking must still stop the action, and a
-// run that finishes first must not have a timer fire on it afterwards and
-// rewrite its reason.
+// The watcher is a libuv timer on A11's one loop rather than a fibre parked in
+// a timed Select, so what these check is the two things that swap.
 
 /// An action with `x-a11-deadline` set @p after from now. `read_file`'s schema
 /// stands in for any action's: StopSignal reads the header and nothing else.
@@ -288,9 +281,6 @@ TEST(StopSignalTest, RefusesADeadlineThatHasAlreadyPassed) {
 }
 
 TEST(StopSignalTest, ManyDeadlinesShareTheOneLoop) {
-  // Fifty of these used to be fifty sleeping fibres, each with a stack. The
-  // point of the test is that arming and disarming that many is not a special
-  // case: half are joined before they fire and half are left to fire.
   std::vector<std::shared_ptr<StopSignal>> signals;
   for (int index = 0; index < 50; ++index) {
     const std::shared_ptr<Action> action =
@@ -581,7 +571,7 @@ TEST(ReadFileTest, OmittingAPortClosesItWithoutWaitingForAReader) {
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok());
   // Nothing was written to them, and nothing had to be drained for the run to
-  // finish -- which is the whole point of `omit`.
+  // finish, as required by `omit`.
   EXPECT_TRUE(ReadAll(action, "bytes").empty());
   const std::optional<nlohmann::json> text = ReadOne(action, "text");
   ASSERT_TRUE(text.has_value());
@@ -1285,9 +1275,7 @@ CapabilitiesBuilder ConfinedIn(const fs::path& root) {
 
 TEST(SandboxTest, TheKernelStopsAWriteThePolicyOnlyChecked) {
   // The point of the whole file: a spawned program makes its own syscalls, and
-  // no check in policy.cc is between it and the rest of the filesystem. A write
-  // rather than a read, because writes are the part both platforms confine --
-  // see SandboxAvailability.
+  // no check in policy.cc is between it and the rest of the filesystem.
   if (!Availability().confines_writes) {
     GTEST_SKIP() << "no write confinement here: " << Availability().why_not;
   }
@@ -1439,10 +1427,7 @@ TEST(EncodingTest, RefusesAnUnknownEncoding) {
 }
 
 TEST(EncodingTest, ANonUtf8NameIsAStatusUnderJsonAndAValueUnderMsgpack) {
-  // A filename is a byte string, and nothing obliges it to be UTF-8. JSON has
-  // no spelling for one that is not, so the two honest answers are to fail and
-  // to offer an encoding that can hold it. Aborting -- which is what nlohmann
-  // does under -fno-exceptions -- is not among them.
+  // A filename is a byte string, and nothing obliges it to be UTF-8.
   Workspace workspace;
   const std::string awkward = workspace.path("bad-\xff\xfe-name.txt");
   {

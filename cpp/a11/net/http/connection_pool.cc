@@ -23,7 +23,7 @@ namespace a11::net {
 namespace {
 
 /**
- * Dials one connection, with the connection-wide deadline deliberately cleared.
+ * Dials one connection after clearing the connection-wide deadline.
  *
  * A pooled connection outlives the request that opened it, so a deadline meant
  * for that one request must not follow it: Http2Options::deadline schedules a
@@ -40,10 +40,8 @@ a11::Future<std::shared_ptr<Http2Client>> Dial(const ParsedUrl& origin,
  * Re-owns @p client so that the last holder closes it, running @p on_closed
  * afterwards.
  *
- * The handle points at the same object but owns a deleter instead of the object
- * itself; the deleter holds the only real reference and drops it. That is what
- * makes a lease the unit of lifetime -- there is no path by which a connection
- * outlives the work being done over it.
+ * The handle points to the same object but owns a deleter. The deleter holds
+ * the only owning reference, making leases define the connection lifetime.
  */
 std::shared_ptr<Http2Client> OwnUntilLastLease(
     std::shared_ptr<Http2Client> client, std::function<void()> on_closed) {
@@ -104,9 +102,8 @@ void HttpConnectionPool::Forget(const std::string& key) {
 
 std::shared_ptr<Http2Client> HttpConnectionPool::Adopt(
     std::string key, std::shared_ptr<Http2Client> client) {
-  // The last lease closes the connection and removes the entry. That is what
-  // makes the pool hold nothing idle: the leases are the lifetime, and the map
-  // is only an index over them.
+  // The last lease closes the connection and removes its index entry, so the
+  // pool retains no idle connections.
   std::weak_ptr<HttpConnectionPool> weak = weak_from_this();
   return OwnUntilLastLease(std::move(client), [weak, key = std::move(key)]() {
     if (const std::shared_ptr<HttpConnectionPool> pool = weak.lock()) {

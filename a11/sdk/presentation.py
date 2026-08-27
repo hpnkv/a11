@@ -1,12 +1,9 @@
 # Copyright 2026 The A11 Authors.
 
-"""How any client turns Interactions into renderable units.
+"""Turn interactions into renderer-independent presentation units.
 
-Every A11 client that shows a conversation has had to answer the same questions
--- what text did this interaction contribute, which tool ran, where is its log,
-which interaction is only carrying a tool result and should not be drawn -- and
-each answered them separately: `a11 chat`, the IntelliJ webview's `chat.ts`, and
-the conversation readers on both sides. This module is the one answer.
+This module determines which text an interaction contributes, which tool ran,
+where its log belongs, and which tool-result interactions should not be drawn.
 
 The unit is a `PresentationBlock`: a flat, ordered, renderer-agnostic piece of a
 turn. A client's job shrinks to a `match` over `BlockKind`, which is what makes
@@ -15,16 +12,16 @@ sharing a line of rendering code.
 
 **One reducer, two feeders.** A live turn arrives as port events (text deltas,
 thought deltas, whole interactions); a reopened conversation arrives as stored
-`Interaction`s. Both go through `PresentationReducer`, so a client draws replayed
-history with exactly the code that draws a live turn -- previously the two paths
-diverged, and only the live one rendered tool runs.
+`Interaction`s. Both go through `PresentationReducer`, so a client draws
+replayed history with the same code that draws a live turn.
 
 **Ordering.** The live feeder sees true interleaving of text, thoughts and tool
-runs, because it is watching them happen. A stored `Interaction` has no timeline,
-so replay is a stable approximation: text, then tool runs in ``action_calls``
+runs, because it is watching them happen. A stored `Interaction` has no
+timeline, so replay is a stable approximation: text, then tool runs in
+``action_calls``
 order, then usage. Live order is authoritative; replay is deterministic but not
-necessarily what the user originally watched. Fixing that would mean recording
-per-part timestamps on the wire, which is not worth a cosmetic gain.
+necessarily match the original live order. Exact replay would require per-part
+timestamps on the wire.
 
 These types carry no serial tag on purpose: tags are for values that cross the
 wire ([a11.data.serial_tags][a11.data.serial_tags]), and this derivation runs
@@ -269,9 +266,10 @@ class PresentationReducer:
     """Accumulates one turn's blocks, fed live or from storage.
 
     The live feeder calls `on_text`/`on_thought` as deltas arrive and
-    `on_interaction` as whole interactions land on ``new_interactions``; a replay
-    feeder calls only `on_interaction`. Either way `blocks` is what a client
-    draws, and an optional `PresentationSink` gets the incremental events.
+    `on_interaction` as whole interactions land on ``new_interactions``; a
+    replay feeder calls only `on_interaction`. Either way `blocks` is what a
+    client draws, and an optional `PresentationSink` receives incremental
+    events.
     """
 
     def __init__(

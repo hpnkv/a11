@@ -83,6 +83,5 @@ history.extend([question, *new_interactions])
 The backend-specific actions (`interact_with_claude`,
 `interact_with_gemini`, and `interact_with_ollama`) expose the same `tools`
 port and registry pattern when direct provider control is preferable. The
-routing action is usually the easier application boundary because switching
-providers becomes a header change rather than a change to the conversation
-flow.
+routing action provides one application boundary: switching providers requires
+only a header change and leaves the conversation flow unchanged.

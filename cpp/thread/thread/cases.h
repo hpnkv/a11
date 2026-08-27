@@ -131,14 +131,6 @@ struct [[nodiscard]] Case {
 typedef absl::InlinedVector<Case, 4> CaseArray;
 
 namespace internal {
-// A PerSelectCaseState represents the per-Select call information kept for a Case.
-// This separation from Case allows a particular Case to be safely passed to
-// multiple Select calls concurrently.
-//
-// PerSelectCaseStates contain an intrusive, circular, doubly-linked list, to be used by
-// selectables for enqueuing cases that are waiting on some condition. See the
-// notes on Selectable::Handle below. Once enqueued, the Selectable is
-// responsible for synchronizing any modifications.
 struct CaseInSelectClause {
   const Case* absl_nullable case_ptr = nullptr;  // Initialized by Select().
   int index = -1;  // Provided by Select(): index in parameter list.
@@ -150,12 +142,7 @@ struct CaseInSelectClause {
 
   [[nodiscard]] const Case* absl_nonnull GetCase() const { return case_ptr; }
 
-  // Attempt to cause the owning Selector to choose this case. Returns true if
-  // and only if this case will be the one chosen, because no other case has
-  // already become ready and been chosen.
-  //
-  // After the caller releases selector->mu, this object is no longer guaranteed to
-  // continue to exist.
+  // Attempt to cause the owning Selector to choose this case.
   bool TryPick() ABSL_EXCLUSIVE_LOCKS_REQUIRED(selector->mu) {
     return selector->TryPick(index);
   }
@@ -166,45 +153,17 @@ struct CaseInSelectClause {
 
 using CaseStateArray = absl::InlinedVector<CaseInSelectClause, 4>;
 
-// The interface implemented by objects that can be used with Select().  Note
-// that a single Selectable may be enqueued against multiple Select statements,
-// this indirection is represented using Case tokens above. Case tokens allow
-// for passing arguments to a single selectable used in multiple different ways.
+// The interface implemented by objects that can be used with Select().
 class Selectable {
  public:
   virtual ~Selectable() = default;
 
-  // If this selectable is ready to be picked up by c's Select, call c->TryPick()
-  // (which may or may not pick this selectable), and return true.
-  // If not ready to be picked: enqueue the case (if enqueue is true) and return
-  // false.
-  //
-  // The selectable should implement the following algorithm:
-  //   if (currently ready) {
-  //     c->selector->mu.Lock();
-  //     if (c->TryPick()) {
-  //       ... perform any side effects of being picked ...
-  //     }
-  //     c->selector->mu.Unlock();
-  //     return true;
-  //   } else {
-  //     if (enqueue) {
-  //       ... enqueue the PerSelectCaseState ...
-  //     }
-  //     return false;
-  //   }
-  //
-  // If the PerSelectCaseState is enqueued and the selectable later becomes ready before
-  // Unregister is called, it should again lock c->selector->mu, call c->TryPick(),
-  // and perform side effects iff picked, while c->selector->mu is still held.
+  // If this selectable is ready to be picked up by c's Select, call
+  // c->TryPick() (which may or may not pick this selectable), and return true.
   virtual bool Handle(CaseInSelectClause* absl_nonnull case_state,
                       bool enqueue) = 0;
 
   // Unregister a case against future transitions for this Selectable.
-  //
-  // Called for all cases c1 where a previous call Handle(c1, true) returned
-  // false and another case c2 was successfully selected (c2->TryPick() returned
-  // true), or a timeout occurred.
   virtual void Unregister(CaseInSelectClause* absl_nonnull case_state) = 0;
 };
 

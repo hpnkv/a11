@@ -119,17 +119,15 @@ struct ChunkMetadata {
  * ### Identity, without RTTI
  *
  * tag() is the serialisation tag -- `a11.sdk.AudioBuffer` -- and it is what a
- * consumer compares before casting. Types are identified by wire tag rather than
+ * consumer compares before casting. Types are identified by wire tag rather
+ * than
  * `std::type_info` to ensure sound matching across dynamic library boundaries.
  *
  * ### Immutability
  *
- * The held value must not change after it is put here, which is not a new rule:
- * a mutable value in a ChunkStore was never sound, since a store replays a
- * fragment to every reader and to readers that attach later. What is new is
- * that sharing makes the rule load-bearing rather than academic, so the value
- * is handed out **by copy** on the consuming side -- one copy per consumer that
- * asks, instead of one encode plus one decode per consumer.
+ * The held value must not change after insertion because a ChunkStore replays a
+ * fragment to current and later readers. Consumers receive independent copies,
+ * avoiding an encode and decode for each consumer.
  */
 class ChunkObject {
  public:

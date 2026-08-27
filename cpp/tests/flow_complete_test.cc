@@ -1,12 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 // What is offered where.
-//
-// These are the cases the IntelliJ plugin's Kotlin completion was held to, moved
-// here with it: deciding which of a language's words are legal at one offset is a
-// question about text, and it has one answer wherever it is asked. The caret is
-// written `|CARET|` in the sources, which is only a marker -- what is completed is
-// the text without it, at the offset it stood at.
 
 #include <string>
 #include <vector>
@@ -119,11 +113,8 @@ TEST(FlowComplete, ACallNamesASiblingFlowThenItsPorts) {
 }
 
 TEST(FlowComplete, WhatAProposalReplacesIsThePartialWordAndNothingElse) {
-  // `[prefix_start, caret)` is what a frontend replaces with what it inserts, so
-  // with nothing typed yet it has to be *empty*. It defaulted to zero, which made
-  // that range the whole document up to the caret: taking any proposal at a
-  // position where no word had been started -- after a `(`, after a `|`, after a
-  // space, which is most of them -- deleted everything in front of it.
+  // `[prefix_start, caret)` is what a frontend replaces with what it inserts,
+  // so with nothing typed yet it has to be *empty*.
   const auto replaced = [](std::string_view marked) {
     const size_t caret = marked.find(kCaret);
     const CompleteResult result = At(marked);
@@ -149,10 +140,7 @@ TEST(FlowComplete, WhatAProposalReplacesIsThePartialWordAndNothingElse) {
 
 TEST(FlowComplete, AnArgumentIsOfferedWithWhatThePortIsFor) {
   // The question somebody has inside a call's parentheses is "what goes here",
-  // and the answer is the port's description. It used to be dropped for exactly
-  // the ports that have to be written: `(required)` *replaced* the description
-  // rather than joining it, so the list said least about the arguments it was
-  // most important about.
+  // and the answer is the port's description.
   constexpr std::string_view kDescribed =
       "flow inner {\n"
       "  in  topic:    string required \"What to research.\"\n"
@@ -183,7 +171,7 @@ TEST(FlowComplete, AnArgumentIsOfferedWithWhatThePortIsFor) {
   EXPECT_NE(topic->documentation.find("What to research."), std::string::npos);
   EXPECT_NE(topic->documentation.find("required"), std::string::npos);
 
-  // An optional port has no `(required)` to join, and still says what it is for.
+  // An optional port omits `(required)` but retains its documentation.
   const Proposal* depth = Find(kDescribed, "depth");
   ASSERT_NE(depth, nullptr);
   EXPECT_EQ(depth->tail, " How many passes; three when nothing says.");
@@ -379,9 +367,6 @@ TEST(FlowComplete, TheOrderedTablesCoverTheirSets) {
 
 TEST(FlowComplete, AnActionIsOfferedUnderItsOwnNameWhereACallMayBegin) {
   // Somebody who knows the action types its name, not the verb in front of it.
-  // Offering action names only *after* `call` meant the list was empty for the
-  // whole of `interact_with_llm` until `call ` had been typed, which reads as
-  // the editor not knowing the action at all.
   const Proposal* head =
       Find("flow f {\n  in q: string\n  |CARET|\n}\n", "make_http_request");
   ASSERT_NE(head, nullptr);
@@ -433,9 +418,6 @@ TEST(FlowComplete, AProposalCarriesWhatAPopupWouldShow) {
 }
 
 TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
-  // The `default:` case of the member rules used to offer nothing, and said why:
-  // nothing knew a value's fields. Two things do -- a pattern names them, and a
-  // port declared with a `struct` has them -- and this is where that shows.
   constexpr std::string_view kHead =
       "struct Source {\n  url:  string required\n  rank: number\n}\n\n"
       "flow f {\n  in  lines: string stream required\n"

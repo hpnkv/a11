@@ -11,8 +11,7 @@ no second resolver: a flow's ports, steps and diagnostics all come from the one
 implementation, so what `a11 flow check` says and what `flow.loads` raises
 cannot disagree.
 
-Two rules of the compiled graph are worth knowing, because they are what makes
-it predictable:
+Two rules make the compiled graph predictable:
 
 * **Steps run concurrently.** Order comes from the data, not from the order the
   statements were written in. A call is dispatched at once and its inputs stream
@@ -20,8 +19,8 @@ it predictable:
   `drain` say so.
 * **A stream read inside a loop or branch is materialised.** The runtime
   buffers it once, in the scope that owns it, and replays the buffer to each
-  reader. That is what lets every pass of a loop see the same outer value, and
-  it is the one place the language trades streaming for repeatability.
+  reader. Each loop pass sees the same outer value; this is the one case where
+  the language buffers a stream for repeatable reads.
 
 A flow's *shape* is readable as plain data with
 [FlowPlan.describe][a11.flow.plan.FlowPlan.describe], which is the same
@@ -145,9 +144,8 @@ def _field_type(described: Mapping[str, Any], shapes: Mapping[str, Any]) -> Any:
 def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
     """The model for the shape `name`, building the ones it names first.
 
-    A shape may name itself, so the model goes into the cache *before* its
-    fields are built and the annotations are resolved afterwards -- which is the
-    same dance a hand-written recursive model does with a forward reference.
+    A shape may reference itself. Cache the model before building its fields,
+    then resolve annotations as for any recursive pydantic model.
     """
     import pydantic
 
@@ -157,7 +155,9 @@ def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
     if cached is not None:
         return cached
 
-    model = pydantic.create_model(name, __doc__=described.get("description") or None)
+    model = pydantic.create_model(
+        name, __doc__=described.get("description") or None
+    )
     _MODELS[key] = model
 
     fields = described.get("fields", {})
@@ -182,10 +182,9 @@ def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
 def _model_for_dto(described_json: str) -> Any:
     """The pydantic model one shape describes, or ``None`` without pydantic.
 
-    Called from the native bridge's ``Adopt``: a value coerced to a `struct` comes
-    out of a flow as an instance of a real model, so Python code reading a
-    `struct`-typed port gets attribute access, ``model_dump()`` and everything else
-    a model gives -- rather than a mapping that merely has the right keys.
+    The native bridge calls this from ``Adopt``. Values coerced to a `struct`
+    leave the flow as model instances, providing attribute access and
+    ``model_dump()`` to Python readers.
 
     ``None`` where pydantic is not installed, which leaves the record as the
     plain mapping the language built. A flow should run either way.

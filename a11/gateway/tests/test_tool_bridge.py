@@ -2,11 +2,8 @@
 
 """How a peer's actions become proxies the model can call.
 
-The bridge asks: it calls `__list_actions__` on the peer, which every A11 peer
-answers, and registers a reverse-dispatch proxy per schema that comes back.
-There used to be a push handshake for this -- a client announcing its tools,
-with its schema hand-copied into four languages -- and its removal is why these
-tests only exercise one direction.
+The bridge calls ``__list_actions__`` on the peer and registers one
+reverse-dispatch proxy for each returned schema.
 """
 
 import asyncio
@@ -33,7 +30,9 @@ def _described(**overrides) -> dict:
                 "json_schema": {"type": "object"},
             }
         ],
-        "outputs": [{"name": "slice", "type": "application/json", "unary": False}],
+        "outputs": [
+            {"name": "slice", "type": "application/json", "unary": False}
+        ],
         "output_to_json_field": {"slice": "$"},
     }
     entry.update(overrides)
@@ -41,14 +40,11 @@ def _described(**overrides) -> dict:
 
 
 def test_a_descriptor_becomes_one_callable_schema():
-    """One schema, not two.
+    """Use one schema for local lookup and wire dispatch.
 
-    There used to be a local schema and a wire schema, differing only in a port
-    the client had flagged as narration. Narration moved to the reserved log
-    port, which no schema declares, and the two collapsed. That identity is what
-    lets a flow `call` a bridged tool: a `call` step dispatches the ports of the
-    schema in the registry straight to the peer, so a local schema that renamed
-    anything would name a port the peer does not have.
+    A Flow ``call`` dispatches the registry schema's ports directly to the
+    peer, so the local schema must preserve every remote port name. Narration
+    uses the reserved log port and is not part of either schema.
     """
     tool = _BridgedTool(_described())
 
@@ -63,17 +59,13 @@ def test_a_descriptor_becomes_one_callable_schema():
     # is the tool's choice, not one assumed here.
     assert dict(tool.schema.output_to_json_field) == {"slice": "$"}
     # The port's value schema travels, which is what lets the model be shown a
-    # remote tool's real argument types -- there is no Python type here to derive
-    # one from.
+    # remote tool's real argument types -- there is no Python type here to
+    # derive one from.
     assert tool.schema.inputs["request"].json_schema
 
 
 def test_an_older_clients_user_facing_flag_is_read_and_dropped():
-    """The flag is gone, and a client still sending it is not an error.
-
-    It marked an output as narration, from before every action had a log port to
-    narrate on. The port comes back as the ordinary output it now is.
-    """
+    """Accept the legacy ``user_facing`` flag as an ignored field."""
     tool = _BridgedTool(
         _described(
             outputs=[
@@ -98,21 +90,17 @@ def test_a_nameless_descriptor_is_refused():
 
 
 def test_a_tool_definition_is_not_a_descriptor():
-    """The old hazard, kept as a test because the shapes still differ.
+    """Reject treating a model tool definition as an action descriptor.
 
-    `get_tool_definitions` produces `{name, description, input_schema}` for the
-    model; a descriptor carries ports. One document is now derived from the
-    other, so this is far harder to get wrong than it was -- but a caller
-    reaching for the wrong one still gets a tool with no ports, and that should
-    be visible here rather than at the first tool call.
+    ``get_tool_definitions`` produces ``{name, description, input_schema}``
+    for the model; an action descriptor carries ports. Passing the former here
+    produces a tool with no ports and must be detectable before dispatch.
     """
-    useless = _BridgedTool(
-        {
-            "name": "shell_execute",
-            "description": "Run a command.",
-            "input_schema": {"type": "object", "properties": {"command": {}}},
-        }
-    )
+    useless = _BridgedTool({
+        "name": "shell_execute",
+        "description": "Run a command.",
+        "input_schema": {"type": "object", "properties": {"command": {}}},
+    })
     assert useless.schema.inputs == {}
 
 
@@ -131,8 +119,8 @@ def test_a_peer_tool_shadows_a_local_one_of_the_same_name():
 
     This is what lets `a11 chat` serve its own `shell_execute` to a gateway that
     serves one too: the model's calls must reach the *client's* shell, in the
-    user's cwd. Registration replaces, and the registry is a per-connection copy,
-    so the substitution is scoped to this peer.
+    user's cwd. Registration replaces, and the registry is a per-connection
+    copy, so the substitution is scoped to this peer.
     """
     registry = a11.ActionRegistry()
     local = a11.ActionSchema(

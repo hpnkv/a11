@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief HTTP/1.1 connection over the shared HttpTransport substrate.
+ * @brief HTTP/1.1 connection over the shared HttpTransport.
  *
  * Http1Connection speaks HTTP/1.1 with chunked transfer-encoding on top of the
  * same TCP/TLS/libuv pump as Http2Connection, and implements the same
@@ -171,7 +171,8 @@ class Http1Connection : public internal::HttpTransport, public HttpConnection {
 
   /// Http2Options::stream_request_body accepted this exchange, so its body is
   /// decoded into request_body_state_ as it arrives and the handler already has
-  /// it. Such an exchange owns the connection for its lifetime: the response may
+  /// it. Such an exchange owns the connection for its lifetime: the response
+  /// may
   /// legitimately be written while body bytes are still coming, which leaves no
   /// point at which a following pipelined request could be told apart from the
   /// remainder of this one. FinishResponseAndAdvance closes instead of reusing.

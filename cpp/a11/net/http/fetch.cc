@@ -31,7 +31,8 @@ namespace {
 constexpr std::string_view kDefaultUserAgent = "a11-net/1";
 
 /**
- * What a fetch is willing to hold in flight per response, unless told otherwise.
+ * What a fetch is willing to hold in flight per response, unless told
+ * otherwise.
  *
  * Larger than the transport's general default because fetching is bulk by
  * nature: it sets the HTTP/2 receive window too, and a window smaller than the
@@ -90,7 +91,7 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
 
   // A bulk transfer wants a receive window big enough for the path's
   // bandwidth-delay product, and the window is tied to what we will buffer (see
-  // StreamWindowSize). A caller who set this deliberately keeps their value.
+  // StreamWindowSize). Preserve an explicit caller-provided value.
   if (options.transport.max_buffered_response_bytes ==
       Http2Options{}.max_buffered_response_bytes) {
     options.transport.max_buffered_response_bytes = kBulkTransferBufferSize;
@@ -99,9 +100,7 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
   std::string method = options.method;
   std::string body = options.body;
   std::shared_ptr<Http2Client> client;
-  // Every hop gets its own connection and the previous one is closed. A redirect
-  // is rare enough that reusing the socket for a same-origin hop is not worth
-  // having to tell "the server closed our keep-alive" apart from a real failure.
+  // Every hop gets its own connection and the previous one is closed.
   const auto close_client = [&client] {
     if (client != nullptr) {
       (void)client->Close();

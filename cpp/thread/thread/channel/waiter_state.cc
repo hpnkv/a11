@@ -45,8 +45,6 @@ void ChannelWaiterState::CloseAndReleaseReaders() {
 
     thread::MutexLock l2(&reader->selector->mu);
     if (reader->selector->picked_case_index == Selector::kNonePicked) {
-      // We know there was no data previously -- otherwise the reader would not
-      // have been waiting -- so we return that the channel was closed.
       bool* ok = reader->GetCase()->GetArgPtr<bool>(1);
       *ok = false;
 
@@ -57,10 +55,7 @@ void ChannelWaiterState::CloseAndReleaseReaders() {
   }
 }
 
-// Attempt to start a direct transfer between "reader" and "writer". Returns
-// true with both selectors held if both cases are eligible for selection and
-// belong to different Select statements. Returns false with no locks held
-// otherwise.
+// Attempt to start a direct transfer between "reader" and "writer".
 static bool LockReaderAndWriterSelectorsIffBothAreWaiting(
     const CaseInSelectClause* absl_nonnull reader,
     const CaseInSelectClause* absl_nonnull writer)
@@ -113,7 +108,8 @@ bool ChannelWaiterState::GetMatchingReader(
     do {
       if (LockReaderAndWriterSelectorsIffBothAreWaiting(current_reader,
                                                         writer)) {
-        // Both current_reader->selector->mu and writer->selector->mu are now locked.
+        // Both current_reader->selector->mu and writer->selector->mu are now
+        // locked.
         *reader = current_reader;
         return true;
       }
@@ -130,7 +126,8 @@ bool ChannelWaiterState::GetMatchingWriter(
     do {
       if (LockReaderAndWriterSelectorsIffBothAreWaiting(reader,
                                                         current_writer)) {
-        // Both reader->selector->mu and current_writer->selector->mu are now locked.
+        // Both reader->selector->mu and current_writer->selector->mu are now
+        // locked.
         *writer = current_writer;
         return true;
       }

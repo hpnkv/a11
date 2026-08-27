@@ -31,13 +31,7 @@ struct ChannelWaiterState {
       const ABSL_EXCLUSIVE_TRYLOCK_FUNCTION(true, reader->selector->mu,
                                             (*writer)->selector->mu);
 
-  // Attempt to find an eligible queued writer.  There is no matching reader in
-  // this case, it is used for when space becomes available in the queue due to
-  // a read completing, allowing a writer to complete without partner.
-  //
-  // Returns true, and updates *writer, if a suitable waiter exists.  *writer is
-  // returned with selector mutex held and guaranteed pickable.
-  // Returns false with no side effects otherwise.
+  // Attempt to find an eligible queued writer.
   bool GetWaitingWriter(CaseInSelectClause* absl_nonnull* absl_nonnull writer)
       const ABSL_EXCLUSIVE_TRYLOCK_FUNCTION(true, (*writer)->selector->mu);
 

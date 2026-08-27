@@ -124,12 +124,7 @@ void Recorder::PrintTable(const std::string& only_suite) const {
       present.emplace_back(column.label, column.metric);
     }
   }
-  // Then anything recorded that kColumns does not name, rather than dropping it.
-  // A metric a suite went to the trouble of measuring and does not appear is
-  // worse than an ugly column heading: `server` recorded `cores_busy` and
-  // `cpu_us_per_op` for weeks and the table showed neither, so the numbers were
-  // read as if they did not exist. Sorted, so the column order is stable across
-  // runs whatever order the metrics were inserted in.
+  // Include recorded metrics that kColumns does not name.
   std::vector<std::string> extras;
   for (const Result& result : results_) {
     for (const auto& [metric, value] : result.metrics) {

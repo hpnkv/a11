@@ -24,10 +24,7 @@ using Json = nlohmann::json;
 absl::StatusOr<Json> ParseJson(std::string_view encoded,
                                std::string_view what) {
   // nlohmann's own non-throwing overload: `allow_exceptions = false` hands back
-  // a discarded value instead of raising. It also discards the reason, and the
-  // reason is most of what makes a parse error actionable -- so the parse is
-  // repeated through the throwing overload only when the first one failed,
-  // where the cost does not matter and the message does.
+  // a discarded value instead of raising.
   Json value = Json::parse(encoded.begin(), encoded.end(), nullptr,
                            /*allow_exceptions=*/false,
                            /*ignore_comments=*/false);

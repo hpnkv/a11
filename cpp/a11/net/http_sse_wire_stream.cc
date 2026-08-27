@@ -761,9 +761,7 @@ a11::Task HttpSseClientWireStream::OpenTransport() {
       if (self->client_state_->outbound == SseOutboundDelivery::kPost) {
         // Still POST, so every message will take a connection of its own -- and
         // two fresh connections race their handshakes, which would hand the
-        // server an order the sender never chose. One at a time is what restores
-        // it, at a round trip per message. The streamed body above is how to
-        // have both, and is why this is the fallback rather than the norm.
+        // server an order the sender never chose.
         self->client_state_->max_posts_in_flight = 1;
       }
     }
@@ -830,9 +828,7 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
     client_state_->outbound = SseOutboundDelivery::kStream;
   }
   // The server answers the upload request's headers as soon as it has adopted
-  // the stream, and keeps the response open until the body ends. Nothing sends
-  // on the strength of that answer -- writes are already flowing -- so it is
-  // watched rather than awaited, and a refusal fails the transport.
+  // the stream, and keeps the response open until the body ends.
   std::weak_ptr<HttpSseClientWireStream> weak =
       std::static_pointer_cast<HttpSseClientWireStream>(shared_from_this());
   const absl::Time deadline = stream_options.stream_options.deadline;
@@ -861,7 +857,8 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
       // the close in the right order.
       held_upload_client = std::move(self->client_state_->upload_client);
     }
-    // A stream this side already ended is expected to come apart; only a failure
+    // A stream this side already ended is expected to come apart; only a
+    // failure
     // that arrives while messages could still be going out is news.
     if (!status.ok() && !finished) {
       self->FailTransport(status);
@@ -878,10 +875,9 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
  *
  * Runs on the internal bridge's sender fibre, one message at a time, and is the
  * only place the two delivery methods differ. Neither method awaits an ordinary
- * message: A11 WireMessages carry no global order, so a POST is handed to its own
- * request and the next one overlaps it, and a streamed write is posted to the
- * loop like every other socket write. Order is imposed only where it is
- * load-bearing -- see the terminal and abort cases below.
+ * message because A11 WireMessages have no global order. POST requests overlap;
+ * streamed writes are posted to the loop like other socket writes. Terminal and
+ * abort messages apply the ordering described below.
  */
 absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
   const bool terminal = IsTerminal(message);
@@ -903,8 +899,8 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
   }
   if (terminal) {
     // A half-close says "nothing more follows", and the peer enforces it, so
-    // everything handed over already has to land first. HTTP/2 gives no ordering
-    // across streams; this barrier is where that ordering comes from.
+    // everything handed over already has to land first. HTTP/2 gives no
+    // ordering across streams; this barrier is where that ordering comes from.
     ABSL_RETURN_IF_ERROR(AwaitPostsDelivered());
     return TransmitAsPost(std::move(payload));
   }
@@ -941,10 +937,7 @@ absl::Status HttpSseClientWireStream::TransmitAsPost(std::string payload) {
   std::string scheme = url.scheme;
   // One connection, one request: the event stream is already on the connect
   // connection and will outlive every message, so over HTTP/1.1 this POST needs
-  // a connection of its own. It is dropped when the request completes, which is
-  // the cost of POST-per-message on HTTP/1.1 -- and why a non-multiplexed
-  // connection prefers the streamed body, reaching this path only against a
-  // server that will not take one, and for the abort that overtakes it.
+  // a connection of its own.
   std::shared_ptr<Http2Client> post_client;
   if (!client->multiplexed()) {
     const HttpSseOptions post_options = options();
@@ -1200,10 +1193,7 @@ a11::Task HttpSseServerWireStream::OpenTransport() {
   SetHttpHeader(&headers, "content-type", "text/event-stream");
   // `cache-control` is not set here: the response-header policy has already
   // supplied `no-store` for a stream, which is stricter than the `no-cache`
-  // this line used to hardcode. A session's messages should not be written to
-  // anybody's disk on the way past.
-  // Both outbound modes reach the same endpoint, so what a client may do with it
-  // has to be said here. A client that only knows POST ignores the field.
+  // this line
   SetHttpHeader(
       &headers, std::string(kSseOutboundModesHeader),
       options().accept_streamed_outbound
@@ -1344,9 +1334,7 @@ absl::StatusOr<std::shared_ptr<HttpSseServer>> HttpSseServer::Create(
   ABSL_RETURN_IF_ERROR(options.Validate());
   // A POST to the message endpoint that declares the streamed wire format is an
   // open-ended sequence of messages rather than a document, so the HTTP server
-  // has to hand it over as it arrives instead of buffering it to its end -- which
-  // for this body never comes until the stream does. Composed with whatever the
-  // owner already asked to stream rather than replacing it.
+  // has to hand it over as it arrives instead of buffering it to its.
   auto inherited = std::move(options.http2_options.stream_request_body);
   options.http2_options.stream_request_body = [pattern =
                                                    options.message_endpoint,
@@ -1433,8 +1421,7 @@ a11::Task HttpSseServer::HandleRequest(
         MatchMessagePath(path, state->options.message_endpoint);
     if (stream_id.ok()) {
       // A body still open after its headers is the streamed outbound direction;
-      // a complete one is a single posted message. Both reach the same endpoint,
-      // so which it is comes from the request rather than from the route.
+      // a complete one is a single posted message.
       return request.body_stream != nullptr
                  ? HandleMessageStream(state, std::move(*stream_id),
                                        std::move(request), std::move(response))
@@ -1504,11 +1491,9 @@ a11::Task HttpSseServer::HandleConnect(
         }
       }
     }
-    // Refused outside the lock. Sending a response crosses to the libuv loop and
-    // waits there, and what it wakes on the way -- a finished response stream,
-    // its writer's done promise -- can reach back into this server. Deciding
-    // under the lock and acting outside it is the shape every other close and
-    // send in this file follows, for the same reason.
+    // Refused outside the lock. Deciding under the lock and acting outside it
+    // is the shape every other close and send in this file follows, for the
+    // same reason.
     if (stopped) {
       return SendHttpStatus(response,
                             absl::UnavailableError("SSE server stopped"),
@@ -1633,9 +1618,9 @@ a11::Task HttpSseServer::HandleMessageStream(
               .Await()
               .status();
         }
-        // The request's headers describe the whole stream, so they are tunneled once
-        // and attached to every message on it -- which is what a client posting the
-        // same headers per message would have produced.
+        // The request's headers describe the whole stream, so they are tunneled
+        // once and attached to every message on it -- which is what a client
+        // posting the same headers per message would have produced.
         absl::StatusOr<absl::flat_hash_map<std::string, std::string>> tunneled =
             TunneledHeaders(request.headers);
         if (!tunneled.ok()) {
@@ -1645,10 +1630,8 @@ a11::Task HttpSseServer::HandleMessageStream(
               .Await()
               .status();
         }
-        // Answer the head before reading: the client is already writing, and the
-        // response is how it learns the stream id was good. It stays open until the
-        // body ends, because a finished response would close the stream the body is
-        // still arriving on.
+        // Answer the head before reading: the client is already writing, and
+        // the response is how it learns the stream id was good.
         ABSL_RETURN_IF_ERROR(
             response->SendHeaders(200, ServerHeaders(state->options)));
 
@@ -1686,10 +1669,9 @@ a11::Task HttpSseServer::HandleMessageStream(
                   "Incoming SSE streamed WireMessage is too large"));
             }
             if (buffer.size() - consumed - kStreamFramePrefix < length) {
-              // A body chunk is whatever the transport handed over -- an HTTP/2 DATA
-              // frame is typically 16 KiB -- so a large message accumulates over
-              // several of them. The length prefix says how much is coming, so the
-              // buffer can be grown once instead of on every append.
+              // A body chunk is whatever the transport handed over -- an HTTP/2
+              // DATA frame is typically 16 KiB -- so a large message
+              // accumulates over several of them.
               buffer.reserve(consumed + kStreamFramePrefix + length);
               break;  // Await the rest of this frame.
             }
@@ -1712,8 +1694,9 @@ a11::Task HttpSseServer::HandleMessageStream(
               return fail(received);
             }
           }
-          // Reclaim what has been delivered rather than growing the buffer for the
-          // life of the stream; a partial frame is all that is ever carried over.
+          // Reclaim what has been delivered rather than growing the buffer for
+          // the life of the stream; a partial frame is all that is ever carried
+          // over.
           if (consumed != 0) {
             buffer.erase(0, consumed);
             consumed = 0;

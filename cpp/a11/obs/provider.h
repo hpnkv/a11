@@ -45,9 +45,6 @@ struct ProviderOptions {
   int otlp_timeout_millis = 10000;  ///< Export request timeout.
 
   // Baggage keys promoted onto every span as attributes (of the same name).
-  // This is how request-scoped values set upstream via the x-otel-baggage
-  // header -- e.g. langfuse.session.id -- become span attributes that a
-  // backend can read, while still propagating across nested/remote actions.
   /// Baggage keys promoted to same-named span attributes.
   std::vector<std::string> baggage_span_attributes;
 };

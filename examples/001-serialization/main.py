@@ -91,10 +91,8 @@ def nested_values_example(registry: SerializationRegistry) -> None:
         assert type(restored) is type(value) and restored == value
         print(f"{chunk.get_mimetype()} -> {restored!r}")
 
-    # Nested in a plain dictionary, there is nowhere left to say it. JSON has
-    # no bytes, so the payload holds base64 and that is what reads back. This
-    # is not a lossy encoding of a Python value -- it is JSON saying what JSON
-    # can say.
+    # JSON has no byte type, so bytes nested in a plain dictionary are encoded
+    # and read back as base64 text.
     chunk = registry.to_chunk({"raw": b"\x00\xff"}, JSON_MIMETYPE)
     describe_chunk(chunk)
     assert registry.from_chunk(chunk) == {"raw": "AP8="}
@@ -123,8 +121,8 @@ def msgpack_example(registry: SerializationRegistry) -> None:
     chunk = registry.to_chunk(value, MSGPACK_MIMETYPE)
     describe_chunk(chunk)
 
-    # MIME selectors may be ordered. The first selector matches this chunk;
-    # the wildcard is a lower-priority option.
+    # MIME selectors may be ordered. The first selector matches this chunk; the
+    # wildcard is a lower-priority option.
     restored = registry.from_chunk(
         chunk,
         mimetype_patterns=[MSGPACK_MIMETYPE, "application/*"],
@@ -228,10 +226,7 @@ def custom_registry_example() -> None:
         obj_type: type[Point],
     ) -> Point:
         # receives_chunk=True supplies metadata as well as payload bytes.
-        coordinate_system = chunk.metadata.get_attribute(
-            "coordinate-system",
-            decode=True,
-        )
+        coordinate_system = chunk.metadata.get_attribute("coordinate-system")
         assert coordinate_system == "cartesian"
         x, y = (int(part) for part in chunk.data.decode("utf-8").split(","))
         return obj_type(x=x, y=y)
@@ -251,7 +246,7 @@ def custom_registry_example() -> None:
     describe_chunk(chunk)
     print(
         "coordinate system:",
-        chunk.metadata.get_attribute("coordinate-system", decode=True),
+        chunk.metadata.get_attribute("coordinate-system"),
     )
     assert restored == value
     print(f"restored custom type: {restored!r}")

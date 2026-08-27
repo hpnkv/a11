@@ -44,6 +44,7 @@ struct SpeechRecognizerState;
  * them. Silero is the accurate detector; the energy gate is the cheap trigger.
  */
 struct SpeechRecognizerOptions {
+  // Path to the whisper.cpp GGML/GGUF model.
   /// Path to the whisper.cpp GGML/GGUF model. The low-level SpeechRecognizer
   /// takes its model path directly through Create() and ignores this field; it
   /// exists so the action layer can carry the model choice inside a single
@@ -81,6 +82,7 @@ struct SpeechRecognizerOptions {
   /// Hard bound that splits continuous speech and caps memory use.
   size_t max_speech_seconds = 30;
 
+  // Path to a whisper.cpp Silero VAD GGML model.
   /// Path to a whisper.cpp Silero VAD GGML model. When non-empty, Silero VAD
   /// filters each endpointed utterance before decoding; empty disables it and
   /// leaves only the energy gate. The temporal fields above are reused as
@@ -102,6 +104,7 @@ using OnTranscription =
 /// Called exactly once after the terminal transcription marker has completed.
 using OnRecognitionDone = std::function<a11::Task()>;
 
+// Pulls the next captured block for recognition.
 /// Pulls the next captured block for recognition. The returned future resolves
 /// with @c OutOfRange when the stream has ended (no more buffers will arrive)
 /// and with @c Cancelled when the future itself is cancelled. Each call should

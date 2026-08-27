@@ -402,9 +402,7 @@ absl::StatusOr<ActionMessage> DecodeAction(const Json& value) {
 absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
   ABSL_RETURN_IF_ERROR(message.Validate());
   // Encoding cannot fail: every value put here is built from a typed field, and
-  // nlohmann only raises on a type mismatch. Byte strings are base64-encoded on
-  // the way in (see EncodeChunk), which is what keeps a chunk of arbitrary
-  // bytes out of a JSON string field.
+  // nlohmann only raises on a type mismatch.
   Json value = Json::object();
   if (!message.node_fragments.empty()) {
     value["node_fragments"] = Json::array();

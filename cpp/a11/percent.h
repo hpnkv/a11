@@ -46,7 +46,8 @@ inline int HexDigit(char one) {
  * read rather than losing it.
  *
  * @param value Text to decode.
- * @param plus_is_space Map `+` to a space, as `application/x-www-form-urlencoded`
+ * @param plus_is_space Map `+` to a space, as
+ * `application/x-www-form-urlencoded`
  *   does. Off for a URL path or a baggage value, where `+` is literal.
  */
 inline std::string Decode(std::string_view value, bool plus_is_space = false) {

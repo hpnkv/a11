@@ -36,11 +36,11 @@ a11.demos.web_demos_server`` is that command with the target filled in and the
 WebSocket defaults the guides quote. The equivalent long way round is
 
 ```sh
-a11 serve a11.demos.web_demos_server:SERVICE --ws --ws-port 9010 --ws-path /a11-demos
+a11 serve a11.demos.web_demos_server:SERVICE --ws --ws-port 9010 \
+  --ws-path /a11-demos
 ```
 
-which is worth knowing because everything ``a11 serve`` grew is therefore
-available here. The one that matters is ``--hosted``:
+All ``a11 serve`` options are therefore available here, including ``--hosted``:
 
 ```sh
 python -m a11.demos.web_demos_server --ws --hosted demoserver
@@ -104,15 +104,12 @@ TEXT_TO_IMAGE_ENV = "A11_DEMOS_TEXT_TO_IMAGE"
 #: The deep-research composition, beside this file.
 DEEP_RESEARCH_FLOW = HERE / "deep_research.flow"
 
-#: What the deep-research flows route to when the caller says nothing.
+#: Default backend configuration for the deep-research flows.
 #:
 #: A header schema's ``default`` is *applied*, not merely advertised: an
 #: `Action` seeds its header map from its schema, so a call that names no
-#: provider really does go to the local ollama -- and the value is forwarded to
-#: every nested model call, because that is what A11 does with an ``x-a11-``
-#: header. Which is the point: `deep-research` takes a topic and nothing else,
-#: and a console that has to be told three header names before the interesting
-#: action will answer is a console nobody tries it from.
+#: provider uses local Ollama. A11 forwards ``x-a11-`` headers to nested model
+#: calls, so callers only need to provide the research topic.
 #:
 #: The values are the ones the guide and the console's own flow template already
 #: quote, and the model comes from `a11.cli.backends`, which is where this

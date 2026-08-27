@@ -132,19 +132,14 @@ struct ChunkStoreReader::State
    * strictly in order, and a batch read that jumped that queue would reorder
    * two concurrent readers. Everything it returns is a fragment
    * CollectAvailableLocked() would have handed out next, in the same order, so
-   * this adds no semantics of its own -- which is the point. Terminal state
-   * (end of stream, error) is deliberately *not* handled here; NextMany falls
+   * this adds no semantics of its own. Terminal state (end of stream or error)
+   * is not handled here; NextMany falls
    * back to the single-fragment path for that, so there is exactly one place
    * that decides what the end of a stream looks like.
    */
   std::vector<data::NodeFragment> TakeBuffered(size_t limit) {
     // Fill on the caller's thread before taking, rather than waking the pump
-    // and taking whatever happens to be there. A caller that comes straight
-    // back for more outruns an asynchronous refill -- the buffer fills from
-    // inside Drive(), so a poller that returns the moment its own fragment
-    // lands arrives again mid-fill -- and batches alternate between full and
-    // one. The reads cost the caller nothing it was not going to wait for, and
-    // a store that answers inline answers them without waiting at all.
+    // and taking whatever happens to be there.
     Drive();
     std::vector<data::NodeFragment> taken;
     {
@@ -160,17 +155,6 @@ struct ChunkStoreReader::State
     }
     // The buffer just lost fragments, and the next caller's own Drive() above
     // is what refills it -- so no wake here.
-    //
-    // `Next` already reasons this way ("a wake would only re-enter an idle
-    // pump") for a read it served from the buffer, and the same holds with more
-    // force here: Drive() ran on this thread a few lines up, so everything the
-    // store could answer without waiting is already in the buffer, and what is
-    // left is outstanding fetches that will wake the pump themselves when they
-    // land. A wake per batch was costing a scheduler hop -- and, when it found
-    // no worker searching, an OS thread signal -- to schedule a pump pass whose
-    // work the next call does inline anyway. It is why the batched read
-    // measured *worse* per fragment than the one-at-a-time read it exists to
-    // beat: 1.41us against 0.865us.
     return taken;
   }
 
@@ -197,17 +181,6 @@ struct ChunkStoreReader::State
     (void)cancellation_callback;
 
     // Serve from the buffer on the caller's thread when it can be served.
-    //
-    // Drive() would do exactly this, but only after Wake() has put it through
-    // the scheduler, and that hop costs more than an order of magnitude what
-    // the read itself does -- which for a reader draining a node that is
-    // already full would be a scheduler round trip per fragment.
-    //
-    // CollectAvailableLocked() pops `pending_reads` from the front, so a request
-    // that arrives behind an earlier waiter still queues behind it; FIFO order is
-    // unchanged. The request is claimed by PopPendingReadLocked(), so the timeout
-    // below and the cancellation callback both find it taken and cannot
-    // double-resolve.
     std::vector<Completion> completions;
     {
       thread::MutexLock lock(&mu);
@@ -218,12 +191,7 @@ struct ChunkStoreReader::State
 
     // Then fetch on the caller's thread rather than handing the work to the
     // pump: Wake() only schedules, so a read the buffer cannot answer would pay
-    // a scheduler hop before the store is even asked, and a caller reading one
-    // fragment at a time never gets ahead of that. Driving here fetches
-    // everything the store can answer without waiting, so this request is
-    // usually resolved by the time it is returned and the buffer is refilled
-    // for the one after it. A store that cannot answer inline leaves its
-    // fetches outstanding.
+    // a scheduler hop before the store is even asked, and a caller reading one.
     Drive();
 
     // Only a request that is still outstanding needs a timer. Arming one for a
@@ -266,9 +234,8 @@ struct ChunkStoreReader::State
    * fragment and leave the buffer no more than one fragment ahead, which is
    * what would make `NextMany`/`next_fragments` return batches of one.
    *
-   * A loop and not recursion, deliberately: A11 runs these callbacks on pooled
-   * fibers with small stacks, and recursing once per fragment would overflow
-   * them.
+   * Uses a loop because callbacks run on pooled fibers with small stacks;
+   * recursion per fragment could overflow them.
    */
   void Drive() {
     DriveInline(&mu, &pump, "ChunkStoreReader", [this] {
@@ -304,9 +271,7 @@ struct ChunkStoreReader::State
       CollectAvailableLocked(&completions);
       ordered = options.ordered;
       // `pop_chunks` clears each fragment after reading it, which is a second
-      // operation per fragment sequenced behind the first. Keep that path on
-      // one-at-a-time; overlapping reads with clears is a different problem
-      // and not one this buys anything on.
+      // operation per fragment sequenced behind the first.
       const size_t ceiling = options.pop_chunks ? 1 : kMaxFetchesInFlight;
       if (status.has_value() || operation != Operation::kNone) {
         // Terminal requests were collected above; a clear in progress will
@@ -423,29 +388,17 @@ struct ChunkStoreReader::State
       }
       // Straight through when this arrival is the one being waited for and
       // nothing about it needs the reorder map's judgement.
-      //
-      // `arrived` exists to hold fetches that came back early, and with the
-      // fetch ceiling at 16 there really can be a queue. But an ordered reader
-      // over a store that answers inline gets its fetches back in the order it
-      // issued them, so the map's steady state is one entry, inserted and
-      // erased again in the same breath -- a red-black node allocated and freed
-      // per fragment, either side of a move in and a move out. Each condition
-      // below is one the map's own drain would have checked; failing any of
-      // them falls through to it, so there is still exactly one place that
-      // decides what an out-of-order, terminal, popped or malformed arrival
-      // means.
-      const bool straight_through =
-          !status.has_value() && !options.pop_chunks && arrived.empty() &&
-          arrived_position == position && result.ok() &&
-          result->seq.has_value();
+      const bool straight_through = !status.has_value() &&
+                                    !options.pop_chunks && arrived.empty() &&
+                                    arrived_position == position &&
+                                    result.ok() && result->seq.has_value();
       if (straight_through) {
         // Advances `position` and collects waiters, exactly as the drain would.
         FinishFragmentLocked(std::move(*result), &completions);
       } else {
         // Moved, not copied: a fragment carries its id and its payload, so
         // copying one into the reorder map and moving it straight back out cost
-        // a deep copy of every byte read. Taking the parameter by value lets
-        // the inline path move all the way through.
+        // a deep copy of every byte read.
         arrived.insert_or_assign(arrived_position, std::move(result));
         DrainArrivedLocked(&completions, &start_clear, &clear_seq,
                            &clear_generation);
@@ -453,10 +406,7 @@ struct ChunkStoreReader::State
       terminal = status.has_value();
     }
     Complete(std::move(completions));
-    // Only when there is something for it to do. `MaybeCompleteDone` takes the
-    // mutex to test a predicate that cannot be true until the stream ends, and
-    // this is per fragment: the answer is already in hand from above, for free,
-    // while the lock was held.
+    // Only when there is something for it to do.
     if (terminal) {
       MaybeCompleteDone();
     }
@@ -614,15 +564,7 @@ struct ChunkStoreReader::State
     const bool continued = fragment.continued;
     // Fetches are serialised through the operation guard, so fragments finish
     // in strictly increasing position order and the freshly read one always
-    // belongs at the back of the ordered buffer. Appending it here - rather
-    // than handing it straight to the FIFO-front waiter - is what makes serial
-    // reads deliver serially: a request that could not yet be matched against
-    // an earlier buffered fragment (its wake-up was coalesced away while this
-    // fetch was in flight) must not receive this later fragment ahead of it.
-    // CollectAvailableLocked below drains the buffer front-to-back, so any
-    // waiter is always paired with the earliest outstanding fragment. It also
-    // covers the zero-buffer case, where a timed-out request may leave one
-    // unavoidable in-flight result that is preserved for the next caller.
+    // belongs at the back of the ordered buffer.
     buffer.push_back(std::move(fragment));
 
     ++chunks_read;
@@ -660,9 +602,7 @@ struct ChunkStoreReader::State
     const size_t capacity =
         static_cast<size_t>(options.num_chunks_to_buffer) + pending_count;
     // Reads already in flight, and results parked waiting for their turn, are
-    // fragments this reader has committed to holding. Counting them keeps the
-    // prefetch window equal to the configured buffer size rather than that
-    // plus everything outstanding.
+    // fragments this reader has committed to holding.
     const size_t committed =
         buffer.size() + fetches_in_flight + arrived.size() + about_to_issue;
     return committed < capacity;
@@ -743,11 +683,7 @@ struct ChunkStoreReader::State
   Operation operation ABSL_GUARDED_BY(mu) = Operation::kNone;
   std::uint64_t operation_generation ABSL_GUARDED_BY(mu) = 0;
   a11::Future<data::NodeFragment> active_operation ABSL_GUARDED_BY(mu);
-  // Multi-fetch state. `position` is the next fragment to *deliver*;
-  // `next_fetch_position` is the next one to *ask for*, and runs ahead of it by
-  // however many fetches are outstanding. Results that arrive out of order wait
-  // in `arrived` until they are at the head, which is what preserves ordered
-  // delivery across fetches that are in flight together.
+  // Multi-fetch state.
   std::uint64_t next_fetch_position ABSL_GUARDED_BY(mu);
   size_t fetches_in_flight ABSL_GUARDED_BY(mu) = 0;
   std::uint64_t fetch_generation ABSL_GUARDED_BY(mu) = 0;
@@ -830,19 +766,8 @@ ChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
     return a11::CompletedFuture<Batch>(std::move(batch));
   }
 
-  // Nothing prefetched. Fall through to exactly one ordinary read, so end of
-  // stream, errors, timeouts and cancellation all behave as they always have,
-  // then sweep up anything that landed while that read was in flight.
-  //
-  // `ThenAfterWaiting` and not `Then`, deliberately. The sweep calls
-  // `TakeBuffered`, which *drives the pump* -- real work, not a reshaping -- and
-  // `Then` would run it from `OnReady` on whichever thread completed the read,
-  // which for a transport-fed reader can be the uv loop. `ThenAfterWaiting` keeps
-  // today's two cases exactly: inline on the caller's thread when the read is
-  // already answered, which is the common case for a reader whose pump could serve
-  // it, and on a fibre only when it genuinely has to wait. The fibre disappears
-  // from the common path without moving the pump anywhere it was not already
-  // driven.
+  // Nothing prefetched. The fibre disappears from the common path without
+  // moving the pump anywhere it was not already driven.
   std::shared_ptr<State> state = state_;
   return a11::ThenAfterWaiting(
       state->Next(timeout), absl::InfiniteFuture(),

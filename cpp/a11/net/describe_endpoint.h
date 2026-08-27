@@ -83,9 +83,10 @@ bool MatchDescribePath(std::string_view path,
 /**
  * @brief Answers @p request from @p options, if it is addressed to it.
  *
- * The whole endpoint, for whichever server holds the port. `GET` and `HEAD` are
- * answered with the JSON document; a failing describer's status code becomes the
- * HTTP one, so an unknown action is a 404 with the describer's own message.
+ * The whole endpoint, for whichever server holds the port. `GET` and `HEAD`
+ * are answered with the JSON document; a failing describer's status code
+ * becomes the HTTP one, so an unknown action is a 404 with the describer's own
+ * message.
  *
  * @param options The endpoint's configuration; a disabled one matches nothing.
  * @param request The inbound request, query string included.

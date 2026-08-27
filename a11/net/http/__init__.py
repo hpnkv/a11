@@ -18,7 +18,7 @@ Examples:
     print(response.head.status, len(response.body))
     ```
 
-    Cache a model, showing progress, and pay nothing on the second call:
+    Cache a model and report download progress:
 
     ```python
     options = a11.net.http.DownloadOptions()

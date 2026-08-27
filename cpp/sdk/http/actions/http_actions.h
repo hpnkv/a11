@@ -11,23 +11,24 @@
  *     the server pushed, and how the connection was carried. A caller reads the
  *     ones it cares about, in whatever order they become available, and can act
  *     on the status while the body is still arriving.
- *   - @c web-fetch -- the same machinery with the protocol turned down: a status,
+ *   - @c web-fetch -- the same machinery at a lower level: a status,
  *     a header map, and the body as text, as JSON, as bytes, or decoded into a
  *     stream of items. What a caller who just wants a document asks for.
  *
  * Why an Action rather than a function. An ordinary HTTP client hands back one
  * `Response` object because its language gives it nothing better to hand back;
  * headers, body and trailers are one value that is only complete at the end. An
- * A11 port is a stream, and there is no reason for these to share one -- so they
+ * A11 port is a stream, and there is no reason for these to share one -- so
+ * they
  * do not. That is the whole idea, and everything else here follows from it.
  *
  * ### Headers
  *
- * An action header that does not begin with @c x-a11- is sent as an HTTP request
- * header, verbatim. So Flow's `with "accept": "application/json"` and
- * `forward headers "authorization"` are already HTTP header syntax, and A11's own
- * @c x-a11- headers (a deadline, a trace) stay out of the request. Anything that
- * cannot be spelled as an A11 header name goes in @c options.headers instead.
+ * An action header that does not begin with @c x-a11- is sent verbatim as an
+ * HTTP request header. Flow's `with "accept": "application/json"` and
+ * `forward headers "authorization"` are already HTTP header syntax, and A11's
+ * A11 @c x-a11- headers, such as deadlines and traces, are excluded. Headers
+ * that are not valid A11 names belong in @c options.headers.
  *
  * Registered on any ActionRegistry with @ref RegisterHttpActions, in C++ or
  * through the Python binding.

@@ -60,8 +60,7 @@ def test_documented_status_responses_produce_a_serialisable_schema():
     responses = document["paths"]["/thing"]["get"]["responses"]
     assert set(responses) >= {"404", "403", "422"}
     example = responses["404"]["content"]["application/json"]["example"]
-    # A plain document, not a Status: the whole point is that pydantic can
-    # serialise the schema that contains it.
+    # Keep the example as plain data so pydantic can serialize its schema.
     assert isinstance(example, dict)
     assert example["code"] == 5
 
@@ -88,7 +87,7 @@ def test_a_status_error_body_survives_the_round_trip():
         response = client.get("/fails")
 
     assert response.status_code == 403
-    # The regression: this used to be `{}`.
+    # Structured details survive the HTTP boundary.
     assert response.json() == {
         "code": 7,
         "message": "not yours",

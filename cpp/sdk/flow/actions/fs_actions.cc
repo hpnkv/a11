@@ -96,6 +96,7 @@ absl::Status ErrorCodeStatus(const std::error_code& error,
   return ErrnoStatus(error.value(), what, path);
 }
 
+// A file descriptor that closes itself.
 /// A file descriptor that closes itself. Not RAII for elegance: every early
 /// return in this file is a `return` out of a fibre, and a leaked descriptor
 /// per failed read is a process that stops working after a few thousand of
@@ -167,8 +168,7 @@ std::string_view KindOf(const fs::file_status& status) {
 std::string FormatFileTime(fs::file_time_type when) {
   // No portable conversion from file_clock before C++20's clock_cast is
   // reliably available across the toolchains this builds on, so the offset
-  // between the two clocks is measured once. It is stable to well under the
-  // second of resolution anybody wants from a modification time.
+  // between the two clocks is measured once.
   static const auto file_epoch_offset = []() {
     const auto file_now = fs::file_time_type::clock::now();
     const absl::Time wall_now = absl::Now();
@@ -236,7 +236,7 @@ absl::StatusOr<fs::path> ResolveInput(const std::shared_ptr<Action>& action,
 
 /// Matches a filename against a `*`/`?` pattern.
 ///
-/// Deliberately not a regular expression: a pattern may have come from a model,
+/// This is not a regular expression: a pattern may have come from a model,
 /// and `*` and `?` cannot be made to backtrack for a second, where a regular
 /// expression can. Iterative rather than recursive for the same reason.
 bool WildcardMatch(std::string_view name, std::string_view pattern) {
@@ -1218,8 +1218,8 @@ ActionSchema MovePathSchema() {
   schema.name = std::string(kMovePathAction);
   schema.description =
       "Rename a path. Atomic within one filesystem and refused across two, "
-      "where it would silently become a copy followed by a delete -- use "
-      "copy_path and remove_path when that is what is meant.";
+      "where a move requires copying and deleting. Use copy_path followed by "
+      "remove_path for that operation.";
   schema.inputs.emplace("path", Port("path", "string", "Path to move.",
                                      /*required=*/true, /*unary=*/true));
   schema.inputs.emplace("to", Port("to", "string", "Where to move it.",

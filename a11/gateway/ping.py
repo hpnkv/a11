@@ -3,16 +3,12 @@
 """The liveness action, now a builtin every A11 peer answers.
 
 A ping is how a client tells "an A11 peer is listening here" apart from
-"something is listening here". The distinction matters because anything at all
-can hold the port, and a peer that completes a TCP handshake but does not speak
-A11 would otherwise be joined and then hang on the first real call.
+"something is listening here". Anything can hold the port, so the probe must
+complete before the client joins the peer.
 
-It used to be registered by `a11.gateway.app` and by nothing else, which meant
-:meth:`a11.client.connection.GatewayConnection.probe` failed against every A11
-service that was not *this* gateway -- an `a11 serve`, an IDE plugin, a demo. It
-is now one of the actions a registry answers for whether or not anybody
-installed it (see `cpp/a11/actions/builtins.h`), so the probe works against any
-peer.
+``__ping`` is a runtime builtin, so
+:meth:`a11.client.connection.GatewayConnection.probe` works with every A11
+service. See ``cpp/a11/actions/builtins.h``.
 
 The name and the schema are unchanged, because four languages' clients probe
 with them. This module stays as the place they are spelled in Python.

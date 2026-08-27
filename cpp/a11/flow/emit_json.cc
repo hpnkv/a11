@@ -59,10 +59,8 @@ std::string_view SarifLevel(Severity severity) {
 }
 
 // --- The syntax tree ---------------------------------------------------------
-//
 // One function, one switch, one case per node kind, and the compiler holds it
-// to being exhaustive -- which is what makes a node added to the language
-// impossible to forget here.
+// to being exhaustive -- which is what makes a node added to the.
 
 nlohmann::json NodeJson(const syntax::Node* node);
 
@@ -704,13 +702,7 @@ nlohmann::json VocabularyToJsonValue() {
     stages[std::string(stage)] =
         vocabulary::StageArgumentName(*vocabulary::StageTakes(stage));
   }
-  // What each word *does*, beside the lists of which words there are. Keyed by
-  // role and then by word, under the same role names the word-list keys use, so
-  // a reader can put `port_modifiers` and `documentation.port_modifier`
-  // together. A sibling key rather than a change to the lists themselves: those
-  // are what the generated grammar files are written from, and a generated file
-  // that changed shape because reference text was added would fail a check that
-  // is meant to be about the words.
+  // What each word *does*, beside the lists of which words there are.
   nlohmann::json documentation = nlohmann::json::object();
   for (const vocabulary::WordRole role : vocabulary::WordRoles()) {
     nlohmann::json words = nlohmann::json::object();
@@ -796,8 +788,9 @@ nlohmann::json DiagnosticsToSarifValue(
                  nlohmann::json{
                      {"artifactLocation",
                       nlohmann::json{{"uri", std::string(source)}}},
-                     // SARIF regions are 1-based lines and columns, with the end
-                     // column exclusive -- the same convention as the range here.
+                     // SARIF regions are 1-based lines and columns, with the
+                     // end column exclusive -- the same convention as the range
+                     // here.
                      {"region",
                       nlohmann::json{
                           {"startLine", diagnostic.range.start.line},

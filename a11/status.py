@@ -31,7 +31,8 @@ class StatusCode(IntEnum):
     Pick the most specific code a caller can act on: for example,
     ``INVALID_ARGUMENT`` for input that can never work,
     ``FAILED_PRECONDITION`` for a lifecycle state that could change, and
-    ``UNAVAILABLE`` for a dependency worth retrying. The conversion methods
+    ``UNAVAILABLE`` for a dependency whose operation may succeed on retry. The
+    conversion methods
     preserve that intent at HTTP and WebSocket boundaries.
     """
 
@@ -499,8 +500,8 @@ class StatusExceptionCasters:
     ):
         """Register one exception-to-status converter.
 
-        A type may be registered once. `StatusException` is deliberately
-        fixed because its existing status must always be preserved.
+        A type may be registered once. `StatusException` has a fixed converter
+        so its existing status is always preserved.
         """
         if exception_type is StatusException:
             raise Status(

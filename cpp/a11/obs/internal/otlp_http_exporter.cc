@@ -152,10 +152,6 @@ json SpanToJson(const otel_sdk::SpanData& span) {
 }
 
 // Serializes a batch of spans into a single OTLP ExportTraceServiceRequest.
-// Spans are grouped under one resource/scope; the resource attributes are read
-// from the first span's instrumentation scope resource is not exposed per-span
-// here, so a minimal resource is emitted and enriched by resource attributes
-// configured on the provider (which OTel copies onto span resources).
 std::string BuildPayload(
     const otel::nostd::span<std::unique_ptr<otel_sdk::Recordable>>& spans) {
   json scope_spans = json::array();
@@ -251,7 +247,8 @@ class OtlpHttpJsonExporter final : public otel_sdk::SpanExporter {
     curl_easy_cleanup(curl);
 
     if (rc != CURLE_OK) {
-      // LOG(ERROR) << "OTLP export transport error: " << curl_easy_strerror(rc);
+      // LOG(ERROR) << "OTLP export transport error: " <<
+      // curl_easy_strerror(rc);
       return otel::sdk::common::ExportResult::kFailure;
     }
     if (http_status < 200 || http_status >= 300) {

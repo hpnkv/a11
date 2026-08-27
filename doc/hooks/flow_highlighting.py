@@ -1,25 +1,18 @@
 # Copyright 2026 The A11 Authors.
 
-"""Teach the documentation build to colour A11 Flow.
+"""Register A11 Flow syntax highlighting for the documentation build.
 
-MkDocs highlights a fenced block by asking Pygments for a lexer with that name,
-and Pygments only knows the lexers it ships with plus the ones installed as
-entry points. A11 is not a Pygments plugin and has no reason to become one, so
-this hook puts the language's own lexer into the registry Pygments looks in --
-after which ```a11flow works in any page like any other language.
+MkDocs resolves fenced-code language names through Pygments. This hook adds
+A11's generated lexer to the Pygments registry, enabling ```a11flow blocks.
 
 The lexer itself is at ``editors/pygments/a11flow_lexer.py`` and is
 **generated** from the language's word tables
-(`a11 flow syntax --target pygments`), which is the same arrangement the
-Sublime grammar has: see ``editors/README.md``. So a
-stage added to the grammar is a stage these pages colour once somebody has run
-the generator, and `a11/flow/tests/test_editor_support.py` fails while nobody
-has.
+(`a11 flow syntax --target pygments`); see ``editors/README.md``. The editor
+support tests require regeneration after vocabulary changes.
 
-Registered rather than imported by name because Pygments resolves an alias
-through ``LEXERS``, whose entries name a module to import. Ours is not on the
-import path of whoever builds these docs, so it is put in the cache the loader
-checks first and the module name is never used.
+Pygments resolves aliases through ``LEXERS`` module entries. The documentation
+build does not install this lexer as a module, so the hook inserts it into the
+loader cache.
 """
 
 import pathlib

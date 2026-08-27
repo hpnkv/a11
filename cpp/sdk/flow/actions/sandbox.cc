@@ -29,14 +29,9 @@ namespace {
 
 #if defined(__linux__)
 
-// Declared here rather than included from <linux/landlock.h>.
-//
-// The build images this ships from are older than the headers -- a manylinux
-// image's kernel headers predate Landlock by years -- while the kernels it runs
-// on are not. Taking the ABI from the header would mean the sandbox silently
-// vanishes from a wheel built on an old image and running on a new kernel, which
-// is the exact failure this file exists to prevent. The ABI is stable and
-// versioned by the kernel itself, so it is written out and probed at runtime.
+// Declared here rather than included from <linux/landlock.h>. The ABI is stable
+// and versioned by the kernel itself, so it is written out and probed at
+// runtime.
 
 #ifndef SYS_landlock_create_ruleset
 #if defined(__x86_64__)
@@ -179,7 +174,7 @@ int ProbeAbiVersion() {
   return version < 0 ? 0 : static_cast<int>(version);
 }
 
-#endif  // __linux__
+#endif
 
 #if defined(__APPLE__)
 
@@ -194,7 +189,7 @@ std::string QuoteForProfile(std::string_view path) {
       "\"", absl::StrReplaceAll(path, {{"\\", "\\\\"}, {"\"", "\\\""}}), "\"");
 }
 
-#endif  // __APPLE__
+#endif
 
 }  // namespace
 
@@ -211,8 +206,7 @@ const SandboxAvailability& Availability() {
     found.kind = SandboxKind::kLandlock;
     found.confines_reads = true;
     found.confines_writes = true;
-    // Network rules arrived in ABI 4. Below that a confined child can still
-    // open a socket, which is worth saying rather than implying.
+    // Network confinement requires ABI 4 or later.
     found.confines_network = found.abi_version >= 4;
 #elif defined(__APPLE__)
     if (::access("/usr/bin/sandbox-exec", X_OK) != 0) {
@@ -220,10 +214,7 @@ const SandboxAvailability& Availability() {
       return found;
     }
     found.kind = SandboxKind::kSeatbelt;
-    // Reads are *not* confined here. See the comment on SandboxAvailability:
-    // the profile imports Apple's own base profile so that a dynamically linked
-    // program can start at all, and that base profile permits broad reads. The
-    // honest options were to overclaim or to say so.
+    // Reads are *not* confined here.
     found.confines_reads = false;
     found.confines_writes = true;
     found.confines_network = true;
@@ -270,8 +261,8 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
   const SandboxAvailability& available = Availability();
   if (available.kind == SandboxKind::kNone) {
     if (process.sandbox == SandboxRequest::kRequired) {
-      // The whole point of `required`: a host that asked for kernel enforcement
-      // must not silently get a policy that is only this library's checks.
+      // `required` must not fall back from
+      // kernel enforcement to library checks.
       return absl::FailedPreconditionError(absl::StrCat(
           "the process policy requires a sandbox and this system cannot "
           "provide one: ",
@@ -369,13 +360,6 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
   std::vector<std::string> lines;
   lines.emplace_back("(version 1)");
   // Apple's own base profile, and the reason reads are not confined here.
-  //
-  // Without it a deny-default profile aborts a dynamically linked program
-  // during dyld startup -- allowing /usr/lib, /System and the Cryptexes paths
-  // was measured to be insufficient, and what remains is undocumented and
-  // version-specific. With it the program starts, and its *reads* are broadly
-  // permitted by the import. So writes and the network are genuinely confined
-  // and reads are not, which is what Availability() reports.
   lines.emplace_back("(import \"bsd.sb\")");
   lines.emplace_back("(deny default)");
   lines.emplace_back("(allow process-exec)");

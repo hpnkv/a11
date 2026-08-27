@@ -155,11 +155,7 @@ absl::Status RegisterStandardLibrary(
         "its "
         "neighbours");
   }
-  // What the host already registered stays registered. A host that put its own
-  // `interact_with_llm` -- or its own `read_file` -- in this registry meant it,
-  // and this library replacing it would be the interpreter overruling the
-  // program's owner. So the standard library goes into a registry of its own
-  // and is copied across only where there is nothing in the way.
+  // What the host already registered stays registered.
   actions::ActionRegistry standard;
   ABSL_RETURN_IF_ERROR(sdk::flow::RegisterFlowActions(standard, capabilities));
   if (standard_streams) {
@@ -216,11 +212,7 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   ABSL_RETURN_IF_ERROR(RegisterStandardLibrary(*registry, options.capabilities,
                                                options.standard_streams));
 
-  // The bridge, when the host gave one. Left null otherwise, which is what
-  // makes the runtime fall back to A11's own registry -- the right answer for a
-  // command line, and the wrong one for a host whose types live in Python.
-  // Qualified: inside this namespace an unqualified `RunOptions` is the
-  // interpreter's, and the runtime's is a different type with the same name.
+  // The bridge, when the host gave one.
   ::a11::flow::RunOptions how;
   how.bridge = options.bridge;
   // Where `call` steps go. Given to the handler rather than to the action
@@ -231,14 +223,13 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
                         MakeEntryHandler(program, std::move(how)));
 
   // The entry flow has no name and an action must have one, so it is named here
-  // on a copy of the plan. Only this process sees it: the name is what an action
-  // needs to derive its port node ids, not something anything can call.
+  // on a copy of the plan. Only this process sees it: the name is what an
+  // action needs to derive its port node ids, not something anything can call.
   FlowPlan named = entry->plan;
   named.name = "main";
   ABSL_ASSIGN_OR_RETURN(const actions::ActionSchema schema, FlowSchema(named));
-  // The session's node map when there is a session, because that is what routes
-  // a dispatched call's reply fragments back. A program with no peer keeps a map
-  // of its own, which is all it ever needed.
+  // A session node map routes reply fragments for dispatched calls. Standalone
+  // programs use a private map.
   std::shared_ptr<nodes::NodeMap> node_map;
   if (options.session != nullptr) {
     node_map = options.session->GetNodeMap();
@@ -246,9 +237,9 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   if (node_map == nullptr) {
     ABSL_ASSIGN_OR_RETURN(node_map, nodes::NodeMap::Create());
   }
-  // The action itself is bound to the session but *not* to the stream: it is run
-  // here, and an action that holds a stream ends it on finishing. Its `call`
-  // steps have the stream, through the handler above.
+  // The action itself is bound to the session but *not* to the stream: it is
+  // run here, and an action that holds a stream ends it on finishing. Its
+  // `call` steps have the stream, through the handler above.
   ABSL_ASSIGN_OR_RETURN(
       const std::shared_ptr<actions::Action> action,
       actions::Action::Create(schema, "main", handler, node_map, nullptr,

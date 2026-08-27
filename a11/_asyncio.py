@@ -9,15 +9,12 @@ from typing import Any
 def _resolve_event_loop() -> asyncio.AbstractEventLoop | None:
     """A loop native code may post work to, or ``None`` if there is none.
 
-    Never creates one. That is the whole point: `asyncio.get_event_loop`'s
-    habit of conjuring a loop for a thread that has none is what used to hand
-    A11 a loop nobody would ever run, so work posted to it waited for good. The
-    deprecation warning is exactly the signal that a loop was invented rather
-    than found, so it is promoted to an error and read as "no loop" -- which is
-    also what newer Pythons raise there of their own accord.
+    Never creates one. Treat the deprecation warning from
+    ``asyncio.get_event_loop`` as "no loop" because it indicates that asyncio
+    would create a loop rather than return a running or explicitly set one.
 
-    A loop that has already been closed is no better than none, since nothing
-    posted to it can run.
+    A closed loop is also reported as ``None`` because it cannot run posted
+    work.
     """
     try:
         return asyncio.get_running_loop()
@@ -42,11 +39,11 @@ class _NativeFuture(asyncio.Future[Any]):
         self._on_cancel: Callable[[], None] | None = on_cancel
         #: Runs once, when somebody first awaits this future and it is not
         #: already resolved. Work that the awaiting thread could do itself
-        #: belongs here rather than at the call that created the future: a
-        #: chunk store writer flushes here, so awaiting a confirmation
-        #: performs the store write on this thread and resolves without an
-        #: event-loop turn, while a producer that awaits only admission leaves
-        #: the write to the writer's pump.
+        #: belongs here rather than at the call that created the future: a chunk
+        #: store writer flushes here, so awaiting a confirmation performs the
+        #: store write on this thread and resolves without an event-loop turn,
+        #: while a producer that awaits only admission leaves the write to the
+        #: writer's pump.
         self._on_await: Callable[[], None] | None = None
 
     def cancel(self, msg: Any = None) -> bool:

@@ -67,9 +67,6 @@ audio::OnModelProgress AudioProgressFromPython(const py::object& on_progress) {
   };
 }
 
-// A read-only 2-D (channels x frames) float view over an AudioBuffer, used to
-// back the buffer protocol so `memoryview(buffer)` is zero-copy and keeps the
-// buffer alive for the view's lifetime.
 py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
   const auto frames = static_cast<py::ssize_t>(buffer.num_frames);
   const auto channels = static_cast<py::ssize_t>(buffer.num_channels);
@@ -82,9 +79,7 @@ py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
 }
 
 // Builds an AudioBuffer from any Python buffer-protocol object (bytes, a NumPy
-// array, a CPU PyTorch tensor, ...). Samples are taken as 32-bit floats in
-// channel-major order; raw byte buffers are reinterpreted as float32. A 2-D
-// buffer's leading dimension is treated as the channel count.
+// array, a CPU PyTorch tensor, ...).
 bool IsCContiguous(const py::buffer_info& info) {
   py::ssize_t expected = info.itemsize;
   for (py::ssize_t axis = info.ndim - 1; axis >= 0; --axis) {
@@ -223,13 +218,6 @@ MakeRecognitionCallbacks(const py::object& on_transcription,
 }
 
 // Release for a Python type held as an ActionPortSchema typeinfo handle.
-// Mirrors the actions binding's own deleter so the referent stays alive for
-// exactly as long as any copy of the schema.
-//
-// Deferred rather than releasing here: this is a shared_ptr deleter, so it runs
-// on whichever thread drops the last copy of the schema -- which may be a pool
-// worker, where taking the GIL races interpreter finalization. See
-// DeferredPythonRefs.
 void ReleaseAudioTypeInfo(void* object) {
   DeferredPythonRefs::Retire(static_cast<PyObject*>(object));
 }

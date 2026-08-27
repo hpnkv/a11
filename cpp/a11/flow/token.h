@@ -15,7 +15,8 @@ namespace a11::flow {
 ///
 /// The same set `a11.flow.lexer` produces, under the same names -- [KindName]
 /// returns exactly the strings the Python lexer uses -- with one addition: a
-/// comment is a token here. The Python lexer drops comments because a parser has
+/// comment is a token here. The Python lexer drops comments because a parser
+/// has
 /// no use for them; a highlighter and a formatter do, and one lexer that keeps
 /// them serves all three.
 enum class TokenKind {

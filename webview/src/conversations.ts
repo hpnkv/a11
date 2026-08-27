@@ -1,14 +1,12 @@
 /**
  * Chat history: listing the stored conversations and reopening one.
  *
- * The backend keeps every conversation as the `Interaction`s it is made of, so
- * reopening one is not replaying a transcript — it is getting the provider's own
- * objects back. That is what lets a rehydrated conversation be threaded into the
- * next turn exactly like a live one, tool calls and all.
+ * The backend stores conversations as `Interaction` values rather than rendered
+ * transcripts. A reopened conversation can therefore continue with its tool
+ * calls and provider data intact.
  *
- * A conversation's id is the id of its first interaction, which this side mints.
- * So the webview never needs a server-assigned handle: `history[0].id` names the
- * conversation the moment it starts.
+ * The first interaction id identifies the conversation, so the webview does not
+ * require a separate server-assigned handle.
  */
 
 import {
@@ -35,7 +33,10 @@ const need = <T>(value: T | Status): T => {
   return value as T;
 };
 
-/** Mirrors the backend's `get_conversations` schema (`conversation_actions.py`). */
+/**
+ * Mirrors the backend's
+ * `get_conversations` schema (`conversation_actions.py`).
+ */
 const GET_CONVERSATIONS_SCHEMA = new ActionSchema({
   name: 'get_conversations',
   description: 'List the stored conversations, most recently active first.',
@@ -94,10 +95,8 @@ export async function fetchConversations(
  * One conversation's interactions, oldest first; empty if the backend has no
  * such conversation (a stale id is not an error).
  *
- * Each value is re-parsed on the way in. Decoding already brands it, but the
- * brand is what lets these go back out to the backend as `a11.sdk.Interaction`
- * rather than anonymous JSON the strict `interactions` port refuses — and these
- * are destined for exactly that port on the next turn.
+ * Each value is parsed again to ensure it carries the `a11.sdk.Interaction`
+ * wire tag required by the strict `interactions` input on the next turn.
  */
 export async function fetchConversation(
   session: Session,
@@ -142,7 +141,8 @@ function payloadText(value: unknown): string {
  * Best-effort human-readable text of an interaction.
  *
  * This reads the content *shapes* rather than the backend: the neutral
- * `{role, content: [{type: 'text', text}]}` envelope `makeTextMessageInteraction`
+ * `{role, content: [{type: 'text',
+ * text}]}` envelope `makeTextMessageInteraction`
  * builds, and the provider message dumps Claude and Gemini put there. Tool-use
  * blocks and images contribute nothing, which is what a transcript wants.
  * `normalizeInteraction` would be the principled route but only has a gemma
@@ -180,16 +180,16 @@ const TOOL_LOGS_KEY = 'tool_logs';
 /**
  * The run logs recorded with this interaction, keyed by tool-call id.
  *
- * These are each tool's own narration of what it did — the plugin's for an IDE
- * tool, the gateway's for one of its own. The model is never shown them (the
- * tool runner keeps that port out of the tool result) but they are kept with the
- * conversation, so a reopened one reads like the live one did.
+ * Logs may come from an IDE tool or a gateway tool. The tool runner excludes
+ * them from model-visible results, while conversation storage preserves them
+ * for reopened sessions.
  */
 export function toolLogs(interaction: Interaction): Record<string, string> {
   const raw = interaction.backend_specific_metadata?.[TOOL_LOGS_KEY];
   if (raw === undefined) return {};
   // `dict[str, bytes]` on the Python side, so this arrives as a Uint8Array; a
-  // string is accepted too, since the schema allows a caller to set one by hand.
+  // string is accepted too, since the schema allows a caller to set one by
+  // hand.
   const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   try {
     const parsed: unknown = JSON.parse(text);

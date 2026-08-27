@@ -15,10 +15,8 @@ host and does three things:
   floor), an A11 `WireStream` echo per transport (the protocol cost), and a
   real `a11.Service` with a registry of workload actions (the server);
 * **reports its own resources** -- CPU seconds, resident bytes, live session
-  count, and interface byte counters, sampled inside the process being
-  measured. This is what makes a cross-machine comparison honest: a host with
-  twelve cores that serves three times the actions may be spending more CPU per
-  action, not less, and only the server's own `getrusage` can say which;
+  count, and interface byte counters sampled inside the measured process. This
+  allows cross-machine comparisons to distinguish throughput from CPU cost;
 * **stays out of the measurement** -- the control channel is a separate TCP
   connection carrying one JSON object per line, used only between measured
   windows. Nothing on it is timed, and no benchmark sends anything on it while
@@ -88,10 +86,8 @@ from a11.data import types
 from a11.net.wire_stream import WireStreamWithRecv
 
 #: The control protocol's framing: one JSON object per line, both directions.
-#: Deliberately not A11's own wire format -- a control channel implemented in
-#: the thing under test cannot be trusted to answer while the thing under test
-#: is wedged, and "the server stopped responding" then reports as a control
-#: failure rather than as the finding it is.
+#: Uses JSON lines instead of A11 framing so the control channel remains
+#: independent when the A11 server under test is unresponsive.
 _ENCODING = "utf-8"
 
 _WAIT = a11.timing.Duration.seconds(60)
@@ -315,11 +311,9 @@ COMPUTE = a11.ActionSchema(
 async def _handle_compute(action: a11.Action) -> None:
     """Hash a buffer `rounds` times, holding a core for a measurable while.
 
-    The workload set was entirely I/O- and store-shaped before this: every other
-    handler is waiting on something. A server hosting real work is not, and the
-    interesting question at scale is what happens to a small request's latency
-    when other requests are *computing* rather than waiting -- the pool cannot
-    overlap those away.
+    This CPU-bound workload measures a small request's latency while other
+    requests are computing rather than waiting. The pool cannot overlap that
+    work as it can I/O.
 
     sha256 rather than a spin loop so the cost is real work a profiler will
     attribute, and so the figure is comparable to the `sha256 of 4 KiB` row in
@@ -334,9 +328,10 @@ async def _handle_compute(action: a11.Action) -> None:
         digest = hashlib.sha256(buffer + digest).digest()
     _counters.compute_rounds += rounds
     _counters.actions += 1
-    await action["report"].finalize(
-        {"rounds": rounds, "digest": digest[:8].hex()}
-    )
+    await action["report"].finalize({
+        "rounds": rounds,
+        "digest": digest[:8].hex(),
+    })
 
 
 def registry() -> a11.ActionRegistry:
@@ -368,7 +363,7 @@ def _rss_bytes() -> int:
 
 
 def _open_file_count() -> int:
-    """How many descriptors this process holds, or 0 where it cannot be asked."""
+    """Return this process's descriptor count, or 0 when unavailable."""
     try:
         return len(os.listdir(f"/proc/{os.getpid()}/fd"))
     except OSError:
@@ -380,7 +375,10 @@ def _open_file_count() -> int:
 
         out = subprocess.run(
             ["lsof", "-p", str(os.getpid())],
-            capture_output=True, text=True, timeout=10, check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
         return max(0, len(out.stdout.splitlines()) - 1)
     except Exception:  # noqa: BLE001 - accounting must never fail a run
@@ -404,10 +402,8 @@ def _interface_counters() -> dict[str, Any]:
     """Bytes in and out of the host's interfaces, for wire-inflation rows.
 
     Linux only, from `/proc/net/dev`. Whole-interface counters include whatever
-    else the host is doing, so a caller must take an idle control sample and
-    report it as the error bar -- which `bench/suites/link.py` does. Anything
-    else is dishonest at the percent level, which is exactly the level a
-    base64 argument lives at.
+    else the host is doing. `bench/suites/link.py` takes an idle control sample
+    and reports it as the error bound for small effects such as base64 overhead.
     """
     if not sys.platform.startswith("linux"):
         return {}
@@ -490,9 +486,9 @@ class Agent:
     async def tcp_echo(self, port: int) -> dict[str, Any]:
         """A bare socket ping-pong: the floor the link itself imposes.
 
-        Length-prefixed so a reply can be matched to a request without a
-        parser, and `TCP_NODELAY` on both ends because a benchmark measuring
-        one request at a time would otherwise be measuring Nagle.
+        Length-prefix replies so they can be matched without a parser. Set
+        `TCP_NODELAY` on both ends so one-request-at-a-time measurements capture
+        link latency rather than Nagle delays.
         """
 
         async def serve(reader, writer) -> None:

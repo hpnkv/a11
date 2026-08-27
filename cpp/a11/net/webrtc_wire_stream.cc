@@ -67,16 +67,8 @@ absl::Status InitializeSctp() {
       settings.recvBufferSize = 32 * 1024 * 1024;
       settings.sendBufferSize = 32 * 1024 * 1024;
       // Max burst is how many MTUs SCTP may put on the wire per send
-      // opportunity, and libdatachannel's default of 10 is worth ~10% at
-      // 64 KiB: on the bare data channel, raising it took loopback throughput
-      // from 133 to 146 MiB/s on Linux, monotonically across 10/32/64/128.
-      // Unlike WebRtcConfiguration::mtu this is a property of the sender rather
-      // than of the path, so there is no value at which a peer stops being
-      // reachable and no reason to leave it at the smaller number. (The initial
-      // congestion window, swept over 10/32/100 in the same run, moved nothing
-      // -- these benchmarks are long enough that the window has long since
-      // opened, so it is startup latency rather than throughput and is left
-      // alone.)
+      // opportunity, and libdatachannel's default of 10 is worth ~10% at 64
+      // KiB:
       settings.maxBurst = 128;
       rtc::SetSctpSettings(settings);
       status = absl::OkStatus();
@@ -118,14 +110,6 @@ struct ClientPeerContext {
 };
 
 // Opens the probe channel, once, after the peer has said it understands one.
-//
-// Deferred to the answer rather than done at dial time on purpose. A client
-// cannot know at dial time whether the peer supports probing, and a probe channel
-// opened unconditionally would be admitted into an older server's multiplex --
-// which would then send application data over it that this side would silently
-// drop as "not a probe frame". Creating a data channel after the association is
-// up needs no renegotiation (DCEP carries it in band), which is the same
-// mechanism the multiplex's own replenishment already relies on.
 
 void FailClient(const std::shared_ptr<ClientPeerContext>& context,
                 absl::Status status) {
@@ -327,9 +311,9 @@ absl::Status WebRtcConfiguration::Validate() const {
 internal::PathMtuOptions BuildPathMtuOptions(
     const WebRtcConfiguration& configuration) {
   internal::PathMtuOptions options;
-  // The configured MTU is the *floor* once discovery is on: a caller that pinned
-  // a value knows something about the path, and the search should start from that
-  // knowledge rather than throw it away and re-derive 1280.
+  // The configured MTU is the *floor* once discovery is on: a caller that
+  // pinned a value knows something about the path, and the search should start
+  // from that knowledge rather than throw it away and re-derive 1280.
   options.base_mtu =
       std::max(configuration.mtu.value_or(kWebRtcBaseMtu), kWebRtcBaseMtu);
   options.min_mtu = kWebRtcMinMtu;
@@ -631,8 +615,8 @@ WebRtcWireStream::CreateClient(
       context->multiplex = multiplex_for_probing;
     }
     // Each side discovers its own *send* direction: an MTU bounds what a sender
-    // emits, so both ends search independently and neither needs the other to do
-    // anything but be a conforming SCTP peer.
+    // emits, so both ends search independently and neither needs the other to
+    // do anything but be a conforming SCTP peer.
     if (configuration.path_mtu_discovery) {
       (*stream)->StartPathMtuDiscovery(configuration, multiplex_for_probing);
     }
@@ -696,10 +680,7 @@ absl::Status WebRtcWireStream::SetPathMtu(size_t mtu) {
         "Setting the WebRTC path MTU raised a non-standard exception");
   }
   if (!applied) {
-    // No association yet, or usrsctp refused. Deliberately not an error about
-    // the *path*: a caller searching for a working MTU must be able to tell
-    // "the stack would not take this" from "the path dropped this", and only
-    // the second is evidence about the network.
+    // No association yet, or usrsctp refused.
     return absl::FailedPreconditionError(
         absl::StrCat("WebRTC association would not accept a path MTU of ", mtu,
                      " (not connected yet, or out of range)"));
@@ -727,11 +708,8 @@ void WebRtcWireStream::StartPathMtuDiscovery(
   const std::shared_ptr<rtc::PeerConnection> connection = connection_;
   const auto next_probe_id = std::make_shared<std::atomic<std::uint32_t>>(1);
   internal::PathMtuProber prober{
-      // Only ever called with a size a probe has *confirmed*, so this applies the
-      // association MTU for real -- fragmentation and all. Probing itself changes
-      // nothing: the probe packet carries its own ceiling for the instant it is
-      // emitted (see the usrsctp patch), so application traffic never sees a size
-      // the path has not acknowledged and there is nothing to hold back.
+      // Only ever called with a size a probe has *confirmed*, so this applies
+      // the association MTU for real -- fragmentation and all.
       .apply = [connection](size_t mtu) -> absl::Status {
         bool ok = false;
         try {
@@ -746,15 +724,7 @@ void WebRtcWireStream::StartPathMtuDiscovery(
       .probe_burst = [connection, next_probe_id](
                          size_t payload, int count,
                          absl::Time deadline) -> std::optional<int> {
-        // `payload` is the chunk space the search wants on the wire. A padded
-        // HEARTBEAT of that size is the probe: any conforming peer answers it,
-        // and the stack needs no MTU change to send one, so nothing about the
-        // stream is disturbed.
-        //
-        // Sent back to back without waiting for each answer, so the burst is in
-        // flight together. That is the point: probes that wait for each other
-        // are each isolated, and a size that survives only in isolation is
-        // exactly the false positive this has to reject.
+        // `payload` is the chunk space the search wants on the wire.
         const std::uint32_t before = connection->pathMtuProbeAckCount();
         std::uint32_t last = 0;
         int sent = 0;
@@ -777,9 +747,7 @@ void WebRtcWireStream::StartPathMtuDiscovery(
           return std::nullopt;  // No association yet: no evidence.
         }
         // Polled: the acknowledgement is consumed by SCTP itself, so there is
-        // nothing to wait on. Requiring the *last* id as well as the count is
-        // what stops a late answer from an earlier burst standing in for a
-        // probe of this one.
+        // nothing to wait on.
         while (absl::Now() < deadline) {
           const std::uint32_t acked = connection->pathMtuProbeAckCount();
           if ((acked - before >= static_cast<std::uint32_t>(sent)) &&
@@ -802,10 +770,9 @@ void WebRtcWireStream::StartPathMtuDiscovery(
     }
     discovery_ = discovery;
   }
-  // The safety net for a size that was confirmed and later stops working -- a path
-  // that changed, or a burst of probes that was luckier than a stream of data. A run
-  // of send failures drops the association back to the base MTU and re-searches;
-  // without this the search has fall-back logic that nothing ever triggers.
+  // The safety net for a size that was confirmed and later stops working -- a
+  // path that changed, or a burst of probes that was luckier than a stream of
+  // data.
   if (stream_data != nullptr) {
     std::weak_ptr<internal::PathMtuDiscovery> weak = discovery;
     stream_data->SetSendOutcomeObserver([weak](bool succeeded) {

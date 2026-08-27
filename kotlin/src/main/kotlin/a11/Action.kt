@@ -3,7 +3,9 @@ package a11
 import a11.net.WireStream
 import kotlinx.coroutines.launch
 
-/** Asynchronous application work invoked by [Action.run]; null result means OK. */
+/**
+ * Asynchronous application work invoked by [Action.run]; null result means OK.
+ */
 typealias ActionHandler = suspend (Action) -> Status?
 
 /** Synchronous hook run when cancellation is first requested. */
@@ -147,19 +149,21 @@ class Action private constructor(
      * Log [value] on the reserved [ACTION_LOG_OUTPUT] port.
      *
      * The value becomes a chunk the way `node.put(value)` would make one -- a
-     * `String` is `text/plain`, a `ByteArray` is `application/octet-stream` -- and
+     * `String` is `text/plain`, a
+     * `ByteArray` is `application/octet-stream` -- and
      * the chunk always carries a timestamp.
      *
-     * Only a running handler may log: logging before `run`, or on the calling side
-     * of a `call`, is a failed precondition, because the port would have nowhere
-     * to go and no reader to close it. Nothing else about logging fails the action
+     * Only a running handler may log: logging before `run`, or on the calling
+     * side of a `call`, is a failed precondition, because the port would have
+     * nowhere to go and no reader to close it. Nothing else about logging fails
+     * the action
      * -- once the chunk is built, a transport or lifecycle problem is reported
      * through the sink rather than returned.
      *
      * Where it goes: always to the process's action log sink, and additionally
-     * onto the log port when something could read it -- a peer is attached, or a
-     * local consumer claimed the port with [getLogNode]. Nobody has to drain it
-     * and nobody has to close it.
+     * onto the log port when something could read it -- a peer is attached, or
+     * a local consumer claimed the port with [getLogNode]. Nobody has to drain
+     * it and nobody has to close it.
      */
     suspend fun log(value: Any?, options: LogOptions = LogOptions()): Status {
         val chunk: Chunk
@@ -177,16 +181,17 @@ class Action private constructor(
     /**
      * Log a formatted line: `%s` is replaced by each argument in turn.
      *
-     * Uses positional `%s` replacements and `%%` for literal percent signs across
-     * language runtimes.
+     * Uses positional `%s` replacements and `%%` for literal percent signs
+     * across language runtimes.
      */
     suspend fun logf(format: String, vararg args: Any?): Status = logfWith(LogOptions(), format, *args)
 
     /**
      * Log a formatted line with explicit options.
      *
-     * A second name rather than an overload, so it matches the C++ surface, where
-     * a leading-options overload of `Logf` is ambiguous against the format spec.
+     * A second name rather than an overload, so it matches the C++ surface,
+     * where a leading-options overload of `Logf` is ambiguous against the
+     * format spec.
      */
     suspend fun logfWith(options: LogOptions, format: String, vararg args: Any?): Status {
         val filled = StringBuilder()
@@ -215,17 +220,21 @@ class Action private constructor(
      *
      * Claiming suppresses the process sink for this action, so a consumer that
      * presents the logs itself does not also have them reported twice. Claim
-     * before the action runs: logs written earlier have already gone to the sink.
+     * before the action runs: logs written earlier have already gone to the
+     * sink.
      *
-     * The stream is not bound: on the calling side, binding an output would echo
-     * received fragments back to the peer.
+     * The stream is not bound: on the calling side, binding an output would
+     * echo received fragments back to the peer.
      */
     suspend fun getLogNode(): StatusOr<AsyncNode> {
         logClaimed = true
         return getOutput(ACTION_LOG_OUTPUT, bindStream = false)
     }
 
-    /** Apply [options] to [chunk], report it, and write it where anything reads. */
+    /**
+     * Apply [options] to [chunk], report
+     * it, and write it where anything reads.
+     */
     private suspend fun writeLog(chunk: Chunk, options: LogOptions): Status {
         val level = parseLogLevel(options.level)
             ?: return invalidArgument(
@@ -241,8 +250,8 @@ class Action private constructor(
             return invalidArgument("Cannot log a status chunk; log its message instead.")
         }
         metadata.timestampMillis = System.currentTimeMillis()
-        // The caller's map first, then the named options, so an explicit level wins
-        // over a "level" the same caller also put in the map.
+        // The caller's map first, then the named options, so an explicit level
+        // wins over a "level" the same caller also put in the map.
         options.metadata?.forEach { (key, value) -> metadata.attributes[key] = value }
         metadata.attributes[LOG_LEVEL_ATTRIBUTE] = level.toByteArray()
         metadata.attributes[LOG_INTERNAL_ATTRIBUTE] =
@@ -253,14 +262,15 @@ class Action private constructor(
         chunk.metadata = metadata
 
         if (!logClaimed) reportLog(logRecordFromChunk(chunk, schema.name, id))
-        // Nothing reads a local log port nobody claimed, so materialising it would
-        // buffer every line of a narrating action for the length of the run and then
-        // throw them away. A peer is always a reader: it is mirroring the node.
+        // Nothing reads a local log port nobody claimed, so materialising it
+        // would buffer every line of a narrating action for the length of the
+        // run and then throw them away. A peer is always a reader: it is
+        // mirroring the node.
         val readable = logClaimed || stream != null || session != null
         if (!readable || finishing) return Status.ok()
 
-        // From here on nothing is returned to the handler: a log that could not be
-        // written is a fault in the logging, not in the action.
+        // From here on nothing is returned to the handler: a log that could not
+        // be written is a fault in the logging, not in the action.
         val node = getOutput(ACTION_LOG_OUTPUT, bindStream = stream != null).orElse { return Status.ok() }
         node.putChunk(chunk)
         return Status.ok()
@@ -343,7 +353,10 @@ class Action private constructor(
         return Ok(this)
     }
 
-    /** Queue this action for remote dispatch; use [waitForDispatch] for acceptance. */
+    /**
+     * Queue this action for remote dispatch;
+     * use [waitForDispatch] for acceptance.
+     */
     suspend fun call(wireHeaders: ByteMap = ByteMap()): StatusOr<Action> {
         begin(ActionMode.CALL).let { if (!it.isOk) return it }
         trackInSession().let { if (!it.isOk) { mode = ActionMode.NONE; return it } }
@@ -523,8 +536,8 @@ class Action private constructor(
     }
 
     private suspend fun finishOutputNodes(status: Status): Status {
-        // The log port is closed with the ordinary outputs -- that is what makes it
-        // something a handler never closes and a reader never waits forever on.
+        // Close the log port with ordinary outputs. Handlers do not close this
+        // reserved port themselves.
         val ids = (schema.outputs.keys + ACTION_LOG_OUTPUT).mapNotNull { outputIds[it] }
         var first: Status = Status.ok()
         val s = stream
@@ -613,7 +626,9 @@ class Action private constructor(
             return Ok(Action(schema, options, id))
         }
 
-        /** Derive the stable `action-id#port-name` id for one action port node. */
+        /**
+         * Derive the stable `action-id#port-name` id for one action port node.
+         */
         fun makeNodeId(actionId: String, nodeName: String): StatusOr<String> {
             validateName(actionId).let { if (!it.isOk) return it }
             validateName(nodeName).let { if (!it.isOk) return it }

@@ -69,7 +69,9 @@ class ActionRegistry;
 /** @brief Default cap on concurrently running nested actions. */
 inline constexpr size_t kDefaultMaxConcurrentNestedActions = 64;
 
-/** @brief Asynchronous action handler: runs the action, returns an awaitable. */
+/**
+ * @brief Asynchronous action handler: runs the action, returns an awaitable.
+ */
 using ActionHandler = std::function<a11::Task(std::shared_ptr<Action>)>;
 /** @brief Synchronous action handler returning a completion status. */
 using SyncActionHandler = std::function<absl::Status(std::shared_ptr<Action>)>;
@@ -138,7 +140,9 @@ class Action : public std::enable_shared_from_this<Action> {
       size_t max_concurrent_nested_actions =
           kDefaultMaxConcurrentNestedActions);
 
-  /** @brief Derives the node id for port @p node_name of action @p action_id. */
+  /**
+   * @brief Derives the node id for port @p node_name of action @p action_id.
+   */
   static absl::StatusOr<std::string> MakeNodeId(std::string_view action_id,
                                                 std::string_view node_name);
 
@@ -291,7 +295,9 @@ class Action : public std::enable_shared_from_this<Action> {
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetLogNode();
 
-  /** @brief Returns the wire ::a11::data::ActionMessage describing this action. */
+  /**
+   * @brief Returns the wire ::a11::data::ActionMessage describing this action.
+   */
   [[nodiscard]] data::ActionMessage GetActionMessage() const;
   /** @brief Binds this action's ports to the nodes named in @p message. */
   absl::Status MapPortsFromMessage(const data::ActionMessage& message);
@@ -426,7 +432,9 @@ class Action : public std::enable_shared_from_this<Action> {
   [[nodiscard]] bool Cancelled() const;
   /** @brief The action's completion status (OK while still running). */
   [[nodiscard]] absl::Status GetStatus() const;
-  /** @brief The remote dispatch status, or nullopt when not (yet) dispatched. */
+  /**
+   * @brief The remote dispatch status, or nullopt when not (yet) dispatched.
+   */
   [[nodiscard]] std::optional<absl::Status> GetDispatchStatus() const;
 
  private:
@@ -462,7 +470,8 @@ class Action : public std::enable_shared_from_this<Action> {
       const std::shared_ptr<Action>& self);
   absl::Status FinishOutputNodes(const absl::Status& status);
   // Applies an already-finished Action's terminal state to an output node that
-  // is only being materialised now, so a late reader sees the end of the stream.
+  // is only being materialised now, so a late reader sees the end of the
+  // stream.
   static absl::Status CloseUnwrittenOutput(
       const std::shared_ptr<nodes::AsyncNode>& node,
       const absl::Status& status);
@@ -485,11 +494,7 @@ class Action : public std::enable_shared_from_this<Action> {
   void SetDispatchStatus(absl::Status status);
   void SetCompletionStatus(const absl::Status& status);
 
-  // Tracing hooks (a11::obs). StartActionSpan opens this action's span after a
-  // successful Begin(); it fails (so the action fails) when the reserved OTel
-  // headers are present but inconsistent, and is a no-op when none are present.
-  // EndActionSpan closes it with the final status. MakeChildSpan lets a child
-  // action open a span parented to this (parent) action's live span.
+  // Tracing hooks (a11::obs).
   absl::Status StartActionSpan(Mode mode);
   void EndActionSpan(const absl::Status& status);
   obs::Span MakeChildSpan(std::string_view name, obs::SpanKind kind);

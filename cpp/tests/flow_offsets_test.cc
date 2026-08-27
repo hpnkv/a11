@@ -12,10 +12,11 @@
 namespace a11::flow {
 namespace {
 
-/// A flow with a character outside ASCII in it, which is the whole point.
+/// A flow containing a non-ASCII character for offset conversion tests.
 ///
 /// `§` is two bytes of UTF-8 and one UTF-16 unit; the emoji is four bytes and
-/// *two* UTF-16 units, so a conversion that merely counted code points would get
+/// *two* UTF-16 units, so a conversion that merely counted code points would
+/// get
 /// the second one wrong and pass on the first.
 constexpr std::string_view kSource =
     "flow marked {\n"
@@ -87,7 +88,8 @@ TEST(FlowOffsets, TheServiceAnswersInTheBasisTheClientAskedFor) {
   const TextIndex index{std::string(kSource)};
   bool differed = false;
   for (size_t at = 0; at < left.size(); ++at) {
-    // The same tokens, said in two arithmetics: the answer is a rebasing and not
+    // The same tokens, said in two arithmetics: the answer is a rebasing and
+    // not
     // a different classification.
     EXPECT_EQ(left[at].at("kind"), right[at].at("kind"));
     const auto from = left[at].at("start").get<size_t>();
@@ -124,8 +126,7 @@ TEST(FlowOffsets, ABasisTheServiceDoesNotSpeakIsSaidSoRatherThanGuessed) {
 
 TEST(FlowOffsets, ACaretIntoAProposalIsNotADocumentOffset) {
   // `caret` counts into the text the proposal inserts. Rebasing it against the
-  // document would be meaningless, so it is one of the two fields the rule
-  // deliberately leaves alone.
+  // document would be invalid, so the conversion rule leaves it unchanged.
   nlohmann::json answer{{"caret", 4}, {"start", 4}};
   const TextIndex index{std::string(kSource)};
   const size_t moved = index.Utf16Of(4);

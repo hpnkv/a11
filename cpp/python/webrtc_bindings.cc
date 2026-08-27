@@ -540,16 +540,12 @@ void BindWebRtc(py::module_& module) {
       .def_readwrite(
           "path_mtu_discovery", &net::WebRtcConfiguration::path_mtu_discovery,
           "Whether to discover the path MTU by probing instead of holding "
-          "`mtu`. On by default, and worth turning off deliberately: discovery "
-          "raises the association MTU once a burst of padded SCTP heartbeats "
-          "is acknowledged, and a burst of probes can be luckier than a stream "
-          "of data. When it is, packets at the raised size are dropped in "
-          "flight -- which produces no local send error, so the association "
-          "sits wedged until the black-hole detector notices and falls back. "
-          "Set False to pin the MTU to `mtu`, which is what a peer on a path "
-          "it cannot characterise (a TURN relay, anything across the "
-          "internet) should do; it costs throughput and buys the absence of "
-          "that stall.")
+          "`mtu`. Enabled by default. Discovery raises the association MTU "
+          "after padded SCTP heartbeat probes succeed. If larger data packets "
+          "are then dropped, the association waits for black-hole detection "
+          "before falling back. Set False to pin the MTU for paths that cannot "
+          "be characterised reliably, including TURN relays and internet "
+          "peers.")
       .def_readwrite(
           "max_discovered_mtu", &net::WebRtcConfiguration::max_discovered_mtu,
           "Ceiling the search may raise the MTU to, in bytes. Defaults to "
@@ -911,10 +907,7 @@ void BindWebRtc(py::module_& module) {
             options.on_message =
                 [callback](net::SignallingMessage* absl_nonnull message) {
                   // The pointer is handed over as a pointer and converted
-                  // inside Call, which is where the GIL is held. Converting
-                  // here would build a Python object without it. pybind wraps
-                  // a raw pointer as a non-owning reference, so a hook that
-                  // rewrites a field rewrites the message that gets routed.
+                  // inside Call, which is where the GIL is held.
                   return callback->Call(message);
                 };
           },

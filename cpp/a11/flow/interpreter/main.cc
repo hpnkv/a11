@@ -34,7 +34,7 @@
  * one that reads a file will find `read_file` -- inside whatever roots this run
  * allows, which is the working directory unless told otherwise.
  *
- * ### What it deliberately does not do
+ * ### Policy limits
  *
  * There is no way to widen the policy from inside the file. `--allow-write`,
  * `--root`, `--allow-run` and `--allow-net` are arguments to *this* program,
@@ -106,8 +106,8 @@ file:
   --allow-net        Let it reach the network. Loopback, private and link-local
                      addresses stay refused unless --allow-local-net.
   --allow-local-net  Also allow loopback, private and link-local addresses.
-                     Say this deliberately: 169.254.169.254 is a cloud
-                     instance's credentials.
+                     This includes 169.254.169.254, which may expose cloud
+                     instance credentials.
   --allow-env <NAME> Let it read that environment variable. Repeatable.
   --unrestricted     No filesystem sandbox at all. For a file you wrote.
   --timeout <dur>    Give up after this long: 30s, 1m30s, 500ms.

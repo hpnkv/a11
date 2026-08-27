@@ -252,8 +252,8 @@ class A11FlowLexer(RegexLexer):
         ],
         "string": [
             # `"""..."""` first, so three quotes are not read as
-            # an empty string and a quote. A line break inside one is content,
-            # which is the whole point of it.
+            # an empty string followed by a quote. Block strings may contain
+            # line breaks.
             (r'"""', String, "block-string"),
             (r'"', String, "quoted-string"),
         ],

@@ -73,8 +73,6 @@ struct TypeTag {};
 
 // The runtime's own types answer the same customization point every other
 // serializable type does, with the canonical tags from a11/data/serial_tags.h.
-// One spelling per type, shared with Python, TypeScript and Kotlin, so a Chunk
-// written by C++ reads back as `a11.Chunk` everywhere.
 inline std::string_view A11SerialTag(TypeTag<ChunkMetadata>) {
   return kChunkMetadataTag;
 }
@@ -106,10 +104,6 @@ inline std::string_view A11SerialTag(TypeTag<WireMessage>) {
 namespace serializable_internal {
 
 // Unqualified calls so ADL locates the customization points in T's namespace.
-// The overloads above are the only same-named functions in a11::data, and a
-// namespace-scope function found by ordinary lookup does not suppress ADL --
-// the two overload sets merge -- so a type declaring its tag in its own
-// namespace is still found.
 
 template <typename T>
 concept HasSerialTag = requires {

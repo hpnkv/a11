@@ -1,27 +1,26 @@
-"""Give A11's native code a faster allocator inside a Python process.
+"""Use mimalloc for A11's native code in a Python process.
 
-Replacing the C library's ``malloc`` is worth about +25% throughput to A11's
-native server, measured, for no change to A11's own code; see
-``bench/PERF_PLAN.md``.
+Benchmarks show about 25% higher native-server throughput than the C library's
+``malloc``; see ``bench/PERF_PLAN.md``.
 The native executables get it by linking mimalloc directly. The Python extension
-cannot, and the reason is worth stating plainly rather than hiding:
+cannot replace the allocator after the interpreter starts:
 
 ``_native`` is a shared object that an interpreter ``dlopen``\\ s *after* that
 interpreter has already allocated memory through the C library. A module that
-replaced ``free`` for the whole process at that point would, sooner or later, be
-handed a pointer that libc allocated before it arrived. So A11 does not do that
-to your process.
+replaced ``free`` for the whole process at that point could receive a pointer
+allocated earlier by libc. A11 therefore does not replace the allocator from an
+imported extension.
 
 Replacing the allocator *before* the process starts allocating has none of that
 problem, and is what this module is for. It is a property of how the process was
 launched, which is why it cannot be switched on from inside one.
 
-What happens automatically
---------------------------
+Automatic setup
+---------------
 
 The ``a11`` command re-executes itself once with the allocator preloaded, so
-anything run through the CLI -- the gateway above all -- gets the full effect
-with no action from you. :func:`is_active` reports whether it worked.
+commands run through the CLI use mimalloc without additional configuration.
+:func:`is_active` reports whether it is active.
 
 What you must do yourself
 -------------------------
@@ -48,8 +47,8 @@ Or let this module build the environment for you when spawning a worker::
         env=a11.allocator.environ_with_preload(),
     )
 
-Caveats worth knowing before you measure
-----------------------------------------
+Measurement considerations
+--------------------------
 
 * On macOS, System Integrity Protection strips ``DYLD_INSERT_LIBRARIES`` from
   signed interpreters. A Homebrew or ``uv``-managed Python usually keeps it; the
@@ -126,11 +125,9 @@ def library_path() -> Path | None:
 def is_active() -> bool:
     """Whether a mimalloc is actually loaded into *this* process.
 
-    The honest check, and the one to trust over any environment variable: it
-    asks the dynamic loader whether a mimalloc symbol resolves. That is false
-    when a preload was requested but silently dropped -- most often by macOS
-    System Integrity Protection -- which is exactly the case an environment
-    variable cannot distinguish.
+    Queries the dynamic loader for a mimalloc symbol instead of relying on an
+    environment variable. This returns false when a requested preload was
+    ignored, including under macOS System Integrity Protection.
     """
     try:
         process = ctypes.CDLL(None)

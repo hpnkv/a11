@@ -58,7 +58,7 @@ TEST(WorkQueueTest, MovesMoveOnlyPayloadsExactlyOnce) {
 }
 
 TEST(WorkQueueTest, LosesNothingUnderConcurrentPushersAndPoppers) {
-  // Deliberately smaller than the traffic, so the ring is full for much of the
+  // Smaller than the traffic so the ring is full for much of the
   // run and both paths are exercised together.
   internal::WorkQueue<int, 64> queue;
   constexpr int kPushers = 4;
@@ -345,19 +345,7 @@ TEST(ThreadFiberTest, JoinedAndDetachedFibersReleaseCapturedState) {
   EXPECT_EQ(Select({finished.OnEvent()}), 0);
   // Two things have to happen after the work returns and they happen in order:
   // the closure is destroyed, releasing the capture, and then the Fiber itself
-  // is reaped by whichever pool worker next comes round (see
-  // thread::ReapWhenFinished). So both need the same bounded wait -- waiting for
-  // only the first and then asserting on the second immediately is a race the
-  // pool never promised to win.
-  //
-  // It is not a theoretical race. Running the *unmodified* pool with
-  // `A11_POOL_ALWAYS_WAKE=1` fails the old form of this assertion 40 times out of
-  // 40, against 0/40 without it, because waking an extra worker changes which
-  // worker gets to the reap first. Anything that perturbs the wake economy --
-  // which is a tuning parameter, not a correctness property -- could fail a test
-  // whose subject is reclamation *latency*. 10 ms is the latency this is
-  // entitled to assert, and it is what PendingReapCount()'s throttle is designed
-  // around; the ordering within that window is not.
+  // is reaped by whichever pool worker next comes round (see.
   for (int attempt = 0; attempt < 100 && !detached_capture.expired();
        ++attempt) {
     thread::SleepFor(absl::Microseconds(100));
@@ -373,13 +361,7 @@ TEST(ThreadFiberTest, JoinedAndDetachedFibersReleaseCapturedState) {
 
 TEST(ThreadFiberTest, PlaceholderFibersRetireCleanlyOnThreadExit) {
   // A thread that touches the fiber API without being a fiber gets a per-thread
-  // placeholder from Fiber::Current(). It must be retired when the OS thread
-  // exits -- from a thread_local destructor, while the thread's TLS is being
-  // torn down -- without re-entering the fiber scheduler (which would read
-  // Boost's thread_local active-context through freed TLS). Spawning many such
-  // threads exercises that teardown; a clean live-fiber count afterwards proves
-  // each placeholder was constructed and destroyed rather than leaked or
-  // crashing the thread on exit.
+  // placeholder from Fiber::Current().
   (void)Fiber::Current();
   const size_t baseline = internal::LiveFiberCountForTesting();
   const size_t before_created = internal::CreatedFiberCountForTesting();
@@ -471,11 +453,7 @@ TEST(ThreadExecutorTest, StacklessCallbacksAndTimersDoNotAllocateFibers) {
 }
 
 // Each of these timers is registered while the pool is parked for a later one,
-// so each has to shorten somebody's park to run on time. Note that this cannot
-// distinguish a pool that arranges that deliberately from one that gets away
-// with it: a park is capped even with nothing to wake for, and the waiting in
-// this test wakes workers of its own accord. It is a guard on the deadlines
-// themselves, not on how few threads were woken to meet them.
+// so each has to shorten somebody's park to run on time.
 TEST(ThreadExecutorTest, TimersRegisteredInDecreasingOrderRunOnTime) {
   // Let the pool go quiet, so that its workers are parked rather than looking
   // for work when the timers below are registered.

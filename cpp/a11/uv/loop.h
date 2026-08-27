@@ -113,7 +113,7 @@ class UvExecutor {
   ///
   /// libuv writes with `write`/`writev`, and on a socket whose peer has gone
   /// that raises SIGPIPE -- whose default disposition terminates the process.
-  /// libuv deliberately leaves this to the application (macOS escapes it
+  /// libuv leaves this to the application (macOS escapes it
   /// because libuv sets SO_NOSIGPIPE there, which Linux has no equivalent of),
   /// so A11 has to say it: every C++ program using these transports would
   /// otherwise die the first time a peer half-closed mid-write. It is not
@@ -124,10 +124,9 @@ class UvExecutor {
   /// this constructor's business.
   static void IgnoreSigPipeIfDefaulted() {
 #if !defined(_WIN32)
-    // Unqualified calls on purpose: `struct sigaction` and the function of
-    // the same name both live in the global namespace, and `::sigaction(...)`
-    // parses as a functional cast to the struct. The declaration of the
-    // function hides the class name, so the plain call finds the function.
+    // Unqualified calls on purpose: `struct sigaction` and the function of the
+    // same name both live in the global namespace, and `::sigaction(...)`
+    // parses as a functional cast to the struct.
     struct sigaction current{};
     if (sigaction(SIGPIPE, nullptr, &current) != 0) {
       return;
@@ -383,10 +382,9 @@ class UvExecutor {
  * @brief Run @p operation on the loop thread and wait for its result.
  *
  * @param operation Work to execute on the loop thread.
- * @param order_key  See UvExecutor::Post. **Pass the connection whenever the
- *   operation touches one**, or its awaited work can be reordered ahead of writes
- *   posted for the same socket. `HttpTransport::RunOnUvForConnection` supplies it
- *   automatically and is what connection code should call.
+ * @param order_key See UvExecutor::Post. Pass the connection whenever the
+ *   operation touches one, preserving its order with socket writes.
+ *   HttpTransport::RunOnUvForConnection supplies it automatically.
  */
 template <typename T>
 absl::StatusOr<T> RunOnUv(std::function<absl::StatusOr<T>()> operation,

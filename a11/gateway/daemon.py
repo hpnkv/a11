@@ -7,11 +7,9 @@ to put its state so a later `a11 gateway status` can find it, somewhere to put
 its output so `a11 gateway logs` can show it, and a way to be stopped that the
 process actually honours.
 
-The state is a small JSON file next to a log file, not a process registry: the
-gateway is a single-instance user daemon, and a file that can be read by `cat`
-and deleted by hand is easier to reason about than anything cleverer. Liveness is
-`kill(pid, 0)` plus, when it matters, the same ``__ping`` a client probes with --
-a pid that has been recycled by an unrelated process must not read as a running
+The single-instance gateway stores state in a small JSON file beside its log.
+Liveness uses `kill(pid, 0)` and, when required, the same ``__ping`` probe as a
+client. A pid recycled by an unrelated process must not be reported as a running
 gateway.
 """
 
@@ -143,12 +141,10 @@ def write_state(config: GatewayConfig, urls: Sequence[str]) -> None:
 
 
 def clear_state() -> None:
-    """Remove the state file, unless it describes a *live* gateway that is not us.
+    """Remove state unless it describes a live gateway that is not us.
 
-    The distinction matters both ways. Deleting a running gateway's record would
-    make it unmanageable, so a live foreign pid is left alone; but a record whose
-    process is gone is precisely what wants clearing, and refusing that would
-    leave a stale file reporting a gateway forever.
+    A live foreign pid is left alone so its gateway remains manageable. A record
+    whose process is gone is stale and can be cleared.
     """
     state = _read_state()
     if state is not None:
@@ -199,10 +195,9 @@ def status() -> GatewayStatus:
 async def probed_status() -> GatewayStatus:
     """`status`, plus a ``__ping`` round trip to the recorded endpoint.
 
-    A pid that is alive proves only that *something* is; a gateway that has
-    wedged, or a pid the OS handed to an unrelated process, both read as running
-    without this. Must be awaited on the caller's loop -- a nested `asyncio.run`
-    is a RuntimeError, and the CLI already runs inside one.
+    A live pid alone cannot distinguish a responsive gateway from a wedged or
+    unrelated process. Await this on the caller's loop because the CLI already
+    runs inside one and cannot use a nested ``asyncio.run``.
     """
     resolved = status()
     if not resolved.running:
@@ -257,14 +252,14 @@ def spawn(argv_extra: Sequence[str] = ()) -> GatewayStatus:
 
     directory = runtime_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    # Removed first, so waiting for it to appear cannot observe a previous run's.
+    # Removed first, so waiting for it to appear cannot observe a previous
+    # run's.
     with contextlib.suppress(OSError):
         state_file().unlink()
 
     command = [sys.executable, "-m", "a11.cli", "gateway", "run", *argv_extra]
-    # Unbuffered: the child's stderr is a file, not a terminal, so without this
-    # its output sits in a block buffer and `a11 gateway logs` shows nothing
-    # until the process exits -- which is exactly when it is least useful.
+    # Keep redirected stderr unbuffered so `a11 gateway logs` receives output
+    # while the child is running.
     child_env = dict(os.environ, PYTHONUNBUFFERED="1")
     with log_file().open("ab") as log:
         child = subprocess.Popen(
@@ -299,9 +294,8 @@ def spawn(argv_extra: Sequence[str] = ()) -> GatewayStatus:
 def stop(*, timeout: float = STOP_TIMEOUT_SECONDS) -> GatewayStatus:
     """Stop a detached gateway, escalating to SIGKILL if it will not go.
 
-    ``SIGTERM`` first, which the gateway handles as a clean shutdown -- and must,
-    because the native runtime installs Abseil's failure-signal handler that
-    would otherwise treat it as a crash (see ``_stop_on_signals``).
+    ``SIGTERM`` is a clean shutdown because ``_stop_on_signals`` handles it
+    before the native runtime's Abseil failure-signal handler.
 
     Returns:
         The status before stopping, so a caller can report what it stopped.

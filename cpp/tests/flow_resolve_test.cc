@@ -456,7 +456,8 @@ TEST(FlowResolve, ARaceIsAValueAndWaitingForEveryoneIsNot) {
 }
 
 TEST(FlowResolve, ALogStageChangesNothingAboutTheStream) {
-  // A log is a pass-through, so what the pipeline was carrying it still carries:
+  // A log is a pass-through, so what the pipeline was carrying it still
+  // carries:
   // the shape survives, and so does the proof that there is one value.
   const ResolveResult result = Check(
       "struct Hit {\n  url: string\n}\n\n"
@@ -477,10 +478,7 @@ TEST(FlowResolve, ItInALogStageIsTheValueInHand) {
 }
 
 TEST(FlowResolve, ADiscardIsADestinationAndNothingElse) {
-  // `-> _` is the whole of what `_` may say. It is not a name, so there is
-  // nowhere to bind it and nothing to read back out of it -- and each wrong
-  // position gets a message about the discard rather than about a name nothing
-  // declared, because `_` is a word of the grammar and not an identifier.
+  // `-> _` is the whole of what `_` may say.
   const auto codes = [](std::string_view body) {
     return Codes(Check(absl::StrCat("flow f {\n  in a: string stream\n",
                                     "  out b: string stream\n", body, "}\n")));
@@ -518,9 +516,6 @@ TEST(FlowResolve, ADiscardIsADestinationAndNothingElse) {
 }
 
 TEST(FlowResolve, ARepeatSaysWhenItStops) {
-  // The cap used to be 16 by default, so a `repeat` whose condition never held
-  // did sixteen passes and reported *success*. There is no default now, which
-  // makes a loop with nothing to end it something to say out loud.
   EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
                         "  repeat n = 0 {\n    a -> b\n  }\n}\n")),
             (std::vector<std::string>{"flow.form.unbounded-repeat"}));
@@ -577,8 +572,8 @@ bool Unary(const ResolvedFlow& flow, std::string_view label) {
 
 TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   // What a value read is allowed to *consume*. A claim, so the interesting half
-  // is what is not claimed: a node the flow writes from anywhere, and a port that
-  // said `stream`, are streams however they are used.
+  // is what is not claimed: a node the flow writes from anywhere, and a port
+  // that said `stream`, are streams however they are used.
   const ResolveResult result =
       Resolve(kShapes, Parse(kShapes), /*build_graph=*/true);
   ASSERT_TRUE(result.diagnostics.empty()) << absl::StrJoin(Codes(result), ", ");
@@ -625,9 +620,7 @@ TEST(FlowResolve, AdvanceOnlyMovesAValueALetBound) {
 TEST(FlowResolve, AdvanceOfAnOuterNameInALoopIsRefused) {
   // `advance` moves by an offset fixed while the file is compiled, and a loop
   // body is resolved once -- so advancing a name bound outside the loop bound
-  // the *same* value on every pass, silently. Four passes over `a b c d e` gave
-  // `a` four times and reported nothing, which is the worst way for this to
-  // behave, so it is now an error that names `for` as the thing to write.
+  // the *same* value on every pass, silently.
   EXPECT_EQ(Codes(Check("flow f {\n  in q: string stream required\n"
                         "  out o: string stream\n  let w = q\n"
                         "  repeat n = 0 max 4 {\n    w -> o\n"
@@ -653,10 +646,7 @@ TEST(FlowResolve, AdvanceOfAnOuterNameInALoopIsRefused) {
 
 TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
   // The trap in binding a loop: `ResolveAfter` makes `kWait` steps of its own,
-  // and `ResolveBind` names a statement's *first* step. Resolve the `after`
-  // before the loop's own `NewStep` and `done` silently becomes one of those
-  // waits -- the flow still compiles, and `after done` then waits for the wrong
-  // thing. So this asserts on the *kind* of the step the name got.
+  // and `ResolveBind` names a statement's *first* step.
   const std::string source =
       "flow f {\n  in w: string stream\n  out o: string stream\n"
       "  taken = node()\n  first = run t()\n"
@@ -773,8 +763,8 @@ TEST(FlowResolve, ALetMayTakeAValueApart) {
                         "  advance name\n}\n")),
             (std::vector<std::string>{"flow.name.not-advanceable"}));
   // A part taking a name something else already has is still a clash, and so is
-  // one taking a name from the same `let`: two parts called the same thing would
-  // define one and shadow it with the other.
+  // one taking a name from the same `let`: two parts called the same thing
+  // would define one and shadow it with the other.
   EXPECT_EQ(Codes(Check("flow f {\n  in u: json stream required\n"
                         "  out o: string\n  let age, age = u\n"
                         "  strformat(\"%s\", age) -> o\n}\n")),
@@ -788,9 +778,9 @@ TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
       "  in  lines: string stream required\n  in  loose: json required\n"
       "  out o:     string stream\n";
 
-  // A port declared with a struct, a value a literal pattern made, and `it` in a
-  // stage after a `match`: three ways the file said what a value holds, and one
-  // check for all of them.
+  // A port declared with a struct, a value a literal pattern made, and `it` in
+  // a stage after a `match`: three ways the file said what a value holds, and
+  // one check for all of them.
   EXPECT_EQ(Codes(Check(absl::StrCat(
                 kHead, "  strformat(\"%s\", src.urll) -> o\n}\n"))),
             (std::vector<std::string>{"flow.form.unknown-field"}));
@@ -813,8 +803,8 @@ TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
           .empty());
 
   // And where the file never said, nothing is checked: a `json` port may hold
-  // anything, and `it` with no pattern behind it is anybody's guess. A check that
-  // cried wolf here would be worse than no check.
+  // anything, and `it` with no pattern behind it is anybody's guess. A check
+  // that cried wolf here would be worse than no check.
   EXPECT_TRUE(
       Codes(Check(absl::StrCat(kHead,
                                "  strformat(\"%s\", loose.anything) -> o\n"
@@ -845,7 +835,8 @@ TEST(FlowResolve, FindsNothingWrongWithAnyFlowThisRepositoryShips) {
 }
 
 TEST(FlowResolve, CountsWhatReadsAndWritesEachName) {
-  // What the inspector is built on: the resolver walks every reference, so it is
+  // What the inspector is built on: the resolver walks every reference, so it
+  // is
   // the pass that knows what nothing ever read.
   const ResolveResult result = Check(
       "flow f {\n"

@@ -90,7 +90,6 @@ class Span {
 
   // Serializes this span's context (and any inherited baggage) into the
   // reserved headers so nested or remote actions continue the same trace.
-  // A no-op that returns OkStatus for an inactive span.
   /// Inject trace context and inherited baggage into reserved A11 headers.
   absl::Status InjectContext(data::ByteMap& headers) const;
 

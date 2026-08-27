@@ -38,17 +38,16 @@
 namespace a11::net {
 namespace {
 
-
 /// Answers a rejected upgrade with an HTTP status the peer can read.
 ///
 /// A WebSocket that opens and immediately closes tells a client almost
 /// nothing; a 401 with a message tells it what to fix.
 a11::Task Reject(const std::shared_ptr<Http2ResponseWriter>& response,
                  const absl::Status& status) {
-  const absl::Status sent = response->SendResponse(
-      StatusCodeToHttp(status.code()),
-      {{"content-type", "text/plain; charset=utf-8"}},
-      std::string(status.message()));
+  const absl::Status sent =
+      response->SendResponse(StatusCodeToHttp(status.code()),
+                             {{"content-type", "text/plain; charset=utf-8"}},
+                             std::string(status.message()));
   return sent.ok() ? a11::ReadyTask() : a11::FailedTask(sent);
 }
 
@@ -184,11 +183,7 @@ WebSocketSignallingClient::Connect(std::string url, std::string identity,
       .path = parsed->target(),
       .headers = std::move(options.headers),
       .http2_options = options.http2_options,
-      // The deadline bounds registering, not being registered. It used to be
-      // folded into `http2_options.deadline`, which meant a host that asked
-      // for a twenty-second handshake got a signalling socket that hung up
-      // twenty seconds after it opened -- presenting as an agent that went
-      // unreachable a moment after it appeared.
+      // The deadline bounds registering, not being registered.
       .handshake_deadline = options.deadline,
       .max_message_size = options.max_message_size,
   };
@@ -336,10 +331,7 @@ void WebSocketSignallingClient::Fail(const std::shared_ptr<State>& state,
   std::shared_ptr<internal::BinaryChannel> channel;
   // Moved out rather than reset in place: `pending_client` is the only strong
   // reference to a client whose connect never completed, and ~Client calls
-  // Close(), which takes this same mutex. Dropping it inside the guard is a
-  // self-deadlock the fibre scheduler reports as "resource deadlock avoided"
-  // -- which is what every refused signalling handshake used to do, including
-  // the plain 404 for an unknown path.
+  // Close(), which takes this same mutex.
   std::shared_ptr<WebSocketSignallingClient> pending;
   {
     thread::MutexLock lock(&state->mu);
@@ -404,10 +396,8 @@ absl::Status WebSocketSignallingClient::SetOnMessage(
 absl::Status WebSocketSignallingClient::Close() {
   std::shared_ptr<internal::BinaryChannel> channel;
   // The state holds a strong reference to this client until its connect
-  // completes, so closing before that has to break the cycle -- and has to do
-  // it outside the guard, since dropping the last reference runs ~Client,
-  // which calls this. Reached re-entrantly from the destructor itself, the
-  // `closed` check above returns first, so the release below is a no-op there.
+  // completes, so closing before that has to break the cycle and has to do it
+  // outside the guard, since dropping the last reference runs ~Client, which.
   std::shared_ptr<WebSocketSignallingClient> pending;
   {
     thread::MutexLock lock(&state_->mu);
@@ -550,7 +540,7 @@ WebSocketSignallingServer::Create(std::shared_ptr<SignallingService> service,
                 [held_state, identity = std::move(identity),
                  request = std::move(request), response = std::move(response)](
                     const absl::StatusOr<a11::Unit>& admitted) mutable
-                -> absl::StatusOr<a11::Unit> {
+                    -> absl::StatusOr<a11::Unit> {
                   if (!admitted.ok()) {
                     return Reject(response, admitted.status()).Await();
                   }
@@ -579,8 +569,7 @@ a11::Task WebSocketSignallingServer::Register(
   if (held_state->options.replace_existing) {
     // The displaced connection goes first: SignallingService::Connect refuses
     // an identity that is already registered, and a host taking its own name
-    // back after a crash would otherwise be locked out by the socket its dead
-    // predecessor left behind.
+    // back after a crash would otherwise be locked out by the socket its dead.
     Remove(held_state, identity);
   }
 
@@ -694,8 +683,7 @@ a11::Task WebSocketSignallingServer::Register(
     thread::MutexLock lock(&held_state->mu);
     if (!held_state->running) {
       (void)(*endpoint)->Close();
-      return a11::FailedTask(
-          absl::CancelledError("Signalling server stopped"));
+      return a11::FailedTask(absl::CancelledError("Signalling server stopped"));
     }
     held_state->connections.insert_or_assign(
         identity,
@@ -709,8 +697,7 @@ a11::Task WebSocketSignallingServer::Register(
   return a11::ReadyTask();
 }
 
-absl::Status WebSocketSignallingServer::Disconnect(
-    std::string_view identity) {
+absl::Status WebSocketSignallingServer::Disconnect(std::string_view identity) {
   const std::string name(identity);
   {
     thread::MutexLock lock(&state_->mu);

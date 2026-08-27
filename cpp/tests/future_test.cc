@@ -46,7 +46,7 @@ TEST(FutureTest, CancelSafelyOwnsRootFiberUntilCompletion) {
   ASSERT_TRUE(value.Cancel().ok());
   EXPECT_EQ(value.Await(absl::Now() + absl::Seconds(5)).status().code(),
             absl::StatusCode::kCancelled);
-  // Cancellation after completion is deliberately idempotent.
+  // Cancellation after completion is idempotent.
   EXPECT_TRUE(value.Cancel().ok());
 }
 

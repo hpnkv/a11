@@ -42,11 +42,14 @@ size_t FlatRun(std::string_view subject, size_t at) {
 
 /// Match one literal at `at`, or nothing.
 ///
-/// A run of spaces or tabs in the pattern matches any run of them in the subject,
+/// A run of spaces or tabs in the pattern matches any run of them in the
+/// subject,
 /// which is what makes a hand-written pattern survive the two spaces somebody's
 /// log writer used. A **line break in the pattern** matches a line break in the
-/// subject, with horizontal space allowed either side: crossing to the next line
-/// is something a pattern has to say, or `a={a} b={b}` would quietly match `a=1`
+/// subject, with horizontal space allowed either side: crossing to the next
+/// line
+/// is something a pattern has to say, or `a={a} b={b}` would quietly match
+/// `a=1`
 /// on one line and `b=2` on the next. Everything else matches itself, exactly.
 std::optional<size_t> MatchLiteral(std::string_view literal,
                                    std::string_view subject, size_t at) {
@@ -92,9 +95,9 @@ size_t LineEnd(std::string_view subject, size_t at) {
 enum class Shape {
   /// Nothing: bounded by whatever literal follows it.
   kOpen,
-  /// Exactly what its type is. Where that does not fit, the hole does not match
-  /// here at all -- `{n:int}` against `none` is not a number, and taking `n` for
-  /// it would be answering a question nobody asked.
+  /// Exactly what its type is. Where that does not fit, the hole does not
+  /// match here at all -- `{n:int}` against `none` is not a number, and taking
+  /// `n` for it would be answering a question nobody asked.
   kExact,
   /// A run it may give some of back, so `{level:word}` can stop before the `:`
   /// that follows it.
@@ -187,16 +190,19 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
 
 /// Match the pieces from `piece` onwards, starting at `at`.
 ///
-/// Recursive because a hole's end is only known once what follows it has matched.
+/// Recursive because a hole's end is only known once what follows it has
+/// matched.
 /// Which candidate ends are tried, and in what order, is the whole behaviour of
 /// the language:
 ///
-/// * an **exact** hole takes what its type is, and if that is not there the hole
+/// * an **exact** hole takes what its type is, and if that is not there the
+/// hole
 ///   does not match here;
 /// * a **run** hole takes its whole run and then gives characters back one at a
 ///   time, so `{level:word}` stops before the `:` that follows it;
-/// * an **open** hole takes as little as it can, growing until what follows fits
-///   -- except as the last piece, where there is nothing to bound it and it takes
+/// * an **open** hole takes as little as it can, growing until what follows
+/// fits
+/// -- except as the last piece, where there is nothing to bound it and it takes
 ///   the rest of its line.
 bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
                size_t at, std::vector<Capture>& captures) {
@@ -247,7 +253,8 @@ bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
   // that swallowed a line break would match half of the next record.
   const size_t stop = LineEnd(subject, at);
   if (piece + 1 >= pattern.pieces.size()) {
-    // Nothing follows, so there is nothing to grow towards: the rest of the line
+    // Nothing follows, so there is nothing to grow towards: the rest of the
+    // line
     // is what "and then the value" means.
     return stop > at && take(stop);
   }

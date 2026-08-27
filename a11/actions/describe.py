@@ -108,10 +108,9 @@ GET_SCHEMA_SCHEMA = ActionSchema(
 def json_schema_for(port: ActionPortSchema) -> str:
     """A JSON Schema for ``port``'s payload, as text, or ``""``.
 
-    Empty when the port has no `typeinfo` to derive from -- which is not a
-    failure. A port whose type nobody stated is described without one, and a
-    model shown that port gets `{"type": "object"}` from the adapter, exactly as
-    before this field existed.
+    Empty when the port has no `typeinfo` to derive from. A port with no stated
+    type is described without one, and the adapter presents it to a model as
+    `{"type": "object"}`.
     """
     if port.json_schema:
         return port.json_schema
@@ -123,11 +122,11 @@ def json_schema_for(port: ActionPortSchema) -> str:
         )
         return json.dumps(derived)
     except Exception:
-        # A type that will not describe itself is worth a line and nothing more:
-        # the action still works, and the alternative is refusing to register it
-        # over a field only a model reads.
+        # Schema derivation is optional metadata. Keep the action registered and
+        # record the failure for diagnostics.
         logging.debug(
-            "could not derive a JSON Schema for port %r", port.name,
+            "could not derive a JSON Schema for port %r",
+            port.name,
             exc_info=True,
         )
         return ""
@@ -222,10 +221,9 @@ def schema_from_json(described: dict[str, Any]) -> ActionSchema:
     registering a reverse-dispatch proxy, or a flow run against a peer
     registering the peer's actions for their schemas alone.
 
-    What cannot survive the trip does not: a port's `typeinfo` is a local handle
-    and comes back None, and an input's autofills are receiver-owned defaults
-    that deliberately never travel. A port's `json_schema` does survive, which
-    is what lets a model be shown a remote tool's real argument types.
+    A port's local `typeinfo` handle returns as None. Receiver-owned autofill
+    defaults remain local, while `json_schema` is preserved for remote tool
+    argument types.
     """
     return _native.schema_from_json(json.dumps(described))
 

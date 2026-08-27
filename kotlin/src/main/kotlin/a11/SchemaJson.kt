@@ -30,10 +30,10 @@ const val SCHEMA_DOCUMENT_FORMAT = "a11.actions/v1"
 enum class PortView { CALLABLE, ALL }
 
 /**
- * The JSON Schema that says nothing, which is not worth writing down.
+ * Returns whether a JSON Schema contains no constraints.
  *
- * A port with no schema is shown to a model as `{"type": "object"}` anyway, so a
- * document spelling that out states exactly what leaving it out does.
+ * A port with no schema is shown to a model as `{"type": "object"}` anyway, so
+ * a document spelling that out states exactly what leaving it out does.
  */
 private fun saysNothing(schema: Map<String, Any?>): Boolean =
     schema.size == 1 && schema["type"] == "object"
@@ -116,7 +116,7 @@ fun schemaToJson(
  * The schema an entry was written from.
  *
  * What cannot survive the trip comes back empty: an input's autofills are
- * receiver-owned defaults that deliberately never travel. A `user_facing` flag
+ * receiver-owned defaults and remain local. A `user_facing` flag
  * from an older client is read and dropped -- narration travels on the reserved
  * log port, which no schema declares.
  */

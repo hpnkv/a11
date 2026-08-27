@@ -63,9 +63,9 @@ _PROVIDERS: dict[str, _Provider] = {
     ),
 }
 
-# Fallbacks used when no explicit provider header is set: the model id's prefix
-# usually names its family. Ollama serves many open-weight families, so a few of
-# the common ones route to it — set the provider header explicitly to override.
+# When no provider header is set, model-family prefixes select a provider.
+# Common open-weight model families use Ollama. An explicit provider header
+# overrides this mapping.
 _MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
     ("claude", "claude"),
     ("gemini", "gemini"),
@@ -196,9 +196,8 @@ def _load_handler(provider: str) -> Handler:
             ),
         ).to_exception() from exc
     except Exception as exc:  # noqa: BLE001 - a broken SDK is a precondition
-        # An SDK that is installed but unimportable (a version conflict, say)
-        # would otherwise surface as whatever it happened to raise, from a
-        # frame the caller cannot place. Name the provider instead.
+        # Report an installed but unimportable SDK as a provider precondition,
+        # with the underlying exception retained in the message.
         raise Status(
             code=StatusCode.FAILED_PRECONDITION,
             message=(

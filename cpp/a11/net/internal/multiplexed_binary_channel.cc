@@ -29,17 +29,8 @@ namespace a11::net::internal {
 namespace {
 
 // Fixed 8-byte little-endian frame suffix carrying the aggregate send order.
-//
-// A suffix rather than a prefix, for the reason A11's byte-chunking metadata is
-// one too: a prefix cannot be added to a buffer the caller already owns without
-// moving every byte of it, and a suffix can. On send that is `append` into the
-// spare capacity the packet already has; on receive it is a truncation, where the
-// prefix form had to copy the payload out from behind its header. At A11's 48 KiB
-// WebRTC packet size that was a full copy of every packet in each direction.
-//
-// Both ends must agree, so this is a wire change: `js/src/webrtc_wire_stream.ts`
-// carries the same framing and moved with it. A peer on the older prefix format
-// reads the sequence out of the first eight payload bytes and gets nonsense.
+// Both ends must agree, so this is a wire change:
+// `js/src/webrtc_wire_stream.ts` carries the same framing and moved with it.
 constexpr size_t kSequenceSuffix = sizeof(std::uint64_t);
 
 // Takes the packet by value and returns it with the sequence appended, so a
@@ -296,7 +287,8 @@ void MultiplexedBinaryChannel::OnMemberMessage(std::string framed) {
       if (reorder_.size() >= options_.max_reorder_packets) {
         on_error = callbacks_.on_error;
       } else {
-        // The payload is the frame with its tail cut off, so this moves no bytes
+        // The payload is the frame with its tail cut off, so this moves no
+        // bytes
         // at all where the prefix form copied the whole payload out.
         reorder_.emplace(sequence, std::move(framed));
       }
@@ -409,10 +401,8 @@ void MultiplexedBinaryChannel::FlushPending() {
     // bytes; that owner rechecks its queue before releasing the claim.
     return;
   }
-  // Each member is handed its bytes independently, so one channel's send does not
-  // wait behind another's. The caller carries the first -- which is the whole job
-  // when only one channel has work, the common case at small message sizes -- and
-  // the rest get a fiber so the handoffs overlap.
+  // Each member is handed its bytes independently, so one channel's send does
+  // not wait behind another's.
   for (size_t index = 1; index < claimed.size(); ++index) {
     std::shared_ptr<MultiplexedBinaryChannel> self = shared_from_this();
     a11::Schedule([self = std::move(self), member = claimed[index]]() mutable {
@@ -438,8 +428,7 @@ void MultiplexedBinaryChannel::FlushMember(
     }
     // Sent outside the lock, and by copy: a member that fails hands its packet
     // back for another to carry, and a lost packet is not recoverable -- the
-    // peer's reorder buffer would wait on that sequence number for good. Send
-    // takes ownership, so keeping a retryable copy is the price of that.
+    // peer's reorder buffer would wait on that sequence number for good.
     absl::Status sent = member->channel->Send(packet);
     std::function<void(bool)> outcome;
     {
@@ -620,9 +609,9 @@ void MultiplexedBinaryChannel::DropMember(std::uint64_t id,
     if (dropped == nullptr) {
       return;
     }
-    // Whatever was assigned to it and not yet handed over goes back to the front
-    // of the unassigned queue, so the next live member carries it. Dropping it
-    // would leave a hole the peer's reorder buffer never fills.
+    // Whatever was assigned to it and not yet handed over goes back to the
+    // front of the unassigned queue, so the next live member carries it.
+    // Dropping it would leave a hole the peer's reorder buffer never fills.
     while (!dropped->pending.empty()) {
       std::string packet = std::move(dropped->pending.back());
       dropped->pending.pop_back();

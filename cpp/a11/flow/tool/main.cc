@@ -1,16 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 // `a11-flow`: the Flow language as a small standalone tool.
-//
-// The point of it is what it does *not* link. `a11::flow_lang` depends on the
-// standard library, Abseil and nlohmann and nothing else -- no OpenSSL, no libuv,
-// no nghttp2, no PortAudio -- so this binary is a few megabytes, builds on
-// anything with a C++20 compiler, and can be bundled in an editor extension for a
-// platform the full A11 runtime is not built for.
-//
-// Everything it prints is the same envelope `a11 flow` prints through the Python
-// bindings, because both are thin frontends over the same library: an editor may
-// speak to whichever is available and read the same answers.
 
 #include <algorithm>
 #include <array>
@@ -68,10 +58,7 @@ struct Options {
   int line = 0;
   int column = 0;
   /// Which editor definition `syntax` is about; **every one** when empty, which
-  /// is the default. It used to default to "sublime", so a bare
-  /// `a11-flow syntax` checked one of four targets and printed "up to date" --
-  /// which reads as an answer about all of them, and was how three stale
-  /// definitions got past it.
+  /// is the default.
   std::string target;
   std::string root = ".";
   std::string protocol = "json";
@@ -420,7 +407,7 @@ int Parse(const Options& options) {
     }
   }
   // The tree is printed either way: a file with a mistake in it still has one,
-  // which is the whole point of a recovering parser.
+  // while retaining the partial tree produced by the recovering parser.
   return parsed.HasErrors() ? 1 : 0;
 }
 
@@ -506,7 +493,8 @@ int Describe(const Options& options) {
 
 /// `a11-flow schema FILE [--struct Name]`: the JSON Schema a shape describes.
 ///
-/// The half of the shape/schema translation somebody runs by hand: a `struct` is
+/// The half of the shape/schema translation somebody runs by hand: a `struct`
+/// is
 /// handed to whatever speaks schemas -- a model's structured-output mode, an
 /// OpenAPI document, a validator elsewhere -- and this is how it gets out. The
 /// other direction is `serve`'s `shapes` method, which takes a schema and gives
@@ -630,9 +618,9 @@ int Vocabulary(const Options& options) {
 
 /// `scan PATH...` -- the actions the project declares, read out of its source.
 ///
-/// Prints a catalogue, which is what a host folds into the context it sends. The
-/// text form is a listing for a person checking what a scan can see; the JSON
-/// form is what an editor or a CI step reads.
+/// Prints a catalogue, which is what a host folds into the context it sends.
+/// The text form is a listing for a person checking what a scan can see; the
+/// JSON form is what an editor or a CI step reads.
 int Scan(const Options& options) {
   const discover::Result found = discover::Discover(options.files);
   if (options.format != Output::kText) {
@@ -685,8 +673,7 @@ int SyntaxOne(const Options& options, SyntaxTarget target) {
     std::cout << path << ": generated\n";
     return 0;
   }
-  // The default is the check, because that is what CI runs and what a person
-  // asking "is this up to date" means.
+  // The default checks whether the generated file is current, as CI does.
   std::string existing;
   std::string reason;
   if (!ReadFile(path, existing, reason)) {
@@ -706,11 +693,7 @@ int SyntaxOne(const Options& options, SyntaxTarget target) {
 
 int Syntax(const Options& options) {
   if (options.target.empty()) {
-    // Every target, and the worst outcome wins: a bare `a11-flow syntax` is a
-    // question about the editor definitions, not about one of them, and a
-    // command that answers for a quarter of them is worse than one that refuses.
-    // Keeps going past the first stale one so a person regenerating gets the
-    // whole list rather than one name at a time.
+    // Every target, and the worst outcome wins:
     int worst = 0;
     for (const SyntaxTarget target : SyntaxTargets()) {
       worst = std::max(worst, SyntaxOne(options, target));
@@ -734,10 +717,7 @@ int Serve(const Options& options) {
     std::cerr << "serve speaks json or lsp, not " << options.protocol << "\n";
     return 2;
   }
-  // One request per line, one answer per line. A source with line breaks in it
-  // is a JSON string with `\n` in it, so a line is always a whole request --
-  // which is what makes this usable from a shell, a test, or a plugin with a
-  // pipe and no framing library.
+  // One request per line, one answer per line.
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line.empty()) {
@@ -816,12 +796,8 @@ Options ReadOptions(int argc, char** argv) {
       options.protocol = value("--protocol");
     } else if (argument == "--stdio") {
       // What every LSP client says to a language server it is talking to over a
-      // pipe, and `vscode-languageclient` appends it to the argument list on its
-      // own. Refusing it exited 2 before a single message was read, which the
-      // client reported as "Pending response rejected since connection got
-      // disposed" -- a sentence about the symptom two layers up from an unknown
-      // flag. Accepted, and it *means* something: serving over stdio is what
-      // `serve` does, so this says so rather than being ignored.
+      // pipe, and `vscode-languageclient` appends it to the argument list on
+      // its own.
       options.command = options.command.empty() ? "serve" : options.command;
       options.protocol = "lsp";
     } else if (argument == "--help" || argument == "-h") {

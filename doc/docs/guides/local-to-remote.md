@@ -1,14 +1,12 @@
 # From a local run to a remote call
 
-On the [previous page](llm.md) the model interaction ran **in your process**:
-`.run()` starts an action's handler locally. But `interact_with_llm` is just an
-action, and any action can instead run on **another peer** — a server that holds
-the API keys, has network egress, or owns a GPU — which you reach with `.call()`
-over a session. The action's schema, handler, and ports do not change; only
-*where the handler runs* and *how you dispatch it* do.
+`.run()` starts an action handler in the current process. `.call()` dispatches
+the same action to another peer over a session. This supports servers that hold
+API keys, provide network egress, or own a GPU without changing the action's
+schema, handler, or ports.
 
-To keep every moving part visible we use a tiny action here; a real
-`interact_with_llm` makes the identical jump (it just has more ports).
+This guide demonstrates the transition with a small action. The same steps move
+`interact_with_llm`, which has additional ports.
 
 ```python
 import a11
@@ -55,9 +53,9 @@ registry.register("shout", SHOUT, shout)
 
 ## Stand up the server
 
-This is the echo server's shape from [before](echo-session.md), but the session
-carries an `action_registry` instead of a message callback — so it answers
-action calls rather than echoing:
+This uses the server structure from the [echo session](echo-session.md), with an
+`action_registry` in place of the echo callback so the session can dispatch
+action calls:
 
 ```python
 async def accept(stream):
@@ -170,7 +168,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## The whole point
+## Local and remote calls
 
 The two paths differ only in the last mile:
 

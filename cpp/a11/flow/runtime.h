@@ -33,6 +33,9 @@ namespace a11::flow {
 /// become a second one.
 inline constexpr size_t kQueueDepth = 8;
 
+// One flow file, compiled: the plans, the graphs, and the tree they borrow. A
+// graph points into the parse tree it was resolved from, so the two have one
+// owner and one lifetime.
 /// One flow file, compiled: the plans, the graphs, and the tree they borrow.
 ///
 /// A graph points into the parse tree it was resolved from, so the two have one
@@ -94,6 +97,9 @@ struct RunOptions {
   /// used when this is null.
   std::shared_ptr<HostBridge> bridge;
 
+  // For a flow a **client** runs over a session it already holds: the `call`
+  // steps that belong to the peer are bound to this stream, and the flow's own
+  // action is not.
   /// For a flow a **client** runs over a session it already holds: the `call`
   /// steps that belong to the peer are bound to this stream, and the flow's own
   /// action is not.

@@ -35,6 +35,8 @@
 namespace a11::flow::tool {
 namespace {
 
+// One open document, and the version the client last told us about. TextIndex
+// converts between UTF-8 byte offsets and the protocol's UTF-16 positions.
 /// One open document, and the version the client last told us about.
 ///
 /// TextIndex converts between UTF-8 byte offsets and the protocol's UTF-16
@@ -330,15 +332,16 @@ class Server {
 
   /// A filesystem path as a `file://` URI.
   ///
-  /// Percent-encodes everything outside the unreserved set, which is what a path
+  /// Percent-encodes everything outside the unreserved set, which is what a
+  /// path
   /// with a space in it needs. The separators stay separators: a URI whose
   /// slashes were escaped would name one file called `a/b`.
   static std::string FileUri(std::string_view path) {
     std::string out = "file://";
     if (!path.empty() && path.front() != '/') {
       // A relative path is relative to wherever the tool was started, which is
-      // the project root for every host that starts one. Making it absolute here
-      // would guess at a directory this process may not be in.
+      // the project root for every host that starts one. Making it absolute
+      // here would guess at a directory this process may not be in.
       std::error_code error;
       const std::filesystem::path absolute =
           std::filesystem::absolute(std::filesystem::path(path), error);
@@ -359,11 +362,14 @@ class Server {
     return out;
   }
 
+  // A zero-width range at a 1-based line and column, as the protocol counts
+  // them: 0-based, and a column in UTF-16 units.
   /// A zero-width range at a 1-based line and column, as the protocol counts
   /// them: 0-based, and a column in UTF-16 units.
   ///
   /// The column is used as given rather than converted, because converting it
-  /// would mean reading a file this process was never asked to open. A caret one
+  /// would mean reading a file this process was never asked to open. A caret
+  /// one
   /// unit out on a line with prose before the declaration is a smaller wrong
   /// than opening the wrong file, and every host scrolls to the line.
   static nlohmann::json PositionAt(int line, int column) {
@@ -397,7 +403,8 @@ class Server {
 
   /// The diagnostics of one document, in the protocol's shape.
   ///
-  /// `data` carries the fixes back with the diagnostic, so `codeAction` needs no
+  /// `data` carries the fixes back with the diagnostic, so `codeAction` needs
+  /// no
   /// second analysis of the document to know what Alt+Enter offers: the fix was
   /// worked out where the problem was found.
   void Publish(const std::string& uri, const Document& document) {
@@ -488,9 +495,7 @@ class Server {
     }
     if (method == "textDocument/didChange") {
       const std::string uri = Uri(params);
-      // Full sync only, which is what the capabilities ask for: a whole document
-      // is what every method here takes, and stitching incremental changes back
-      // together would be a second copy of the document's state to get wrong.
+      // Full sync only, which is what the capabilities ask for:
       const auto changes = params.find("contentChanges");
       if (changes != params.end() && changes->is_array() && !changes->empty()) {
         const nlohmann::json& last = changes->back();
@@ -597,12 +602,6 @@ class Server {
       // The JSON service, reached through the LSP connection: `{"method":
       // "check", "source": ".."}` answered exactly as `serve --protocol json`
       // answers it.
-      //
-      // For the questions the protocol has no place for, and there is one that
-      // matters: a flow written inside a *string literal* of another language is
-      // not a document the server has, so it is asked about as text. Without this
-      // a client would have to run a second process for it, and the two would
-      // then disagree about the world the moment one of them was sent a context.
       nlohmann::json relayed =
           params.is_object() ? params : nlohmann::json::object();
       if (!relayed.contains("context") && !known_.Empty()) {
@@ -615,7 +614,8 @@ class Server {
       Answer(message, Handle(relayed));
       return;
     }
-    // Anything else: an unknown request still needs an answer, or a client waits
+    // Anything else: an unknown request still needs an answer, or a client
+    // waits
     // for one for ever.
     if (message.contains("id")) {
       Answer(message, nlohmann::json());
@@ -640,21 +640,10 @@ class Server {
       return;
     }
     const size_t offset = OffsetIn(*document, params);
-    // Against the world this session knows, which is the whole point of knowing
-    // it. Hover and go-to-declaration were given `known_` and this was not, so an
-    // action the project declares hovered with its description and had somewhere
-    // to go, and was the one thing never *offered* -- which is the case that
-    // matters most, since a name you have to know already is a name you did not
-    // need completing.
+    // Complete against the catalogue associated with this session.
     const CompleteResult completed =
         CompleteAt(document->Text(), offset, known_);
     // What taking a proposal replaces: the partial word, and nothing else.
-    //
-    // Clamped rather than trusted. Every other answer in this adapter is read-only
-    // -- a colour, a message, a hover -- and this one *edits the document*, so the
-    // cost of the language being wrong about the range is somebody's file rather
-    // than a wrong colour. It was wrong once, and a completion taken where nothing
-    // had been typed replaced everything before the caret.
     Range replaced;
     replaced.start.offset = std::min(completed.prefix_start, offset);
     replaced.end.offset = offset;
@@ -673,10 +662,7 @@ class Server {
           // than alphabetically.
           {"sortText", absl::StrCat(SortKey(items.size()))},
       };
-      // The type beside the name, and what the thing is *for* after it. A client
-      // that renders `labelDetails` gets the two apart, which reads better; one
-      // that does not gets both in `detail`, because a description that only
-      // appears for some clients is a description somebody does not see.
+      // The type beside the name, and what the thing is *for* after it.
       std::string detail = proposal.type;
       if (label_details_) {
         if (!proposal.tail.empty()) {
@@ -684,8 +670,8 @@ class Server {
         }
       } else if (!proposal.tail.empty()) {
         // The tail already opens with the space that separates it from whatever
-        // it follows, so nothing is added here; with no type in front of it that
-        // space would be a leading one, and is taken off.
+        // it follows, so nothing is added here; with no type in front of it
+        // that space would be a leading one, and is taken off.
         absl::StrAppend(&detail, proposal.tail);
         if (!detail.empty() && detail.front() == ' ') {
           detail.erase(0, 1);
@@ -695,10 +681,7 @@ class Server {
         item["detail"] = detail;
       }
       // The reference text beside the list, which is the same text a hover over
-      // the finished word gives. The language works it out for every proposal it
-      // has one for; dropping it here was why this client's popup was empty
-      // where the IntelliJ one, reading the same field off the JSON protocol,
-      // was not.
+      // the finished word gives.
       if (!proposal.documentation.empty()) {
         item["documentation"] = nlohmann::json{
             {"kind", "markdown"}, {"value", proposal.documentation}};
@@ -763,9 +746,9 @@ class Server {
       Answer(message, nlohmann::json());
       return;
     }
-    // The language decides what is under the caret -- it is name resolution, and
-    // this adapter has no business doing it a second time. All that happens here
-    // is the translation into what the protocol calls a hover.
+    // The language decides what is under the caret -- it is name resolution,
+    // and this adapter has no business doing it a second time. All that happens
+    // here is the translation into what the protocol calls a hover.
     const Description about =
         Describe(document->Text(), OffsetIn(*document, params), known_);
     if (!about.found || about.markdown.empty()) {
@@ -807,9 +790,7 @@ class Server {
       return;
     }
     // A name this document did not declare may still have somewhere to go: an
-    // action declared in a project file that something scanned. This is the one
-    // answer that leaves the document, and it is why an `ActionSchema` written
-    // in a `.py` two directories away is now a jump rather than a search.
+    // action declared in a project file that something scanned.
     if (about.origin.has_value()) {
       Answer(message,
              nlohmann::json{{"uri", FileUri(about.origin->file)},
@@ -817,9 +798,9 @@ class Server {
                                                  about.origin->column)}});
       return;
     }
-    // A word that is not a name at all -- a stage, a keyword -- has no location.
-    // Null rather than an empty list, which is what a client reads as "nowhere
-    // to go".
+    // A word that is not a name at all -- a stage, a keyword -- has no
+    // location. Null rather than an empty list, which is what a client reads as
+    // "nowhere to go".
     Answer(message, nlohmann::json());
   }
 
@@ -898,6 +879,8 @@ class Server {
     label_details_ = item->value("labelDetailsSupport", false);
   }
 
+  // `a11flow/scan`: read the project's own source for the actions it declares,
+  // and fold what is found into the world these documents are read against.
   /// `a11flow/scan`: read the project's own source for the actions it declares,
   /// and fold what is found into the world these documents are read against.
   ///
@@ -907,7 +890,8 @@ class Server {
   /// merged over what is already known, and every open document is re-checked,
   /// since an action that exists now may make a flow that named it correct.
   ///
-  /// Merged rather than replacing, so a host may scan *and* send a live registry
+  /// Merged rather than replacing, so a host may scan *and* send a live
+  /// registry
   /// and get both.
   void Scan(const nlohmann::json& message, const nlohmann::json& params) {
     std::vector<std::string> roots;
@@ -944,10 +928,10 @@ class Server {
 
   /// `a11flow/setContext`: what the world outside these documents contains.
   ///
-  /// Stateful, and deliberately so. A client that knows which action registry an
-  /// inline flow is attached to says it once, and every completion and hover for
-  /// the rest of the session sees it -- rather than repeating a catalogue of a
-  /// hundred actions on every keystroke.
+  /// Stateful. A client that knows which action registry an inline flow is
+  /// attached to says it once, and every completion and hover for the rest of
+  /// the session sees it -- rather than repeating a catalogue of a hundred
+  /// actions on every keystroke.
   void SetContext(const nlohmann::json& params) {
     if (!params.is_object()) {
       return;
@@ -982,13 +966,9 @@ class Server {
              {"completionProvider",
               nlohmann::json{
                   {"triggerCharacters",
-                   // `(` and `,` are what open an argument list and
-                   // what separate one argument from the next, so both
-                   // are positions where the answer is "these ports".
-                   // Without them, typing `run act(` asked for nothing
-                   // and the ports of the action being called -- the
-                   // thing hardest to remember -- were the one list
-                   // that needed Ctrl+Space to see.
+                   // `(` and `,` are what open an argument list and what
+                   // separate one argument from the next, so both are positions
+                   // where the answer is "these ports".
                    nlohmann::json::array({".", "|", ":", ">", " ", "(", ","})},
                   {"resolveProvider", false}}},
              {"semanticTokensProvider",
@@ -1012,8 +992,10 @@ class Server {
   bool exited_ = false;
   /// Whether the client said it renders `labelDetails`.
   ///
-  /// It is an opt-in capability, and a client that did not ask for it is entitled
-  /// to ignore the field -- which would drop a port's description out of the row
+  /// It is an opt-in capability, and a client that did not ask for it is
+  /// entitled
+  /// to ignore the field -- which would drop a port's description out of the
+  /// row
   /// and leave the list saying only the port's name. So where it is absent the
   /// same text goes in `detail`, which every client has always shown.
   bool label_details_ = false;

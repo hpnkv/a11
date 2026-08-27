@@ -65,7 +65,9 @@ struct BodyPlan {
  */
 std::optional<std::size_t> FindHeaderBlockEnd(std::string_view data);
 
-/** Parses a request head (start line + headers, no trailing CRLFCRLF needed). */
+/**
+ * Parses a request head (start line + headers, no trailing CRLFCRLF needed).
+ */
 absl::StatusOr<Http1RequestHead> ParseRequestHead(std::string_view head_block);
 /** Parses a response head (status line + headers). */
 absl::StatusOr<Http1ResponseHead> ParseResponseHead(
@@ -127,7 +129,9 @@ std::string EncodeChunk(std::string_view data);
  */
 std::string EncodeLastChunk(const HttpHeaders& trailers = {});
 
-/** Appends "name: value\r\n" for each header to @p out (names sent as given). */
+/**
+ * Appends "name: value\r\n" for each header to @p out (names sent as given).
+ */
 void AppendHeaderBlock(const HttpHeaders& headers, std::string* out);
 /** Serializes an HTTP/1.1 request head (start line + headers + CRLF). */
 std::string SerializeRequest(std::string_view method, std::string_view target,

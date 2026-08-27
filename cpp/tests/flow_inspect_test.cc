@@ -79,8 +79,8 @@ TEST(FlowInspect, SaysWhenNothingUsesSomethingTheFlowDeclared) {
 }
 
 TEST(FlowInspect, ATryWhoseStatusIsReadIsFine) {
-  // Three ways of reading it, and each one has to count -- otherwise the fix the
-  // finding suggests does not clear it.
+  // Three ways of reading it, and each one has to count -- otherwise the fix
+  // the finding suggests does not clear it.
   for (const std::string_view read :
        {"  wait x\n", "  s = wait x\n  s -> c\n", "  status x -> c\n"}) {
     const std::string source = absl::StrCat(
@@ -158,9 +158,8 @@ TEST(FlowInspect, SaysWhenABarrierCannotDoAnything) {
                   " x = run act(p: a)\n wait x\n wait x\n x.out -> b }"),
             (std::vector<std::string>{"flow.barrier.duplicate"}));
   // Both of these give the `cancel` an `after` or a branch, because a `cancel`
-  // at the top of a body races everything and the language refuses one -- and the
-  // inspector says nothing at all about a flow that does not resolve, so without
-  // that these would pass by going quiet rather than by being right.
+  // at the top of a body races everything and the language refuses one -- and
+  // the inspector says nothing at all about a flow that does not resolve.
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
                   " x = run act(p: a)\n w = wait x\n cancel x after w\n"
                   " x.out -> b }"),

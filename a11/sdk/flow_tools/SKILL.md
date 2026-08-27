@@ -37,7 +37,7 @@ A direct tool call is clearer for one action. Split the work into separate flows
 - **Declare focused outputs.** Return the answer, count, or selected hits rather than large intermediate values you do not need to inspect.
 - **`run` what is `runnable`, `call` what is not.** The two verbs are two different things: `run` executes the action where the flow is running, `call` puts it on the stream the flow is attached to and lets the peer do it. `flow_actions` marks each one, and almost everything it offers you is `runnable: true` — so `run` is the usual verb, and a `run` of something without a handler is refused rather than quietly sent elsewhere.
 - **Use listed actions.** `flow_actions` is the set of names the flow may resolve.
-- **Every output port of every step is read.** You do not have to name them all — the runtime drains what you ignore — but `skip x.debug` says so plainly, and is worth writing when an output is large. `skip 1 x.rows` is the other one: it drops a port's first value for *every* reader, which is how you throw away a header line, and several of them naming one port add up.
+- **Every output port of every step is read.** You do not have to name them all — the runtime drains what you ignore — but `skip x.debug` makes the choice explicit for a large output. `skip 1 x.rows` is the other one: it drops a port's first value for *every* reader, which is how you throw away a header line, and several of them naming one port add up.
 - **A failing step ends the flow** unless you wrote `try`. When a failure is one the composition should handle, write `try run` (or `try call`) and then `wait` to find out how it went.
 - **Give a port the type it wants.** When an action's input is a real type rather than a bag of keys, write `a11.sdk.Interaction{role: "user", content: [...]}` (or `{...} as a11.sdk.Interaction`) and it is validated into that type, defaults and all. `to_chunk(value)` makes the `Chunk` such a type's content is made of. Which tags exist is the host's — ask `flow_actions` what the ports are and match them.
 - **A stream of fragments is not a stream of things.** `| group EXPR` gathers values until `EXPR` holds of the one just added, then hands over the list: `| group ends-with(trim(it), [".", "?"]) | map trim(join(it, " "))` is partial utterances becoming whole sentences. Reach for it whenever one value is only part of what you need.
@@ -45,7 +45,7 @@ A direct tool call is clearer for one action. Split the work into separate flows
 - **Keep computation in actions.** Flow expressions read, compare, transform, and assemble values; use an action for application-specific computation.
 - **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is refused rather than quietly stopping after some number of passes and calling that success.
 - **`fail`, `cancel` and `log` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "..." after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
-- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" n after search` write to a log the flow already has: nothing declares it, nothing drains it, and it is not one of the outputs you pay for. As a stage, `| log` and `| logf "saw %s" it` say what is going past and pass every value on unchanged, which is the way to see into a pipeline without changing it.
+- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" n after search` write to a log the flow already has: nothing declares or drains it, and it is not a model-facing output. As a stage, `| log` and `| logf "saw %s" it` say what is going past and pass every value on unchanged, which is the way to see into a pipeline without changing it.
 
 ## The language
 
@@ -91,8 +91,8 @@ flow NAME {
            # an action to *finish* instead is not a language construct: it is
            # `{"command": "stop"} -> X.control_events`, a convention of the
            # standard library rather than of the language.
-           # No port declares the log, nothing drains it, and a flow that
-           # never logs pays nothing for it
+           # The log needs no declared port or manual drain and is created
+           # only when used
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
                                            # names take a tuple apart
   repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
@@ -120,8 +120,8 @@ to each other are one string, so prose that outgrows its line does not need a
 `matching`, a `strformat` — is one literal, since a run there could not be told
 from the argument followed by a description.
 
-A `struct` declares a shape: a record with named, typed, constrained fields, which
-a port may be typed with and a value may be made into. A shape a file declares
+A `struct` declares a record with named, typed, constrained fields. A port may
+use the record as its type, and a value may be coerced into it. A declared shape
 outranks a serialisation tag of the same name — what the file says about the
 name is what the file means by it — and it may hold, and be held by, another
 shape. `A..B` bounds a number, a duration or an instant, and the *length* of a
@@ -145,9 +145,9 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       Reading a stream where a value belongs *takes* a value off it. Two places
       that read one stream for a value take turns on the one view of it, so they
       see two different values rather than two copies of the first: reading the
-      first value and ignoring the rest is exactly the mistake nobody finds out
-      about. Which of them gets which value is not defined; `after` is how a flow
-      that cares says so — except *within* one statement, where there is no
+      first value and ignoring the rest would lose data silently. Which reader
+      receives each value is undefined; `after` can order separate statements.
+      Within one statement there is no
       `after` that could order two reads of one node against each other, and the
       language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
       it names a value, and a value is shared. A stream the language can *prove*
@@ -170,7 +170,8 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       `let first, second = pair` by position. They are the same statement, and
       which one is meant is a question about the value rather than about the
       text: each name is looked up as a field, and as a position where there is
-      no such field. So `let name, age = match("name={name} age={age:int}", line)`
+      no such field. For example:
+      `let name, age = match("name={name} age={age:int}", line)`
       reads what a pattern named. A part is not a value of a stream of its own,
       so `advance` on one says so rather than binding the next whole value.
 
@@ -230,9 +231,8 @@ STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
       A per-value stage may say `parallel N` to work on N values at once, and
       what follows still reads them in the order they arrived. `unordered`
       gives that up for whatever it saves:
-      `urls | map fetch(it) parallel 8 -> bodies`. It is worth writing where
-      the per-value work is expensive (a host round trip, a coercion) and
-      nowhere else.
+      `urls | map fetch(it) parallel 8 -> bodies`. Use it for substantial
+      per-value work such as a host round trip or coercion.
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
       Text stops at a character boundary rather than splitting one. A value
@@ -314,7 +314,8 @@ TIME: durations are written 500ns, 250ms, 30s, 2m, 1h, compound as 1m30s500ms,
       duration, and a bare number on either side counts as seconds. A duration
       the other way round is below zero and says so.
       duration(x) and time(x) read a value in: a number of seconds, or the text
-      the language itself writes — duration("1m30s"), time("2026-08-11T09:14:22Z")
+      the language writes: duration("1m30s") or
+      time("2026-08-11T09:14:22Z")
       — so a duration or an instant that arrived as a string is a value again.
       seconds(d) is the number of seconds.
       Formatting: %s gives `1m30s` and `2026-08-11T09:14:22Z`,

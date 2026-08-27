@@ -59,9 +59,7 @@ class PythonFactory {
       py::object value = function(node_id);
       auto store = value.cast<std::shared_ptr<stores::ChunkStore>>();
       // A shared_ptr keeps the C++ trampoline alive, but pybind11 override
-      // lookup also needs the corresponding Python instance.  Retain factory
-      // results for the NodeMap lifetime so a temporary Python store remains
-      // virtual when native readers and writers call it later.
+      // lookup also needs the corresponding Python instance.
       values_.push_back(value.inc_ref().ptr());
       return store;
     } catch (py::error_already_set& error) {

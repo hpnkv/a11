@@ -5,23 +5,18 @@ import com.intellij.psi.TokenType
 import com.intellij.psi.tree.IElementType
 
 /**
- * The A11 Flow lexer: a replay of the token stream the language itself produced.
+ * Replays the native Flow token stream as IntelliJ token types.
  *
- * There used to be a hand-written lexer here, 500 lines of it, and it had to be
- * taught every word the compiler learned -- with a test whose only job was to
- * catch it falling behind. What a word *means* is a judgement the language makes
- * (a word is a stage only after a `|`, a type only past a port's `:`, a member
- * whatever follows a `.`), and it now makes it in one place, in C++. This asks
- * [FlowEngine] for the answer and turns it into the platform's token types.
+ * [FlowEngine] determines contextual token meanings, such as whether a word is
+ * a stage, type, or member. This lexer translates that response into platform
+ * token types.
  *
- * The whole document is classified at once and the answer cached against its text,
- * so an incremental relex of one line costs a map lookup rather than a process
- * round trip.
+ * The whole document is classified at once and the answer cached against its
+ * text, so an incremental relex of one line costs a map lookup rather than a
+ * process round trip.
  *
- * **Without the tool** -- no binary for this platform -- it falls back to the
- * shape of a flow: comments, strings, numbers, words and punctuation, with no
- * opinion about which words are keywords. That is a plainer editor, not a broken
- * one, and it is the only lexing rule left in Kotlin.
+ * If the service is unavailable, it classifies only comments, strings, numbers,
+ * words, and punctuation, without assigning keyword semantics.
  */
 class FlowLexer : LexerBase() {
 
@@ -44,9 +39,8 @@ class FlowLexer : LexerBase() {
         this.buffer = buffer
         this.start = startOffset
         this.end = endOffset
-        // The classifier is given the whole document, because the meaning of a
-        // word depends on what came before it -- which is exactly what a relex
-        // from the middle of a file does not have.
+        // Contextual token meanings require the whole document, even when the
+        // platform requests an incremental range.
         val text = buffer.toString()
         val classified = classify(text) ?: shapeOf(text)
         tokens = fill(classified, startOffset, endOffset)
@@ -80,12 +74,8 @@ class FlowLexer : LexerBase() {
             val token = entry as? Map<*, *> ?: continue
             val from = (token["start"] as? Number)?.toInt() ?: continue
             val to = (token["end"] as? Number)?.toInt() ?: continue
-            // Offsets arrive in the platform's own units (see FlowEngine), so a
-            // token past the end of the document is not a unit mismatch to be
-            // absorbed -- it is a disagreement about the text, and the document
-            // this was asked about has already been retyped. Bailing out is right:
-            // the answer is about a document that no longer exists, and the next
-            // relex will ask again.
+            // An out-of-range token describes stale document text. Discard the
+            // response; the next relex requests the current document.
             if (to > text.length) return null
             if (to <= from) continue
             val kind = token["kind"] as? String ?: continue
@@ -99,8 +89,8 @@ class FlowLexer : LexerBase() {
      *
      * The names are the `flow.tokens/v1` contract, so this is a translation and
      * not a decision. A kind this plugin has not been taught is an identifier,
-     * which is what a word looks like when nobody has an opinion about it -- so a
-     * language that gains a kind degrades to plain rather than to nothing.
+     * which is what a word looks like when nobody has an opinion about it -- so
+     * a language that gains a kind degrades to plain rather than to nothing.
      */
     private fun typeOf(kind: String, lexical: String?): IElementType = when (kind) {
         "comment" -> FlowTokens.COMMENT
@@ -138,8 +128,9 @@ class FlowLexer : LexerBase() {
      * The gaps between tokens, as whitespace, clipped to the requested range.
      *
      * The platform's contract is that a lexer tiles its whole range: every
-     * character belongs to exactly one token. The language reports the tokens and
-     * says nothing about the space between them, so the space is filled in here.
+     * character belongs to exactly one token. The language reports the tokens
+     * and says nothing about the space between them, so the space is filled in
+     * here.
      */
     private fun fill(slices: List<Slice>, from: Int, to: Int): List<Slice> {
         val filled = ArrayList<Slice>(slices.size * 2 + 1)
@@ -151,8 +142,8 @@ class FlowLexer : LexerBase() {
             if (begin > position) {
                 filled.add(Slice(TokenType.WHITE_SPACE, position, begin))
             }
-            // A newline reported as a token is whitespace, and two runs of it in a
-            // row would be two tokens where the platform expects one.
+            // A newline reported as a token is whitespace, and two runs of it
+            // in a row would be two tokens where the platform expects one.
             if (slice.type == TokenType.WHITE_SPACE &&
                 filled.isNotEmpty() &&
                 filled.last().type == TokenType.WHITE_SPACE &&
@@ -172,9 +163,8 @@ class FlowLexer : LexerBase() {
     /**
      * The shape of a flow, for when the language cannot be asked.
      *
-     * Comments, strings, numbers, words and punctuation -- and deliberately no
-     * word lists, because a copy of those is the thing this rework exists to
-     * delete. A word is an identifier here however significant it is.
+     * Handles comments, strings, numbers, identifiers, and punctuation without
+     * copying the language vocabulary into the plugin.
      */
     private fun shapeOf(text: String): List<Slice> =
         FlowShape.tokenize(text).map { Slice(it.type, it.start, it.end) }

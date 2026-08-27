@@ -133,9 +133,7 @@ void ApplyServerHeaders(const ServerHeaderOptions& options, CachePolicy cache,
       SetUnlessPresent(headers, "cache-control", "no-store");
       // Not a standard header, and worth sending anyway: nginx buffers a
       // proxied response by default, which for an event stream means the client
-      // sees nothing until the buffer fills or the stream ends. This is the
-      // documented way to ask it not to, and anything that does not know the
-      // header ignores it.
+      // sees nothing until the buffer fills or the stream ends.
       SetUnlessPresent(headers, "x-accel-buffering", "no");
       break;
     case CachePolicy::kVolatile:

@@ -1,34 +1,22 @@
 # Copyright 2026 The A11 Authors.
 
-"""The same wire questions as `wire`, over a wire.
+"""Measure A11 transports across a network link.
 
-`bench/suites/wire.py` measures the *protocol*: two endpoints in one process,
-or two processes on one machine, with the network taken out so a microsecond
-can be attributed. That is the right way to decide where A11's own time goes,
-and it cannot answer three questions a deployment turns on:
+`bench/suites/wire.py` isolates protocol overhead on one machine. This suite
+adds network propagation, bandwidth limits, and separate client and server
+resource measurements:
 
-* **Does the ladder survive a real RTT?** On loopback the transports differ by
-  40-1000us, which is most of the round trip. Add a millisecond of propagation
-  and queueing and the *ordering* may hold while the *ratios* collapse -- which
-  changes which optimisations are worth doing.
-* **What does a byte on the wire cost when there are only so many?** Loopback
-  has no bandwidth limit, so a transport that inflates its payload 1.33x pays
-  nothing for it. A 2.5 Gbit/s link charges for every one of those bytes, and
-  `wire_inflation` below is the first row in this project that prices it.
-* **Which end is the bottleneck?** Two machines have two CPUs, and the slower
-  one sets the rate. Every row here carries the server's own CPU cost per
-  operation, sampled inside the server process, because "the Linux host is
-  faster" and "the Linux host has more cores" are different claims and only the
-  second one is usually true.
+* Round-trip results show how propagation changes transport latency ratios.
+* `wire_inflation` measures payload expansion against finite link bandwidth.
+* Server CPU metrics identify which endpoint limits throughput.
 
 Requires a `bench.peer` agent on the far host and `A11_BENCH_PEER=host:port`;
-skips with a reason otherwise. **Run it against `127.0.0.1` first.** That is the
-control: identical code, identical two-process topology, no network. A LAN
-number is only interpretable as a difference from it.
+skips with a reason otherwise. Run it against `127.0.0.1` first to record the
+two-process loopback baseline, then compare the LAN result with that baseline.
 
 The `raw-tcp` rows are the same reference `wire` uses, re-measured on this link:
-a bare length-prefixed socket ping-pong with no A11 in it. A transport row near
-`raw-tcp` has nothing left to win on this link; one far from it does.
+a bare length-prefixed socket ping-pong without A11. Its results provide the
+link-level latency and throughput baseline.
 """
 
 from __future__ import annotations
@@ -51,9 +39,8 @@ SUITE = "link"
 
 _TIMEOUT = 30.0
 
-#: Sizes to sweep. 1 MiB is here and not in `wire` on purpose: WebSocket's
-#: default `split_size` is 64 KiB, so a megabyte is many packets and a real
-#: link is where multi-packet reassembly stops being free.
+#: Sizes to sweep. The 1 MiB case exercises WebSocket's 64 KiB splitting and
+#: multi-packet reassembly on a network link.
 _LATENCY_SIZES = (64, 4096, 65536)
 _THROUGHPUT_SIZES = (64, 4096, 65536, 1 << 20)
 
@@ -62,14 +49,14 @@ _THROUGHPUT_SIZES = (64, 4096, 65536, 1 << 20)
 #: pushing back. The peer's one-fragment echo per arriving fragment is the
 #: credit that releases the next message.
 #:
-#: **On a link with a real RTT the window is itself a ceiling**, and that is not
-#: a defect in A11 -- it is the bandwidth-delay product. A window of W messages
+#: On a link with a real RTT, the window limits throughput according to the
+#: bandwidth-delay product. A window of W messages
 #: of S bytes on a link of RTT R cannot exceed `W * S / R` however fast either
 #: end is, so on a 3.6ms wireless RTT a 32-message window of 64-byte messages
-#: caps at 8.9k msg/s before A11 does anything at all. `A11_BENCH_LINK_WINDOW`
+#: caps at 8.9k msg/s. `A11_BENCH_LINK_WINDOW`
 #: sweeps it, and `window_sweep` below reports the curve: where a row stops
-#: improving with the window, the transport is the limit; where it keeps
-#: improving, the benchmark was.
+#: improving with the window, the transport is the limit. Continued improvement
+#: indicates that the benchmark window was limiting throughput.
 _WINDOW = int(os.environ.get("A11_BENCH_LINK_WINDOW", "32"))
 
 
@@ -111,11 +98,10 @@ async def _peer() -> PeerClient:
 
 
 def _link_params(peer: PeerClient) -> dict[str, str]:
-    """How a row says which link it was taken on.
+    """Return the result label for the measured link.
 
-    `link=loopback` when the peer is this machine and `link=lan` otherwise, so
-    the control run and the real one land on different keys and a `--baseline`
-    diff between them is a deliberate act rather than an accident.
+    Local peers use `link=loopback`; remote peers use `link=lan`. Distinct keys
+    prevent an implicit `--baseline` comparison between the two environments.
     """
     loopback = peer.host in ("127.0.0.1", "localhost", "::1")
     return {"link": "loopback" if loopback else "lan"}
@@ -322,9 +308,8 @@ async def _close(endpoint) -> None:
         )
 
 
-#: Transports reachable over a socket. `in-process` is deliberately absent:
-#: there is no such thing across two machines, and the honest floor here is
-#: `raw-tcp`.
+#: Transports reachable across machines. `raw-tcp` provides the baseline;
+#: `in-process` is excluded because it does not use a network socket.
 _TRANSPORTS = ("websocket", "sse")
 
 
@@ -469,18 +454,18 @@ async def _windowed(
 
 @benchmark(SUITE, "window_sweep")
 async def window_sweep(scale: float) -> list[Result]:
-    """Throughput against the credit window: the transport's limit, or ours?
+    """Measure how the credit window limits transport throughput.
 
-    The row that keeps `stream_throughput` honest on a real link. A window of W
-    messages of S bytes on a link whose round trip is R cannot carry more than
+    A window of W messages of S bytes on a link whose round trip is R cannot
+    carry more than
     `W * S / R` regardless of what either end can do -- so on a wireless LAN
     with a 3.6ms RTT, the default 32-message window caps 64-byte traffic at
     about 8.9k msg/s before A11 is involved at all.
 
-    Read the curve, not any single cell. Where doubling the window stops buying
-    throughput, the transport (or the link) is the ceiling and the figure is a
-    result. Where it keeps buying, `stream_throughput`'s number was a
-    measurement of the benchmark's own pacing and must not be quoted as A11's.
+    Compare the curve across window sizes. Where doubling the window stops
+    increasing throughput, the transport or link is the ceiling. If throughput
+    continues to increase, `stream_throughput` measured the benchmark's pacing
+    and does not represent A11's limit.
 
     The window cannot simply be made large: `Send` has no admission signal, so
     past the peer's reassembly budget the connection is aborted rather than

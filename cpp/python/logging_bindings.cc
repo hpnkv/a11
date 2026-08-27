@@ -38,21 +38,14 @@ absl::LogSeverityAtLeast SeverityAtLeast(int value) {
 }
 
 // Forwards each Abseil log entry to a Python callable, which turns it into a
-// LogRecord on an ordinary `logging.Logger` (see a11/logging.py). Only the
-// fields a LogRecord needs are handed over; Abseil's own prefix is dropped so
-// the Python formatter owns the textual shape.
-//
-// FATAL is left alone. Abseil writes it to stderr with a backtrace and then
-// ends the process, and taking the GIL on a dying thread buys nothing.
+// LogRecord on an ordinary `logging.Logger` (see a11/logging.py).
 class PythonLogSink final : public absl::LogSink {
  public:
   explicit PythonLogSink(py::object callback)
       : callback_(std::move(callback)) {}
 
-  // Called from whichever thread wrote the entry: libuv, a fiber worker, or
-  // the interpreter itself. Abseil disables sink dispatch per-thread for the
-  // duration of Send(), so a LOG raised by the Python handler cannot recurse
-  // back into here.
+  // Called from whichever thread wrote the entry: libuv, a fiber worker, or the
+  // interpreter itself.
   void Send(const absl::LogEntry& entry) override {
     if (entry.log_severity() == absl::LogSeverity::kFatal) {
       return;
@@ -86,10 +79,7 @@ std::unique_ptr<PythonLogSink>& InstalledSink() {
   return *sink;
 }
 
-// Forwards each action log to a Python callable. The same shape as the Abseil
-// bridge above and for the same reason: one sink slot, so a log is reported once.
-// Replacing this slot is what keeps Python from adding a *second* consumer of the
-// log port alongside the default, which would report every line twice.
+// Forwards each action log to a Python callable.
 void SetActionLogSink(const py::object& callback) {
   if (callback.is_none()) {
     actions::SetActionLogSink(nullptr);

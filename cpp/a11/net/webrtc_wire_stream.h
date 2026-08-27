@@ -251,7 +251,8 @@ class WebRtcWireStream final : public ChannelWireStream {
    * usrsctp re-fragments already-queued data when the value shrinks.
    *
    * This is the primitive path MTU discovery is built on, and it is public
-   * because the discovery loop is not the only legitimate caller: an application
+   * because the discovery loop is not the only legitimate caller: an
+   * application
    * that already knows its path (a fixed datacentre fabric, a tunnel with a
    * known overhead) can set it once and skip searching.
    *
@@ -279,7 +280,8 @@ class WebRtcWireStream final : public ChannelWireStream {
       const WebRtcConfiguration& configuration,
       const std::shared_ptr<internal::MultiplexedBinaryChannel>& stream_data);
 
-  /// @return What path MTU discovery has confirmed, or 0 when it is not running.
+  /// @return What path MTU discovery has confirmed, or 0 when it is not
+  /// running.
   [[nodiscard]] size_t discovered_path_mtu() const;
 
   WebRtcWireStream(ConstructorToken, std::shared_ptr<State> state,
@@ -350,8 +352,8 @@ class WebRtcWireServer : public std::enable_shared_from_this<WebRtcWireServer> {
    *
    * @param signalling Connected signalling transport; its identity is the
    *        server's. The server takes over its message callback, and closes it
-   *        when stopped -- it is the server's rendezvous, not a side channel the
-   *        caller keeps using.
+   *        when stopped. It is the server's rendezvous, not a caller-owned side
+   *        channel.
    * @param on_stream Callback invoked with each accepted stream.
    * @param configuration ICE and fragmentation settings.
    * @param stream_options Transport-level WireStreamOptions per stream.

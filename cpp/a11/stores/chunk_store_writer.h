@@ -120,11 +120,10 @@ class ChunkStoreWriter {
    *  time this returns, so the confirmation is already resolved and its awaiter
    *  never suspends.
    *
-   *  Call it when you are about to wait for a write, not when you make one.
-   *  Enqueuing deliberately does not flush: a producer pacing itself against
-   *  the admission buffer is running ahead of its store and should not be made
-   *  to do the store's work. The Python binding flushes from the
-   *  confirmation's first `await` for that reason.
+   *  Call it before waiting for a write, not when enqueuing one. Enqueue does
+   *  not flush because producers pacing against the admission buffer may run
+   *  ahead of the store. The Python binding flushes on the confirmation's first
+   *  `await`.
    *
    *  A store that cannot answer inline leaves the operation in flight and this
    *  is a no-op, which is what keeps batching where batching is worth

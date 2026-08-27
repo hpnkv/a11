@@ -181,7 +181,7 @@ class AudioInput : public std::enable_shared_from_this<AudioInput> {
   std::shared_ptr<internal::PortAudioSession> session_;
   std::shared_ptr<internal::CaptureContext> context_;
 
-  // Guards the capture lifecycle (stream_, pump_, capturing_). Deliberately
+  // Guards the capture lifecycle (stream_, pump_, capturing_). This uses
   // separate from the context mutex the pump fiber holds, so StopCapture can
   // join the pump without deadlocking against it.
   mutable thread::Mutex mu_;

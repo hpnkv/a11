@@ -69,8 +69,10 @@ inline constexpr std::string_view kSseOutboundStreamToken = "stream";
  *
  * The body is a sequence of frames, each a four-byte little-endian payload
  * length followed by that many bytes of the JSON WireMessage encoding the POST
- * route carries one of. HTTP/2 sends it as DATA frames and HTTP/1.1 as a chunked
- * body; neither framing is a message boundary, which is why the length prefix is
+ * route carries one of. HTTP/2 sends it as DATA frames and HTTP/1.1 as a
+ * chunked
+ * body; neither framing is a message boundary, which is why the length prefix
+ * is
  * there.
  */
 inline constexpr std::string_view kSseWireStreamContentType =
@@ -86,19 +88,18 @@ inline constexpr std::string_view kDefaultSseMessageEndpoint =
  *
  * The inbound direction is always the SSE event stream. Only the outbound one
  * has a choice, and it is a reachability/throughput trade rather than a
- * correctness one -- the server accepts both, on the same endpoint, and a stream
+ * correctness one -- the server accepts both, on the same endpoint, and a
+ * stream
  * and a series of POSTs deliver the same messages.
  */
 enum class SseOutboundDelivery {
   /**
    * One HTTP POST per message.
    *
-   * Universally reachable: a browser needs nothing but `fetch()` per message,
-   * which is the whole reason this transport exists. A11 issues these
-   * concurrently up to `max_concurrent_posts` -- WireMessages need no global
-   * order -- and serialises only where order is load-bearing: everything
-   * outstanding is delivered before a half-close, and an abort goes out ahead of
-   * whatever is still in flight.
+   * Browsers can use this mode through `fetch()`. A11 issues POSTs concurrently
+   * up to `max_concurrent_posts` because WireMessages have no global order.
+   * Outstanding messages complete before a half-close; an abort is sent before
+   * messages still in flight.
    */
   kPost,
   /**
@@ -145,6 +146,8 @@ struct HttpSseOptions {
   /// Server-side: `GET /actions`, when something above filled in the handler.
   /// See a11/net/describe_endpoint.h for why this is a callback.
   DescribeEndpointOptions describe;
+  // Server-side: whether a streamed outbound request body is accepted, and so
+  // advertised in kSseOutboundModesHeader.
   /// Server-side: whether a streamed outbound request body is accepted, and so
   /// advertised in kSseOutboundModesHeader. Clearing it leaves clients with
   /// POST-per-message -- which is what an intermediary that will not carry a
@@ -155,6 +158,9 @@ struct HttpSseOptions {
   /// the strictly serialised behaviour; the bound is what stops a fast producer
   /// from spending every stream on the HTTP/2 connection at once.
   size_t max_concurrent_posts = 16;
+  // Server-side response-header policy: the `Server` header, cross-origin
+  // access, and the hints that tell a client and its intermediaries how to
+  // treat a reply.
   /// Server-side response-header policy: the `Server` header, cross-origin
   /// access, and the hints that tell a client and its intermediaries how to
   /// treat a reply. Permissive by default, because a browser is a first-class
@@ -288,9 +294,9 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
   /**
    * @brief The outbound delivery method actually in use.
    *
-   * Equals the requested HttpSseOptions::outbound once connected, except where a
-   * kStream request fell back to kPost because the server did not advertise it.
-   * Meaningful only after the transport has opened.
+   * Equals the requested HttpSseOptions::outbound once connected, except where
+   * a kStream request fell back to kPost because the server did not advertise
+   * it. Meaningful only after the transport has opened.
    */
   [[nodiscard]] SseOutboundDelivery outbound_delivery() const;
 

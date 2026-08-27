@@ -57,8 +57,8 @@ CapabilitiesBuilder SystemCapabilities() {
   capabilities->network.enabled = true;
   capabilities->network.may_listen = true;
   capabilities->network.any_host = true;
-  // Deliberately still refused. "I trust this flow" and "this flow may read my
-  // instance credentials" are different claims, and a host that means the
+  // Continue to refuse this case. "I trust this flow" and "this flow may read
+  // my instance credentials" are different claims, and a host that means the
   // second one can say so in one more line.
   capabilities->network.allow_loopback = false;
   capabilities->network.allow_private = false;
@@ -106,10 +106,9 @@ absl::Status RegisterFlowActions(actions::ActionRegistry& registry,
       !capabilities->environment.names.empty()) {
     ABSL_RETURN_IF_ERROR(RegisterEnvironmentActions(registry, capabilities));
   }
-  // The standard streams are deliberately not here: a gateway has nothing
+  // Standard streams are unavailable here: a gateway has no source or sink
   // useful on its standard input, and a flow reading it there would wait
-  // forever on a stream nobody is writing. A command-line host calls
-  // RegisterStandardStreamActions itself.
+  // forever on a stream nobody is writing.
   return absl::OkStatus();
 }
 

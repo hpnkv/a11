@@ -11,10 +11,11 @@
  * reply. None of that is per-endpoint policy -- it is what an A11 server is --
  * so it is stated once here and applied by whichever transport holds the port.
  *
- * Everything here is a hint or a policy, not behaviour: no header changes what a
- * response *contains*. What they change is whether a browser will read it, and
- * whether an intermediary will cache, buffer or sniff it -- and the defaults
- * below are what makes a browser client work without anybody configuring one.
+ * Everything here is a hint or a policy, not behaviour: no header changes what
+ * a response *contains*. What they change is whether a browser will read it,
+ * and whether an intermediary will cache, buffer or sniff it -- and the
+ * defaults below are what makes a browser client work without anybody
+ * configuring one.
  */
 
 #ifndef A11_NET_SERVER_HEADERS_H_
@@ -35,16 +36,14 @@ inline constexpr std::string_view kServerHeaderValue = "a11";
 /**
  * @brief Cross-origin policy for an A11 HTTP surface.
  *
- * **Permissive by default, deliberately.** A11's browser clients are a first
- * class case -- the whole HTTP SSE transport exists because a page cannot open a
- * raw socket -- and a default that refused them would mean every demo, every
- * embedded panel and every `fetch()` began with a configuration step and a
- * confusing console error. A deployment that wants a narrower policy sets
- * @c allow_origin; one that wants none clears @c enabled.
+ * **Permissive by default.** A11's browser clients are a primary
+ * use case because pages cannot open raw sockets. Configure @c allow_origin
+ * for a narrower policy, or clear @c enabled to disable cross-origin access.
  *
- * This is not a security boundary and must not be read as one. CORS governs what
- * *a browser* will let a page read; it says nothing to anything else. An A11
- * server that should not be reachable is one that is not listening publicly.
+ * This is not a security boundary and must not be read as one. CORS governs
+ * what *a browser* will let a page read; it says nothing to anything else. An
+ * A11 server that should not be reachable is one that is not listening
+ * publicly.
  */
 struct CorsOptions {
   /// Whether cross-origin headers are sent at all.

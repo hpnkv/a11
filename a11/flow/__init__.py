@@ -40,50 +40,45 @@ page:
 | `drain node` | end a node: mark it final and close it |
 | `abort node [code] [msg]` | end a node with a *failure*, so readers see why |
 | `status x` | the same outcome, read where a value is expected |
-| `[name =] for v in source [parallel n] { } [after x]` | run a block per value; the name reads its outcome |
-| `repeat s = start [max n] { }` | run a block repeatedly, carrying a value; say when it stops |
+| `[name =] for v in source [parallel n] { }` | run a block per value |
+| `repeat s = start [max n] { }` | repeat a block with carried state |
 | `s <- source`, `until e` | what a `repeat` carries, and when a loop stops |
 | `if e { } else { }` | run one block or the other |
 | `s = try { }` | run a block as one step, and say how it went |
-| `p = try source -> port` | a failing pipe becomes a value, not the flow's end |
+| `p = try source -> port` | turn a pipe failure into a value |
 | `cancel x` | ask a called action to stop |
-| `fail [code] [message]` | end the flow with a status: in an `if`, or with an `after` |
+| `fail [code] [message]` | end the flow with a status |
 
 Every significant word may be written in lower case or upper case — `for` or
 `FOR`, `stream` or `STREAM`, `not_found` or `NOT_FOUND`. Mixed case is not a
-keyword, so `For` is a name; the rule is easy to state and easy to see.
+keyword, so `For` is a name.
 
-**Steps run concurrently.** A flow is dataflow, not a script: statement order is
-just reading order. A call is dispatched at once and its inputs stream in while
-it works, which is what makes a composition of streaming actions worth writing.
-Where order genuinely matters, say so with `after`, `wait` or `drain`.
+**Steps run concurrently.** Statement order does not define execution order. A
+call starts immediately and receives inputs as they arrive. Use `after`, `wait`,
+or `drain` when execution order matters.
 
-## Why the language has the shape it does
+## A11 operations in Flow
 
-Three of A11's abilities are hard to use well from glue code, and each has
-first-class syntax here:
+Flow provides syntax for these A11 operations:
 
 * **`run` and `call`, which are two different things.** `run some-action(...)`
   executes the handler registered where the flow is running; `call
   some-action(...)` puts the action on the stream the flow is attached to and
-  lets the peer do it. That is A11's own distinction — `Action::Run` against
-  `Action::Call` — and the flow says which it means rather than letting the
-  contents of a registry decide. A composition written against a gateway's
+  lets the peer do it. This matches `Action::Run` and `Action::Call`. A
+  composition written against a gateway's
   actions `call`s them; one composing actions of its own `run`s them; a client
   flow doing retrieval here and inference there does both, in the same flow.
-  `run` needs a handler and says so if there is none, instead of quietly going
-  to the session.
-* **`skip`, and stages that cut a stream down.** `skip x.debug` reads an output
-  and keeps nothing, which is how an output nobody wants stops stalling the
-  action producing it. `skip 1 x.rows` is the other half: it takes the first
+  `run` requires a local handler and does not fall back to the session.
+* **`skip`, and stages that cut a stream down.** `skip x.debug` reads and
+  discards an output, preventing an undrained output from stalling its producer.
+  `skip 1 x.rows` takes the first
   value off the node itself, for *every* reader of it, which is how a header
   line stops being everybody's problem — `| drop 1` only trims the one reader
   that says it. Several of them naming the same node add up. `-> _` is the
-  opposite end of the same idea: `skip` says the values were never wanted, `_`
-  says the *result* is not, and the pipeline making it still runs — so
-  `pages | map summarise(it) -> _` summarises every page and keeps nothing.
-  `_` is a destination and not a name: nothing may be bound to it and nothing
-  may be read out of it. `| first 3`,
+  complementary form: `skip` bypasses processing, while `_` discards the result
+  after the pipeline runs. `pages | map summarise(it) -> _` therefore
+  summarises every page. `_` is a destination, not a name, and cannot be read.
+  `| first 3`,
   `| truncate 4000`, `| where it.ok` and
   `| mime "text/*"` throw values away *before* they reach the next step --
   which, when the next step is a model, is the difference between a cheap call
@@ -107,15 +102,13 @@ first-class syntax here:
   statement reports is what was true by the time it ran. A `wait` on a node the
   flow *lends* rather than writes is the exception that is not a wait at all: it
   ends the node, and at once, which is why the idiom is `drain n after <call>`.
-* **Nodes of a flow's own.** `x = node()` makes a stream the flow can write
-  from several places and read back from one; `x = node(where-they-said)`
-  attaches
-  to a node somebody else named, and `x.id` hands a node to an action that
+* **Flow-owned nodes.** `x = node()` makes a stream the flow can write
+  from several places and read back from one; `x = node(existing-id)` attaches
+  to an existing node, and `x.id` passes a node identifier to an action that
   expects to be told where to write. A node lands in the active node map,
   which is what keeps it off the wire.
-* **Headers, which are how a call is told *about* itself.** A11 gives a nested
-  action every `x-a11-` header of its parent already, so a model or a deadline
-  reaches a step without the flow saying anything. For the rest --
+* **Headers.** A11 automatically gives a nested action every `x-a11-` header of
+  its parent. For other headers, such as
   an `authorization`, a tenant id — `forward headers "authorization"` sends on
   what the flow was called with, as it arrived, and `"x-tenant-*"` sends on a
   family. `with "header": expr` is the other half, for a value the flow
@@ -124,12 +117,11 @@ first-class syntax here:
 
 ## Failures a flow expects
 
-Not every failure should end a composition. `try` says so — on either verb --
-and from there the flow is in charge:
+Use `try` with either verb when the flow will handle a failure:
 
 ```
 page = try run web-fetch(url: url)
-outcome = wait page                       # waits, and says how it went
+outcome = wait page                       # wait and read the status
 if not outcome.ok {
   fail unavailable outcome.message        # or `fail outcome`, unchanged
 }
@@ -147,11 +139,10 @@ a flow said it would handle.
 
 A file may declare more than one flow, and a flow may `run` or `call` any of the
 others by name — in whichever order they are written, and with nothing
-registered for them. That is what lets a composition be *factored*: the part
-worth reusing becomes a flow of its own, the part that reads badly inline becomes
-another, and the whole thing still arrives as one text with one entry point.
+registered for them. This supports extracting reusable or complex sections into
+named flows while keeping one source document and entry point.
 Ports are checked between them at compile time, exactly as they are against a
-registered action, so a rename that breaks a caller says so before anything runs.
+registered action, so an incompatible rename is reported before execution.
 
 ```
 flow ask {                        # the piece, reusable on its own
@@ -187,7 +178,8 @@ statement  := [name "="] call
             | "skip" (number reference | skip-target ("," skip-target)*)
 destination := reference | "_"      # `_` keeps nothing, and is not a name
 skip-target := pipeline
-            | name ("," name)* "of" name   # or "(" name ("," name)* [ "of" name ] ")"
+            | name ("," name)* "of" name
+            | "(" name ("," name)* [ "of" name ] ")"
             | "cancel" name
             | "abort" reference [expr [expr]]
             | "fail" [expr [expr]]
@@ -244,10 +236,10 @@ MATCHING: `match` pulls named fields out of text, as a stage over a stream and
       be read at all is refused where it is written, because it is a literal
       almost every time and a silent no-match would hide the typo.
 
-FIELDS: two things say what a value holds, and reading a field it does not have is
+FIELDS: two sources define a value's fields. Missing fields are
       reported for both: a port declared with a `struct`, and a `match` pattern,
       whose holes *are* its fields. Where the file never said -- a port carrying
-      `object` or `json`, `it` with no pattern behind it, a positional pattern --
+      `object` or `json`, `it` without a pattern, or a positional pattern --
       nothing is checked, because a value that may hold anything does. One level
       is checked: a field holding a record of its own says nothing about *its*
       keys, so `src.meta.title` checks `meta` and stops.
@@ -404,8 +396,8 @@ flow NAME {
            # an action to *finish* instead is not a language construct: it is
            # `{"command": "stop"} -> X.control_events`, a convention of the
            # standard library rather than of the language.
-           # No port declares the log, nothing drains it, and a flow that
-           # never logs pays nothing for it
+           # The log needs no declared port or manual drain and is created
+           # only when used
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
                                            # names take a tuple apart
   repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
@@ -433,8 +425,8 @@ to each other are one string, so prose that outgrows its line does not need a
 `matching`, a `strformat` — is one literal, since a run there could not be told
 from the argument followed by a description.
 
-A `struct` declares a shape: a record with named, typed, constrained fields, which
-a port may be typed with and a value may be made into. A shape a file declares
+A `struct` declares a record with named, typed, constrained fields. A port may
+use the record as its type, and a value may be coerced into it. A declared shape
 outranks a serialisation tag of the same name — what the file says about the
 name is what the file means by it — and it may hold, and be held by, another
 shape. `A..B` bounds a number, a duration or an instant, and the *length* of a
@@ -458,9 +450,9 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       Reading a stream where a value belongs *takes* a value off it. Two places
       that read one stream for a value take turns on the one view of it, so they
       see two different values rather than two copies of the first: reading the
-      first value and ignoring the rest is exactly the mistake nobody finds out
-      about. Which of them gets which value is not defined; `after` is how a flow
-      that cares says so — except *within* one statement, where there is no
+      first value and ignoring the rest would lose data silently. Which reader
+      receives each value is undefined; `after` can order separate statements.
+      Within one statement there is no
       `after` that could order two reads of one node against each other, and the
       language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
       it names a value, and a value is shared. A stream the language can *prove*
@@ -483,7 +475,8 @@ ONE VALUE: everything here is a stream, which is the right default for dataflow
       `let first, second = pair` by position. They are the same statement, and
       which one is meant is a question about the value rather than about the
       text: each name is looked up as a field, and as a position where there is
-      no such field. So `let name, age = match("name={name} age={age:int}", line)`
+      no such field. For example:
+      `let name, age = match("name={name} age={age:int}", line)`
       reads what a pattern named. A part is not a value of a stream of its own,
       so `advance` on one says so rather than binding the next whole value.
 
@@ -543,9 +536,8 @@ STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
       A per-value stage may say `parallel N` to work on N values at once, and
       what follows still reads them in the order they arrived. `unordered`
       gives that up for whatever it saves:
-      `urls | map fetch(it) parallel 8 -> bodies`. It is worth writing where
-      the per-value work is expensive (a host round trip, a coercion) and
-      nowhere else.
+      `urls | map fetch(it) parallel 8 -> bodies`. Use it for substantial
+      per-value work such as a host round trip or coercion.
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
       Text stops at a character boundary rather than splitting one. A value
@@ -627,7 +619,8 @@ TIME: durations are written 500ns, 250ms, 30s, 2m, 1h, compound as 1m30s500ms,
       duration, and a bare number on either side counts as seconds. A duration
       the other way round is below zero and says so.
       duration(x) and time(x) read a value in: a number of seconds, or the text
-      the language itself writes — duration("1m30s"), time("2026-08-11T09:14:22Z")
+      the language writes: duration("1m30s") or
+      time("2026-08-11T09:14:22Z")
       — so a duration or an instant that arrived as a string is a value again.
       seconds(d) is the number of seconds.
       Formatting: %s gives `1m30s` and `2026-08-11T09:14:22Z`,
@@ -714,9 +707,13 @@ def run_program(
     from a11.sdk import llm_tools
 
     registry = ActionRegistry()
-    llm_tools.register(registry)                 # interact_with_llm, and friends
-    flow.run_program(source, "summarise.flow", registry=registry,
-                     arguments=["summarise.flow", "notes.txt"])
+    llm_tools.register(registry)
+    flow.run_program(
+        source,
+        "summarise.flow",
+        registry=registry,
+        arguments=["summarise.flow", "notes.txt"],
+    )
     ```
 
     A name already in `registry` is never replaced by the standard library's: a
@@ -811,7 +808,9 @@ def request(payload: Mapping[str, Any]) -> dict[str, Any]:
     from a11 import flow
 
     problems = flow.request({"method": "check", "source": "flow t { }"})
-    schema = flow.request({"method": "schema", "source": src, "struct": "Source"})
+    schema = flow.request(
+        {"method": "schema", "source": src, "struct": "Source"}
+    )
     ```
     """
     return _flow.request(dict(payload))

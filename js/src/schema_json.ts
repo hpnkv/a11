@@ -15,10 +15,10 @@
  * `required` and `unary` are written only when true, and a port's `json_schema`
  * only when it says more than `{"type": "object"}` -- which is what an adapter
  * shows a model for a port carrying no schema at all. Every reader fills in
- * {@link ActionPortSchema}'s own defaults, so what is absent and what is spelled
- * out mean the same thing. Those defaults are this document's and not A11's
- * everywhere: `flow.catalogue/v1` defaults `unary` to true and omits it when
- * true, the opposite convention for a different format.
+ * {@link ActionPortSchema}'s own defaults, so what is absent and what is
+ * spelled out mean the same thing. Those defaults are this document's and not
+ * A11's everywhere: `flow.catalogue/v1` defaults `unary` to true and omits it
+ * when true, the opposite convention for a different format.
  */
 
 import {
@@ -76,10 +76,10 @@ export interface SchemaDocument {
 }
 
 /**
- * Whether a JSON Schema says nothing, and so is not worth writing down.
+ * Returns whether a JSON Schema contains no constraints.
  *
- * A port with no schema is shown to a model as `{"type": "object"}` anyway, so a
- * document spelling that out states exactly what leaving it out does.
+ * A port with no schema is shown to a model as `{"type": "object"}` anyway, so
+ * a document spelling that out states exactly what leaving it out does.
  */
 function saysNothing(schema: unknown): boolean {
   return (
@@ -189,7 +189,7 @@ export function schemaToJson(
  * The schema an entry was written from.
  *
  * What cannot survive the trip comes back empty: an input's autofills are
- * receiver-owned defaults that deliberately never travel. A `user_facing` flag
+ * receiver-owned defaults and remain local. A `user_facing` flag
  * from an older client is read and dropped -- narration travels on the reserved
  * log port, which no schema declares.
  */
@@ -234,7 +234,8 @@ export function schemaFromJson(entry: SchemaEntry): StatusOr<ActionSchema> {
   if (entry.output_to_json_field && typeof entry.output_to_json_field === 'object') {
     for (const [output, field] of Object.entries(entry.output_to_json_field)) {
       // Only a mapping onto a port that came with it: an output named here and
-      // absent above would fail validation with a message about the wrong thing.
+      // absent above would fail validation with a message about the wrong
+      // thing.
       if (typeof field !== 'string' || !outputs.has(output)) continue;
       outputToJsonField.set(output, field);
     }

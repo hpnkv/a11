@@ -2,15 +2,13 @@
 
 """Talking to an A11 exchange over its HTTP API.
 
-The exchange is a separate service with a documented HTTP contract, and this is
-A11's client for it -- what `a11 register`, `a11 login` and `a11 serve --hosted`
-use. It deliberately knows only the protocol, not the implementation: the
-dependency runs A11 -> exchange over HTTP and never over an import, which is
-what lets the exchange live in its own repository.
+The exchange is a separate service with a documented HTTP contract. This client
+supports `a11 register`, `a11 login`, and `a11 serve --hosted` through that
+protocol without importing the exchange implementation.
 
-Errors come back as `Status` documents, so they are re-raised as
-`StatusException` with the code the service chose. A client can therefore tell
-"renew this claim" from "this key is dead" without parsing prose.
+Errors are returned as `Status` documents and raised as `StatusException` with
+the service's code, allowing callers to handle claim renewal and invalid keys
+without parsing messages.
 """
 
 from __future__ import annotations
@@ -99,7 +97,9 @@ class ExchangeClient:
         except httpx.HTTPError as exc:
             raise Status(
                 code=StatusCode.UNAVAILABLE,
-                message=f"Could not reach the exchange at {self.base_url}: {exc}",
+                message=(
+                    f"Could not reach the exchange at {self.base_url}: {exc}"
+                ),
             ).to_exception() from exc
 
         if response.status_code >= 400:
@@ -176,10 +176,10 @@ class ExchangeClient:
     ) -> dict:
         """Register a name to host under.
 
-        ``scoped`` puts the organization's own name in front of ``name`` and
-        registers a disposable identity rather than reserving a global one --
-        which is only worth doing up front to say something about it, such as
-        making it public, since claiming a scoped name creates it anyway.
+        ``scoped`` prefixes ``name`` with the organization and registers a
+        disposable identity. Register it explicitly when metadata such as
+        public visibility is required; claiming a scoped name otherwise creates
+        it automatically.
         """
         return await self._request(
             "POST",
@@ -266,9 +266,7 @@ class ExchangeClient:
         params = {}
         if identity and claim:
             params = {"identity": identity, "claim": claim}
-        payload = await self._request(
-            "GET", "/v1/ice-servers", params=params
-        )
+        payload = await self._request("GET", "/v1/ice-servers", params=params)
         return list(payload.get("ice_servers", []))
 
     # --- keys -----------------------------------------------------------

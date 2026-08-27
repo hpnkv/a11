@@ -1,10 +1,8 @@
 """Text to image, as an action with a port per thing the caller cares about.
 
-The image is one payload at the end; the progress is a stream that runs the
-whole time; and they are separate ports, so a client renders a step counter
-without waiting for pixels and receives pixels without polling for a step. That
-is the whole reason this is worth showing: the same work behind one
-request/response would have to choose between the two.
+The image is one final payload, while progress is a stream on a separate port.
+A client can render step updates before the image is ready and receive the
+image without polling.
 
 Needs `diffusers`, `torch` and a Stable Diffusion checkpoint on the machine
 running it. Without them the action fails with `FAILED_PRECONDITION` and says

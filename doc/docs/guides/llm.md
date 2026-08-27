@@ -60,7 +60,7 @@ stream_task = asyncio.create_task(stream_text())
 The input side takes three ports:
 
 - `interactions` — the conversation so far, ending with the new user turn;
-- `config` — model settings (defaults are fine, so we just open and close it);
+- `config` — model settings; close it empty to use backend defaults;
 - `tools` — tool definitions; here there are none, so we close it empty.
 
 An `Interaction` is a role plus content chunks:

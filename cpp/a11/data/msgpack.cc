@@ -255,12 +255,6 @@ void AppendByte(std::string* absl_nonnull out, std::uint8_t byte) {
 }
 
 // Encode buffers, reused per thread.
-//
-// A nested record is encoded into one of these and then copied into its parent
-// as a binary field, so without pooling every record at every level would
-// allocate a buffer whose lifetime ends immediately. Records nest about four
-// deep and each level holds its buffer only while its children encode, so a
-// handful per thread is all that is ever live.
 constexpr size_t kMaxPooledBuffers = 8;
 // A buffer that grew to hold one large message is not worth keeping alive for
 // the rest of the thread's life; the pool exists for the steady stream of small
@@ -344,9 +338,8 @@ void MsgpackWriter::PackUint(std::uint64_t value) {
 }
 
 void MsgpackWriter::PackInt(std::int64_t value) {
-  // MessagePack does not distinguish a non-negative signed integer from an
-  // unsigned one, and neither does nlohmann when it encodes: it takes the
-  // unsigned path. Matching that is what keeps the bytes identical.
+  // MessagePack does not distinguish non-negative signed integers from unsigned
+  // integers. Use nlohmann's unsigned encoding to keep the bytes identical.
   if (value >= 0) {
     PackUint(static_cast<std::uint64_t>(value));
     return;

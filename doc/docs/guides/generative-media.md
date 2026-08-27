@@ -1,10 +1,9 @@
 # A port per thing the caller cares about
 
-Image generation is the shortest example of why an action has ports rather than a
-return value. One request produces two entirely different things: a step counter
-that matters *while* the work runs, and a payload that arrives at the end. Behind
-one request/response you have to choose which one to serve; with a port each, you
-serve both.
+Image generation provides a compact example of separate action ports. One
+request produces two different results: a step counter used while the work runs
+and a payload delivered at the end. Separate ports make both available without
+combining progress and final output into one response.
 
 !!! note "Before you start"
 
@@ -57,8 +56,8 @@ The action is
 [`a11/demos/text_to_image.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/text_to_image.py)
 and the page is
 [`js/demo/generative_media.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/generative_media.ts).
-[HTTP as separate streams](../api/http-actions.md) applies the same
-port-per-concern idea to a protocol rather than to a model.
+[HTTP as separate streams](../api/http-actions.md) applies the same design to
+HTTP protocol fields.
 
 ## 1. The contract
 
@@ -83,10 +82,10 @@ TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
 )
 ```
 
-`unary=True` says a port carries one whole value; `progress` says nothing, so it
-is a stream. The request is plain JSON rather than a tagged type on purpose: the
-caller is a browser, and `application/json` is a complete description that needs
-no shared type table. The handler validates it into a pydantic model on arrival:
+`unary=True` declares a port that carries one complete value. Without it,
+`progress` is a stream. The browser sends the request as plain JSON, which needs
+no shared type registry. The handler validates it into a Pydantic model on
+arrival:
 
 ```python
 request = DiffusionRequest.model_validate(await action["request"].consume(dict))
@@ -111,24 +110,22 @@ def on_step(_pipeline, step, _timestep, kwargs):
 result = await asyncio.to_thread(pipeline, request.prompt, callback_on_step_end=on_step, ...)
 ```
 
-The confirmation future each `put` returns is dropped here, which is the right
-trade for a progress tick: the value is worth sending, not worth blocking a
-denoising step for. A payload you must not lose is awaited twice —
-`await (await node.put(value))` — the way
+The handler does not await each progress tick's confirmation future, so a
+denoising step does not wait for storage. Await both stages for payloads that
+must be confirmed — `await (await node.put(value))` — as
 `a11.gateway.conversations.ConversationStore.record` does.
 
 Both ports are closed however the handler ends:
 
 ```python
 finally:
-    # Closed rather than finalized: `progress` has no last event worth marking,
-    # and `image_out` marked its own PNG final -- or failed before it had one.
+    # `progress` has no final event. `image_out` finalizes the PNG itself or
+    # fails before producing one.
     await progress.close()
     await image_out.close()
 ```
 
-An output port nobody closes leaves its reader waiting for a stream that has
-already stopped.
+Close every output port so readers can observe the end of the stream.
 
 ## 3. The image is bytes
 
@@ -140,8 +137,8 @@ png = await asyncio.to_thread(_png_bytes, result.images[0])
 await image_out.put(png, mimetype="image/png", final=True)
 ```
 
-In the browser it is read as a *chunk* rather than as a value — there is nothing
-to deserialize a PNG into:
+The browser reads the PNG as a *chunk* because it has no registered application
+type:
 
 ```ts
 const node = need(await call.getOutput('image', false));
@@ -159,7 +156,5 @@ const chunk = need(await node.nextChunk(900_000));
 await progress;
 ```
 
-Not out of tidiness: an output port nobody drains stalls the action producing it,
-so a page that waited for the image before reading `progress` would eventually
-wedge the very work it is waiting for.
-
+An undrained output port stalls its producer. Read `progress` while waiting for
+the image.

@@ -67,10 +67,7 @@ absl::StatusOr<data::Chunk> ValueChunk(const nlohmann::json& value,
         data::ChunkMetadata{.mimetype = std::string(data::kMsgpackMimetype)};
     return chunk;
   }
-  // Checked before nlohmann is asked. a11::DumpJson does catch, but whether the
-  // failure is an exception or a std::abort() depends on which instantiation of
-  // `dump()` the linker kept -- see IsValidUtf8. A filename is exactly the sort
-  // of value that lands here, so the answer has to depend on the bytes.
+  // Checked before nlohmann is asked.
   if (FindUnencodableString(value) != nullptr) {
     return NotEncodableAsJson("this value");
   }
@@ -142,9 +139,7 @@ absl::StatusOr<std::optional<nlohmann::json>> ReadJsonInput(
   const std::string mimetype = chunk->GetMimetype();
   // MessagePack first, and not as an afterthought: A11 treats it as a
   // first-class codec, `| packb` puts it in front of any port, and a producer
-  // upstream may have chosen it for reasons of its own. Reading one of those as
-  // a text payload -- which is what a missing branch here would do -- would
-  // hand this action a string of packed bytes and call it a path.
+  // upstream may have chosen it for reasons of its own.
   if (absl::StartsWith(mimetype, data::kMsgpackMimetype)) {
     ABSL_ASSIGN_OR_RETURN(
         nlohmann::json unpacked,

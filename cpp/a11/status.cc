@@ -193,9 +193,7 @@ nlohmann::json StatusDetails(const absl::Status& status) {
 
 absl::StatusOr<nlohmann::json> StatusToJson(const absl::Status& status) {
   // Building an object out of an int, a string and an array cannot fail:
-  // nlohmann raises on a type mismatch, and there is none to make here. The
-  // StatusOr stays because it is the published signature, and because
-  // StatusFromJson's failure is real.
+  // nlohmann raises on a type mismatch, and there is none to make here.
   return nlohmann::json{{"code", static_cast<int>(status.code())},
                         {"message", std::string(status.message())},
                         {"details", StatusDetails(status)}};
@@ -215,9 +213,7 @@ nlohmann::json StatusToJsonOrEmptyDetails(const absl::Status& status) {
 absl::StatusOr<absl::Status> StatusFromJson(const nlohmann::json& value) {
   // Every read below is preceded by the check that makes it well-typed, so
   // nlohmann has nothing to raise about: `find` before a subscript, and
-  // `is_number_integer`/`is_string`/`is_array` before a `get`. That is the
-  // convention throughout A11's JSON code, and what makes it safe to compile
-  // with exceptions disabled -- see a11/json_codec.h.
+  // `is_number_integer`/`is_string`/`is_array` before a `get`.
   if (!value.is_object() || value.find("code") == value.end() ||
       !value["code"].is_number_integer() ||
       value.find("message") == value.end() || !value["message"].is_string()) {

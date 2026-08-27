@@ -517,9 +517,7 @@ class PythonBridge : public flow::HostBridge {
     }
     // Nothing is registered for a media type that describes bytes rather than a
     // structure -- `application/octet-stream` for a response body, `text/plain`
-    // for a log line -- and the default C++ bridge reads those as a bytes or
-    // string value rather than failing. The two bridges have to agree, or a
-    // flow that runs in a C++ host stops working in a Python one.
+    // for a log line -- and the default C++ bridge reads those as a bytes or.
     if (absl::IsNotFound(from_registry)) {
       const std::string mimetype = chunk.GetMimetype();
       if (absl::StartsWith(mimetype, "text/")) {
@@ -615,6 +613,8 @@ class PythonBridge : public flow::HostBridge {
     return chunks;
   }
 
+  // A value of a `struct` becomes an instance of the pydantic model that shape
+  // describes.
   /// A value of a `struct` becomes an instance of the pydantic model that shape
   /// describes.
   ///
@@ -649,12 +649,9 @@ class PythonBridge : public flow::HostBridge {
  private:
   /// The registry every conversion goes through.
   ///
-  /// The *getter* is cached, not the registry:
-  /// `set_global_serialization_registry` rebinds the module's own global, so
-  /// asking it each time is what keeps a swapped registry honest -- while
-  /// importing the module and looking the getter up again is not. This runs
-  /// twice per value through a stage, which made those two lookups a per-value
-  /// cost of the language.
+  /// Cache the getter, not the registry. `set_global_serialization_registry`
+  /// rebinds the module global, so each conversion calls the cached getter to
+  /// observe replacements without repeating module and attribute lookup.
   ///
   /// REQUIRES: the GIL is held.
   py::object Registry() {
@@ -665,10 +662,9 @@ class PythonBridge : public flow::HostBridge {
     return (*getter_)();
   }
 
-  /// Never destroyed: the bridge itself is a deliberately leaked singleton (see
-  /// [HostBridgeForPython]), so this reference outlives interpreter teardown
-  /// rather than being released without the GIL. See DeferredPythonRefs for the
-  /// cases that are not like that.
+  // The leaked HostBridgeForPython singleton owns this reference beyond
+  // interpreter teardown, avoiding release without the GIL. DeferredPythonRefs
+  // handles objects with shorter lifetimes.
   std::optional<py::object> getter_;
 };
 
@@ -761,9 +757,7 @@ nested bodies and all.
                   dispatch_stream.cast<std::shared_ptr<net::WireStream>>();
             }
             // A native handler, handed over as the opaque holder the bindings
-            // accept anywhere a handler is taken: wrapping it in a Python
-            // callable would bounce every invocation through the interpreter
-            // for nothing, and would need a running loop it does not have.
+            // accept anywhere a handler is taken:
             return py::cast(NativeActionHandler(ValueOrThrow(flow::MakeHandler(
                 self.program, self.name, std::move(options)))));
           },
@@ -815,10 +809,9 @@ them.
           },
           R"doc(Whether the file declares a `flow { ... }` -- a program.
 
-A bool rather than the flow itself, because an entry flow is deliberately
-unaddressable: it has no name, so there is no `program["..."]` that reaches it and
-nothing can `run` or `call` it. What a caller does with this is decide whether to
-run the file with `run_program` or to pick one of `names`.
+Returns a bool because an entry flow has no name and cannot be accessed through
+`program["..."]`, `run`, or `call`. Use this to choose between `run_program` and
+a named flow from `names`.
 )doc")
       .def(
           "get",
@@ -1135,9 +1128,8 @@ the check covers, rather than one a list in Python has to be told about.
 
 Walks each path -- a file or a directory -- for ``ActionSchema`` declarations in
 Python, C++ and TypeScript, and returns a ``flow.catalogue/v1`` payload in which
-every entry carries the ``origin`` it was declared at. That is what makes an
-action somebody wrote this afternoon hoverable in a flow, and what gives it
-somewhere for "go to declaration" to land.
+every entry carries its declaration ``origin``. Editors use that location for
+hover information and "go to declaration".
 
 A tolerant textual read, not a parser for three languages: a schema written as a
 constructor call with literal arguments comes back whole, one assembled statement
@@ -1162,9 +1154,9 @@ merges over the embedded snapshot itself.
           -> py::typing::Dict<py::str, py::object> {
         namespace sdk_flow = a11::sdk::flow;
 
-        // Built here rather than bound as a class: the policy a caller states is
-        // the same short list the command line takes, and a bound struct would
-        // be a second way to say it that could drift from the first.
+        // Built here rather than bound as a class: the policy a caller states
+        // is the same short list the command line takes, and a bound struct
+        // would be a second way to say it that could drift from the first.
         std::vector<std::string> where = roots;
         if (where.empty() && !unrestricted) {
           where.emplace_back(".");
@@ -1212,12 +1204,7 @@ merges over the embedded snapshot itself.
               "session dispatches calls whose replies nothing routes back, and "
               "a session with no stream has nowhere to dispatch them"));
         }
-        // The same bridge `make_handler` installs. Without it the program runs
-        // against A11's own registry, which is keyed by `typeid` and so knows
-        // nothing about a type declared in Python -- so a flow saying
-        // `a11.sdk.Interaction{..}` would fail `unimplemented` in the one place
-        // it is most likely to be written, a program the host handed its own
-        // `interact_with_llm` to.
+        // The same bridge `make_handler` installs.
         how.bridge = HostBridgeForPython();
         if (timeout_seconds.has_value()) {
           how.timeout = absl::Seconds(*timeout_seconds);
@@ -1227,9 +1214,7 @@ merges over the embedded snapshot itself.
 
         // Without the GIL: the program runs to completion here, and everything
         // it does -- reading a file, waiting on a clock, calling an action the
-        // host registered -- happens on A11's fibres. Holding the GIL across it
-        // would deadlock the moment one of those needed to call back into
-        // Python, which is exactly what a host-registered action does.
+        // host registered -- happens on A11's fibres.
         absl::StatusOr<a11::flow::interpreter::RunOutcome> outcome =
             WithoutGil([&] { return a11::flow::interpreter::Run(what, how); });
         if (!outcome.ok()) {
@@ -1257,8 +1242,7 @@ merges over the embedded snapshot itself.
       py::arg("standard_streams") = true,
       // `py::none()`, not a null shared_ptr: a default argument is converted
       // when the function is *defined*, and BindFlow runs before BindActions
-      // registers ActionRegistry -- so a typed default fails at import. The cast
-      // happens at call time instead, when the type is certainly known.
+      // registers ActionRegistry -- so a typed default fails at import.
       py::arg("registry") = py::none(),
       // Same reason as `registry` above: Session and WireStream are registered
       // by other Bind* functions, so these are cast at call time.

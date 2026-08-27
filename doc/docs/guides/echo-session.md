@@ -45,7 +45,7 @@ options.path = "/ws"
 server = a11.WebSocketWireServer.create(accept, options)
 ```
 
-`server.port` is the port it bound to — handy when you let the OS choose one.
+`server.port` reports the bound port, including an OS-assigned port.
 
 ## Connect a client
 

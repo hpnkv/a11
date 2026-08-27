@@ -1,40 +1,30 @@
 /**
- * Applying a unified diff to a file, by its context rather than by its numbers.
+ * Applies a unified diff to a file using its context.
  *
- * A port of `intellij-plugin/.../tools/Patch.kt`, kept line for line in behaviour
- * because it is the one tool here whose logic is real and whose failure mode is
- * expensive: a fuzzy match is how a tool silently rewrites the wrong lines. Not
- * *shared* with that file, because it is written against a different editor's
- * document API and a Kotlin implementation is not runnable here — but the same
- * decisions, and the test fixtures are the same cases.
+ * This implements the same matching rules and test cases as
+ * `intellij-plugin/.../tools/Patch.kt`. The editor document APIs require
+ * separate TypeScript and Kotlin implementations.
  *
- * Three decisions worth knowing, all of them the Kotlin file's:
+ * The implementation follows three constraints shared with the Kotlin version:
  *
- * * **Hunks are placed by their context**, not by the numbers in the `@@` header.
- *   The header's line is *tried first* — a patch generated against this very file
- *   lands there and the scan is a formality — and then every line from where the
- *   last hunk ended.
- * * **A hunk that does not match is refused, and nothing is applied.** The message
- *   says what is at that line instead, because the useful next move is to read the
- *   file again rather than to try harder.
- * * **Two slips a hand- or model-written diff makes are read for what they are**: a
- *   context line missing its leading space, and markers indented as a block. The
- *   file itself settles which is meant, which is not fuzz — it is the one
- *   ambiguity only the file can resolve.
+ * - Hunks use context, with the `@@` line number tried first as a hint.
+ * - Every hunk must match before any edit is applied. Mismatch errors include
+ *   the current file text.
+ * - Context lines without a leading marker and block-indented markers are
+ *   accepted when their text matches the file.
  */
 
 /** One line of a diff: what it does, and the text either way of reading it. */
 interface PatchLine {
   /** `+`, `-`, or ' ' for a line the hunk keeps. */
   kind: '+' | '-' | ' ';
-  /** The line with its marker taken off, which is what the diff says it is. */
+  /** The line with its diff marker removed. */
   text: string;
   /**
    * The line exactly as written, marker and all.
    *
-   * The other spelling to try: a line of an indented file *starts* with a space,
-   * so a patch that leaves the ' ' prefix off a context line is indistinguishable
-   * from one that includes it and means a line indented one space less.
+   * Used when a context line omitted its leading `' '` marker. This form is
+   * ambiguous with content indented by one fewer space, so the file must match.
    */
   raw: string;
 }
@@ -58,10 +48,8 @@ function after(hunk: Hunk): PatchLine[] {
 /**
  * Whether a patch line and a file line are the same line.
  *
- * Trailing whitespace is ignored, and only trailing: a diff that has been through
- * a chat window, a JSON string or an editor that strips it should still apply,
- * while indentation — which is meaning, in more than one language — has to be
- * exactly right.
+ * Trailing whitespace is ignored because transport or editors may strip it.
+ * Leading whitespace remains significant.
  */
 function sameLine(expected: string, actual: string): boolean {
   return expected.replace(/\s+$/, '') === actual.replace(/\s+$/, '');
@@ -72,24 +60,24 @@ const HEADER = /^@@\s*-(\d+)(?:,\d+)?\s+\+\d+(?:,\d+)?\s*@@/;
 /**
  * Every hunk of a unified diff, in order.
  *
- * File headers are skipped rather than checked: the file is a separate input, so
- * a `---`/`+++` pair says nothing the caller has not already said, and a patch
- * generated for one path should still apply to the one it was sent with.
+ * File headers are ignored because the target file is a separate input. This
+ * also permits applying a patch generated for one path to an explicit target.
  */
 function parseHunks(patch: string, indented: boolean): Hunk[] {
   const hunks: Hunk[] = [];
   let current: Hunk | undefined;
-  // A patch that ends with a newline does not have an empty last line: that break
-  // belongs to the line before it. Keeping it would add a phantom context line,
-  // which is a hunk that matches somewhere else entirely.
+  // A patch that ends with a newline does not have an empty last line: that
+  // break belongs to the line before it. Keeping it would add a phantom context
+  // line, which is a hunk that matches somewhere else entirely.
   const lines = patch.split('\n');
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
 
   for (const raw of lines) {
     // With `indented`, whatever whitespace was put in front of the marker comes
     // off first, which is the second slip a written-by-hand diff makes. Before
-    // the header is looked for, not after: an indented `@@` line read as written
-    // is a context line, and a hunk that swallowed its own header matches nothing.
+    // the header is looked for, not after: an indented `@@` line read as
+    // written is a context line, and a hunk that swallowed its own header
+    // matches nothing.
     const line = indented ? raw.replace(/^[ \t]+/, '') : raw;
     const header = HEADER.exec(line);
     if (header) {
@@ -134,8 +122,9 @@ export interface Placed {
  * The lines to leave at `start` if the hunk matches the file there, else
  * undefined.
  *
- * Both spellings of every kept and removed line are tried, and whichever matched
- * is what goes back: a kept line is the *file's* line, not the patch's copy of it.
+ * Both spellings of every kept and removed line are tried, and whichever
+ * matched is what goes back: a kept line is the *file's* line, not the patch's
+ * copy of it.
  */
 function matchAt(file: string[], hunk: Hunk, start: number): string[] | undefined {
   const expected = before(hunk);
@@ -239,19 +228,18 @@ export interface PatchOutcome {
 /**
  * `patch` applied to `text`.
  *
- * Throws with what is in the file instead when a hunk does not match, and applies
- * nothing in that case: the caller turns one outcome into one editor edit, so a
- * patch either lands whole or does not land.
+ * Throws with what is in the file instead when a hunk does not match, and
+ * applies nothing in that case: the caller turns one outcome into one editor
+ * edit, so a patch either lands whole or does not land.
  *
- * Tried twice, which is the second slip: once as written, and once with the
- * markers un-indented, for a diff that arrived inside a bulleted list or a quoted
- * block. The un-indented reading is used only if the first one found nothing.
+ * Parsing first uses the patch as written, then retries with unindented markers
+ * to support diffs copied from a list or quoted block.
  */
 export function applyPatch(text: string, patch: string): PatchOutcome {
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
   const file = text.split(/\r?\n/);
-  // A trailing newline makes an empty last element, which is the end of the file
-  // rather than a line of it. Remembered so it can be put back.
+  // A trailing newline makes an empty last element, which is the end of the
+  // file rather than a line of it. Remembered so it can be put back.
   const trailing = file.length > 0 && file[file.length - 1] === '';
   if (trailing) file.pop();
 

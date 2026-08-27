@@ -23,22 +23,23 @@ import java.util.concurrent.atomic.AtomicLong
  * **The gap this closes.** The language ships a snapshot of what the SDK
  * registers, so hovering `interact_with_llm` has always said something useful.
  * An action somebody wrote this afternoon in a file two directories away was in
- * no snapshot: hovering its name said "action name", completing its ports offered
- * nothing, and there was nowhere for Ctrl+B to go. That is the common case for
- * anybody composing their own actions, and it was the case the editor knew least
- * about.
+ * no snapshot: hovering its name said "action name", completing its ports
+ * offered nothing, and there was nowhere for Ctrl+B to go. That is the common
+ * case for anybody composing their own actions, and it was the case the editor
+ * knew least about.
  *
  * **How.** `a11-flow` reads the project's own `.py`, `.cc` and `.ts` for
  * `ActionSchema` declarations and answers a catalogue in which every entry
  * carries the file and line it was written at. This hands that to [FlowEngine],
  * which sends it with every hover, completion and go-to-declaration afterwards.
- * No language knowledge here and no second scanner: the reading is the same code
+ * No language knowledge here and no second scanner: the reading is the same
+ * code
  * `a11 flow scan` and CI run, and this is the wiring.
  *
  * **When.** Once when the project opens, and again a moment after a source file
  * is saved. Debounced, because a save-all over twenty files is one interesting
- * event, and off the UI thread, because walking a tree is not something to do on
- * it.
+ * event, and off the UI thread, because walking a tree is not something to do
+ * on it.
  */
 @Service(Service.Level.PROJECT)
 class FlowCatalogueService(private val project: Project) : Disposable {
@@ -70,10 +71,11 @@ class FlowCatalogueService(private val project: Project) : Disposable {
     }
 
     /**
-     * Whether one filesystem event could have changed what this project declares.
+     * Whether one filesystem event could have changed what this project
+     * declares.
      *
-     * Only the three languages a scan reads, and only the events that change what
-     * is in a file. Everything else -- a `.flow` saved, a build directory
+     * Only the three languages a scan reads, and only the events that change
+     * what is in a file. Everything else -- a `.flow` saved, a build directory
      * rewritten, a file opened -- is not a reason to walk the tree again.
      */
     private fun interesting(event: VFileEvent): Boolean {
@@ -105,8 +107,8 @@ class FlowCatalogueService(private val project: Project) : Disposable {
             }
             scheduled.set(false)
             if (generation.get() != mine) {
-                // Something asked again while this was waiting, and that request
-                // scheduled its own run.
+                // Something asked again while this was waiting, and that
+                // request scheduled its own run.
                 return@executeOnPooledThread
             }
             read()
@@ -135,7 +137,10 @@ class FlowCatalogueService(private val project: Project) : Disposable {
         FlowEngine.instance().setProjectCatalogue(key(), answer)
     }
 
-    /** This project's key in the engine, which is one process for the whole IDE. */
+    /**
+     * This project's key in the engine,
+     * which is one process for the whole IDE.
+     */
     private fun key(): String = project.basePath ?: project.name
 
     override fun dispose() {
@@ -154,7 +159,10 @@ class FlowCatalogueService(private val project: Project) : Disposable {
         private val SCANNED_EXTENSIONS =
             listOf(".py", ".pyi", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".ts", ".tsx", ".mts", ".js", ".mjs", ".jsx")
 
-        /** Directories a scan does not descend into, so an event in one is not news. */
+        /**
+         * Directories a scan does not descend
+         * into, so an event in one is not news.
+         */
         private val SKIPPED =
             listOf("/node_modules/", "/.venv/", "/build/", "/dist/", "/__pycache__/", "/.git/")
 
@@ -165,8 +173,8 @@ class FlowCatalogueService(private val project: Project) : Disposable {
 /**
  * Read the project's actions when it opens.
  *
- * A startup activity rather than eager service construction, so a project that
- * never opens a flow pays nothing until the IDE is idle enough to run this.
+ * A startup activity defers scanning until the IDE is idle and avoids work for
+ * projects that never open Flow files.
  */
 class FlowCatalogueStartup : ProjectActivity {
     override suspend fun execute(project: Project) {
@@ -174,7 +182,9 @@ class FlowCatalogueStartup : ProjectActivity {
     }
 }
 
-/** Whether `file` is one a scan would read, for a caller with a [VirtualFile]. */
+/**
+ * Whether `file` is one a scan would read, for a caller with a [VirtualFile].
+ */
 internal fun scannable(file: VirtualFile): Boolean =
     file.extension?.lowercase() in
         setOf("py", "pyi", "cc", "cpp", "cxx", "h", "hpp", "ts", "tsx", "mts", "js", "mjs", "jsx")

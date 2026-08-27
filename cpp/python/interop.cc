@@ -28,19 +28,10 @@
 namespace a11::python {
 namespace {
 
-// (GilForDestructor was here. It acquired the GIL in destructors, guarded on
-// Py_IsInitialized(), and every one of its users has been converted to
-// DeferredPythonRefs: a destructor cannot take the GIL safely, because it may run
-// on a pool worker and no check can close the race against finalization.)
+// (GilForDestructor was here.
 
 // The last event loop A11 was seen running on, for an owner that could not
 // capture one when it was created.
-//
-// Deliberately never destroyed and never released: a strong reference held for
-// the life of the process cannot be retired at the wrong moment, and one loop
-// object outliving the interpreter costs nothing. `absl::Mutex` rather than
-// `thread::Mutex` for the same reason as DeferredPythonRefs -- this is reachable
-// with the GIL held, and a fibre-aware mutex wants a scheduler.
 absl::Mutex& RememberedLoopMutex() {
   static absl::NoDestructor<absl::Mutex> mutex;
   return *mutex;
@@ -75,8 +66,7 @@ void PythonLoop::Remember(const std::shared_ptr<PythonLoop>& loop) {
   }
   // Callers hold the GIL, so nothing inside this section may reach for it: the
   // assignment copies a shared_ptr and, at most, retires the previous loop's
-  // reference, which only queues. Taking the GIL under this lock would deadlock
-  // against a thread holding the GIL and waiting here.
+  // reference, which only queues.
   absl::MutexLock lock(RememberedLoopMutex());
   RememberedLoop() = loop;
 }
@@ -174,10 +164,7 @@ bool PythonLoop::IsClosed() const {
 }
 
 PythonLoop::~PythonLoop() {
-  // Deferred, not released here. Every Python callback holds a PythonLoop, so
-  // this destructor runs wherever the last callback died -- typically a pool
-  // worker -- and acquiring the GIL there races finalization. See
-  // DeferredPythonRefs.
+  // Deferred, not released here.
   DeferredPythonRefs::Retire(std::exchange(loop_, nullptr));
 }
 
@@ -447,7 +434,8 @@ PythonReferences::PythonReferences(py::handle loop, py::handle future,
       loop_thread_(PyThread_get_thread_ident()) {}
 
 PythonReferences::~PythonReferences() {
-  // Deferred; see DeferredPythonRefs. ClearWithGilHeld() remains for the callers
+  // Deferred; see DeferredPythonRefs. ClearWithGilHeld() remains for the
+  // callers
   // that genuinely hold the GIL and want the references gone now.
   DeferredPythonRefs::Retire(std::exchange(loop_, nullptr));
   DeferredPythonRefs::Retire(std::exchange(future_, nullptr));

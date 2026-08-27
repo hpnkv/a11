@@ -4,9 +4,8 @@
  * @file
  * @brief The filesystem as Actions: streaming in, streaming out.
  *
- * These are the actions that turn a `.flow` file from a description of other
- * people's deployed work into a program that can do something on its own. There
- * is nothing clever in any of them; what matters is the shape.
+ * These actions let Flow programs read and write local files through explicit
+ * streaming ports.
  *
  * ### Why streaming is the point rather than a detail
  *
@@ -31,7 +30,7 @@
  *
  * @code{.a11flow}
  *   f = run read_file(path: path)
- *   if f.info.size > 100000000 { fail resource_exhausted "too big to summarise" }
+ *   if f.info.size > 100000000 { fail resource_exhausted "too large" }
  * @endcode
  *
  * ### What happens when a run does not finish

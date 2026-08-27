@@ -513,11 +513,7 @@ void BindService(py::module_& module) {
              std::shared_ptr<net::WireStream> origin_stream) {
             // Without the GIL: DispatchWireMessage does real work before it
             // hands back a future -- it can park in the fibre scheduler -- and
-            // this runs as an ordinary event-loop callback. Holding the GIL
-            // across it deadlocks the process: a store completion on a worker
-            // thread needs the GIL to resolve a Python future, while the loop
-            // thread that holds the GIL is parked waiting for exactly that
-            // work.
+            // this runs as an ordinary event-loop callback.
             return FutureToPython(WithoutGil([&] {
               return self->DispatchWireMessage(std::move(message),
                                                std::move(origin_stream));
@@ -781,8 +777,7 @@ Examples:
              if (!on_connection.is_none()) {
                // The same mechanism `on_stream_message` uses: capture the
                // asyncio loop now, and hand the call back to it from whichever
-               // fiber accepts the connection. So a Python hook -- the gateway's
-               // registry copy and tool-bridge bind -- stays plain Python.
+               // fiber accepts the connection.
                std::shared_ptr<PythonSessionCallback> callback =
                    ValueOrThrow(PythonSessionCallback::Create(on_connection,
                                                               "on_connection"));

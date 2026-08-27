@@ -21,9 +21,9 @@ namespace {
 
 /// Where in a declaration the classifier is, which is all the state it needs.
 ///
-/// Every one of these is a position the grammar gives a word a meaning in that it
-/// has nowhere else. They are the states the plugin's hand-written lexer had, and
-/// they are here now instead.
+/// Every one of these is a position the grammar gives a word a meaning in that
+/// it has nowhere else. They are the states the plugin's hand-written lexer
+/// had, and they are here now instead.
 enum class State {
   /// Nowhere in particular: the word before says nothing about this one.
   kDefault,
@@ -52,7 +52,8 @@ enum class State {
   /// Inside the dotted tag of a `Tag{...}` value, up to the `{`.
   ///
   /// Its own state because the decision is made at the front of the chain -- a
-  /// `{` after a *dotted* name is a type, a `{` after a bare one opens a block --
+  /// `{` after a *dotted* name is a type, a `{` after a bare one opens a block
+  /// --
   /// and the parts after the first dot have no way to see that from where they
   /// stand.
   kInTypeTag,
@@ -87,7 +88,8 @@ class Classifier {
 
   /// The next token that is not a comment or a line break.
   ///
-  /// Comments and breaks say nothing, so the context carries across them: `call`
+  /// Comments and breaks say nothing, so the context carries across them:
+  /// `call`
   /// on one line and its action on the next is still an action name.
   [[nodiscard]] const Token& NextReal(size_t from) const {
     for (size_t index = from; index < tokens_.size(); ++index) {
@@ -114,13 +116,16 @@ class Classifier {
 
   /// Whether `in`/`out` here opens a port declaration.
   ///
-  /// `in` is four other things as well -- a `for`'s, a node's, the comparison --
+  /// `in` is four other things as well -- a `for`'s, a node's, the comparison
+  /// --
   /// so the word alone will not do. A port is the one shape where a name and a
   /// `:` follow, which is the lookahead the parser makes too.
   [[nodiscard]] bool PortDeclarationFollows() const {
     return At(index_ + 1).IsWord() && At(index_ + 2).kind == TokenKind::kColon;
   }
 
+  // Whether the word here is the start of a longer expression rather than a
+  // word standing alone: `error.message`, `levels[0]`, `info(x)`.
   /// Whether the word here is the start of a longer expression rather than a
   /// word standing alone: `error.message`, `levels[0]`, `info(x)`.
   ///
@@ -156,7 +161,8 @@ class Classifier {
   /// Whether this word starts the tag of a `Tag{...}` value.
   ///
   /// A `.` somewhere in the name is required, because a bare `name {` is a name
-  /// and a block -- which is what keeps `if outcome {` reading as it always has.
+  /// and a block -- which is what keeps `if outcome {` reading as it always
+  /// has.
   [[nodiscard]] bool TypeLiteralFollows() const {
     size_t index = index_;
     bool dotted = false;
@@ -174,17 +180,15 @@ class Classifier {
       return false;
     }
     // A dotted name before a `{` is always a tag: nothing else is written that
-    // way. A *bare* one is a shape the file declares -- `Source{..}` -- unless
-    // the brace it is in front of opens a block, which is the parser's own rule
-    // and is decided by the word the line began with.
+    // way.
     return dotted || !LineOpensBlock();
   }
 
   /// Whether the line being read is a block header: `flow x {`, `if c {`.
   ///
-  /// The same judgement `ParserImpl::brace_literals_` makes, arrived at from the
-  /// token stream alone: only these words open a body, and each of them opens it
-  /// at the head of its line. Everywhere else a `{` holds a value.
+  /// The same judgement `ParserImpl::brace_literals_` makes, arrived at from
+  /// the token stream alone: only these words open a body, and each of them
+  /// opens it at the head of its line. Everywhere else a `{` holds a value.
   [[nodiscard]] bool LineOpensBlock() const {
     size_t at = index_;
     while (at > 0 && At(at - 1).kind != TokenKind::kNewline) {
@@ -249,8 +253,8 @@ class Classifier {
       return SemanticKind::kMember;
     }
     // Inside a shape, the word before a `:` is the field's own name -- whatever
-    // else that word means elsewhere. Without this a field called `id` or `with`
-    // would be coloured as the call modifier it is not.
+    // else that word means elsewhere. Without this a field called `id` or
+    // `with` would be coloured as the call modifier it is not.
     if (InFieldPosition() && At(index_ + 1).kind == TokenKind::kColon) {
       return SemanticKind::kIdentifier;
     }
@@ -329,7 +333,8 @@ class Classifier {
     if (vocabulary::StatementWords().contains(word) ||
         vocabulary::SourceWords().contains(word) ||
         vocabulary::ClauseWords().contains(word)) {
-      // A statement word before a single `=` is a binding name: `run = run x()`.
+      // A statement word before a single `=` is a binding name: `run = run
+      // x()`.
       if (AssignmentFollows()) {
         return SemanticKind::kIdentifier;
       }
@@ -385,8 +390,7 @@ class Classifier {
     }
     // A header's declaration runs to the end of its line, and *everything* on
     // it belongs to the declaration -- including the strings, which is what a
-    // header's name and a text default are. Checked here, before the switch
-    // below sends a string to the default case and loses the state.
+    // header's name and a text default are.
     if (state_ == State::kInHeader) {
       if (token.kind == TokenKind::kNewline) {
         state_ = State::kDefault;
@@ -398,20 +402,14 @@ class Classifier {
       case TokenKind::kNewline:
         // A **declaration** is one line: what follows the next one is not its
         // port's type, and not the type a cast on the line above asked for.
-        // Everything else carries across a break, which is what lets `call` on
-        // one line and its action on the next still be an action name -- see
-        // [NextReal].
-        //
-        // `kAfterCast` used not to be in this list, and that was the bug behind
-        // a `header "x" as alias` line colouring the *first word of the next
-        // line* as a type: the cast state outlived the line that opened it.
         if (state_ == State::kInPortName || state_ == State::kInPortType ||
             state_ == State::kAfterCast) {
           state_ = State::kDefault;
         }
         return;
       case TokenKind::kColon:
-        // A port says which `:` is its own with `in`/`out`; a field has only its
+        // A port says which `:` is its own with `in`/`out`; a field has only
+        // its
         // position to say so, which is why the depth is counted.
         if (state_ == State::kInPortName || InFieldPosition()) {
           state_ = State::kInPortType;
@@ -636,10 +634,7 @@ void RefinePorts(std::string_view source,
     return;
   }
 
-  // Where each top-level declaration begins. A flow's tokens are the ones from
-  // its own `flow` to the next declaration of any kind -- which is how a `struct`
-  // written *after* a flow does not have its field names read as that flow's
-  // ports because one of them happens to share a name.
+  // Where each top-level declaration begins.
   std::vector<size_t> boundaries;
   boundaries.reserve(parsed.flows.size());
   for (const syntax::FlowDeclarationPtr& flow : parsed.flows) {
@@ -683,8 +678,8 @@ void RefinePorts(std::string_view source,
   }
 
   for (SemanticToken& token : semantic) {
-    // Only a plain identifier: a member after a `.`, a keyword and a string that
-    // happens to spell a port's name are all already what they are.
+    // Only a plain identifier: a member after a `.`, a keyword and a string
+    // that happens to spell a port's name are all already what they are.
     if (token.kind != SemanticKind::kIdentifier) {
       continue;
     }

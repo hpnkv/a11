@@ -150,10 +150,7 @@ void Configure(const std::string& service_name,
     ThrowStatus(absl::InvalidArgumentError("Unknown exporter: " + exporter));
   }
   // Reconfiguring tears down the previous provider, which joins the batch span
-  // processor's worker thread (and may block on a final export). Release the
-  // GIL across the native call so a worker thread that needs the GIL to finish
-  // destroying an in-flight action (PyGILState_Ensure) is not starved -- see
-  // obs_shutdown below for why that starvation is fatal at interpreter exit.
+  // processor's worker thread (and may block on a final export).
   absl::Status status;
   {
     py::gil_scoped_release release;
@@ -250,16 +247,7 @@ void BindObs(py::module_& module) {
       "obs_shutdown",
       []() {
         // Shutdown() flushes and joins the batch span processor's worker
-        // thread, which can block on a final OTLP export. It must run with the
-        // GIL released: a native worker thread finishing an in-flight action
-        // destroys the last shared_ptr<Action>, whose Python members require
-        // the GIL (PyGILState_Ensure). If this (typically the atexit) call held
-        // the GIL while blocking, that worker would only acquire it once we
-        // return -- by which point the interpreter is finalizing, so CPython
-        // force-exits the thread via pthread_exit. The forced unwind then tears
-        // through a noexcept destructor and std::terminate aborts the process
-        // ("terminate called without an active exception"). Dropping the GIL
-        // lets the worker complete its teardown before finalization.
+        // thread, which can block on a final OTLP export.
         py::gil_scoped_release release;
         a11::obs::Shutdown();
       },

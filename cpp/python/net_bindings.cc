@@ -423,10 +423,7 @@ py::typing::Optional<py::capsule> VoidPointer(void* pointer, const char* name) {
 }  // namespace
 
 void BindNet(py::module_& module) {
-  // First because more than one listener's options carry one. Note that being
-  // first is *not* enough to make the member's annotation resolve: pybind bakes
-  // the raw C++ name into a property's signature here regardless, exactly as it
-  // does for `http2_options`, and `scripts/generate_stubs.py` maps both back.
+  // First because more than one listener's options carry one.
   py::class_<net::DescribeEndpointOptions>(module, "DescribeEndpointOptions")
       .def(py::init<>(), "Construct default (disabled) describe options.")
       .def_readwrite("path", &net::DescribeEndpointOptions::path,
@@ -586,14 +583,7 @@ void BindNet(py::module_& module) {
           "send",
           [](net::WireStream& self, data::WireMessage message) {
             // Without the GIL, because `send` is not always as non-blocking as
-            // it looks. It takes the peer's fibre-aware mutex, and the sender
-            // pump holds that same mutex while parked on the peer's condition
-            // variable waiting for buffer space. With the GIL held that is a
-            // permanent deadlock: the event-loop thread blocks on the mutex,
-            // so the task that would drain the peer never runs, so space never
-            // appears -- and no `asyncio.wait_for` above it can fire, because
-            // the loop it needs is the thing that is blocked. It hung
-            // `wire/one_way_throughput` on both event loops.
+            // it looks. It hung `wire/one_way_throughput` on both event loops.
             ThrowIfNotOk(
                 WithoutGil([&] { return self.Send(std::move(message)); }));
           },
@@ -672,10 +662,7 @@ Examples:
           [](const std::shared_ptr<net::WireStream>& self) {
             // Without the GIL: this takes the stream's fibre-aware mutex to
             // read the drain future out, and whoever holds that mutex may need
-            // the GIL to finish. Acquiring it with the GIL held is the same
-            // deadlock a `WithoutGil`-less binding caused elsewhere -- a loop
-            // thread parked in the fibre scheduler while the worker that would
-            // release it waits for the GIL.
+            // the GIL to finish.
             return FutureToPython(
                 WithoutGil([&] { return self->DrainOutgoingMessages(); }));
           },
@@ -721,9 +708,7 @@ Examples:
             }
             // Without the GIL: a deadline already in the past aborts the stream
             // from this call, and aborting ends it -- which awaits the caller's
-            // own on_done. A Python on_done resolves on the asyncio loop, so
-            // waiting for it with the GIL held is the deadlock in
-            // gil-deadlock-on-blocking-port-accessors, one layer down.
+            // own on_done.
             ThrowIfNotOk(
                 WithoutGil([&] { return self->SetDeadline(*converted); }));
           },

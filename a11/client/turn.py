@@ -1,14 +1,12 @@
 # Copyright 2026 The A11 Authors.
 
-"""Driving one conversational turn against a gateway.
+"""Drive one conversational turn against a gateway.
 
-This is the loop that used to exist twice -- once in `a11 chat` and once in the
-IntelliJ webview's ``runTurn`` -- and in the CLI's case did the LLM call
-in-process rather than on a gateway at all. Everything that is not presentation
-lives here: build the call, feed history and tools in, read the output ports,
-fold what arrives into a `PresentationReducer`.
+This module owns the non-presentation workflow: build the call, feed history
+and tools, read every output port, and fold events into a
+``PresentationReducer``.
 
-Two details are load-bearing rather than stylistic:
+The following ordering and lifecycle requirements are part of the contract:
 
 * The ``thoughts`` and ``new_interactions`` readers start **before** the
   ``text_output`` loop. Ports carry no global ordering guarantee, and a
@@ -55,10 +53,10 @@ class TurnConfig:
     model: str
     api_key: str = ""
     base_url: str = ""
-    #: Regex patterns naming the actions this turn may use -- the gateway's
-    #: own, and any the gateway discovers on this session. A client that serves
-    #: its own tools just registers them and names them here; the gateway asks
-    #: what the session serves and proxies the answer.
+    #: Regex patterns naming the actions this turn may use -- the gateway's own,
+    #: and any the gateway discovers on this session. A client that serves its
+    #: own tools just registers them and names them here; the gateway asks what
+    #: the session serves and proxies the answer.
     allowed_actions: str = ""
     #: Applied last, so a user-supplied header wins over the defaults above.
     extra_headers: Sequence[tuple[str, str]] = ()
@@ -95,7 +93,8 @@ async def run_turn(
         StatusException: When the call fails, at any point in the turn.
     """
     call = (
-        a11.Action(INTERACT_WITH_LLM_SCHEMA)
+        a11
+        .Action(INTERACT_WITH_LLM_SCHEMA)
         .bind_node_map(connection.session.node_map)
         .bind_session(connection.session)
         .bind_stream(connection.stream)
@@ -103,7 +102,9 @@ async def run_turn(
         .set_header(LlmHeaders.MODEL.value, config.model)
         .set_header(LlmHeaders.API_KEY.value, config.api_key)
         .set_header(LlmHeaders.BASE_URL.value, config.base_url)
-        .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, config.allowed_actions)
+        .set_header(
+            LlmHeaders.ALLOWED_LLM_ACTIONS.value, config.allowed_actions
+        )
     )
     for key, value in config.extra_headers:
         call.set_header(key, value)

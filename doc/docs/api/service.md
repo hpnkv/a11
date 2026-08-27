@@ -84,8 +84,9 @@ The symbol may be a `Service` as well as an `ActionRegistry`, which is how a
 backend that specialises each connection -- a registry copy per caller, a
 reverse-dispatch bridge bound to the session -- is served by this command rather
 than by a loop of its own.
-[`a11.demos.web_demos_server`][a11.demos.web_demos_server] is the worked
-example, and `--hosted` is why it bothers: the same actions are then reachable
-through the exchange, at `a11.to/ui`, with no inbound port.
+The
+[`a11.demos.web_demos_server`](https://github.com/hpnkv/a11/blob/main/a11/demos/web_demos_server.py)
+module is a complete example. With `--hosted`, its actions are also available
+through the exchange at `a11.to/ui`, without an inbound port.
 
 ::: a11.cli.commands.serve

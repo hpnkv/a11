@@ -93,8 +93,8 @@ puts it on the stream the flow is attached to and lets the peer do it. \
 without a handler is refused rather than quietly sent elsewhere.
 - **Use listed actions.** `flow_actions` is the set of names the flow may resolve.
 - **Every output port of every step is read.** You do not have to name them \
-all — the runtime drains what you ignore — but `skip x.debug` says so \
-plainly, and is worth writing when an output is large. `skip 1 x.rows` is the \
+all — the runtime drains what you ignore — but `skip x.debug` makes the choice \
+explicit for a large output. `skip 1 x.rows` is the \
 other one: it drops a port's first value for *every* reader, which is how you \
 throw away a header line, and several of them naming one port add up.
 - **A failing step ends the flow** unless you wrote `try`. When a failure is \
@@ -127,8 +127,8 @@ statement. Put one in an `if` or a loop body, or write `fail internal \
 body reads like a last resort and is refused, because it is the first \
 thing that would happen.
 - **`log` needs no port.** `log "searching" after plan` and `logf "found %s" \
-n after search` write to a log the flow already has: nothing declares it, \
-nothing drains it, and it is not one of the outputs you pay for. As a stage, \
+n after search` write to a log the flow already has: nothing declares or \
+drains it, and it is not a model-facing output. As a stage, \
 `| log` and `| logf "saw %s" it` say what is going past and pass every value \
 on unchanged, which is the way to see into a pipeline without changing it.
 
@@ -187,10 +187,8 @@ def get_system_prompt() -> str:
 def get_skill() -> "Skill":
     """The same instructions as an ``a11.sdk.skill.Skill``.
 
-    Imported where it is used rather than at the top of the module:
-    ``a11.sdk.skill`` needs PyYAML for the frontmatter, and the three tools
-    themselves do not, so a host that only wants the prompt text pays nothing
-    for a dependency it will not use.
+    Imported on demand because ``a11.sdk.skill`` needs PyYAML for frontmatter,
+    while generating prompt text does not.
     """
     from a11.sdk.skill import Skill
 

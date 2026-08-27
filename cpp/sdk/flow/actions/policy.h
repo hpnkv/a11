@@ -89,10 +89,12 @@ struct FilesystemPolicy {
  * this file happens before A11 makes a syscall -- which is all of them for
  * `read_file`, and *none* of the ones a spawned program makes for itself. A
  * flow allowed to run `python` under a policy rooted at `/work` can read
- * `/etc/passwd` through it unless something outside this library says otherwise.
+ * `/etc/passwd` through it unless something outside this library says
+ * otherwise.
  *
  * `kRequired` is how a host says it would rather not run the program at all
- * than run it unconfined, and it fails at Prepare() time on a system that cannot
+ * than run it unconfined, and it fails at Prepare() time on a system that
+ * cannot
  * confine it. See sandbox.h.
  */
 enum class SandboxRequest {
@@ -185,10 +187,9 @@ using CapabilitiesPtr = std::shared_ptr<const Capabilities>;
  * @param for_write Whether this is a write. Checked here rather than at each
  *        call site so that a read-only policy refuses `write_file` even if
  *        somebody registers it by mistake.
- * @return The resolved absolute path, or `permission_denied` naming the root it
- *         was expected to be under. Deliberately not `not_found`: which paths
- *         exist outside the sandbox is not something a caller should learn from
- *         the error message.
+ * @return The resolved absolute path, or
+ * `permission_denied` naming the expected
+ *         root. This status does not reveal whether an outside path exists.
  */
 absl::StatusOr<std::filesystem::path> ResolvePath(
     const FilesystemPolicy& policy, std::string_view path, bool for_write);

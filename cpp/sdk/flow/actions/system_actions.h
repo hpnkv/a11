@@ -5,7 +5,7 @@
  * @brief The process's own streams, its environment, and randomness.
  *
  * Three small groups that share one property: each of them is a thing the
- * language cannot do and deliberately never will.
+ * language does not provide.
  *
  * ### Standard input and output
  *
@@ -34,7 +34,8 @@
  * `env_get` reads named variables, and only the ones the host allowed. Note
  * what it does *not* do: there is no "give me the environment", because a flow
  * that can ask for everything can exfiltrate credentials it was never told
- * about, and a flow that has to name what it wants is a flow a reader can audit.
+ * about, and a flow that has to name what it wants is a flow a reader can
+ * audit.
  *
  * ### Randomness
  *

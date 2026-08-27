@@ -78,9 +78,9 @@ TEST(FlowShape, FillsDefaultsAndKeepsDeclarationOrder) {
 }
 
 TEST(FlowShape, DropsWhatTheShapeDoesNotDeclare) {
-  // Extra data is how `{...it, ..}` is useful, and a producer that sent more than
-  // this reader declared has done nothing wrong. Writing such a key out by hand
-  // is a different thing, and the resolver says so.
+  // Extra data is how `{...it, ..}` is useful, and a producer that sent more
+  // than this reader declared has done nothing wrong. Writing such a key out by
+  // hand is a different thing, and the resolver says so.
   const Compiled compiled = Compile(kShapes);
   const absl::StatusOr<Value> made =
       CoerceShape(compiled.Shape("Source"),
@@ -187,7 +187,7 @@ TEST(FlowShape, ARecordIsARecordAndNothingElse) {
 }
 
 TEST(FlowShape, ACastNamesAShapeBeforeItNamesATag) {
-  // The whole point of declaring one: `Source` here is this file's shape, and a
+  // `Source` is this file's declared shape, and a
   // registry that also knew the name would not be asked.
   const Compiled compiled = Compile(kShapes);
   syntax::TypeExpression type;

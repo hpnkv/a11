@@ -54,7 +54,7 @@ class Client;
  * A non-buffering, broadcast Redis Pub/Sub subscription.
  *
  * Each message advances a monotonically increasing generation and wakes every
- * waiter. Payloads are deliberately not queued: this makes the primitive safe
+ * waiter. Payloads are not queued, making the primitive safe
  * for invalidation notifications even when producers outpace consumers, and
  * prevents the libuv thread from blocking on a full channel.
  */
@@ -114,7 +114,9 @@ class Client : public std::enable_shared_from_this<Client> {
   /** Resolve when both command and subscription connections are initialized. */
   a11::Future<a11::Unit> Ready() const;
 
-  /** Execute a binary-safe command represented by command name plus arguments. */
+  /**
+   * Execute a binary-safe command represented by command name plus arguments.
+   */
   a11::Future<Reply> Command(std::vector<std::string> parts,
                              absl::Time deadline);
 
@@ -122,7 +124,9 @@ class Client : public std::enable_shared_from_this<Client> {
     return Command(std::move(parts), absl::InfiniteFuture());
   }
 
-  /** Execute a Lua script, declaring every sharding-sensitive key explicitly. */
+  /**
+   * Execute a Lua script, declaring every sharding-sensitive key explicitly.
+   */
   a11::Future<Reply> Eval(std::string script, std::vector<std::string> keys,
                           std::vector<std::string> arguments,
                           absl::Time deadline);
@@ -153,7 +157,9 @@ class Client : public std::enable_shared_from_this<Client> {
 /** Return the process-global client configured from A11_REDIS_* variables. */
 absl::StatusOr<std::shared_ptr<Client>> DefaultClient();
 
-/** Replace the process-global default; useful for dependency injection/tests. */
+/**
+ * Replace the process-global default; useful for dependency injection/tests.
+ */
 absl::Status SetDefaultClient(std::shared_ptr<Client> client);
 
 /** Clear an injected/default client so the environment is read again. */

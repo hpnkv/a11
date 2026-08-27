@@ -14,7 +14,8 @@
 namespace a11::exception_guard::internal {
 
 // This no-exceptions translation unit uses the Failure trait without including
-// exception_guard_impl.h, whose wrappers are instantiated at throwing boundaries.
+// exception_guard_impl.h, whose wrappers are instantiated at throwing
+// boundaries.
 
 absl::Status Raised(const std::exception& error, std::string_view what) {
   return absl::UnknownError(absl::StrCat(what, " raised: ", error.what()));

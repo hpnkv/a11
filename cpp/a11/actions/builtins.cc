@@ -106,9 +106,7 @@ absl::Status RunGetSchema(const std::shared_ptr<Action>& action) {
         "__get_schema__ needs the name of an action on its 'action' input");
   }
   // NotFound rather than an empty document, and distinct from the
-  // InvalidArgument an unnameable id gets: "there is no such action" and "that
-  // is not an action name" are different answers and a caller acts on them
-  // differently.
+  // InvalidArgument an unnameable id gets:
   ABSL_ASSIGN_OR_RETURN(const ActionSchema schema, registry->GetSchema(name));
   const bool runnable = registry->GetHandler(name).ok();
   ABSL_ASSIGN_OR_RETURN(std::string document,

@@ -16,11 +16,12 @@ import kotlin.test.assertTrue
  * The Kotlin half of the cross-language tag contract.
  *
  * `testdata/serial_tags.json` is the one table every language answers to, and
- * `testdata/interaction_golden.json` is one interaction as the Python SDK writes
- * it. Between them these tests pin what a Kotlin client depends on when it holds
- * a conversation and hands it back to a Python backend turn after turn: the tool
- * calls and results inside each interaction must arrive as the objects that were
- * sent, and go back out as the payload that was received.
+ * `testdata/interaction_golden.json` is
+ * one interaction as the Python SDK writes
+ * it. Between them these tests pin what a Kotlin client depends on when it
+ * holds a conversation and hands it back to a Python backend turn after turn:
+ * the tool calls and results inside each interaction must arrive as the objects
+ * that were sent, and go back out as the payload that was received.
  */
 class SerialTagsTest {
     private fun <T> ok(value: StatusOr<T>): T = when (value) {
@@ -144,7 +145,7 @@ class SerialTagsTest {
         val interaction = ok(registry.fromChunk(chunk)) as Interaction
 
         assertEquals("golden-model", interaction["model"])
-        // The point of the exercise: what a turn *did* survives the crossing.
+        // Turn metadata survives the language boundary.
         val content = interaction["content"] as List<*>
         assertTrue(content[0] is Chunk)
         assertEquals("application/json", (content[0] as Chunk).mimetype)
@@ -221,9 +222,9 @@ class SerialTagsTest {
 
     @Test
     fun aSerializedInteractionCarriesNoTags() {
-        // The model's own shape says what everything is; nothing repeats it. The
-        // chunk's `;type=` names the payload, and from there every nested value
-        // sits in a field whose declared type identifies it.
+        // The model's own shape says what everything is; nothing repeats it.
+        // The chunk's `;type=` names the payload, and from there every nested
+        // value sits in a field whose declared type identifies it.
         ensureInteractionCodec()
         val registry = SerializationRegistry(registerDefaults = true)
         fun keys(value: Any?): List<String> = when (value) {
@@ -249,9 +250,9 @@ class SerialTagsTest {
     fun noKeyInAPayloadIsEverReadAsAType() {
         // A payload is data. Nothing in it names a type, so nothing is escaped.
         // A11 once wrote a nested value's type as the sole key of a one-entry
-        // object ({"!a11.Chunk": {...}}), which meant a caller's own map of that
-        // shape had to be escaped on the way out. The type lives in the chunk's
-        // metadata now, so these go out byte-for-byte as written.
+        // object ({"!a11.Chunk": {...}}), which meant a caller's own map of
+        // that shape had to be escaped on the way out. The type lives in the
+        // chunk's metadata now, so these go out byte-for-byte as written.
         val registry = SerializationRegistry(registerDefaults = true)
         for (value in listOf(
             linkedMapOf<String, Any?>("!${SerialTags.CHUNK}" to "not one"),
@@ -266,8 +267,8 @@ class SerialTagsTest {
 
     @Test
     fun anUnloadableTypeTagStillYieldsThePayload() {
-        // A peer that never loaded the naming module still holds valid JSON, and
-        // is entitled to read it as such rather than be refused.
+        // A peer that never loaded the naming module still holds valid JSON,
+        // and is entitled to read it as such rather than be refused.
         val registry = SerializationRegistry(registerDefaults = true)
         val chunk = Chunk(
             metadata = ChunkMetadata(mimetype = "application/json;type=some.other.Model"),
@@ -282,17 +283,17 @@ class SerialTagsTest {
 
     @Test
     fun mediaTypesMatchTheFixture() {
-        // Pinned across languages exactly as the tags are. `text` and `bytes` are
-        // the ones that matter: they are the defaults for a String and a
-        // ByteArray, and a chunk using either carries no `type` parameter, so the
-        // media type alone is what a peer has to go on.
+        // Pinned across languages exactly as the tags are. `text` and `bytes`
+        // are the ones that matter: they are the defaults for a String and a
+        // ByteArray, and a chunk using either carries no `type` parameter, so
+        // the media type alone is what a peer has to go on.
         val media = fixtureMediaTypes()
 
         assertEquals(media["json"], JSON_MIMETYPE)
         assertEquals(media["msgpack"], MSGPACK_MIMETYPE)
         assertEquals(media["text"], TEXT_MIMETYPE)
-        // This side's constant keeps its established name; what is pinned is the
-        // fixture key, not the identifier each language spells it with.
+        // This side's constant keeps its established name; what is pinned is
+        // the fixture key, not the identifier each language spells it with.
         assertEquals(media["bytes"], OCTET_STREAM_MIMETYPE)
     }
 

@@ -1,10 +1,10 @@
 # Examples
 
-These examples grow from one local stream into distributed and tool-using
-agents. Each one focuses on an applied task and points out the part of A11 that
-makes it work.
+Use these examples to build local streams, distributed services, and
+tool-using agents. Each example focuses on one application task and the A11 APIs
+required to implement it.
 
-| Example | What you will build |
+| Example | Outcome |
 | --- | --- |
 | [Compose actions without deploying code](guides/flow.md) | Describe a composition of existing actions in the Flow language and run it as one action. |
 | [Stream data through an AsyncNode](guides/streaming.md) | Produce and consume an ordered asynchronous stream, including clean finalisation. |

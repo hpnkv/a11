@@ -99,9 +99,7 @@ std::vector<RefId> FlowGraph::ValueRefs(RefId ref) const {
     }
   }
   // A `| log`/`| logf` stage reads whatever it prints, the same way the
-  // statement does: `x | logf "%s at %s" it, started` is a value read of
-  // `started` per value going past, and one uncounted read of it is a stage
-  // told the stream has no reader slot left.
+  // statement does:
   if (one.kind == RefKind::kDerived) {
     for (const ExprId expr : one.stage.log.arguments) {
       if (expr == kNone) {
@@ -138,7 +136,6 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
       // A `wait first of` / `wait all of` reads one outcome per subject, and
       // each is a reader of whatever produces it: counted here, or the second
       // one is told the stream has more readers than the plan accounted for.
-      // `outcome` *is* the first subject, so the two forms do not double-count.
       if (one.subjects.empty()) {
         Push(found, one.outcome);
       } else {
@@ -380,16 +377,7 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
     }
   };
 
-  // A *value* read of a ref does not get a reader of its own. Every value read
-  // of one ref in one body shares a single cursor over it (see
-  // `Scope::ValueOf`), because that is what makes two `let`s on one node two
-  // different values rather than two names for the first: they take turns on
-  // one view of the stream. So the slots are one per *stream* read plus at most
-  // one for all the value reads together.
-  //
-  // Counting one each instead would allocate slots nobody takes, and an untaken
-  // slot fills to `kQueueDepth` and then stops the producer for everybody: this
-  // is the count that has to be exactly right or the flow hangs.
+  // A *value* read of a ref does not get a reader of its own.
   absl::flat_hash_set<RefId> valued;
   auto value_read = [&](RefId ref) {
     if (ref == kNone) {
@@ -428,9 +416,7 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
   }
 
   // A derived or computed stream reads its own upstream, so the upstream needs
-  // a reader for it. A ref is always built from refs created before it, so
-  // taking the highest id still to do settles the whole chain -- including the
-  // ones only reached through another derivation.
+  // a reader for it.
   absl::flat_hash_set<RefId> settled;
   while (true) {
     RefId next = kNone;

@@ -2,11 +2,10 @@
  * "The model calls back into the page" guide demo.
  *
  * The page draws a few blobs on a canvas and serves three actions over them. It
- * serves those actions on its own session's registry -- the backend asks what is
- * there rather than being told -- and from then on the model's
- * tool calls are dispatched back down the same WebSocket and run *here* — the
- * backend never touches the canvas, and the model sees three ordinary A11
- * actions.
+ * serves those actions on its own session's registry -- the backend asks what
+ * is there rather than being told -- and from then on the model's tool calls
+ * are dispatched back down the same WebSocket and run *here* — the backend
+ * never touches the canvas, and the model sees three ordinary A11 actions.
  *
  * The port names are the model's argument names: a tool definition is derived
  * from the action's ports, so `set_color(ids, colors)` is what the model is
@@ -126,10 +125,8 @@ class Scene {
  * The nearest point to (x, y) that keeps a blob wholly on a `width` x `height`
  * canvas.
  *
- * A tool call is an outside instruction, and "off the left edge" is a place the
- * scene has no way to show. Clamping is the honest reading of "move it left" when
- * it is already at the edge; the alternative is a blob nobody can see or name
- * again.
+ * Tool calls cannot move a blob outside the visible canvas. Coordinates are
+ * clamped so every blob remains visible and selectable.
  */
 export function contain(
   blob: Blob,
@@ -145,21 +142,15 @@ export function contain(
 
 // --- Reading a tool call's arguments -----------------------------------------
 //
-// A tool call is the least trustworthy input a page gets: the values are a
-// model's idea of what the schema said. So each argument is *validated before
-// anything is touched*, and a call that cannot be honoured comes back as an
-// INVALID_ARGUMENT status naming what was wrong. The tool runner hands that to
-// the model as the call's result, which is what lets it correct itself and try
-// again — whereas coercing the value silently (`Number("a bit left")` is `NaN`)
-// applies nonsense to the scene and reports success.
+// Validate model-supplied arguments before changing the page. Invalid values
+// return INVALID_ARGUMENT so the model can revise the call; coercion could
+// instead change the scene with values such as `Number("a bit left") === NaN`.
 
 /**
  * `value` as a finite number, or a status saying why it is not one.
  *
- * Emptiness is refused rather than read as zero: `Number('')` is `0`, so a model
- * that sends `dx: null` would otherwise be told it moved five blobs by nothing.
- * A port that carried *no* value at all is the caller's to default — see the
- * handler.
+ * Empty values are invalid because `Number('')` is `0` although no movement
+ * was requested. The handler supplies defaults for absent port values.
  */
 export function finiteNumber(value: unknown, name: string, limit: number): number | Status {
   const empty = value === null || value === undefined || String(value).trim() === '';
@@ -216,9 +207,9 @@ export function colorFor(value: unknown, id: number): string | Status {
 // --- The actions the page serves ---------------------------------------------
 
 /**
- * A port per argument. Narration needs none: `log()` has its own.
- * That port is the tool's narration for the person watching: the backend keeps it
- * out of the model's result and records it with the turn.
+ * A port per argument. Narration needs none: `log()` has its own. That port is
+ * the tool's narration for the person watching: the backend keeps it out of the
+ * model's result and records it with the turn.
  */
 const DESCRIBE_SCENE_SCHEMA = new ActionSchema({
   name: 'describe_scene',
@@ -332,9 +323,9 @@ async function readAll(action: Action, port: string): Promise<unknown[]> {
 /**
  * Narrate the run, to the page and to whoever called the tool.
  *
- * No port and nothing to close: `log()` writes to the action's own log, which the
- * backend reads separately from the outputs, so a tool's account of itself can
- * never turn up in the model's result.
+ * No port and nothing to close: `log()` writes to the action's own log, which
+ * the backend reads separately from the outputs, so a tool's account of itself
+ * can never turn up in the model's result.
  */
 async function narrate(action: Action, text: string, onLog: (text: string) => void): Promise<void> {
   onLog(text);
@@ -419,8 +410,7 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
 
         const blobs = blobsFor(scene, ids);
         if (isStatus(blobs)) return await refuse(action, blobs, onLog);
-        // An axis the caller left out is zero; both left out is a call that asks
-        // for nothing, which is worth saying rather than reporting as done.
+        // An omitted axis defaults to zero. Reject calls that omit both axes.
         if (rawDx === null && rawDy === null) {
           return await refuse(
             action,
@@ -497,7 +487,8 @@ class BrowserToolsDemo {
     try {
       const connection = await this.connected();
       // No history: each instruction stands on its own here, and the scene --
-      // which the model reads with `describe_scene` -- is the state that matters.
+      // which the model reads with `describe_scene` -- is the state that
+      // matters.
       await runTurn({
         connection,
         backend: this.backend.value,

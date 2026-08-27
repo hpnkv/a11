@@ -120,9 +120,9 @@ await result.finalize(value, seq=7) # ...and it belongs at this sequence
 With no value it writes a null terminator: a marker carrying no application
 value, which only ends the logical sequence. That is the form for a streaming
 port whose last value is not known until it has been written, and for a unary
-port a caller has nothing to put on. With a value it spends one chunk instead of
-two — a value plus a separate terminator — which is worth having when the
-producer does know which one is last.
+port a caller has nothing to put on. With a value it uses one chunk instead of
+separate value and terminator chunks when the producer knows which value is
+last.
 
 !!! important
     A final fragment does **not** close the writer or backing store, and closing
@@ -256,8 +256,6 @@ Abort only when the shared stream itself has failed.
 ## How this fits an Action
 
 An [Action lifecycle](action.md) maps each schema port to an AsyncNode. The
-handler decides semantic output finality because only application code knows
-whether the last token or object is complete: that is what `finalize()` in a
-handler says. Action cleanup closes writers the handler left open, and failure
-cleanup aborts them, but cleanup cannot safely invent a final application
-value.
+handler calls `finalize()` when the last token or object is complete. Action
+cleanup closes writers the handler left open, and failure cleanup aborts them,
+but cleanup cannot infer a final application value.

@@ -1,14 +1,11 @@
 """A Python handler may be registered before any event loop exists.
 
-A11 posts a handler's coroutine to an asyncio loop, so it needs one -- but it
-needs it when the handler *runs*, not when it is registered. Registration is
-ordinary module-level Python (`@registry.action` at import time is the obvious
-shape), and resolving the loop there used to hand the handler one that
-`asyncio.get_event_loop` had invented and nobody would ever run: every dispatch
-was posted into it and waited for good.
+A11 resolves the asyncio loop when the handler runs, not when it is registered.
+This supports ordinary module-level registration, including
+`@registry.action` at import time, before an application creates its loop.
 
-These run in subprocesses because the thing under test is what happens *before*
-the first loop of a process exists, and pytest-asyncio has already made one.
+These tests run in subprocesses to observe behaviour before the first process
+loop exists; pytest-asyncio has already created one in the test process.
 """
 
 from __future__ import annotations
@@ -58,12 +55,12 @@ def _run(body: str) -> str:
 
 
 def test_a_handler_registered_before_any_loop_still_runs() -> None:
-    """The case that used to hang: registered at import, run by asyncio.run."""
+    """A handler registered at import time runs under ``asyncio.run``."""
     assert _run("print(asyncio.run(drive()))") == "HI"
 
 
 def test_registration_outside_a_loop_warns_about_nothing() -> None:
-    """Nothing is asked of asyncio at registration, so nothing is deprecated.
+    """Registration outside a loop does not ask asyncio to create one.
 
     `asyncio.get_event_loop` inventing a loop is a DeprecationWarning on the
     Pythons that still allow it, which makes the absence of one the sharpest
@@ -111,7 +108,7 @@ def test_one_registration_serves_two_successive_loops() -> None:
 
 
 def test_a_handler_registered_inside_a_loop_is_unaffected() -> None:
-    """The ordinary case keeps its eager capture and its old cost."""
+    """Registration inside a running loop captures that loop eagerly."""
     assert (
         _run(
             """
@@ -138,9 +135,9 @@ def test_a_handler_registered_inside_a_loop_is_unaffected() -> None:
 def test_with_no_loop_at_all_the_handler_fails_instead_of_hanging() -> None:
     """An unanswerable question is an error, not a wait.
 
-    Awaiting completion needs a loop, which is the thing being taken away, so
-    this polls instead: `run()` is fire-and-forget and the failure lands a
-    moment later. What matters is that the action *ends*, and says why.
+    Awaiting completion needs a loop, so this test polls after removing the
+    loop. ``run()`` is fire-and-forget; the action must still end with a useful
+    failure.
     """
     output = _run(
         """
@@ -166,7 +163,7 @@ def test_with_no_loop_at_all_the_handler_fails_instead_of_hanging() -> None:
 
 @pytest.mark.asyncio
 async def test_registration_inside_a_running_loop_needs_no_subprocess() -> None:
-    """The same thing once more in-process, as a canary on the fast path."""
+    """Exercise registration inside a running loop in-process."""
     from a11.actions import ActionRegistry
 
     registry = ActionRegistry()

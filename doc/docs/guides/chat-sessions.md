@@ -1,9 +1,8 @@
 # A chat that survives a reload
 
-This guide builds the part of a chat application that is usually the hardest to
-get right: the conversation. One action answers with any provider, the page keeps
-the conversation as the model's own objects rather than as a transcript, and
-reloading the page continues it.
+This guide builds a persistent chat conversation. One action supports multiple
+providers, the page retains the model's structured interaction objects, and a
+reload continues the same conversation.
 
 The session design is provider-agnostic: Ollama, Claude, and Gemini use
 the same interface, configured via headers.
@@ -30,9 +29,9 @@ the same interface, configured via headers.
     browser blocks it.
 
     Either address goes in the demo's first field. `https://` and `wss://` name
-    the same endpoint here: browsers connect to A11's WebSocket server directly,
-    because it speaks HTTP/1.1 as well as HTTP/2, so no bridge is needed. For the
-    TypeScript side, `npm install a11@npm:@curiositystack/a11`.
+    the same endpoint here. Browsers connect directly because A11's WebSocket
+    server supports HTTP/1.1 and HTTP/2. Install the TypeScript package with
+    `npm install a11@npm:@curiositystack/a11`.
 
 ## Try it
 
@@ -109,9 +108,8 @@ need(call.setHeader(LlmHeaders.BASE_URL, 'http://127.0.0.1:11434'));
 need(await call.call());
 ```
 
-Swapping those three for `claude` / `claude-sonnet-4-6` and an
-`LlmHeaders.API_KEY` is the whole difference between a local model and a hosted
-one: the ports, the reading code and the conversation are the same either way.
+Select a hosted model by setting the provider, model, and API key. The ports,
+reading code, and conversation format remain unchanged.
 
 The action's ports are the same whoever answers: `interactions`, `tools` and
 `config` in; `text_output`, `thoughts`, `event_stream` and `new_interactions`
@@ -131,10 +129,8 @@ for (const interaction of history) need(await interactions.put(interaction));
 need(await interactions.finalize(question));
 ```
 
-A conversation's identity comes for free from that: **its id is the id of the
-interaction that opened it**, minted in the page. So the page names the
-conversation the moment it starts, and the backend needs to hand back no session
-handle at all.
+The page uses the first interaction's ID as the **conversation ID**. The backend
+therefore does not need to return a separate session handle.
 
 ## 3. The backend records what it answers
 
@@ -186,7 +182,7 @@ restored.push(need(parseInteraction(next)));
 
 `parseInteraction` brands the value with its serialization tag, which is
 what lets it go back out to the backend as an `a11.sdk.Interaction` on the next
-turn rather than as anonymous JSON the strict `interactions` port would refuse.
+turn with the `a11.sdk.Interaction` type expected by the `interactions` port.
 The same tag table is what makes this work across languages at all — see
 `js/src/serial_tags.ts` and `a11/data/serial_tags.py`.
 
@@ -205,4 +201,3 @@ window.history.replaceState(null, '', url);
 ```
 
 On load, the page lists the conversations and reopens whatever the URL names.
-

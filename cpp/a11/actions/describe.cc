@@ -100,7 +100,7 @@ std::vector<const ActionHeaderSchema*> SortedHeaders(
   return sorted;
 }
 
-/// The JSON Schema that says nothing, which is not worth writing down.
+/// Returns whether a JSON Schema contains no constraints.
 ///
 /// What a port with no stated type gets shown as anyway: an adapter offering a
 /// port with no `json_schema` to a model gives it `{"type": "object"}`, so a
@@ -114,9 +114,9 @@ bool SaysNothing(const nlohmann::json& schema) {
 /// A port's `json_schema`, parsed if it parses.
 ///
 /// Carried as a JSON value rather than as the string it is stored as, so a
-/// consumer building a tool definition can splice it in rather than re-parse it.
-/// Text that is not JSON is dropped: a schema nobody can read is worse than an
-/// absent one, which at least reads as "no type information".
+/// consumer building a tool definition can splice it in rather than re-parse
+/// it. Text that is not JSON is dropped: a schema nobody can read is worse
+/// than an absent one, which at least reads as "no type information".
 void AttachJsonSchema(nlohmann::json* target, const std::string& encoded) {
   if (encoded.empty()) {
     return;
@@ -203,9 +203,7 @@ bool MatchesAnyPattern(const std::vector<std::string>& patterns,
   const std::string subject(name);
   for (const std::string& pattern : patterns) {
     // Full match, the same rule `x-a11-allowed-llm-actions` already uses, so a
-    // pattern means one thing across this codebase rather than two. A pattern
-    // that does not compile is skipped here; the request parser rejected it
-    // already, so reaching this is a caller that built a request by hand.
+    // pattern means one thing across this codebase rather than two.
     absl::StatusOr<std::regex> expression = internal::CompilePattern(pattern);
     if (!expression.ok()) {
       continue;
@@ -255,8 +253,7 @@ bool SchemaQueryAccepts(const SchemaQuery& request, std::string_view name) {
 absl::StatusOr<SchemaQuery> ParseSchemaQuery(std::string_view encoded) {
   SchemaQuery request;
   const std::string trimmed(absl::StripAsciiWhitespace(encoded));
-  // No request is the default request. Asking a peer what it serves, with
-  // nothing further to say, is the common case and must not need a document.
+  // An empty request uses the default query.
   if (trimmed.empty() || trimmed == "null") {
     return request;
   }
@@ -266,8 +263,7 @@ absl::StatusOr<SchemaQuery> ParseSchemaQuery(std::string_view encoded) {
     return request;
   }
   if (value.is_array()) {
-    // A bare array is read as patterns, because that is what a caller who wrote
-    // one meant, and refusing it teaches nothing.
+    // A bare array is read as name patterns.
     for (const nlohmann::json& one : value) {
       if (one.is_string()) {
         request.names.push_back(one.get<std::string>());
@@ -468,8 +464,6 @@ absl::StatusOr<ActionSchema> SchemaFromJson(const nlohmann::json& entry) {
       if (!field.is_string()) {
         continue;
       }
-      // Only a mapping onto a port that came with it: an output named here and
-      // absent above would fail validation with a message about the wrong thing.
       if (!schema.outputs.contains(output)) {
         continue;
       }

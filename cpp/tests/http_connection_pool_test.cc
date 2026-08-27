@@ -112,7 +112,8 @@ TEST(HttpConnectionPoolTest, ClosesTheConnectionWhenTheLastLeaseGoes) {
     EXPECT_EQ(pool->size(), 1u);
   }
   // No leases: nothing is being done with the connection, so nothing is kept.
-  // This is the whole point -- the pool is an index over live work, not a cache.
+  // The pool indexes live work and does not retain an
+  // cache.
   EXPECT_EQ(pool->size(), 0u);
 
   // Asking again dials afresh, and says so.
@@ -180,8 +181,8 @@ TEST(HttpConnectionPoolTest, DoesNotPoolHttp1Connections) {
   EXPECT_FALSE(first->multiplexed());
   EXPECT_FALSE(first->reused());
 
-  // An HTTP/1.1 connection carries one request, so there is nothing to share and
-  // the pool never indexes it.
+  // An HTTP/1.1 connection carries one request, so there is nothing to share
+  // and the pool never indexes it.
   auto second = pool->Acquire(server.origin(), http1).Await(Soon());
   ASSERT_TRUE(second.ok()) << second.status();
   EXPECT_FALSE(second->reused());

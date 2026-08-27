@@ -82,12 +82,9 @@ nlohmann::json Success(const nlohmann::json& request, nlohmann::json result) {
 
 /// What the world outside the document contains, for this request.
 ///
-/// The embedded snapshot, with whatever the caller sent laid over it -- so a
-/// frontend that knows nothing gets the actions and types the SDK registers, and
-/// one that has a live registry gets its own. `"replace": true` says the caller's
-/// catalogue is the whole truth, which is what an IDE tracking exactly which
-/// registry an inline flow is attached to means: an action that registry does
-/// not have should not be offered just because the snapshot has it.
+/// Returns the embedded catalogue merged with caller entries. With
+/// `"replace": true`, only the caller's catalogue is used, allowing an IDE to
+/// reflect the exact registry attached to an inline flow.
 catalogue::Catalogue KnownWorld(const nlohmann::json& request) {
   const auto context = request.find("context");
   if (context == request.end() || !context->is_object()) {
@@ -180,12 +177,7 @@ nlohmann::json Handle(const nlohmann::json& request) {
   const std::string source = request.value("source", std::string());
   const std::string path = request.value("path", std::string("-"));
 
-  // Which arithmetic this client counts in. Bytes unless it says otherwise, so
-  // nothing that worked before changes; a host whose document buffer is UTF-16 --
-  // a JVM plugin, a JavaScript extension -- says `utf16` once per request and
-  // every offset in the answer is in its own units. Doing it here rather than in
-  // each frontend is the same rule as everything else in this service: the
-  // language converts, nobody re-derives.
+  // Which arithmetic this client counts in.
   OffsetBasis basis = OffsetBasis::kBytes;
   const std::string wanted = request.value("offsets", std::string());
   if (!OffsetBasisFromName(wanted, basis)) {
@@ -230,10 +222,7 @@ nlohmann::json Handle(const nlohmann::json& request) {
   if (method == "format") {
     return answer(FormatToJsonValue(Format(source)));
   }
-  // The methods that take a caret. The offset is the one thing that travels
-  // *in*, so it is the one that converts the other way: a caret an editor
-  // reports in its own units is a byte offset here before anything reads the
-  // character in front of it.
+  // The methods that take a caret.
   if (method == "complete" || method == "describe" || method == "definition") {
     if (!request.contains("offset")) {
       return Failure(request, absl::StrCat("`", method,
@@ -267,9 +256,7 @@ nlohmann::json Handle(const nlohmann::json& request) {
         result["kind"] = SymbolClassName(about.kind);
       }
       // A name this document did not declare may still have somewhere to go: an
-      // action a scan found in a project file. `found` stays about *this*
-      // document, so a client reads `origin` for the other case rather than
-      // having one field mean a range here and a path elsewhere.
+      // action a scan found in a project file.
       if (about.origin.has_value()) {
         result["origin"] = OriginToJson(*about.origin);
         result["name"] = about.text;
@@ -305,16 +292,13 @@ nlohmann::json Handle(const nlohmann::json& request) {
                                  {"symbols", std::move(symbols)}});
   }
   if (method == "catalogue") {
-    // What the tools would use for this request, snapshot and override merged --
+    // What the tools would use for this request, snapshot and override merged
+    // --
     // so a frontend can see exactly what its context did rather than guess.
     return Success(request, KnownWorld(request).ToJson());
   }
   if (method == "scan") {
-    // The actions a *project* declares, read out of its source. Answers a
-    // catalogue, because that is what it is: a host folds this into the context
-    // it sends, and everything downstream -- hover, completion, go to
-    // declaration -- treats a scanned action exactly as it treats one the SDK
-    // registered, except that this one knows where it was written.
+    // The actions a *project* declares, read out of its source.
     std::vector<std::string> roots;
     if (const auto paths = request.find("paths");
         paths != request.end() && paths->is_array()) {
@@ -344,10 +328,7 @@ nlohmann::json Handle(const nlohmann::json& request) {
                        {"too_large", found.too_large}};
     return Success(request, std::move(scanned));
   }
-  // The two directions of the shape/schema translation. Both are about *shapes*
-  // rather than about a document, so neither takes an offset and neither needs
-  // the flows resolved -- but `schema` reads a document, because the shape it is
-  // asked about is one the document declares.
+  // The two directions of the shape/schema translation.
   if (method == "schema") {
     const ParseResult parsed = Parse(source);
     const ResolveResult resolved = Resolve(source, parsed);

@@ -77,13 +77,16 @@ struct Proposal {
   std::string tail;
   /// The type of the thing proposed, where it has one: a port's declared type.
   std::string type;
+  // The whole of what is known about it, as Markdown, for the popup an editor
+  // shows beside the list.
   /// The whole of what is known about it, as Markdown, for the popup an editor
   /// shows beside the list. Empty where the name is its own explanation.
   ///
   /// The same text a hover over the finished word gives (see [ActionMarkdown]
-  /// and friends), because a reader choosing `interact_with_llm` from a list and
-  /// a reader hovering it afterwards are asking the same question. The `tail` is
-  /// the one-line version that fits in the list; this is what is behind it.
+  /// and friends), because a reader choosing `interact_with_llm` from a list
+  /// and a reader hovering it afterwards are asking the same question. The
+  /// `tail` is the one-line version that fits in the list; this is what is
+  /// behind it.
   std::string documentation;
 };
 
@@ -99,7 +102,8 @@ struct CompleteResult {
   /// **The caret itself when there is no partial word**, which makes
   /// `[prefix_start, caret)` the range a proposal replaces in every case rather
   /// than only when something has been typed. It defaulted to zero, and that
-  /// range is the whole document up to the caret: taking a proposal at a position
+  /// range is the whole document up to the caret: taking a proposal at a
+  /// position
   /// where nothing had been typed yet deleted everything in front of it.
   size_t prefix_start = 0;
 };
@@ -116,7 +120,8 @@ struct CompleteResult {
 /// **It never fails and never throws.** The document is being typed: the
 /// statement the caret is in is usually half-written and the braces are usually
 /// unbalanced. Parsing recovers, resolution recovers, and what cannot be
-/// established simply narrows the list -- an unknown call target offers `status`
+/// established simply narrows the list -- an unknown call target offers
+/// `status`
 /// and no ports rather than nothing at all.
 ///
 /// A source that declares no flow is completed as though it were a flow body,

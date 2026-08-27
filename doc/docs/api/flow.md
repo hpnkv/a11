@@ -1,12 +1,10 @@
 # Flow language
 
-Flow is a small language for describing a composition of actions that is itself
-an action. This page is the whole of it, section by section, and then the Python
-API that compiles and runs one.
-[Compose actions without deploying code](../guides/flow.md) builds a real
-composition a statement at a time and is the better place to start;
-`a11.flow.REFERENCE` is the same material sized for a prompt, for a model that
-has to write one.
+Flow describes a composition of actions as an action. This page is the language
+reference and Python API. Start with
+[Compose actions without deploying code](../guides/flow.md) for a guided
+example. `a11.flow.REFERENCE` provides a compact version suitable for model
+prompts.
 
 ## One flow, read from the top
 
@@ -39,23 +37,17 @@ flow research {
 }
 ```
 
-`x = run action(port: source)` runs an action here and gives it a name, so its
-ports can be named afterwards; `x = call action(...)` dispatches one on the
-stream the flow is attached to instead. `source -> destination` pipes a stream into a
-node. Everything else is a variation on those two.
+`x = run action(port: source)` runs a local action and binds its ports to `x`.
+`x = call action(...)` dispatches an action on the flow's attached stream.
+`source -> destination` pipes a stream into a node.
 
-Note what is *not* being said. `brief` is dispatched before it has any pages: it
-is streaming, so the loop feeds it while it works, and A11 closes its `pages`
-port when the loop's last writer is done. Nothing declares an order between the
-search and the fetches either — **steps run concurrently, and order comes from
-the data**. When an order really is needed, `after`, `wait` and `drain` say so
-explicitly.
+`brief` starts before pages arrive. The loop feeds its streaming `pages` port,
+which A11 closes after the loop's last writer finishes. Steps run concurrently;
+use `after`, `wait`, or `drain` to require an order.
 
-A port says what it holds first and what it is like afterwards: it carries one
-value unless it says `stream`, and is optional unless it says `required`. Every
-significant word may be written in lower case or upper case — `for` or `FOR`,
-`stream` or `STREAM`. Mixed case is a name, not a keyword, which keeps the rule
-easy to see.
+A port carries one value unless declared `stream`, and is optional unless
+declared `required`. Keywords accept lower or upper case, such as `for` and
+`FOR`. Mixed-case words are identifiers.
 
 
 ## What a port holds
@@ -68,20 +60,16 @@ out raw:      "application/x-msgpack"
 ```
 
 Besides the built-in names — `string`, `text`, `number`, `integer`, `bool`,
-`object`, `json`, `list`, `bytes`, `any` — a type may be **a tag a
-serialisation registry knows a type by**, written unquoted exactly as it is
-registered: `a11.sdk.AudioBuffer`. A dotted name is read as a tag, which is what
-tells one from a misspelt built-in, and it is carried through as written --
-compiling a flow does not require the module defining the type to have been
-imported. A container says what it holds in brackets: `list[string]`,
-`list[a11.NodeFragment]`. A quoted type is a mimetype, for a port described by
-its representation rather than by a type at all.
+`object`, `json`, `list`, `bytes`, and `any` — a type may use an unquoted
+serialisation tag such as `a11.sdk.AudioBuffer`. Dotted names are tags and are
+preserved without importing the module that defines the type. Brackets specify
+container contents, as in `list[string]` and `list[a11.NodeFragment]`. A quoted
+type is a media type that describes the representation.
 
-## Descriptions, at the length they need
+## Descriptions
 
-A description is what a caller — often a model — reads to decide whether to use a
-flow, so it is worth writing properly. Two spellings keep it from being squeezed
-onto the end of a declaration:
+Descriptions help callers, including models, decide when to use a flow. They may
+follow a declaration or use a multiline string:
 
 ```a11flow
 flow research {
@@ -96,24 +84,22 @@ flow research {
 }
 ```
 
-A `"""` string may hold line breaks, and its value is **dedented**: a blank first
-line goes, a whitespace-only last line goes with the break above it, and the
-indentation every remaining line shares comes off. So the text sits at the
-indentation of the flow it belongs to and still reads as prose, with whatever one
-line has *extra* kept. Escapes work as they do in an ordinary string.
+A `"""` string preserves line breaks after dedenting. Dedenting removes a blank
+first line, a whitespace-only final line and its preceding break, and the common
+indentation from all remaining lines. Additional indentation on individual
+lines remains. Escapes match ordinary strings.
 
-A description may also stand **alone on the line below** what it describes, at any
-indentation or none — for a port, a header, or a `describe`. That is unambiguous
-because the string has to be alone on its line: `"a literal" -> out` is a
-statement, since something follows the string.
+A description may also appear alone on the line below a port, header, or
+`describe` declaration. A string followed by another token, such as
+`"a literal" -> out`, remains a statement.
 
 `a11 flow fmt` indents a description under its declaration and lines up the
 columns of a run of declarations around it.
 
 ## Making a value of a type
 
-A port often wants a real type — an `Interaction`, an `AudioBuffer` — and what a
-flow has is the handful of fields it cared about. `TYPE{...}` bridges the two:
+A flow can construct a registered type such as `Interaction` or `AudioBuffer`
+from fields with `TYPE{...}`:
 
 ```
 a11.sdk.Interaction{
@@ -122,10 +108,9 @@ a11.sdk.Interaction{
 }
 ```
 
-`EXPR as TYPE` is the same thing written the other way round, and the one to use
-for a generic (`pieces as list[string]`) or when the value came from somewhere
-else. Either way the value is *validated* into the type, so defaults are filled
-in and a field that will not fit is an error rather than a surprise later.
+`EXPR as TYPE` performs the same conversion and supports generic types such as
+`pieces as list[string]`. Both forms validate the value, apply defaults, and
+report incompatible fields.
 `to_chunk` and `from_chunk` are the two builtins that make and read a
 [`Chunk`][a11.data.types.Chunk], which is what a content-bearing type is made
 of.
@@ -136,34 +121,26 @@ import anything. `TYPE{...}` is unavailable where a `{` would open a block
 instead — an `if` condition, a `for`'s source — so `if step.next.done {` keeps
 reading the way it always has; wrap it in brackets if you really need one there.
 
-## The parts that exist because A11 does
-
-A few things A11 can do are awkward from glue code, and each is a piece of
-syntax here.
+## Action composition
 
 ### Running a step, and calling one
 
-A11 has two verbs for getting an action done, and so does a flow.
-`run some-action(...)` executes the handler registered where the flow is
-running. `call some-action(...)` puts the action on the stream the flow is
-attached to and lets the peer do it. They are not interchangeable, and the flow
-says which it means rather than leaving it to whatever happens to be in a
-registry:
+`run some-action(...)` executes a handler registered in the local process.
+`call some-action(...)` dispatches the action on the flow's attached stream.
+Choose the verb explicitly:
 
 ```a11flow
 search = run web-search(query: question)      # ours, here
 llm    = call interact_with_llm(...)          # theirs, over there
 ```
 
-`run` needs a handler and says so if there is none, instead of quietly going to
-the session. `call` needs none — an action registered for its *schema* alone is
-exactly how a composition written against somebody else's deployment learns the
-port names while saying the work is not local — and it goes to the peer even
-when a handler for that name does happen to be registered here.
+`run` requires a local handler. `call` requires only a local schema for
+resolution and always dispatches to the peer, even when a local handler has the
+same name.
 
-Which one an action takes is a property of the deployment, not of the action, so
-[`flow_actions`][a11.sdk.flow_tools] reports it: each entry carries `runnable`,
-and a model writing a flow reads the verb off that rather than guessing.
+The deployment determines which verb is available.
+[`flow_actions`][a11.sdk.flow_tools] reports this through each entry's
+`runnable` field.
 
 `try` goes in front of either: `try run`, `try call`.
 
@@ -187,18 +164,16 @@ flow ask {
 }
 ```
 
-A program is a set of flows, not a sequence, so which one is written first is
-just reading order — and their ports are checked against each other while the
-file is compiled, exactly as they are against a registered action. That is what
-lets a composition be factored: the reusable piece becomes a flow, the caller
-stays readable, and the whole thing is still one text with one entry point,
-which is what `flow_run` and a gateway are handed.
+A program is a set of flows, so declaration order does not affect execution.
+Compilation checks calls between flows against their declared ports. This keeps
+reusable compositions in one source file with a single entry point for
+`flow_run` and the gateway.
 
-### Reading a stream you do not want
+### Discarding stream values
 
-An output port nobody drains stalls the action producing it. `skip page.bytes`
-reads one and keeps nothing. The runtime also drains any declared output the flow
-never mentions, so forgetting is not a way to deadlock a composition.
+An undrained output port stalls its producer. `skip page.bytes` consumes one
+value without retaining it. The runtime drains declared outputs that the flow
+does not reference.
 
 `skip n port` is a different statement wearing the same word. A Flow stream fans
 out — every reader sees all of it — so `| drop 1` trims only the one reader that
@@ -207,7 +182,7 @@ fan-out, so *every* reader starts after them:
 
 ```a11flow
 rows = run read-csv(path: path)
-skip 1 rows.lines            # the header line is nobody's
+skip 1 rows.lines            # discard the header line
 rows.lines | count -> data-rows
 rows.lines -> passed-through # both readers start at the second line
 ```
@@ -226,25 +201,23 @@ produced it still runs:
 pages | map summarise(it) | logf info "summarised %s" it.url -> _
 ```
 
-Every page is summarised and every line is logged; nothing is kept afterwards.
-Written where a destination goes and nowhere else — `_` is not a name, so
-nothing may be bound to it and nothing may be read back out of it. `_ = node()`,
+Every page is summarised and every line is logged, but the result is discarded.
+`_` is valid only as a destination; it cannot be bound or read. `_ = node()`,
 `_ | count -> n`, `drain _` and `in _: string` are each refused while the flow is
-compiled. It may stand beside a real destination (`a -> b, _`), where it is
-simply one more reader that keeps nothing.
+compiled. It may stand beside a real destination (`a -> b, _`), where it simply
+adds a reader that discards its values.
 
 ### Putting a stream back together
 
 `| group EXPR` is `batch` with a question instead of a count: values gather into
 a list, and the list closes when the expression holds of the value just added.
-It is how a stream of fragments becomes whole things —
+For example, it can assemble partial utterances into sentences:
 
 ```a11flow
 pieces | group ends-with(trim(it), [".", "?", "!"]) | map trim(join(it, " "))
 ```
 
-— which turns partial utterances into sentences. Whatever is still gathered when
-the stream ends comes out too, because a partial group is still what was said.
+Any partial final group is emitted when the stream ends.
 
 `| then SOURCE` is the other direction: this stream, and then that one.
 
@@ -252,11 +225,9 @@ the stream ends comes out too, because a partial group is still what was said.
 history then asked -> llm.interactions
 ```
 
-`then` and `where` may drop the pipe, because both read as words joining the
-things they sit between rather than as transformations applied to a stream:
-`history then asked`, `hits where it.ok`. Every other stage keeps its `|`,
-which is what stops a stage name from swallowing a port that shares it — a
-port really called `then` still reads as one.
+`then` and `where` may omit the pipe: `history then asked` and
+`hits where it.ok`. Every other stage requires `|`, which distinguishes stage
+names from identically named ports.
 
 `| flatten` is `batch` backwards: a stream of lists becomes a stream of what
 they held.
@@ -275,12 +246,9 @@ values per value, once `N` have arrived.
 lines | window 2 | where contains(join(it, "\n"), needle) -> hits
 ```
 
-It exists because `batch` has to put a boundary *somewhere*, and a question
-about neighbours is exactly the question a boundary hides: a pattern spanning
-two lines is invisible to a `batch` whenever the boundary falls between them, so
-roughly one match in `N` goes missing and nothing says so. A window holds `N`
-values and no more, so one over a stream that never ends costs nothing that
-grows — and a stream shorter than `N` yields nothing at all, whereas `batch`
+Unlike `batch`, a window can detect patterns that span arbitrary batch
+boundaries. It retains at most `N` values, so memory use remains bounded for an
+unending stream. A stream shorter than `N` produces no window, while `batch`
 may emit a shorter final list.
 
 `interleave(a, b, ...)` is the other kind of fan-in. Where `zip` reads its
@@ -291,9 +259,8 @@ each value as it arrives, so a fast stream is not held behind a slow one:
 interleave(llm.text_output, tool.progress) -> shown
 ```
 
-The order between the sources is whatever the values did — that is the point of
-asking — and it ends when every source has. A source that ends badly ends the
-stream with its status.
+Values retain their arrival order across sources. The combined stream ends when
+every source ends; a source failure ends it with that status.
 
 ### Reducing a stream to one value
 
@@ -306,12 +273,10 @@ runs   | avg it.elapsed -> typical
 hits   | max it.score -> best
 ```
 
-`sum`, `min`, `max` and `avg` read the whole stream and yield one value. With no
-expression they use the values themselves; with one they read a field of each, so
-`| sum it.price` is `| map it.price | sum` said once. Durations add and average
-as durations. `min`, `max` and `avg` of an *empty* stream yield **nothing** —
-the smallest of no values is not a value — while `| sum` of one is `0`, because
-adding nothing is.
+`sum`, `min`, `max`, and `avg` read the whole stream and yield one value. With no
+expression they use each value directly; `| sum it.price` is equivalent to
+`| map it.price | sum`. Durations add and average as durations. For an empty
+stream, `min`, `max`, and `avg` emit no value, while `sum` emits `0`.
 
 `| fold` is the general form, for the shape none of those is:
 
@@ -319,12 +284,10 @@ adding nothing is.
 orders | fold 0 as total, total + it.price -> revenue
 ```
 
-The name is bound to what the last value produced and `it` to the value in hand.
-The starting value is a literal, not an expression: `fold 0 as total` read as an
-expression would be a cast of `0` to a type called `total`, and the language
-should not have to guess which was meant. A **record** literal is allowed, and a
-state worth carrying usually is one; the ambiguity does not arise there, because
-`{ .. }` is read by its braces before `as` is looked at.
+The name is bound to the previous accumulated value and `it` to the current
+input. The starting value is a literal, not an expression: otherwise
+`fold 0 as total` could be parsed as a cast of `0` to a type called `total`.
+A **record** literal is allowed because its braces remove this ambiguity.
 
 ### Carrying state along a stream
 
@@ -336,14 +299,12 @@ arrives.
 lines | scan 0 as n, n + 1 -> numbered
 ```
 
-That is what a state machine is — a state carried forward and read at every step
-— and it is the only way to write one over a stream. The two constructs that
-look like they should do it cannot: `repeat` carries state across passes but
-reads its stream from the start on *every* pass, and `for` walks a stream one
-value at a time but carries nothing between passes. `scan` is the one that does
-both, and it holds one value of state rather than the stream.
+`scan` carries state forward for each stream value. `repeat` also carries state,
+but rereads its stream from the start on each pass; `for` reads one value per
+pass but does not carry state between passes. `scan` retains one state value,
+not the complete stream.
 
-With a record start it is a state machine in the ordinary sense:
+The state may also be a record:
 
 ```a11flow
 lines
@@ -355,9 +316,7 @@ lines
   -> body
 ```
 
-The cost is one value of state and nothing per value of the stream, so this runs
-in constant memory over an input of any size — which is the property that makes
-it worth having as a stage rather than an action.
+The stage uses constant memory by retaining only one state value.
 
 `| sort` puts a stream in order:
 
@@ -365,28 +324,24 @@ it worth having as a stage rather than an action.
 hits | sort by it.score desc | first 10 -> best
 ```
 
-It reads the whole stream to find out what the order is, so nothing comes out
-until the stream ends. Values compare the way `<` compares them, `by` names what
-to compare, `desc` reverses it, and it is **stable**: values that tie stay in the
-order they were written.
+`sort` buffers the complete stream before emitting values. Comparison follows
+`<`; `by` selects the comparison value, `desc` reverses the order, and equal
+values retain their input order.
 
 ### When a value arrives
 
-Two stages are about time rather than about values.
+Two stages control stream timing.
 
 ```a11flow
 tokens   | timeout 30s  -> answer
 requests | pace 100ms   -> to_api
 ```
 
-`timeout` is a **gap**: a stream that keeps arriving runs as long as it likes,
-and one that goes quiet for longer than this ends the flow with
-`deadline_exceeded`. That is what a stalled producer looks like from here; a
-budget for a whole step is `wait ... timeout`, which already existed.
+`timeout` limits the gap between values. A longer gap ends the flow with
+`deadline_exceeded`. Use `wait ... timeout` to limit an entire step.
 
-`pace` spaces values out and **drops nothing** — whoever is producing them is
-held back behind the buffer, which is what makes it a rate limit rather than a
-sample. What it costs is latency, on purpose.
+`pace` delays values to enforce a minimum interval without dropping them. The
+producer blocks when the buffer is full.
 
 ### Working on several values at once
 
@@ -396,36 +351,29 @@ A per-value stage may say how many values it may have in hand:
 urls | map fetch_page(it) parallel 8 -> bodies
 ```
 
-**What follows still reads them in the order they arrived.** The stage finishes
-its values in whatever order it finishes them and puts the stream back together
-before anything downstream sees it, so `parallel` can be added to a pipeline
-nobody else changed. `unordered` gives that up for whatever it saves:
+Downstream stages still receive values in input order. The parallel stage
+reorders completed work before emitting it. Add `unordered` to emit results as
+soon as they complete:
 
 ```a11flow
 urls | map fetch_page(it) parallel 8 unordered -> bodies
 ```
 
-It is worth writing where the per-value work is expensive — a round trip through
-the host, a coercion, a large `chunk` — and nowhere else: eight workers taking a
-field out of a record is eight fibres doing what one was already fast at. A
-stage that gathers or orders values refuses `parallel`, because there is nothing
-to run at once.
+Use `parallel` for substantial per-value work such as host round trips,
+coercions, or large chunks. It adds overhead to simple field access. Stages that
+gather or order values do not accept `parallel`.
 
 ### Text, times, and how long something took
 
-`strformat("%s of %s", got, wanted)` is printf, because a format string is
-something people already know how to read: `%s` for text, `%d`, `%f` and `%x`
-for numbers, printf's own flags and precision (`%-8s`, `%06.2f`), `%2$s` to pick
-a value by number, and `%%` for a literal percent. `| strformat "fmt"` is the
-one-value shorthand for `| map strformat("fmt", it)`, which is nearly every use
-of it.
+`strformat("%s of %s", got, wanted)` uses printf conversions: `%s` for text;
+`%d`, `%f`, and `%x` for numbers; flags and precision such as `%-8s` and
+`%06.2f`; `%2$s` for a positional value; and `%%` for a literal percent.
+`| strformat "fmt"` abbreviates `| map strformat("fmt", it)`.
 
-Flow uses printf-style conversions rather than Python template strings:
-`str.format` reads attributes, which could escape sandboxing when formatting
-untrusted expressions. A printf conversion operates strictly on supplied values
-without attribute access. A conversion with no value behind it is left as written
-rather than raising, because a visible `%3$s` in a log line is easier to
-diagnose than a flow that died formatting one.
+Flow uses printf-style conversions because `str.format` reads attributes, which
+could escape sandboxing for untrusted expressions. A printf conversion operates
+only on supplied values. A conversion with no corresponding value remains
+unchanged to expose the invalid conversion.
 
 Durations are written the way a timeout is — `500ns`, `250ms`, `30s`, `2m`,
 `1h`, and compounded as `1m30s500ms` — and are ordinary values. `now()` is the
@@ -440,24 +388,21 @@ let took = now() - started        # instant - instant is a duration
 strformat("took %s", took) -> log after done
 ```
 
-The `after` is not decoration. Steps run concurrently, so a statement that reads
-the clock and nothing else runs *at once* — written last and measuring the flow
-starting. `now() -> started` needs no barrier because a start is whenever the
-flow started; anything that reads the clock *against* something the flow produced
-is a measurement, and a measurement needs a moment. The language says so
-(`flow.barrier.unordered-clock`) rather than letting it report microseconds.
+Steps run concurrently, so source order alone does not delay a clock read.
+`now() -> started` needs no barrier because it records the start. A clock read
+that measures produced work requires `after`; otherwise the compiler reports
+`flow.barrier.unordered-clock`.
 
-An `after` holds the whole statement, its **arguments included**: in
-`run act(p: now() - started) after done` the argument is read once `done` has
-happened, not while the flow is starting. So a barriered statement reports what
-was true by the time it ran, which is what it reads like.
+An `after` applies to the complete statement, including arguments. In
+`run act(p: now() - started) after done`, the argument is evaluated after
+`done`.
 
 `+` and `-` are the only arithmetic the language has, and they exist for this:
 a composition cannot otherwise say how long it took. A bare number beside a
-duration counts as seconds; `seconds(d)` gives the number back. Subtracting the
-other way round gives a length below zero, and it says so rather than meaning
-"forever" the way a negative timeout does elsewhere in A11. `-` needs its
-spaces, since `text-upper` is one name.
+duration counts as seconds; `seconds(d)` gives the number back. Subtracting in
+the other order produces a negative duration; it does not use the
+infinite-timeout convention found elsewhere in A11. `-` requires spaces because
+`text-upper` is an identifier.
 
 Formatting: `%s` renders a duration as `1m30s` and an instant as RFC 3339. A
 unit in the parenthesised spec gives one number — `%(ns)d`, `%(us)d`, `%(ms)d`,
@@ -477,48 +422,35 @@ A timestamp or a timeout that arrived as text — from a header, a JSON field, a
 model's answer — is a value again, in one call and without a format string to
 get wrong.
 
-Two statements writing to the same node interleave by arrival, which is fine for
-pages and wrong for a conversation. `then` is how a flow says which comes first,
-and it is what makes a multi-turn chat expressible: the turns so far, then the
-one just made.
+Two statements writing to the same node interleave by arrival. Use `then` when
+order matters, such as sending prior conversation turns before the current one.
 
-### Throwing values away before they cost anything
+### Reducing data before serialization
 
-`| truncate 200` cuts each page down before it is written to the summariser's
-port. What is dropped is never serialised, never sent to a peer, and — when the
-next step is a model — never charged for. `| first 3`, `| where it.ok`,
-`| mime "text/*"` and `| drop 1` are the same lever at different granularities,
-and they are the reason a model asked to *instrument* a composition can make it
-cheaper without changing what it computes.
+`| truncate 200` shortens each page before writing it to the summariser. Dropped
+data is not serialized, sent to a peer, or included in model input. The same
+applies to `| first 3`, `| where it.ok`, `| mime "text/*"`, and `| drop 1`.
 
 ### Saying how a value travels
 
-`| packb` writes a value as `application/x-msgpack` instead of JSON. It is a
-no-op when the producer already wrote MessagePack — the chunk is passed on
-untouched, type tag and all — so putting it in front of a port that wants
-packed bytes is safe whatever is upstream, and costs a re-encode only when there
-is really one to pay for.
+`| packb` writes a value as `application/x-msgpack` instead of JSON. Existing
+MessagePack chunks pass through unchanged, including their type tag. Other
+representations are re-encoded.
 
 ### Passing on what the flow was told
 
-Headers are how a call is told *about* itself — which model to answer with, who
-is asking, when to give up. A11 already gives a nested action every `x-a11-`
-header of its parent, so a deadline or a model reaches a step with the flow
-saying nothing at all. For the headers outside that prefix, `forward headers`
-says it in one line:
+Headers carry call metadata such as model selection, identity, and deadlines.
+Nested actions automatically receive their parent's `x-a11-` headers. Use
+`forward headers` for other headers:
 
 ```a11flow
 answer = run interact_with_llm(interactions: asked, config: {})
     forward headers "authorization", "x-tenant-*"
 ```
 
-A name is forwarded as it arrived; a `*` matches a family of them; a header the
-caller did not send is simply not forwarded, so an optional one cannot fail the
-composition. `with "header": expr` remains the other half — for a value the flow
-*computes* rather than passes on — and if both name the same header the `with`
-wins, being the more specific of the two. Before this, moving one header one hop
-took a `header` declaration to give it a name and a `with` on every step that
-needed it.
+Names are forwarded unchanged, and `*` matches a family of names. Missing
+optional headers are ignored. Use `with "header": expr` for computed values. A
+`with` value overrides a forwarded header with the same name.
 
 ### Keeping a step's traffic off the wire
 
@@ -531,11 +463,9 @@ A `run` step already keeps its nodes off the wire unless it asks for `tee`; a
 
 ### Nodes of the flow's own
 
-`x = node()` gives a flow a stream of its own: somewhere several passes of a loop
-can write and one reader can read back, which a unary output port cannot be. The
-parentheses are not decoration — making a node is the one thing in the language
-that *does* something without naming an action, so it is written as the
-construction it is, and `node` stays available as a name for anything else.
+`x = node()` creates a stream that several loop passes can write and another
+step can read. Parentheses distinguish the constructor from an identifier named
+`node`.
 
 ```a11flow
 best = node()
@@ -548,11 +478,9 @@ for url in urls {
 best | first 1 -> text
 ```
 
-The node lands in the contextually active node map — the enclosing `nodes`
-block's, or the action's — so `nodes scratch` around it keeps it off the wire
-like anything else. `x = node(where-they-said)` attaches to a node *somebody else*
-named instead of making one, and `x.id` hands a node to an action that expects to
-be told where to write:
+The node uses the active node map: the enclosing `nodes` block's map or the
+action's map. `x = node(existing-id)` attaches to an existing node, and `x.id`
+passes its identifier to an action that writes to it:
 
 ```a11flow
 seen = node()
@@ -561,12 +489,9 @@ seen -> progress
 drain seen after reader          # the flow lent the node; the flow ends it
 ```
 
-The `after` on that last line is the whole of it. Nothing in the flow writes
-`seen`, so nothing in the flow would close it either — which means the barrier is
-what closes it, and a barrier with nothing to wait for closes it *at once*,
-leaving whoever was lent `seen.id` with a shut writer. `wait seen` on its own is
-that mistake wearing the word "wait", and the language says so
-(`flow.barrier.wait-lends-node`).
+The final `after` delays `drain` until `reader` finishes writing through
+`seen.id`. Without the dependency, the node would close immediately. The
+compiler reports `flow.barrier.wait-lends-node` for `wait seen` in this pattern.
 
 ## Failures a flow expects
 
@@ -611,9 +536,7 @@ the rest running; `wait all of a, b` holds for every one of them. A race is
 between *calls* — a node is finished when whoever writes it says so, which is
 what `wait` and `drain` are for.
 
-A race is also a *value*: which one won, counted from zero. It is written where
-a number is written, so the flow can act on the answer rather than only on the
-fact that someone finished:
+A race also produces the zero-based index of the winning call:
 
 ```a11flow
 won = wait first of primary, backup        # 0 or 1
@@ -660,24 +583,22 @@ repeat state = {"round": 0} max 6 {
 
 `repeat` carries one value from each pass to the next: `state` starts at the
 literal and becomes whatever `<-` names. `until` (or `while`) ends the loop, and
-`max` bounds it regardless. One of the two is required: there is no default
-bound, so a `repeat` with neither is refused rather than stopping after some
-number of passes and reporting that as success.
+`max` bounds it regardless. One of the two is required because `repeat` has no
+default bound.
 
 `match` pulls named fields out of text, as a stage over a stream and as a
 function over one value: `lines | match "name={name} age={age:int}"` turns
 `name=Alice   age=27` into a record with `name` and `age`. Literal text matches
 itself, a run of spaces or tabs matches any run, and a hole may say what to read
 itself as (`int`, `number`, `bool`, `word`, `line`, `rest`, `duration`, `time`,
-`json`). The pattern searches rather than anchors, so there are no wildcards to
-write, and a hole stays on its line unless it says otherwise. The stage drops a
+`json`). The pattern searches anywhere in the input, so it requires no
+wildcards. A hole stays on its line unless specified otherwise. The stage drops a
 value the pattern does not fit and the function answers null. Where the pattern
 is written out, the fields are known: `it.name` is completed and a typo is
 reported.
 
-`try` also goes in front of a **pipe**, and there it means the failure arriving
-from the source — or refused by the destination — is a value rather than the end
-of the flow:
+`try` also goes in front of a **pipe**. It converts a source or destination
+failure into a value instead of ending the flow:
 
 ```a11flow
 moved = try findings -> seen
@@ -690,13 +611,11 @@ saying why — so the language reports that. This is a different thing from `try
 on a *stage*: a stage fails once per value and carries on, which is why it has
 `into` for the ones it dropped, while a pipe fails once and stops.
 
-A `[s =] [try] { ... }` block runs its statements as one step. Everything in a
-flow's body runs at once, which is the point of it; a block is how a flow says
-"these together, and *this* is what came of them". Reading a value blocks where
-it stands, so a condition inside a block holds up only what is in the braces and
-not the rest of the body. Bound to a name it reads as a status, exactly as a call
-does; `try` says a failure inside is the flow's to handle, and without it a
-failure ends the flow the way a call's does.
+A `[s =] [try] { ... }` block runs its statements as one step. Statements in a
+flow body run concurrently, while a block groups their outcome. Reading a value
+blocks only the statements inside the braces. A bound block yields a status like
+a call. With `try`, the flow handles a block failure; otherwise the failure ends
+the flow.
 
 `for v in stream` runs its block once per value, `parallel n` runs `n` passes at
 a time. A stream read *inside* a loop or branch is materialised: the runtime
@@ -742,9 +661,8 @@ stays a `repeat`'s, because a `for` takes its value from its stream and has
 nothing to hand the next pass.
 
 `advance` is the other way to walk a stream, and it is *not* a loop: its offset
-is worked out while the file is compiled, so it reads the first, second and third
-value where it is written out three times, and advancing a name bound outside a
-loop is refused rather than binding the same value on every pass.
+is determined during compilation, so three uses read the first, second, and
+third values. A name bound outside a loop cannot be advanced inside the loop.
 
 ### Ending a stream, and ending it badly
 
@@ -766,15 +684,15 @@ in an `if` or a loop body or carries an `after`.
 
 Only a node this flow **writes** can be aborted by it.
 
-Flow unifies node completion into full endings (`drain` or `abort`): marking a node
-final also closes its writer to ensure consistent reader semantics.
+Flow unifies node completion into full endings (`drain` or `abort`): marking a
+node final also closes its writer to keep reader semantics consistent.
 
 ### Ending a step early
 
 `cancel x` aborts a step, ending the run with status `cancelled`.
 
-To request that a step finish gracefully rather than cancelling, send a stop command
-following standard action conventions:
+To request graceful completion, send a stop command following standard action
+conventions:
 ```a11flow
 if tick.number == 3 { {"command": "stop"} -> clock.control_events }
 ```
@@ -791,11 +709,11 @@ belongs within a conditional, loop body, or `after` clause.
 
 ## Flow boundaries and sandbox limits
 
-Beyond `+` and `-` there is no arithmetic, no way to define a function, and no way to call out to
-arbitrary host code. An expression reads values, compares them, accesses fields via `.field`
-and `[i]`, and constructs new records using built-in functions (`len`, `lower`,
-`join`, `merge`, `default`, etc.). A flow operates strictly by orchestrating declared
-action streams within these sandbox boundaries.
+Beyond `+` and `-`, Flow provides no arithmetic, function definitions, or
+direct calls to host code. Expressions read and compare values, access fields
+with `.field` and `[i]`, and construct records with built-in functions such as
+`len`, `lower`, `join`, `merge`, and `default`. A flow operates only through
+declared action streams.
 
 ## The tables, as data
 
@@ -853,7 +771,7 @@ the whole composition, which is what makes one reviewable before it is run.
 
 A file with a `flow { ... }` is a program, and running one is a different call
 from running a flow: it gets `argv`, a policy, this process's standard streams,
-and its exit code is a result rather than an exception.
+and returns its exit code as a result.
 
 ```sh
 a11 flow run greet.flow -- Helena

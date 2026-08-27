@@ -32,15 +32,19 @@ std::string Formatted(std::string_view source) {
   return result.formatted;
 }
 
+// Every token as `kind:text`, minus the line breaks. The comparison the
+// token-preservation invariant is stated in.
 /// Every token as `kind:text`, minus the line breaks.
 ///
-/// The comparison the token-preservation invariant is stated in. Line breaks are
-/// left out because they are whitespace that happens to be a token: `if a { b }`
-/// has to become three lines, and a formatter that could not add one could not
-/// indent anything. What may not change is everything else -- and the tree, which
-/// is what [Tree] checks and is the guarantee that actually matters.
+/// The comparison the token-preservation invariant is stated in. Line breaks
+/// are left out because they are whitespace that happens to be a token: `if a
+/// { b }` has to become three lines, and a formatter that could not add one
+/// could not indent anything. What may not change is everything else -- and
+/// the tree, which is what [Tree] checks and is the guarantee that actually
+/// matters.
 ///
-/// Trailing whitespace inside a comment is the one piece of whitespace that lives
+/// Trailing whitespace inside a comment is the one piece of whitespace that
+/// lives
 /// inside a token, and the formatter trims it.
 std::vector<std::string> Stream(std::string_view source) {
   std::vector<std::string> out;
@@ -62,11 +66,14 @@ std::vector<std::string> Stream(std::string_view source) {
   return out;
 }
 
+// The syntax tree, with every position dropped. This is the invariant a person
+// actually cares about: the program after formatting is the same program.
 /// The syntax tree, with every position dropped.
 ///
-/// Formatting moves everything, so the offsets differ by construction; what has to
-/// be identical is the tree those positions hang off. This is the invariant a
-/// person actually cares about: the program after formatting is the same program.
+/// Formatting moves everything, so the offsets differ by construction; what
+/// has to be identical is the tree those positions hang off. This is the
+/// invariant a person actually cares about: the program after formatting is
+/// the same program.
 nlohmann::json Tree(std::string_view source) {
   nlohmann::json value = SyntaxToJsonValue("-", Parse(source));
   value.erase("source");
@@ -222,12 +229,8 @@ TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
 }
 
 TEST(FlowFormat, AFoldArgumentOnTheNextLineIsIndentedUnderItsStage) {
-  // A comma at the end of a line says the statement is not over, so what follows
-  // is a tail of it. Without that, a `fold`/`scan` expression written on the
-  // next line began with a `{` or a name -- neither of which reads as a tail --
-  // and was pushed out to the *block's* indent, level with `nodes` and the
-  // statement itself. Two levels rather than one, as a modifier tail gets, so
-  // the argument does not land exactly where the next `|` would.
+  // A comma at the end of a line says the statement is not over, so what
+  // follows is a tail of it.
   const std::string source =
       "flow t {\n"
       "  in  n: number stream\n"
@@ -268,9 +271,9 @@ TEST(FlowFormat, ADescriptionOnItsOwnLineIsIndentedUnderWhatItDescribes) {
 }
 
 TEST(FlowFormat, ATripleQuotedStringIsLeftExactlyAsItWasWritten) {
-  // Its interior is content, not code: the formatter indents the line the string
-  // starts on and does not touch a byte inside it, because every one of those
-  // bytes is in the value.
+  // Its interior is content, not code: the formatter indents the line the
+  // string starts on and does not touch a byte inside it, because every one of
+  // those bytes is in the value.
   const std::string source =
       "flow t {\n"
       "describe \"\"\"\n"
@@ -378,9 +381,9 @@ TEST(FlowFormat, TheEditIsTrimmedToWhatActuallyDiffers) {
 }
 
 TEST(FlowFormat, IsIdempotentAndTokenPreservingOverTheCorpus) {
-  // The two invariants, over every flow this repository ships. They are what let
-  // `fmt -i` be run without reading the diff: whatever the style decides, the
-  // program is the same program, and running it again changes nothing.
+  // The two invariants, over every flow this repository ships. They are what
+  // let `fmt -i` be run without reading the diff: whatever the style decides,
+  // the program is the same program, and running it again changes nothing.
   const std::vector<std::filesystem::path> corpus = Corpus();
   ASSERT_FALSE(corpus.empty());
   for (const std::filesystem::path& path : corpus) {
@@ -404,9 +407,9 @@ TEST(FlowFormat, IsIdempotentAndTokenPreservingOverTheCorpus) {
 }
 
 TEST(FlowFormat, EveryFlowThisRepositoryShipsIsFormatted) {
-  // The corpus is the style's own documentation, so it is held to it. A diff here
-  // means either the formatter or the file needs a change, and the diff says
-  // which.
+  // The corpus is the style's own documentation, so it is held to it. A diff
+  // here means either the formatter or the file needs a change, and the diff
+  // says which.
   for (const std::filesystem::path& path : Corpus()) {
     const std::string source = ReadFile(path);
     EXPECT_EQ(Format(source).formatted, source) << path;

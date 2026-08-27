@@ -245,6 +245,7 @@ class HostBridge {
     return chunks;
   }
 
+  // How this host would rather hold a value of a shape the *language* declared.
   /// How this host would rather hold a value of a shape the *language*
   /// declared.
   ///
@@ -275,7 +276,7 @@ class HostBridge {
 ///
 /// What the standalone tool and the C++ tests run with. A tag the C++ registry
 /// does not know is an error in the same words the Python reference used, which
-/// is the honest answer: the module defining the type is not loaded here.
+/// reports the type as unavailable because its defining module is not loaded.
 std::unique_ptr<HostBridge> NativeHostBridge();
 
 // --- Reading values ----------------------------------------------------------
@@ -439,11 +440,10 @@ struct EvalContext {
 
 /// Evaluate one expression.
 ///
-/// Fails only where a flow asked for something that cannot be done at all -- a
-/// type nothing here knows, two instants added together -- because everything
-/// else the language answers rather than dying on: a bad comparison compares as
-/// text, a missing key is null, an unreadable number is zero. That is what
-/// makes a flow safe to accept from somewhere else and run.
+/// Fails for unsupported operations such as an unknown type or adding two
+/// instants. Other invalid values use the language defaults: incompatible
+/// comparisons use text, a missing key is null, and an unreadable number is
+/// zero.
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context);
 
@@ -457,6 +457,8 @@ absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
                              const CoerceContext& context);
 
+// Make `value` a value of `shape`: fill its defaults, check its bounds, and
+// coerce every field to the type the shape gives it.
 /// Make `value` a value of `shape`: fill its defaults, check its bounds, and
 /// coerce every field to the type the shape gives it.
 ///

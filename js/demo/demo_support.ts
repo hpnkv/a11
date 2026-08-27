@@ -1,14 +1,13 @@
 /**
  * What the four guide demos that talk to `a11.demos.web_demos_server` all need:
- * a WebSocket session, the backend toolbar (provider, model, key, base URL), one
- * chat turn against `interact_with_llm`, the registry a page serves, and
- * a few DOM helpers.
+ * a WebSocket session, the backend toolbar (provider, model, key, base URL),
+ * one chat turn against `interact_with_llm`, the registry a page serves, and a
+ * few DOM helpers.
  *
- * It is one module rather than four copies because the demos differ in what they
- * *do* with a turn — read a report, drive a canvas, draw an image — and not in
- * how a turn is run. The code here is the same sequence the IntelliJ plugin's
- * webview runs (`intellij-plugin/webview/src/a11client.ts`), cut down to what a
- * documentation page shows.
+ * The demos share this turn lifecycle while presenting different results such
+ * as reports, canvas updates, and images. It is a compact version of the
+ * IntelliJ webview sequence in
+ * `intellij-plugin/webview/src/a11client.ts`.
  */
 
 import {
@@ -57,7 +56,7 @@ export const DEFAULT_SERVER_URL = 'wss://a11.services:9443/a11-demos';
 
 // --- The backend a turn is answered by --------------------------------------
 
-/** Everything that decides *who* answers, all of it a header on the call. */
+/** Provider settings sent as call headers. */
 export interface Backend {
     provider: string;
     model: string;
@@ -68,14 +67,11 @@ export interface Backend {
 /**
  * What each provider is usually called and reached at.
  *
- * The hosted ones need a key and no base URL; a keyless provider reached over a
- * base URL (Ollama) is the other way round. Nothing else here is
- * provider-specific — that is the whole point of `interact_with_llm`.
+ * Hosted providers need a key and no base URL. Ollama uses a base URL and no
+ * key. Other interaction handling remains provider-independent.
  *
- * The base URL is resolved by whoever *serves* the action, not by the page, so
- * `http://127.0.0.1:11434` means the backend's own Ollama — which is why it is
- * the default: the hosted demo backend runs one, and a turn against it needs no
- * key at all.
+ * The action server resolves the base URL. The default therefore selects the
+ * demo backend's local Ollama instance and requires no API key.
  */
 export const BACKEND_DEFAULTS: Record<string, { model: string; baseUrl: string }> = {
     ollama: {model: 'glm-4.7-flash', baseUrl: 'http://127.0.0.1:11434'},
@@ -123,7 +119,10 @@ export class BackendControls {
     }
 }
 
-/** The backend, as the headers that carry it on a call. Empty ones are left off. */
+/**
+ * The backend, as the headers that carry
+ * it on a call. Empty ones are left off.
+ */
 export function LlmHeadersFor(backend: Backend): Array<[string, string]> {
     const headers: Array<[string, string]> = [
         [LlmHeaders.PROVIDER, backend.provider],
@@ -145,10 +144,8 @@ export interface Connection {
 /**
  * The WebSocket URL of a service address.
  *
- * A person writes (and a service publishes) `https://host:port/path`; the
- * transport wants `wss://`. They are the same endpoint — A11's WebSocket server
- * speaks HTTP/1.1 as well as HTTP/2, so a browser connects to it directly — and
- * accepting both is one line rather than a footgun in every demo's URL field.
+ * Services may publish `https://host:port/path`, while the WebSocket transport
+ * requires `wss://`. This helper accepts either form for the same endpoint.
  */
 export function webSocketUrl(url: string): string {
     return url.trim().replace(/^http(s?):\/\//i, 'ws$1://');
@@ -158,11 +155,11 @@ export function webSocketUrl(url: string): string {
  * Open a session to the demo server over one WebSocket.
  *
  * `registry` is what the *page* serves: an empty one for a demo that only calls
- * out, and a populated one for the demo whose actions the model calls back into.
- * It is bound to the session before the stream is attached, so an inbound call
- * cannot arrive before there is a handler for it -- and so that the backend,
- * which asks this session what it serves over `__list_actions__`, gets the
- * right answer whenever it asks. There is nothing to announce.
+ * out, and a populated one for the demo whose actions the model calls back
+ * into. It is bound to the session before the stream is attached, so an inbound
+ * call cannot arrive before there is a handler for it -- and so that the
+ * backend, which asks this session what it serves over `__list_actions__`, gets
+ * the right answer whenever it asks. There is nothing to announce.
  */
 export async function connect(url: string, registry = new ActionRegistry()): Promise<Connection> {
     const session = need(Session.create({actionRegistry: registry, noStreamTimeoutMs: null}));
@@ -200,14 +197,12 @@ export async function readPort(
 /**
  * Claim an action's log port, before it is dispatched.
  *
- * Every A11 action has one, reserved and not in its schema, which is why this is
- * how a page follows a slow action: it works on anything, without the page and
- * the action having agreed on a narration port first. `deep-research` used to
- * publish a `user_log` output, and the cost of that was that every client had to
- * be told its name and no other client could follow the run at all.
+ * Every A11 action has a reserved log port outside its schema, so a page can
+ * follow any slow action without agreeing on a custom narration port.
  *
  * Two rules, and the order of the calls in a page is how they are kept. Claim
- * *before* `call()`, because a log written before anything holds the port goes to
+ * *before* `call()`, because a log written
+ * before anything holds the port goes to
  * the server's own log and is gone. And read it with `readLogFrom` *alongside*
  * the outputs rather than before them, because nothing finalizes a log port --
  * the action's ending closes it.
@@ -232,7 +227,9 @@ export async function readLogFrom(
     }
 }
 
-/** Read an output port and keep nothing: an undrained port stalls its producer. */
+/**
+ * Read an output port and keep nothing: an undrained port stalls its producer.
+ */
 export async function drainPort(action: Action, port: string): Promise<void> {
     try {
         await readPort(action, port, () => {
@@ -250,14 +247,18 @@ export interface TurnCallbacks {
     onThought?: (text: string) => void;
 }
 
-/** What a turn is: a conversation so far, a new question, and who answers it. */
+/**
+ * What a turn is: a conversation so far, a new question, and who answers it.
+ */
 export interface TurnRequest extends TurnCallbacks {
     connection: Connection;
     backend: Backend;
     prompt: string;
     /** Every interaction of the conversation so far, oldest first. */
     history: readonly Interaction[];
-    /** Rides on the first interaction of a conversation; later ones ignore it. */
+    /**
+     * Rides on the first interaction of a conversation; later ones ignore it.
+     */
     systemPrompt?: string;
     /** Actions the page serves that this turn may use, already announced. */
     tools?: readonly ActionSchema[];
@@ -268,10 +269,11 @@ export interface TurnRequest extends TurnCallbacks {
 /**
  * Run one turn and return the interactions it added.
  *
- * The caller appends them to its own history: the conversation lives in the page
- * as the provider's own interaction objects, so the next turn puts the whole of
- * it back in front of the model, and the backend records the same objects as it
- * goes (which is what makes a reload continue rather than start over).
+ * The caller appends them to its own history: the conversation lives in the
+ * page as the provider's own interaction objects, so the next turn puts the
+ * whole of it back in front of the model, and the backend records the same
+ * objects as it goes (which is what makes a reload continue rather than start
+ * over).
  */
 export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     const {connection, backend, prompt, history} = request;
@@ -281,8 +283,8 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     for (const [header, value] of LlmHeadersFor(backend)) need(call.setHeader(header, value));
     const toolNames = (request.tools ?? []).map((schema) => schema.name);
     if (toolNames.length > 0) {
-        // The allow-list is the request: a tool the model is not offered here cannot
-        // be called, and is not even described to it.
+        // The allow-list is the request: a tool the model is not offered here
+        // cannot be called, and is not even described to it.
         need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, toolNames.join(',')));
     }
     need(await call.call());
@@ -352,7 +354,8 @@ function payloadText(value: unknown): string {
 }
 
 /**
- * Best-effort readable text of an interaction, for drawing a stored conversation.
+ * Best-effort readable text of an interaction, for drawing a stored
+ * conversation.
  *
  * It reads the content *shapes* rather than the provider: the neutral
  * `{role, content: [{type: 'text', text}]}` envelope this side writes, and the

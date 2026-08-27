@@ -134,17 +134,14 @@ async def wired():
     async def fake_llm(action: Action) -> None:
         """Answer, and hand back an interaction shaped the way a backend's is.
 
-        `role` and a `content` list inside the chunk, because that is what the
-        real backends write (`snapshot.model_dump()`) and what they read back
-        out of a replayed interaction. A conversation only survives a round trip
-        if the fake keeps to that shape.
+        Real backends write `role` and a `content` list through
+        `snapshot.model_dump()` and expect the same shape during replay. The
+        fake uses that representation for round-trip coverage.
         """
         asked = []
         async for interaction in action["interactions"]:
             message = a11.from_chunk(interaction.content[0])
-            asked.append(
-                f"{message['role']}: {message['content'][0]['text']}"
-            )
+            asked.append(f"{message['role']}: {message['content'][0]['text']}")
         await action["config"].consume(dict, allow_none=True)
         heard["asked"] = asked
         heard.setdefault("turns", []).append(asked)
@@ -160,12 +157,10 @@ async def wired():
                     # inside keeps whatever the provider calls it.
                     role=Role.ASSISTANT,
                     content=[
-                        a11.to_chunk(
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": answer}],
-                            }
-                        )
+                        a11.to_chunk({
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": answer}],
+                        })
                     ],
                 ),
                 final=True,
@@ -185,6 +180,7 @@ async def wired():
     theirs.register(
         INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, fake_llm
     )
+
     # The gateway knows `capture_audio` too, with a microphone of its own. The
     # flow says `call`, so this one must never be the one that runs.
     async def wrong_mic(action: Action) -> None:
@@ -216,13 +212,12 @@ async def wired():
 
 
 @pytest.mark.asyncio
-async def test_the_first_full_sentence_becomes_the_question(
-    playground, wired
-):
+async def test_the_first_full_sentence_becomes_the_question(playground, wired):
     client, stream, heard = wired
 
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(stream)
@@ -250,21 +245,17 @@ async def test_the_first_full_sentence_becomes_the_question(
     # Every input port of the call, including the ones it has nothing for: one
     # that is neither written nor closed is one the handler waits on.
     await call["source"].finalize(playground.FLOW_SOURCE)
-    await call["inputs"].finalize(
-        {
-            "asr": {"model": "fake.bin"},
-            "device": {},
-            "history": history.get_id(),
-        }
-    )
+    await call["inputs"].finalize({
+        "asr": {"model": "fake.bin"},
+        "device": {},
+        "history": history.get_id(),
+    })
     await call["flow"].finalize()
     await call["input_streams"].finalize()
 
     # Read off the published nodes rather than out of `result`: this is the
     # client watching the answer being written.
-    sentence = await asyncio.wait_for(
-        sentence_node.next_object(), timeout=30
-    )
+    sentence = await asyncio.wait_for(sentence_node.next_object(), timeout=30)
     reply = [
         await asyncio.wait_for(reply_node.next_object(), timeout=30)
         for _ in range(2)

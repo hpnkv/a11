@@ -19,20 +19,14 @@ requirements rather than tuning. A connection's `on_connection` hook runs before
 its session pumps messages, so an awaited round trip there deadlocks; and a
 connection that never chats should not pay for a round trip it will not use.
 
-There used to be a ``__register_tools__`` handshake for the other direction --
-a client announcing its tools -- with its schema hand-copied into four
-languages and its own port-descriptor vocabulary. It is gone: every A11
-runtime now answers `__list_actions__` itself, so there is nothing to announce
-and, more to the point, nothing to announce wrongly.
-
 Narration -- what a tool did, for the person watching, never part of the model's
 tool result -- rides the reserved log port. A client that logs through its own
-A11 runtime needs nothing from this module: the log port of the action the bridge
-dispatched mirrors back like any other output, and the proxy re-emits it through
+A11 runtime needs nothing from this module: the log port of the action the
+bridge dispatched mirrors back like any other output, and the proxy re-emits it
+through
 :meth:`a11.actions.action.Action.log` on the local action, which is where the
-tool runner reads it. There is no longer any way for a client to nominate one of
-its *declared* outputs as narration, and nothing needs one: every action has a
-log port, and no schema has to declare it.
+tool runner reads it. Every action has a log port, so schemas do not nominate a
+declared output for narration.
 """
 
 from __future__ import annotations
@@ -54,18 +48,11 @@ DISCOVERY_TIMEOUT = timing.Duration.seconds(15)
 
 
 class _BridgedTool:
-    """One remote tool: the schema it is called with, here and on the wire.
+    """One remote tool with the same schema locally and on the wire.
 
-    They are the same schema. They were once two, differing only in a port the
-    client had flagged as narration, which existed here and not there; narration
-    moved to the reserved log port, which no schema declares, and the two
-    collapsed into one.
-
-    That identity is worth more than it looks. A **flow** does not go through the
-    proxy's forwarding: a ``call`` step dispatches the ports of the schema in the
-    registry straight to the peer. When the local schema was the wire schema with
-    a port renamed, a flow calling a bridged tool named a port the client did not
-    have and the composition failed there.
+    A Flow ``call`` dispatches the registry schema's ports directly to the
+    peer, so local and wire port names must be identical. Narration uses the
+    reserved log port, which no schema declares.
     """
 
     def __init__(self, described: dict[str, Any]) -> None:
@@ -85,8 +72,7 @@ class RemoteToolBridge:
     and so does the registry they are registered on.
     """
 
-    #: Attribute the bridge parks itself under on its session, so the tool
-    #: runner can find it without a global.
+    #: Session attribute through which the tool runner finds this bridge.
     SESSION_ATTRIBUTE = "a11_tool_bridge"
 
     def __init__(self) -> None:
@@ -100,17 +86,16 @@ class RemoteToolBridge:
     def install(self, registry: a11.ActionRegistry) -> None:
         """Bind this bridge to the registry its proxies go on.
 
-        Nothing is registered here. The bridge's own entry point is
-        `__list_actions__` on the *peer*, not an action it serves itself.
+        This does not register an action. Discovery calls ``__list_actions__``
+        on the peer.
         """
         self._registry = registry
 
     def bind_session(self, session: Session, stream: WireStream) -> None:
         self._session = session
         self._stream = stream
-        # Parked on the session so `collect_tools` can reach the bridge for
-        # *this* connection. A module-level map keyed by session would be the
-        # same thing with a lifetime bug attached.
+        # Session ownership keeps the bridge lifetime aligned with its
+        # connection and lets `collect_tools` find it without a global map.
         setattr(session, self.SESSION_ATTRIBUTE, self)
 
     @classmethod
@@ -128,9 +113,9 @@ class RemoteToolBridge:
     ) -> list[str]:
         """Ask the peer what it serves, once, and proxy each answer.
 
-        Idempotent and cheap after the first call: a connection asks once. A peer
-        that cannot answer is not an error -- plenty of clients serve no tools at
-        all, and the turn should proceed with the gateway's own.
+        Idempotent and cheap after the first call: a connection asks once. A
+        peer that cannot answer is not an error; plenty of clients serve no
+        tools, and the turn should proceed with the gateway's own.
         """
         async with self._lock:
             if self._asked:
@@ -151,7 +136,8 @@ class RemoteToolBridge:
 
     async def _ask(self, timeout: timing.Duration) -> list[dict[str, Any]]:
         call = (
-            a11.Action(describe.LIST_ACTIONS_SCHEMA)
+            a11
+            .Action(describe.LIST_ACTIONS_SCHEMA)
             .bind_node_map(self._session.node_map)
             .bind_session(self._session)
             .bind_stream(self._stream)
@@ -196,17 +182,16 @@ class RemoteToolBridge:
                 tool = _BridgedTool(entry)
             except Exception:
                 logging.warning(
-                    "could not read the peer's description of %r", name,
+                    "could not read the peer's description of %r",
+                    name,
                     exc_info=True,
                 )
                 continue
             # A peer announcing a name this side also serves shadows it:
             # `register` replaces, and the registry is a per-connection copy, so
             # no other session sees the substitution. That is the behaviour we
-            # want -- the peer asked for *its* tool to run the model's calls, and
-            # a client whose whole point is its own shell (`a11 chat`) must be
-            # able to serve `shell_execute` to a gateway that serves one too.
-            # It is worth a log line because it is otherwise invisible.
+            # want: peer tools must replace same-named gateway tools for this
+            # connection. Log the otherwise invisible replacement.
             if self._registry.is_registered(tool.name):
                 shadowed.append(tool.name)
             self._registry.register(
@@ -241,7 +226,8 @@ class RemoteToolBridge:
             # and the forwarding below blocks forever. Mirrors the outbound-call
             # binding in a11/actions/tests/test_action.py.
             remote = (
-                a11.Action(tool.schema)
+                a11
+                .Action(tool.schema)
                 .bind_node_map(self._session.node_map)
                 .bind_session(self._session)
                 .bind_stream(self._stream)
@@ -252,19 +238,13 @@ class RemoteToolBridge:
             # Forward the tool inputs the runner fed us to the peer, then stream
             # the peer's outputs back onto the nested action's outputs.
             #
-            # Every port is pumped concurrently, and that is load-bearing rather
-            # than an optimisation. A peer writes its ports in whatever order it
-            # likes, `ActionSchema.inputs`/`outputs` do not preserve declaration
-            # order, and the transport applies backpressure: draining one
-            # port to completion before starting the next deadlocks the moment
-            # the peer is busy filling a port this side has not begun reading. A
-            # big result (a whole file, say) is exactly when that happens.
-            await asyncio.gather(
-                *[
-                    _pump(nested.get_input(name), remote.get_input(name))
-                    for name in tool.schema.inputs
-                ]
-            )
+            # Pump every port concurrently. Port mappings do not preserve
+            # declaration order, and the transport applies backpressure. Reading
+            # ports sequentially can deadlock while the peer fills a later port.
+            await asyncio.gather(*[
+                _pump(nested.get_input(name), remote.get_input(name))
+                for name in tool.schema.inputs
+            ])
             await asyncio.gather(
                 *[
                     _pump(remote.get_output(name), nested.get_output(name))
@@ -289,8 +269,8 @@ async def _relog(src: a11.AsyncNode, action: a11.Action) -> None:
     The level, channel, location and internal flag come back through: a client's
     ``debug`` line must not arrive here as ``info``.
 
-    Best effort: a peer's narration is worth nothing next to its result, so a log
-    that will not re-emit does not fail the call.
+    Best effort: a peer's narration is secondary to its result, so a log that
+    cannot be re-emitted does not fail the call.
     """
     while True:
         chunk = await src.next_chunk()
@@ -306,8 +286,8 @@ async def _relog(src: a11.AsyncNode, action: a11.Action) -> None:
                 channel=record["channel"] or None,
                 internal=record["internal"],
                 # The peer's location, or none at all -- an empty file rather
-                # than None, so `log` does not helpfully stamp this module's
-                # own line onto somebody else's log.
+                # than None, so `log` does not helpfully stamp this module's own
+                # line onto somebody else's log.
                 file=record["file"],
                 lineno=record["lineno"],
             )

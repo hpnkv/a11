@@ -18,9 +18,9 @@ who is asking rather than about what a flow means:
 * **A flow may not call the flow tools.** Composing ``flow_run`` into a flow is
   a way to run something the check above just refused, and a way to recurse.
 
-Each handler narrates its run through :meth:`a11.actions.action.Action.log`. The
-LLM tool runner reads that separately from the action's outputs, so the narration
-cannot reach the model's result -- and no schema here declares a port for it.
+Each handler narrates its run through :meth:`a11.actions.action.Action.log`.
+The LLM tool runner reads that separately from the action's outputs, so the
+narration cannot reach the model's result. No schema here declares a log port.
 """
 
 from __future__ import annotations
@@ -61,9 +61,9 @@ def _fenced(source: str) -> str:
 def _compile(source: str) -> Program:
     """Compile submitted source, reporting a syntax error as a status.
 
-    A [FlowSyntaxError][a11.flow.diagnostics.FlowSyntaxError] already carries the
-    line and column and converts to the ``INVALID_ARGUMENT`` a caller should be
-    told about, which is exactly what a model needs to fix its own flow.
+    A [FlowSyntaxError][a11.flow.diagnostics.FlowSyntaxError] already carries
+    the line and column and converts to the ``INVALID_ARGUMENT`` a caller should
+    receive, which is exactly what a model needs to fix its own flow.
     """
     try:
         return compile_flows(source, SOURCE_NAME)
@@ -105,8 +105,8 @@ def verify_calls(program: Program, patterns: list[str]) -> None:
     declared = set(program.flows)
     for name in _called_actions(program):
         if name in declared:
-            # A flow calling another flow in the same source reaches nothing
-            # the caller did not itself submit.
+            # A flow calling another flow in the same source reaches nothing the
+            # caller did not itself submit.
             continue
         if name in FLOW_TOOL_NAMES:
             raise Status(
@@ -134,26 +134,20 @@ def describe_composable_actions(
 
     A thin projection of the written schema
     ([a11.actions.describe][a11.actions.describe]) into the words a flow uses.
-    It used to build its own port shape -- ``{port, type, stream}`` where the
-    tool bridge said ``{name, type, unary}`` -- which made three vocabularies
-    for one idea. The document is now shared; only the spelling is local, and
-    only because a flow declares `stream` rather than `unary` and a flow step
-    names an `action` rather than a `name`.
+    The written schema is shared with tool discovery. This projection only
+    translates Flow's ``stream`` and ``action`` terminology from ``unary`` and
+    ``name``.
 
-    The ports are the point: an action's *output* port names are what a pipe
-    needs on the left of a ``->``, and a tool definition carries only inputs.
+    Output port names support pipe expressions, but tool definitions only
+    describe inputs.
 
-    ``runnable`` is the other thing a tool definition cannot say. A flow says
-    `run` or `call` and the two are not interchangeable, so which one an action
-    takes has to be data rather than a rule to remember: an action registered
-    here with a handler is one to `run`, and one registered for its schema
-    alone is one to `call`.
+    ``runnable`` distinguishes actions for `run` from actions for `call`.
+    Actions registered with a handler are runnable; schema-only registrations
+    are callable through the peer.
 
-    One kind of port is left out, because a flow that named it would be making a
-    mistake: an autofilled input, which is supplied before the handler runs (a
-    tool definition hides these too). Narration needs no exclusion -- an action
-    logs through :meth:`a11.actions.action.Action.log`, whose port is not in the
-    schema, so there is nothing here to hide.
+    Autofilled inputs are omitted because the runtime supplies them before the
+    handler runs. Action logs use
+    :meth:`a11.actions.action.Action.log` and are not schema ports.
     """
     document = describe.registry_to_json(
         registry, {"names": list(patterns)} if patterns else None
@@ -161,23 +155,21 @@ def describe_composable_actions(
     described: list[dict[str, Any]] = []
     for entry in describe.schemas_in_document(document):
         name = entry.get("name", "")
-        # The flow tools themselves: a flow composing `flow_run` would be asking
-        # the gateway to run the flow it is already running.
+        # Exclude Flow tools to prevent recursive composition through
+        # `flow_run`.
         if name in FLOW_TOOL_NAMES:
             continue
-        described.append(
-            {
-                "action": name,
-                "description": entry.get("description", ""),
-                "runnable": entry.get("runnable", False),
-                "inputs": [
-                    _describe_port(port) for port in entry.get("inputs", ())
-                ],
-                "outputs": [
-                    _describe_port(port) for port in entry.get("outputs", ())
-                ],
-            }
-        )
+        described.append({
+            "action": name,
+            "description": entry.get("description", ""),
+            "runnable": entry.get("runnable", False),
+            "inputs": [
+                _describe_port(port) for port in entry.get("inputs", ())
+            ],
+            "outputs": [
+                _describe_port(port) for port in entry.get("outputs", ())
+            ],
+        })
     return described
 
 
@@ -258,12 +250,12 @@ def flow_input_node_id(call_id: str, port: str) -> str:
 
     The mirror image of
     [flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id], and
-    the same derivation -- a port's node id does not depend on its direction, so
-    the two functions agree by construction and exist separately to say which one
-    a caller means. (Which is also why a flow cannot declare an input and an
-    output of the same name: they would be one node.) A flow's input ports are in
-    the session's node map like its outputs, so the caller fills one by writing
-    to its id -- and keeps writing, for as long as it has values.
+    the same derivation -- a port's node id does not depend on its direction,
+    so the two functions agree by construction and exist separately to say
+    which one a caller means. This also prevents a flow from declaring an input
+    and output with the same name because they would share one node. Input ports
+    are in the session's node map like its outputs, so the caller fills one by
+    writing to its id -- and keeps writing, for as long as it has values.
 
     ```python
     call = a11.Action(FLOW_RUN_SCHEMA)...
@@ -331,21 +323,17 @@ async def flow_run(action: a11.Action) -> None:
         # that the flow's action holds no stream and its `run` steps bind none,
         # so nothing between two steps is ever mirrored.
         node_map=action.get_node_map(),
-        # Its `call` steps are the exception, and that is what this is: a
-        # `call` goes back out on the stream the flow arrived on, so a
-        # composition running here can dispatch to the peer that sent it --
-        # the peer's own microphone, the peer's own shell. Without the stream
-        # the reply fragments have nowhere to land and the call never returns.
-        # `run` steps are unaffected; they never touch a stream.
+        # `call` dispatches to the peer on the incoming stream and receives its
+        # reply fragments there. `run` remains local.
         dispatch_stream=action.get_stream(),
         timeout=remaining(),
-        # Fixes every port's node id at what `flow_output_node_id` and
-        # `flow_input_node_id` compute, so the caller needs nothing announced.
+        # Use the node IDs exposed by `flow_output_node_id` and
+        # `flow_input_node_id`; no separate announcement is required.
         action_id=action.get_id() + FLOW_ACTION_SUFFIX,
-        # The caller's headers are the composition's: a flow declaring
-        # `header "x-a11-llm-model" as model` is reading what was sent with
-        # this call, and its steps forward them on with `with`. Without this a
-        # submitted flow could never be told which model to answer with.
+        # The caller's headers are the composition's: a flow declaring `header
+        # "x-a11-llm-model" as model` is reading what was sent with this call,
+        # and its steps forward them on with `with`. Submitted flows receive
+        # values such as the model selection through these headers.
         headers=dict(action.headers),
         # Left for the caller to fill and to close. Which of them carry one
         # value and which carry many is the flow's business, not this

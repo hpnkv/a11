@@ -16,11 +16,10 @@ import com.intellij.psi.tree.TokenSet
 /**
  * Enough of a language for the platform to hold a flow.
  *
- * The tree is deliberately flat: every token hangs off the file. Colour comes
- * from the lexer, and nothing here needs structure -- but a language cannot be
- * *injected* into a string literal without a parser definition, and a flat one
- * has the useful property that a fragment can never be a syntax error. A partial
- * flow pasted into a docstring highlights; it does not turn red.
+ * The tree is flat: every token is a child of the file. Colour comes from the
+ * lexer, while semantic structure remains in the native service. A flat parser
+ * definition also allows partial Flow fragments in string literals to
+ * highlight without parser errors.
  */
 class FlowParserDefinition : ParserDefinition {
 

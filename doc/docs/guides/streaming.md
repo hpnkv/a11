@@ -2,12 +2,10 @@
 
 An [`AsyncNode`][a11.nodes.async_node.AsyncNode] is A11's unit of streaming
 state: an **ordered** sequence of chunks that one side writes and another reads.
-It is the building block everything else is made of — an action's inputs and
-outputs are async nodes, and a model's tokens reach you through one. This page
-builds up a producer/consumer from the smallest possible pieces.
+Action inputs and outputs are async nodes, and model tokens can stream through
+them. This guide builds a minimal producer and consumer.
 
-Everything here is reachable straight off the top-level package, so a single
-`import a11` is enough:
+All required types are available from the top-level package:
 
 ```python
 import a11
@@ -53,10 +51,10 @@ One call, because a writer almost always wants the two things it does:
 - it then **closes the store with an OK status and refuses further writes**, and
   tells any attached stream so a peer's copy of the node closes as well.
 
-`finalize()` does not wait for the store: the writer's pump finishes the write
-and the closure after your code has moved on, which is what lets a handler end
-its outputs and return. Pass `wait=True` when you need to know it landed, and
-`close=False` to mark the end now and close later.
+`finalize()` does not wait for the store. Its writer pump completes the write
+and closure asynchronously, allowing a handler to finish after ending its
+outputs. Pass `wait=True` to wait for storage, and `close=False` to mark the end
+without closing yet.
 
 A value can be anything the node's serialization registry can encode (strings,
 dicts, dataclasses, Pydantic models, ...); see
@@ -95,10 +93,9 @@ await node.finalize()
 what a `consume()` reader — one expecting a single whole value — needs to know
 the value was complete.
 
-When the stream has *failed*, do not end it: fail it, with
-`abort_with_status(status)`. A reader then observes the error rather than a
-truncated stream that looks finished. An action handler gets that for free — a
-raising handler's outputs are aborted with its status.
+Use `abort_with_status(status)` for a failed stream. Readers then receive the
+error instead of treating a truncated stream as complete. When an action handler
+raises, its outputs are aborted with the corresponding status.
 
 For the rare producer that can say "no more are coming" but cannot say which
 chunk was last — a log, say — `close()` is closure without finality.
@@ -124,6 +121,4 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-That is the whole model: produce into a node, end it with one call, and read it
-back. Next, [carry a node's data over a network](echo-session.md) with a
-session.
+Next, [carry a node's data over a network](echo-session.md) with a session.

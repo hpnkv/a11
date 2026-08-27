@@ -306,12 +306,18 @@
   `arg0`) and a docstring. Keep them brief and accurate. After changing
   bindings, rebuild the extension and regenerate the `a11/_native/` stubs with
   `scripts/generate_stubs.py`; `--check` gates it in CI.
-- Comments earn their place by saying something the code does not. Keep the ones
-  that explain concurrency correctness, a non-obvious performance choice, a wire
-  or format requirement, or a bug that a plainer-looking implementation
-  reintroduces — those are the comments that stop a future change from being
-  wrong. Narration of what the next line plainly does is noise; delete it rather
-  than maintain it.
+- Implementation comments are at most three lines and exist only for
+  unconventional code paths or complex decisions. API docstrings retain useful
+  parameter descriptions, nuanced behaviour, and in-context examples, and may
+  be longer when that material cannot be stated clearly in three lines. Delete
+  historical explanations and counterfactual warnings; state current
+  constraints directly. All comment lines stay within 80 columns. Preserve
+  licence headers verbatim, even when their required form exceeds these limits.
+  Keep namespace and header-guard closing comments.
+- Preserve operational comments that prevent misuse or wasted work: generated
+  file warnings, regeneration commands, required call ordering, ignored-work
+  explanations, and non-obvious usage constraints. These may exceed three lines
+  when the complete instructions need the space, but remain within 80 columns.
 
 ## Dependencies, installation, and wheels
 

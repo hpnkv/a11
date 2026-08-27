@@ -1,9 +1,8 @@
 # Copyright 2026 The A11 Authors.
 
-"""Actions: the unit A11 is counted in.
+"""Measure action throughput across local and remote execution paths.
 
-"Actions per second" is the number a person asks for first, and it has three
-honest answers depending on where the action runs, so all three are here:
+The suite reports three execution modes:
 
 * **local** -- built, run and awaited in this process, no session and no
   stream. This is the composition path: a flow's `run` step, a tool a client
@@ -93,7 +92,9 @@ async def _call_local(schema, handler, inputs: int, outputs: int) -> str:
     return result
 
 
-async def _call_local_partial(schema, handler, inputs: int, outputs: int) -> str:
+async def _call_local_partial(
+    schema, handler, inputs: int, outputs: int
+) -> str:
     """Feed one input and read one output of a wide schema."""
     call = a11.Action(schema, handler=handler)
     call.run()
@@ -205,7 +206,8 @@ async def _session(schema, handler):
 
 async def _call_remote(session, stream, schema, inputs, outputs) -> str:
     call = (
-        a11.Action(schema)
+        a11
+        .Action(schema)
         .bind_node_map(session.node_map)
         .bind_session(session)
         .bind_stream(stream)
@@ -326,10 +328,7 @@ async def concurrency_attribution(scale: float) -> list[Result]:
         while remaining > 0:
             batch = min(in_flight, remaining)
             await asyncio.gather(
-                *(
-                    _call_local(schema, handler, 1, 1)
-                    for _ in range(batch)
-                )
+                *(_call_local(schema, handler, 1, 1) for _ in range(batch))
             )
             remaining -= batch
         elapsed = (time.perf_counter_ns() - started) / 1e9
@@ -401,19 +400,17 @@ async def action_memory(scale: float) -> list[Result]:
                 call = a11.Action(s, handler=h)
                 # Realising the ports is what costs; an un-run action has not
                 # made its nodes yet, and a benchmark of that would flatter.
-                made.append(
-                    (
-                        call,
-                        [
-                            call.get_input(f"in{n}", bind_stream=False)
-                            for n in range(i)
-                        ],
-                        [
-                            call.get_output(f"out{n}", bind_stream=False)
-                            for n in range(o)
-                        ],
-                    )
-                )
+                made.append((
+                    call,
+                    [
+                        call.get_input(f"in{n}", bind_stream=False)
+                        for n in range(i)
+                    ],
+                    [
+                        call.get_output(f"out{n}", bind_stream=False)
+                        for n in range(o)
+                    ],
+                ))
             return made
 
         slope, trail = await memory_slope(build, counts=[stage] * 6)

@@ -113,7 +113,9 @@ export interface ActionSessionContext {
 export interface ActionCreateOptions {
   /** Stable call id; generated when omitted. */
   id?: string;
-  /** Local implementation; may be bound later or absent for remote-only calls. */
+  /**
+   * Local implementation; may be bound later or absent for remote-only calls.
+   */
   handler?: ActionHandler | null;
   /** Node namespace backing input/output port ids. */
   nodeMap?: NodeMap;
@@ -227,8 +229,8 @@ export class Action {
   private finishing = false;
   private inputAutofillsApplied = false;
   private tracked = false;
-  // Set once a consumer has taken the log port through getLogNode(). It then owns
-  // presentation, so log() stops reporting to the process sink.
+  // Set once a consumer has taken the log port through getLogNode(). It then
+  // owns presentation, so log() stops reporting to the process sink.
   private logClaimed = false;
   private readonly done = new Deferred<Status>();
   private readonly dispatched = new Deferred<Status>();
@@ -407,7 +409,9 @@ export class Action {
     return okStatus();
   }
 
-  /** Move lifetime/routing ownership to a session, retaining active tracking. */
+  /**
+   * Move lifetime/routing ownership to a session, retaining active tracking.
+   */
   bindSession(session: ActionSessionContext | null): Status {
     if (session !== null && !hasSessionShape(session)) {
       return invalidArgumentError('session must implement ActionSessionContext or be null.');
@@ -484,7 +488,9 @@ export class Action {
     return isOk(attached) ? node : attached;
   }
 
-  /** Open a named output node and optionally mirror local writes to the peer. */
+  /**
+   * Open a named output node and optionally mirror local writes to the peer.
+   */
   async getOutput(name: string, bindStream?: boolean): Promise<StatusOr<AsyncNode>> {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -677,7 +683,10 @@ export class Action {
     return this;
   }
 
-  /** Queue this action for remote dispatch; use `waitForDispatch` for acceptance. */
+  /**
+   * Queue this action for remote dispatch;
+   * use `waitForDispatch` for acceptance.
+   */
   async call(wireHeaders: ByteMapInput = new Map()): Promise<StatusOr<Action>> {
     try {
       return await this.callInternal(wireHeaders);
@@ -751,7 +760,7 @@ export class Action {
    * Request cooperative cancellation once.
    *
    * Local handlers observe {@link signal}; remote calls also send the reserved
-   * cancellation action. `cancel()` initiates the transition—await `wait()` if
+   * cancellation action. `cancel()` initiates the transition; await `wait()` if
    * teardown and output abort propagation must be complete.
    */
   cancel(): Status {
@@ -812,7 +821,9 @@ export class Action {
     return okStatus();
   }
 
-  /** Materialize schema autofills into empty input nodes before a handler runs. */
+  /**
+   * Materialize schema autofills into empty input nodes before a handler runs.
+   */
   async applyInputAutofills(): Promise<Status> {
     try {
       return await this.applyInputAutofillsInternal();
@@ -875,19 +886,20 @@ export class Action {
    * Log `value` on the reserved {@link ACTION_LOG_OUTPUT} port.
    *
    * The value becomes a chunk the way `node.put(value)` would make one -- a
-   * `string` is `text/plain`, a `Uint8Array` is `application/octet-stream` -- and
+   * `string` is `text/plain`, a
+   * `Uint8Array` is `application/octet-stream` -- and
    * the chunk always carries a timestamp.
    *
-   * Only a running handler may log: logging before `run`, or on the calling side
-   * of a `call`, is a failed precondition, because the port would have nowhere to
-   * go and no reader to close it. Nothing else about logging fails the action --
-   * once the chunk is built, a transport or lifecycle problem is reported through
-   * the sink rather than returned.
+   * Only a running handler may log: logging before `run`, or on the calling
+   * side of a `call`, is a failed precondition, because the port would have
+   * nowhere to go and no reader to close it. Nothing else about logging fails
+   * the action -- once the chunk is built, a transport or lifecycle problem is
+   * reported through the sink rather than returned.
    *
-   * Where it goes: always to the process's action log sink, and additionally onto
-   * the log port when something could read it -- a peer is attached, or a local
-   * consumer claimed the port with {@link getLogNode}. Nobody has to drain it and
-   * nobody has to close it.
+   * Where it goes: always to the process's action log sink, and additionally
+   * onto the log port when something could read it -- a peer is attached, or a
+   * local consumer claimed the port with {@link getLogNode}. Nobody has to
+   * drain it and nobody has to close it.
    */
   async log(value: unknown, options: LogOptions = {}): Promise<Status> {
     let chunk: Chunk;
@@ -942,8 +954,8 @@ export class Action {
    * Return the log port's node, claiming it for this consumer.
    *
    * Claiming suppresses the process sink for this action, so a consumer that
-   * presents the logs itself does not also have them reported twice. Claim before
-   * the action runs: logs written earlier have already gone to the sink.
+   * presents the logs itself does not also have them reported twice. Claim
+   * before the action runs: logs written earlier have already gone to the sink.
    *
    * The stream is not bound: on the calling side, binding an output would echo
    * received fragments back to the peer.
@@ -953,7 +965,9 @@ export class Action {
     return this.getOutput(ACTION_LOG_OUTPUT, false);
   }
 
-  /** Apply `options` to `chunk`, report it, and write it where anything reads. */
+  /**
+   * Apply `options` to `chunk`, report it, and write it where anything reads.
+   */
   private async writeLog(chunk: Chunk, options: LogOptions): Promise<Status> {
     const level = parseLogLevel(options.level ?? '');
     if (level === null) {
@@ -1007,8 +1021,9 @@ export class Action {
       reportLog(logRecordFromChunk(chunk, this.schema.name, this.id));
     }
     // Nothing reads a local log port nobody claimed, so materialising it would
-    // buffer every line of a narrating action for the length of the run and then
-    // throw them away. A peer is always a reader: it is mirroring the node.
+    // buffer every line of a narrating action for the length of the run and
+    // then throw them away. A peer is always a reader: it is mirroring the
+    // node.
     const readable = this.logClaimed || this.stream !== null || this.session !== null;
     if (!readable || this.finishing) return okStatus();
 
@@ -1180,8 +1195,8 @@ export class Action {
   }
 
   private async finishOutputNodes(status: Status): Promise<Status> {
-    // The log port is closed with the ordinary outputs -- that is what makes it
-    // something a handler never has to close and a reader never waits forever on.
+    // Close the reserved log port with ordinary outputs. Handlers do not close
+    // it themselves.
     const ids = [...this.schema.outputs.keys(), ACTION_LOG_OUTPUT]
       .map((name) => this.outputIds.get(name))
       .filter((id): id is string => id !== undefined);
@@ -1348,7 +1363,8 @@ export class Action {
         if (isOk(writable) && writable) await node.abortWithStatus(status);
       }
     } catch {
-      // Cancellation has already completed; local output cleanup is best effort.
+      // Cancellation has already completed; local output cleanup is best
+      // effort.
     }
   }
 

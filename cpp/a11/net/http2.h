@@ -41,7 +41,7 @@ namespace a11::net {
 class HttpConnection;
 
 namespace internal {
-/// Shared TCP/TLS transport substrate for the HTTP connections.
+/// Shared TCP/TLS transport for HTTP connections.
 class HttpTransport;
 }  // namespace internal
 
@@ -102,10 +102,9 @@ class Http2ResponseStream;
 /**
  * @brief A response the server sent without being asked (HTTP/2 server push).
  *
- * The PUSH_PROMISE names a request the client never made -- that is what the
- * pseudo-header fields below are -- and @c response carries the response to it,
- * read exactly like any other. A client that does not want it calls Cancel() on
- * @c response, which resets the pushed stream and stops the transfer.
+ * The PUSH_PROMISE pseudo-headers describe the request. @c response carries its
+ * response and is read like any other. Calling Cancel() on @c response resets
+ * the pushed stream and stops the transfer.
  *
  * Reachable only when Http2Options::enable_push was set on the connection.
  */
@@ -151,7 +150,8 @@ struct Http2Options {
   absl::Time deadline = absl::InfiniteFuture();  ///< Connection-wide deadline.
   Http2TlsOptions tls;  ///< TLS and certificate policy.
 
-  // --- Protocol negotiation (server: which to accept; client: which to try). ---
+  // --- Protocol negotiation (server: which to accept; client: which to try).
+  // ---
   bool enable_h2 = true;     ///< Serve/accept HTTP/2 over TLS (ALPN "h2").
   bool enable_h2c = true;    ///< Serve/accept cleartext prior-knowledge HTTP/2.
   bool enable_http1 = true;  ///< Serve/accept HTTP/1.1 (ALPN and/or cleartext).
@@ -320,7 +320,8 @@ class Http2DuplexStream
    *
    * Headers() and Read() here are that stream's; its trailers and any pushed
    * responses are reached through this. Handing it out rather than mirroring
-   * every method keeps one definition of what a response is, whether the request
+   * every method keeps one definition of what a response is, whether the
+   * request
    * that produced it was buffered or streamed.
    */
   [[nodiscard]] const std::shared_ptr<Http2ResponseStream>& response() const {
@@ -499,11 +500,10 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
    * @brief Opens a request whose body is written incrementally.
    *
    * Where RequestStream() wants the whole body up front, this returns while the
-   * request side is still open: Http2DuplexStream::Write() sends more of it and
-   * Finish() ends it, with the response read from the same handle throughout.
-   * That is what an upload of unknown or unbounded length needs -- HTTP/2 sends
-   * the body as DATA frames, HTTP/1.1 as a chunked body, and neither needs a
-   * `content-length`.
+   * request side is still open. Http2DuplexStream::Write() sends more data and
+   * Finish() ends the body, while the same handle provides the response. This
+   * supports uploads of unknown or unbounded length without `content-length`:
+   * HTTP/2 uses DATA frames and HTTP/1.1 uses a chunked body.
    *
    * @param method Request method.
    * @param path Absolute request path, including any query.
@@ -545,14 +545,7 @@ class Http2Client : public std::enable_shared_from_this<Http2Client> {
  private:
   struct Impl;
 
-  // Inline storage for Impl, whose definition lives in the .cc. The budget is
-  // derived from the member types rather than written as a literal because
-  // std::string is 24 bytes on libc++ and 32 on libstdc++: Impl holds four of
-  // them (its own host plus the three in Http2Options::tls), so a constant
-  // tuned on macOS silently overflows by 24 bytes on Linux and the
-  // static_assert in the constructor becomes a hard build failure. Keep this
-  // in sync with Impl's members; the trailing slack covers padding and the odd
-  // small field.
+  // Inline storage for Impl, whose definition lives in the .cc.
   static constexpr size_t kImplSize =
       sizeof(std::string) +                               // host
       sizeof(std::uint16_t) +                             // port

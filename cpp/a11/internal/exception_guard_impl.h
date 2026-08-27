@@ -7,15 +7,19 @@
  * Include this **only** from a translation unit compiled with exceptions -- one
  * of the `boundary.cc` files named in the exception policy block of
  * cpp/CMakeLists.txt -- and follow it with an explicit instantiation of every
- * signature that library adopts. The wrapper's body has to live where exceptions
+ * signature that library adopts. The wrapper's body has to live where
+ * exceptions
  * exist, or it protects nothing. See a11/exception_guard.h for why.
  *
  * Including it anywhere else is the `#error` below rather than a diagnostic on
  * one of the `try` blocks, because whether *that* is an error depends on the
- * compiler: a `try` in an uninstantiated template body is rejected at parse time
- * by GCC and by clang up to around 17, and accepted by Apple clang 21. Relying on
+ * compiler: a `try` in an uninstantiated template body is rejected at parse
+ * time
+ * by GCC and by clang up to around 17, and accepted by Apple clang 21. Relying
+ * on
  * it meant a build that passed on one macOS and failed on another, which is
- * exactly what happened. If you need the `Failure` trait and not the wrappers --
+ * exactly what happened. If you need the `Failure` trait and not the wrappers
+ * --
  * a11/exception_guard.cc does -- include
  * a11/internal/exception_guard_failure.h, which compiles anywhere.
  */

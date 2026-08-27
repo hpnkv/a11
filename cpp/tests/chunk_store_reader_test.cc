@@ -233,9 +233,7 @@ TEST(ChunkStoreReaderTest, ManyReadersShareStacklessPump) {
 }
 
 // A fragment that arrived while the reader was already prefetching the next
-// sequence must still reach the caller that asks for it afterwards. That
-// prefetch waits for a value nobody has written yet, so a reader which only
-// delivered from a completing fetch would hold the answer back forever.
+// sequence must still reach the caller that asks for it afterwards.
 TEST(ChunkStoreReaderTest, BufferedFragmentReachesALaterReader) {
   auto store = *LocalChunkStore::Create("reader-prefetch");
   auto reader = *ChunkStoreReader::Create(store);

@@ -39,7 +39,8 @@ class PortAudioSession {
   PortAudioSession() = default;
 };
 
-/// Translate a PortAudio error code into an A11 status; @p error must be non-OK.
+/// Translate a PortAudio error code into an A11 status; @p error must be
+/// non-OK.
 absl::Status PaErrorToStatus(std::string_view context, PaError error);
 
 }  // namespace a11::sdk::audio::internal

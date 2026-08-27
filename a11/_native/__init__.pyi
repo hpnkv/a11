@@ -564,14 +564,13 @@ class Action:
         always carries a timestamp. Pass an already-built
         [Chunk][a11.data.types.Chunk] to log it as it is.
 
-        Nobody declares the log port, nobody drains it and nobody closes it: the
-        action closes it with its other outputs, and a handler that never logs
-        pays nothing for it. Only a *running* action may log; logging before
-        ``run``, or on the calling side of a ``call``, raises.
+        The reserved log port requires no schema declaration or manual drain.
+        The action closes it with its other outputs and creates it only when
+        used. Only a running action may log; logging before ``run`` or from the
+        calling side of ``call`` raises.
 
-        Where it goes is the sink's business, which defaults to A11's own logger
-        (see [a11.logging][]). A consumer that wants the chunks themselves calls
-        `get_log_node`.
+        The default sink is A11's logger (see [a11.logging][]). Call
+        `get_log_node` to consume the chunks directly.
 
         Args:
             value: What to log.
@@ -7725,7 +7724,7 @@ class WebRtcConfiguration:
     @property
     def path_mtu_discovery(self) -> bool:
         """
-        Whether to discover the path MTU by probing instead of holding `mtu`. On by default, and worth turning off deliberately: discovery raises the association MTU once a burst of padded SCTP heartbeats is acknowledged, and a burst of probes can be luckier than a stream of data. When it is, packets at the raised size are dropped in flight -- which produces no local send error, so the association sits wedged until the black-hole detector notices and falls back. Set False to pin the MTU to `mtu`, which is what a peer on a path it cannot characterise (a TURN relay, anything across the internet) should do; it costs throughput and buys the absence of that stall.
+        Whether to discover the path MTU by probing instead of holding `mtu`. Enabled by default. Discovery raises the association MTU after padded SCTP heartbeat probes succeed. If larger data packets are then dropped, the association waits for black-hole detection before falling back. Set False to pin the MTU for paths that cannot be characterised reliably, including TURN relays and internet peers.
         """
     @path_mtu_discovery.setter
     def path_mtu_discovery(self, arg0: bool) -> None: ...

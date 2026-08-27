@@ -53,7 +53,8 @@ inline constexpr std::string_view kMsgpackMimetype = "application/x-msgpack";
  *
  * The default for strings in the languages that distinguish text from bytes.
  * C++ does not -- a @c std::string is a sequence of bytes -- so here it is
- * available on request and @c kBytesMimetype is the default; see RegisterDefaults.
+ * available on request and @c kBytesMimetype is the default; see
+ * RegisterDefaults.
  */
 inline constexpr std::string_view kTextMimetype = "text/plain";
 /**
@@ -89,7 +90,8 @@ class SerializationRegistry;
  *
  * The pair is templated in the *caller's* translation unit, which is what makes
  * it safe: the value's type is known at both ends, and what crosses between
- * them is a tag comparison rather than a type identity. See a11::data::ChunkObject.
+ * them is a tag comparison rather than a type identity. See
+ * a11::data::ChunkObject.
  */
 template <typename T>
 class TypedChunkObject final : public ChunkObject {
@@ -114,9 +116,7 @@ class TypedChunkObject final : public ChunkObject {
   [[nodiscard]] size_t ApproxBytes() const override {
     // A stand-in, not a measurement: this is called for buffer accounting on
     // every put, and encoding the value to find its size would be the cost the
-    // whole mechanism exists to avoid. Wrong by a constant factor for a large
-    // value, which the accounting tolerates -- it bounds a buffer, it does not
-    // report a number to anybody.
+    // whole mechanism exists to avoid.
     return sizeof(T) + 64;
   }
 
@@ -190,9 +190,7 @@ class SerializationRegistry {
           }
           // Guarded here, in the translation unit that registered the codec,
           // because that is the one that owns it: if the codec can throw, this
-          // instantiation was compiled with exceptions and catches it. A11's
-          // own codecs cannot, and compile to a plain call. See
-          // a11/exception_guard.h.
+          // instantiation was compiled with exceptions and catches it.
           absl::StatusOr<Chunk> chunk;
           absl::Status raised = exception_guard::Attempt(
               [&] { chunk = serializer(*static_cast<const T*>(value)); },
@@ -258,11 +256,6 @@ class SerializationRegistry {
                         Deserializer<T> deserializer) {
     ABSL_RETURN_IF_ERROR(
         RegisterSerializer<T>(type_name, mimetype, std::move(serializer)));
-    // Borrowed rather than moved: the rollback below names the serializer by
-    // the same tag and media type, and a moved-from string would ask
-    // RemoveSerializer to remove something that was never registered -- leaving
-    // the half of the pair this call added behind, which is the one thing the
-    // rollback exists to prevent.
     absl::Status status =
         RegisterDeserializer<T>(type_name, mimetype, std::move(deserializer));
     if (!status.ok()) {
@@ -304,11 +297,7 @@ class SerializationRegistry {
     ABSL_ASSIGN_OR_RETURN(std::any result,
                           FromChunkErased(chunk, typeid(T), mimetype_patterns));
     // The pointer form, which reports a mismatch by returning null rather than
-    // by raising. Worth knowing why this can miss even for the right T: a
-    // std::any built in one shared object and cast in another compares
-    // type_info by address unless both see the same definition, which is the
-    // failure recorded as `serialization-registry-any-cross-tu`. The message
-    // below is what that looks like from here.
+    // by raising.
     T* absl_nullable value = std::any_cast<T>(&result);
     if (value == nullptr) {
       return absl::InternalError(
@@ -394,8 +383,7 @@ Chunk MakeChunkObject(T value, std::string tag, std::string mimetype,
   Chunk chunk;
   // The mimetype is set even though the bytes are not: it is what selects a
   // codec, what a `| mime "text/*"` stage filters on, and what tells a reader
-  // what it is about to get. Leaving it for Materialize() would make an
-  // unmaterialised chunk describe itself differently from a materialised one.
+  // what it is about to get.
   chunk.metadata = ChunkMetadata{.mimetype = mimetype};
   chunk.object = std::make_shared<const TypedChunkObject<T>>(
       std::move(value), std::move(tag), std::move(mimetype),

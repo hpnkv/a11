@@ -20,8 +20,8 @@ So this samples `/proc/<pid>/fd` *by kind*, joins the socket inodes against
 beside them. Those three series together name the bug; any one of them alone
 does not.
 
-Linux only, and deliberately so: `/proc` is what makes the classification
-possible, and the leak was only ever observed on the platform that has it.
+Linux only: descriptor classification uses `/proc`, and the observed leak is
+Linux-specific.
 
     # both halves on one host, which is enough -- the leak is not about the link
     python -m bench.fdprobe --serve --port 8811          # the server
@@ -113,14 +113,14 @@ def classify(pid: int) -> Counter[str]:
         elif target.startswith("pipe:["):
             counts["pipe"] += 1
         elif target.startswith("anon_inode:"):
-            counts[f"anon:{target[len('anon_inode:'):]}"] += 1
+            counts[f"anon:{target[len('anon_inode:') :]}"] += 1
         else:
             counts["file"] += 1
     return counts
 
 
 def render(samples: list[dict]) -> str:
-    """The three series side by side, which is the whole point of the probe."""
+    """Render the probe's three series side by side."""
     keys: list[str] = []
     for sample in samples:
         for key in sample["fds"]:
@@ -169,12 +169,9 @@ async def serve(port: int) -> None:
         with contextlib.suppress(Exception):
             await service.accept(stream)
 
-    # Reported with the session count on purpose. A session with no streams left
-    # is reaped `no_stream_timeout` after its last one went away, and a count
-    # sampled inside that window looks exactly like a count that will never
-    # fall -- which is how a 6-second settle against this 30-second default
-    # produced a confident, wrong "sessions never terminate" finding. The number
-    # travels with the series so the series cannot be read without it.
+    # Report this beside the session count. A session with no streams is reaped
+    # only after `no_stream_timeout`, so samples inside that window do not show
+    # whether the count will fall.
     no_stream_timeout = a11.SessionOptions().no_stream_timeout.float_seconds()
 
     options = net.WebSocketServerOptions()
@@ -185,14 +182,12 @@ async def serve(port: int) -> None:
     options.http2_options.enable_h2c = False
     server = net.WebSocketWireServer.create(accept, options)
     print(
-        json.dumps(
-            {
-                "ready": True,
-                "pid": os.getpid(),
-                "port": server.port,
-                "no_stream_timeout_s": no_stream_timeout,
-            }
-        ),
+        json.dumps({
+            "ready": True,
+            "pid": os.getpid(),
+            "port": server.port,
+            "no_stream_timeout_s": no_stream_timeout,
+        }),
         flush=True,
     )
     try:
@@ -225,12 +220,15 @@ async def one_cycle(port: int, teardown: str) -> None:
         f"ws://127.0.0.1:{port}/probe", websocket_options=options
     )
     session = a11.Session(action_registry=a11.ActionRegistry())
-    await asyncio.wait_for(session.add_stream(stream, mode="start"), _CONNECT_TIMEOUT)
+    await asyncio.wait_for(
+        session.add_stream(stream, mode="start"), _CONNECT_TIMEOUT
+    )
     try:
         # One real action, so the cycle exercises a session that carried work
         # rather than one that only handshook.
         call = (
-            a11.Action(ECHO)
+            a11
+            .Action(ECHO)
             .bind_node_map(session.node_map)
             .bind_session(session)
             .bind_stream(stream)
@@ -244,7 +242,9 @@ async def one_cycle(port: int, teardown: str) -> None:
     if teardown in ("half_close", "both"):
         with contextlib.suppress(Exception):
             stream.half_close()
-            await asyncio.wait_for(stream.drain_outgoing_messages(), _DRAIN_TIMEOUT)
+            await asyncio.wait_for(
+                stream.drain_outgoing_messages(), _DRAIN_TIMEOUT
+            )
     if teardown in ("abort", "both"):
         with contextlib.suppress(Exception):
             stream.abort(
@@ -255,7 +255,9 @@ async def one_cycle(port: int, teardown: str) -> None:
         del session
 
 
-async def churn(port: int, cycles: int, concurrency: int, teardown: str) -> None:
+async def churn(
+    port: int, cycles: int, concurrency: int, teardown: str
+) -> None:
     done = 0
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -278,7 +280,14 @@ async def churn(port: int, cycles: int, concurrency: int, teardown: str) -> None
 async def drive(args: argparse.Namespace) -> int:
     """Spawns the server as a child, churns against it, samples its table."""
     child = subprocess.Popen(
-        [sys.executable, "-m", "bench.fdprobe", "--serve", "--port", str(args.port)],
+        [
+            sys.executable,
+            "-m",
+            "bench.fdprobe",
+            "--serve",
+            "--port",
+            str(args.port),
+        ],
         stdout=subprocess.PIPE,
         text=True,
         bufsize=1,
@@ -290,11 +299,9 @@ async def drive(args: argparse.Namespace) -> int:
     # Sample past the longest timeout in the path, not past a round number. A
     # session with no streams is reaped `no_stream_timeout` after its last one
     # left, so a settle shorter than that reports a session count still inside
-    # its grace period -- indistinguishable from one that will never fall, and
-    # the source of a wrong "sessions never terminate" finding.
-    # 2x rather than 1x: reap times are staggered across the churn window, so the
-    # sessions created last expire a whole timeout after the final cycle. At 1.5x
-    # a 60-cycle run was still draining (60 -> 15) exactly as sampling stopped.
+    # its grace period, indistinguishable from one that will never fall. Reap
+    # times are staggered across the churn window, so allow twice the timeout
+    # for sessions created near the final cycle.
     if args.settle < reap_after * 2.0:
         args.settle = reap_after * 2.0
         print(
@@ -324,15 +331,13 @@ async def drive(args: argparse.Namespace) -> int:
     async def sampler(stop: asyncio.Event) -> None:
         while not stop.is_set():
             read_sessions()
-            samples.append(
-                {
-                    "t": time.perf_counter() - start,
-                    "cycles": cycles,
-                    "sessions": sessions,
-                    "fds": dict(classify(pid)),
-                    "client_fds": classify(os.getpid())["total"],
-                }
-            )
+            samples.append({
+                "t": time.perf_counter() - start,
+                "cycles": cycles,
+                "sessions": sessions,
+                "fds": dict(classify(pid)),
+                "client_fds": classify(os.getpid())["total"],
+            })
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop.wait(), args.interval)
 
@@ -363,21 +368,21 @@ async def drive(args: argparse.Namespace) -> int:
         stop.set()
         await sampling
         read_sessions()
-        samples.append(
-            {
-                "t": time.perf_counter() - start,
-                "cycles": cycles,
-                "sessions": sessions,
-                "fds": dict(classify(pid)),
-                "client_fds": classify(os.getpid())["total"],
-            }
-        )
+        samples.append({
+            "t": time.perf_counter() - start,
+            "cycles": cycles,
+            "sessions": sessions,
+            "fds": dict(classify(pid)),
+            "client_fds": classify(os.getpid())["total"],
+        })
         child.terminate()
         with contextlib.suppress(Exception):
             child.wait(timeout=5)
 
-    print(f"\nteardown={args.teardown} cycles={args.churn} "
-          f"concurrency={args.concurrency}")
+    print(
+        f"\nteardown={args.teardown} cycles={args.churn} "
+        f"concurrency={args.concurrency}"
+    )
     print(render(samples))
     first, last = samples[0], samples[-1]
     grew = last["fds"].get("total", 0) - first["fds"].get("total", 0)
@@ -386,7 +391,8 @@ async def drive(args: argparse.Namespace) -> int:
         f"\nserver fds {first['fds'].get('total', 0)} -> "
         f"{last['fds'].get('total', 0)} ({grew / max(cycles, 1):+.3f}/cycle); "
         f"client fds {first.get('client_fds', 0)} -> "
-        f"{last.get('client_fds', 0)} ({client_grew / max(cycles, 1):+.3f}/cycle); "
+        f"{last.get('client_fds', 0)} "
+        f"({client_grew / max(cycles, 1):+.3f}/cycle); "
         f"over {cycles} cycles; sessions ended at {last['sessions']} "
         f"(reaped {reap_after:.0f}s after their last stream; "
         f"settled {args.settle:.0f}s)"
@@ -399,9 +405,13 @@ async def drive(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--serve", action="store_true", help="be the server half")
+    parser.add_argument(
+        "--serve", action="store_true", help="be the server half"
+    )
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--churn", type=int, default=300, help="connection cycles")
+    parser.add_argument(
+        "--churn", type=int, default=300, help="connection cycles"
+    )
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument(
         "--teardown",

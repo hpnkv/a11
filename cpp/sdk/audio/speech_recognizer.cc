@@ -239,9 +239,6 @@ absl::Status TranscribeUtterance(
                               ? nullptr
                               : state->options.initial_prompt.c_str();
   // A null language already makes whisper_full auto-detect before it decodes.
-  // detect_language is the separate "detect and return" switch: it makes
-  // whisper_full stop right after detection and yield zero segments, so it must
-  // stay false here or transcription silently produces nothing.
   params.language = state->options.language == "auto"
                         ? nullptr
                         : state->options.language.c_str();
@@ -249,12 +246,9 @@ absl::Status TranscribeUtterance(
   params.abort_callback = &ShouldAbortInference;
   params.abort_callback_user_data = state;
 
-  // Silero VAD, when a model is configured, runs inside whisper_full: it filters
-  // the endpointed utterance down to its speech frames before decoding, and
-  // returns zero segments (hence no transcription) for a false-positive that the
-  // energy gate let through. whisper.cpp loads the model once and caches it in
-  // its state, so this stays cheap across utterances. The temporal options are
-  // shared with the energy gate; whisper's own defaults fill the rest.
+  // Silero VAD, when a model is configured, runs inside whisper_full: it
+  // filters the endpointed utterance down to its speech frames before decoding,
+  // and returns zero segments (hence no transcription) for a false-positive.
   params.vad = !state->options.vad_model.empty();
   if (params.vad) {
     params.vad_model_path = state->options.vad_model.c_str();
@@ -564,7 +558,8 @@ a11::Task SpeechRecognizer::Start(OnTranscription on_transcription,
     subscription = std::move(*created);
   }
 
-  // A subscription is itself an AudioBufferReader; a device stream never pauses.
+  // A subscription is itself an AudioBufferReader; a device stream never
+  // pauses.
   AudioBufferReader reader = [subscription]() {
     return subscription->Read();
   };

@@ -189,9 +189,9 @@ absl::Status Http1Connection::ServerParse() {
       request_body_remaining_ = request_body_plan_.content_length;
       state_ = ParseState::kBody;
 
-      // A body the owner asked to receive incrementally: dispatch now and decode
-      // into the request body stream as bytes arrive, rather than buffering the
-      // whole thing and dispatching at its end.
+      // A body the owner asked to receive incrementally: dispatch now and
+      // decode into the request body stream as bytes arrive, rather than
+      // buffering the whole thing and dispatching at its end.
       if (options().stream_request_body != nullptr &&
           options().stream_request_body(request_head_.method,
                                         request_head_.target,
@@ -402,9 +402,7 @@ void Http1Connection::PrepareClientResponseState() {
     return absl::OkStatus();
   };
   // Backpressure: a full response buffer stops the socket read rather than
-  // failing the transfer. Wired here as well as on the HTTP/2 path, because
-  // both share Http2ResponseStream::State and a state without this hook would
-  // simply buffer without bound.
+  // failing the transfer.
   response_state_->set_read_paused = [weak](bool paused) {
     if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
       connection->SetReadPaused(paused);
@@ -529,9 +527,7 @@ Http1Connection::SubmitDuplex(std::string protocol, std::string /*scheme*/,
             return absl::OkStatus();
           };
           // Backpressure: a full response buffer stops the socket read rather
-          // than failing the transfer. Wired here as well as on the HTTP/2
-          // path, because both share Http2ResponseStream::State and a state
-          // without this hook would simply buffer without bound.
+          // than failing the transfer.
           self->response_state_->set_read_paused = [weak](bool paused) {
             if (std::shared_ptr<Http1Connection> connection = weak.lock()) {
               connection->SetReadPaused(paused);
@@ -884,7 +880,8 @@ absl::Status Http1Connection::AbortResponse(std::int32_t stream_id,
         if (!self->response_headers_sent_) {
           HttpHeaders headers;
           headers.emplace_back("content-type", "text/plain; charset=utf-8");
-          // Reuse the buffered-response path; SendResponse advances the exchange.
+          // Reuse the buffered-response path; SendResponse advances the
+          // exchange.
           return self->SendResponse(stream_id, StatusCodeToHttp(status.code()),
                                     std::move(headers),
                                     std::string(status.message()));

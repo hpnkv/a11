@@ -421,7 +421,7 @@ async def test_drain_tees_a_closure_marker_after_the_data():
     writer = ChunkStoreWriter(store)
     stream = _RecordingStream()
     writer.attach_stream(stream)  # type: ignore[arg-type]
-    # Deliberately no final fragment: the marker is all a peer gets.
+    # Omit a final fragment so the peer receives only the closure marker.
     assert await (await writer.put_chunk(_chunk(0))) == 0
     await writer.drain_and_close()
 

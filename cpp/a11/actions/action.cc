@@ -49,7 +49,6 @@
 
 namespace a11::actions {
 namespace {
-
 /** How many times a generated id is retried against a session's live ones. */
 constexpr int kActionIdAttempts = 4;
 
@@ -105,7 +104,6 @@ void RecordSpanOutcome(obs::Span& span, const absl::Status& status) {
     span.SetAttribute("error.type", absl::StatusCodeToString(status.code()));
   }
 }
-
 }  // namespace
 
 ActionLimiter::ActionLimiter(size_t maximum)
@@ -221,7 +219,6 @@ Action::Action(ActionSchema schema, std::string id, ActionHandler handler,
                std::shared_ptr<ActionRegistry> registry,
                std::shared_ptr<ActionLimiter> nested_limiter)
     : schema_(std::move(schema)),
-      // Guarded at adoption; see actions/internal/exception_guarded_handlers.h.
       handler_(internal::GuardHandler(std::move(handler))),
       id_(std::move(id)),
       node_map_(std::move(node_map)),
@@ -514,9 +511,7 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetOutput(
   ABSL_RETURN_IF_ERROR(AttachStreamIfRequested(node, bind));
   if (finished) {
     // The Action has already closed its outputs, so this one will never be
-    // written. Give the caller the terminal state its port had at completion --
-    // an empty closed stream, or the failure -- rather than a node that nothing
-    // will ever close and any read of which would wait forever.
+    // written.
     ABSL_RETURN_IF_ERROR(CloseUnwrittenOutput(node, final_status));
   }
   return node;
@@ -639,8 +634,8 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     // Avoid buffering an unclaimed local log port. Peers mirror the node and
     // therefore count as readers.
     readable = claimed || stream_ != nullptr || !session_.expired();
-    const auto found = output_ids_.find(std::string(kActionLogOutput));
-    if (found != output_ids_.end()) {
+    if (const auto found = output_ids_.find(std::string(kActionLogOutput));
+        found != output_ids_.end()) {
       node_id = found->second;
     }
   }
@@ -736,7 +731,7 @@ absl::StatusOr<std::optional<data::Bytes>> Action::GetHeader(
   if (found == headers_.end()) {
     return std::nullopt;
   }
-  return std::optional<data::Bytes>(found->second);
+  return std::optional(found->second);
 }
 
 bool Action::HasHeader(std::string_view name) const {
@@ -778,9 +773,9 @@ absl::Status Action::ForwardHeadersWithPrefix(
     return absl::InvalidArgumentError("target must not be null");
   }
   const std::string folded = absl::AsciiStrToLower(prefix);
-  const data::ByteMap headers = Headers();
-  for (const auto& [name, value] : headers) {
-    if (std::string_view(name).starts_with(folded)) {
+  for (const data::ByteMap headers = Headers();
+       const auto& [name, value] : headers) {
+    if (name.starts_with(folded)) {
       ABSL_RETURN_IF_ERROR(target->SetHeader(name, value));
     }
   }
@@ -825,7 +820,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
 
 absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
     std::string_view action_name, bool propagate_io, bool forward_headers) {
-  std::shared_ptr<ActionRegistry> registry = GetRegistry();
+  const std::shared_ptr<ActionRegistry> registry = GetRegistry();
   if (registry == nullptr) {
     return absl::FailedPreconditionError(
         "Cannot resolve a nested Action without a registry");
@@ -834,19 +829,13 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
   if (!schema.ok()) {
     return schema.status();
   }
-  absl::StatusOr<std::shared_ptr<Action>> child =
-      MakeNested(*schema, propagate_io, forward_headers);
-  if (!child.ok()) {
-    return child.status();
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Action> child,
+                        MakeNested(*schema, propagate_io, forward_headers));
+  if (absl::StatusOr<ActionHandler> handler = registry->GetHandler(action_name);
+      handler.ok()) {
+    ABSL_RETURN_IF_ERROR(child->BindHandler(std::move(*handler)));
   }
-  absl::StatusOr<ActionHandler> handler = registry->GetHandler(action_name);
-  if (handler.ok()) {
-    absl::Status status = (*child)->BindHandler(std::move(*handler));
-    if (!status.ok()) {
-      return status;
-    }
-  }
-  return *child;
+  return child;
 }
 
 absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
@@ -884,16 +873,6 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
   }
   std::shared_ptr<Action> self = shared_from_this();
 
-  // With no limiter to wait on, nothing before the handler can block, so the
-  // handler is started here and its completion continued with Then(). A fibre
-  // whose only job is to Await() the handler's task is one push onto the worker
-  // pool's queue and one condvar signal per action, and the handler itself
-  // still runs wherever it chooses to: a synchronous one is submitted to a
-  // fibre by MakeAsyncActionHandler, so Run() does not become the place a
-  // caller's handler body executes.
-  //
-  // A limiter means admission has to be waited for, and input autofills write
-  // to nodes before the handler sees them, so both keep the fibre.
   if (limiter == nullptr && !HasInputAutofills()) {
     return RunHandlerWithoutFiber(self);
   }
@@ -943,12 +922,10 @@ absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
     return self;
   }
 
-  a11::Task task = handler(self);
+  const a11::Task task = handler(self);
 
   {
     thread::MutexLock lock(&mu_);
-    // The handler's own task is what Cancel() reaches now, which stops the work
-    // itself rather than a fibre waiting on it.
     task_ = task;
     if (cancel_requested_) {
       task_.Cancel().IgnoreError();
@@ -1083,11 +1060,6 @@ a11::Future<std::shared_ptr<Action>> Action::Wait(absl::Duration timeout) {
   }
   std::shared_ptr<Action> self = shared_from_this();
 
-  // Answered on this thread when the Action has already finished, and by a
-  // fibre only when there is really something to wait for. Callers ask after
-  // the fact all the time -- `await action.wait()` at the end of a handler, a
-  // registry sweeping finished work -- and for those a scheduler hop plus an
-  // event-loop turn would report what this frame can already see.
   return a11::ThenAfterWaiting(
       std::move(done), TimeoutDeadline(timeout),
       [self = std::move(self)](const absl::StatusOr<a11::Unit>& finished)
@@ -1186,10 +1158,7 @@ absl::Status Action::GetStatus() const {
 
 std::optional<absl::Status> Action::GetDispatchStatus() const {
   thread::MutexLock lock(&mu_);
-  if (!dispatch_status_.has_value()) {
-    return std::nullopt;
-  }
-  return *dispatch_status_;
+  return dispatch_status_;
 }
 
 absl::Status Action::Begin(Mode mode) {
@@ -1357,10 +1326,8 @@ absl::Status Action::AttachStreamIfRequested(
   if (stream == nullptr) {
     return absl::OkStatus();
   }
-  absl::Status status = node->AttachStream(stream);
-  if (!status.ok()) {
-    return status;
-  }
+  ABSL_RETURN_IF_ERROR(node->AttachStream(stream));
+
   thread::MutexLock lock(&mu_);
   stream_bound_nodes_.insert(node);
   return absl::OkStatus();
@@ -1462,16 +1429,13 @@ absl::Status Action::ApplyInputAutofills() {
   // First pass: every autofilled input must be empty and writable before it is
   // filled, so a peer cannot smuggle data into a receiver-autofilled input
   // ahead of (or racing) the ActionMessage that authorizes it.
-  // The writability and emptiness of every autofilled input is asked at once: the
-  // checks are independent, and the first pass used to pay two pool handoffs per
-  // node in series before a single byte was written.
   std::vector<std::shared_ptr<nodes::AsyncNode>> nodes;
   nodes.reserve(work.size());
   std::vector<a11::Future<bool>> checks;
   checks.reserve(work.size());
   std::vector<a11::Future<size_t>> sizes;
   sizes.reserve(work.size());
-  for (const auto& [node_id, autofills] : work) {
+  for (const auto& node_id : work | std::views::keys) {
     ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> node,
                           node_map->Get(node_id));
     checks.push_back(node->IsWritable());
@@ -1500,10 +1464,7 @@ absl::Status Action::ApplyInputAutofills() {
     }
   }
 
-  // Second pass: write and close each autofilled input. One fibre per node, and
-  // the writes *within* a node stay in this order because their sequence numbers
-  // are assigned by the order they are put -- that is the one thing here that is
-  // not independent, so it is the one thing that stays serial.
+  // Second pass: write and close each autofilled input.
   std::vector<absl::AnyInvocable<absl::Status() &&>> fills;
   fills.reserve(work.size());
   for (size_t index = 0; index < work.size(); ++index) {
@@ -1587,9 +1548,6 @@ absl::Status Action::FinishRun(absl::Status status) {
       thread::MutexLock lock(&mu_);
       children.assign(children_.begin(), children_.end());
     }
-    // One fibre per child rather than one child at a time: children are separate
-    // Actions with separate nodes, and each AbortInputs is itself now two rounds
-    // of pool work, so a parent with several children used to serialise all of it.
     std::vector<absl::AnyInvocable<absl::Status() &&>> aborts;
     aborts.reserve(children.size());
     const bool cancelled = final_status.code() == absl::StatusCode::kCancelled;
@@ -1659,12 +1617,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     node_map = node_map_;
     remote = stream_ != nullptr || !session_.expired();
     // Publishing the terminal state and snapshotting the nodes to close under
-    // one hold of mu_ is what makes the lazy path safe. GetOutput() inserts
-    // into output_nodes_ and reads this flag under the same lock, so a port
-    // materialised concurrently with finishing is either in the snapshot below
-    // and closed here, or sees the flag and closes itself. A gap between the
-    // two would leave a node nothing ever closes, and a reader of it waiting
-    // forever.
+    // one hold of mu_ is what makes the lazy path safe.
     outputs_finished_ = true;
     outputs_final_status_ = status;
     for (const auto& [name, id] : output_ids_) {
@@ -1685,14 +1638,6 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   absl::Status first;
   if (node_map != nullptr) {
     for (const std::string& id : ids) {
-      // An output the handler never touched has no node yet, and creating one
-      // to immediately close it costs a node, its reader and its writer per
-      // unused port -- the dominant cost of a wide schema, where a caller
-      // typically reads one output of eight. With a peer attached the closure
-      // is not local bookkeeping but an end-of-stream marker it is waiting
-      // for, so those are still materialised; otherwise the node is left
-      // uncreated and GetOutput() closes it on the way out if anybody asks
-      // for it later.
       absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
           remote ? node_map->Get(id) : node_map->GetIfExists(id);
       if (!node.ok()) {
@@ -1703,11 +1648,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     }
   }
   // A graceful close only tees its end-of-stream marker to streams something
-  // attached, and nothing attaches the log port unless the handler logged. A
-  // caller that opted into reading logs would then wait forever on a silent
-  // action, so the attach happens here, where the node exists anyway. Only the
-  // log port: it is the one output a caller reads without the schema promising
-  // anything will be written to it.
+  // attached, and nothing attaches the log port unless the handler logged.
   if (remote && !log_id.empty()) {
     const auto found = nodes.find(log_id);
     if (found != nodes.end()) {
@@ -1718,10 +1659,7 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   if (!status.ok()) {
     KeepFirstError(SendNodeAbortStatuses(ids, status), &first);
   }
-  // Two rounds rather than two handoffs per node. Every output node's writability
-  // is asked at once, then every close or abort the answers call for is started at
-  // once -- the nodes are independent of each other, so a wide schema used to pay
-  // 2N pool handoffs in series where it now pays 2. See a11/concurrency/parallel.h.
+  // Two rounds rather than two handoffs per node.
   std::vector<std::shared_ptr<nodes::AsyncNode>> ordered;
   ordered.reserve(nodes.size());
   std::vector<a11::Future<bool>> checks;
@@ -1831,7 +1769,8 @@ absl::Status Action::AbortInputs(const absl::Status& status) {
     }
   }
   KeepFirstError(SendNodeAbortStatuses(ids, status), &first);
-  // Same two rounds as CloseUnwrittenOutputs, and for the same reason: the input
+  // Same two rounds as CloseUnwrittenOutputs, and for the same reason: the
+  // input
   // nodes do not depend on each other.
   std::vector<std::shared_ptr<nodes::AsyncNode>> ordered(nodes.begin(),
                                                          nodes.end());
@@ -2023,9 +1962,7 @@ void Action::AbortLocalCallOutputs(const absl::Status& status) {
   aborts.reserve(ordered.size());
   for (size_t index = 0; index < ordered.size(); ++index) {
     if (writable[index].ok() && *writable[index]) {
-      // A copy per node, not a move: moving the status into the first abort left
-      // every node after it being aborted with a moved-from (OK) status, which
-      // silently turned an abort into a graceful close for every output but one.
+      // A copy per node, not a move:
       aborts.push_back(ordered[index]->AbortWithStatus(status));
     }
   }
@@ -2095,13 +2032,6 @@ void Action::SetCompletionStatus(const absl::Status& status) {
     if (!dispatch_status_.has_value()) {
       // A completion that arrives with nothing yet said about the dispatch
       // answers for the dispatch too, and it must not answer OK for a failure.
-      // When a peer refuses a dispatch it sends the same status to both the
-      // dispatch-status and the status node in one WireMessage, and the two
-      // node writes race: filling OK here lost the real refusal about half the
-      // time (see the test named for it). Adopting the completion is also the
-      // honest answer when a stream dies before any dispatch was acknowledged,
-      // and it can never contradict a dispatch fragment that lands later --
-      // that fragment carries this very status.
       dispatch_status_ = status.ok() ? absl::OkStatus() : status;
       dispatch = dispatch_promise_;
     }
@@ -2123,5 +2053,4 @@ void Action::SetCompletionStatus(const absl::Status& status) {
     CompleteCall(status, true);
   }
 }
-
 }  // namespace a11::actions

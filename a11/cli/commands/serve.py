@@ -29,12 +29,11 @@ async def summarise(document: str) -> str:
 The symbol may also be a [`Service`][a11.service.service.Service], which is how
 a backend that needs more than a registry gets served by this command rather
 than by a loop of its own. What "more" means in practice is an ``on_connection``
-hook: a registry copy per connection, a reverse-dispatch bridge onto it, a
-session the caller's own actions are registered on -- none of which a registry
-can carry, and all of which
-[`a11.demos.web_demos_server`][a11.demos.web_demos_server] needs. A `Service`
-arrives with its listeners still unbound, so every transport and `--hosted`
-below work on it unchanged.
+hook: a registry copy per connection, a reverse-dispatch bridge onto it, and a
+session where the caller's actions are registered. The
+``a11.demos.web_demos_server`` module uses these features. A `Service` arrives
+with its listeners still unbound, so every transport and `--hosted` below works
+on it unchanged.
 
 ## One service, however many endpoints
 
@@ -61,8 +60,8 @@ siblings resolve.
 
 `--h11` (the default), `--h2c` and `--h2` are mutually exclusive and apply to
 every HTTP-based endpoint, as do `--cert`/`--privkey`. HTTP/1.1 is the default
-because that is what an RFC 6455 WebSocket client speaks, so a browser and
-`a11.client` reach the same port without being told anything.
+for compatibility with RFC 6455 WebSocket clients, allowing browsers and
+`a11.client` to use the same port.
 
 SSE runs on HTTP/1.1 too, at the cost of a second connection: a connection
 carries one request and the event stream has it, so the outbound direction gets
@@ -109,7 +108,7 @@ HOSTED_ANY = "*"
 
 
 class ServeError(Exception):
-    """A configuration mistake worth a message rather than a traceback."""
+    """A configuration error that the CLI reports without a traceback."""
 
 
 # --- The target --------------------------------------------------------------
@@ -300,9 +299,8 @@ def resolve_registry(target: str) -> tuple[a11.ActionRegistry, str, str]:
     """
     served = resolve_served(target)
     if served.service is not None or served.registry is None:
-        # Strict about a service rather than handing back the registry inside
-        # it: what makes a service worth exporting is the per-connection hook,
-        # and a caller that took the registry alone would drop it silently.
+        # Returning the registry inside a service would silently discard the
+        # service's per-connection hook.
         raise ServeError(
             f"{served.module_path}:{served.symbol} is a Service, and this"
             " wants an ActionRegistry."
@@ -321,12 +319,11 @@ def configure(
     Args:
         parser: The parser to add to.
         with_target: Whether to add the positional target. A module that serves
-            *itself* through this machinery -- see
-            [`a11.demos.web_demos_server`][a11.demos.web_demos_server] -- knows
-            its own target and takes every transport flag below, so it asks for
-            the flags without the positional and fills `target` in itself.
-            Sharing the declaration is the point: one vocabulary of transport
-            flags, whichever entry point the user typed.
+            *itself* through this machinery, such as
+            ``a11.demos.web_demos_server``, knows its own target and takes every
+            transport flag below. It requests the flags without the positional
+            argument and supplies `target` itself, keeping the transport flags
+            consistent across entry points.
     """
     if with_target:
         parser.add_argument(
@@ -627,9 +624,9 @@ def _follow_the_claim(
         # A stopped WebRTC server closes its transport, so the listener is
         # always built against the transport just handed over -- never against
         # `endpoint.transport` read later, which may already have moved on.
-        live["webrtc"] = webrtc(
-            transport, endpoint.webrtc_configuration()
-        )(service)
+        live["webrtc"] = webrtc(transport, endpoint.webrtc_configuration())(
+            service
+        )
         logging.info("[serve] bound the WebRTC listener")
 
     endpoint.on_drop_listener = drop_listener
@@ -678,9 +675,7 @@ async def _hosted_endpoint(args: argparse.Namespace):
         raise ServeError(exc.status.message) from exc
 
     asked_for = None if args.hosted == HOSTED_ANY else args.hosted
-    client = ExchangeClient(
-        credential.exchange, api_key=credential.api_key
-    )
+    client = ExchangeClient(credential.exchange, api_key=credential.api_key)
     endpoint = HostedEndpoint(
         client,
         asked_for,
@@ -774,9 +769,8 @@ async def serve(args: argparse.Namespace) -> int:
     registry = served.registry
     actions = registry.list_registered_actions() if registry else []
 
-    # Nothing asked for means WebSocket: the point of the command is a running
-    # service, and every transport being opt-in would make the short form do
-    # nothing. Said out loud so it is never a surprise.
+    # Use WebSocket when no transport is selected so the short form starts a
+    # reachable service.
     implied = not (args.ws or args.sse or args.webrtc)
     if implied:
         logging.info(

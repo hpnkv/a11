@@ -56,7 +56,9 @@ class Reply {
 
   [[nodiscard]] bool is_null() const { return type_ == ReplyType::kNull; }
 
-  /** Borrow the binary-safe string bytes without making another payload copy. */
+  /**
+   * Borrow the binary-safe string bytes without making another payload copy.
+   */
   absl::StatusOr<std::string_view> AsStringView() const;
   absl::StatusOr<std::string> AsString() const;
   absl::StatusOr<std::int64_t> AsInteger() const;

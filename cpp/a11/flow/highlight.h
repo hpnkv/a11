@@ -17,7 +17,8 @@ namespace a11::flow {
 /// Finer-grained than the grammar needs: a word is significant or not to a
 /// parser, but a reader wants to tell a port type from a pipeline stage from a
 /// status code, because that is the distinction they are making. These are the
-/// names the output format uses and the names an editor maps to its own palette,
+/// names the output format uses and the names an editor maps to its own
+/// palette,
 /// so they are part of the contract.
 enum class SemanticKind {
   kComment,
@@ -93,28 +94,29 @@ SemanticKind SemanticKindFromName(std::string_view name);
 /// Classify a token stream.
 ///
 /// The rules are the ones the grammar itself uses, which is why this reads a
-/// stream rather than one token at a time: a word is only a stage directly after a
-/// `|`, only a function where it is called, only a type past a port's `:`, and
-/// whatever follows a `.` is a member however it is spelled. Two of them need a
-/// look ahead rather than behind -- a bare `then`/`where` is a stage only with an
-/// operand after it, and `node` is the keyword only where its parentheses open --
-/// and having the whole stream is what makes those cheap and exact.
+/// stream rather than one token at a time: a word is only a stage directly
+/// after a `|`, only a function where it is called, only a type past a port's
+/// `:`, and whatever follows a `.` is a member however it is spelled. Two of
+/// them need a look ahead rather than behind -- a bare `then`/`where` is a
+/// stage only with an operand after it, and `node` is the keyword only where
+/// its parentheses open -- and having the whole stream is what makes those
+/// cheap and exact.
 ///
-/// The tokens are expected to include comments (`LexOptions::keep_comments`), and
-/// the result is one entry per input token except the final `end`.
+/// The tokens are expected to include comments (`LexOptions::keep_comments`),
+/// and the result is one entry per input token except the final `end`.
 std::vector<SemanticToken> Highlight(absl::Span<const Token> tokens);
 
 /// Mark the identifiers that are ports of the flow they stand in.
 ///
 /// The second pass, and it is a second pass because it is the only part of
-/// classification that needs **name resolution**: whether `sources` is a port or
-/// a node of the flow's own is not a fact about the token stream, and no amount
-/// of looking at neighbouring words will settle it. [Highlight] stays lexical --
-/// it is what an editor's lexer runs on every keystroke -- and this is applied
-/// on top by the surfaces that publish meanings.
+/// classification that needs **name resolution**: whether `sources` is a port
+/// or a node of the flow's own is not a fact about the token stream, and no
+/// amount of looking at neighbouring words will settle it. [Highlight] stays
+/// lexical -- it is what an editor's lexer runs on every keystroke -- and this
+/// is applied on top by the surfaces that publish meanings.
 ///
-/// Only `kIdentifier` tokens are touched, so a member after a `.`, a string that
-/// happens to spell a port's name, and a keyword all stay as they were.
+/// Only `kIdentifier` tokens are touched, so a member after a `.`, a string
+/// that happens to spell a port's name, and a keyword all stay as they were.
 void RefinePorts(std::string_view source, std::vector<SemanticToken>& semantic);
 
 }  // namespace a11::flow

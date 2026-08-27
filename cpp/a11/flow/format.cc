@@ -40,7 +40,8 @@ struct PortColumns {
   /// The description, quoted exactly as it was written.
   std::string description;
   /// Whether this is a `struct` field. Told apart from a port by more than its
-  /// empty direction, because a run has to be all one kind and "is the direction
+  /// empty direction, because a run has to be all one kind and "is the
+  /// direction
   /// empty" is a fact about this line rather than about what it is.
   bool field = false;
 };
@@ -54,9 +55,9 @@ struct OutputLine {
   std::optional<PortColumns> port;
   /// Whether one blank line goes above this one.
   bool blank_before = false;
-  /// Whether this is a declaration's description, written on its own line. Such
-  /// a line sits *inside* a run of declarations without being one of them, so the
-  /// columns of the run are worked out across it.
+  /// Whether this is a declaration's description, written on its own line.
+  /// Such a line sits *inside* a run of declarations without being one of
+  /// them, so the columns of the run are worked out across it.
   bool description = false;
 };
 
@@ -83,9 +84,11 @@ TokenKind Closes(TokenKind opener) {
 
 /// Whether `word(` reads as something being called.
 ///
-/// One decision, and it is about the space: `web-fetch(`, `len(` and `node()` hug
+/// One decision, and it is about the space: `web-fetch(`, `len(` and `node()`
+/// hug
 /// their parentheses because the word and the brackets are one thing, while
-/// `not (`, `if (` and `in (` are a word and then a bracketed expression. So every
+/// `not (`, `if (` and `in (` are a word and then a bracketed expression. So
+/// every
 /// word the grammar gives meaning to takes its space -- except `node`, which is
 /// the one keyword in the language that is *constructed*.
 bool IsCalled(std::string_view text) {
@@ -117,9 +120,7 @@ class Formatter {
         value_braces_(value_braces.begin(), value_braces.end()),
         tagged_braces_(tagged_braces.begin(), tagged_braces.end()) {
     // Line breaks are not tokens here: what matters is how *many* there were
-    // between two pieces of code, and the lexer folds a run of them into one. The
-    // source gap has the number, so it is read from there and the newline tokens
-    // are dropped.
+    // between two pieces of code, and the lexer folds a run of them into one.
     size_t previous_end = 0;
     for (const Token& token : tokens) {
       if (token.kind == TokenKind::kNewline || token.kind == TokenKind::kEnd) {
@@ -169,8 +170,10 @@ class Formatter {
   /// Whether the line starting at `index` continues the statement above it.
   ///
   /// The grammar's own rule, because it has to be: a line beginning with `|` or
-  /// `->` is a continuation, a modifier word is one unless what follows makes it a
-  /// statement of its own, and a bare `then`/`where` is one when it has an operand.
+  /// `->` is a continuation, a modifier word is one unless what follows makes
+  /// it a
+  /// statement of its own, and a bare `then`/`where` is one when it has an
+  /// operand.
   [[nodiscard]] bool ContinuesStatement(size_t index) const {
     const Token& token = code_[index];
     const bool inside_group = !brackets_.empty();
@@ -183,27 +186,19 @@ class Formatter {
       default:
         break;
     }
-    // A description on a line of its own belongs to the declaration above it, so
-    // it is indented under it like any other tail.
+    // A description on a line of its own belongs to the declaration above it,
+    // so it is indented under it like any other tail.
     if (!inside_group && IsDescriptionLine(index)) {
       return true;
     }
     // A line that begins where the one above left off mid-list continues it: a
     // comma at the end of the previous line says the statement is not over.
-    //
-    // The case that needed this is a `fold`/`scan` whose expression is on the
-    // next line -- `| scan 0 as total,` then the expression. That expression is
-    // the *stage's argument*, and without this it began with a `{` or a name,
-    // neither of which reads as a tail, so it was pushed out to the block's own
-    // indent and the construct with the language's longest argument became the
-    // worst-looking thing in the file. `skip a,` and `wait first of a,` split
-    // over two lines are the same shape and want the same answer.
     if (!inside_group && index > 0 &&
         code_[index - 1].kind == TokenKind::kComma) {
       return true;
     }
-    // Inside a bracketed group a word starts an element, never a tail: `id:` is a
-    // key of the object it is in, and the modifiers of a call are outside its
+    // Inside a bracketed group a word starts an element, never a tail: `id:` is
+    // a key of the object it is in, and the modifiers of a call are outside its
     // parentheses by definition.
     if (inside_group) {
       return false;
@@ -212,9 +207,7 @@ class Formatter {
       return false;
     }
     // A shape has no calls and no pipelines, so nothing in one is the tail of
-    // the line above it. Without this a field named `id` or `with` -- both
-    // perfectly good field names, and both call modifiers -- would be indented
-    // as though it continued the field above.
+    // the line above it.
     if (in_dto_) {
       return false;
     }
@@ -237,6 +230,8 @@ class Formatter {
     }
   }
 
+  // Whether the line at `index` is a lone string: a declaration's description,
+  // written under what it describes.
   /// Whether the line at `index` is a lone string: a declaration's description,
   /// written under what it describes.
   ///
@@ -266,7 +261,8 @@ class Formatter {
 
   /// A modifier tail gets two levels rather than one.
   ///
-  /// `with "x": y` under a call is not the next step of a pipeline; it is part of
+  /// `with "x": y` under a call is not the next step of a pipeline; it is part
+  /// of
   /// the call above it, and indenting it further is what says so at a glance.
   [[nodiscard]] bool IsModifierTail(size_t index) const {
     const Token& token = code_[index];
@@ -300,7 +296,8 @@ class Formatter {
 
   int IndentFor(size_t index) {
     const int indent = IndentOf(index);
-    // A line that is not a continuation is the statement the next ones continue.
+    // A line that is not a continuation is the statement the next ones
+    // continue.
     if (brackets_.empty() && !ContinuesStatement(index)) {
       statement_indent_ = BlockIndent();
     }
@@ -309,8 +306,10 @@ class Formatter {
 
   /// Where a comment line goes: with the line under it.
   ///
-  /// A comment explains what follows, so it takes that line's indent -- including
-  /// when what follows is a continuation, which is how a note about one stage of a
+  /// A comment explains what follows, so it takes that line's indent --
+  /// including
+  /// when what follows is a continuation, which is how a note about one stage
+  /// of a
   /// pipeline stays with the stage.
   [[nodiscard]] int IndentForComment(size_t index) const {
     size_t next = index + 1;
@@ -371,7 +370,8 @@ class Formatter {
         if (OpensBlock(current)) {
           return true;
         }
-        // `a11.sdk.Interaction{...}` hugs its tag, because the tag and the braces
+        // `a11.sdk.Interaction{...}` hugs its tag, because the tag and the
+        // braces
         // are one value. `| map {...}` is a stage and then a literal.
         return !tagged_braces_.contains(current.start);
       default:
@@ -398,7 +398,8 @@ class Formatter {
     out.port = std::move(port_);
     out.description = description_line_;
     description_line_ = false;
-    // A line with nothing on it is not a line; a blank line is asked for by name.
+    // A line with nothing on it is not a line; a blank line is asked for by
+    // name.
     if (!out.text.empty() || !out.comment.empty() || out.port.has_value()) {
       out.blank_before = blank_pending_;
       blank_pending_ = false;
@@ -436,9 +437,8 @@ class Formatter {
 
   size_t Emit(size_t index) {
     const Token& token = code_[index];
-    // A block brace ends its line whatever the author did -- one statement per
-    // line is the language's own rule, and `{ a -> b }` is three of them. The one
-    // thing that may share a closing brace's line is the `else` it belongs to.
+    // A block brace ends its line whatever the author did one statement per
+    // line is the language's own rule, and `{ a -> b }` is three of them.
     const bool starts_line = index == 0 || breaks_[index] > 0 ||
                              after_block_open_ ||
                              (after_block_close_ && !IsElse(token));
@@ -451,7 +451,8 @@ class Formatter {
       }
       in_dto_ = !dto_blocks_.empty() && dto_blocks_.back();
       // A blank line before a `}` says nothing, so it is dropped rather than
-      // indented: this is the one place a break the author wrote is thrown away.
+      // indented: this is the one place a break the author wrote is thrown
+      // away.
       blank_pending_ = false;
       Start(BlockIndent());
       Append(token);
@@ -610,7 +611,8 @@ class Formatter {
     return stop;
   }
 
-  /// A port declaration as its columns, or `index` unchanged if this is not one.
+  /// A port declaration as its columns, or `index` unchanged if this is not
+  /// one.
   size_t EmitPort(size_t index) {
     const Token& first = code_[index];
     if (!first.IsWord()) {
@@ -650,7 +652,8 @@ class Formatter {
     if (at >= end) {
       return index;
     }
-    // The type: a quoted mimetype, or a dotted name with its parameters. It ends
+    // The type: a quoted mimetype, or a dotted name with its parameters. It
+    // ends
     // at the first thing that is plainly not part of a type.
     std::string type;
     Token previous;
@@ -716,12 +719,14 @@ class Formatter {
     comment_ = std::move(comment);
     Flush();
     opened_block_ = false;
-    // Past the declaration and the comment that shared its line, and no further:
+    // Past the declaration and the comment that shared its line, and no
+    // further:
     // a comment on the *next* line is the next line's.
     return stop;
   }
 
-  /// Whether a field modifier takes a value, so the thing after it is that value
+  /// Whether a field modifier takes a value, so the thing after it is that
+  /// value
   /// rather than the field's description.
   static bool TakesAnArgument(const Token& token) {
     if (!token.IsWord()) {
@@ -731,11 +736,13 @@ class Formatter {
     return word == "matching" || word == "default";
   }
 
+  // A `struct` field as its columns, or `index` unchanged
   /// A `struct` field as its columns, or `index` unchanged if this is not one.
   ///
   /// The same three columns a port has, minus the direction: a field opens with
   /// its own name. Everything after the type is one column, as a header's tail
-  /// is, because what a reader scans down a shape is the list of names and their
+  /// is, because what a reader scans down a shape is the list of names and
+  /// their
   /// types -- not which of them happens to carry a pattern.
   size_t EmitField(size_t index) {
     if (!code_[index].IsWord()) {
@@ -758,9 +765,7 @@ class Formatter {
       --end;
     }
     // A description ends the line; anything before it is the type and what
-    // bounds it. Read from the right, and only where the string is not the
-    // argument of the word in front of it: `matching "^x"` and `default "page"`
-    // both end in a string that is not a description.
+    // bounds it.
     std::string description;
     if (end > index + 2 && code_[end - 1].kind == TokenKind::kString &&
         code_[end - 2].kind != TokenKind::kColon &&
@@ -793,9 +798,9 @@ class Formatter {
 
   /// The lines, with each run of port declarations lined up.
   std::string Render() {
-    // A run is consecutive declarations at one indent with nothing between them:
-    // a blank line or a comment means the author grouped them on purpose, and two
-    // groups line up their own columns.
+    // A run is consecutive declarations at one indent with nothing between
+    // them: a blank line or a comment means the author grouped them on purpose,
+    // and two groups line up their own columns.
     for (size_t index = 0; index < lines_.size();) {
       if (!lines_[index].port.has_value()) {
         ++index;
@@ -835,7 +840,8 @@ class Formatter {
 
   /// Whether a declaration line is a `header` rather than a port.
   ///
-  /// A run is one or the other: they are different lists, and lining a header up
+  /// A run is one or the other: they are different lists, and lining a header
+  /// up
   /// with a port above it would say they belonged together.
   static bool IsHeaderLine(const OutputLine& line) {
     return line.port.has_value() &&
@@ -843,9 +849,9 @@ class Formatter {
   }
 
   void AlignPorts(size_t begin, size_t end) {
-    // Three for a port whatever this run holds, so `in` and `out` line up across
-    // two groups of them as well as within one. A field has no such word, and a
-    // header's is only ever `header`.
+    // Three for a port whatever this run holds, so `in` and `out` line up
+    // across two groups of them as well as within one. A field has no such
+    // word, and a header's is only ever `header`.
     const bool fields = lines_[begin].port->field;
     size_t direction_width = fields || IsHeaderLine(lines_[begin]) ? 0 : 3;
     size_t name_width = 0;

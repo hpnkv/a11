@@ -103,9 +103,7 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
 
   // Runs on a foreign thread, before the handler's fibre is cancelled, so it
   // must not block: Stop() is an atomic exchange and a notify, and CancelReader
-  // only unblocks the control watcher. Captured by value rather than through
-  // the handle, so a cancellation arriving after the handler returned finds
-  // something valid to notify.
+  // only unblocks the control watcher.
   ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
       [shared,
        control](const std::shared_ptr<actions::Action>&) -> absl::Status {
@@ -132,13 +130,11 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
                 ReadJsonInput(control);
             if (!command.ok()) {
               // The reader was cancelled during teardown, which is how this
-              // fibre is meant to end. A genuine read failure on a control
-              // port is not worth failing an otherwise healthy run for, so it
-              // ends the watching and nothing else.
+              // fibre is meant to end.
               return absl::OkStatus();
             }
             if (!command->has_value()) {
-              // The control stream ended without a stop. Deliberately not a
+              // The control stream ended without a stop. This is not a
               // reason to stop: a caller that closes a port it is not using
               // has not asked for anything.
               return absl::OkStatus();
@@ -172,8 +168,7 @@ absl::Status StopSignal::ArmDeadlineTimer() {
   const std::shared_ptr<Shared> shared = shared_;
   // Create() has already refused a deadline in the past, so this is positive --
   // except for the sliver between that check and this line, which rounds to a
-  // zero-millisecond timer. libuv fires that on the next loop iteration, which
-  // is the right answer for a deadline that expired while we were arming it.
+  // zero-millisecond timer.
   const absl::Duration remaining = deadline_ - absl::Now();
   const uvw::timer_handle::time delay{static_cast<std::uint64_t>(
       remaining > absl::ZeroDuration() ? absl::ToInt64Milliseconds(remaining)
@@ -194,8 +189,8 @@ absl::Status StopSignal::ArmDeadlineTimer() {
             timer->on<uvw::timer_event>(
                 [shared](const uvw::timer_event&, uvw::timer_handle& handle) {
                   shared->Stop(StopReason::kDeadline);
-                  // One-shot, so it is done: closing here rather than leaving it
-                  // for Join() means an action whose deadline passed stops
+                  // One-shot, so it is done: closing here rather than leaving
+                  // it for Join() means an action whose deadline passed stops
                   // holding a loop handle at the moment it stops mattering.
                   handle.close();
                 });
@@ -218,8 +213,7 @@ void StopSignal::DisarmDeadlineTimer() {
   }
   // Awaited, so no callback can still be in flight when this returns -- the
   // same guarantee Await()ing the control fibre gives, and needed for the same
-  // reason. Its failure is not worth reporting: the loop being gone is exactly
-  // the case where there is nothing left to disarm.
+  // reason.
   uv::RunStatusOnUv([timer]() -> absl::Status {
     if (!timer->closing()) {
       timer->stop();

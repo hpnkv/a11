@@ -10,18 +10,20 @@
  * (https://github.com/sctplab/usrsctp/issues/205), so libdatachannel disables
  * path MTU discovery and pins the association to RFC 8261's safe fallback of
  * 1280 -- the IPv6 minimum. Every message is then fragmented into 1172-byte
- * chunks whatever the path could carry, which measured at roughly a third of the
- * achievable throughput at 64 KiB on both of A11's reference machines.
+ * chunks whatever the path could carry, which measured at roughly a third of
+ * the achievable throughput at 64 KiB on both of A11's reference machines.
  *
  * The value cannot simply be raised: above about 4 KiB on both machines every
- * message needing more than one chunk stopped arriving while small messages kept
- * flowing at full rate, so a wrong guess produces a transport that works until a
- * payload gets big and says nothing about why. That is exactly the situation
- * RFC 8899 exists for -- probe, and let a lost probe be the evidence.
+ * message needing more than one chunk stopped arriving while small messages
+ * kept flowing at full rate, so a wrong guess produces a transport that works
+ * until a payload gets big and says nothing about why. That is exactly the
+ * situation RFC 8899 exists for -- probe, and let a lost probe be the
+ * evidence.
  *
- * This engine is deliberately ignorant of WebRTC, SCTP and libdatachannel. It
+ * This engine is independent of WebRTC, SCTP, and libdatachannel. It
  * asks a PathMtuProber to apply a size and to send one probe of a given size,
- * and it decides what to try next. That keeps the search testable against a fake
+ * and it decides what to try next. That keeps the search testable against a
+ * fake
  * prober with a size threshold, which is the only way to get coverage of the
  * interesting paths (a shrinking path, a vanishing peer) without a network that
  * can be reconfigured mid-test.
@@ -83,15 +85,15 @@ struct PathMtuOptions {
   /**
    * @brief Ceiling on the search. RFC 8899's MAX_PLPMTU.
    *
-   * Deliberately above the ~4 KiB point where both reference machines stopped
+   * Above the ~4 KiB point where both reference machines stopped
    * delivering fragmented messages: the search is *supposed* to find that edge,
    * and a ceiling below it would cap the result at an arbitrary number instead.
    * The cost of setting it too high is a slower first search (one probe timeout
    * per rejected candidate), not a wrong answer.
    */
   size_t max_mtu = 8192;
-  /// Stop searching once the bracket is this narrow. Below roughly this, another
-  /// probe round trip buys less than it costs.
+  /// Stop searching once the bracket is this narrow. A smaller bracket adds
+  /// probe round trips without materially improving payload size.
   size_t granularity = 64;
   /// Bytes of SCTP/DTLS/UDP/IPv6 header between a probe's payload and the
   /// packet it becomes. Matches libdatachannel's own arithmetic.
@@ -102,27 +104,28 @@ struct PathMtuOptions {
   /**
    * @brief Probes that must be acknowledged *together* to confirm a candidate.
    *
-   * One acknowledged probe is not evidence that a size is usable, and this is the
-   * single most important number in this struct. Measured on the bare data
-   * channel: a 64 KiB stream runs at 173 MiB/s at MTU 4096 and does not run at all
-   * at 4256, yet a single probe at 4256 is acknowledged. One IP-fragmented
+   * One acknowledged probe is not evidence that a size is usable, and this is
+   * the single most important number in this struct. Measured on the bare data
+   * channel: a 64 KiB stream runs at 173 MiB/s at MTU 4096 and does not run at
+   * all at 4256, yet a single probe at 4256 is acknowledged. One IP-fragmented
    * datagram reassembles; a stream of them does not. A search that believed a
    * single probe converged on 4256, applied it, and stalled the stream.
    *
    * So a candidate is confirmed only when a burst of this many probes goes out
-   * back to back -- in flight together, which is what stresses reassembly the way
+   * back to back -- in flight together, which is what stresses reassembly the
+   * way
    * real traffic does -- and all of them return.
    */
   int confirm_burst = 4;
   /**
    * @brief How long one probe has to be acknowledged.
    *
-   * Every rejected candidate costs this once per attempt, and the application is
-   * paused for each -- so it is a latency budget, not just a patience setting. A
-   * second was far too generous: it made a first search stall a live stream for
-   * seconds at a time. 500 ms leaves room for a slow internet path while keeping
-   * the worst-case stall to half a second, and a probe lost to a short timeout
-   * costs only a retry.
+   * Every rejected candidate costs this once per attempt, and the application
+   * is paused for each -- so it is a latency budget, not just a patience
+   * setting. A second was far too generous: it made a first search stall a
+   * live stream for seconds at a time. 500 ms leaves room for a slow internet
+   * path while keeping the worst-case stall to half a second, and a probe lost
+   * to a short timeout costs only a retry.
    */
   absl::Duration probe_timeout = absl::Milliseconds(500);
   /// How long after converging before searching upward again, which is what
@@ -134,10 +137,11 @@ struct PathMtuOptions {
    *
    * Distinct from `raise_timer`, and the distinction matters: a search that
    * confirmed something has all the time in the world before looking for more,
-   * while one that could not even apply an MTU has learned nothing and must come
-   * back promptly. The association is routinely not up yet when the probe channel
-   * appears -- with in-process signalling it never is -- and treating that like a
-   * completed search meant waiting ten minutes to discover anything at all.
+   * while one that could not even apply an MTU has learned nothing and must
+   * come back promptly. The association is routinely not up yet when the probe
+   * channel appears -- with in-process signalling it never is -- and treating
+   * that like a completed search meant waiting ten minutes to discover
+   * anything at all.
    */
   absl::Duration startup_retry = absl::Milliseconds(250);
   /// Consecutive transport send failures that count as the path having shrunk
@@ -172,7 +176,8 @@ struct PathMtuProber {
    *
    * `true` acknowledged, `false` sent and unanswered, and **`std::nullopt` when
    * it could not be sent at all** -- the probe channel is not open yet, or has
-   * gone. That third case is not optional politeness: a probe that never left is
+   * gone. That third case is not optional politeness: a probe that never left
+   * is
    * no evidence about the path, and counting it as a loss at the base MTU makes
    * discovery abort a perfectly healthy stream as a connectivity failure. It
    * did, before this was three-valued.
@@ -188,47 +193,33 @@ struct PathMtuProber {
    * @brief Sends @p count probes back to back and reports how many returned.
    *
    * Set in preference to `probe`: probes that wait for each other's answer are
-   * never in flight together, so they cannot detect a size that only survives in
-   * isolation -- which is exactly the failure this search has to avoid. `probe` is
+   * never in flight together, so they cannot detect a size that only survives
+   * in
+   * isolation -- which is exactly the failure this search has to avoid. `probe`
+   * is
    * kept for a transport that cannot express a burst, and for tests.
    *
-   * `std::nullopt` when the burst could not be sent at all (no association yet).
+   * `std::nullopt` when the burst could not be sent at all (no association
+   * yet).
    */
   std::function<std::optional<int>(size_t payload, int count,
                                    absl::Time deadline)>
       probe_burst;
   /**
-   * @brief Optional. Not used by the search, and the reason is worth recording.
+   * @brief Optional traffic pause for transports without SCTP recovery.
    *
-   * The obvious worry is that raising the association MTU to probe exposes
-   * application traffic to an unconfirmed size, so traffic should be held for the
-   * round trip. That was this file's original design and it was wrong twice over:
-   * it is not necessary, and it is actively harmful.
-   *
-   * Not necessary, because SCTP already repairs it. Shrinking the association MTU
-   * re-fragments and resends anything that went out too big -- usrsctp's own
-   * comment on that path reads "mark the chunk for immediate resend, since we
-   * sent it being too big" -- so a failed probe costs the unlucky data a
-   * retransmission, not delivery. Restoring the confirmed size on failure, which
-   * the search does anyway, *is* the repair.
-   *
-   * Harmful, because holding traffic makes every rejected candidate a stall of a
-   * whole probe timeout. It timed out a ten-second `DrainOutgoingMessages` in
-   * webrtc_wire_stream_test and stalled a throughput row, and the workaround --
-   * only probing a quiet stream -- meant a continuously busy stream never probed
-   * at all and silently kept the base MTU.
-   *
-   * So probing does not interact with in-flight data by design: the *probe* is
-   * just a message, and the only thing that has to be careful is the MTU change
-   * it rides on, which SCTP already unwinds. Left in the interface because a
-   * transport whose reliability layer does *not* recover would need it.
+   * SCTP re-fragments and retransmits data sent above a failed probe size, so
+   * this search leaves application traffic running. Pausing for every rejected
+   * candidate would stall traffic for a complete probe timeout. A transport
+   * without equivalent recovery may provide this callback.
    */
   std::function<void()> pause = {};
 
   /// @see pause
   std::function<void()> resume = {};
 
-  /// The path cannot carry the base MTU. Terminal; the caller aborts the stream.
+  /// The path cannot carry the base MTU. Terminal; the caller aborts the
+  /// stream.
   std::function<void(absl::Status)> fail = {};
 };
 
@@ -262,8 +253,9 @@ class PathMtuDiscovery {
   /**
    * @brief Reports that the transport failed to deliver at the confirmed size.
    *
-   * Cheap and callable from anywhere. `black_hole_threshold` consecutive reports
-   * drop the association straight back to the base MTU -- no search first,
+   * Cheap and callable from anywhere. `black_hole_threshold` consecutive
+   * reports drop the association straight back to the base MTU without a search
+   * first,
    * because the priority is restoring connectivity -- and start a fresh search.
    * Any successful probe resets the count, so ordinary loss does not accumulate
    * into a false positive.

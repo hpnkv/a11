@@ -19,15 +19,12 @@ import com.intellij.lang.PsiStructureViewFactory
 import javax.swing.Icon
 
 /**
- * Hover, go-to-declaration and the structure view, all answered by the language.
+ * Hover, go-to-declaration and the structure view, all answered by the
+ * language.
  *
- * A flow's PSI is a flat token stream -- deliberately, since the parse tree is
- * the compiler's and there is no second parser in Kotlin. So none of these can
- * be answered by walking a tree here; each is a question about *meaning*, and
- * each is put to [FlowEngine] at an offset. That is the same rule the annotator
- * and the completion contributor follow, and it is why hovering an action's name
- * can show that action's ports: the language knows what the world contains, and
- * the plugin does not have to.
+ * Flow PSI is a flat token stream; the native compiler owns the parse tree.
+ * Navigation and hover requests therefore go through [FlowEngine] at a source
+ * offset, consistent with annotations and completion.
  */
 
 /** Markdown as the small subset of HTML the documentation popup renders. */
@@ -72,10 +69,10 @@ private val CODE = Regex("""`([^`]+)`""")
 /**
  * What hovering something in a flow shows.
  *
- * Over an action's name that is its description and a list of every port it has,
- * which is the thing a flow author most often has to leave the file to find out.
- * Over a shape it is the shape's fields; over a port, a node or a loop variable
- * it is what the flow said about it.
+ * Over an action's name that is its description and a list of every port it
+ * has, which is the thing a flow author most often has to leave the file to
+ * find out. Over a shape it is the shape's fields; over a port, a node or a
+ * loop variable it is what the flow said about it.
  */
 class FlowDocumentationProvider : AbstractDocumentationProvider() {
 
@@ -107,12 +104,9 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
     /**
      * The documentation popup beside an item in the completion list.
      *
-     * A lookup item is a [FlowProposal] and not a PSI element -- there is no
-     * declaration in the document to point at, since the whole point is that the
-     * word has not been written yet -- so the language's answer is carried on a
-     * throwaway element the platform can ask about. Without this the popup has
-     * nothing to show, which is what left `interact_with_llm` in the list with
-     * one line of grey text and no way to see its ports.
+     * A [FlowProposal] has no declaration in the current document. Attach the
+     * language response to a temporary PSI element so the platform can request
+     * its documentation popup.
      */
     override fun getDocumentationElementForLookupItem(
         psiManager: PsiManager,
@@ -130,8 +124,10 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
      *
      * `original` is the token the reader is actually on; `element` is whatever
      * the platform resolved it to, which for a name this file declares is the
-     * *declaration* -- so asking about `element` answered a hover over a call to
-     * `research` with whatever is at `flow research`. The word under the caret is
+     * *declaration* -- so asking about
+     * `element` answered a hover over a call to
+     * `research` with whatever is at `flow
+     * research`. The word under the caret is
      * the question, so it is the offset that goes out.
      */
     private fun describe(element: PsiElement, original: PsiElement?): Map<String, Any?>? {
@@ -144,7 +140,8 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
 }
 
 /**
- * A completion proposal's documentation, as something the platform can ask about.
+ * A completion proposal's documentation, as something the platform can ask
+ * about.
  *
  * Not in the file and never in the tree: it exists for the length of one popup,
  * which is why it is a fake element rather than anything the PSI has to know.
@@ -199,7 +196,10 @@ private class FlowSymbol(
 
     override fun canNavigateToSource(): Boolean = canNavigate()
 
-    /** The start offset of one of the answer's ranges, in the units the IDE uses. */
+    /**
+     * The start offset of one of the
+     * answer's ranges, in the units the IDE uses.
+     */
     @Suppress("UNCHECKED_CAST")
     private fun offsetOf(key: String): Int? {
         val range = described[key] as? Map<String, Any?> ?: return null
@@ -249,9 +249,9 @@ private class FlowPsiFileRoot(private val file: FlowPsiFile) :
 /**
  * "Go to symbol" and the structure view, from `flow.symbols/v1`.
  *
- * A flat PSI has no declarations for the platform to index, so the outline comes
- * from the language instead -- which is also how it knows that a `struct`'s fields
- * belong under it and a flow's ports belong under it.
+ * A flat PSI has no declarations for the platform to index, so the outline
+ * comes from the language instead -- which is also how it knows that a
+ * `struct`'s fields belong under it and a flow's ports belong under it.
  */
 class FlowStructureViewFactory : PsiStructureViewFactory {
     override fun getStructureViewBuilder(file: PsiFile): StructureViewBuilder? {
@@ -263,7 +263,10 @@ class FlowStructureViewFactory : PsiStructureViewFactory {
     }
 }
 
-/** Go to declaration: the language says where the name under the caret was bound. */
+/**
+ * Go to declaration: the language says
+ * where the name under the caret was bound.
+ */
 class FlowDeclarationHandler :
     com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler {
 
@@ -275,11 +278,8 @@ class FlowDeclarationHandler :
         val file = source?.containingFile as? FlowPsiFile ?: return null
         val answer = FlowEngine.instance().definition(file.text, offset) ?: return null
         if (answer["found"] != true) {
-            // Not a name of this document, which used to be the end of it. It may
-            // still be an action declared in one of the project's own files, and
-            // the language now says where: that is the one target that leaves the
-            // flow, and the reason an `ActionSchema` in a `.py` two directories
-            // away is a jump rather than a search.
+            // Project action declarations may live outside the Flow document.
+            // The language response supplies their source location directly.
             return elsewhere(file, answer)
         }
         @Suppress("UNCHECKED_CAST")
@@ -289,14 +289,11 @@ class FlowDeclarationHandler :
         val at = (start["offset"] as? Number)?.toInt() ?: return null
         if (at !in 0..file.textLength) return null
         // A flat PSI has nothing to point at but the token, which is exactly
-        // where the declaration is -- so the element covering that offset is the
-        // target.
+        // where the declaration is -- so the element covering that offset is
+        // the target.
         val target = file.findElementAt(at.coerceAtMost(file.textLength - 1)) ?: return null
-        // Jumping to where you already are is not navigation; the platform shows
-        // a "no declaration found" hint, which is the honest answer. The caret
-        // being *inside* the declaration's own token is what that looks like --
-        // comparing against an empty range at the offset never matched anything,
-        // since a token's range is never empty.
+        // Return no target when the caret is already inside the declaration
+        // token; the platform reports that no navigation is available.
         if (target.textRange.containsOffset(offset)) return null
         return arrayOf(target)
     }
@@ -305,9 +302,10 @@ class FlowDeclarationHandler :
      * The declaration an `origin` points at, in another file.
      *
      * The path is the one the scan was given, which is the project's own base
-     * path, so a relative one is resolved against it. A line and a column rather
-     * than an offset, because the answer travelled from a file this process never
-     * opened; the document is here now, so the offset is worked out from them.
+     * path, so a relative one is resolved against it. A line and a column
+     * rather than an offset, because the answer travelled from a file this
+     * process never opened; the document is here now, so the offset is worked
+     * out from them.
      */
     private fun elsewhere(
         file: FlowPsiFile,
@@ -330,9 +328,9 @@ class FlowDeclarationHandler :
         val lineStart = document.getLineStartOffset(zeroLine)
         val lineEnd = document.getLineEndOffset(zeroLine)
         val at = (lineStart + (column - 1).coerceAtLeast(0)).coerceIn(lineStart, lineEnd)
-        // The element covering the declaration's own position, or the file itself
-        // where the host language has no PSI there. Either way the caret lands on
-        // the line, which is what somebody following the jump wanted.
+        // The element covering the declaration's own position, or the file
+        // itself where the host language has no PSI there. Either way the caret
+        // lands on the line, which is what somebody following the jump wanted.
         return arrayOf(declared.findElementAt(at) ?: declared)
     }
 }

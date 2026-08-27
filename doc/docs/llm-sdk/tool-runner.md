@@ -59,21 +59,19 @@ continue.
 
 ## Narrate a run without telling the model
 
-A handler narrates itself with [log][a11.actions.action.Action.log]: the tool's
-own account of what it did, written for the person watching — a summary line,
-then whatever detail is worth reading. The shell tools in `a11.sdk.bash` all do.
+A handler reports user-visible activity through
+[log][a11.actions.action.Action.log]. A log can contain a summary followed by
+supporting detail. The shell tools in `a11.sdk.bash` use this structure.
 
 ```python
 await action.log("Ran `git status`.\n\n2 lines of output.")
 await action.log("resolved the shell", internal=True)   # A11's own bookkeeping
 ```
 
-Nothing declares a port for it and nothing has to drain it. The runner reads the
-action's log port separately from its outputs, which is what makes the separation
-structural rather than a matter of remembering to strip a field: the model's tool
-result is built from the ports the action *declared*, and the log is not one of
-them. "User facing" is the absence of `internal`, so an entry marked internal is
-left out of the log a person is shown.
+The schema does not declare a port for this log, and callers do not drain it.
+The runner reads it separately from action outputs. Model tool results include
+only declared output ports, while user-visible logs omit entries marked
+`internal`.
 
 ```python
 executed = await execute_actions_from_interaction(assistant_interaction, action)

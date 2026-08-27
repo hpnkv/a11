@@ -14,9 +14,8 @@ are exercised here:
 * **one POST per message** -- one connection per message, the fallback for a
   server that will not carry a long-lived request body.
 
-Regression cover for both: forcing HTTP/1.1 used to connect and then never
-answer, because the POST was queued behind the event stream on the one
-connection it was allowed.
+Both cases verify that outbound POSTs use a connection independent of the
+long-lived event stream.
 """
 
 from __future__ import annotations

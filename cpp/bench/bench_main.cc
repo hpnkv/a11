@@ -158,14 +158,6 @@ void DataSuite(Recorder& recorder, double scale) {
   data::SerializationRegistry& registry = data::GlobalSerializationRegistry();
 
   // The chunk codec, against the same payload the Python suite uses.
-  //
-  // Through `nlohmann::json`, because that is what the C++ registry actually
-  // holds: it registers eight types (json plus the seven native A11 values),
-  // where the Python registry holds fifty-six (dict, list, str, bytes, int,
-  // every pydantic model, ...). That difference is itself worth knowing --
-  // Python's per-call `isinstance` scan is seven times longer *by
-  // construction*, so the dispatch cost the Python suite measured cannot be
-  // reproduced here and is not a C++ problem to fix.
   for (const std::int64_t size : {64, 1024, 65536}) {
     const nlohmann::json body = {
         {"id", "bench"},
@@ -524,8 +516,7 @@ void NodesSuite(Recorder& recorder, double scale) {
   {
     // The node's batched read, which had no native row -- so the only figure
     // for it came through the binding, and there was no way to tell the
-    // reader's own per-fragment cost from the crossing's. Same data, same
-    // fill, same fragment count as the row above: the two are a ratio.
+    // reader's own per-fragment cost from the crossing's.
     const std::int64_t count = Scaled(100000, scale, 1000);
     auto store = *stores::LocalChunkStore::Create("bench-read-batched");
     auto node = *nodes::AsyncNode::Create(store);
@@ -536,15 +527,8 @@ void NodesSuite(Recorder& recorder, double scale) {
     }
     constexpr size_t kBatch = 64;
     // One *fragment* per iteration, refilling from a batched read when the
-    // local buffer runs dry, so `per_op_items` is honestly 1 and the reported
+    // local buffer runs dry, so `per_op_items` is 1 and the reported
     // rate is fragments per second.
-    //
-    // Charging `iterations x kBatch` items instead -- one call per iteration,
-    // 64 items assumed per call -- overstated this row by 3.5x, because the
-    // node's batches are data-dependent and averaged 18 rather than 64. A
-    // batched read's item count is not known before the run, so it cannot be
-    // passed to `Throughput`; consuming one at a time from a batch is how a
-    // real reader uses it anyway.
     std::deque<data::NodeFragment> pending;
     std::int64_t seen = 0;
     std::int64_t calls = 0;
@@ -614,10 +598,6 @@ void NodesSuite(Recorder& recorder, double scale) {
 #include <sys/resource.h>
 
 // How much CPU this process has used, across every thread.
-//
-// `getrusage(RUSAGE_SELF)` and not a per-thread clock: the question a server
-// benchmark asks is how many cores an operation costs, and A11 spreads one
-// operation over the uv loop, the pool workers and the caller.
 double ProcessCpuSeconds() {
   rusage usage{};
   if (getrusage(RUSAGE_SELF, &usage) != 0) {
@@ -690,6 +670,8 @@ actions::ActionSchema PortlessSchema() {
   return actions::ActionSchema{.name = "portless"};
 }
 
+// A schema with `width` inputs and `width` outputs, none of which the handler
+// touches.
 /// A schema with `width` inputs and `width` outputs, none of which the handler
 /// touches.
 ///
@@ -843,20 +825,10 @@ void ActionsSuite(Recorder& recorder, double scale) {
                     iterations, iterations / 10),
                 .params = {{"ports", "1in/1out"}}});
 
-  // Width, which is what prices teardown. The handler touches nothing, so the
-  // whole cost is creating the action and finalising 2*width ports -- the path
-  // that used to be one pool handoff per port in series. Two widths, because
-  // the interesting question is whether the row scales with width or with a
-  // constant.
+  // Width, which is what prices teardown.
   for (const int width : {8, 32}) {
     const actions::ActionSchema wide = WideSchema(width);
-    // The handler *opens* every port and closes none. That matters: an output
-    // the handler never touched is deliberately never materialised (see
-    // Action::CloseUnwrittenOutputs), so a handler that ignores its ports
-    // leaves teardown with nothing to do and the row measures only the schema.
-    // Opening them is also the realistic shape -- an action that took its ports
-    // and then failed, or wrote some and exited -- and it is the only way this
-    // row prices finalising 2*width real nodes.
+    // The handler *opens* every port and closes none.
     const actions::ActionHandler noop =
         [width](const std::shared_ptr<actions::Action>& action) -> a11::Task {
       for (int index = 0; index < width; ++index) {
@@ -1007,9 +979,7 @@ void SchedulingSuite(Recorder& recorder, double scale) {
   }
 
   // The same handoff with the workers kept awake: posts are issued back to back
-  // and only the last is waited for, so no worker parks between them. The gap
-  // against pool_post_round_trip is the cost of sleeping and being woken, as
-  // opposed to the queue and the signal.
+  // and only the last is waited for, so no worker parks between them.
   {
     // The counter is atomic and only the last callback touches the mutex: a
     // shared lock across 256 callbacks on 14 workers measures the lock, not the
@@ -1045,14 +1015,6 @@ void SchedulingSuite(Recorder& recorder, double scale) {
 
   // Registering a deadline, which is what every request and session timeout in
   // the system does, and what a store read with a timeout does per read.
-  //
-  // Each deadline here is earlier than the one before it, so every registration
-  // becomes the pool's earliest timer -- the case that has to reach a worker
-  // whose park is armed for something later. A pool that answers that by waking
-  // every parked worker pays a thread wake per worker per registration, and
-  // pays it on the caller's thread, so it shows up here as latency and not
-  // merely as load. The deadlines are far enough out that none of them fires
-  // during the run: this measures registering a timer, not running one.
   {
     const absl::Time base = absl::Now() + absl::Hours(1);
     std::atomic<std::int64_t> step{0};
@@ -1083,8 +1045,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                 .params = {}});
 
   // The same Submit, measured from inside a fibre that is already on a pool
-  // worker: the caller is then a fibre the scheduler can park and resume
-  // without waking a sleeping thread, which is the difference worth knowing.
+  // worker. The caller is then a fibre the scheduler can park and resume
+  // without waking a sleeping thread.
   recorder.Add({.suite = "scheduling",
                 .name = "submit_round_trip",
                 .metrics = Latency(
@@ -1102,17 +1064,6 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                 .params = {{"from", "fiber"}}});
 
   // Genuine parallel work, and the counterweight to every other row here.
-  //
-  // Each of the rows above is a handoff with nothing on the other end, so each
-  // of them gets faster the narrower the pool is -- a two-worker pool beats a
-  // fourteen-worker one by 7.7x on `pool_post_pipelined`. Tuned against those
-  // alone, the right pool has one worker in it, which would be an excellent
-  // benchmark result and a useless runtime.
-  //
-  // This row is the one that punishes that: N fibres that each want a core for
-  // a stretch, so its rate is a speedup measurement and it falls off a cliff
-  // when the pool cannot run them at once. Anything that concentrates work on
-  // fewer workers has to hold this number as well as improve the others.
   {
     constexpr int kFibres = 16;
     // Enough work per fibre to be worth a core and to dwarf the handoff, but
@@ -1162,18 +1113,11 @@ namespace {
 
 // A client endpoint whose peer is already accepting, plus how to shut both
 // down.
-//
-// The server side is accepted inside the factory because that is what completes
-// the handshake: for WebSocket the accept is what sends the 101 the client's
-// Start() is waiting for, so a factory that returned the peer for the caller to
-// accept later would deadlock the two against each other.
 struct BenchPair {
   std::shared_ptr<net::WireStream> client;
   std::function<void()> close;
   // Run after Start() has resolved on both ends, for anything that needs a live
-  // connection rather than a configured one. The live-MTU row is the only user:
-  // its whole point is that the value is applied to an association that is
-  // already up, which is not something a factory can do.
+  // connection rather than a configured one.
   std::function<void()> after_start = {};
 };
 
@@ -1183,11 +1127,6 @@ using PairFactory = std::function<std::optional<BenchPair>(
     std::weak_ptr<net::WireStream>*, net::OnMessage, net::OnDone)>;
 
 // Counted arrivals, shared with the callback rather than captured by reference.
-//
-// A promise reassigned on this thread while a pool fibre is resolving the last
-// one is a race on the pointer itself, and a callback that outlives the loop it
-// was made for is a read of a dead stack frame: both crash inside the fibre
-// condition variable, some rows later, with nothing in the trace to say why.
 struct Arrivals {
   thread::Mutex mu;
   thread::CondVar cv;
@@ -1216,26 +1155,8 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   EchoSetup setup;
   setup.arrivals = std::make_shared<Arrivals>();
   setup.peer = std::make_shared<std::weak_ptr<net::WireStream>>();
-  // Accounting is in fragments, not messages, and that is not a detail.
-  //
-  // Both in-process Sender loops fold whatever is already queued into the
-  // message they are about to deliver, so N messages sent can arrive as fewer,
-  // larger ones -- and they do, as soon as anything delivers in bursts rather
-  // than one at a time (a transport with concurrent outbound requests, say). A
-  // window counted in messages then waits for echoes that will never come
-  // separately and the row reports a stall that is not one. Fragments survive
-  // the fold, so one echo fragment per arriving fragment keeps the credit
-  // exact.
-  //
-  // Replies on the fibre the transport already delivered on.
-  //
-  // A SubmitTask here would be a pool round trip (2.2us) plus, when the pool's
-  // workers are parked, an OS thread wake -- on both sides of every message,
-  // and charged to every transport equally. That is a large fraction of the
-  // small- message rows and it prices A11's scheduler rather than the wire. The
-  // delivery fibre is a legitimate place to send from: it is a fibre, Send
-  // takes the endpoint's claim and writes inline, and no callback runs on a
-  // caller of Send on any of these transports.
+  // Accounting is in fragments, not messages, and that is not a detail. Replies
+  // on the fibre the transport already delivered on.
   const std::shared_ptr<std::weak_ptr<net::WireStream>> peer = setup.peer;
   net::OnMessage on_server =
       [peer](std::optional<data::WireMessage> message) -> a11::Task {
@@ -1334,9 +1255,7 @@ void MeasureRoundTrip(Recorder& recorder, double scale,
               .data = std::string(static_cast<size_t>(size), 'x')}}}};
   const std::int64_t iterations = Scaled(20000, scale, 200);
   // Every wait is bounded, and the first one that is not answered abandons the
-  // row. An echo that never arrives is a transport problem, and a benchmark
-  // that waits forever for it reports nothing at all -- not even the rows that
-  // had already passed.
+  // row.
   bool stalled = false;
   auto metrics = Latency(
       [&](std::int64_t) {
@@ -1506,11 +1425,7 @@ std::optional<BenchPair> WebSocketPair(
   options.port = 0;
   // A11 packetises a message before the channel frames it, and the default
   // split (64 KiB) is just below a 64 KiB payload plus its envelope -- so the
-  // target message size is exactly the size that turns one message into two
-  // packets and takes the out-of-order reassembly path instead of the
-  // single-packet one. A11_BENCH_WS_SPLIT prices that: it is a wire-format
-  // decision shared with the other languages' clients, so the number is worth
-  // having before anyone changes the default.
+  // target message size is exactly the size that turns one message into two.
   if (const std::optional<int> ws_split = EnvironmentInt("A11_BENCH_WS_SPLIT");
       ws_split.has_value()) {
     options.framing.split_size = static_cast<size_t>(std::max(1024, *ws_split));
@@ -1524,10 +1439,7 @@ std::optional<BenchPair> WebSocketPair(
   const auto shared_server =
       std::make_shared<net::OnMessage>(std::move(on_server));
   const auto shared_done = std::make_shared<net::OnDone>(std::move(on_done));
-  // Somebody has to own the accepted stream. The transport does not keep it
-  // alive for the handler's sake, and the echo holds only a weak reference so
-  // that it is not part of a cycle with the stream it replies on -- so the pair
-  // holds it, and lets go in close().
+  // Somebody has to own the accepted stream.
   const auto accepted = std::make_shared<std::shared_ptr<net::WireStream>>();
   absl::StatusOr<std::shared_ptr<net::WebSocketWireServer>> server =
       net::WebSocketWireServer::Create(
@@ -1574,13 +1486,7 @@ std::optional<BenchPair> WebSocketPair(
 
 // Server-Sent Events: the transport a browser can always reach, and the only
 // one whose two directions are different mechanisms -- an SSE response stream
-// inbound, and outbound either one HTTP POST per message or a single streamed
-// request body. Both outbound modes get a row, because they are the two ends of
-// the trade the option exists for: `sse` is what a `fetch()` client can do, and
-// `sse-stream` is what a capable backend can.
-//
-// A11_BENCH_SSE_POSTS sets how many outbound POSTs the `sse` row keeps in
-// flight; 1 restores the strictly serialised delivery this used to have.
+// inbound, and outbound either one HTTP POST per message or a single.
 std::optional<BenchPair> HttpSseVariantPair(
     net::SseOutboundDelivery outbound,
     std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
@@ -1645,11 +1551,6 @@ std::optional<BenchPair> HttpSseStreamPair(
 }
 
 // WebRTC over an SCTP data channel, negotiated through in-process signalling.
-//
-// Signalling is local so the row prices the data channel rather than a
-// rendezvous server, but everything below it is real: ICE, DTLS, SCTP. The
-// accept runs on its own fibre because it does not return until the peer
-// connection is up, and the callback it runs in is on the negotiation path.
 std::optional<BenchPair> WebRtcVariantPair(
     bool set_mtu_live, std::weak_ptr<net::WireStream>* peer_slot,
     net::OnMessage on_server, net::OnDone on_done) {
@@ -1676,10 +1577,7 @@ std::optional<BenchPair> WebRtcVariantPair(
       mtu.value_or(0) > 0 ? static_cast<size_t>(*mtu) : 0;
   // `webrtc` configures the MTU at construction; `webrtc-live-mtu` leaves the
   // configuration at the 1280 default and applies the same value *after* both
-  // ends are up. The two rows must agree, and that agreement is the only direct
-  // evidence that the libdatachannel patch does what usrsctp's setsockopt
-  // handler says it does -- a build where the patch silently failed to apply
-  // shows a live row stuck at the 1280 numbers while the configured row moves.
+  // ends are up.
   if (requested_mtu != 0 && !set_mtu_live) {
     configuration.mtu = requested_mtu;
   }
@@ -1717,16 +1615,9 @@ std::optional<BenchPair> WebRtcVariantPair(
   const std::shared_ptr<net::WebRtcWireServer>& listener = *server;
   std::function<void()> after_start;
   if (!set_mtu_live && configuration.path_mtu_discovery && requested_mtu == 0) {
-    // Wait for discovery to settle before measuring. The row has always claimed
-    // to report steady-state throughput, and a search costs a probe timeout per
-    // rejected candidate -- so a row started mid-search would measure the base
-    // MTU and the search would look like it did nothing.
+    // Wait for discovery to settle before measuring.
     after_start = [holder] {
-      // Waits for the value to stop moving, not for it to become non-zero. The
-      // base MTU is confirmed first and every larger candidate after it, so the
-      // first non-zero reading is the *start* of the search rather than its
-      // result -- reading it as the result made a working search look like one
-      // that had settled at 1280.
+      // Waits for the value to stop moving, not for it to become non-zero.
       const absl::Time limit = absl::Now() + absl::Seconds(40);
       size_t settled = 0;
       absl::Time stable_since = absl::Now();
@@ -1750,12 +1641,6 @@ std::optional<BenchPair> WebRtcVariantPair(
       // Both ends: the MTU bounds what a *sender* emits, and the round-trip row
       // has the peer echoing the whole payload back, so setting only the client
       // would leave half the measurement at 1280 and understate the change.
-      //
-      // Retried briefly because SetPathMtu reports FAILED_PRECONDITION until
-      // the association exists, and Start() resolving means the data channel
-      // opened, not that usrsctp has finished its handshake. A discovery loop
-      // has the same race and answers it the same way; here a bounded retry
-      // keeps the row honest instead of silently measuring an unset MTU.
       const absl::Time limit = absl::Now() + absl::Seconds(5);
       bool client_set = false;
       bool peer_set = false;
@@ -1810,12 +1695,6 @@ std::optional<BenchPair> WebRtcLiveMtuPair(
 }  // namespace
 
 // A round trip to the libuv loop and back, with nothing else in it.
-//
-// Every socket transport crosses this boundary twice per message: once to hand
-// the write to the loop thread, once when the loop hands a read back. Pricing
-// it on its own is what turns "a WebSocket round trip costs 63us" into a
-// budget, because the crossing is the largest thing in that number that is
-// neither the kernel nor A11's own scheduling.
 void MeasureUvCrossing(Recorder& recorder, double scale) {
   thread::Mutex mu;
   thread::CondVar cv;
@@ -1862,11 +1741,6 @@ void MeasureUvCrossing(Recorder& recorder, double scale) {
 }
 
 // A bare TCP ping-pong over loopback, with no A11 in it at all.
-//
-// The floor for every socket transport: two threads, two sockets, one write and
-// one read each way, no framing, no fibres, no event loop. Whatever a real
-// transport costs above this is A11's; whatever this costs is the kernel's, and
-// reading the WebSocket row without it invites attributing one to the other.
 void MeasureLoopbackFloor(Recorder& recorder, double scale, std::int64_t size) {
   const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
   if (listener < 0) {
@@ -1987,11 +1861,6 @@ void MeasureLoopbackFloor(Recorder& recorder, double scale, std::int64_t size) {
 }
 
 // The pipelined floor: a bare socket carrying the same windowed stream.
-//
-// The counterpart to MeasureLoopbackFloor for the throughput rows, and the
-// number the 5 Gbit/s target has to be read against -- it is what loopback plus
-// a one-byte-per-message credit costs with no A11 in it at all, so a transport
-// cannot be expected above it and the gap below it is A11's.
 void MeasureLoopbackThroughput(Recorder& recorder, double scale,
                                std::int64_t size, std::int64_t window) {
   const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -2117,15 +1986,6 @@ void MeasureLoopbackThroughput(Recorder& recorder, double scale,
 
 // The reference row the WebRTC diagnosis has been missing: a bare
 // libdatachannel data channel with no A11 in it at all.
-//
-// `raw-tcp` and `in-process` bound every other transport from below and above,
-// but nothing priced libdatachannel on its own, so "WebRTC's cost is all below
-// the channel" was a reasoned claim rather than a measured one -- and the
-// document says as much ("the one number here that has never been profiled").
-// This is the same two rows the A11 `webrtc` transport reports, over two
-// rtc::PeerConnections wired directly to each other: real ICE, real DTLS, real
-// usrsctp, no WireStream, no multiplex, no byte chunking, no msgpack. The gap
-// between this and the `webrtc` row is A11's; everything below it is not.
 void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
                       bool pipelined, std::int64_t window) {
   rtc::Configuration configuration;
@@ -2134,11 +1994,6 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
   // The three knobs that decide how a message becomes packets, swept here
   // rather than on the A11 row because this row has no A11 in it: whatever they
   // are worth here is what they are worth at all.
-  //
-  // A11_BENCH_RTC_MTU is the big one. libdatachannel disables path MTU
-  // discovery (usrsctp does not implement it) and falls back to RFC 8261's safe
-  // 1280, so every message is fragmented to 1172-byte chunks whatever the path
-  // can carry -- 57 DTLS records and 57 datagrams for one 64 KiB message.
   const auto env_size = [](const char* name) -> std::optional<size_t> {
     const std::optional<int> parsed = EnvironmentInt(name);
     return parsed.value_or(0) > 0
@@ -2187,9 +2042,8 @@ void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
     return;
   }
 
-  // Signalling is a direct call in both directions: the point of the row is the
-  // data path, and a rendezvous server would add a term A11's row does not have
-  // either (its `webrtc` rows use in-process signalling for the same reason).
+  // Signalling is a direct call in both directions to isolate the data path.
+  // The `webrtc` rows also use in-process signalling.
   std::weak_ptr<rtc::PeerConnection> weak_server = server;
   std::weak_ptr<rtc::PeerConnection> weak_client = client;
   client->onLocalDescription([weak_server](rtc::Description description) {
@@ -2433,23 +2287,6 @@ void WireSuite(Recorder& recorder, double scale) {
 // ---------------------------------------------------------------------------
 
 // What a C++ server costs per request, and whether it uses more than one core.
-//
-// This exists because the only server figures A11 had came from the *Python*
-// `bench/peer.py` agent, which tops out at ~1,550 echo actions a second while
-// using 1.5 of 12 cores -- a ceiling that does not move when the offered load
-// grows eightfold. Two explanations fit that: the Python asyncio loop is the
-// serial path, or something inside A11 is. A native server distinguishes them,
-// because there is no Python in it at all.
-//
-// Read the `cores_busy` column first. Throughput that plateaus while cores stay
-// near one is a serial path; throughput that plateaus with cores near the
-// machine width is saturation, which is a different problem with different
-// fixes.
-//
-// One caveat the note on every row repeats: client and server share this
-// process, so `cpu_us_per_op` covers both ends. It is still the number that
-// matters -- what an operation costs the machine -- but it is not comparable
-// with a figure taken from a server in a process of its own.
 void ServerSuite(Recorder& recorder, double scale) {
   for (const int clients : {1, 4, 16, 64, 256, 1024}) {
     const std::int64_t per_client =
@@ -2481,11 +2318,7 @@ void ServerSuite(Recorder& recorder, double scale) {
         net::WebSocketWireServer::Create(
             [serving](
                 std::shared_ptr<net::WebSocketWireStream> stream) -> a11::Task {
-              // Reported, not discarded. Swallowing this is what made the first
-              // version of this suite hang: a failed accept leaves the client
-              // waiting for a peer that never arrived, and every thread in the
-              // process then sits idle in the fibre dispatcher with nothing to
-              // say why.
+              // Reported, not discarded.
               absl::StatusOr<std::shared_ptr<service::Session>> accepted =
                   serving->StartStreamHandler(std::move(stream));
               if (!accepted.ok()) {
@@ -2564,11 +2397,7 @@ void ServerSuite(Recorder& recorder, double scale) {
     const absl::Time started = absl::Now();
     g_echo_handler_replies.store(0, std::memory_order_relaxed);
     std::atomic<std::int64_t> completed{0};
-    // When the last successful round-trip landed. Dividing by wall-clock
-    // instead charges this row for the 5s stage timeout that the wedged 1-3% of
-    // drivers sit out, which understates throughput by more than an order of
-    // magnitude at high client counts -- 3986 of 4096 operations completing
-    // looked like 772 ops/s.
+    // When the last successful round-trip landed.
     std::atomic<std::int64_t> last_completion_unix_nanos{0};
     std::vector<a11::Task> drivers;
     drivers.reserve(sessions.size());
@@ -2582,26 +2411,14 @@ void ServerSuite(Recorder& recorder, double scale) {
               if (!call.ok()) {
                 return call.status();
               }
-              // The id must be empty so each call gets a generated one. It is
-              // an *instance* id, not the action name: a literal here makes
-              // every call in the process share one id, so their port nodes
-              // collide in the shared node map and round two's put lands on
-              // round one's node. That presented as a put-input stall, and as a
-              // collapse to 13 ops/s at 64 clients rather than as any kind of
-              // error. The node map matters as much as the session and the
-              // stream: without it the call's ports have nowhere to live, and
-              // the first version of this suite hung here rather than failing,
-              // with the client connected and every thread idle. The Python
-              // client binds all three, which is what this mirrors.
+              // The id must be empty so each call gets a generated one.
               if (!(*call)->BindNodeMap(sessions[index]->GetNodeMap()).ok() ||
                   !(*call)->BindSession(sessions[index]).ok() ||
                   !(*call)->BindStream(streams[index]).ok()) {
                 return absl::InternalError("could not bind the call");
               }
               // Each stage gets a deadline shorter than the driver's own, so
-              // that a wedge is reported as the stage that wedged. With only an
-              // outer deadline every failure reads DEADLINE_EXCEEDED, which
-              // names the harness rather than the problem.
+              // that a wedge is reported as the stage that wedged.
               const absl::Time stage_deadline = absl::Now() + kStageTimeout;
               if (const absl::Status dispatched =
                       (*call)->Call().Await(stage_deadline).status();
@@ -2614,11 +2431,7 @@ void ServerSuite(Recorder& recorder, double scale) {
               if (!input.ok()) {
                 return input.status();
               }
-              // The mimetype is not decoration here. A chunk crossing a
-              // transport boundary is validated, and an empty mimetype passes
-              // locally -- which is why every local_action row works -- and is
-              // rejected on the wire, where it surfaces as a reply that never
-              // comes rather than as an error at the put.
+              // The mimetype is not decoration here.
               if (!(*input)
                        ->PutChunk(
                            data::Chunk{.metadata =
@@ -2632,10 +2445,7 @@ void ServerSuite(Recorder& recorder, double scale) {
                 return absl::InternalError("stage=put-input timed out");
               }
               // A11_BENCH_READ_DELAY_MS delays the read of the output so the
-              // reply is already delivered before anyone asks for it. That is
-              // the ordering that concurrency produces by accident -- a busier
-              // client reads later -- so forcing it turns a 16-client race into
-              // a one-client experiment.
+              // reply is already delivered before anyone asks for it.
               if (const std::optional<int> delay =
                       EnvironmentInt("A11_BENCH_READ_DELAY_MS");
                   delay.has_value()) {
@@ -2646,13 +2456,7 @@ void ServerSuite(Recorder& recorder, double scale) {
               if (!output.ok()) {
                 return output.status();
               }
-              // One read, no retries. `bind_stream` must be false on a
-              // caller's *output*: the session routes inbound fragments to the
-              // node by id, and a bound output node tees what it receives back
-              // to the peer -- an echo of the reply that corrupted the
-              // connection for every later call. Binding it was what made reads
-              // here appear to lose their wake, and the retry loop that used to
-              // be here was hiding the damage rather than measuring it.
+              // One read, no retries.
               const absl::StatusOr<std::optional<data::Chunk>> replied =
                   (*output)->NextChunk().Await(absl::Now() + kStageTimeout);
               if (!replied.ok() || !replied->has_value()) {
@@ -2685,14 +2489,6 @@ void ServerSuite(Recorder& recorder, double scale) {
           thread::TreeOptions{.stack_size = 512 * 1024}));
     }
     // Reported, not discarded -- for the third time in this suite's short life.
-    // A driver that returns an error and is ignored shows up as a row that
-    // never appears, which reads as "the benchmark is broken" rather than "the
-    // call failed and here is why".
-    // Every distinct driver error, not just the first. A driver that times out
-    // keeps running -- Await returning DEADLINE_EXCEEDED does not stop the
-    // fibre -- so the teardown below then aborts a stream it is still using and
-    // it fails FAILED_PRECONDITION. Reporting only the first error in iteration
-    // order surfaces that cascade and hides the timeout that caused it.
     std::vector<std::string> driver_errors;
     for (const a11::Task& driver : drivers) {
       if (const absl::Status result = driver.Await(Deadline()).status();
@@ -2714,10 +2510,7 @@ void ServerSuite(Recorder& recorder, double scale) {
           static_cast<long long>(
               g_echo_handler_replies.load(std::memory_order_relaxed)));
     }
-    // Printed so a fibre or scheduling census can be divided by it. Counters
-    // like A11_POOL_STATS are process-wide and include connection setup, so the
-    // honest way to get a per-operation figure is to run two scales and divide
-    // the differences -- which needs the operation count, not just the rate.
+    // Printed so a fibre or scheduling census can be divided by it.
     std::fprintf(
         stderr, "  server[%d clients]: completed=%lld\n", clients,
         static_cast<long long>(completed.load(std::memory_order_relaxed)));
@@ -2772,7 +2565,6 @@ void ServerSuite(Recorder& recorder, double scale) {
  * a loop with a call per pass -- are the ones that answer whether a pipeline
  * paces itself or runs item by item.
  */
-
 /// `echo`, as the Python flow suite declares it: one unary input, one output.
 actions::ActionSchema FlowEchoSchema() {
   return actions::ActionSchema{
@@ -2817,8 +2609,8 @@ data::Chunk TextChunk(std::string text) {
 
 /// One run of one flow: feed every input, drain every output, wait.
 ///
-/// Deliberately the whole thing, exactly as `flow_lang.invoke` does it, so the
-/// row is comparable with the Python one rather than with a fragment of it.
+/// Runs the complete invocation used by `flow_lang.invoke`, making the result
+/// comparable with the Python benchmark.
 struct FlowRun {
   absl::Status status;
   std::int64_t values_out = 0;
@@ -2872,9 +2664,7 @@ FlowRun RunOneFlow(
   }
   // Either the flow starts and is then fed value by value -- a live producer,
   // which is what every other row measures -- or it is handed a stream that is
-  // already there: a node an earlier step filled, a stored conversation, a
-  // file. The second is the shape in which a stage sees several values at once,
-  // and so the shape that says what batching is worth.
+  // already there: a node an earlier step filled, a stored conversation.
   const auto feed = [&]() -> absl::Status {
     for (const auto& [port, unused] : schema->inputs) {
       ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> node,
@@ -3205,14 +2995,6 @@ const std::vector<std::pair<std::string, SuiteFn>>& Suites() {
 
 int main(int argc, char** argv) {
   // Ignore SIGPIPE, or the whole run dies inside the `wire` suite on Linux.
-  //
-  // The raw-tcp reference rows are bare sockets, and a `write` to one whose
-  // peer has closed raises SIGPIPE, whose default disposition terminates the
-  // process. macOS never showed it and Linux did on the first run, at exit
-  // status 141 (128 + 13) with the `wire` header printed and nothing under it
-  // -- indistinguishable from a suite that produced no rows, which is exactly
-  // the failure the per-suite reporting above exists to contain. A failed write
-  // is reported by `errno` at the call site; the signal adds nothing.
   std::signal(SIGPIPE, SIG_IGN);
 
   double scale = 1.0;
@@ -3256,10 +3038,7 @@ int main(int argc, char** argv) {
     std::printf("=== %s ===\n", name.c_str());
     std::fflush(stdout);
     run(recorder, scale);
-    // Report each suite as it finishes rather than everything at the end. A
-    // benchmark that crashes takes the process with it, and a run that only
-    // reports at the end therefore loses the suites that had already passed --
-    // which is how a crash in the last suite hid every wire number there was.
+    // Report each suite as it finishes rather than everything at the end.
     recorder.PrintTable(name);
     std::fflush(stdout);
     if (!json_path.empty() && !recorder.WriteJson(json_path)) {

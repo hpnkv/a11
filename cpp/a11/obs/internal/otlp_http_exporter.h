@@ -1,13 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
-// Protobuf-free OTLP/HTTP (JSON) span exporter. OTLP over HTTP supports a JSON
-// encoding, which lets A11 export natively to any OTLP-compatible backend
-// (including Langfuse) using nlohmann_json + libcurl -- no protobuf, and no
-// second Abseil dragged in by it. Only built when A11_WITH_OTLP_HTTP is set.
-//
-// This header is internal to a11_obs and pulls in the OTel SDK, so it is never
-// installed or included by a public A11 header. Only a factory is exposed here;
-// the SpanExporter subclass lives in the .cc.
+// Protobuf-free OTLP/HTTP (JSON) span exporter.
 
 #ifndef A11_OBS_INTERNAL_OTLP_HTTP_EXPORTER_H_
 #define A11_OBS_INTERNAL_OTLP_HTTP_EXPORTER_H_

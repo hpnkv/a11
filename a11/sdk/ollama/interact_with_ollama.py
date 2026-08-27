@@ -163,25 +163,21 @@ def _ollama_from_normalized(
             if part.data:
                 images.append(part.data)
         elif part.type == llm.NormalizedContentType.TOOL_CALL:
-            tool_calls.append(
-                {
-                    "function": {
-                        "name": part.name or "",
-                        "arguments": part.arguments or {},
-                    }
+            tool_calls.append({
+                "function": {
+                    "name": part.name or "",
+                    "arguments": part.arguments or {},
                 }
-            )
+            })
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
             name = part.name
             if not name and part.call_id and resolve_call_name is not None:
                 name = resolve_call_name(part.call_id)
-            tool_results.append(
-                {
-                    "role": "tool",
-                    "content": part.content or "",
-                    "tool_name": name or part.call_id or "",
-                }
-            )
+            tool_results.append({
+                "role": "tool",
+                "content": part.content or "",
+                "tool_name": name or part.call_id or "",
+            })
 
     messages: list[dict[str, Any]] = []
     if text_chunks or images or tool_calls:
@@ -374,8 +370,8 @@ class _StreamAccumulator:
     turn. The runner gives a call's nested action that id verbatim, and an
     action's node ids are `"<id>#<port>"` in the session's node map, so a
     repeated id resolves to an earlier call's already-closed nodes: feeding the
-    new call's inputs then fails with "ChunkStoreWriter is closed", and the model
-    is handed that instead of a tool result.
+    new call's inputs then fails with "ChunkStoreWriter is closed", and the
+    model is handed that instead of a tool result.
 
     Hence both halves of an id. ``prefix`` is drawn once per turn, which is what
     keeps the second user message in a conversation from reusing the first's
@@ -409,14 +405,12 @@ class _StreamAccumulator:
                     params=dict(function.arguments or {}),
                 )
             )
-            self._raw_tool_calls.append(
-                {
-                    "function": {
-                        "name": function.name,
-                        "arguments": dict(function.arguments or {}),
-                    }
+            self._raw_tool_calls.append({
+                "function": {
+                    "name": function.name,
+                    "arguments": dict(function.arguments or {}),
                 }
-            )
+            })
 
     @property
     def content(self) -> str:
@@ -546,17 +540,14 @@ class _PassthroughTool(ollama.Tool):
 def _serializing_a_raw_tool_schema():
     """Silence the one warning `_PassthroughTool` is expected to produce.
 
-    Handing pydantic a value that is deliberately not of the declared type earns
-    a `PydanticSerializationUnexpectedValue` warning per serialized tool, from a
-    stack that varies enough that the interpreter's "once per location" rule does
-    not collapse them: a handful of lines of pydantic internals in the log for
-    every turn, describing something already known and intended.
+    `_PassthroughTool` stores the provider's raw schema instead of the declared
+    pydantic type. Serialization emits one
+    `PydanticSerializationUnexpectedValue` warning per tool, often from distinct
+    stack locations, even though this representation is expected.
 
-    Narrow on purpose — this filter matches that warning's own text, so anything
-    else pydantic or the SDK has to say still comes through. The window is the
-    `chat` call itself, which builds and serializes the request without ever
-    suspending, so no other task can run inside it (`warnings` filters are
-    process-global, and this would otherwise not be ours to change).
+    The filter matches only that warning text. Its scope is the
+    `chat` call itself, which builds and serializes the request without
+    suspending. No other task runs while the process-global filter is active.
     """
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -631,20 +622,19 @@ async def interact_with_ollama(action: a11.Action):
     options = _build_options(config)
 
     # Tool-call ids must be unique across the whole session, not just within one
-    # round or one turn (see `_StreamAccumulator`). The counter lives out here so
-    # it advances by the number of tool calls each round produces, and the prefix
-    # is drawn per turn so the *next* user message in this conversation cannot
-    # collide with this one's calls — a caller keeps one session for a whole
-    # conversation, and every turn's handler starts this counter at zero.
+    # round or turn (see `_StreamAccumulator`). The counter advances by the
+    # number of tool calls each round produces. A per-turn prefix prevents the
+    # next user message from colliding with this turn's calls.
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     try:
         while True:
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
-                messages.append(
-                    {"role": "system", "content": conversation.system_prompt}
-                )
+                messages.append({
+                    "role": "system",
+                    "content": conversation.system_prompt,
+                })
             messages.extend(conversation.messages)
 
             try:
@@ -737,13 +727,11 @@ async def interact_with_ollama(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk(
-                        {
-                            "messages": await _build_tool_results_from_outputs(
-                                executed, call_names
-                            )
-                        }
-                    )
+                    a11.to_chunk({
+                        "messages": await _build_tool_results_from_outputs(
+                            executed, call_names
+                        )
+                    })
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

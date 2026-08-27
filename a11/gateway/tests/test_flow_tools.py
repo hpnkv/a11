@@ -25,9 +25,9 @@ from a11.status import StatusCode, StatusException
 
 
 #: An action the *client* serves, for the reverse-dispatch tests. Its name is an
-#: ordinary one on purpose: A11's own `__`-prefixed actions are answered by every
-#: registry and cannot be re-registered, so they cannot stand in for "a tool the
-#: peer owns" -- which is what these tests need.
+#: ordinary one on purpose: A11's own `__`-prefixed actions are answered by
+#: every registry and cannot be re-registered, so they cannot stand in for "a
+#: tool the peer owns" -- which is what these tests need.
 _CLIENT_TOOL = a11.ActionSchema(
     name="ask_the_human",
     description="Put a question to whoever is running the client.",
@@ -65,9 +65,7 @@ async def _send(
     await call["flow"].finalize(flow)
 
 
-def _registry(
-    root: pathlib.Path, **overrides
-) -> a11.ActionRegistry:
+def _registry(root: pathlib.Path, **overrides) -> a11.ActionRegistry:
     settings = config.GatewayConfig(
         a11_port=0,
         conversation_store_root=root,
@@ -124,7 +122,8 @@ async def test_a_client_sends_a_flow_and_the_gateway_runs_it(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -147,9 +146,7 @@ async def test_a_client_sends_a_flow_and_the_gateway_runs_it(
         inputs={"word": "hello"},
     )
 
-    result = await asyncio.wait_for(
-        call["result"].next_object(), timeout=30
-    )
+    result = await asyncio.wait_for(call["result"].next_object(), timeout=30)
     await asyncio.wait_for(call.wait(), timeout=30)
     assert result == {"said": ["hello", "hello"]}
 
@@ -166,10 +163,9 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
 
     The flow runs on the gateway, and says `call ask_the_human`, so the action
     is dispatched back down the stream the flow arrived on and served by the
-    *client's* handler. That is what lets a composition running over there use
-    a microphone or a shell over here, and it is the reason `flow_run` hands
-    the composition its stream: a `call` step's reply fragments route through
-    it, and without one the call never returns.
+    *client's* handler. This allows a remote composition to use client-local
+    resources such as a microphone or shell. `flow_run` supplies the stream
+    used to route the `call` step's reply fragments.
 
     The two sides register the same name differently, which is the contract:
     the gateway holds its *schema* alone, so the step resolves and means "not
@@ -194,7 +190,8 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -225,13 +222,11 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
         await serving
 
 
-ECHO = a11.ActionSchema.model_validate(
-    {
-        "name": "__echo",
-        "inputs": {"text": {"type": str}},
-        "outputs": {"echoed": {"type": str}},
-    }
-)
+ECHO = a11.ActionSchema.model_validate({
+    "name": "__echo",
+    "inputs": {"text": {"type": str}},
+    "outputs": {"echoed": {"type": str}},
+})
 
 
 async def _echo(action: a11.Action) -> None:
@@ -257,7 +252,8 @@ flow echo-each {
 async def _run_flow_call(client: Session, stream, allowed: bytes = b"__echo"):
     """A `flow_run` call on the client's session, dispatched and ready."""
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(stream)
@@ -315,13 +311,9 @@ async def test_a_port_named_on_input_streams_takes_values_as_it_runs(
     # One value in, one value back, with the port still open: the flow is
     # certainly still running, so this cannot be a collected result.
     await (await words.put("one"))
-    assert (
-        await asyncio.wait_for(said.next_object(), timeout=30)
-    ) == "ONE"
+    assert (await asyncio.wait_for(said.next_object(), timeout=30)) == "ONE"
     await (await words.put("two"))
-    assert (
-        await asyncio.wait_for(said.next_object(), timeout=30)
-    ) == "TWO"
+    assert (await asyncio.wait_for(said.next_object(), timeout=30)) == "TWO"
 
     # A port that carries one value is filled the same way, and closed the same
     # way. The close is the caller's: nothing else ends either port.
@@ -362,7 +354,8 @@ async def test_a_streamed_port_does_not_lose_a_value_written_early(
 
     words = _port(client, call, client_stream, "words", write=True)
     once = _port(client, call, client_stream, "once", write=True)
-    # Written and closed before the gateway has even been told which flow to run.
+    # Written and closed before the gateway has even been told which flow to
+    # run.
     for node, value in ((words, "early"), (once, "also early")):
         await (await node.put(value))
         await node.finalize()
@@ -428,13 +421,11 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
     """
     # An action that takes its time, so "arrived early" is a fact rather than a
     # race: the third value cannot exist until at least 3 x 50ms have passed.
-    slow = a11.ActionSchema.model_validate(
-        {
-            "name": "__slow",
-            "inputs": {"count": {"type": int, "unary": True}},
-            "outputs": {"tick": {"type": str}},
-        }
-    )
+    slow = a11.ActionSchema.model_validate({
+        "name": "__slow",
+        "inputs": {"count": {"type": int, "unary": True}},
+        "outputs": {"tick": {"type": str}},
+    })
 
     async def emit(action: a11.Action) -> None:
         count = await action["count"].consume(int, allow_none=True) or 0
@@ -455,7 +446,8 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -488,8 +480,7 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
     assert first == "tick-0"
 
     rest = [
-        await asyncio.wait_for(said.next_object(), timeout=30)
-        for _ in range(2)
+        await asyncio.wait_for(said.next_object(), timeout=30) for _ in range(2)
     ]
     assert rest == ["tick-1", "tick-2"]
 
@@ -519,9 +510,8 @@ async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
     serving = asyncio.create_task(gateway.handle_stream(server_stream))
 
     here = a11.ActionRegistry()
-    # Nothing to register: `__ping` is a builtin every registry answers for, so
-    # the schema a `call` step needs is already here. It used to be registered
-    # by hand, schema-only, to say "the work is the gateway's".
+    # `__ping` is a builtin, so the client registry already has the schema that
+    # a remote `call` step requires.
     client = Session(action_registry=here)
     await client.add_stream(client_stream, mode="start")
 
@@ -557,13 +547,7 @@ async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
 async def test_a_client_can_run_two_flows_over_one_connection(
     tmp_path: pathlib.Path,
 ):
-    """The second one has to reach the peer too.
-
-    It did not: the flow's own action was given the session's stream, and a
-    locally-run action that holds a stream ends it when it finishes -- after
-    which the session dispatched nothing and said nothing about why. The
-    stream belongs to the calls, not to the flow.
-    """
+    """Two flows reuse a connection because calls, not flows, own streams."""
     gateway = gateway_app.A11Gateway(
         conversations.ConversationStore(tmp_path), _registry(tmp_path)
     )
@@ -571,9 +555,8 @@ async def test_a_client_can_run_two_flows_over_one_connection(
     serving = asyncio.create_task(gateway.handle_stream(server_stream))
 
     here = a11.ActionRegistry()
-    # Nothing to register: `__ping` is a builtin every registry answers for, so
-    # the schema a `call` step needs is already here. It used to be registered
-    # by hand, schema-only, to say "the work is the gateway's".
+    # `__ping` is a builtin, so the client registry already has the schema that
+    # a remote `call` step requires.
     client = Session(action_registry=here)
     await client.add_stream(client_stream, mode="start")
 
@@ -601,7 +584,8 @@ async def test_a_client_can_run_two_flows_over_one_connection(
     # And a plain dispatch still works after them, which is the same property
     # from the other side.
     call = (
-        a11.Action(PING_SCHEMA)
+        a11
+        .Action(PING_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -631,7 +615,8 @@ async def test_the_gateway_refuses_a_flow_that_reaches_too_far(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11
+        .Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)

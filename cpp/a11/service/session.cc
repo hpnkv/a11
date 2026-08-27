@@ -582,37 +582,14 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
     return a11::FailedFuture<std::uint32_t>(validation);
   }
 
-  // An ordinary data fragment for an ordinary node -- the overwhelming majority of
-  // what a busy session dispatches -- is handled here without a fibre.
-  //
-  // Everything before the write is synchronous: classifying the fragment, finding
-  // the node map, materialising the node, reading the writer's abort status. The
-  // write itself is the only thing that can wait, and after it there is nothing but
-  // error mapping. So the fibre this used to spend existed to `Await()` one future
-  // and then map its error, which is what `ThenAfterWaiting` does without one.
-  //
-  // `ThenAfterWaiting` and not `Then`: the mapping calls `GetWriterAbortStatus()`,
-  // which takes the node's fibre-aware lock, so it must not be handed to whatever
-  // thread happens to complete a stream-backed write. Inline when the store answers
-  // without waiting, a fibre only when it genuinely blocks.
-  //
-  // The branchy cases keep the fibre they had, unchanged: a close marker, a special
-  // (status) node, or a status chunk each await several times in sequence with the
-  // control flow depending on what came back, and rewriting those as continuations
-  // is a different and much riskier change than this one.
+  // An ordinary data fragment for an ordinary node -- the overwhelming majority
+  // of what a busy session dispatches -- is handled here without a fibre. So
+  // the fibre this
   const auto fast_special = ActionSpecialNode(fragment.id);
   const data::Chunk* fast_chunk = std::get_if<data::Chunk>(&fragment.data);
-  // Only two shapes genuinely need the fibre, and both await more than once with
-  // the control flow depending on what came back: a close marker (which reads the
-  // mirror's writability, then applies a close), and a status chunk arriving on an
-  // *ordinary* node (which reads writability, then aborts). A status node -- about
-  // half of everything a busy session dispatches -- does not: decoding the status
-  // and finding the Action are synchronous, and then it joins the same single-write
-  // tail as an ordinary fragment.
-  //
-  // The close-marker test comes first here for the same reason it does below: a
-  // close marker is also a status chunk, and the marker's handling is the one that
-  // must win.
+  // Only two shapes genuinely need the fibre, and both await more than once
+  // with the control flow depending on what came back: a close marker (which
+  // reads the mirror's writability, then applies a close), and a status chunk.
   const bool close_marker =
       fast_chunk != nullptr && actions::IsCloseStatusChunk(*fast_chunk);
   const bool status_chunk =
@@ -687,16 +664,9 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
         });
   }
 
-  // The last two shapes: a close marker, and a status chunk on an ordinary node.
-  // Both read writability and then, conditionally, apply something and wait for it
-  // -- two awaits with a branch between, which is why they were left on a fibre.
-  //
-  // They can still avoid it whenever the *first* await is already answered, which
-  // for an in-memory node it is: `IsWritable()` is now a continuation over a
-  // final-seq lookup that completes inline. So this asks, rather than assumes -- and
-  // when the answer is not already there, it falls through to the fibre below
-  // instead of blocking in a frame that must not block. The second await needs no
-  // fibre either way: what follows it only maps a status to a sequence number.
+  // The last two shapes: a close marker, and a status chunk on an ordinary
+  // node. The second await needs no fibre either way: what follows it only maps
+  // a status to a sequence number.
   if (close_marker || (status_chunk && !fast_special.has_value())) {
     absl::StatusOr<absl::Status> carried =
         actions::StatusFromChunk(*fast_chunk);
@@ -708,9 +678,9 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
           "An ordinary node cannot be aborted with an OK status"));
     }
     const std::uint32_t seq = fragment.seq.value_or(0);
-    // Created if absent, not looked up: a marker can arrive before whatever would
-    // have materialised its node, and dropping it hangs the reader for good. The
-    // fibre path's own note explains this at length.
+    // Created if absent, not looked up: a marker can arrive before whatever
+    // would have materialised its node, and dropping it hangs the reader for
+    // good. The fibre path's own note explains this at length.
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
         GetNodeMap()->Get(fragment.id);
     if (!node.ok()) {
@@ -754,39 +724,12 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
 
     // A closure marker reports that the peer drained the node and closed its
     // write half; it carries no value, so it is applied to the local mirror
-    // rather than stored. This is checked before the reserved status nodes so
-    // that closing an Action's status node is not mistaken for a second status
-    // value for that Action.
+    // rather than stored.
     if (chunk != nullptr && actions::IsCloseStatusChunk(*chunk)) {
       ABSL_ASSIGN_OR_RETURN(absl::Status closed,
                             actions::StatusFromChunk(*chunk));
       const std::uint32_t seq = fragment.seq.value_or(0);
-      // Create the node if it is not here yet, rather than dropping the
-      // marker.
-      //
-      // Looking the node up without creating it (GetIfExists) would be wrong,
-      // however reasonable "nothing is lost by dropping a marker for a node
-      // that no longer exists" sounds: it conflates a node that has been
-      // released with one that has *not been created yet*, and the second case
-      // hangs. Ports are materialised on use, and a marker can arrive before
-      // the fragment or action message that would materialise its node -- the
-      // two travel as separate wire messages and are dispatched by separate
-      // fibres.
-      //
-      // For a port closed without ever carrying data the marker is the only
-      // end-of-stream there will ever be. `run_turn` closes `config` empty
-      // exactly this way, so dropping its marker leaves the receiving handler
-      // blocked in `consume()` on an input that never ends -- it then writes
-      // no outputs, and every reader on the caller's side waits forever, with
-      // no timeout anywhere in the path.
-      //
-      // Creating here costs an empty node that is immediately drained and
-      // closed. A reader that finds it sees end-of-stream, which is the right
-      // answer for a peer that has closed its write half whether or not the
-      // node was ever used. The alternative -- parking the closure in a
-      // pending-markers table consulted at node creation -- avoids the
-      // allocation for genuinely released nodes and is the better fix if this
-      // ever shows up as a leak.
+      // Create the node
       ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> mirror,
                             self->GetNodeMap()->Get(fragment.id));
       if (mirror == nullptr) {
@@ -931,9 +874,7 @@ a11::Task Session::DispatchActionMessage(
               (void)(*action)->ClearOutputsAfterRun();
               // The receiver applies its own input autofills (which may differ
               // from the caller's) before running and before this WireMessage's
-              // node fragments are dispatched. Each autofilled input must be
-              // empty, so a caller cannot inject data into it; a caller that
-              // tries later writes to a closed node and is rejected.
+              // node fragments are dispatched.
               dispatch_status = (*action)->ApplyInputAutofills();
               if (dispatch_status.ok()) {
                 absl::StatusOr<std::shared_ptr<actions::Action>> started =
@@ -977,10 +918,6 @@ a11::Task Session::DispatchActionMessage(
         }
         return dispatch_status;
       },
-      // Default stack, not 16 KiB. This fibre dispatches node fragments, which
-      // reach a store write, and a store write driven inline needs 67,695 B below
-      // Drive() once it tees to an attached stream -- four times what 16 KiB
-      // holds. See the stack note in cpp/thread/CMakeLists.txt.
       {});
 }
 
@@ -1040,16 +977,7 @@ a11::Task Session::DispatchWireMessage(
           }
         }
         // Fragments for *different* nodes are independent, and one WireMessage
-        // routinely carries many of them: the in-process Sender folds whatever is
-        // queued into the message it is about to deliver, so a burst arrives as
-        // one message with many fragments (see TRANSPORT_FINDINGS.md, "The
-        // throughput rows count fragments, not messages"). Dispatching them one
-        // at a time made the whole burst serial on the receiving side.
-        //
-        // Fragments for the *same* node are not independent -- their order is
-        // their sequence order -- so the work is grouped by node id and each group
-        // stays serial. Groups are keyed in first-appearance order so a failure
-        // report still names a stable element index.
+        // routinely carries many of them:
         std::vector<std::string> group_order;
         absl::flat_hash_map<std::string, std::vector<size_t>> groups;
         for (size_t index = 0; index < message.node_fragments.size(); ++index) {
@@ -1061,11 +989,9 @@ a11::Task Session::DispatchWireMessage(
           entry->second.push_back(index);
         }
 
-        // Fragment failures are collected separately and merged after the action
-        // ones, because the aggregate's detail order is part of the contract:
-        // actions first, then fragments, each in element order. Sorting a combined
-        // list by element_index alone interleaves them, which
-        // `test_wire_dispatch_tries_every_element_and_aggregates_failures` catches.
+        // Fragment failures are collected separately and merged after the
+        // action ones, because the aggregate's detail order is part of the
+        // contract: actions first, then fragments, each in element order.
         std::vector<DispatchFailure> fragment_failures;
         thread::Mutex failure_mu;
         std::vector<absl::AnyInvocable<absl::Status() &&>> dispatches;
@@ -1098,18 +1024,16 @@ a11::Task Session::DispatchWireMessage(
                   .element_index = index,
                   .status = std::move(status),
               });
-              // Deliberately keeps going through the rest of this node's
-              // fragments, exactly as the serial version did. Stopping here would
-              // be defensible -- their sequence follows the one that failed -- but
-              // it would change which failures a caller is told about, and this
-              // change is meant to be about concurrency only.
+              // Continue through this node's remaining fragments, matching the
+              // serial path.
             }
             return absl::OkStatus();
           });
         }
         a11::RunAllToCompletion(std::move(dispatches)).IgnoreError();
-        // In element order regardless of which group finished first, so the same
-        // message always produces the same error whichever way it was scheduled.
+        // In element order regardless of which group finished first, so the
+        // same message always produces the same error whichever way it was
+        // scheduled.
         std::sort(
             fragment_failures.begin(), fragment_failures.end(),
             [](const DispatchFailure& left, const DispatchFailure& right) {
@@ -1139,10 +1063,6 @@ a11::Task Session::DispatchWireMessage(
                          " WireMessage elements"),
             details);
       },
-      // Default stack, not 16 KiB. This fibre dispatches node fragments, which
-      // reach a store write, and a store write driven inline needs 67,695 B below
-      // Drive() once it tees to an attached stream -- four times what 16 KiB
-      // holds. See the stack note in cpp/thread/CMakeLists.txt.
       {});
 }
 
@@ -1223,13 +1143,7 @@ absl::StatusOr<a11::Task> Session::AddStream(
                            : a11::ReadyTask();
   };
   // Run the transport's Start()/Accept() on the runtime's fiber pool rather
-  // than the caller's thread. Some transports (notably a WebSocket client,
-  // whose Open() drives the HTTP/2 CONNECT handshake inline) block until the
-  // connection is established; doing that on the calling thread would stall an
-  // asyncio event loop and deadlock any in-process peer whose accept callback
-  // needs that same loop. Awaiting off-thread keeps AddStream non-blocking,
-  // matching the raw WireStreamWithRecv.start()/accept() bindings. The stream
-  // is already registered above, so callers may use it before startup settles.
+  // than the caller's thread.
   a11::Task startup = a11::SubmitTask(
       [stream = std::move(stream), mode, on_message = std::move(on_message),
        on_done = std::move(on_done)]() mutable -> absl::Status {
@@ -1382,10 +1296,7 @@ a11::Task Session::HandleStreamMessage(
     if (start_pump) {
       // The pump runs the session message callback synchronously (msgpack
       // decode, action creation, exception unwinding, and any tracing spans)
-      // before Await()-ing, so it needs a full-size stack. Unlike the other
-      // per-stream fibers, which only do small bookkeeping before suspending, a
-      // tiny stack here overflows into the adjacent pooled stack's heap block
-      // and corrupts neighbouring fibers. Use the default stack size.
+      // before Await()-ing, so it needs a full-size stack.
       std::function<void()> cancel = a11::ScheduleCancelable(
           [self, stream_state] { self->ProcessStreamMessages(stream_state); });
       thread::MutexLock lock(&self->state_->mu);

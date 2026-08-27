@@ -17,9 +17,11 @@ from a11.status import Status, StatusCode, StatusException
 
 
 def _schema(name: str, inputs: dict, outputs: dict) -> ActionSchema:
-    return ActionSchema.model_validate(
-        {"name": name, "inputs": inputs, "outputs": outputs}
-    )
+    return ActionSchema.model_validate({
+        "name": name,
+        "inputs": inputs,
+        "outputs": outputs,
+    })
 
 
 # --- Toy actions the flows below compose -------------------------------------
@@ -115,13 +117,11 @@ async def registry() -> ActionRegistry:
         state = await action.get_input("state").consume(dict)
         turns = int(state.get("turns", 0)) + 1
         await (
-            await action.get_output("next").put(
-                {
-                    "turns": turns,
-                    "done": turns >= 3,
-                    "trace": state.get("trace", "") + ".",
-                }
-            )
+            await action.get_output("next").put({
+                "turns": turns,
+                "done": turns >= 3,
+                "trace": state.get("trace", "") + ".",
+            })
         )
 
     async def show_mimetypes(action: Action) -> None:
@@ -1076,9 +1076,8 @@ async def test_mime_and_distinct_and_json_filter_a_stream(registry):
         registry,
         words=["x", "x", "y"],
     )
-    # `text/*`, because that is what a string chunk now is: strings travel as
-    # `text/plain`, not as a JSON-quoted copy of themselves. This is also the
-    # idiom doc/docs/api/flow.md has always used.
+    # `text/*` matches string chunks, which use `text/plain` rather than a
+    # JSON-quoted representation.
     assert result["kept"] == ["x", "x", "y"]
     assert result["unique"] == ["x", "y"]
     assert result["parsed"] == [[1, 2]]
@@ -1141,8 +1140,7 @@ async def test_group_accumulates_until_a_value_closes_the_group(registry):
         registry,
         pieces=["um", "so", "what is a fiber?", "a stack", "one you park."],
     )
-    # The fragments before the closing piece are part of the sentence, which
-    # is the whole point: a piece is not a sentence.
+    # Fragments before a closing piece remain part of the same sentence.
     assert result["said"] == [
         "um so what is a fiber?",
         "a stack one you park.",
@@ -1594,10 +1592,9 @@ def test_mixed_case_is_a_name_and_not_a_keyword():
 def test_a_description_may_be_long_and_may_sit_under_what_it_describes():
     """Prose is prose: it wraps, and it does not fit on the declaration's line.
 
-    Two spellings, and they compose: a triple-quoted string holds line breaks and
-    gives back the indentation the source put in front of it, and a description
-    alone on the line below a declaration belongs to that declaration. What keeps
-    the second unambiguous is that the string has to be *alone*: a line with
+    A triple-quoted string preserves line breaks and source indentation. A
+    description alone below a declaration belongs to that declaration. The
+    second form is unambiguous because the string must be alone: a line with
     anything after the string is a statement, as it always was.
     """
     schema = flow.loads('''
@@ -1897,7 +1894,7 @@ async def test_a_flow_runs_a_sibling_that_is_in_no_registry(
         ),
     }
     program = flow.loads("\n".join(bodies[name] for name in order), "two.flow")
-    # Deliberately not registered: only the toy actions are.
+    # Register only the toy actions; the flows resolve from their source file.
     result = await program["outer"].invoke({"t": ["a", "b"]}, registry=registry)
     assert result == {"o": ["A", "B"]}
 
@@ -2057,7 +2054,7 @@ def test_strformat_does_not_let_a_template_walk_into_a_value():
     assert strformat("100%% sure", []) == "100% sure"
     # A percent that starts nothing is a percent.
     assert strformat("100% sure", []) == "100% sure"
-    # And a Python-style slot is now just text, which is the point of moving.
+    # Python-style replacement fields remain literal text.
     assert strformat("{} and {}", ["a", "b"]) == "{} and {}"
 
 
@@ -2606,10 +2603,10 @@ def test_a_node_needs_a_node_map_that_exists():
 # --- Ports left open for somebody else to fill -------------------------------
 #
 # `invoke` writes every input and closes it, which is what a collected result
-# needs. `start(open_inputs=...)` is the other half: a port handed back live, for
-# a caller that has values while the flow is already running -- a peer writing it
-# by id, most of all. One value or many is the same mechanism; a `one` port is a
-# stream that carries one.
+# needs. `start(open_inputs=...)` is the other half: a port handed back live,
+# for a caller that has values while the flow is already running -- a peer
+# writing it by id, most of all. One value or many is the same mechanism; a
+# `one` port is a stream that carries one.
 
 
 ECHO_EACH = """
@@ -2674,7 +2671,7 @@ async def test_an_open_port_is_the_callers_to_close(registry):
 async def test_a_value_written_to_an_open_port_keeps_its_own_mimetype(
     registry,
 ):
-    """What an object of values cannot do: hand a port a value as it was sent."""
+    """An open port preserves the MIME type of a value written to it."""
     running = await _started(
         """
         flow how-it-arrived {
@@ -2874,8 +2871,7 @@ async def test_interleave_reads_several_streams_as_one(registry):
         fast=["a", "b"],
         slow=["c"],
     )
-    # Every value once. The order *between* the sources is whatever arrived
-    # first, which is the point of asking for an interleave.
+    # Every value appears once, ordered by arrival across sources.
     assert sorted(outputs["all"]) == ["a", "b", "c"]
 
 

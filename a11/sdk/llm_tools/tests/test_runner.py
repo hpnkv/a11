@@ -1,10 +1,11 @@
 # Copyright 2026 The A11 Authors.
 
-"""The two things the tool runner does besides running tools.
+"""What the tool runner does besides running tools.
 
 It keeps a tool's narration out of the result the model is shown and
-hands it back as that call's log, and it offers the model the actions registered
-on this side that the caller's allowed-tool patterns match.
+hands it back as that call's log, it offers the model the actions registered
+on this side that the caller's allowed-tool patterns match, and it honours a
+schema that nominates one output as the whole result.
 """
 
 import pytest
@@ -16,6 +17,7 @@ from a11.sdk.llm import (
     Interaction,
     LlmHeaders,
     TOOL_LOGS_METADATA_KEY,
+    decode_action_output_fragments,
 )
 from a11.sdk.llm_tools import runner
 
@@ -107,6 +109,48 @@ async def test_log_metadata_is_empty_when_no_tool_narrated_its_run():
 
 
 @pytest.mark.asyncio
+async def test_an_output_mapped_to_the_whole_result_is_not_wrapped():
+    """`{"port": "$"}` exposes the port value without a one-key wrapper."""
+    schema = ActionSchema(
+        name="whole_tool",
+        outputs={
+            "payload": ActionPortSchema(
+                "payload", "application/json", unary=True, required=True
+            )
+        },
+        output_to_json_field={"payload": a11.ActionSchema.WHOLE_JSON},
+    )
+
+    async def handler(action: a11.Action) -> None:
+        await action["payload"].finalize({"total": 7})
+
+    registry = ActionRegistry()
+    registry.register(schema.name, schema, handler)
+    executed: list[runner.ExecutedActions] = []
+
+    async def host_handler(action: a11.Action) -> None:
+        interaction = Interaction(
+            action_calls=[a11.ActionMessage(id="call-1", name=schema.name)]
+        )
+        executed.append(
+            await runner.execute_actions_from_interaction(
+                interaction, action, registry
+            )
+        )
+
+    registry.register(
+        INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, host_handler
+    )
+    host = registry.make_action(INTERACT_WITH_LLM_SCHEMA.name)
+    host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"whole_tool")
+    host.run()
+    await host.wait()
+
+    fragments = executed[0].outputs["call-1"]
+    assert decode_action_output_fragments(fragments) == {"total": 7}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "patterns,expected",
     [
@@ -135,13 +179,11 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, patterns)
     host.run()
 
-    await host["tools"].finalize(
-        {
-            "name": "caller_tool",
-            "description": "A tool the caller serves itself.",
-            "input_schema": {"type": "object", "properties": {}},
-        }
-    )
+    await host["tools"].finalize({
+        "name": "caller_tool",
+        "description": "A tool the caller serves itself.",
+        "input_schema": {"type": "object", "properties": {}},
+    })
     await host["interactions"].finalize()
     await host["config"].finalize()
     await host.wait()

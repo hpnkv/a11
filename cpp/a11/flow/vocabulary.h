@@ -16,11 +16,7 @@ namespace a11::flow {
 
 /// The words the language gives meaning to, and what each one may be given.
 ///
-/// This is the one table. The Python parser, the Sublime syntax and the
-/// IntelliJ plugin each used to keep a copy, and
-/// `a11/flow/tests/test_editor_support.py` existed to catch them drifting;
-/// everything now reads these instead, generating what a static grammar file
-/// needs rather than restating it.
+/// Every frontend reads this table; static grammar files are generated from it.
 ///
 /// There are no reserved words: a word is only significant where the grammar
 /// puts it, which is why these are sets to be consulted at a position rather
@@ -70,14 +66,7 @@ enum class StageArgument {
 };
 
 /// Every pipeline stage, in the order they read best in a listing.
-/**
- * @brief One port the entry flow gets without declaring it.
- *
- * `flow { ... }` is a program, and a program is handed its arguments. Rather
- * than make every file write the same two `in` lines, the language declares
- * them -- so `argv` resolves, completes and formats like any other port, and an
- * interpreter knows exactly what it is expected to supply.
- */
+/// Every pipeline stage, in the order they read best in a listing.
 struct EntryPort {
   std::string_view name;
   std::string_view type;
@@ -108,9 +97,8 @@ std::string_view StageArgumentName(StageArgument argument);
 /// one answer, and a copy of this in the IntelliJ plugin would be a copy that
 /// goes stale the first time a stage learns a new argument.
 ///
-/// Written as reference rather than as a gloss. "stage, takes number" is what
-/// the editor used to say about `truncate`, and it answers nothing a reader did
-/// not already know from looking at the line.
+/// The text explains semantics rather than merely repeating a token kind and
+/// argument category.
 struct WordDoc {
   /// One line: what it does. A sentence, because it is shown as one.
   std::string_view summary;
@@ -235,9 +223,8 @@ const WordDoc* absl_nullable Documentation(WordRole role,
 /// Every punctuation mark and non-word operator the language gives meaning to,
 /// in the order a listing reads them.
 ///
-/// Here rather than only in the lexer because these are the forms an editor is
-/// asked about most and had least to say: a hover on `|` used to answer "flow
-/// operator", which is the token's kind rather than an answer.
+/// Keeping these here lets editor help explain their semantics, not just their
+/// token kinds.
 absl::Span<const std::string_view> OrderedSymbols();
 
 /// The two stages that may be written without their leading `|`.

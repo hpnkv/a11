@@ -4,7 +4,8 @@
  * @file
  * @brief UTF-8 byte-level primitives, as inline functions over a string_view.
  *
- * Header-only and dependency-free on purpose: `a11::flow_lang` links nothing but
+ * Header-only and dependency-free on purpose: `a11::flow_lang` links nothing
+ * but
  * Abseil and nlohmann, so the lexer, the diagnostic index and the offset table
  * can only share these if sharing costs no link dependency.
  */
@@ -44,7 +45,8 @@ inline size_t SequenceWidth(char lead) {
   return 1;
 }
 
-/// UTF-16 code units the character at @p lead occupies: 2 above the BMP, else 1.
+/// UTF-16 code units the character at @p lead occupies: 2 above the BMP, else
+/// 1.
 inline size_t Utf16Units(char lead) {
   return static_cast<unsigned char>(lead) >= 0xF0U ? 2 : 1;
 }

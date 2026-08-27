@@ -478,10 +478,7 @@ bool ReadSelectable<T>::Handle(CaseInSelectClause* absl_nonnull reader,
     DVLOG(2) << "Get from buffer";
     reader->selector->mu.Lock();
     if (reader->selector->picked_case_index == Selector::kNonePicked) {
-      // Move out of the buffer. Explicitly destruct behind for types that don't
-      // have a move-assignment operator and where it may be harmful to leave
-      // around a copy. (For example, a shared_ptr-like object with only a copy
-      // assignment operator.)
+      // Move out of the buffer.
       *dst_item = std::move(channel->queue_.front());
       channel->queue_.pop_front();
       *dst_ok = true;

@@ -101,14 +101,8 @@ def _install_loop(name: str):
     try:
         import uvloop
     except ImportError:
-        # Refuse, rather than quietly measure the other loop.
-        #
-        # This used to fall back to asyncio with a warning, and a whole
-        # two-loop run once came back with every "uvloop" number actually
-        # measured on asyncio -- the warning scrolled past in a subprocess's
-        # output and the comparison was worthless. uvloop is not a project
-        # dependency, so `uv sync` prunes it; that is easy to do by accident and
-        # must not silently change what is being measured.
+        # A requested loop must not silently measure another implementation.
+        # uvloop is optional and `uv sync` may remove it.
         raise SystemExit(
             "--loop uvloop was requested but uvloop is not importable.\n"
             "Install it (`uv pip install uvloop`) or run with --loop asyncio.\n"
@@ -191,13 +185,8 @@ def _run_isolated(options, selected) -> list[harness.Result]:
             command.append("--slow")
         for pattern in options.pattern:
             command += ["-k", pattern]
-        # Its own session, and no native crash handler.
-        #
-        # A suite that has to be killed used to take the whole run with it: the
-        # signal reached the parent as well as the child, and A11's failure
-        # handler then printed a fibre stack per thread from both. Detaching
-        # the child means a kill lands only on the child, and disabling the
-        # handler keeps a deliberate timeout from looking like a crash.
+        # Isolate timeout signals to the child. Disable its crash handler so a
+        # deliberate timeout is not reported as a native crash.
         child_environment = {
             **os.environ,
             "A11_DISABLE_FAILURE_SIGNAL_HANDLER": "1",
@@ -223,10 +212,8 @@ def _run_isolated(options, selected) -> list[harness.Result]:
                 harness.Result(**record) for record in payload["results"]
             )
         except (OSError, ValueError, KeyError):
-            # No final payload: the child was killed, or crashed, before writing
-            # it. Whatever it finished is still in the partial log, and reporting
-            # that is much better than reporting nothing -- a single hung
-            # benchmark used to discard the whole suite.
+            # Recover completed measurements from a killed or crashed child's
+            # partial log when it could not write the final payload.
             recovered = harness.read_partial(harness.partial_path(path))
             if recovered:
                 merged.extend(recovered)
@@ -275,12 +262,15 @@ def main(argv: list[str] | None = None) -> int:
     _warn_about_the_clock(environment)
 
     if options.in_process:
+
         def _record(result: harness.Result) -> None:
             print(f"  ok   {result.key}", flush=True)
             # Streamed as it finishes, so a suite killed for exceeding its
             # timeout still reports what it measured.
             if options.json:
-                harness.append_partial(harness.partial_path(options.json), result)
+                harness.append_partial(
+                    harness.partial_path(options.json), result
+                )
 
         results = runner(
             harness.run_selected(

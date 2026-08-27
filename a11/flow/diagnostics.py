@@ -4,18 +4,14 @@
 
 One problem found in a flow is a [Diagnostic][a11.flow.diagnostics.Diagnostic]:
 a stable code, a severity, a family, a range that carries both byte offsets and
-line/column, a message, and any fix that is a single obvious edit. Everything
-that reports on a flow -- the CLI, an editor, a CI job -- renders that one shape,
-so the wording of a language problem lives in one place.
+line/column, a message, and an optional single-edit fix. The CLI, editors, and
+CI integrations render this shared shape.
 
 The formats are versioned and additive: a reader checks ``format`` and ignores
 fields it does not know, and a new field is not a version change. They are
-*produced* by `cpp/a11/flow/emit_json.{h,cc}` -- one writer per envelope, so the
-payload `a11 flow` prints and the payload the standalone `a11-flow` prints cannot
-differ. What lives here is the reading half: the dataclasses a Python caller wants
-and the text and SARIF renderings the CLI prints. `testdata/flow/codes.json` is
-generated from the C++ table and read back here, so the two cannot drift about
-what a code means.
+produced by `cpp/a11/flow/emit_json.{h,cc}`, which provides one writer per
+envelope. This module supplies Python dataclasses plus text and SARIF renderers.
+`testdata/flow/codes.json` is generated from the C++ table.
 """
 
 from __future__ import annotations
@@ -37,7 +33,10 @@ SYNTAX_FORMAT = "flow.syntax/v1"
 
 #: The generated table of every code the language publishes.
 _CODES_PATH = (
-    pathlib.Path(__file__).resolve().parents[2] / "testdata" / "flow" / "codes.json"
+    pathlib.Path(__file__).resolve().parents[2]
+    / "testdata"
+    / "flow"
+    / "codes.json"
 )
 
 
@@ -86,9 +85,8 @@ class Severity(enum.StrEnum):
 class Family(enum.StrEnum):
     """The kind of problem, which is the grouping a reader thinks in.
 
-    An editor turns each of these into one switchable inspection and a CI job can
-    gate on some and not others, which is why the family travels in the output
-    rather than being inferred from the code.
+    Editors may expose each family as a switchable inspection, and CI can gate
+    on selected families. The family is explicit in the output.
     """
 
     SYNTAX = "syntax"
@@ -104,8 +102,8 @@ class Position:
     """One place in the source: the byte offset, and the line and column at it.
 
     All three travel because each consumer wants a different one -- offsets to
-    edit with, line and column to read -- and computing one from the other needs
-    the source text, which a diagnostic that has travelled as JSON no longer has.
+    edit with, line and column to display. Converting between them requires the
+    source text, which may not accompany a JSON diagnostic.
     Lines and columns are 1-based, as the lexer has always reported them.
     """
 
@@ -152,7 +150,10 @@ class Fix:
     edits: tuple[Edit, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
-        return {"label": self.label, "edits": [edit.as_json() for edit in self.edits]}
+        return {
+            "label": self.label,
+            "edits": [edit.as_json() for edit in self.edits],
+        }
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -177,8 +178,8 @@ class Diagnostic:
             "range": self.range.as_json(),
             "fixes": [fix.as_json() for fix in self.fixes],
         }
-        # Absent rather than empty: the flow is unknown when the text did not get
-        # far enough to name one, and "" would read as a flow called nothing.
+        # Omit the field when parsing did not identify a flow. An empty string
+        # would identify a flow whose name is empty.
         if self.flow:
             value["flow"] = self.flow
         return value
@@ -197,8 +198,8 @@ class Diagnostic:
 
         What the native engine hands over, and what a frontend reading the JSON
         envelope -- a CI script, the IDE plugin -- turns back into an object.
-        Unknown fields are ignored and missing ones take their defaults, so a newer
-        producer never breaks an older reader.
+        Unknown fields are ignored and missing fields use their defaults for
+        compatibility with newer producers.
         """
 
         def position(payload: Any) -> Position:
@@ -274,13 +275,10 @@ class LineIndex:
     Built once per file and shared by everything that reports a position, so a
     diagnostic never costs a scan of the source to locate.
 
-    **Over the source's bytes, not its characters.** An offset in this language is
-    a byte offset -- that is what the lexer reads, what a diagnostic carries and
-    what an edit is applied in -- while a Python `str` is indexed by code point and
-    a `§` is one of those and two bytes. Indexing the string would agree with the
-    native compiler on every ASCII file and disagree on the first one with prose in
-    it, so the bytes are what is indexed and `characters_of` is how a consumer that
-    genuinely wants a character count asks for one.
+    **Over source bytes, not characters.** The lexer, diagnostics, and edits use
+    byte offsets, while Python strings use code-point indexes. For example, `§`
+    occupies one code point and two UTF-8 bytes. Use `characters_of` when a
+    character count is required.
     """
 
     __slots__ = ("_data", "_length", "_line_starts")
@@ -297,7 +295,7 @@ class LineIndex:
 
     @property
     def length(self) -> int:
-        """How many bytes the source is, which is what an offset is bounded by."""
+        """The byte length used to bound offsets."""
         return self._length
 
     def at(self, offset: int) -> Position:
@@ -408,18 +406,15 @@ def sarif_log(
 ) -> dict[str, Any]:
     """A SARIF 2.1.0 log for one file's diagnostics.
 
-    SARIF is what code-scanning services and CI annotators already read, so
-    emitting it means a flow's problems show up in a pull request without anybody
-    writing a converter. Every rule in the log is documented, because the rule
-    list is the published code table.
+    Code-scanning services and CI annotators consume SARIF directly. Every rule
+    in the log is documented from the published code table.
 
-    ``index`` is the text the diagnostics are about, and it is worth passing:
+    ``index`` contains the source text used by the diagnostics.
     SARIF specifies ``charOffset`` in *characters* while a diagnostic carries
-    bytes, and the two differ from the first non-ASCII character in the file. With
-    no index the two offset fields are left out rather than written wrongly --
-    ``startLine``/``startColumn`` are what an annotator actually places a comment
-    with, and a field that is absent is better than one that is off by three.
+    bytes, and the two differ after a non-ASCII character. Without an index,
+    character-offset fields are omitted while line and column remain available.
     """
+
     def region(diagnostic: Diagnostic) -> dict[str, Any]:
         placed: dict[str, Any] = {
             "startLine": diagnostic.range.start.line,

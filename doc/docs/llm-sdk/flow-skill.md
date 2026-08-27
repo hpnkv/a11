@@ -1,10 +1,8 @@
 # Let a model compose its own tools
 
-A model with three tools and a task that needs all three calls them one at a
-time, and reads every intermediate result on the way: the fetched page, the
-transcript, the file listing. It pays for each of them twice — once to read it,
-once to quote it into the next call — and the values it copies are only as
-accurate as its copying.
+A model that calls tools one at a time must read each intermediate result and
+include it in the next call. Large pages, transcripts, and file listings
+therefore consume model context and may lose detail during copying.
 
 [`a11.sdk.flow_tools`][a11.sdk.flow_tools] offers the alternative as three
 tools. The model writes a [flow](../guides/flow.md) — a composition of the
@@ -39,15 +37,11 @@ a11 gateway run                    # flow_actions, flow_check, flow_run served
 a11 gateway run --no-flow-tools    # not served
 ```
 
-That makes a flow something a client can *send*. It is worth being concrete
-about what that buys: a client that wants a transcript summarised can call
-`capture_transcription` and `interact_with_llm` one at a time and carry the
-whole transcript back and forth over the wire, or it can send eight lines of
-flow and receive the summary. `scripts/flow_playground.py` is the runnable
-version of exactly that — it asks the gateway what it can compose, has it check
-a flow, then listens for a spoken sentence and asks a model about it, turn after
-turn: each turn hands the interactions back, and the next one sends them in as
-`history` for the flow to put in front of the new question with `then`.
+Clients can send a flow that connects `capture_transcription` directly to
+`interact_with_llm`, avoiding transcript round trips through the client and
+model. `scripts/flow_playground.py` demonstrates this workflow: it discovers
+gateway actions, checks a flow, captures a spoken sentence, and sends the model
+reply history into the next turn with `then`.
 
 A flow can also run on the *client* and call the gateway's actions, which is
 what that script does with its own microphone-to-model composition. For that,
@@ -66,30 +60,32 @@ schema)` per action.
 | `flow_check`   | Compiles a flow and describes what it resolves to, without dispatching anything. A syntax error comes back with its line and column.                                                |
 | `flow_run`     | Compiles, checks the call targets, runs the flow, and returns its declared outputs as one object.                                                                                   |
 
-## Client-Side Streaming with `flow_run`
+## Client-side streaming with `flow_run`
 
-A model typically consumes the collected object result, whereas an application client can stream inputs into a running flow and receive incremental output events as they occur:
+Models typically consume the collected object result. Application clients can
+instead stream inputs into a running flow and receive incremental outputs:
 
 ```python
 call = a11.Action(flow_tools.FLOW_RUN_SCHEMA)
 await call.call()
 
-# Access flow input and output streams via deterministic node IDs
+# Access flow inputs and outputs through their deterministic node IDs.
 said = session.node_map.get(flow_tools.flow_output_node_id(call.get_id(), "said"))
 words = session.node_map.get(flow_tools.flow_input_node_id(call.get_id(), "words"))
 words.attach_stream(stream)
 
-# Declare streamed input ports and finalize static parameters
+# Declare streamed inputs and finalize static parameters.
 await call["input_streams"].finalize(["words"])
 await call["source"].finalize(SOURCE)
 
-# Stream inputs and read incremental responses
+# Stream inputs and read incremental responses.
 await words.put("one")
 response = await said.next_object()
 await words.finalize()
 ```
 
-When supplying stream inputs via `input_streams`, remember to finalize or close each input port so the receiving action knows no further data is pending.
+Finalize or close every port named in `input_streams` so the receiving action can
+observe the end of input.
 
 ## What the model is not allowed to compose
 
@@ -115,9 +111,8 @@ flow_tools.get_system_prompt()  # for composing into a larger system prompt
 flow_tools.get_skill()  # the same words as an a11.sdk.skill.Skill
 ```
 
-The text embeds `a11.flow.REFERENCE` — [the language's own cheat
-sheet](../api/flow.md) — rather than restating it, so
-the language it teaches is the language that is implemented.
+The text embeds `a11.flow.REFERENCE`, the compact
+[language reference](../api/flow.md), so prompts use the implemented syntax.
 `a11/sdk/flow_tools/SKILL.md` is generated from the same constants and checked
 in, for a host that loads skills from disk; a test fails when the file and the
 code disagree.
@@ -150,11 +145,10 @@ flow answer-from-the-web {
 }
 ```
 
-What comes back is `{"answer": ..., "sources": [...]}`. Three pages were
-fetched, trimmed and summarised; the `nodes fetched` block kept them off the
-wire; and the model read two small values. That is the whole point, and it is
-why the skill's first instruction about writing one is *declare outputs small
-enough to read*.
+The result is `{"answer": ..., "sources": [...]}`. The `nodes fetched` block
+keeps fetched and trimmed pages off the wire, while the model receives only the
+declared answer and source values. Keep declared outputs small enough for the
+model to read.
 
 ::: a11.sdk.flow_tools
 

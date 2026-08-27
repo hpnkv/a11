@@ -74,12 +74,9 @@ void CheckContained(const std::vector<DocumentSymbol>& symbols,
 }
 
 TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
-  // The one invariant a document symbol has to satisfy, and the reason it is worth
-  // a test of its own: LSP refuses the *whole* answer when one entry breaks it --
-  // "selectionRange must be contained in fullRange" -- so a single bad symbol cost
-  // the document its entire outline. It broke for every `flow` and every `struct`,
-  // because the parser records where a node *started* and a flow's name is the token
-  // after its keyword.
+  // The one invariant a document symbol has to satisfy, and the reason it is
+  // worth a test of its own: LSP refuses the *whole* answer when one entry
+  // breaks it -- "selectionRange must be contained in fullRange" -- so a.
   CheckContained(Symbols(kSource), "the two-declaration source");
 
   // A range is the whole construct, which is the other half of what the format
@@ -96,8 +93,8 @@ TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
       "research");
 
   // And it holds for text somebody is part-way through typing, which is where a
-  // range that stopped at the keyword would otherwise still be produced: there is
-  // no closing brace to find.
+  // range that stopped at the keyword would otherwise still be produced: there
+  // is no closing brace to find.
   for (const std::string_view unfinished :
        {"flow half {\n  in q: string\n", "flow\n", "struct S {\n  a: string\n",
         "flow a { }\nflow b {\n", ""}) {
@@ -166,11 +163,7 @@ TEST(FlowNavigate, AShapeHoversAsItsFields) {
 }
 
 TEST(FlowNavigate, ANameIsReadInTheFlowItIsWrittenIn) {
-  // Two flows may each declare `in q`, and they are two different ports. The
-  // answer used to be whichever flow came first in the file, because a symbol
-  // was matched by name against every flow the caret was merely *after* -- so a
-  // hover in the second flow described the first one's port and offered to
-  // navigate into it.
+  // Two flows may each declare `in q`, and they are two different ports.
   constexpr std::string_view kTwo = R"(flow one {
   in  q: string required "The first one's."
   out a: string
@@ -192,10 +185,7 @@ flow two {
 }
 
 TEST(FlowNavigate, ADefinitionIsTheNameAndNotTheWordThatDeclaresIt) {
-  // What "go to declaration" jumps to, and where a hover says the thing came
-  // from. Landing on `struct` or `flow` is landing one word to the left of what
-  // was asked about -- and, in an editor whose PSI is a token stream, on a
-  // keyword whose own hover then answers the wrong question entirely.
+  // Check the target used by navigation and hover origin metadata.
   const Description shape = Describe(kSource, At("Source{"));
   ASSERT_TRUE(shape.has_definition);
   EXPECT_EQ(shape.definition.start.offset, At("Source {"));
@@ -230,11 +220,7 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
 }
 
 TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
-  // The regression this exists for: a hover on a mark or a keyword used to be
-  // the token's kind and nothing else -- "`|` — flow operator", "`in` —
-  // declaration keyword" -- which answers nothing a reader could not see. Each
-  // of these is now a sentence about what the form does, and the kind survives
-  // only as the label above it.
+  // The regression this exists for: a hover on a mark or a keyword
   struct Case {
     std::string_view at;     ///< The text to put the caret in.
     std::string_view label;  ///< What the summary calls it.
@@ -372,7 +358,7 @@ TEST(FlowCatalogue, ReadsWhatItWritesAndToleratesRubbish) {
 TEST(FlowCatalogue, TheEmbeddedSnapshotIsThereAndUsable) {
   // What a standalone tool knows with nothing configured. Generated from the
   // live registries by `scripts/generate_flow_catalogue.py`; the check that
-  // regenerates it is what keeps it honest.
+  // regenerates it, keeping the fixture synchronized.
   const catalogue::Catalogue& builtin = catalogue::Catalogue::Builtin();
   EXPECT_FALSE(builtin.Empty());
   ASSERT_NE(builtin.Action("make_http_request"), nullptr);
@@ -416,8 +402,6 @@ TEST(FlowCatalogue, CompletionOffersAnActionsPortsAndItsName) {
 }
 
 TEST(FlowNavigate, AStageHoversAsReference) {
-  // What the hover used to say about a stage was "stage, takes number", which
-  // tells a reader nothing the line in front of them did not.
   const Description about = Describe(kSource, At("| map Source") + 2, Known());
   ASSERT_TRUE(about.found);
   EXPECT_NE(about.summary.find("a pipeline stage"), std::string::npos)
@@ -425,7 +409,8 @@ TEST(FlowNavigate, AStageHoversAsReference) {
   EXPECT_NE(about.markdown.find("**Takes:** an expression"), std::string::npos)
       << about.markdown;
   EXPECT_NE(about.markdown.find("**Example:**"), std::string::npos);
-  // Reference, not a gloss: what it does with a shape is the thing worth saying.
+  // Reference, not a gloss: what it does with a shape is the thing worth
+  // saying.
   EXPECT_NE(about.markdown.find("map Shape"), std::string::npos)
       << about.markdown;
   // A stage that takes nothing prints no "Takes" line at all.

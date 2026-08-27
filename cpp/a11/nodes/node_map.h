@@ -69,6 +69,11 @@ class NodeMap : public std::enable_shared_from_this<NodeMap> {
   // By value: on a miss the id is moved into the map, and callers hand it
   // over rather than lending it.
   // NOLINTNEXTLINE(performance-unnecessary-value-param)
+  /**
+   * @brief Return the node for an id, creating it if it does not exist.
+   * @param node_id The node identifier.
+   * @return The node, or an error status on failure.
+   */
   absl::StatusOr<std::shared_ptr<AsyncNode>> Get(std::string node_id);
 
   /**

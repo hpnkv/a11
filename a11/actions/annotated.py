@@ -83,10 +83,9 @@ runner, which closes any output the handler did not write.
 A11's client contract already asks a caller to close every input port it
 declares, and a derived handler needs that too: an input port left open with
 nothing in it is indistinguishable from one whose value has not arrived yet, so
-reading it waits. The wait is bounded by the action's ``x-a11-deadline``, which
-is how a handler that would otherwise hang for good instead fails at the time
-the caller agreed to -- but a caller that neither fills nor closes an optional
-input and sets no deadline will wait for good.
+reading it waits. The action's ``x-a11-deadline`` bounds that wait. A caller
+that neither fills nor closes an optional input and sets no deadline waits
+indefinitely.
 """
 
 from __future__ import annotations
@@ -176,7 +175,7 @@ class InputPort:
             for a parameter that admits ``None`` or has a default, and for
             streams, and ``True`` otherwise.
         unary: Whether the port carries a single whole value. Defaults to the
-            parameter's arity and is rarely worth overriding.
+            parameter's arity and normally needs no override.
         autofills: Fragments the runtime fills the port with, as on
             [`ActionPortSchema`][a11.actions.action.ActionPortSchema].
     """
@@ -288,8 +287,7 @@ def _default_mimetype(annotation: Any) -> str:
     if isinstance(annotation, type) and issubclass(
         annotation, (data_types.Chunk, data_types.NodeFragment)
     ):
-        # Opaque on purpose: a port carrying raw chunks does not know what is
-        # in them, and octet-stream is the honest floor.
+        # Raw chunks are opaque, so use the generic octet-stream representation.
         return serialization.BYTES_MIMETYPE
     return serialization.JSON_MIMETYPE
 

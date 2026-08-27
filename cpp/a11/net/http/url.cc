@@ -21,7 +21,9 @@
 namespace a11::net {
 namespace {
 
-/** @return Whether @p host needs bracketing in an authority (an IPv6 literal). */
+/**
+ * @return Whether @p host needs bracketing in an authority (an IPv6 literal).
+ */
 bool IsIpV6Literal(std::string_view host) {
   return absl::StrContains(host, ':');
 }
@@ -97,7 +99,9 @@ void SplitPathParts(std::string_view rest, std::string* path,
   }
 }
 
-/** @return @p path with its last segment removed, keeping the trailing slash. */
+/**
+ * @return @p path with its last segment removed, keeping the trailing slash.
+ */
 std::string DirectoryOf(std::string_view path) {
   const size_t slash = path.rfind('/');
   if (slash == std::string_view::npos) {

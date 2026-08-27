@@ -26,7 +26,7 @@
  * reason, so a handler resolves each port once:
  *
  * @code
- *   ABSL_ASSIGN_OR_RETURN(OutputPorts outputs, OutputPorts::Open(action, omit));
+ *   ABSL_ASSIGN_OR_RETURN(auto outputs, OutputPorts::Open(action, omit));
  *   const Sink bytes = outputs["bytes"];
  *   while (...) {
  *     ABSL_RETURN_IF_ERROR(bytes.PutBytes(std::move(piece)));
@@ -38,29 +38,19 @@
  * loop above needs no test of its own -- and where producing the value is
  * itself expensive, Sink::present() says whether to bother.
  *
- * Open() takes the ports from the action's own schema rather than from a list
- * the handler repeats, because the two drifting apart is exactly the bug this
- * class exists to make impossible.
+ * Open() reads ports from the action schema, avoiding a second port list in the
+ * handler.
  *
  * ### What a port's chunks look like, and why the encoding is a choice
  *
- * A structured value goes out as JSON by default and as MessagePack when the
- * caller says `encoding: "msgpack"`. That is not only a speed setting, and the
- * reason is worth stating plainly because it decides whether some perfectly
- * ordinary files can be read at all:
+ * A structured value uses JSON by default and MessagePack when the caller sets
+ * `encoding: "msgpack"`. The encoding determines which byte sequences can be
+ * represented:
  *
- * **JSON is defined over text, and the filesystem is not.** A path, a line of a
- * file, and a program's output are byte strings; nothing stops one of them
- * holding a byte sequence that is not valid UTF-8, and such a value has no JSON
- * spelling. So `read_file`'s `lines` and `list_directory`'s `entries` can carry
- * something JSON cannot represent, and the honest options are to fail, to
- * corrupt it silently, or to offer an encoding that can hold it. This library
- * does the first and the third: a value that will not fit its encoding is an
- * `invalid_argument` naming both ways out -- `encoding: "msgpack"`, which holds
- * arbitrary bytes, or the `bytes` port, which is exact by construction.
- *
- * Silently replacing the offending bytes was the option not taken. A flow that
- * copies a file should not quietly change it.
+ * Paths, file lines, and process output may contain invalid UTF-8 and therefore
+ * have no JSON representation. Such values return `invalid_argument` with two
+ * alternatives: use `encoding: "msgpack"` for arbitrary bytes, or read the
+ * exact data from the `bytes` port.
  *
  * Every conversion here goes through a11::DumpJson and a11::PackMsgpack rather
  * than through nlohmann directly, because nlohmann reports these failures by
@@ -169,7 +159,9 @@ absl::StatusOr<std::string> BytesOfChunk(const data::Chunk& chunk);
  */
 absl::StatusOr<std::optional<nlohmann::json>> ReadJsonInput(
     const std::shared_ptr<nodes::AsyncNode>& node);
-/** @brief Reads a unary input port as text, accepting a JSON string or bytes. */
+/**
+ * @brief Reads a unary input port as text, accepting a JSON string or bytes.
+ */
 absl::StatusOr<std::optional<std::string>> ReadTextInput(
     const std::shared_ptr<nodes::AsyncNode>& node);
 /** @brief Reads a unary input port of @p action as JSON. */
@@ -274,7 +266,8 @@ class OutputPorts {
   OutputPorts& operator=(OutputPorts&&) = default;
 
   /**
-   * @brief Resolves every output port of @p action, closing those in @p omitted.
+   * @brief Resolves every output port of @p action, closing those in @p
+   * omitted.
    * @param action The running action, whose schema names the ports.
    * @param omitted Port names the caller asked not to be written. A name that
    *        is not a port is reported rather than ignored: a caller that
@@ -324,7 +317,8 @@ class OutputPorts {
 /**
  * @brief Opens an action's outputs from its `options`, honouring both settings.
  *
- * What every handler in this library calls: reads `omit` and `encoding` from one
+ * What every handler in this library calls: reads `omit` and `encoding` from
+ * one
  * place, so neither can be honoured by some actions and forgotten by others.
  */
 absl::StatusOr<OutputPorts> OpenOutputs(

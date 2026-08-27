@@ -1,20 +1,15 @@
 /**
  * The actions every A11 peer answers, whatever it was built to do.
  *
- * The TypeScript half of `cpp/a11/actions/builtins.h`, and the reason a browser
- * page or an IDE plugin no longer announces anything: a gateway asks what this
- * side serves, and this is what answers.
+ * This is the TypeScript counterpart of `cpp/a11/actions/builtins.h`. A gateway
+ * discovers what this side serves by calling these actions.
  *
- * These are not registrations. A peer that cannot be asked has to be told, and
- * telling is what four hand-copied handshakes were for -- so discovery cannot be
- * something an application remembers to install. It has to hold for a registry
- * nobody configured and for one an application has called `unregister` all over,
- * which rules out being an entry in the map. What holds instead is this table,
- * consulted by {@link ActionRegistry} on a miss.
+ * These are not registrations. Discovery must remain available for an empty or
+ * modified registry, so {@link ActionRegistry} consults this table on a miss.
  *
  * The handlers reach their registry through the action they were given rather
- * than capturing one, which is what keeps this a module-level constant and not a
- * cycle.
+ * than capturing one, which is what keeps this a module-level constant and not
+ * a cycle.
  */
 
 import type { Action, ActionHandler } from './action.js';
@@ -109,8 +104,7 @@ function parseQuery(encoded: string): SchemaQuery {
     runnableOnly: false,
   };
   const trimmed = encoded.trim();
-  // No request is the default request: asking a peer what it serves, with
-  // nothing further to say, is the common case and must not need a document.
+  // An empty request uses the default query.
   if (trimmed === '' || trimmed === 'null') return query;
   let value: unknown;
   try {
@@ -119,8 +113,7 @@ function parseQuery(encoded: string): SchemaQuery {
     return query;
   }
   if (Array.isArray(value)) {
-    // A bare array is read as patterns, because that is what a caller who wrote
-    // one meant.
+    // A bare array is read as name patterns.
     query.names = value.filter((one): one is string => typeof one === 'string');
     return query;
   }

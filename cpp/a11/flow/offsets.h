@@ -13,19 +13,16 @@
 
 namespace a11::flow {
 
+// A document, and the offset arithmetic every editor protocol needs over it. So
+// the conversion lives here, once, and both protocol adapters use it.
 /// A document, and the offset arithmetic every editor protocol needs over it.
 ///
-/// The language counts **bytes** from the start of the file, because that is what
-/// a lexer reads and what an edit has to be applied in. Editors do not: LSP counts
-/// **UTF-16 code units** from the start of a line, and the JVM -- so IntelliJ, so
-/// every `CharSequence` and `TextRange` in a plugin -- counts UTF-16 code units
-/// from the start of the document. For ASCII the three agree, which is exactly why
-/// this is easy to get wrong: it works on every test file until somebody writes a
-/// `§` in a description, and then everything after it is coloured one column to
-/// the left.
+/// Converts between byte offsets and editor position units.
 ///
-/// So the conversion lives here, once, and both protocol adapters use it. It is a
-/// real conversion and not a cast.
+/// Flow offsets count bytes from the start of the file. LSP positions count
+/// UTF-16 code units from the start of a line, while JVM offsets count UTF-16
+/// code units from the start of the document. Both protocol adapters use this
+/// conversion.
 class TextIndex {
  public:
   TextIndex() = default;
@@ -59,7 +56,8 @@ class TextIndex {
   std::string text_;
   /// The byte offset each line starts at.
   std::vector<size_t> line_starts_;
-  /// How many UTF-16 units precede each line, so a position inside one is a walk
+  /// How many UTF-16 units precede each line, so a position inside one is a
+  /// walk
   /// along that line rather than along the file.
   std::vector<size_t> line_utf16_starts_;
 };
@@ -84,16 +82,19 @@ std::string_view OffsetBasisName(OffsetBasis basis);
 
 /// Rewrite every document offset in an answer from bytes into UTF-16 units.
 ///
-/// The rule, and it is the whole rule: a **numeric** field named `start`, `end`,
+/// The rule, and it is the whole rule: a **numeric** field named `start`,
+/// `end`,
 /// `offset` or `prefix_start` is a byte offset into the document, at any depth.
-/// That is true of every `flow.*` envelope by construction -- those four names are
-/// not used for anything else in any of them -- so this converts exactly the right
+/// That is true of every `flow.*` envelope by construction -- those four names
+/// are
+/// not used for anything else in any of them -- so this converts exactly the
+/// right
 /// set and needs no table of shapes to fall out of step with the emitters.
 ///
-/// Two near misses are deliberately left alone. `range.start` and `range.end` are
-/// *objects*, and the offset inside each is the `offset` field this does convert.
-/// A proposal's `caret` counts into the text that proposal inserts, not into the
-/// document, so a document-basis conversion of it would be wrong.
+/// Two near matches are left unchanged. `range.start` and `range.end` are
+/// *objects*, and the offset inside each is the `offset` field this does
+/// convert. A proposal's `caret` counts into the text that proposal inserts,
+/// not into the document, so a document-basis conversion of it would be wrong.
 void RebaseToUtf16(nlohmann::json& answer, const TextIndex& index);
 
 }  // namespace a11::flow

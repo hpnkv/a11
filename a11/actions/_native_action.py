@@ -269,14 +269,13 @@ class _ActionProtocol:
         always carries a timestamp. Pass an already-built
         [Chunk][a11.data.types.Chunk] to log it as it is.
 
-        Nobody declares the log port, nobody drains it and nobody closes it: the
-        action closes it with its other outputs, and a handler that never logs
-        pays nothing for it. Only a *running* action may log; logging before
-        ``run``, or on the calling side of a ``call``, raises.
+        The reserved log port requires no schema declaration or manual drain.
+        The action closes it with its other outputs and creates it only when
+        used. Only a running action may log; logging before ``run`` or from the
+        calling side of ``call`` raises.
 
-        Where it goes is the sink's business, which defaults to A11's own logger
-        (see [a11.logging][]). A consumer that wants the chunks themselves calls
-        `get_log_node`.
+        The default sink is A11's logger (see [a11.logging][]). Call
+        `get_log_node` to consume the chunks directly.
 
         Args:
             value: What to log.

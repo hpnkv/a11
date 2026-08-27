@@ -53,9 +53,8 @@
 namespace a11::sdk::audio {
 
 // --- Type tags --------------------------------------------------------------
-//
 // Aliases of the canonical cross-language table in a11/data/serial_tags.h;
-// every language must agree on these strings, so they are defined once there.
+// every language must agree on these strings, so they are defined once.
 
 inline constexpr std::string_view kAudioBufferTypeTag =
     a11::data::kAudioBufferTag;
@@ -127,12 +126,8 @@ absl::StatusOr<TranscriptionEvent> A11FromJson(
 absl::Status RegisterAudioTypes(a11::data::SerializationRegistry& registry);
 
 // --- Direct chunk encode/decode (no std::any) -------------------------------
-//
 // The Action handlers use these instead of the registry's typed Put/NextObject
-// so that a value is encoded and decoded within one translation unit. The
-// registry path routes through std::any, whose libc++ type identity is not
-// reliably shared across translation units inside a hidden-visibility Python
-// extension, which would surface as a spurious "bad any cast".
+// so that a value is encoded and decoded within one translation.
 
 /// Encode a JSON-serializable value into a tagged @c application/json chunk.
 template <typename T>

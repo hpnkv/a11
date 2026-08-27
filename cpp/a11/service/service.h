@@ -23,9 +23,9 @@
  *   ``/a11`` to one service and ``/admin`` to another
  *   (see a11::net::HttpRouter).
  *
- * Deliberately *not* here: sockets, ports, TLS, or anything else a transport
- * owns. `Service` never opens a connection; a11/service/serving.h has the
- * one-line adapter that hands it to a listener.
+ * Sockets, ports, TLS, and other transport concerns remain outside this class.
+ * `Service` never opens a connection; a11/service/serving.h adapts it to a
+ * listener.
  */
 
 #ifndef A11_SERVICE_SERVICE_H_
@@ -80,7 +80,8 @@ struct ServiceOptions {
   bool copy_registry_per_connection = false;
   /// Headers stamped on every session the service creates.
   data::ByteMap session_headers;
-  /// How long ~Service and Drain() wait for live sessions before abandoning them.
+  /// How long ~Service and Drain() wait for live sessions before abandoning
+  /// them.
   absl::Duration drain_timeout = absl::Seconds(30);
   /// Forwarded to each Session; for a service that wants raw message access.
   OnSessionStreamMessage on_stream_message;
@@ -133,15 +134,17 @@ class Service : public std::enable_shared_from_this<Service> {
    */
   absl::Status SetActionRegistry(
       const std::shared_ptr<actions::ActionRegistry>& action_registry);
-  /** @brief Replace the per-connection hook. Affects connections from now on. */
+  /**
+   * @brief Replace the per-connection hook. Affects connections from now on.
+   */
   absl::Status SetOnConnection(OnServiceConnection on_connection);
 
   /**
    * @brief Describes this service's actions, for `GET /actions`.
    *
-   * The same describer the `__list_actions__` builtin runs, so the endpoint and
-   * the action cannot answer differently -- which is the point of routing the
-   * HTTP route back here rather than giving a transport a registry of its own.
+   * Uses the same describer as `__list_actions__`, keeping the endpoint and
+   * action responses consistent. Transports do not maintain a separate
+   * registry.
    *
    * @param name One action to describe, or empty for the whole collection.
    * @param query URL query string, without the `?`, carrying the filters.
@@ -230,8 +233,7 @@ class Service : public std::enable_shared_from_this<Service> {
 
   // A shared_ptr rather than inline pImpl storage: every in-flight connection
   // task captures the state and unregisters itself from it when its session
-  // finishes, so the state has to be able to outlive this handle. Do not
-  // "optimize" this into a fixed-size buffer like Http2Client::kImplSize.
+  // finishes, so the state has to be able to outlive this handle.
   std::shared_ptr<State> state_;
 };
 

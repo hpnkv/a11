@@ -1,14 +1,10 @@
 # Copyright 2026 The A11 Authors.
 
-"""Serving many endpoints on one port, and knowing which one was asked for.
+"""Serve many endpoints on one port and identify the requested endpoint.
 
-A11's servers matched one exact path and handed the accepted stream over with
-no record of the request, so one port served one thing. That is right for an
-agent and wrong for anything that fronts several -- a gateway, a proxy, a
-hosting service -- which is what `path_prefix` and `request_path` are for.
-
-The old behaviour is unchanged and asserted here too: a server that names one
-path still serves exactly that path.
+``path_prefix`` enables a gateway, proxy, or hosting service to route several
+endpoints. ``request_path`` records the accepted request. A server configured
+with one exact path continues to serve only that path.
 """
 
 from __future__ import annotations
@@ -33,7 +29,9 @@ async def dial(url: str, options: net.WebSocketClientOptions | None = None):
     why the start is awaited rather than blocked on.
     """
     stream = net.WebSocketWireStream.connect(
-        url, net.WireStreamOptions(), websocket_options=options or client_options()
+        url,
+        net.WireStreamOptions(),
+        websocket_options=options or client_options(),
     )
     await asyncio.wait_for(
         stream.start(lambda message: None, lambda: None), timeout=5

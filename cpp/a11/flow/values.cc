@@ -60,6 +60,8 @@ constexpr Unit kUnits[] = {
     {"ms", 1e-3},  {"us", 1e-6}, {"ns", 1e-9},
 };
 
+// A double as Python's `repr` writes it: the shortest text that reads back as
+// the same number, with a `.0` where it would otherwise look like an integer.
 /// A double as Python's `repr` writes it: the shortest text that reads back as
 /// the same number, with a `.0` where it would otherwise look like an integer.
 ///
@@ -362,9 +364,7 @@ class NativeBridge final : public HostBridge {
   absl::StatusOr<Value> Coerce(std::string_view tag,
                                const Value& /*value*/) override {
     // The C++ registry is keyed by `typeid`, so a tag names a type this process
-    // was compiled with rather than one it can look up and construct. Saying so
-    // is the honest answer: a flow casting to a registered type wants the host
-    // that registered it, which for A11 means the Python bindings.
+    // was compiled with rather than one it can look up and construct.
     return absl::UnimplementedError(absl::StrCat(
         "Nothing here knows the type '", tag,
         "'. A tag names a type a serialization registry has been told about, so"
@@ -1366,13 +1366,6 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
         std::string(absl::StripAsciiWhitespace(AsText(first))));
   }
   // Base64, both alphabets, both ways.
-  //
-  // Encoding gives *text*, because that is the whole point of encoding: it is
-  // what a JSON field or a header can carry. Decoding gives *bytes*, because
-  // that is what was encoded -- a flow that wants them as text says so with
-  // `text(..)`, rather than this guessing that the bytes were a string.
-  // Padding is written and, on the way back, not required: the web-safe
-  // alphabet is routinely sent without it.
   if (name == "b64encode") {
     return Value::String(absl::Base64Escape(AsText(first)));
   }
@@ -1954,8 +1947,7 @@ absl::StatusOr<Value> Coerce(const Value& value,
   }
   // A shape this program declared, before a registry is asked: a `struct`
   // outranks a tag of the same name, because what the file says about the name
-  // is what the file means by it. Its own spelling, not the canonical one:
-  // `struct` names are not keywords.
+  // is what the file means by it.
   if (context.shapes != nullptr) {
     if (const DtoPlan* shape = context.shapes->Dto(type.name);
         shape != nullptr) {
@@ -2059,9 +2051,7 @@ absl::StatusOr<Value> Add(const Value& left, const Value& right) {
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context) {
   // A name the resolver bound to a stream reads as that stream's first value,
-  // whatever shape the expression around it has. Checked first, because
-  // `x.field` is a field of a value and `call.port` is a stream, and only the
-  // resolver knows which of the two was written.
+  // whatever shape the expression around it has.
   if (const Value* found = Bound(node, context); found != nullptr) {
     return *found;
   }

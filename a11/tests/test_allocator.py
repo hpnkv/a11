@@ -1,14 +1,13 @@
-"""Preloading a faster allocator, and refusing to lie about whether it worked.
+"""Test allocator preloading and active-state detection.
 
 Replacing the C library's malloc is worth ~25% to A11's native throughput, but
 the extension cannot do it to a process it was merely loaded into -- see
 `a11/allocator.py`. What it can do is prepare the environment for a process A11
-launches, and report honestly whether the allocator is actually in this one.
+launches, and detect whether the allocator is loaded in the current process.
 
-The invariants that matter here are all about *not* being clever: never preload
-twice, never clobber a preload the caller already had, never claim to be active
-on the strength of an environment variable, and never break a process just
-because the library is missing.
+The implementation must not preload twice, replace an existing caller preload,
+infer active state from an environment variable, or fail when the library is
+missing.
 """
 
 from __future__ import annotations

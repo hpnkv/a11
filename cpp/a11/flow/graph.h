@@ -116,11 +116,13 @@ struct Stage {
   absl::Duration duration;
   /// `sort`: whether the order is reversed.
   bool descending = false;
+  // `fold`: what the first pass carries, the name it is bound to, and the ref
+  // that name resolves to inside the fold's expression.
   /// `fold`: what the first pass carries, the name it is bound to, and the ref
   /// that name resolves to inside the fold's expression. The ref is how the
-  /// accumulator reaches [Evaluate]: a name in an expression is a ref, and this
-  /// is the one the runtime fills in per value rather than reading a stream
-  /// for.
+  /// accumulator reaches [Evaluate]: a name in an expression is a ref, and
+  /// this is the one the runtime fills in per value rather than reading a
+  /// stream for.
   syntax::Constant start;
   std::string carried;
   RefId carry = kNone;
@@ -201,6 +203,8 @@ struct Ref {
   /// `kBound`: which of a loop's streams this is -- `item`, `index`, `carry`.
   std::string role;
   StepId bound_by = kNone;
+  // `kZip`: the streams read in step, in the order they were written, which is
+  // the order their values appear in each tuple.
   /// `kZip`: the streams read in step, in the order they were written, which is
   /// the order their values appear in each tuple. `kMerge`: the streams read at
   /// once, where the order they were written in says nothing about the order
@@ -286,6 +290,9 @@ struct Step {
   /// `kSkip`: `skip n port`, which claims no reader slot -- the count is
   /// applied where the stream is produced and this step has nothing left to do.
   std::optional<long long> count;
+  // `kSkip`: the call `skip act` named, when its real ports are not known here
+  // (an action from a registry, not a sibling flow) so there is nothing to set
+  // `source` to.
   /// `kSkip`: the call `skip act` named, when its real ports are not known here
   /// (an action from a registry, not a sibling flow) so there is nothing to set
   /// `source` to. Purely informational -- the runtime already drains every
@@ -297,6 +304,8 @@ struct Step {
   /// `kWait`/`kDrain`: the outcome read, and whether a bad one is this flow's
   /// business or the subject's.
   RefId outcome = kNone;
+  // `kWait`: the outcomes of a `wait first of` / `wait all of`, in the order
+  // they were written.
   /// `kWait`: the outcomes of a `wait first of` / `wait all of`, in the order
   /// they were written. Empty for the single-subject form, whose one outcome is
   /// `outcome` -- which is also the *first* of these, so anything reading a
@@ -393,6 +402,7 @@ struct FlowGraph {
   [[nodiscard]] std::vector<RefId> ValueSources(StepId step) const;
   /// The refs a step writes, one entry per independent writer.
   [[nodiscard]] std::vector<RefId> Destinations(StepId step) const;
+  // The refs the *stages* a step reads write to: a `try ...
   /// The refs the *stages* a step reads write to: a `try ... into failures`.
   ///
   /// A stage is part of a stream rather than of a statement, so its destination
@@ -409,21 +419,19 @@ struct FlowGraph {
 
 /// Who reads and who writes each ref a body owns.
 ///
-/// The counts are the load-bearing part: a stream gets exactly as many readers
-/// as the plan says it has, and a node is closed exactly when the last of its
-/// writers finishes -- including a loop or a branch, which counts as one writer
-/// for as long as it runs. Getting a count wrong is a flow that hangs, not a
-/// flow that is slightly off.
+/// A stream gets the reader count specified by the plan. A node closes when its
+/// last writer finishes; a running loop or branch counts as one writer. An
+/// incorrect count can leave the flow waiting indefinitely.
 struct Analysis {
   BodyId body = kNone;
   /// Every ref this body owns.
   std::vector<RefId> refs;
   /// How many readers each of them has.
   absl::flat_hash_map<RefId, int> readers;
-  /// The ones read from inside a nested body, which are buffered once and
-  /// replayed to each reader: that is what lets every pass of a loop see the
-  /// same outer value, and it is the one place the language trades streaming
-  /// for repeatability.
+  // The ones read from inside a nested body, which are buffered once and
+  // replayed to each reader:
+  /// Refs read inside a nested body. They are buffered once and replayed so
+  /// each loop pass sees the same outer value.
   absl::flat_hash_set<RefId> materialise;
   /// How many writers each written ref has.
   absl::flat_hash_map<RefId, int> writers;
@@ -440,11 +448,9 @@ Analysis Analyse(const FlowGraph& flow, BodyId body);
 
 /// Appends to a [FlowGraph] while the resolver walks a flow.
 ///
-/// Deliberately thin: the graph is vectors, and the only thing worth having a
-/// type for is that a step is appended to its own body's list at the moment it
-/// gets its id, so the two cannot fall out of step. The resolver holds one of
-/// these, or none at all on the editor path -- `a11 flow check` pays nothing
-/// for a graph nobody runs.
+/// Keeps step allocation and insertion into the owning body in one operation.
+/// The resolver omits this builder on editor-only paths that do not need an
+/// executable graph.
 class GraphBuilder {
  public:
   explicit GraphBuilder(FlowGraph& flow) : flow_(&flow) {}

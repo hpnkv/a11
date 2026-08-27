@@ -1,14 +1,12 @@
 # Logging
 
-A11's runtime is C++, but its logs are ordinary `logging.LogRecord`s. A sink
-inside the native module hands each Abseil entry to Python, which emits it on
-the `a11.native` logger, so the whole of `logging` applies to native output —
-levels, `dictConfig`, a JSON formatter, a file handler, pytest's `caplog`.
+A11 emits native C++ logs as ordinary Python `logging.LogRecord` values. The
+native module forwards Abseil entries to the `a11.native` logger, where levels,
+`dictConfig`, formatters, handlers, and pytest's `caplog` apply.
 
-## Importing A11 adopts your configuration
+## Importing A11 uses the process configuration
 
-`import a11` reads the level from the surrounding process rather than choosing
-one:
+`import a11` selects a level from the surrounding process in this order:
 
 1. **absl-py, if the process configured it** — `set_verbosity()` was called,
    `--verbosity` was passed, or `absl.logging`'s handler is on the root logger.
@@ -17,8 +15,8 @@ one:
 3. **`A11_LOG_LEVEL`** — a name (`debug`, `info`, ...) or an integer, read only
    when neither of the above says anything.
 
-With none of those the level is `WARNING`, the same default a bare interpreter
-gives you, and importing A11 prints nothing and installs no handler.
+Without a configured level, A11 uses `WARNING`. Importing A11 prints nothing and
+installs no handler.
 
 ```python
 import logging
@@ -28,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 import a11  # follows the line above
 ```
 
-## Turning it on yourself
+## Enabling logging explicitly
 
 ```python
 import a11
@@ -69,8 +67,8 @@ ancestor logger's filters for a record that merely propagates through it, so
 one attached to `a11` will not see them.
 
 Only `VLOG` is gated natively, because it is the one genuinely costly tier.
-Call [`sync`][a11.logging.sync] after reconfiguring logging behind A11's back
-if you want a sub-`DEBUG` level to reach the runtime:
+Call [`sync`][a11.logging.sync] after external logging reconfiguration to pass a
+sub-`DEBUG` level to the native runtime:
 
 ```python
 logging.config.dictConfig(my_config)
@@ -84,11 +82,9 @@ Abseil `VLOG` tier, so `logging.DEBUG - 1` enables `VLOG(2)`.
 
 ## What actions log
 
-`Action.log` and `Action.logf` are a different thing from the two above. The
-bridge carries A11 telling you about *itself*; an action's log is the action
-telling you what it is *doing* -- part of the work, not of the runtime -- and it
-travels as chunks on a reserved port, so a caller across a wire receives it as
-data rather than as text on somebody else's stderr.
+`Action.log` and `Action.logf` report action progress, while the logging bridge
+reports runtime events. Action logs travel as chunks on a reserved port, so a
+remote caller receives structured data instead of process-local stderr text.
 
 ```python
 await action.log("searching", channel="fetch")
@@ -96,10 +92,9 @@ await action.logf("read %d of %d pages", done, total)
 await action.log({"hits": 12}, level="debug", internal=True)
 ```
 
-Nothing declares that port, nothing drains it and nothing closes it; an action
-that never logs pays nothing for it. Only a *running* action may log -- before
-`run`, or on the calling side of a `call`, there is nothing to close the port and
-no reader waiting on it.
+The reserved port is created only when used and requires no schema declaration.
+Only a running action may log; logging before `run` or from the calling side of
+`call` has no active writer or reader.
 
 What is consumed in this process becomes a record on the `a11.action` logger, so
 `setLevel`, `dictConfig` and your existing handlers apply. The chunk's whole
@@ -109,15 +104,14 @@ channel or drop A11's internal lines without parsing the message back apart.
 
 `A11_ACTION_LOG=0` leaves them on the native log instead.
 [set_action_log_sink][a11.logging.set_action_log_sink] takes them somewhere else
-entirely. There is one sink rather than one per interested party, which is what
-keeps a line from being reported twice; a consumer that wants the chunks
-themselves calls `action.get_log_node()` instead, and that suppresses the sink
-for that action.
+entirely. A single sink prevents duplicate delivery. Calling
+`action.get_log_node()` returns the chunks directly and suppresses the sink for
+that action.
 
 In Flow the same log is two statements and two pipeline stages:
 
 ```
-log warning "nothing worth reading"
+log warning "no readable content"
 logf "read %s pages" read after search
 pages | log debug it -> kept
 ```

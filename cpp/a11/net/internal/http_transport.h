@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Shared TCP/TLS/libuv transport substrate for the HTTP connections.
+ * @brief Shared TCP/TLS/libuv transport for HTTP connections.
  *
  * HttpTransport owns the socket, the optional OpenSSL BIO pump, and the libuv
  * lifecycle that both the HTTP/2 (nghttp2) and HTTP/1.1 connections sit on top
@@ -62,10 +62,9 @@
 
 namespace a11::net::internal {
 
-// The loop, the executor and the marshalling helpers now live in a11::uv --
-// an event loop is not an HTTP concept, and the Flow standard library needs the
-// same one. Re-exported under the names this file has always used, so every
-// call site below reads exactly as it did.
+// The loop, the executor and the marshalling helpers now live in a11::uv -- an
+// event loop is not an HTTP concept, and the Flow standard library needs the
+// same one.
 using ::a11::uv::RunOnUv;
 using ::a11::uv::RunStatusOnUv;
 using ::a11::uv::UvError;
@@ -100,7 +99,7 @@ constexpr std::size_t kSocketReceiveBufferSize = 4 * 1024 * 1024;
 /**
  * How much plaintext to pull out of OpenSSL per SSL_read_ex.
  *
- * Reused across reads rather than allocated per call, and deliberately *not*
+ * Reused across reads rather than allocated per call, and not
  * zero-initialised: a `std::array<char, N> buf{}` costs a memset of the whole
  * buffer on every TCP read for bytes that are about to be overwritten. Held on
  * the transport rather than on the stack because the libuv loop runs on a
@@ -205,6 +204,7 @@ inline absl::Status LoadCertificateAndKey(SSL_CTX* absl_nonnull context,
   return absl::OkStatus();
 }
 
+/** Builds an OpenSSL context advertising the policy's ALPN protocols. */
 /**
  * @brief Builds an OpenSSL context advertising the policy's ALPN protocols.
  *
@@ -212,19 +212,6 @@ inline absl::Status LoadCertificateAndKey(SSL_CTX* absl_nonnull context,
  * @param server Whether this is a server (accept) or client (connect) context.
  * @param policy Which HTTP protocols to advertise/select over ALPN. The server
  *     ALPN callback keeps a copy alive via SSL_CTX app data.
- */
-/**
- * @brief A CA bundle to trust when the caller named none, or "" if none is found.
- *
- * A11 links OpenSSL statically, so its compiled-in trust directory is the one
- * inside the deps prefix used to build it -- a path that does not exist on the
- * machine running the wheel. `SSL_CTX_set_default_verify_paths` therefore
- * succeeds while loading nothing, and the first `https://` or `wss://` request
- * fails with "unable to get local issuer certificate". Probing the platform's
- * usual bundle is what makes a client work out of the box.
- *
- * `SSL_CERT_FILE` comes first because it is OpenSSL's own override and the way a
- * container or a corporate proxy points a process at its roots.
  */
 inline std::string DiscoverCaBundle() {
   if (const char* configured = std::getenv("SSL_CERT_FILE");
@@ -287,10 +274,7 @@ inline absl::StatusOr<SslContext> CreateTlsContext(
       trusted = SSL_CTX_load_verify_locations(
           context.get(), options.ca_certificate_pem_file.c_str(), nullptr);
     } else {
-      // Both, and in this order. The default paths cover a system OpenSSL and
-      // honour SSL_CERT_DIR; the discovered bundle covers the static build,
-      // whose compiled-in path does not exist on the running machine. Loading
-      // roots is additive, so trying both only widens what is trusted.
+      // Both, and in this order.
       trusted = SSL_CTX_set_default_verify_paths(context.get());
       const std::string bundle = DiscoverCaBundle();
       if (!bundle.empty()) {
@@ -411,15 +395,14 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
 
   // Wires the libuv socket callbacks and begins the TLS handshake (or the
   // cleartext preamble). Call once from the derived Initialize(), after the
-  // protocol codec has been created. `prebuffered` carries any bytes already
-  // read from the socket during cleartext protocol detection; they are replayed
-  // into the codec after the cleartext start (never set for a TLS transport).
+  // protocol codec has been created.
   /**
    * @brief Stop or resume reading from the socket.
    *
    * The backpressure primitive. A reader whose buffers are full asks for a
    * pause; the kernel receive buffer then fills, the TCP window closes, and the
-   * peer stops sending -- all the way back to its own sender. This is what makes
+   * peer stops sending -- all the way back to its own sender. This is what
+   * makes
    * a large HTTP/2 window safe: the window governs how much may be *in flight*,
    * and this governs whether we are willing to take more at all.
    *
@@ -453,6 +436,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     }
   }
 
+  /** Runs an outbound write on the loop without waiting for it. */
   /**
    * @brief Runs an outbound write on the loop without waiting for it.
    *
@@ -478,14 +462,6 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
    * @param bytes  Size of the data the operation will write, for the queue
    * bound. @param write  The work to run on the loop thread.
    */
-  /**
-   * @brief RunOnUv keyed to this connection.
-   *
-   * Connection code should use this and never bare `RunOnUv`: the key is what
-   * keeps an awaited operation (a Finish, a header write, a settings update)
-   * behind the data writes already posted for the same socket. Forgetting it does
-   * not fail loudly -- it reorders frames.
-   */
   template <typename T>
   absl::StatusOr<T> RunOnUvForConnection(
       std::function<absl::StatusOr<T>()> operation) {
@@ -506,11 +482,9 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     if (UvExecutor::Instance().IsLoopThread() || !connected_.load() ||
         queued_write_bytes_.load(std::memory_order_relaxed) >=
             kMaxQueuedWriteBytes) {
-      // Keyed like the posted path: this is the same socket, and a fallback write
-      // that lost its key could be reordered ahead of writes already queued for
-      // this connection. The three cases that come here (already on the loop
-      // thread, not connected, queue past the bound) are exactly the ones where a
-      // caller waits, so they must still land in order.
+      // Keyed like the posted path: this is the same socket, and a fallback
+      // write that lost its key could be reordered ahead of writes already
+      // queued for this connection.
       return RunStatusOnUvForConnection(std::move(write));
     }
     std::shared_ptr<HttpTransport> self = shared_from_this();
@@ -561,11 +535,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
           }
         });
     tcp_->no_delay(true);
-    // A receive buffer sized for a fast path. The kernel's default is tens of
-    // kilobytes, which caps a single connection at buffer/RTT no matter what
-    // the HTTP/2 windows say, and is also the backstop that absorbs data still
-    // in flight when a reader pauses. Best effort: a platform that refuses the
-    // size just keeps its default.
+    // A receive buffer sized for a fast path.
     tcp_->recv_buffer_size(static_cast<int>(kSocketReceiveBufferSize));
     tcp_->read();
     if (ssl_context_ != nullptr) {
@@ -768,20 +738,6 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
     size_t offset = 0;
     {
       // Hand it to the socket directly first.
-      //
-      // uv_write is an owning, queued write: it needs a buffer that outlives
-      // the call, so every byte is allocated and copied before the kernel is
-      // even asked whether it had room. On a socket that is not backed up --
-      // which is the normal case, and always the case on loopback --
-      // uv_try_write takes it straight from this buffer and the copy never
-      // happens. Only the remainder of a partial write, or a socket whose send
-      // buffer is full, pays for one.
-      //
-      // Guarded on an empty write queue, and that guard is load-bearing rather
-      // than an optimisation: a try_write while an owning write is still queued
-      // would put these bytes on the wire in front of bytes handed over
-      // earlier, which for a framed protocol is corruption and not merely
-      // reordering.
       while (offset < length && tcp_->write_queue_size() == 0) {
         const size_t remaining = length - offset;
         const unsigned int attempt = static_cast<unsigned int>(std::min(
@@ -901,12 +857,7 @@ class HttpTransport : public std::enable_shared_from_this<HttpTransport> {
       plaintext_.resize(kTlsPlaintextBufferSize);
     }
     // SSL_read_ex returns at most one TLS record -- 16 KiB -- per call, however
-    // large the buffer. Dispatching each one separately hands the protocol a
-    // batch of one frame every time, so nothing downstream can ever amortise:
-    // one allocation, one reader wake-up and one write per 16 KiB. Filling the
-    // buffer across records first, and dispatching once, is what lets the layers
-    // above work in batches. It costs no latency -- these bytes have all arrived
-    // already.
+    // large the buffer.
     size_t filled = 0;
     const auto dispatch = [this, &filled]() -> absl::Status {
       if (filled == 0) {

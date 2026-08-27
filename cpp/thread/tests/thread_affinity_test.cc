@@ -1,12 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 // The worker pool's CPU affinity (A11_POOL_PIN).
-//
-// Its own executable, and not a file in thread_test, for one reason: the pool is
-// a process-global singleton that reads its environment when it starts, and it
-// starts on first use. A test that needs A11_POOL_PIN set *before* that first use
-// cannot share a binary with tests that reach the pool for their own reasons, so
-// this binary sets it in main() and does nothing else first.
 
 #include <atomic>
 #include <cstdlib>
@@ -29,9 +23,7 @@ namespace thread {
 namespace {
 
 // A stand-in process mask, so the parsing cases say the same thing on every
-// platform. Deliberately not contiguous and not zero-based: a spec is written
-// against the host's numbering and has to survive being handed a mask that is a
-// subset of it, which is what a cpuset does.
+// platform.
 const std::vector<int>& Allowed() {
   static const std::vector<int> allowed = {0, 1, 2, 3, 6, 7};
   return allowed;
@@ -52,10 +44,7 @@ TEST(PoolAffinitySpecTest, OffSpellingsDisablePinning) {
   EXPECT_TRUE(Parse(" off ").empty());
 }
 
-// A bare 1 is "on", because that is what 1 means to every other dial in the
-// pool (A11_POOL_STATS, A11_POOL_ALWAYS_WAKE). "1-1" is how a caller asks for
-// CPU 1 alone, and the pair below is the whole point of pinning that
-// distinction down in a test.
+// A bare 1 means "on", matching A11_POOL_STATS and A11_POOL_ALWAYS_WAKE.
 TEST(PoolAffinitySpecTest, OnSpellingsTakeTheWholeAllowedMask) {
   EXPECT_EQ(Parse("1"), Allowed());
   EXPECT_EQ(Parse("on"), Allowed());
@@ -99,11 +88,7 @@ TEST(PoolAffinityTest, ProcessMaskIsReadableExactlyWherePinningExists) {
 #if defined(__linux__)
   EXPECT_FALSE(internal::ProcessAllowedCpus().empty());
 #else
-  // Not a limitation of this code. macOS has no per-core affinity API at all --
-  // thread_policy_set(THREAD_AFFINITY_POLICY) is a cache-sharing hint where it
-  // is implemented and returns KERN_NOT_SUPPORTED on Apple arm64 -- so the pool
-  // reports no allowed set and declines to pin rather than calling an API that
-  // would report success and place nothing.
+  // Not a limitation of this code.
   EXPECT_TRUE(internal::ProcessAllowedCpus().empty());
 #endif
 }
@@ -115,11 +100,6 @@ TEST(PoolAffinityTest, ThreadsOutsideThePoolAreNeverReportedAsPinned) {
 // The contract, end to end: with A11_POOL_PIN=1 (set in main below), work that
 // runs on a pool worker runs on a thread whose affinity mask holds exactly the
 // one CPU the pool says it placed it on.
-//
-// It does not assert that every worker was reached. Reaching all of them means
-// holding each one busy until the last starts, and the routing policy exists
-// precisely to keep small items off most of the pool -- a test that forced the
-// pool wide would be testing the forcing. Each observation is the whole claim.
 TEST(PoolAffinityTest, PoolWorkersRunOnTheOneCpuTheyWerePinnedTo) {
 #if !defined(__linux__)
   GTEST_SKIP()
@@ -190,7 +170,8 @@ TEST(PoolAffinityTest, PoolWorkersRunOnTheOneCpuTheyWerePinnedTo) {
 }  // namespace thread
 
 int main(int argc, char** argv) {
-  // Before anything at all: the pool reads this when it starts, and it starts on
+  // Before anything at all: the pool reads this when it starts, and it starts
+  // on
   // first use, which gtest's own setup can reach.
   ::setenv("A11_POOL_PIN", "1", /*overwrite=*/0);
   ::testing::InitGoogleTest(&argc, argv);

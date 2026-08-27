@@ -1,26 +1,22 @@
 /**
- * The chat client the webview runs: it owns the A11 WebSocket to the **A11
- * gateway** (`a11 gateway`) and drives chat turns. The Kotlin side does not
- * broker the connection — the TypeScript A11 library does — and it does not
- * start the gateway either: the gateway is a service the user runs, expected at
- * the URL in settings.
+ * The webview chat client owns the A11 WebSocket to `a11 gateway` and drives
+ * chat turns. The TypeScript library connects directly to the gateway URL in
+ * settings; the Kotlin plugin does not broker or start the service.
  *
  * On first use it opens the socket, builds the IDE-tool registry (so the
  * gateway can reverse-dispatch tool calls), announces the tools via
  * its own registry, and then calls `interact_with_llm` and streams the reply
  * off `text_output` / `thoughts` / `new_interactions`.
  *
- * Tools come from both ends. The IDE's own are announced and served here; the
- * gateway's — its shell tools — are offered to the model by the gateway itself
- * for every name the allowed-tools header matches, and run there. Either way the
- * model sees one flat tool list, and either way a run's user-facing log reaches
- * this side: directly for a local tool, and in the tool-result interaction's
- * metadata for a gateway one.
+ * IDE tools are announced and served here. The gateway adds matching shell
+ * tools according to the allowed-tools header. The model receives one tool
+ * list, and tool logs reach the client either directly or through tool-result
+ * interaction metadata.
  *
- * The live conversation lives here, as a flat list of a11 `Interaction`s threaded
- * back into every turn — the same loop as `a11 chat` (`a11/cli/chat_ui.py`).
- * The gateway records those same interactions as it goes, which is what
- * `listConversations` / `loadConversation` read back; a reopened conversation is
+ * The client keeps a flat list of A11 `Interaction`s and sends it with each
+ * turn, matching `a11 chat` in `a11/cli/chat_ui.py`. The gateway records these
+ * interactions for `listConversations` and `loadConversation`; a reopened
+ * conversation is
  * the same list of objects, so it continues rather than starts over.
  * They are the provider's own objects, not a transcript reconstructed from
  * text, so a turn's tool calls and their results are still in front of the
@@ -70,10 +66,8 @@ const isTimeout = (error: unknown): boolean =>
     error instanceof Error && error.message.startsWith(`${StatusCode[StatusCode.DEADLINE_EXCEEDED]}:`);
 
 /**
- * The model is an assistant sitting inside an IDE, and the tools are how it
- * gets anything done there. Without this, a turn like "rename X to Y" tends to
- * come back as a description of what the model *would* do; the tools are
- * offered but nothing tells it that acting through them is the job.
+ * The model is an assistant inside an IDE. Tell it to act through the offered
+ * tools rather than only describing proposed changes.
  *
  * It rides on the first interaction of the conversation — every backend reads
  * system instructions only there.
@@ -103,12 +97,9 @@ project index, and the PSI (symbols, references, refactorings). Use them.
  * The system prompt for a conversation, with where the user actually is spliced
  * in: which IDE, which project, which directory on disk.
  *
- * Without it the model has to ask, or infer the path from the first tool result
- * — and "the IDE" being CLion versus PyCharm changes what it should reach for,
- * since the plugin runs in all of them. The values come from the Kotlin side
- * (`getConfig`), so they describe the live IDE rather than a build-time guess.
- * The project path is omitted when the project has no single root, which is the
- * one case where there is no honest answer.
+ * The Kotlin host supplies current values through `getConfig`, including which
+ * JetBrains IDE is running. The project path is omitted when the project has no
+ * single root.
  */
 function systemPrompt(config: A11Config): string {
     const where = [
@@ -140,29 +131,34 @@ export class A11ChatSession {
     private descriptors: ActionDescriptor[] = [];
     private toolNames: string[] = [];
     private connecting: Promise<void> | null = null;
-    /** Whether a tool ran during the turn in flight; a retry must not repeat it. */
+    /**
+     * Whether a tool ran during the turn in
+     * flight; a retry must not repeat it.
+     */
     private ranTool = false;
     /** The conversation so far, threaded back into every turn. */
     private history: Interaction[] = [];
 
     /**
-     * The settings as of the turn in flight, re-read by [refreshConfig] before
-     * every one of them. Deliberately not a constructor argument: a config handed
-     * in at construction is a snapshot from whenever the chat view was mounted, and
-     * something has to keep it current — so nothing may hold one.
+     * Settings for the active turn. [refreshConfig] reloads them before each
+     * turn so changes made after the chat view was mounted take effect.
      */
     private config!: A11Config;
 
     constructor(
-        /** Notified for each tool the model runs, with that run's user-facing log. */
+        /**
+         * Notified for each tool the model
+         * runs, with that run's user-facing log.
+         */
         private readonly onToolRun?: ToolRunSink,
     ) {
     }
 
     private async ensureConnected(): Promise<void> {
-        // Settle a dial already in flight before judging the connection: it is about
-        // to install a session, and one that appeared after the check below would be
-        // a session nobody had re-examined against the current settings.
+        // Settle a dial already in flight before judging the connection: it is
+        // about to install a session, and one that appeared after the check
+        // below would be a session nobody had re-examined against the current
+        // settings.
         if (this.connecting) {
             try {
                 await this.connecting;
@@ -181,22 +177,15 @@ export class A11ChatSession {
     }
 
     /**
-     * Re-read the settings, and drop the session if it was dialed at a gateway URL
-     * the settings no longer name.
+     * Re-read the settings, and drop the session if it was dialed at a gateway
+     * URL the settings no longer name.
      *
-     * This runs before *every* turn, not once per socket, because that is the only
-     * way the settings and the request agree. Provider, model, API key and
-     * allowed-tools are headers on the turn, not properties of the connection, so a
-     * config read only at connect time pins the whole conversation to whatever was
-     * configured when it opened: switching model or provider mid-conversation would
-     * keep sending the old provider and model — with the API key of the *new* one,
-     * since the key is stored per provider — and the turn fails, tool calls first.
+     * This runs before every turn because provider, model, API key, and allowed
+     * tools are request headers rather than connection properties. Reading
+     * them only while connecting would retain stale provider and model values.
      *
-     * Only the URL is a property of the socket, so only the URL forces a redial;
-     * everything else is picked up by the next turn for free. The reconnect is what
-     * makes a corrected URL take effect without restarting the IDE, and the
-     * conversation survives it, since the history lives here rather than in the
-     * session.
+     * Only a URL change requires a new socket. Conversation history is stored
+     * by this client and survives that reconnection.
      */
     private async refreshConfig(): Promise<void> {
         const dialedUrl = this.session ? this.config?.url ?? null : null;
@@ -205,11 +194,8 @@ export class A11ChatSession {
     }
 
     private async connect(): Promise<void> {
-        // The registry below is the whole of it: the gateway asks this session
-        // what it serves, over `__list_actions__`, and proxies what comes back.
-        // Nothing is announced, and so nothing can be announced wrongly — this
-        // used to push a hand-written descriptor document whose schema was
-        // copied into four languages.
+        // The gateway asks this session what it serves over `__list_actions__`
+        // and proxies the registry entries returned here.
         //
         // Run logs still reach the gateway, on the reserved log port of the
         // action it dispatched. That is deliberate: its tool runner files a log
@@ -235,9 +221,9 @@ export class A11ChatSession {
     /**
      * The conversation's id: the id of the interaction that opened it.
      *
-     * The backend names a conversation the same way, so this identifies it in the
-     * history without anything having to be handed back from the server. Null
-     * until the first turn succeeds and the conversation exists.
+     * The backend names a conversation the same way, so this identifies it in
+     * the history without anything having to be handed back from the server.
+     * Null until the first turn succeeds and the conversation exists.
      */
     get conversationId(): string | null {
         return this.history[0]?.id ?? null;
@@ -246,10 +232,11 @@ export class A11ChatSession {
     /**
      * Start a fresh conversation.
      *
-     * Only the history is dropped, not the session: the socket, the tool registry
-     * and the announced tools are all conversation-independent. Emptying the
-     * history is what makes the next turn mint a new first interaction — and so a
-     * new conversation id — and re-attach the system prompt to it.
+     * Only the history is dropped, not the session: the socket, the tool
+     * registry and the announced tools are all conversation-independent.
+     * Emptying the history is what makes the next turn mint a new first
+     * interaction — and so a new conversation id — and re-attach the system
+     * prompt to it.
      */
     startNewConversation(): void {
         this.history = [];
@@ -258,9 +245,8 @@ export class A11ChatSession {
     /**
      * The stored conversations, most recently active first.
      *
-     * This connects if it has to, which also starts the backend process — so it
-     * belongs to an explicit gesture (opening the history), not to mounting the
-     * view.
+     * This may connect and start the backend process, so call it only after an
+     * explicit request such as opening conversation history.
      */
     async listConversations(): Promise<ConversationSummary[]> {
         await this.ensureConnected();
@@ -270,10 +256,10 @@ export class A11ChatSession {
     /**
      * Reopen a stored conversation and continue in it.
      *
-     * The fetched interactions *become* the history, so the next turn threads the
-     * old conversation back to the model in full, and lands on the same
-     * conversation node on the backend: its id is the first interaction's id, and
-     * that interaction is replayed unchanged.
+     * The fetched interactions *become* the history, so the next turn threads
+     * the old conversation back to the model in full, and lands on the same
+     * conversation node on the backend: its id is the first interaction's id,
+     * and that interaction is replayed unchanged.
      */
     async loadConversation(id: string): Promise<Interaction[]> {
         await this.ensureConnected();
@@ -285,13 +271,14 @@ export class A11ChatSession {
     /**
      * Run a flow the plugin ships, on the gateway, streaming its outputs.
      *
-     * The gateway compiles the source and runs the composition; the flow's `call`
-     * steps come back down this same stream to the IDE tools, and its `run` steps
-     * are the gateway's own. So one call reaches both ends, and the values between
-     * the steps never pass through here at all.
+     * The gateway compiles the source and runs the composition; the flow's
+     * `call` steps come back down this same stream to the IDE tools, and its
+     * `run` steps are the gateway's own. So one call reaches both ends, and the
+     * values between the steps never pass through here at all.
      *
      * `outputs` names the flow's output ports to read as they fill; what comes
-     * back is the same values collected, for a caller that wants them at the end.
+     * back is the same values collected, for a caller that wants them at the
+     * end.
      *
      * Connecting first is not only about the socket: a flow saying
      * `call get_active_file` is compiled against the schemas the gateway got by
@@ -312,10 +299,10 @@ export class A11ChatSession {
                 [LlmHeaders.MODEL]: this.config.model,
                 [LlmHeaders.API_KEY]: this.config.apiKey,
                 [LlmHeaders.BASE_URL]: this.config.baseUrl,
-                // Every action the flow names is checked against this before any
-                // of them runs -- `run` steps as much as `call` ones. So a flow
-                // that asks a model needs `interact_with_llm` here, on top of the
-                // IDE's own tools that a chat turn allows.
+                // Every action the flow names is checked against this before
+                // any of them runs -- `run` steps as much as `call` ones. So a
+                // flow that asks a model needs `interact_with_llm` here, on top
+                // of the IDE's own tools that a chat turn allows.
                 [LlmHeaders.ALLOWED_LLM_ACTIONS]: [
                     ...this.allowedTools(),
                     INTERACT_WITH_LLM_SCHEMA.name,
@@ -330,16 +317,17 @@ export class A11ChatSession {
      * Run one chat turn, streaming assistant text (and thoughts) via callbacks.
      *
      * A session that has failed is never reused. The backend is a child process
-     * that can die between turns — it crashes, it is restarted, the IDE was asleep
-     * — and the socket to it dies with it. Holding on to that session would make
-     * one failure permanent: every later message would fail on the same closed
-     * socket. So a failed turn discards the session, and a turn that failed before
-     * producing anything is retried once on a fresh one, which is the difference
-     * between "type it again" and a chat window that stays broken.
+     * that can die between turns — it crashes, it is restarted, the IDE was
+     * asleep — and the socket to it dies with it. Holding on to that session
+     * would make one failure permanent: every later message would fail on the
+     * same closed socket. So a failed turn discards the session, and a turn
+     * that failed before producing anything is retried once on a fresh one,
+     * which is the difference between "type it again" and a chat window that
+     * stays broken.
      *
-     * The conversation survives that: it is held here, not in the session, so the
-     * fresh one is handed the whole history back and the retried turn is answered
-     * in context rather than from nothing.
+     * The conversation survives that: it is held here, not in the session, so
+     * the fresh one is handed the whole history back and the retried turn is
+     * answered in context rather than from nothing.
      */
     async chat(prompt: string, callbacks: ChatCallbacks): Promise<void> {
         let produced = false;
@@ -360,14 +348,12 @@ export class A11ChatSession {
             return;
         } catch (error) {
             this.discardSession();
-            // Only safe to retry when the turn achieved nothing: no text, no thoughts,
-            // and above all no tool run, since a tool may have changed the project.
+            // Only safe to retry when the turn achieved nothing: no text, no
+            // thoughts, and above all no tool run, since a tool may have
+            // changed the project.
             if (produced || this.ranTool) throw error;
-            // A timeout is not a lost turn: the gateway is still working on this
-            // very prompt, and it is the *reader* that gave up. Retrying sends the
-            // prompt a second time — the model answers it twice, its tools run
-            // twice — and buys another full read timeout of a frozen chat before
-            // the failure is finally shown. Report the timeout instead.
+            // The gateway may continue processing after a read timeout.
+            // Retrying could duplicate the response and tool side effects.
             if (isTimeout(error)) throw error;
         }
         await this.runTurn(prompt, watched);
@@ -400,10 +386,10 @@ export class A11ChatSession {
         need(call.setHeader(LlmHeaders.MODEL, this.config.model));
         if (this.config.apiKey) need(call.setHeader(LlmHeaders.API_KEY, this.config.apiKey));
         if (this.config.baseUrl) need(call.setHeader(LlmHeaders.BASE_URL, this.config.baseUrl));
-        // The IDE's tools *and* the patterns the user allowed the gateway to add
-        // (`shell_.*` by default). A pattern here is what makes the gateway offer a
-        // tool of its own: it matches its registered actions against this header and
-        // adds the ones it may serve to the turn's tool list.
+        // The IDE's tools *and* the patterns the user allowed the gateway to
+        // add (`shell_.*` by default). A pattern here is what makes the gateway
+        // offer a tool of its own: it matches its registered actions against
+        // this header and adds the ones it may serve to the turn's tool list.
         need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, this.allowedTools().join(',')));
         need(await call.call());
 
@@ -426,17 +412,19 @@ export class A11ChatSession {
         for (const def of toolDefs) need(await toolsNode.put(def));
         need(await toolsNode.finalize());
 
-        // Read thoughts concurrently so the "thinking" affordance streams live —
-        // and started before the text reader, so that a turn which thinks before
-        // it speaks does not have its first thoughts arrive after its first
-        // tokens. The backend writes both ports from the one provider stream as
-        // it reads it, so what reaches these two loops in arrival order is the
-        // order the model produced it, which is what lets the view interleave
-        // thoughts, text and tool runs without knowing anything about providers.
+        // Read thoughts concurrently so the "thinking" affordance streams live
+        // — and started before the text reader, so that a turn which thinks
+        // before it speaks does not have its first thoughts arrive after its
+        // first tokens. The backend writes both ports from the one provider
+        // stream as it reads it, so what reaches these two loops in arrival
+        // order is the order the model produced it, which is what lets the view
+        // interleave thoughts, text and tool runs without knowing anything
+        // about providers.
         const thoughtsTask = this.pumpText(call, 'thoughts', callbacks.onThought);
-        // And the interactions, for the same reason: a gateway-side tool's run log
-        // arrives on this stream, mid-turn, and waiting for the text to finish would
-        // hold every shell command's box back until the model had stopped talking.
+        // And the interactions, for the same reason: a gateway-side tool's run
+        // log arrives on this stream, mid-turn, and waiting for the text to
+        // finish would hold every shell command's box back until the model had
+        // stopped talking.
         const produced: Interaction[] = [];
         const interactionsTask = this.pumpInteractions(call, produced);
 
@@ -450,9 +438,10 @@ export class A11ChatSession {
         await thoughtsTask;
         await interactionsTask;
 
-        // The turn's terminal status is the *only* place a backend failure after the
-        // first token shows up: the text stream has already ended cleanly by then, so
-        // dropping this status turns "the turn died" into "the model said nothing".
+        // The turn's terminal status is the *only* place a backend failure
+        // after the first token shows up: the text stream has already ended
+        // cleanly by then, so dropping this status turns "the turn died" into
+        // "the model said nothing".
         need(await call.wait(120_000));
 
         // Only a turn that got this far joins the conversation, so a failed one
@@ -460,20 +449,23 @@ export class A11ChatSession {
         this.history.push(userInteraction, ...produced);
     }
 
-    /** The names and patterns of every tool this turn may use, both ends' worth. */
+    /**
+     * The names and patterns of every tool
+     * this turn may use, both ends' worth.
+     */
     private allowedTools(): string[] {
         const extra = (this.config.allowedTools ?? []).filter((pattern) => !this.toolNames.includes(pattern));
         return [...this.toolNames, ...extra];
     }
 
     /**
-     * Collect the turn's interactions as they arrive, reporting the tool runs that
-     * happened on the gateway.
+     * Collect the turn's interactions as they arrive, reporting the tool runs
+     * that happened on the gateway.
      *
      * A backend records a tool round trip as an assistant interaction that made
-     * the calls, then a user-role one carrying their results — and it is on that
-     * second one that the run logs ride, keyed by call id. So the call names are
-     * remembered from the first and matched up on the second.
+     * the calls, then a user-role one carrying their results — and it is on
+     * that second one that the run logs ride, keyed by call id. So the call
+     * names are remembered from the first and matched up on the second.
      *
      * Only the gateway's own tools are reported: an IDE tool ran here, and
      * [buildIdeToolRegistry] has already shown its log live. Reporting it again
@@ -491,8 +483,8 @@ export class A11ChatSession {
             for (const [id, log] of Object.entries(toolLogs(interaction))) {
                 const name = names.get(id);
                 if (!name || this.toolNames.includes(name)) continue;
-                // A gateway tool may have changed the project just as an IDE one may
-                // have, so this turn is no longer safe to retry either.
+                // A gateway tool may have changed the project just as an IDE
+                // one may have, so this turn is no longer safe to retry either.
                 this.ranTool = true;
                 this.onToolRun?.({tool: name, log});
             }
@@ -501,7 +493,8 @@ export class A11ChatSession {
 
     private async pumpText(call: Action, output: string, sink?: (text: string) => void): Promise<void> {
         if (!sink) return;
-        // Thoughts are best-effort: never let a thoughts-stream hiccup fail the turn.
+        // Thoughts are best-effort: never let a thoughts-stream hiccup fail the
+        // turn.
         try {
             const node = need(await call.getOutput(output, false));
             for (; ;) {
@@ -510,7 +503,8 @@ export class A11ChatSession {
                 sink(String(next));
             }
         } catch {
-            // ignore — the text stream is authoritative for turn success/failure.
+            // ignore — the text stream is authoritative for turn
+            // success/failure.
         }
     }
 

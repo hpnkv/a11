@@ -2,7 +2,8 @@
 
 /**
  * @file
- * @brief Making the policy the kernel's opinion rather than only this library's.
+ * @brief Making the policy the kernel's opinion rather than only this
+ * library's.
  *
  * a11::sdk::flow::Capabilities is checked before a path is opened, which is
  * exactly as strong as the checking code -- and no stronger. That is enough for
@@ -18,21 +19,21 @@
  *     directories the child may read and write; the child calls
  *     `landlock_restrict_self` before `exec`. It is unprivileged, it cannot be
  *     dropped once applied, and it is inherited by everything the child spawns.
- *   * **macOS: Seatbelt**, reached through `sandbox-exec`. A profile is built in
+ *   * **macOS: Seatbelt**, through `sandbox-exec`. A profile is built in
  *     the parent and the child execs `/usr/bin/sandbox-exec -p <profile>`
  *     wrapping the real program.
  *
  * ### Why macOS goes through a process and Linux does not
  *
  * `sandbox_init()` allocates, and the child of a fork in a threaded process
- * must not: it holds whatever locks the other threads held at the moment of the
- * fork, so a malloc there deadlocks it, rarely and unreproducibly. Landlock has
- * no such problem -- the allocation is the ruleset, built before the fork, and
- * the child makes two bare syscalls against a descriptor. macOS has no
- * equivalent fork-safe entry point, so rather than take a small chance of an
- * undebuggable hang, the profile is passed as `argv` and enforcement begins in a
- * process that has already exec'd. One extra process, and nothing that can
- * deadlock.
+ * must not: it holds whatever locks the other threads held at the moment of
+ * the fork, so a malloc there deadlocks it, rarely and unreproducibly.
+ * Landlock has no such problem -- the allocation is the ruleset, built before
+ * the fork, and the child makes two bare syscalls against a descriptor. macOS
+ * has no equivalent fork-safe entry point, so rather than take a small chance
+ * of an undebuggable hang, the profile is passed as `argv` and enforcement
+ * begins in a process that has already exec'd. One extra process, and nothing
+ * that can deadlock.
  *
  * ### What it does not claim
  *
@@ -43,7 +44,8 @@
  * something dangerous. Availability() says what the running system can actually
  * do, and `Capabilities::process::require_sandbox` decides whether a host that
  * asked for confinement will accept running without it -- because "the sandbox
- * quietly did not apply" is the one outcome that would make this file worse than
+ * quietly did not apply" is the one outcome that would make this file worse
+ * than
  * not having it.
  */
 
@@ -111,9 +113,10 @@ const SandboxAvailability& Availability();
 /**
  * @brief A prepared confinement: everything allocatable, done before the fork.
  *
- * Built by Prepare() in the parent. `Apply()` runs in the child between fork and
- * exec and calls nothing that allocates. `WrapCommand()` is the other half, for
- * the platform where confinement is reached by exec'ing something else.
+ * Built by Prepare() in the parent. `Apply()` runs in the child between fork
+ * and exec and calls nothing that allocates. `WrapCommand()` is the other
+ * half, for the platform where confinement is reached by exec'ing something
+ * else.
  */
 class Sandbox {
  public:

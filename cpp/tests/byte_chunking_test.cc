@@ -44,8 +44,7 @@ TEST(ByteChunkingTest, CompletePacketRoundTrips) {
 
 // The owning entry points exist to avoid copying the payload, so what has to
 // hold is that they produce exactly what the borrowing ones do -- for a message
-// that fits one packet, for one that does not, and for a packet that is
-// malformed.
+// that fits one packet, for one that does not, and for a packet.
 TEST(ByteChunkingTest, OwningSplitAndParseMatchTheBorrowingOnes) {
   for (const size_t size : {size_t{0}, size_t{5}, size_t{22}, size_t{200}}) {
     const std::string message(size, 'q');

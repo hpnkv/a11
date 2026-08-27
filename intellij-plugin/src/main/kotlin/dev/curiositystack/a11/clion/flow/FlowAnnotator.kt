@@ -12,13 +12,13 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.util.IncorrectOperationException
 
-/** One edit the language says would fix something. */
+/** One source edit returned with a diagnostic fix. */
 data class FlowEdit(val start: Int, val end: Int, val text: String)
 
-/** One fix: what to call it, and the edits that are it. */
+/** A labelled diagnostic fix and its edits. */
 data class FlowFix(val label: String, val edits: List<FlowEdit>)
 
-/** One problem the language found, ready to be drawn. */
+/** A diagnostic ready for IntelliJ annotation. */
 data class FlowProblem(
     val code: String,
     val severity: String,
@@ -30,21 +30,15 @@ data class FlowProblem(
 )
 
 /**
- * Everything wrong with a flow, from the language rather than from here.
+ * Displays diagnostics returned by `a11-flow check`.
  *
- * This replaced five `LocalInspectionTool`s over a Kotlin resolver. What they
- * found -- a `try` whose failure nothing looks at, a `| drop 3` after a
- * `| collect`, an `out` port nothing writes -- is now found by `a11-flow check`,
- * which is the same code `a11 flow check` and CI run: one set of messages, one set
- * of severities, one place a new check is added.
+ * The native service supplies the same messages and severities used by
+ * `a11 flow check` and CI.
  *
- * An `ExternalAnnotator` because that is the platform's hook for "ask something
- * outside the IDE": [doAnnotate] runs off the UI thread, so a process round trip
- * costs nothing anybody waits for.
+ * [doAnnotate] runs the process request off the UI thread.
  *
- * A finding's range is an offset into the file being annotated, which for a flow
- * injected into somebody else's string is an offset into the fragment; the
- * platform maps it back to the host document itself.
+ * Ranges use offsets into the annotated file. For injected Flow, IntelliJ maps
+ * fragment offsets back to the host document.
  */
 class FlowAnnotator : ExternalAnnotator<String, List<FlowProblem>>() {
 
@@ -72,8 +66,8 @@ class FlowAnnotator : ExternalAnnotator<String, List<FlowProblem>>() {
             var annotation = holder
                 .newAnnotation(severityOf(problem.severity), problem.message)
                 .range(range)
-            // Greyed out, the way an unused variable is in every other language:
-            // the flow works, and this part of it is doing nothing.
+            // Render non-error unused diagnostics with IntelliJ's standard
+            // unused-element attributes.
             if (problem.family == "unused" && problem.severity != "error") {
                 annotation = annotation.textAttributes(
                     CodeInsightColors.NOT_USED_ELEMENT_ATTRIBUTES,
@@ -82,8 +76,7 @@ class FlowAnnotator : ExternalAnnotator<String, List<FlowProblem>>() {
             for (fix in problem.fixes) {
                 annotation = annotation.withFix(FlowApplyFix(fix))
             }
-            // The code travels in the tooltip, because that is what somebody
-            // switching an inspection off or searching for an explanation needs.
+            // Include the diagnostic code for inspection settings and lookup.
             annotation.tooltip("${problem.message} <code>[${problem.code}]</code>")
                 .create()
         }
@@ -133,11 +126,8 @@ class FlowAnnotator : ExternalAnnotator<String, List<FlowProblem>>() {
 /**
  * Alt+Enter: apply the edits the diagnostic came with.
  *
- * Nothing here works out *what* the fix is. The language found the problem and
- * wrote down the edits that repair it, so this applies them blind -- which is the
- * only way a fix can be trusted: one that re-derived the repair from the message
- * would be a second implementation of the check, and would corrupt a file the day
- * the two disagreed.
+ * The diagnostic carries the repair edits. This action applies them without
+ * re-deriving a fix from the message.
  */
 private class FlowApplyFix(private val fix: FlowFix) : IntentionAction {
 

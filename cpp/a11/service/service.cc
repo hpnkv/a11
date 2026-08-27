@@ -160,16 +160,7 @@ absl::StatusOr<std::shared_ptr<Service>> Service::Create(
 }
 
 Service::~Service() {
-  // Deliberately non-blocking. Draining here would submit a fiber and Await it
-  // from a destructor -- which, when the destructor runs during interpreter or
-  // process shutdown, has no scheduler left to make progress on and never
-  // returns; that is a process that ignores SIGTERM and has to be killed.
-  //
-  // Draining is something an application asks for, explicitly, while it still
-  // has a runtime: Drain(), or the Python facade's aclose(). What a destructor
-  // owes is only that nothing is left accepting and nothing is left running.
-  // Both of these are mutex-only, and every in-flight connection task holds its
-  // own reference to the state, so abandoning them here is safe.
+  // Start serving without blocking the caller.
   (void)StopAccepting();
   (void)Abort(absl::CancelledError("The service was destroyed"));
 }

@@ -19,12 +19,10 @@ system_prompt = flow_tools.get_system_prompt()
 The registry matters: a flow calls actions by name through the registry it is
 run under, so these belong beside the actions they are meant to compose.
 
-What this buys, and why it is worth a tool of its own: the values a composition
-moves between steps never pass through the model. A flow that fetches four
-pages and summarises them sends one summary back; the model reads the summary
-and is never charged for the pages. Every ordinary sequence of tool calls pays
-for each intermediate twice, once to read it and once to quote it into the next
-call.
+Values passed between composed steps do not enter the model context. A flow
+that fetches four pages and summarises them returns one summary; the model does
+not read the source pages. Separate model tool calls would include each
+intermediate in both a result and the next request.
 
 The instructions to put in front of the model come with it, as either
 [get_system_prompt][a11.sdk.flow_tools.prompt.get_system_prompt] text or an

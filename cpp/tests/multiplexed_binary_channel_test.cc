@@ -3,12 +3,9 @@
 // The striping channel behind the WebRTC transport, and in particular the frame
 // layout it puts on the wire.
 //
-// That layout is shared with js/src/webrtc_wire_stream.ts, and nothing but these
-// tests keeps the two in agreement: there is no generated fixture for it the way
-// testdata/serial_tags.json pins the serialization tags. The byte-level test
-// below is deliberately spelled out as a literal so that changing the layout
-// fails here, with a matching test of the same literal in
-// js/test/transports.test.mjs.
+// The layout is shared with js/src/webrtc_wire_stream.ts. No generated fixture
+// pins it, so this test and js/test/transports.test.mjs use the same literal;
+// changing either side without the other must fail visibly.
 
 #include "a11/net/internal/multiplexed_binary_channel.h"
 
@@ -107,11 +104,7 @@ BinaryChannelCallbacks CollectInto(const std::shared_ptr<Received>& received) {
   }};
 }
 
-// The pin. A frame is the payload followed by the 8-byte little-endian sequence:
-// a *suffix*, so the sender appends to a buffer it already owns and the receiver
-// truncates instead of copying the payload out from behind a header.
-//
-// js/test/transports.test.mjs asserts the same bytes for the same input.
+// The pin.
 TEST(MultiplexedBinaryChannelTest, FramesThePayloadWithASequenceSuffix) {
   auto member = std::make_shared<FakeMember>();
   std::shared_ptr<MultiplexedBinaryChannel> channel =

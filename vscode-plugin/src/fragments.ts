@@ -1,23 +1,21 @@
 /**
  * Flows written inside another language's string literals.
  *
- * **Why this exists.** Most flows do not live in `.flow` files. A flow is meant to
+ * **Why this exists.** Most flows do not
+ * live in `.flow` files. A flow is meant to
  * travel as text, so it is usually written where it is handed over:
- * `flow.loads("""...""")` in Python, a template literal in TypeScript. An editor
- * that only understood `.flow` would understand almost none of the flows anybody
- * writes.
+ * `flow.loads("""...""")` in Python, a
+ * template literal in TypeScript. An editor
+ * that only understood `.flow` would understand almost none of the flows
+ * anybody writes.
  *
- * **Why it is not the same mechanism the JetBrains plugin uses.** That plugin
- * registers a `MultiHostInjector`, and the platform then treats the fragment as a
- * real document of the injected language: every feature works inside it with no
- * further effort. VSCode has no equivalent, and forcing one would mean either
- * shipping a worse version of it or pretending the difference away. So the two
- * editors do the conceptually same thing by their own means, which is the honest
- * arrangement: an injection grammar colours the fragment, and this module asks the
- * language about it as *text* and moves the answers back by the offset the
- * fragment starts at.
+ * JetBrains uses `MultiHostInjector` to expose fragments as injected language
+ * documents. VS Code has no equivalent, so an injection grammar highlights the
+ * fragment while this module sends its text to the language service and rebases
+ * returned offsets into the host document.
  *
- * **The rule for what counts.** The same one the JetBrains injector uses: a string
+ * **The rule for what counts.** The same
+ * one the JetBrains injector uses: a string
  * whose first real word is `flow`, followed by a name and a `{`. Prose merely
  * mentioning a flow is not one, in either editor.
  */
@@ -64,8 +62,9 @@ export function fragmentAt(
  * A position inside a fragment, as an offset into the fragment's own text.
  *
  * The whole of the translation, and it is an addition rather than a mapping: a
- * fragment is one contiguous run of the host document, so its offset zero is the
- * host's `fragment.offset`. This is why the module needs no virtual documents.
+ * fragment is one contiguous run of the host document, so its offset zero is
+ * the host's `fragment.offset`. This is why the module needs no virtual
+ * documents.
  */
 export function offsetIn(
   document: vscode.TextDocument,
@@ -131,13 +130,11 @@ interface Envelope {
 }
 
 /**
- * Everything wrong with the flows in one document, as this editor's diagnostics.
+ * Everything wrong with the flows in one document, as this editor's
+ * diagnostics.
  *
- * The fixes travel with each diagnostic and are kept on it, so the code-action
- * provider applies the edits the language wrote rather than working out a repair
- * of its own — the same rule the JetBrains plugin follows, and for the same
- * reason: a fix that re-derived itself would be a second implementation of the
- * check, and would corrupt a file the day the two disagreed.
+ * Each diagnostic carries its fixes. The code-action provider preserves those
+ * edits so the frontend does not derive a separate repair from the message.
  */
 export async function checkFragments(
   server: FlowServer,

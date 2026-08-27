@@ -1,12 +1,10 @@
 # Copyright 2026 The A11 Authors.
 
-"""One console for the CLI, and one honest answer to "can we be fancy here?".
+"""Shared CLI console with equivalent rich and scriptable output.
 
-Every module used to build its own `rich.console.Console`, which is fine until a
-command has to be *scriptable*. The rule this module exists to enforce: rich
-output is a shortcut to the same information, never the only way to get it. A
-table when someone is watching, `key=value` lines when something is parsing, and
-the same exit code either way.
+Rich output is an alternate presentation of the same information. Interactive
+terminals receive tables; scripts receive stable ``key=value`` lines, with the
+same exit code in either mode.
 
 Richness is off when stdout is not a terminal, when ``NO_COLOR`` is set, when
 ``TERM`` is ``dumb``, or when the user passed ``--plain``.
@@ -60,8 +58,8 @@ def add_plain_flag(parser) -> None:
         "--plain",
         action="store_true",
         help=(
-            "Plain, parseable output: key=value lines instead of tables. Implied"
-            " when stdout is not a terminal."
+            "Plain, parseable output: key=value lines instead of tables. "
+            "Implied when stdout is not a terminal."
         ),
     )
 

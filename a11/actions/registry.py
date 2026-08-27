@@ -19,10 +19,8 @@ if TYPE_CHECKING:
     # needing them at run time, and the generated stub resolves them.
     from a11._native import ActionHandler, ActionSchema, NativeActionHandler
 
-    # Written out in full where it is used, because that is what the generated
-    # stub carries: a bare `FlowPlan` is not a name `a11._native`'s own stub can
-    # resolve, and the module path is. At type-check time only -- `a11.flow`
-    # imports this package, so importing it back at run time would be a cycle.
+    # Use the qualified name required by the generated stub. Import only during
+    # type checking because `a11.flow` imports this package at runtime.
     import a11.flow.plan
 
 ActionRegistry.__module__ = __name__

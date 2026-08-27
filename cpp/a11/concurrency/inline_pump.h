@@ -11,9 +11,8 @@
  * work the caller could do in the frame it is already in, and through a
  * language binding an event-loop turn on top of that.
  *
- * The hazard that buys, and what this header exists to contain: completing work
- * runs the caller's continuation, that continuation may ask the pump for more,
- * so a pump can be re-entered from inside itself.
+ * Completing work runs the caller's continuation, which may ask the pump for
+ * more work and re-enter it. This helper bounds that re-entry.
  */
 
 #ifndef A11_CONCURRENCY_INLINE_PUMP_H_
@@ -51,19 +50,19 @@ struct InlinePumpState {
  * @brief
  *   Run @p once until the pump has nothing left to do without waiting.
  *
- * Recursion is bounded rather than forbidden: a call arriving over @p max_depth
- * asks the turns already running for another pass instead of adding a frame. The
- * cap counts *all* live drives, so a genuinely concurrent driver can be turned
- * away too. That costs it a pass it need not have made, which is far cheaper
- * than turning away every concurrent caller and handing its work to whoever
- * happens to be inside -- an inline drive exists precisely so that a caller
- * does its own work.
+ * Recursion is bounded rather than forbidden: a call arriving over @p
+ * max_depth asks the turns already running for another pass instead of adding
+ * a frame. The cap counts *all* live drives, so a genuinely concurrent driver
+ * can be turned away too. That costs it a pass it need not have made, which is
+ * far cheaper than turning away every concurrent caller and handing its work
+ * to whoever happens to be inside -- an inline drive exists precisely so that
+ * a caller does its own work.
  *
  * Deciding to leave and dropping out of the count happen under one hold of
- * @p mu, and a call that is turned away sets `again` under the same lock, so one
- * of the two always observes the other and the pass asked for is never dropped.
- * @p once is wrapped so an escaping exception cannot leak the count, which would
- * strand the pump permanently.
+ * @p mu, and a call that is turned away sets `again` under the same lock, so
+ * one of the two always observes the other and the requested pass is retained.
+ * @p once is wrapped so an escaping exception cannot leak the count and strand
+ * the pump.
  *
  * @param mu
  *   The pump's mutex, guarding @p state.
@@ -90,9 +89,7 @@ void DriveInline(thread::Mutex* absl_nonnull mu,
   }
   while (true) {
     // Every pump body is A11's own -- the store writers and the session pump --
-    // so inside A11 this is a plain call. It stays a guard for the benefit of a
-    // build with exceptions on, where a pump reaching into a caller's code (a
-    // ChunkStore implemented in Python, say) can still raise.
+    // so inside A11 this is a plain call.
     const absl::Status raised =
         exception_guard::Attempt([&] { once(); }, absl::StrCat(name, " pump"));
     if (!raised.ok()) {
@@ -111,9 +108,9 @@ void DriveInline(thread::Mutex* absl_nonnull mu,
  * @brief
  *   Whether a DriveInline() turn for this pump is running right now.
  *
- * For a completion that has just run inline and has more to do: handing the next
- * pass to the turn it is standing in is right, while posting one to a worker
- * would race the caller's own next drive and take the work off it. Call it with
+ * For a completion that has just run inline and has more to do, handing the
+ * next pass to the active turn avoids posting one to a worker. Posting would
+ * race the caller's next drive and take the work from it. Call this with
  * @p mu held.
  */
 inline bool PumpIsDriving(const InlinePumpState& state) {

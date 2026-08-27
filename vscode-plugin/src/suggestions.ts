@@ -3,16 +3,14 @@
  *
  * A flow the extension ships (`flows/suggest-fixes.flow`) reviews a file and
  * writes two streams: a comment about a range, and a patch that fixes it. Each
- * record arrives here through the webview bridge and is put on the range it names,
- * so the reader sees it where the problem is rather than in a list somewhere else.
+ * record arrives here through the webview bridge and is put on the range it
+ * names, so the reader sees it where the problem is rather than in a list
+ * somewhere else.
  *
- * **Where this differs from the JetBrains plugin, and why.** That one renders a
- * popup of its own (`highlights/SuggestionPopup.kt`) with the comment and an
- * "apply" button, because the platform gives it a gutter and a custom popup and no
- * natural home for a machine-written comment. VSCode has one: a diagnostic carries
- * the comment in its hover, and a code action carries the patch. Same information,
- * each platform's own affordance — which is the whole argument for not forcing one
- * implementation across two editors.
+ * JetBrains renders the same data in a custom gutter popup. VS Code uses a
+ * diagnostic hover for the comment and a code action for the patch. Each
+ * frontend uses its platform's native presentation while preserving the shared
+ * suggestion data.
  */
 
 import * as vscode from 'vscode';
@@ -21,9 +19,9 @@ import {runByName} from './tools/index.js';
 /**
  * One record about one range of one file, as the review flow produces it.
  *
- * The same shape the shared UI declares (`webview/src/bridge.ts`), because it is
- * the same record: the page reads it off the flow's ports and hands it straight
- * over. Lines and columns are 0-based and `end_column` is exclusive.
+ * The same shape the shared UI declares (`webview/src/bridge.ts`), because it
+ * is the same record: the page reads it off the flow's ports and hands it
+ * straight over. Lines and columns are 0-based and `end_column` is exclusive.
  */
 export interface HighlightNote {
   path: string;
@@ -68,14 +66,15 @@ export class Suggestions {
    * Attach one record to the range it is about.
    *
    * A record whose `id` names a suggestion already attached is *merged* into it
-   * rather than marking the range twice: the flow writes the comment and the patch
-   * on two ports so the sentence need not wait for the diff, and the id is what
-   * puts them back together.
+   * rather than marking the range twice: the flow writes the comment and the
+   * patch on two ports so the sentence need not wait for the diff, and the id
+   * is what puts them back together.
    */
   add(note: HighlightNote): void {
     const key = vscode.Uri.file(note.path).toString();
     const forFile = this.held.get(key) ?? new Map<string, Suggestion>();
-    // A record with no id stands alone, so it gets a key nothing else will share.
+    // A record with no id stands alone, so it gets a key nothing else will
+    // share.
     const id = note.id ?? `${note.start_line}:${note.start_column}:${forFile.size}`;
     const existing = forFile.get(id);
     const merged: HighlightNote = existing
@@ -124,9 +123,9 @@ export class Suggestions {
         one.note.comment || 'A suggested patch.',
         vscode.DiagnosticSeverity.Information,
       );
-      // "reported" means the editor already underlines this range itself, so the
-      // source says which of the two this is: a range the model *found* has no
-      // squiggle of the editor's own underneath it.
+      // "reported" means the editor already underlines this range itself, so
+      // the source says which of the two this is: a range the model *found* has
+      // no squiggle of the editor's own underneath it.
       diagnostic.source =
         one.note.origin === 'found' ? 'a11 review (found)' : 'a11 review';
       if (one.note.patch) {
@@ -169,9 +168,8 @@ class SuggestionActions implements vscode.CodeActionProvider {
           : 'Apply the suggested patch',
         vscode.CodeActionKind.QuickFix,
       );
-      // Through `apply_patch` rather than as a `WorkspaceEdit` built here: that
-      // tool is where the context-matching and the refusal-on-a-near-miss live,
-      // and a second path into the same file would be a second set of rules.
+      // `apply_patch` owns context matching and refusal on a near miss. Route
+      // all suggested patches through that single implementation.
       action.command = {
         command: 'a11.applySuggestion',
         title: 'Apply the suggested patch',
@@ -197,8 +195,8 @@ export function registerApply(): vscode.Disposable {
       try {
         await runByName('apply_patch', {path, patch});
       } catch (error) {
-        // A patch that no longer matches is the expected failure — the file has
-        // been edited since the review — and the message says what is there now.
+        // An edit after review may make the patch inapplicable. Show the
+        // mismatch details returned by the patch tool.
         void vscode.window.showWarningMessage(
           error instanceof Error ? error.message : String(error),
         );

@@ -2,12 +2,13 @@
  * "Streaming generative media" guide demo.
  *
  * One action, three ports: the request goes in, the step counter comes back on
- * `progress` while the work runs, and the PNG arrives on `image` at the end. The
- * page renders a progress bar from a port and an image from another, which is the
- * whole point — behind one request/response it would have to choose.
+ * `progress` while the work runs, and the
+ * PNG arrives on `image` at the end. The
+ * page renders a progress bar from one port and the final image from another.
  *
- * Needs a backend with a Stable Diffusion checkpoint (see the guide). Without one
- * the action fails with `FAILED_PRECONDITION` and this page shows what it said.
+ * Needs a backend with a Stable Diffusion checkpoint (see the guide). Without
+ * one the action fails with `FAILED_PRECONDITION` and this page shows what it
+ * said.
  */
 
 import {ActionPortSchema, ActionSchema} from '../src/index.js';
@@ -82,8 +83,8 @@ class GenerativeMediaDemo {
         this.status.textContent = `step ${step.step} of ${step.steps}`;
       });
 
-      // The image is bytes, so it is read as a chunk rather than as a value: what
-      // arrives is a PNG, and there is nothing to deserialize it into.
+      // The image is bytes, so it is read as a chunk rather than as a value:
+      // what arrives is a PNG, and there is nothing to deserialize it into.
       const node = need(await call.getOutput('image', false));
       const chunk = need(await node.nextChunk(900_000));
       await progress;

@@ -171,10 +171,8 @@ absl::StatusOr<Value> Divide(const Value& total, const Value& count) {
 
 /// Decode every item of a batch that still needs it, in one crossing.
 ///
-/// A no-op when nothing needs decoding, which is the common case for a pipe
-/// that only moves values -- and the reason this is worth asking about rather
-/// than always calling: the batch form of a host's answer is cheap per value
-/// and not free per call.
+/// A no-op when fewer than two values need decoding. Batching reduces host
+/// crossings while preserving the direct path for pipes that only move values.
 void PrimeBatch(const std::vector<ItemPtr>& items,
                 HostBridge* absl_nonnull bridge) {
   std::vector<const data::Chunk*> chunks;
@@ -244,6 +242,9 @@ bool MatchesFolded(std::string_view name, std::string_view pattern) {
 
 // --- The monitor -------------------------------------------------------------
 
+// Coordinates every wait in one run and wakes them together on cancellation.
+// Blocking node, action, and host operations run with the monitor lock
+// released.
 /// Coordinates every wait in one run and wakes them together on cancellation.
 ///
 /// Blocking node, action, and host operations run with the monitor lock
@@ -252,6 +253,8 @@ class Monitor {
  public:
   thread::Mutex& mu() ABSL_LOCK_RETURNED(mu_) { return mu_; }
 
+  // Wake every parked waiter after shared state changes. Waiters increment the
+  // count under the monitor lock before testing their predicate.
   /// Wake every parked waiter after shared state changes.
   ///
   /// Waiters increment the count under the monitor lock before testing their
@@ -297,6 +300,8 @@ class Monitor {
     std::atomic<int> waiters_ = 0;
   };
 
+  // Wait on one object's condition until `ready` holds, or the run is given up.
+  // REQUIRES: the lock is held.
   /// Wait on one object's condition until `ready` holds, or the run is given
   /// up.
   ///
@@ -363,10 +368,8 @@ class Monitor {
 
   /// Give up on the run, waking everything waiting on anything.
   ///
-  /// The one thing a single monitor buys that a lock per object would not: a
-  /// pump waiting for a reader that will never come, a barrier waiting for a
-  /// node nobody will close, and a step waiting for a dependency that failed
-  /// are all woken by this, so a failed flow ends instead of hanging.
+  /// The shared monitor wakes pumps, barriers, and steps together so a failed
+  /// flow cannot leave one waiting on state that will never change.
   void Stop(absl::Status why) {
     if (why.ok()) {
       why = absl::CancelledError("The flow stopped");
@@ -544,6 +547,8 @@ class Reader {
   /// A non-ok status is the producer's failure, relayed to every reader.
   virtual absl::StatusOr<ItemPtr> Next() = 0;
 
+  // Append up to `limit` currently available items, waiting only when none is
+  // ready.
   /// Append up to `limit` currently available items, waiting only when none is
   /// ready.
   ///
@@ -773,7 +778,8 @@ class BusReader : public Reader {
         ABSL_RETURN_IF_ERROR(slot_->error);
       }
     }
-    // One wake is sufficient because the producer only tests whether room exists.
+    // One wake is sufficient because the producer only tests whether room
+    // exists.
     if (room) {
       bus_->moved().Wake();
     }
@@ -866,8 +872,6 @@ absl::Status Bus::Pump() {
     }
   }
   moved_.Wake();
-  // The failure belongs to the readers, who each see it where they were
-  // reading. Reporting it here as well would fail the flow twice for one cause.
   return absl::OkStatus();
 }
 
@@ -918,10 +922,13 @@ class Lazy {
   absl::StatusOr<ItemPtr> result_;
 };
 
+// Incrementally buffers a stream and replays it to each nested reader. The
+// buffer retains the stream for the body's lifetime.
 /// Incrementally buffers a stream and replays it to each nested reader.
 ///
 /// Loops and branches use this for outer refs so every pass sees the same
-/// values as they arrive. The buffer retains the stream for the body's lifetime.
+/// values as they arrive. The buffer retains the stream for the body's
+/// lifetime.
 class Buffer {
  public:
   /// Shared storage retained by readers that outlive the creating scope.
@@ -1031,6 +1038,9 @@ class ValueCursor {
         unary_(unary),
         label_(std::move(label)) {}
 
+  // Return the next value, or the cached value for a unary stream. Readers
+  // reserve a turn under the monitor lock and perform the blocking read after
+  // releasing it.
   /// Return the next value, or the cached value for a unary stream.
   ///
   /// Readers reserve a turn under the monitor lock and perform the blocking
@@ -1286,9 +1296,8 @@ class Destination {
 
   /// End the node with a failure, so its readers see the error and not an end.
   ///
-  /// `drain` says the stream is over; this says it went wrong, and the
-  /// difference is the whole point of having it: a reader cannot otherwise tell
-  /// a stream that finished from one cut short by something the flow noticed.
+  /// `drain` reports an ordinary end; this reports a failure so readers can
+  /// distinguish completion from interruption.
   ///
   /// Forced, like End(): whoever was writing it, this is the last word. It also
   /// marks the node finished, so the ordinary Release() every step does on its
@@ -1461,9 +1470,9 @@ class CallHandle {
 
   /// How the call went, once it has gone.
   ///
-  /// Two statuses, which is why this is not a `StatusOr`: the returned one says
-  /// whether the *waiting* worked, and `outcome` is what the call finished
-  /// with.
+  /// Two statuses, which is why this is not a `StatusOr`: the returned one
+  /// says whether the *waiting* worked, and `outcome` is what the call
+  /// finished with.
   absl::Status Outcome(absl::Status* absl_nonnull outcome) {
     std::shared_ptr<actions::Action> action;
     {
@@ -1612,6 +1621,9 @@ class Scope {
   /// Which subject each `wait first of` in this body saw finish first, once it
   /// has. Read through the barrier's winner ref, which waits for the step.
   absl::flat_hash_map<StepId, std::int64_t> winners_;
+  // What a `fold` is carrying right now, per fold in this body. One entry per
+  // fold, and a fold runs on one fibre -- it reads its stream to the end -- so
+  // the only concurrency here is a second fold elsewhere in the same body.
   /// What a `fold` is carrying right now, per fold in this body.
   ///
   /// A fold's accumulator is a name in an expression, and a name in an
@@ -1673,7 +1685,7 @@ class Runner {
   ///
   /// One map per name per execution. Nodes created in it are not in the
   /// session's node map, so a peer neither sees them nor receives their
-  /// fragments -- which is the point of putting a step's traffic there.
+  /// fragments.
   absl::StatusOr<std::shared_ptr<nodes::NodeMap>> NodeMapNamed(
       const std::string& name) {
     thread::MutexLock lock(&monitor_.mu());
@@ -1687,6 +1699,8 @@ class Runner {
     return made;
   }
 
+  // Return the cached read/write analysis for one body. Analysis runs outside
+  // the monitor lock.
   /// Return the cached read/write analysis for one body.
   ///
   /// Analysis runs outside the monitor lock. Concurrent first callers may
@@ -1756,6 +1770,8 @@ class Runner {
     return at->second.get();
   }
 
+  // Whether this body's call ports have already been checked against the
+  // schemas of what they call.
   /// Whether this body's call ports have already been checked against the
   /// schemas of what they call.
   ///
@@ -1847,10 +1863,7 @@ absl::Status Scope::Prepare() {
     }
     ABSL_ASSIGN_OR_RETURN(const actions::ActionSchema* schema,
                           runner_->SchemaOf(flow.steps[step].action));
-    // A port the target does not declare, rejected before anything runs. The
-    // check cannot always happen while compiling -- an action's schema comes
-    // from the registry of whatever runtime dispatches the flow -- so it
-    // happens here, once, with the same wording the compiler would have used.
+    // A port the target does not declare, rejected before anything runs.
     for (const auto& [key, ref] : flow.steps[step].ports) {
       const bool input = absl::StartsWith(key, "inputs:");
       const std::string name = flow.refs[ref].name;
@@ -2114,10 +2127,7 @@ absl::Status Scope::ReadNode(const NodePtr& node, bool tolerant,
                              const Sink& sink) {
   // Every value a flow reads enters here, so this is the one read worth
   // batching: `NextFragments` hands back what the store already had and waits
-  // only when it had nothing, so a batch costs the same await as a value would
-  // and a live stream still yields each value as it arrives. One await, one
-  // lock and one wake for up to `kQueueDepth` values rather than for each of
-  // them.
+  // only when it had nothing, so a batch costs the same await as a value would.
   std::vector<ItemPtr> items;
   items.reserve(kQueueDepth);
   while (true) {
@@ -2165,9 +2175,7 @@ absl::Status Scope::ReadNode(const NodePtr& node, bool tolerant,
 absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
   // One place, upstream of the bus that fans the stream out, so the values
-  // `skip n` spoke for are the same ones every reader misses. A skip counts
-  // values, so it takes the one-at-a-time path and gives up the batch: it runs
-  // once per stream at the head of it, which is not where a pipeline's cost is.
+  // `skip n` spoke for are the same ones every reader misses.
   long long taken = 0;
   const long long skip = one.skip;
   const auto pass = [&](ItemPtr item) -> absl::Status {
@@ -2226,6 +2234,8 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   }
 }
 
+// Read several streams in step, as one stream of tuples. A fibre per source
+// would buy nothing and would put three more lifetimes on the run's monitor.
 /// Read several streams in step, as one stream of tuples.
 ///
 /// **No fibre of its own per source, and that is not a shortcut.** A tuple is
@@ -2301,12 +2311,9 @@ absl::Status Scope::ProduceZip(RefId ref, const Sink& sink) {
 /// exists to avoid. The fibres are the sources the author named, and they are
 /// what "in the order values arrive" costs.
 ///
-/// The sink is what interleaves: publishing takes the bus's lock, so two
-/// sources with a value each are ordered by whichever gets there, which is the
-/// honest answer to "which arrived first". A source that ends well is simply
-/// done; one that ends badly ends the whole stream with its status, because a
-/// value missing for a reason nobody has been told about is worse than no
-/// value.
+/// Publishing takes the bus lock, so concurrent values are ordered by lock
+/// acquisition. A successful source end contributes no value; a failed source
+/// ends the merged stream with its status.
 absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
   std::vector<ReaderPtr> readers;
@@ -2429,8 +2436,8 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
             sink.Many(out).IgnoreError();
             return ran;
           }
-          // The values that made it go on, then this one is accounted for and
-          // the stream carries on: that is what `try` on a stage means.
+          // Emit completed values, account for this failure, and continue the
+          // stream according to the stage's `try` semantics.
           ABSL_RETURN_IF_ERROR(sink.Many(out));
           ABSL_RETURN_IF_ERROR(tolerate(item, ran));
         }
@@ -2444,9 +2451,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         stage.indexed ? Value::Integer(stage.index) : Value::String(stage.text);
     if (stage.named_or_indexed) {
       // A destructuring `let`: the field where the value has one, and the
-      // position where it is a list. `Lookup` answers by the *value's* kind, so
-      // a record ignores an integer key and a list ignores a string one --
-      // which is why this asks twice rather than choosing once.
+      // position where it is a list.
       const Value position = Value::Integer(stage.index);
       return per_value(
           [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
@@ -2488,9 +2493,8 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   }
   if (name == "log" || name == "logf") {
     // Shaped like `where`, not like `map`: the value is read so the log can say
-    // something about it, and then emitted *as the item it was* -- bytes,
-    // mimetype and all -- so dropping a log into a pipeline changes nothing
-    // about what comes out of it.
+    // something about it, and then emitted *as the item it was* bytes, mimetype
+    // and all so dropping a log into a pipeline changes nothing about.
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
           ABSL_RETURN_IF_ERROR(WriteLog(stage.log, item));
@@ -2510,8 +2514,8 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
           ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
           Value found = MatchCompiled(compiled.pattern, AsText(value));
-          // A value the pattern does not fit is dropped, which is what makes this a
-          // `where` and a `map` at once and what makes reading a log worth writing.
+          // A value the pattern does not fit is dropped, which is what makes
+          // this a combined `where` and `map` stage.
           if (!found.IsNull()) {
             out.push_back(Item::Of(std::move(found)));
           }
@@ -2651,10 +2655,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     return sink.One(Item::Of(Value::List(std::move(group))));
   }
   if (name == "window") {
-    // The overlapping counterpart of `batch`. `batch` has to put a boundary
-    // somewhere, and a question about neighbours -- a pattern across two lines,
-    // a rise between two readings -- is exactly the question a boundary hides:
-    // half the answers fall on it.
+    // The overlapping counterpart of `batch`.
     if (stage.count <= 0) {
       return Fail(absl::StrCat("'window ", stage.count,
                                "' is not a width; a window holds at least one "
@@ -2682,13 +2683,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   }
   if (name == "chunk") {
     // The other direction from `let`: one value, cut into pieces of a size
-    // somebody downstream cares about. An upload wants 64 KiB frames and a
-    // model wants a paragraph, and both are "this one value, as a stream".
-    //
-    // A byte count, because that is what the sizes people write are about --
-    // a frame, a buffer, a limit. Text is still cut on a character boundary:
-    // half a code point is not a piece of text anybody can use, and backing off
-    // a byte or two is cheaper than the bug.
+    // somebody downstream cares about.
     if (stage.count <= 0) {
       return Fail(absl::StrCat("'chunk ", stage.count,
                                "' is not a size; a chunk holds at least one "
@@ -2740,8 +2735,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   if (name == "group") {
     // `batch`, closed by a question rather than by a count: values pile up
     // until one of them says the group is finished, and the group goes on as a
-    // list. What is left when the stream ends goes too -- a partial group is
-    // still what was said.
+    // list.
     std::vector<Value> gathered;
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
@@ -2781,8 +2775,6 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   if (name == "sum" || name == "avg") {
     // `sum` with no expression adds the values themselves; with one it adds
     // what the expression makes of each, which is what `| sum it.price` says.
-    // Addition is the one an expression's `+` does, so a stream of durations
-    // sums to a duration rather than to a number of seconds.
     Value total = Value::Integer(0);
     std::int64_t seen = 0;
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
@@ -2841,14 +2833,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   }
   if (name == "scan") {
     // `fold`, with the values published as they are computed rather than only
-    // the last one. Written identically on purpose: the difference between the
-    // two is where the values go, and nothing about how the state is carried.
-    //
-    // This is the shape a state machine has, and the reason it needed a stage
-    // of its own: `repeat` carries state but reads one stream from the start on
-    // every pass, and `for` reads a stream one value at a time but carries
-    // nothing between passes. Neither is a state machine over a stream; this
-    // is.
+    // the last one.
     Value carried = Value::Of(stage.start);
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
@@ -2859,9 +2844,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   }
   if (name == "sort") {
     // The whole stream, because which value comes first is not knowable until
-    // the last one has arrived. Stable, so values that compare equal stay in
-    // the order they were written -- `| sort by it.day` of a day's events keeps
-    // the events' own order.
+    // the last one has arrived.
     std::vector<std::pair<Value, ItemPtr>> keyed;
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value key, StageValue(stage, item, host));
@@ -2926,9 +2909,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   }
   if (name == "packb") {
     // An item read from a node keeps the producer's bytes, so a value that
-    // arrived packed is passed on untouched, tag and all. Anything else is
-    // decoded once and re-encoded, which is the only point at which a flow pays
-    // for the conversion.
+    // arrived packed is passed on untouched, tag and all.
     return each([&](const ItemPtr& item) -> absl::Status {
       if (item->chunk().has_value() &&
           BaseMimetype(item->Mimetype()) == data::kMsgpackMimetype) {
@@ -2975,6 +2956,8 @@ absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {
   return Fail(absl::StrCat(one.label, " has no status to read."));
 }
 
+// Which subject of a race finished first, as the value the barrier is. On the
+// scope that ran the step, because a nested body's race is that body's.
 /// Which subject of a race finished first, as the value the barrier is.
 ///
 /// Reading it is waiting for the barrier -- the same wait `after` does -- and
@@ -3052,13 +3035,7 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
   ValueCursor* cursor = nullptr;
   {
     thread::MutexLock lock(&monitor().mu());
-    // One cursor per ref, and one *subscription* per ref. The plan set aside a
-    // single reader slot for all the value reads of a ref together, so two
-    // steps arriving here at once must not both take it -- checking for the
-    // cursor and then subscribing is not enough, because both would find
-    // nothing and both would subscribe, and the second would be told the stream
-    // has more readers than the plan accounted for. Whoever arrives first makes
-    // it; the rest wait for it to be there.
+    // One cursor per ref, and one *subscription* per ref.
     ABSL_RETURN_IF_ERROR(monitor().Wait([owner, ref] {
       return owner->cursors_.contains(ref) ||
              !owner->opening_cursors_.contains(ref);
@@ -3113,7 +3090,7 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it) {
   absl::flat_hash_map<const syntax::Node*, Value> bound;
   // One value per *ref* per evaluation, not per mention of it: `strformat("%s
   // %s", x, x)` names one value twice and must not take two off the stream.
-  // Across statements they are separate reads, which is the whole point.
+  // Separate statements perform separate reads.
   absl::flat_hash_map<RefId, Value> taken;
   for (const auto& [node, ref] : one.bound) {
     const auto held = taken.find(ref);
@@ -3298,8 +3275,7 @@ absl::Status Scope::Run() {
   Group group(monitor());
   // A node of the flow's own that nothing writes is ended here, and without a
   // fibre each: `Finalize` hands the write and the close to the node's own
-  // writer pump, so the awaitables are collected and waited on together rather
-  // than one 256 KiB fibre per node parking on one of them.
+  // writer pump, so the awaitables are collected and waited on together.
   std::vector<a11::Task> closing;
   closing.reserve(unwritten_.size());
   for (const RefId ref : unwritten_) {
@@ -3375,10 +3351,7 @@ absl::Status Scope::Execute(StepId step) {
       return runner_->RunCall(*this, step);
     case StepKind::kPipe: {
       if (one.discard) {
-        // `-> _`. Deliberately not the shortcut a counted `skip` takes: the
-        // pipeline is *read*, so every stage on it does its work on every
-        // value, and the values are dropped only here, where there is nowhere
-        // left for them to go. Nothing is kept, and nothing else can see them.
+        // `-> _`.
         ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
         std::vector<ItemPtr> dropped;
         dropped.reserve(kQueueDepth);
@@ -3406,14 +3379,9 @@ absl::Status Scope::Execute(StepId step) {
       batch.reserve(kQueueDepth);
       while (true) {
         batch.clear();
-        // Both halves under the same `try`, because the author cannot tell which
-        // gave way: a source that aborted and a destination that refused the
-        // write are one event from here -- "this pipe did not finish".
-        //
-        // Tolerated here, at the statement, and not in the reader: a reader's
-        // tolerance is a property of the *ref*, reached through a bus shared by
-        // every reader of it, so putting it there would tolerate for readers
-        // that never said `try`.
+        // Both halves under the same `try`, because the author cannot tell
+        // which gave way: a source that aborted and a destination that refused
+        // the write are one event from here -- "this pipe did not finish".
         if (absl::Status read = reader->NextMany(batch, kQueueDepth);
             !read.ok()) {
           if (!one.tolerant) {
@@ -3443,9 +3411,7 @@ absl::Status Scope::Execute(StepId step) {
         return absl::OkStatus();
       }
       // `skip act` against a call whose real ports are not known here (an
-      // action from a registry): nothing to subscribe to. The call itself
-      // already drains every output nothing reads, so there is nothing left
-      // for this step to do.
+      // action from a registry): nothing to subscribe to.
       if (one.source == kNone) {
         return absl::OkStatus();
       }
@@ -3523,6 +3489,9 @@ absl::Status Scope::Execute(StepId step) {
       absl::StrCat("Cannot run a ", graph::StepKindName(one.kind), "."));
 }
 
+// `wait first of a, b` and `wait all of a, b`: several outcomes, one barrier.
+// What a race actually needs is one wait on a condition its candidates already
+// wake, which is what a call handle's `finished` is for.
 /// `wait first of a, b` and `wait all of a, b`: several outcomes, one barrier.
 ///
 /// Every outcome is read on its own fibre, because reading one blocks on
@@ -3532,9 +3501,9 @@ absl::Status Scope::Execute(StepId step) {
 /// not cancelled, because a flow that wanted them stopped has `cancel` to say
 /// so.
 ///
-/// A bad outcome is this flow's business unless every subject was a `try`, the
-/// same rule the single-subject form follows. For `first`, only the winner's
-/// outcome is looked at; for `all`, the first bad one of them.
+/// A failure propagates unless every subject was a `try`, matching the
+/// single-subject form. `first` checks only the winner; `all` returns the first
+/// failure.
 /// `wait first of a, b` and `wait all of a, b`: several subjects, one barrier.
 ///
 /// **No fibre per subject, and that is not a shortcut.** A `first` has to stop
@@ -3645,9 +3614,7 @@ absl::Status Scope::RunWait(StepId step) {
   if (one.timeout.has_value() && *one.timeout < absl::InfiniteDuration()) {
     // Reading the outcome blocks on whatever the subject is doing, so a timeout
     // is a race against that read rather than something the read itself knows
-    // about. The read runs in a group so that losing the race ends it: a fibre
-    // left holding a pointer to this scope after the statement has failed and
-    // the flow has been torn down is a crash, not a leak.
+    // about.
     struct Waiting {
       Monitor* absl_nonnull monitor;
       bool ready = false;
@@ -3780,12 +3747,10 @@ absl::Status Scope::AbortNode(StepId step) {
 /// only difference between the two, since `it` means nothing where there is no
 /// value in hand.
 ///
-/// What is logged keeps its own representation. A `logf` makes a string because
-/// that is what a format is for; a `log` hands the *value* over, so a record
-/// arrives as the record it is and a chunk that came off a port arrives with
-/// the bytes and mimetype it came with. Rendering it is the consumer's
-/// business, and a log that stringified everything on the way out would have
-/// taken that decision away from them.
+/// Logged values retain their representation. `logf` produces formatted text;
+/// `log` preserves records and chunk bytes
+/// with their mimetype. Consumers choose
+/// how to render the value.
 ///
 /// A failure to log is the flow's, not the log's: writing is what
 /// actions::Action::Log already declines to fail on, so what can go wrong here
@@ -3849,9 +3814,8 @@ absl::Status Scope::LogValue(const Value& value,
   const std::shared_ptr<actions::Action>& action = runner_->action();
   if (value.kind() == Value::Kind::kString) {
     // Built here rather than asked of the host: a host is entitled to answer a
-    // request for `text/plain` with the JSON spelling of the string -- the
-    // native bridge does -- and a logged string is the characters, not a quoted
-    // rendering of them.
+    // request for `text/plain` with the JSON spelling of the string the native
+    // bridge does and a logged string is the characters, not a quoted.
     data::Chunk chunk;
     chunk.metadata =
         data::ChunkMetadata{.mimetype = std::string(data::kTextMimetype)};
@@ -3883,10 +3847,10 @@ absl::Status Scope::Logged(const absl::Status& logged) {
 
 /// Remember how a nested body went, for a name bound to it to read.
 ///
-/// A block and a loop both have an outcome of their own rather than a call's, so
-/// both record it here and `StatusItem` reads it back after `StepDone`. One
-/// helper because the two must agree: a reader waiting on the wake this does is
-/// waiting on the same condition either way.
+/// A block and a loop both have an outcome of their own rather than a call's,
+/// so both record it here and `StatusItem` reads it back after `StepDone`. One
+/// helper because the two must agree: a reader waiting on the wake this does
+/// is waiting on the same condition either way.
 void Scope::Record(StepId step, const absl::Status& outcome) {
   {
     thread::MutexLock lock(&monitor().mu());
@@ -4024,9 +3988,7 @@ absl::Status Runner::Resolve(const std::string& name,
   if (const ResolvedFlow* sibling = program_->Flow(name); sibling != nullptr) {
     ABSL_ASSIGN_OR_RETURN(*schema, FlowSchema(sibling->plan));
     // A flow of this program that this flow runs is still the same client's, so
-    // its own `call` steps belong on the same stream. It cannot inherit that: a
-    // `run` step's action is bound to no stream precisely so its nodes stay off
-    // the wire.
+    // its own `call` steps belong on the same stream.
     ABSL_ASSIGN_OR_RETURN(
         *handler, MakeHandler(program_, name,
                               RunOptions{.bridge = bridge_,
@@ -4094,8 +4056,8 @@ absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
     ABSL_RETURN_IF_ERROR(nested->BindNodeMap(map));
   }
   if (!local && dispatch_stream_ != nullptr) {
-    // The flow is a client's, and this call is the peer's: give it the stream
-    // the flow itself deliberately does not hold.
+    // A peer call uses the dispatch stream, which the flow action does not
+    // hold.
     ABSL_RETURN_IF_ERROR(nested->BindStream(dispatch_stream_));
   }
   if (local) {
@@ -4293,12 +4255,9 @@ namespace {
 
 /// What a port's declared type is called in an [actions::ActionSchema].
 ///
-/// A schema's `type` is the *host's* name for the payload, because that is what
-/// a caller and a model are shown -- and A11's own schemas spell a built-in
-/// with the Python type's name, so a flow's ports have to as well or a
-/// composition would describe itself differently from a hand-written action. A
-/// tag and a mimetype go through as they were written: they already name a
-/// concrete thing.
+/// A schema's `type` is the host-visible payload name. Built-in types use their
+/// Python names so generated Flow schemas match hand-written action schemas.
+/// Tags and mimetypes are preserved as written.
 std::string SchemaType(std::string_view declared) {
   static const auto* const kNames =
       new absl::flat_hash_map<std::string_view, std::string_view>{

@@ -64,6 +64,7 @@ async def _peer() -> PeerClient:
         ) from unreachable
     return client
 
+
 SUITE = "scale"
 
 #: How long each measured window runs. Long enough that a 30k-session ramp step
@@ -127,16 +128,16 @@ def _read_int(path: str) -> int | None:
 def preflight(target_sessions: int, server_ports: int) -> Limits:
     """Read the host's limits and explain any that the target would exceed.
 
-    Deliberately does not *raise*: a run that cannot reach 30k on this host is
-    still worth doing at whatever it can reach, and a hard failure would hide
-    the rest of the ramp. The notes travel with the result so a number is never
-    read as an A11 ceiling when it was a `ulimit`.
+    Returns limit notes instead of raising. The benchmark can continue at the
+    supported scale, and each result retains the host limit that constrained it.
     """
     import resource
 
-    soft, _hard = resource.getlimit(resource.RLIMIT_NOFILE) if hasattr(
-        resource, "getlimit"
-    ) else resource.getrlimit(resource.RLIMIT_NOFILE)
+    soft, _hard = (
+        resource.getlimit(resource.RLIMIT_NOFILE)
+        if hasattr(resource, "getlimit")
+        else resource.getrlimit(resource.RLIMIT_NOFILE)
+    )
     port_range: tuple[int, int] | None = None
     somaxconn: int | None = None
     if platform.system() == "Linux":
@@ -290,7 +291,8 @@ def _call(item: _Session, schema):
     the first version of this file failed.
     """
     return (
-        a11.Action(schema)
+        a11
+        .Action(schema)
         .bind_node_map(item.session.node_map)
         .bind_session(item.session)
         .bind_stream(item.stream)
@@ -326,8 +328,13 @@ async def _one_compute(item: _Session, rounds: int) -> None:
     await call.wait(_OP_TIMEOUT)
 
 
-async def _drive(item: _Session, slice_: Slice, deadline: float,
-                 samples: list[float], failures: list[str]) -> None:
+async def _drive(
+    item: _Session,
+    slice_: Slice,
+    deadline: float,
+    samples: list[float],
+    failures: list[str],
+) -> None:
     """Call in a loop until the window closes, recording each latency."""
     payload = b"b" * slice_.bulk_bytes
     while time.perf_counter() < deadline:
@@ -375,8 +382,10 @@ async def _run_slice(slice_: Slice) -> dict[str, Any]:
         chunk = wanted[start : start + _CONNECT_WAVE]
         wave_started = time.perf_counter()
         await asyncio.gather(
-            *(open_one(start + offset, population)
-              for offset, population in enumerate(chunk))
+            *(
+                open_one(start + offset, population)
+                for offset, population in enumerate(chunk)
+            )
         )
         slowest_wave = max(slowest_wave, time.perf_counter() - wave_started)
     connect_seconds = time.perf_counter() - connect_started
@@ -386,8 +395,13 @@ async def _run_slice(slice_: Slice) -> dict[str, Any]:
     deadline = time.perf_counter() + slice_.window_seconds
     await asyncio.gather(
         *(
-            _drive(item, slice_, deadline, samples[item.population],
-                   failures[item.population])
+            _drive(
+                item,
+                slice_,
+                deadline,
+                samples[item.population],
+                failures[item.population],
+            )
             for item in sessions
         )
     )
@@ -414,7 +428,7 @@ async def _run_slice(slice_: Slice) -> dict[str, Any]:
 
 
 def _worker_entry(payload: dict[str, Any], results) -> None:
-    """Process entry point. Deliberately tiny: everything else is async.
+    """Run the asynchronous worker from a process entry point.
 
     The pool width is pinned *before* a11 is touched. Each worker process brings
     its own A11 runtime -- a uv loop and a worker pool -- and a default pool is
@@ -428,7 +442,10 @@ def _worker_entry(payload: dict[str, Any], results) -> None:
     try:
         results.put(asyncio.run(_run_slice(slice_)))
     except Exception as error:  # noqa: BLE001
-        results.put({"worker": slice_.worker, "fatal": f"{type(error).__name__}: {error}"})
+        results.put({
+            "worker": slice_.worker,
+            "fatal": f"{type(error).__name__}: {error}",
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -454,8 +471,9 @@ def _percentiles(values: list[float]) -> dict[str, float]:
     }
 
 
-async def _start_services(peer: PeerClient, transport: str,
-                          count: int) -> list[int]:
+async def _start_services(
+    peer: PeerClient, transport: str, count: int
+) -> list[int]:
     """One listener per `count`, because one is not enough tuple space.
 
     Returns the ports. Several listeners on the server is the cheapest way to
@@ -472,9 +490,8 @@ async def _start_services(peer: PeerClient, transport: str,
 def _launch(slices: list[Slice]) -> list[dict[str, Any]]:
     """Run every slice in its own process and collect the results.
 
-    `spawn` rather than `fork`: the parent has an asyncio loop and native
-    threads (the uv loop, the worker pool) running, and forking a process with
-    those is how a benchmark acquires a mystery deadlock.
+    Use `spawn` because the parent already has an asyncio loop and native
+    threads. Forking that state can deadlock the benchmark.
     """
     context = multiprocessing.get_context("spawn")
     results = context.Queue()
@@ -487,11 +504,9 @@ def _launch(slices: list[Slice]) -> list[dict[str, Any]]:
         process.start()
         processes.append(process)
 
-    # Collected by polling rather than by a long blocking get, because a worker
-    # that dies without posting a result would otherwise hang the parent for the
-    # whole timeout -- and a worker holding thousands of sessions has plenty of
-    # ways to die (a descriptor limit, the OOM killer, a native abort). The loop
-    # exits as soon as every process is either accounted for or gone.
+    # Poll so a worker that exits without posting a result cannot hold the
+    # parent until the full timeout. Stop once every process is accounted for
+    # or has exited.
     import queue as queue_module
 
     collected: list[dict[str, Any]] = []
@@ -519,8 +534,10 @@ def _launch(slices: list[Slice]) -> list[dict[str, Any]]:
     if missing > 0:
         collected.append({
             "worker": -1,
-            "fatal": f"{missing} of {len(processes)} client workers produced no "
-                     f"result (died or exceeded {_LAUNCH_TIMEOUT:.0f}s)",
+            "fatal": (
+                f"{missing} of {len(processes)} client workers produced no "
+                f"result (died or exceeded {_LAUNCH_TIMEOUT:.0f}s)"
+            ),
         })
     return collected
 
@@ -647,7 +664,9 @@ async def population_ramp(scale: float) -> list[Result]:
             if note_peer_died:
                 note_parts.append(note_peer_died)
             if merged["fatal"]:
-                note_parts.append("worker fatal: " + "; ".join(merged["fatal"][:2]))
+                note_parts.append(
+                    "worker fatal: " + "; ".join(merged["fatal"][:2])
+                )
             if merged["examples"]:
                 note_parts.append("examples: " + " | ".join(merged["examples"]))
 
@@ -744,7 +763,9 @@ async def _sample_server(host: str, port: int, peak: dict[str, float]) -> None:
             await sampler.aclose()
 
 
-def _server_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, float]:
+def _server_delta(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, float]:
     """What the server spent, from its own accounting."""
     out: dict[str, float] = {}
     cpu_before = float(before.get("cpu_s", 0.0))

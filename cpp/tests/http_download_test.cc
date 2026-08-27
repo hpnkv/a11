@@ -67,7 +67,8 @@ class DownloadTestServer {
   int served_ = 0;
 };
 
-/// A directory of its own per test, so a cache hit is never another test's file.
+/// A directory of its own per test, so a cache hit is never another test's
+/// file.
 class HttpDownloadTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -135,7 +136,7 @@ TEST_F(HttpDownloadTest, AVerifiedCacheHitDoesNotReachTheNetwork) {
   ASSERT_TRUE(Download(server.Url("/model.bin"), options).Await(Soon()).ok());
   EXPECT_EQ(server.served(), 1);
 
-  // The point of the cache: asking again is free.
+  // The second request uses the cached value.
   const auto again = Download(server.Url("/model.bin"), options).Await(Soon());
   ASSERT_TRUE(again.ok()) << again.status();
   EXPECT_EQ(server.served(), 1);

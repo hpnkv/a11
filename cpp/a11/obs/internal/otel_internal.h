@@ -17,8 +17,6 @@
 
 namespace a11::obs::internal {
 
-// The tracer used to mint spans. Only valid when Configure() has succeeded;
-// callers gate on IsConfigured() first.
 opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> GlobalTracer();
 
 // The in-memory span buffer, or nullptr unless the in-memory exporter is

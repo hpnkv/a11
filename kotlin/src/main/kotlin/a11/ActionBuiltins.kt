@@ -3,16 +3,11 @@ package a11
 /**
  * The actions every A11 peer answers, whatever it was built to do.
  *
- * The Kotlin half of `cpp/a11/actions/builtins.h`, and the reason the IDE plugin
- * no longer announces anything: a gateway asks what this side serves, and this
- * is what answers.
+ * This is the Kotlin counterpart of `cpp/a11/actions/builtins.h`. A gateway
+ * discovers what this side serves by calling these actions.
  *
- * These are not registrations. A peer that cannot be asked has to be told, and
- * telling is what four hand-copied handshakes were for -- so discovery cannot be
- * something an application remembers to install. It has to hold for a registry
- * nobody configured and for one an application has called `unregister` all over,
- * which rules out being an entry in the map. What holds instead is this table,
- * consulted by [ActionRegistry] on a miss.
+ * These are not registrations. Discovery must remain available for an empty or
+ * modified registry, so [ActionRegistry] consults this table on a miss.
  *
  * The handlers reach their registry through the action they were given rather
  * than capturing one, which is what keeps this an object and not a cycle.
@@ -91,15 +86,13 @@ private class SchemaQuery(
 
 private fun parseQuery(encoded: String): SchemaQuery {
     val trimmed = encoded.trim()
-    // No request is the default request: asking a peer what it serves, with
-    // nothing further to say, is the common case and must not need a document.
+    // An empty request uses the default query.
     if (trimmed.isEmpty() || trimmed == "null") return SchemaQuery()
     val parsed = A11Json.parse(trimmed)
     if (parsed !is Ok) return SchemaQuery()
     val value = parsed.value
     if (value is List<*>) {
-        // A bare array is read as patterns, because that is what a caller who
-        // wrote one meant.
+        // A bare array is read as name patterns.
         return SchemaQuery(names = value.filterIsInstance<String>())
     }
     val asked = value as? Map<*, *> ?: return SchemaQuery()

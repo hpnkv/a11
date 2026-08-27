@@ -85,7 +85,7 @@ TEST(FlowDiscover, FindsAPythonSchemaWholeWithItsPortsAndItsOrigin) {
   EXPECT_TRUE(text->required);
   EXPECT_TRUE(text->unary);
 
-  // The origin is the whole point: an action declared in a project file is a
+  // The origin makes an action declared in a project file a
   // "go to declaration" target for the first time, and the position has to be
   // the declaration rather than the top of the file.
   ASSERT_TRUE(simple->origin.has_value());
@@ -110,9 +110,9 @@ TEST(FlowDiscover, JoinsProseWrittenAcrossLinesAndGivesBackTheIndentation) {
         << name << ": " << action->description;
   }
 
-  // A `"""..."""` description gives back the indentation the source put in front
-  // of it, as the Flow parser does for its own: the text is what a reader is
-  // shown, and twelve spaces of Python indentation are not part of it.
+  // A `"""..."""` description gives back the indentation the source put in
+  // front of it, as the Flow parser does for its own: the text is what a reader
+  // is shown, and twelve spaces of Python indentation are not part of it.
   const catalogue::ActionInfo* prose = Find(Scanned(), "prose");
   ASSERT_NE(prose, nullptr);
   const catalogue::PortInfo* question = Port(prose->inputs, "question");
@@ -175,10 +175,7 @@ TEST(FlowDiscover, ReadsACppSchemaAssembledStatementByStatement) {
 }
 
 TEST(FlowDiscover, DegradesRatherThanGuessingWhereItCannotRead) {
-  // Three limits, each pinned here rather than left to be discovered. All three
-  // are the scanner reading *less* than everything, which is the failure mode
-  // worth having: a port with no type says less than it could, and a port with
-  // the wrong type would send somebody looking for a bug in their flow.
+  // Three limits, each pinned here rather than left to be discovered.
   const catalogue::ActionInfo* action = Find(Scanned(), "cpp-assembled");
   ASSERT_NE(action, nullptr);
 
@@ -291,12 +288,13 @@ TEST(FlowCatalogue, CarriesAnOriginThroughJsonAndAMerge) {
   EXPECT_EQ(before->origin, after->origin);
 
   // A merge replaces a whole entry, so an entry from a live registry does not
-  // inherit a scanned one's origin: half a description from each side would be a
-  // third thing that is true of neither.
+  // inherit a scanned one's origin: half a description from each side would be
+  // a third thing that is true of neither.
   const catalogue::Catalogue live = catalogue::Catalogue::FromJson(
       nlohmann::json::parse(R"({"actions": [{"name": "simple",
                                              "description": "From a registry."}]})"));
-  // Held by name, not chained: `Action` points into the catalogue, and a pointer
+  // Held by name, not chained: `Action` points into the catalogue, and a
+  // pointer
   // into a temporary would dangle at the semicolon.
   const catalogue::Catalogue merged = scanned.MergedWith(live);
   const catalogue::ActionInfo* entry = merged.Action("simple");

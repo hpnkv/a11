@@ -13,10 +13,7 @@
 
 namespace a11::data {
 
-// JSON encoding used by A11's HTTP/SSE transports. Byte strings are base64
-// encoded, timestamps use RFC 3339, and omitted/default fields accepted by the
-// Python Pydantic models are emitted explicitly where that removes union
-// ambiguity.
+// JSON encoding used by A11's HTTP/SSE transports.
 absl::StatusOr<nlohmann::json> WireMessageToJsonValue(
     const WireMessage& message);
 absl::StatusOr<std::string> WireMessageToJson(const WireMessage& message);

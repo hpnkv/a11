@@ -43,9 +43,9 @@ private const val READ_TIMEOUT_MS = 5_000L
  *
  * A key, not a port. Narration travels on the action's own log port, which no
  * schema declares — so there is nothing to announce, nothing for a gateway to
- * rename, and nothing a flow's `call` step can fail to recognise. The A11 handler
- * picks this out of the result and logs it; see `webview/src/ideTools.ts`, which
- * uses the same string and must keep using it.
+ * rename, and nothing a flow's `call` step can fail to recognise. The A11
+ * handler picks this out of the result and logs it; see
+ * `webview/src/ideTools.ts`, which uses the same string and must keep using it.
  */
 const val RUN_LOG_KEY = "run_log"
 
@@ -97,15 +97,17 @@ private fun fileName(path: String?): String = path?.substringAfterLast('/') ?: "
 /**
  * A run log: one summary line, then markdown detail.
  *
- * The first line is what the UI shows folded, so it has to stand alone; the rest
- * is only read when someone opens the box.
+ * The first line is what the UI shows folded, so it has to stand alone; the
+ * rest is only read when someone opens the box.
  */
 private fun runLog(summary: String, vararg details: String): String {
     val body = details.filter { it.isNotBlank() }
     return if (body.isEmpty()) summary else "$summary\n\n${body.joinToString("\n\n")}"
 }
 
-/** A markdown bullet list of [items], truncated with a count of what it hides. */
+/**
+ * A markdown bullet list of [items], truncated with a count of what it hides.
+ */
 private fun bullets(items: List<String>, limit: Int = 10): String {
     if (items.isEmpty()) return ""
     val shown = items.take(limit).joinToString("\n") { "- `$it`" }
@@ -121,7 +123,10 @@ private fun objectOn(inputs: Map<String, Any?>, port: ActionPortSchema): Map<Str
     return value as Map<String, Any?>
 }
 
-/** Read a required non-blank string field, or fail with a caller-facing message. */
+/**
+ * Read a required non-blank string field,
+ * or fail with a caller-facing message.
+ */
 private fun requiredString(json: Map<String, Any?>, field: String): String {
     val value = json[field]
     require(value is String && value.isNotBlank()) {
@@ -130,7 +135,9 @@ private fun requiredString(json: Map<String, Any?>, field: String): String {
     return value
 }
 
-/** Read an optional integer field bounded below by [minimum]; null when absent. */
+/**
+ * Read an optional integer field bounded below by [minimum]; null when absent.
+ */
 private fun optionalInt(json: Map<String, Any?>, field: String, minimum: Int): Int? {
     val value = json[field] ?: return null
     require(value is Number) { "'$field' must be a number." }
@@ -164,15 +171,17 @@ private fun optionalStrings(json: Map<String, Any?>, field: String): List<String
 }
 
 /**
- * Request DTO for `get_active_file`: which slice of the file's text to return, and
- * how to number it.
+ * Request DTO for `get_active_file`: which slice of the file's text to return,
+ * and how to number it.
  *
- * [lineLimit] is how a caller keeps a large file from flooding a model's context;
- * paging through the file means repeating the call with a bumped [lineOffset].
+ * [lineLimit] is how a caller keeps a large file from flooding a model's
+ * context; paging through the file means repeating the call with a bumped
+ * [lineOffset].
  *
- * [includeLineNumbers] is spelled and behaves exactly as [ReadFileRequest]'s: same
- * field name, same 0-based number, same tab. A caller that has learnt one of these
- * tools has learnt the other, and a numbered line means one thing in this plugin.
+ * [includeLineNumbers] is spelled and behaves exactly as [ReadFileRequest]'s:
+ * same field name, same 0-based number, same tab. A caller that has learnt one
+ * of these tools has learnt the other, and a numbered line means one thing in
+ * this plugin.
  */
 data class ActiveFileRequest(
     val lineOffset: Int,
@@ -261,9 +270,9 @@ data class SearchProjectRequest(val query: String, val maxResults: Int = DEFAULT
 /**
  * Request DTO for `rename_symbol`.
  *
- * [name] alone is usually enough; [line] and [column] are there for the case where
- * one file declares several symbols with the same name, which the tool reports
- * rather than guessing at.
+ * [name] alone is usually enough; [line] and [column] are there for the case
+ * where one file declares several symbols with the same name, which the tool
+ * reports rather than guessing at.
  */
 data class RenameSymbolRequest(
     val name: String,
@@ -304,8 +313,8 @@ data class RenameSymbolRequest(
  * Request DTO for `read_file`: which file, which lines, and how to number them.
  *
  * The same 0-based, `end_line`-inclusive range as [FileHighlightsRequest], so a
- * highlight's own coordinates can be handed straight back here to read the lines
- * it sits on.
+ * highlight's own coordinates can be handed straight back here to read the
+ * lines it sits on.
  */
 data class ReadFileRequest(
     val path: String,
@@ -363,10 +372,9 @@ data class ReadFileRequest(
 /**
  * Request DTO for `get_error_highlights`: which file, and which lines of it.
  *
- * Lines are 0-based here and in the results, so a caller can hand a highlight's
- * `start_line` straight back as a `start_line` bound. [endLine] is inclusive, and
- * omitting it means "to the end of the file" — the common case of asking about
- * everything from a point onwards.
+ * Lines are 0-based here and in the results, so a highlight's `start_line` can
+ * be reused as the lower bound. [endLine] is inclusive; null selects through
+ * the end of the file.
  */
 data class FileHighlightsRequest(val path: String, val startLine: Int, val endLine: Int?) {
     companion object {
@@ -405,9 +413,10 @@ data class FileHighlightsRequest(val path: String, val startLine: Int, val endLi
 /**
  * Which file `get_file_symbols` should report, and which of its symbols.
  *
- * Every field is optional and an omitted one narrows nothing — including [path],
- * whose absence means the file in the active editor. Filtering happens in the
- * IDE, so a caller asking about one part of a large file pays for that part only.
+ * Every field is optional and an omitted one narrows nothing — including
+ * [path], whose absence means the file in the active editor. Filtering happens
+ * in the IDE, so a caller asking about one part of a large file pays for that
+ * part only.
  */
 data class FileSymbolsRequest(
     val path: String?,
@@ -416,7 +425,10 @@ data class FileSymbolsRequest(
     val lineLimit: Int?,
     val kinds: List<String>,
 ) {
-    /** Whether [symbol] — one entry of the `symbols` output — survives the filters. */
+    /**
+     * Whether [symbol] — one entry of the
+     * `symbols` output — survives the filters.
+     */
     fun keeps(symbol: Map<String, Any?>): Boolean {
         val name = symbol["name"] as? String ?: ""
         if (namePattern != null && !namePattern.containsMatchIn(name)) return false
@@ -431,7 +443,9 @@ data class FileSymbolsRequest(
         return kinds.any { kind.contains(it, ignoreCase = true) }
     }
 
-    /** How the narrowing reads in a run log; empty when nothing was narrowed. */
+    /**
+     * How the narrowing reads in a run log; empty when nothing was narrowed.
+     */
     fun describe(): String = listOfNotNull(
         namePattern?.let { "name matching `${it.pattern}`" },
         lineOffset?.let { "from line ${it + 1}" },
@@ -473,7 +487,10 @@ data class FileSymbolsRequest(
             emptyList(),
         )
 
-        /** What a request asked for; all-empty JSON means "the active file, whole". */
+        /**
+         * What a request asked for; all-empty
+         * JSON means "the active file, whole".
+         */
         fun fromJson(json: Map<String, Any?>) = FileSymbolsRequest(
             path = optionalString(json, "path"),
             namePattern = optionalString(json, "name_pattern")?.let { pattern ->
@@ -531,10 +548,15 @@ private val RENAME_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
  */
 private val MIN_REPORTED_SEVERITY: HighlightSeverity = HighlightSeverity.WARNING
 
-/** How much of a highlighted range's text a result carries before it is clipped. */
+/**
+ * How much of a highlighted range's text
+ * a result carries before it is clipped.
+ */
 private const val MAX_HIGHLIGHT_TEXT = 500
 
-/** JSON Schema of one entry on the `get_error_highlights` `highlights` output. */
+/**
+ * JSON Schema of one entry on the `get_error_highlights` `highlights` output.
+ */
 private val HIGHLIGHT_SCHEMA: Map<String, Any?> = objectSchema(
     "One warning or error highlight — a yellow or red underline the IDE's analysis draws.",
     linkedMapOf(
@@ -563,10 +585,15 @@ private val HIGHLIGHT_SCHEMA: Map<String, Any?> = objectSchema(
     listOf("severity", "start_line", "end_line", "start_column", "end_column", "text", "message"),
 )
 
-/** The analyzed file's path, and the highlights found inside the requested lines. */
+/**
+ * The analyzed file's path, and the
+ * highlights found inside the requested lines.
+ */
 data class FileHighlights(val path: String, val highlights: List<Map<String, Any?>>)
 
-/** A file's path, the lines read from it, and the 0-based line they start at. */
+/**
+ * A file's path, the lines read from it, and the 0-based line they start at.
+ */
 data class FileLines(val path: String, val lines: List<String>, val firstLine: Int)
 
 /** JSON Schema of the `apply_patch` metadata object. */
@@ -588,7 +615,9 @@ data class FileSymbols(val path: String?, val symbols: List<Map<String, Any?>>)
 /** The active editor's path, and the slice of its lines a caller asked for. */
 data class ActiveFileSlice(val path: String?, val lines: List<String>)
 
-/** Where the selection sits, and the lines it covers; both empty without one. */
+/**
+ * Where the selection sits, and the lines it covers; both empty without one.
+ */
 data class SelectionSlice(val metadata: Map<String, Any?>?, val lines: List<String>)
 
 /** JSON Schema of the `get_selection` metadata object. */
@@ -608,8 +637,8 @@ private val SELECTION_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
  * A unary JSON input port typed by the JSON Schema of the object it carries.
  *
  * Required by default: a tool that cannot run without its arguments should say
- * so. An input the tool has a sensible answer for when it is omitted — a filter,
- * say — passes `required = false`.
+ * so. An input the tool has a sensible answer for when it is omitted — a
+ * filter, say — passes `required = false`.
  */
 private fun jsonInput(
     name: String,
@@ -627,10 +656,9 @@ private fun jsonInput(
 /**
  * A unary JSON output port typed by the JSON Schema of the object it carries.
  *
- * Outputs default to optional: a port only counts as [required] when the tool
- * always has something to put there. Where nothing — no selection, no open file,
- * no match — is a perfectly good answer, saying "required" would promise a value
- * the tool cannot always produce.
+ * Outputs default to optional. Set [required] only when every successful call
+ * produces a value; an absent selection, open file, or match uses an empty
+ * optional output.
  */
 private fun jsonOutput(
     name: String,
@@ -649,9 +677,8 @@ private fun jsonOutput(
 /**
  * A unary text input port, for a tool whose argument *is* one string.
  *
- * The alternative — one JSON object with one string field — buys nothing here and
- * costs the caller an envelope. A patch is text, and a path is text; a tool that
- * takes two of them says so with two ports.
+ * A patch or path is represented directly as text. Tools that accept multiple
+ * text values define multiple ports.
  */
 private fun textInput(name: String, description: String) = ActionPortSchema(
     name,
@@ -671,10 +698,10 @@ private fun requireText(inputs: Map<String, Any?>, port: ActionPortSchema): Stri
 }
 
 /**
- * A text output port. Its MIME type already says the values are text, so it needs
- * no JSON Schema: [a11.sdk.ToolAdapter] derives a string (or an array of strings,
- * when the port streams) from `text/plain` alone. Optional by default, for the
- * reason [jsonOutput] gives.
+ * A text output port. Its MIME type already says the values are text, so it
+ * needs no JSON Schema: [a11.sdk.ToolAdapter] derives a string (or an array of
+ * strings, when the port streams) from `text/plain` alone. Optional by default,
+ * for the reason [jsonOutput] gives.
  */
 private fun textOutput(
     name: String,
@@ -690,20 +717,18 @@ private fun textOutput(
 )
 
 /**
- * A tool's run log for the person watching: one short summary line, optionally
- * followed by markdown detail. It is *not* part of the model's contract — the
- * mirrors strip it before the tool is announced, so it never enters the
- * conversation — it exists so the UI can show what a tool call actually did.
+ * A tool's UI log: one summary line followed by optional markdown detail.
+ * Mirrors remove it before advertising the tool, so it is not part of the
+ * model-facing contract.
  */
 
 /**
  * One IDE tool: its port contract, and the body that runs it.
  *
- * [run] takes the inputs keyed by port name and returns the outputs keyed by port
- * name — a unary port's single value, or the list of values a streaming port
- * carries — plus its narration under [RUN_LOG_KEY], which is not a port. Both the
- * A11 handler and the direct bridge call go through it, so the two paths cannot
- * drift.
+ * [run] takes the inputs keyed by port name and returns the outputs keyed by
+ * port name — a unary port's single value, or the list of values a streaming
+ * port carries, plus its UI log under [RUN_LOG_KEY], which is not a port. The
+ * A11 handler and direct bridge both use this implementation.
  */
 private class Tool(
     val schema: ActionSchema,
@@ -733,21 +758,17 @@ private fun tool(
  * dispatches a tool call, the plugin's [a11.Session] runs the handler here with
  * live IDE access and tees the JSON result back.
  *
- * The same tools are also reachable directly — without any A11 session — via
- * [listDescriptors] and [runByName], which the JCEF webview drives through the
- * JS↔Kotlin bridge (for both the reverse-dispatched chat tools and the manual
- * action explorer). Both paths run the same [Tool.run] bodies, so the schemas and
- * behavior stay identical.
+ * [listDescriptors] and [runByName] also expose the tools directly to the JCEF
+ * webview through the JS↔Kotlin bridge, without an A11 session. Both entry
+ * points use the same [Tool.run] implementations.
  *
  * Each tool names its own ports and types them: an argument-taking tool takes a
  * JSON object typed by its request DTO's schema (e.g. [FindFileRequest]), and
- * results come back on ports typed either by a MIME type (`text/plain`, streaming
- * one value per line or path) or by a JSON Schema. An output is marked required
- * only when the tool always has something to put on it; no selection, no open
- * file, and no match are all valid answers here, so most outputs are optional and
- * simply carry nothing. `request` is a conventional name these tools happen to
- * use, nothing more — the plumbing below reads and writes whatever ports a schema
- * declares.
+ * results come back on ports typed either by a MIME type (`text/plain`,
+ * streaming one value per line or path) or by a JSON Schema. An output is
+ * marked required only when every successful call produces a value. Most
+ * outputs are optional because a selection, open file, or match may be absent.
+ * `request` is only a naming convention; dispatch uses the declared ports.
  *
  * All IDE reads happen under a read action (and the EDT where the editor model
  * requires it), so handlers are safe to run off the platform's UI thread.
@@ -768,21 +789,27 @@ class IdeTools(private val project: Project) {
         searchProjectTool(),
     ).associateBy { it.schema.name }
 
-    /** Build the client registry of IDE tools and their reverse-dispatch descriptors. */
+    /**
+     * Build the client registry of IDE tools
+     * and their reverse-dispatch descriptors.
+     */
     fun buildRegistry(): Pair<ActionRegistry, List<Map<String, Any?>>> {
         val registry = ActionRegistry()
         for (tool in tools.values) register(registry, tool)
         return registry to listDescriptors()
     }
 
-    /** The reverse-dispatch/tool descriptors for every IDE tool, in stable order. */
+    /**
+     * The reverse-dispatch/tool descriptors
+     * for every IDE tool, in stable order.
+     */
     fun listDescriptors(): List<Map<String, Any?>> = tools.values.map { describe(it) }
 
     /**
-     * Run one IDE tool by name with its inputs keyed by port name — a unary port
-     * holds a single value, a streaming port a list of them — and return its
-     * outputs the same way. Used by the JCEF bridge (both the chat tool round-trip
-     * and the action explorer); no A11 session is involved.
+     * Run one IDE tool by name with its inputs keyed by port name — a unary
+     * port holds a single value, a streaming port a list of them — and return
+     * its outputs the same way. Used by the JCEF bridge (both the chat tool
+     * round-trip and the action explorer); no A11 session is involved.
      */
     fun runByName(name: String, inputs: Map<String, Any?>): Map<String, Any?> {
         val tool = tools[name] ?: error("Unknown IDE tool '$name'.")
@@ -800,9 +827,9 @@ class IdeTools(private val project: Project) {
             } catch (error: Throwable) {
                 return@handler Status.fromException(error, "IDE tool '${schema.name}' failed.")
             }
-            // Narration, off the result map and onto the action's own log. Never a
-            // port: the log port is in no schema, so what a tool says about itself
-            // cannot become part of the result a model is shown.
+            // Narration, off the result map and onto the action's own log.
+            // Never a port: the log port is in no schema, so what a tool says
+            // about itself cannot become part of the result a model is shown.
             logNarration(action, outputs[RUN_LOG_KEY])
             writeOutputs(action, schema, outputs).let { if (!it.isOk) return@handler it }
             Status.ok()
@@ -812,9 +839,8 @@ class IdeTools(private val project: Project) {
     /**
      * Log what a tool said about its run, if it said anything.
      *
-     * A tool hands its narration back as a string or as the lines of one; either
-     * reads as the log a person sees. Best effort: a run log is worth nothing next
-     * to the tool's actual result, so one that will not write does not fail the
+     * A tool hands its narration back as a string or as the lines of one;
+     * either is rendered as a UI log. Log-write failures do not fail the tool
      * call.
      */
     private suspend fun logNarration(action: Action, narration: Any?) {
@@ -830,12 +856,11 @@ class IdeTools(private val project: Project) {
     /**
      * Write the tool's outputs onto the ports its schema declares: a unary port
      * takes its single value, a streaming port one value per item with the last
-     * marked final, and a port the tool had nothing for is simply closed.
+     * marked final. A port with no value is closed without a chunk.
      *
-     * Nothing is ever written as an explicit null. A null chunk is a *value* on
-     * the wire, and a consumer that decodes an action's outputs — the LLM tool
-     * runner, for one — has no type to decode it as; closing an empty port says
-     * "nothing here" without putting an undecodable value in front of anyone.
+     * Null is not used to represent an absent output. A null chunk is a wire
+     * value that requires a declared decode type; closing the port represents
+     * absence without introducing an undecodable value.
      */
     private suspend fun writeOutputs(
         action: Action,
@@ -866,13 +891,15 @@ class IdeTools(private val project: Project) {
     }
 
     /**
-     * Read the tool's declared inputs, keyed by port name: a unary port yields its
-     * single value, a streaming port the list of values it carried. A port that is
-     * absent or empty is left out, so a handler sees exactly what the caller sent.
+     * Read the tool's declared inputs, keyed by port name: a unary port yields
+     * its single value, a streaming port the list of values it carried. A port
+     * that is absent or empty is left out, so a handler sees exactly what the
+     * caller sent.
      */
     private suspend fun readInputs(action: Action, schema: ActionSchema): Map<String, Any?> = coroutineScope {
         // Read every port concurrently, for the same reason the outputs are
-        // written concurrently: the caller fills them in its own order, not ours.
+        // written concurrently: the caller fills them in its own order, not
+        // ours.
         val read = schema.inputs.values.map { port ->
             async {
                 if (!action.containsPort(port.name)) return@async null
@@ -898,8 +925,9 @@ class IdeTools(private val project: Project) {
     /**
      * The active file's path and the requested slice of its lines.
      *
-     * An offset past the end of the file is not an error, it just yields no lines;
-     * a caller pages through a large file by bumping the offset until that happens.
+     * An offset past the end of the file is not an error, it just yields no
+     * lines; a caller pages through a large file by bumping the offset until
+     * that happens.
      */
     private fun getActiveFile(request: ActiveFileRequest): ActiveFileSlice = onEdtRead {
         val manager = FileEditorManager.getInstance(project)
@@ -912,8 +940,7 @@ class IdeTools(private val project: Project) {
             val text = document.getText(
                 TextRange(document.getLineStartOffset(line), document.getLineEndOffset(line)),
             )
-            // The file's own line number, not the slice's: a caller that paged in
-            // from line 200 needs the numbers the file has, or they locate nothing.
+            // Retain absolute file line numbers when returning a page.
             if (request.includeLineNumbers) "$line\t$text" else text
         }
         ActiveFileSlice(path, lines)
@@ -926,10 +953,11 @@ class IdeTools(private val project: Project) {
     /**
      * Where the current selection sits, and the lines it covers.
      *
-     * `lines` holds the selected text itself, so a selection that starts or ends
-     * mid-line yields that partial line — what the user highlighted, not the whole
-     * lines around it. With no selection there is nothing to describe: no metadata
-     * and no lines.
+     * `lines` holds the selected text
+     * itself, so a selection that starts or ends
+     * mid-line yields that partial line — what the user highlighted, not the
+     * whole lines around it. With no selection there is nothing to describe: no
+     * metadata and no lines.
      */
     private fun getSelection(): SelectionSlice = onEdtRead {
         val manager = FileEditorManager.getInstance(project)
@@ -948,15 +976,12 @@ class IdeTools(private val project: Project) {
     /**
      * Every named symbol a file's PSI tree declares, in source order.
      *
-     * `PsiNamedElement` is the language-agnostic notion of "something with a name",
-     * so this works in any language the IDE can parse without knowing the dialect;
-     * `kind` is the parser's own element type, which is as close to a portable
-     * classification as the platform offers.
+     * `PsiNamedElement` provides language-independent named declarations.
+     * `kind` contains the parser's element type as the available portable
+     * classification.
      *
-     * With no path, the file in the active editor — which is the question "what is
-     * in front of me" and needs no argument. With one, any file of the project,
-     * open or not, because a caller reasoning about a file it found by name should
-     * not have to open it first.
+     * With no path, inspect the active editor. A path may select any project
+     * file, whether open or closed.
      */
     private fun getFileSymbols(path: String?): FileSymbols = onEdtRead {
         if (path != null) {
@@ -974,14 +999,14 @@ class IdeTools(private val project: Project) {
         FileSymbols(active, namedElements(psiFile).map { describeSymbol(it, document) })
     }
 
-    // --- reading a file --------------------------------------------------------
+    // --- reading a file
+    // --------------------------------------------------------
 
     /**
      * The requested lines of a file, as text.
      *
-     * Read from the *document* rather than from disk, so what comes back is what
-     * the editor shows — including edits nobody has saved yet, which is the version
-     * every other tool here reports on too.
+     * Reads the editor document, including unsaved edits, to match the source
+     * used by the other IDE tools.
      */
     private fun readFile(request: ReadFileRequest): FileLines = onEdtRead {
         val target = resolveFile(request.path)
@@ -999,21 +1024,18 @@ class IdeTools(private val project: Project) {
         FileLines(target.path, lines, from)
     }
 
-    // --- patching a file -------------------------------------------------------
+    // --- patching a file
+    // -------------------------------------------------------
 
     /**
      * Apply a unified diff to one file, as a single undoable command.
      *
-     * One command, so one Undo takes it back — the same reversibility a rename
-     * has, and for the same reason: the IDE's own undo stack, not a copy of the
-     * file kept somewhere. The document is saved after, because a patch to a file
-     * nobody has open would otherwise sit in memory looking applied.
+     * The entire patch is one IDE command and therefore one undo operation.
+     * The document is saved so patches to closed files reach disk.
      *
-     * Hunks are located by their context rather than by the line numbers in their
-     * `@@` header (which is advisory here), and each has to match: a patch that
-     * does not fit the file is refused with the text that was there instead. That
-     * is the only safe answer for an edit nobody is watching — a fuzzy match is
-     * how a tool silently rewrites the wrong lines.
+     * Hunks are located by context; line numbers in `@@` headers are advisory.
+     * Every hunk must match exactly. A mismatch returns the current text and
+     * leaves the document unchanged.
      */
     private fun applyPatch(path: String, patch: String): Map<String, Any?> = onEdt {
         val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(path) }
@@ -1034,18 +1056,22 @@ class IdeTools(private val project: Project) {
         )
     }
 
-    /** The file's named elements, in source order; the file itself is not a symbol. */
+    /**
+     * The file's named elements, in source
+     * order; the file itself is not a symbol.
+     */
     private fun namedElements(psiFile: PsiFile): List<PsiNamedElement> =
         PsiTreeUtil.findChildrenOfType(psiFile, PsiNamedElement::class.java)
             .filter { it !is PsiFile && !it.name.isNullOrBlank() }
             .sortedBy { nameOffset(it) }
 
     /**
-     * Where the symbol's *name* starts — which is what a caret position means to a
-     * reader, and not always where the element starts: an `XmlTag`'s own offset is
-     * the `<`, and a function's is the start of its whole declaration. Languages
-     * that model a name identifier answer authoritatively; for the rest, the name's
-     * first occurrence inside the element is the best available answer.
+     * Where the symbol's *name* starts — which is what a caret position means
+     * to a reader, and not always where the element starts: an `XmlTag`'s own
+     * offset is the `<`, and a function's is the start of its whole
+     * declaration. Languages that model a name identifier answer
+     * authoritatively; for the rest, the name's first occurrence inside the
+     * element is the best available answer.
      */
     private fun nameOffset(element: PsiNamedElement): Int {
         (element as? PsiNameIdentifierOwner)?.nameIdentifier?.let { return it.textRange.startOffset }
@@ -1071,15 +1097,15 @@ class IdeTools(private val project: Project) {
      * The warning and error highlights the IDE's code analysis puts on a file,
      * narrowed to the lines the request asks about.
      *
-     * A highlight is reported when it *overlaps* the range rather than when it sits
-     * entirely inside it: an underline that starts above `start_line` and runs into
-     * the range is one of the range's problems, and dropping it would hide exactly
-     * the multi-line errors a caller is most likely asking about.
+     * A highlight is reported when it *overlaps* the range rather than when it
+     * sits entirely inside it: an underline that starts above `start_line` and
+     * runs into the range is one of the range's problems, and dropping it would
+     * hide exactly the multi-line errors a caller is most likely asking about.
      */
     private fun getFileHighlights(request: FileHighlightsRequest): FileHighlights {
         val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(request.path) }
-        // Outside a read action on purpose: analysis takes its own, and holding one
-        // across it is what `runMainPasses` refuses to run under.
+        // Outside a read action on purpose: analysis takes its own, and holding
+        // one across it is what `runMainPasses` refuses to run under.
         val infos = analyze(target)
         return ReadAction.compute<FileHighlights, RuntimeException> {
             val document = target.document
@@ -1100,24 +1126,21 @@ class IdeTools(private val project: Project) {
     private fun resolveFile(path: String): TargetFile = ProjectFiles.resolve(project, path)
 
     /**
-     * Every highlight the analysis has for [target], however it has to be obtained.
+     * Every highlight the analysis has for [target], however it has to be
+     * obtained.
      *
-     * A file open in an editor has already been analyzed, and its markup *is* what
-     * the user sees underlined — so when the daemon has finished with it, that
-     * markup is both the fastest and the most faithful answer. Otherwise the file
-     * has no highlights yet and the analysis has to be run for it, which is what
-     * [runMainPasses] is for.
+     * Completed daemon markup is used for an open file because it matches the
+     * visible underlines. [runMainPasses] analyzes files without usable markup.
      */
     private fun analyze(target: TargetFile): List<HighlightInfo> =
         ReadAction.compute<List<HighlightInfo>?, RuntimeException> { existingMarkup(target) } ?: runMainPasses(target)
 
     /**
-     * The highlights already on the document, or null when there are none to trust.
+     * The highlights already on the document, or null when there are none to
+     * trust.
      *
-     * Null covers both "nothing has ever analyzed this file" — no markup model
-     * exists for it — and "analysis is still running", where the markup holds
-     * whatever passes happen to have finished and reading it would report a subset
-     * of the file's problems as if it were all of them.
+     * Null indicates either missing markup or analysis still in progress.
+     * Partial markup is not returned as a complete result.
      */
     private fun existingMarkup(target: TargetFile): List<HighlightInfo>? {
         DocumentMarkupModel.forDocument(target.document, project, false) ?: return null
@@ -1137,17 +1160,14 @@ class IdeTools(private val project: Project) {
     }
 
     /**
-     * Run the highlighting passes for a file nothing has analyzed yet.
+     * Run the highlighting passes for a file without completed markup.
      *
-     * The platform is particular about how this is called, and all three
-     * requirements come from `runMainPasses` itself: off the EDT and outside a read
-     * action (it takes read actions in smart mode on its own), and under a
-     * [DaemonProgressIndicator] — the passes assert they are running under the
-     * daemon's own kind of indicator, so a plain empty progress will not do.
+     * `runMainPasses` must run off the EDT, outside a read action, and under a
+     * [DaemonProgressIndicator]. It acquires its own read actions in smart mode
+     * and requires the daemon-specific indicator type.
      *
-     * Documents are committed first, on the EDT, so the PSI the passes walk matches
-     * the text the results are reported against; an editor with uncommitted typing
-     * in it would otherwise yield offsets for a tree that no longer describes it.
+     * Documents are committed on the EDT first so PSI offsets match the text
+     * used for the results.
      */
     private fun runMainPasses(target: TargetFile): List<HighlightInfo> {
         require(!ApplicationManager.getApplication().isDispatchThread) {
@@ -1166,7 +1186,10 @@ class IdeTools(private val project: Project) {
         return infos
     }
 
-    /** One highlight as the `highlights` output describes it; call under a read action. */
+    /**
+     * One highlight as the `highlights` output
+     * describes it; call under a read action.
+     */
     private fun describeHighlight(info: HighlightInfo, document: Document): Map<String, Any?> {
         val start = info.startOffset.coerceIn(0, document.textLength)
         val end = info.endOffset.coerceIn(start, document.textLength)
@@ -1186,9 +1209,8 @@ class IdeTools(private val project: Project) {
     }
 
     /**
-     * The tooltip's text, as text. The platform writes tooltips as HTML — wrapped,
-     * escaped, and with the inspection's name in a trailing element — and a caller
-     * asked what the popup says, not how it is marked up.
+     * The tooltip's plain text. Platform HTML wrapping, escaping, and trailing
+     * inspection metadata are removed.
      */
     private fun plainTooltip(info: HighlightInfo): String? {
         val tooltip = info.toolTip ?: return null
@@ -1199,25 +1221,29 @@ class IdeTools(private val project: Project) {
         return text.ifEmpty { null }
     }
 
-    /** [text] at most [MAX_HIGHLIGHT_TEXT] long, ellipsized when it had to be cut. */
+    /**
+     * [text] at most [MAX_HIGHLIGHT_TEXT]
+     * long, ellipsized when it had to be cut.
+     */
     private fun clip(text: String): String =
         if (text.length <= MAX_HIGHLIGHT_TEXT) text else text.take(MAX_HIGHLIGHT_TEXT) + "…"
 
     /**
      * Rename one symbol in the active file, updating its references with it.
      *
-     * The refactoring runs on the EDT (it takes its own write action), so this one
-     * hops to the EDT without wrapping the whole thing in a read action. A name
-     * that matches nothing, or several things the request does not pin down, is an
-     * error carrying the candidates' positions — never a guess at which was meant.
+     * The refactoring runs on the EDT (it takes its own write action), so this
+     * one hops to the EDT without wrapping the whole thing in a read action. A
+     * name that matches nothing, or several things the request does not pin
+     * down, is an error carrying the candidates' positions — never a guess at
+     * which was meant.
      */
     private fun renameSymbol(request: RenameSymbolRequest): Map<String, Any?> = onEdt {
         val manager = FileEditorManager.getInstance(project)
         val located = ReadAction.compute<Located, RuntimeException> { locate(manager, request) }
         val refactoring = RefactoringFactory.getInstance(project).createRename(located.element, request.newName)
-        // Rename the symbol and the references to it, nothing else: a mention in a
-        // comment or a string literal is not a reference, and rewriting one would
-        // go beyond what the caller asked for.
+        // Rename the symbol and the references to it, nothing else: a mention
+        // in a comment or a string literal is not a reference, and rewriting
+        // one would go beyond what the caller asked for.
         refactoring.setSearchInComments(false)
         refactoring.setSearchInNonJavaFiles(false)
         val found = refactoring.findUsages()
@@ -1233,7 +1259,10 @@ class IdeTools(private val project: Project) {
         metadata
     }
 
-    /** The symbol a rename request points at, with the position it was found at. */
+    /**
+     * The symbol a rename request points
+     * at, with the position it was found at.
+     */
     private class Located(
         val element: PsiNamedElement,
         val path: String?,
@@ -1241,7 +1270,10 @@ class IdeTools(private val project: Project) {
         val column: Int,
     )
 
-    /** Resolve a rename request to exactly one symbol, or explain why it cannot. */
+    /**
+     * Resolve a rename request to exactly
+     * one symbol, or explain why it cannot.
+     */
     private fun locate(manager: FileEditorManager, request: RenameSymbolRequest): Located {
         val path = manager.selectedFiles.firstOrNull()?.path
         val document = manager.selectedTextEditor?.document
@@ -1260,7 +1292,8 @@ class IdeTools(private val project: Project) {
         var candidates = positioned
         request.line?.let { line -> candidates = candidates.filter { it.line == line } }
         request.column?.let { column ->
-            // The caret may sit anywhere inside the name, not just on its first character.
+            // The caret may sit anywhere inside the name, not just on its first
+            // character.
             candidates = candidates.filter { column >= it.column && column <= it.column + request.name.length }
         }
         val at = if (request.line == null && request.column == null) "" else " at the position given"
@@ -1299,7 +1332,10 @@ class IdeTools(private val project: Project) {
 
     // --- threading -----------------------------------------------------------
 
-    /** Run [block] on the EDT and wait; it takes whatever read/write action it needs. */
+    /**
+     * Run [block] on the EDT and wait; it
+     * takes whatever read/write action it needs.
+     */
     private fun <T> onEdt(block: () -> T): T {
         var result: Result<T>? = null
         ApplicationManager.getApplication().invokeAndWait { result = runCatching(block) }
@@ -1615,8 +1651,8 @@ class IdeTools(private val project: Project) {
 
     /**
      * One tool descriptor. `output_to_json_field` carries the schema's own
-     * output-to-JSON mapping, so a mirror can reproduce it without knowing which
-     * port a given tool happens to map.
+     * output-to-JSON mapping, so a mirror can reproduce it without knowing
+     * which port a given tool happens to map.
      */
     private fun describe(tool: Tool): Map<String, Any?> {
         val schema = tool.schema

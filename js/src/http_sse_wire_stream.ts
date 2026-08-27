@@ -51,7 +51,9 @@ export type FetchFunction = (
 export interface HttpSseOptions {
   /** Wire-level buffering, timeout, and message-size limits. */
   streamOptions?: WireStreamOptions;
-  /** Absolute POST path used to open the inbound `text/event-stream` response. */
+  /**
+   * Absolute POST path used to open the inbound `text/event-stream` response.
+   */
   connectEndpoint?: string;
   /** Absolute path template containing one `{id}` for outbound messages. */
   messageEndpoint?: string;
@@ -61,11 +63,11 @@ export interface HttpSseOptions {
    * Outbound message POSTs kept in flight at once; defaults to 16.
    *
    * A11 WireMessages carry no global order, so a message does not have to wait
-   * for the one before it to be answered -- and on any real network that wait is
-   * the whole outbound throughput ceiling, one message per round trip. Order is
-   * still imposed where it matters: everything outstanding is delivered before a
-   * half-close, and an abort goes out ahead of whatever is still in flight. Set
-   * to 1 to restore strictly serialised delivery.
+   * for the one before it to be answered -- and on any real network that wait
+   * is the whole outbound throughput ceiling, one message per round trip. Order
+   * is still imposed where it matters: everything outstanding is delivered
+   * before a half-close, and an abort goes out ahead of whatever is still in
+   * flight. Set to 1 to restore strictly serialised delivery.
    */
   maxConcurrentPosts?: number;
   /** Fetch implementation; defaults to `globalThis.fetch`. */
@@ -354,7 +356,9 @@ export class HttpSseClientWireStream implements WireStream {
     return this.responseHeaders === null ? null : { ...this.responseHeaders };
   }
 
-  /** Replace request headers before {@link start}; headers then become fixed. */
+  /**
+   * Replace request headers before {@link start}; headers then become fixed.
+   */
   setHttpRequestHeaders(headers: HttpHeaders): Status {
     if (this.started) {
       return failedPreconditionError(
@@ -367,7 +371,10 @@ export class HttpSseClientWireStream implements WireStream {
     return okStatus();
   }
 
-  /** Await connect response headers or the transport failure that prevented them. */
+  /**
+   * Await connect response headers or the
+   * transport failure that prevented them.
+   */
   waitForHttpHeaders(): Promise<Status> {
     return this.headersReady.promise;
   }
@@ -449,18 +456,17 @@ export class HttpSseClientWireStream implements WireStream {
   /**
    * Hands one outbound message to the transport.
    *
-   * Called from the bridge one message at a time. An ordinary message is posted
-   * without waiting for its response, so the next one overlaps it -- WireMessages
-   * carry no global order, and waiting would cap the outbound direction at one
-   * message per round trip. Order is imposed only where it is load-bearing:
+   * Called from the bridge one message at a time. Ordinary POSTs overlap
+   * because WireMessages have no global order. Terminal messages require
+   * ordering:
    *
-   *  - a half-close says "nothing more follows" and the peer enforces it, so
-   *    everything already handed over has to land first;
-   *  - an abort goes out at the earliest possibility, ahead of anything still in
-   *    flight, because the peer discards the rest anyway.
+   * - a half-close says "nothing more follows" and the peer enforces it, so
+   * everything already handed over has to land first; - an abort goes out at
+   * the earliest possibility, ahead of anything still in flight, because the
+   * peer discards the rest anyway.
    *
-   * A failure on a POST nobody is waiting for reaches the application the way a
-   * failed socket write does, through the stream's lifecycle.
+   * A failed asynchronous POST is reported through the stream lifecycle, like a
+   * failed socket write.
    */
   private async transmit(message: WireMessage): Promise<Status> {
     const terminal = message.isHalfClose;

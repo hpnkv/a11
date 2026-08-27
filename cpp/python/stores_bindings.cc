@@ -1066,20 +1066,7 @@ Examples:
                     ? std::optional<std::uint32_t>(
                           static_cast<std::uint32_t>(*converted))
                     : std::nullopt;
-            // Enqueue only. Whoever awaits the confirmation flushes then, via
-            // `_NativeFuture._on_await` attached by the writer's Python
-            // protocol, so the store write happens on the awaiting caller's
-            // thread and nowhere else. That is what keeps admission meaning
-            // what it says: a producer pacing itself against the bounded queue
-            // hands the write to the pump and carries on.
-            //
-            // The pump start below is that producer's safety net. It is a loop
-            // callback rather than a wake so it cannot race the flush:
-            // `call_soon` runs after the current coroutine step, by which time
-            // an awaiting caller has already flushed and this finds nothing to
-            // do. A worker woken here would sometimes start the write just
-            // before the flush and put the confirmation back on the slow
-            // path.
+            // Enqueue only.
             stores::ChunkStoreWrite write = WithoutGil([&] {
               return self->EnqueueChunk(std::move(chunk), seq_number, final,
                                         false);

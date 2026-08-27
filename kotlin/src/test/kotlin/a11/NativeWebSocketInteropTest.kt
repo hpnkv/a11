@@ -110,8 +110,8 @@ asyncio.run(main())
 
     @Test
     fun kotlinPluginFlowAgainstRealGateway(): Unit = runBlocking {
-        // The plugin talks to `a11 gateway`, so this drives the same service the
-        // IDE does rather than a test double of it.
+        // The plugin talks to `a11 gateway`, so this drives the same service
+        // the IDE does rather than a test double of it.
         val gateway = File("../.venv/bin/a11")
         assumeTrue(gateway.canExecute(), "repo venv a11 CLI not available; skipping")
 
@@ -125,8 +125,8 @@ asyncio.run(main())
             },
         ).redirectErrorStream(true).start()
         try {
-            // The gateway does not announce its port, so wait for it to answer on
-            // the one it was given.
+            // The gateway does not announce its port, so wait for it to answer
+            // on the one it was given.
             withTimeout(20_000) {
                 while (!portAccepts(port)) {
                     assertTrue(process.isAlive, "gateway exited before listening")
@@ -158,9 +158,8 @@ asyncio.run(main())
                 "__list_actions__ produced no 'actions' output",
             )
 
-            // And that this side can read what that side wrote. A document the
-            // Kotlin reader cannot parse is the failure mode the four
-            // hand-copied handshake schemas used to produce.
+            // Kotlin must parse the schema document returned by the native
+            // gateway.
             val document = ok(response) as Map<*, *>
             assertEquals(SCHEMA_DOCUMENT_FORMAT, document["format"])
             val entries = ok(schemasInDocument(document))

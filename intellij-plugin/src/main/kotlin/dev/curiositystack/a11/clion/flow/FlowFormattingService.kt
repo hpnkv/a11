@@ -8,15 +8,10 @@ import com.intellij.psi.PsiFile
 /**
  * Ctrl+Alt+L on a flow: the language's own formatter.
  *
- * There is no `FormattingModelBuilder` here and there never will be one -- that
- * would be a second opinion about how a flow is written, and the language has one
- * already. It decides indentation, the spaces between tokens, blank lines and the
- * columns of a run of port declarations; it deliberately does not decide where the
- * lines break, because that is a judgement about what belongs together and it
- * stays the author's.
+ * The native formatter owns indentation, token spacing, blank lines, and port
+ * declaration alignment. It preserves author-selected line breaks.
  *
- * A file with an error in it comes back unchanged, with the reason. Half-formatting
- * something somebody is in the middle of typing is how a formatter loses work.
+ * A file with an error comes back unchanged, with the reason.
  */
 class FlowFormattingService : AsyncDocumentFormattingService() {
 

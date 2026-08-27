@@ -154,8 +154,10 @@ struct Http2ResponseStream::State {
    * Asks the transport to stop or resume reading from the socket.
    *
    * The buffer bound is enforced by *not taking more data* rather than by
-   * failing: a reader slower than the link is ordinary, and on a fast path it is
-   * the common case. Pausing closes the TCP window back to the peer; the earlier
+   * failing: a reader slower than the link is ordinary, and on a fast path it
+   * is
+   * the common case. Pausing closes the TCP window back to the peer; the
+   * earlier
    * behaviour -- erroring once the buffer filled -- turned a slow consumer into
    * a failed transfer.
    */
@@ -234,7 +236,8 @@ struct Http2ResponseStream::State {
     if (reader == nullptr) {
       return absl::OkStatus();
     }
-    // The data is moved into `chunks` only on the arm that leaves `reader` null,
+    // The data is moved into `chunks` only on the arm that leaves `reader`
+    // null,
     // so reaching here means it was not moved.
     // NOLINTNEXTLINE(bugprone-use-after-move)
     (void)reader->SetValue(std::optional<std::string>(std::move(data)));
@@ -262,9 +265,8 @@ struct Http2ResponseStream::State {
         publish_headers_error = true;
       }
     }
-    // No PUSH_PROMISE may follow the stream it is associated with, so the end of
-    // this response is the end of its pushes. A reader waiting on one is told
-    // there are no more rather than left waiting for the connection to close.
+    // No PUSH_PROMISE may follow the stream it is associated with, so the end
+    // of this response is the end of its pushes.
     if (push_reader != nullptr) {
       if (completion.ok()) {
         (void)push_reader->SetValue(std::nullopt);

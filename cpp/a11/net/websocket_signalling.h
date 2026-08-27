@@ -144,14 +144,14 @@ using OnSignallingDeparture = std::function<void(std::string identity)>;
 /**
  * @brief Inspects, rewrites or refuses each inbound message before routing.
  *
- * Deliberately synchronous. Signalling is ordered per connection and an
+ * Synchronous because signalling is ordered per connection and an
  * asynchronous filter would either reorder messages or need a queue per
  * connection to avoid it; the things a filter actually does -- rate limiting,
  * field checks -- are arithmetic. A non-OK status refuses that one message and
  * is reported to its sender as an `error` message; the connection stays open.
  */
-using OnSignallingMessageFilter = std::function<absl::Status(
-    SignallingMessage* absl_nonnull message)>;
+using OnSignallingMessageFilter =
+    std::function<absl::Status(SignallingMessage* absl_nonnull message)>;
 
 /**
  * @brief Offered a message whose recipient is not connected to this server.
@@ -181,10 +181,10 @@ struct WebSocketSignallingServerOptions {
   Http2Options http2_options;             ///< Server HTTP/2 and TLS policy.
   size_t max_message_size = 1024 * 1024;  ///< Inbound JSON message limit.
 
-  OnSignallingAdmission on_admit;         ///< Admission control, if any.
-  OnSignallingDeparture on_departed;      ///< Presence bookkeeping, if any.
-  OnSignallingMessageFilter on_message;   ///< Per-message policy, if any.
-  OnSignallingUnroutable on_unroutable;   ///< Where else to look, if anywhere.
+  OnSignallingAdmission on_admit;        ///< Admission control, if any.
+  OnSignallingDeparture on_departed;     ///< Presence bookkeeping, if any.
+  OnSignallingMessageFilter on_message;  ///< Per-message policy, if any.
+  OnSignallingUnroutable on_unroutable;  ///< Where else to look, if anywhere.
 
   /**
    * @brief Whether a new registration displaces an existing one.

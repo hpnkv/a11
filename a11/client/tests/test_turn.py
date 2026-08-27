@@ -1,12 +1,10 @@
 # Copyright 2026 The A11 Authors.
 
-"""One whole turn driven the way `a11 chat` drives it: over a gateway.
+"""One complete ``a11 chat``-style turn over a gateway.
 
-The chain this covers is the point of the change. A client announces a tool of
-its own, asks a gateway to run a turn, the (fake) model calls that tool, the
-gateway reverse-dispatches the call back over the same stream so it runs *here*,
-and the whole thing comes out as `PresentationBlock`s a renderer can draw --
-including the tool run, which `a11 chat` previously could not show at all.
+A client registers a tool, the model calls it, and the gateway
+reverse-dispatches the call over the same stream. The client receives the
+result, including the tool run, as renderable ``PresentationBlock`` values.
 """
 
 from __future__ import annotations
@@ -32,15 +30,15 @@ ollama = pytest.importorskip("ollama")
 def _fresh_conversation_store():
     """Reset the process-global store between tests.
 
-    `get_conversation_store` is deliberately process-wide -- one gateway serves
-    every client and a conversation id must mean one thing -- so two tests with
-    two roots would otherwise collide.
+    `get_conversation_store` is process-wide because one gateway serves every
+    client. Reset it so tests can use independent roots.
     """
     from a11.gateway import conversations
 
     conversations._STORE = None
     yield
     conversations._STORE = None
+
 
 from a11.sdk.ollama import interact_with_ollama as ollama_mod  # noqa: E402
 
@@ -109,8 +107,8 @@ class _FakeOllama:
 
 #: A tool the *client* owns. What it logs is what a reader sees for the run; its
 #: result is what the model sees. Nothing declares a port for the log: it goes
-#: through `Action.log`, and the bridge re-emits it onto the gateway-side action's
-#: own log, which is where the tool runner finds it.
+#: through `Action.log`, and the bridge re-emits it onto the gateway-side
+#: action's own log, which is where the tool runner finds it.
 _ECHO_SCHEMA = a11.ActionSchema(
     name="client_echo",
     description="Echo text back, as the client's own tool.",
@@ -142,10 +140,8 @@ async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
     and proxies what comes back, so the model's call reverse-dispatches to the
     handler below.
 
-    This test used to announce a *descriptor* and also pass that same descriptor
-    where `run_turn` wants tool *definitions*, which are a different document
-    for a different port. It worked only because the fake backend ignores what
-    it is shown. There is one document now, and it is derived rather than sent.
+    The gateway derives model tool definitions from the registered action
+    descriptor; the client does not send a second document.
     """
     fake = _FakeOllama(_rounds())
     monkeypatch.setattr(ollama_mod, "get_ollama_client", lambda *a, **k: fake)
@@ -170,12 +166,10 @@ async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
             Interaction(
                 role=Role.USER,
                 content=[
-                    a11.to_chunk(
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": "say hello"}],
-                        }
-                    )
+                    a11.to_chunk({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "say hello"}],
+                    })
                 ],
             ),
             (),
@@ -205,9 +199,7 @@ async def test_a_turn_runs_a_client_tool_and_renders_as_blocks(
     # could not show before.
     assert run.text == _LOG
 
-    answer = "".join(
-        b.text for b in reducer.blocks if b.kind == BlockKind.TEXT
-    )
+    answer = "".join(b.text for b in reducer.blocks if b.kind == BlockKind.TEXT)
     assert _ANSWER in answer
 
 
@@ -230,9 +222,10 @@ async def test_the_turn_is_recorded_by_the_gateway(
     question = Interaction(
         role=Role.USER,
         content=[
-            a11.to_chunk(
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-            )
+            a11.to_chunk({
+                "role": "user",
+                "content": [{"type": "text", "text": "hi"}],
+            })
         ],
     )
 
@@ -264,10 +257,9 @@ async def test_a_turn_works_over_a_websocket_after_a_pause(
     Two things this pins that an in-process stream cannot. The framing and
     lifecycle live in `channel_wire_stream`, which backs WebSocket but not the
     in-memory pair -- so a stream-level regression is invisible to the embedded
-    tests. And the pause matters: the connect timeout must bound the *handshake*
-    only. Setting it as `WireStreamOptions.deadline` instead aborts the stream at
-    that absolute time, which let a chat connect, announce its tools, and then
-    fail every turn a user was slow enough to reach.
+    tests. The pause verifies that the connect timeout bounds only the
+    *handshake*. The established stream must remain usable after that timeout
+    window has elapsed.
     """
     from a11 import net
     from a11.gateway import app as gateway_app
@@ -311,12 +303,10 @@ async def test_a_turn_works_over_a_websocket_after_a_pause(
             Interaction(
                 role=Role.USER,
                 content=[
-                    a11.to_chunk(
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": "hey"}],
-                        }
-                    )
+                    a11.to_chunk({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hey"}],
+                    })
                 ],
             ),
             [],
@@ -360,15 +350,14 @@ async def test_the_event_stream_port_is_drained_even_when_unwatched(
             Interaction(
                 role=Role.USER,
                 content=[
-                    a11.to_chunk(
-                        {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-                    )
+                    a11.to_chunk({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi"}],
+                    })
                 ],
             ),
             [],
-            TurnConfig(
-                provider="ollama", model="fake", on_event=seen.append
-            ),
+            TurnConfig(provider="ollama", model="fake", on_event=seen.append),
             PresentationReducer(),
         )
 

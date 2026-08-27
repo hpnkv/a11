@@ -30,7 +30,8 @@
 namespace a11::service {
 
 /**
- * @brief A callback for any transport's on-stream hook, serving into @p service.
+ * @brief A callback for any transport's on-stream hook, serving into @p
+ * service.
  *
  * Holds a weak reference, so a server that outlives its service rejects new
  * connections instead of dereferencing a destroyed one.

@@ -484,7 +484,7 @@ def test_process_exits_cleanly_with_batch_otlp_exporter():
             await act.wait()
 
         asyncio.run(main())
-        # Deliberately no shutdown_otel(): the atexit hook must handle it.
+        # Omit shutdown_otel() to exercise the atexit hook.
         """)
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -492,9 +492,9 @@ def test_process_exits_cleanly_with_batch_otlp_exporter():
         text=True,
         timeout=60,
     )
-    assert (
-        result.returncode == 0
-    ), f"non-clean exit ({result.returncode}); stderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"non-clean exit ({result.returncode}); stderr:\n{result.stderr}"
+    )
     assert "libc++abi" not in result.stderr
     assert "mutex lock failed" not in result.stderr
 

@@ -24,17 +24,8 @@
 #include "thread/cases.h"
 
 namespace thread {
-// PermanentEvent
-// ---------------
-// Provides a level-triggered event which may be added to a Select statement.
-// PermanentEvents may only transition into a notified state.  Selecting
-// against OnEvent() for an event that has already been signalled will always
-// return immediately.
-//
-// Memory ordering: For any threads X and Y, if X calls `Notify()`, then any
-// action taken by X before it calls `Notify()` is visible to thread Y after:
-//  * Y selects OnEvent(), or
-//  * Y receives a `true` return value from `HasBeenNotified()`
+// PermanentEvent --------------- Provides a level-triggered event which may be
+// added to a Select statement.
 class PermanentEvent final : public internal::Selectable {
  public:
   PermanentEvent() = default;
@@ -79,49 +70,12 @@ class PermanentEvent final : public internal::Selectable {
       nullptr;
 };
 
-// NonSelectableCase()
-// -------------------
-// Provides a 'null' case which will never evaluate as ready by Select. This
-// may be used to substitute a Selectable that is no longer of interest within a
-// set, without re-labeling adjacent elements.
-//
-// Example:
-//   int item;
-//   bool ok;
-//   thread::CaseArray cases = { chan1.reader()->OnRead(&item, &ok),
-//                               chan2.reader()->OnRead(&item, &ok) };
-//
-//   while (1) {
-//     int index = thread::Select(cases);
-//     if (!ok) {
-//       // Channel has been closed
-//       cases[index] = NonSelectableCase();
-//     } else {
-//       ...  process item
-//     }
+// NonSelectableCase() ------------------- Provides a 'null' case which will
+// never evaluate as ready by Select.
 Case NonSelectableCase();
 
-// AlwaysSelectableCase()
-// ----------------------
-// Provides case which will always evaluate as ready by Select. This may be
-// used when returning a Case for an event that is already known to be ready.
-//
-// Example:
-//   class WorkItem {
-//    public:
-//     // Start the work and return a case that will become ready when
-//     // the work has completed.
-//     thread::Case Start() {
-//       if (!status_.ok()) {
-//         // An error has already been detected, so the work has completed.
-//         return thread::AlwaysSelectableCase();
-//       } else {
-//         ... start real work ...
-//       }
-//     }
-//    private:
-//     util::Status status_;
-//   };
+// AlwaysSelectableCase() ---------------------- Provides case which will always
+// evaluate as ready by Select.
 Case AlwaysSelectableCase();
 }  // namespace thread
 

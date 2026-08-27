@@ -3,8 +3,8 @@
 """Interactive chat loop for ``a11 chat``.
 
 `ChatUI` is presentation and nothing else. The processing -- the LLM call, tool
-dispatch, conversation persistence -- happens on a *gateway*: either one the user
-is already running, or one started inside this process and reached over an
+dispatch, conversation persistence -- happens on a *gateway*: either one the
+user is already running, or one started inside this process and reached over an
 in-memory stream pair. Either way the turn is driven by
 [run_turn][a11.client.turn.run_turn], the same loop every A11 client uses, and
 rendered from the [PresentationBlock][a11.sdk.presentation.PresentationBlock]s
@@ -113,8 +113,8 @@ class ChatUI:
         self._voice_accepting = False
         self._recognizer: SpeechRecognizer | None = None
 
-        # Shell tools: their definitions, and the system prompt that teaches
-        # the model to use them. The Actions themselves are registered on the
+        # Shell tools: their definitions, and the system prompt that teaches the
+        # model to use them. The Actions themselves are registered on the
         # connection's session registry, because the gateway reverse-dispatches
         # the model's calls back to *this* process to run them.
         self._tool_names: list[str] = []
@@ -130,13 +130,8 @@ class ChatUI:
         which may be shared, or in a container -- is the wrong place for that.
         So nothing asks the gateway for its `shell_*` actions; these run here.
 
-        Registering them is the whole of it. The gateway asks this session what
-        it serves, over `__list_actions__`, and proxies what comes back -- so
-        there is nothing to announce and, more to the point, nothing to announce
-        *wrongly*. This used to keep two parallel lists -- the port schemas the
-        gateway rebuilds a proxy from, and the JSON-Schema definitions the model
-        is shown -- because the two were confusable and sending one where the
-        other was wanted produced a tool with no inputs at all.
+        The gateway calls ``__list_actions__`` on this session and proxies the
+        returned schemas. No separate tool announcement is required.
         """
         from a11.sdk import bash
 
@@ -166,8 +161,8 @@ class ChatUI:
             self._warn_missing_key()
         self._report_missing_sdk()
         # Nothing to announce: the gateway asks this session what it serves the
-        # first time a turn needs tools, and reverse-dispatches the model's calls
-        # back here to run them.
+        # first time a turn needs tools, and reverse-dispatches the model's
+        # calls back here to run them.
         if self._voice_enabled:
             await self._prepare_voice()
 
@@ -194,9 +189,9 @@ class ChatUI:
                                     "</ansicyan> › "
                                 ),
                                 # PromptSession resets its edit buffer at the
-                                # start of prompt_async(). Starting capture as
-                                # a pre-run hook guarantees ASR pieces land in
-                                # the active prompt rather than the old buffer.
+                                # start of prompt_async(). Starting capture as a
+                                # pre-run hook guarantees ASR pieces land in the
+                                # active prompt rather than the old buffer.
                                 pre_run=start_voice,
                             )
                     finally:
@@ -327,8 +322,8 @@ class ChatUI:
             extra_headers=self._extra_headers,
             traceparent=self._traceparent,
             # The raw provider events, shown only under -v. They are *not* used
-            # to reconstruct text or thoughts -- those come from their own ports.
-            # `run_turn` drains the port either way.
+            # to reconstruct text or thoughts -- those come from their own
+            # ports. `run_turn` drains the port either way.
             on_event=(self._console.log if self._verbose else None),
         )
 
@@ -343,8 +338,8 @@ class ChatUI:
                 user_interaction,
                 # Nothing pushed: `allowed_actions` names this side's tools, and
                 # the gateway discovers their schemas by asking this session. A
-                # definition sent here would be a second description of the same
-                # tools, which is the thing that used to go wrong.
+                # Tool definitions come from the session registry; sending them
+                # here would duplicate that description.
                 (),
                 config,
                 reducer,
@@ -356,9 +351,7 @@ class ChatUI:
             reducer.on_error(exc.status)
             live.update(render_blocks(reducer.blocks, verbose=self._verbose))
         except Exception as exc:  # pragma: no cover - defensive
-            reducer.on_error(
-                Status(code=StatusCode.INTERNAL, message=str(exc))
-            )
+            reducer.on_error(Status(code=StatusCode.INTERNAL, message=str(exc)))
             live.update(render_blocks(reducer.blocks, verbose=self._verbose))
         finally:
             if live.is_started:
@@ -382,7 +375,8 @@ class ChatUI:
                 self._voice_model, self._console
             )
             # Silero VAD gates the decoder on genuine speech, so brief noise
-            # while the user gathers their thoughts does not spawn transcription.
+            # while the user gathers their thoughts does not spawn
+            # transcription.
             vad_model: Path = await ensure_vad_model(self._console)
             language = "en" if self._voice_model.endswith(".en") else "auto"
             options = SpeechRecognizerOptions(
@@ -480,15 +474,15 @@ class ChatUI:
         """Print why the current backend cannot run here; return that it can't.
 
         Only asked of an in-process gateway. A gateway reached over the network
-        runs in its own environment, so what is installed here says nothing
-        about whether it can serve the backend -- there, the turn's
-        `FAILED_PRECONDITION` remains the only honest answer.
+        runs in its own environment, so local installation state cannot
+        determine whether it can serve the backend. Remote failures are reported
+        by the turn's `FAILED_PRECONDITION` status.
         """
         if not self._connection.embedded:
             return False
         try:
-            # Importing the backend up front also keeps the SDK's (deep) import
-            # off the stack of the action that would otherwise trigger it.
+            # Import the backend before dispatch so its SDK setup stays outside
+            # the action's call stack.
             load_provider(self._provider.name)
         except StatusException as exc:
             # Soft-wrapped: the message ends in a command to run, and a wrap

@@ -15,49 +15,38 @@ private const val PATCH_COMMAND_GROUP = "a11.apply_patch"
 /**
  * The `@@ -before,count +after,count @@` line that opens a hunk.
  *
- * Only the first number is read, and the rest of the header is not checked. It is
- * advisory — a hunk is placed by its context — so a header that is mangled but
- * recognisable (`@@ -5,1,5,1 @@`, which a model will write) should still open the
- * hunk it announces rather than make the whole patch unreadable.
+ * Only the first number is read; hunk placement uses context. Recognisable
+ * malformed headers such as `@@ -5,1,5,1 @@` are accepted.
  */
 private val HUNK_HEADER = Regex("""@@+\s*-(\d+)[^@]*@@.*""")
 
 /**
  * How much unchanged context a preview shows around what a patch touches.
  *
- * Two lines, not the three a `diff` writes: this is read in a popup over the code
- * it is about, where the file itself is the context, so the lines either side are
- * there to place the change and not to explain it.
+ * Two lines keep the popup compact while locating the change in the file.
  */
 private const val PREVIEW_CONTEXT_LINES = 2
 
 /**
  * Reading a unified diff, placing it against a document, and applying it.
  *
- * Its own object rather than a corner of [IdeTools] because two callers need the
- * same answers from it. `apply_patch` reads a patch, places it, and applies it in
- * one go for a model that is not watching. The editor's suggestion popup places
- * the same patch *without* applying it — twice: once to decide whether there is a
- * diff worth showing at all, and again when the button is pressed, because the
- * file may have moved in between. "A valid patch" therefore means exactly what
- * the tool means by it, decided by this code and not by the model that wrote it.
+ * `apply_patch` locates and applies a patch. The suggestion popup locates the
+ * same patch for preview, then locates it again before applying because the
+ * document may have changed. Both paths therefore use identical validation.
  */
 internal object Patch {
 
     /**
      * Every hunk of [patch] placed against [document], top to bottom.
      *
-     * Located by context rather than by the line numbers in the `@@` headers, and
-     * each hunk has to match: a patch that does not fit is refused with the text
-     * that was there instead. That is the only safe answer for an edit nobody is
-     * watching — a fuzzy match is how a tool silently rewrites the wrong lines.
+     * Located by context instead of the line numbers in `@@` headers. Every
+     * hunk must match; a mismatch returns the current text without editing it.
      *
-     * A patch whose markers are indented — the other slip a written-by-hand diff
-     * makes — is read again that way rather than refused, and the file is still
-     * what decides: if neither reading matches, the first one's report is the
-     * honest one, because it is the format that was asked for.
+     * If standard parsing fails, indented patch markers are also accepted. If
+     * neither form matches, the standard-format error is reported.
      *
-     * @throws IllegalArgumentException if there are no hunks, or one does not fit.
+     * @throws IllegalArgumentException if
+     * there are no hunks, or one does not fit.
      */
     fun locate(document: Document, patch: String): List<Applied> {
         val hunks = parseHunks(patch, indented = false)
@@ -80,14 +69,11 @@ internal object Patch {
     /**
      * Apply already-placed [edits] to [document] as a single undoable command.
      *
-     * One command, so one Undo takes it back — the same reversibility a rename
-     * has, and for the same reason: the IDE's own undo stack, not a copy of the
-     * file kept somewhere. The document is saved after, because a patch to a file
-     * nobody has open would otherwise sit in memory looking applied.
+     * All edits use one IDE command and therefore one undo operation. The
+     * document is saved so patches to closed files reach disk.
      *
-     * Applied bottom to top, so every offset [locate] worked out is still the
-     * offset it was: an edit above would have moved the ones below it. Call on the
-     * EDT; the write action is taken here.
+     * Edits are applied bottom to top to preserve the offsets from [locate].
+     * Call on the EDT; this method enters the write action.
      */
     fun apply(project: Project, document: Document, edits: List<Applied>) {
         CommandProcessor.getInstance().executeCommand(
@@ -105,18 +91,20 @@ internal object Patch {
     }
 
     /**
-     * What [edits] would do, as a unified sequence of lines: kept, removed, added.
+     * What [edits] would do, as a unified sequence of lines: kept, removed,
+     * added.
      *
-     * The window is what the patch touches plus [context] lines either side, not
-     * the whole file: a diff of a 2000-line file scrolled to one changed line is a
-     * worse answer than the changed line with its neighbours, and this is read in
-     * a popup.
+     * The window is what the patch touches plus [context] lines either side,
+     * not the whole file: a diff of a 2000-line file scrolled to one changed
+     * line is a worse answer than the changed line with its neighbours, and
+     * this is read in a popup.
      *
-     * Unified rather than two texts side by side, because one column of lines is
-     * what fits where this is shown, and because the marker each line carries is
-     * enough to colour it. Kept and removed lines are the *document's* own text
-     * rather than the patch's copy of them (see [matchAt]), so what the reader sees
-     * on the left of a change is what is really in the file.
+     * Unified rather than two texts side by side, because one column of lines
+     * is what fits where this is shown, and because the marker each line
+     * carries is enough to colour it. Kept and removed lines are the
+     * *document's* own text rather than the patch's copy of them (see
+     * [matchAt]), so what the reader sees on the left of a change is what is
+     * really in the file.
      */
     fun preview(document: Document, edits: List<Applied>, context: Int = PREVIEW_CONTEXT_LINES): Preview {
         val lineCount = document.lineCount
@@ -132,8 +120,9 @@ internal object Patch {
         while (line < to) {
             val edit = ordered.getOrNull(next)?.takeIf { it.at == line }
             if (edit != null) {
-                // A hunk that only adds matches no lines, so the line it was placed
-                // at is still ahead of us and is written out on the next turn.
+                // A hunk that only adds matches no lines, so the line it was
+                // placed at is still ahead of us and is written out on the next
+                // turn.
                 line = expand(document, edit, lines)
                 next += 1
                 continue
@@ -141,8 +130,9 @@ internal object Patch {
             lines.add(Line(Kind.KEPT, lineText(document, line)))
             line += 1
         }
-        // A hunk that only adds, placed past the last line, is an append: the loop
-        // above never reaches the line it sits at, because there is not one.
+        // A hunk that only adds, placed past the last line, is an append: the
+        // loop above never reaches the line it sits at, because there is not
+        // one.
         while (next < ordered.size) {
             expand(document, ordered[next], lines)
             next += 1
@@ -173,11 +163,14 @@ internal object Patch {
     class Line(val kind: Kind, val text: String)
 
     /**
-     * The lines a patch touches, in unified order, and the 0-based file line the
-     * window starts at.
+     * The lines a patch touches, in unified order, and the 0-based file line
+     * the window starts at.
      */
     class Preview(val lines: List<Line>, val firstLine: Int) {
-        /** The window as the file has it now — everything the patch did not add. */
+        /**
+         * The window as the file has it now —
+         * everything the patch did not add.
+         */
         val before: String get() = joined { it != Kind.ADDED }
 
         /** And as the patch would leave it — everything it did not remove. */
@@ -196,12 +189,18 @@ internal object Patch {
      */
     class Applied(val hunk: Hunk, val at: Int, val replacement: List<String>)
 
-    /** How many lines the placed [edits] leave behind, and how many they replace. */
+    /**
+     * How many lines the placed [edits]
+     * leave behind, and how many they replace.
+     */
     fun added(edits: List<Applied>): Int = edits.sumOf { it.hunk.after.size }
 
     fun removed(edits: List<Applied>): Int = edits.sumOf { it.hunk.before.size }
 
-    /** Every hunk placed against the file, top to bottom, or the first mismatch. */
+    /**
+     * Every hunk placed against the file,
+     * top to bottom, or the first mismatch.
+     */
     private fun locateAll(document: Document, hunks: List<Hunk>): List<Applied> {
         val edits = ArrayList<Applied>(hunks.size)
         var searchFrom = 0
@@ -218,8 +217,8 @@ internal object Patch {
         val start = document.getLineStartOffset(edit.at)
         val replacement = edit.replacement.joinToString("\n")
         if (edit.hunk.before.isEmpty()) {
-            // Nothing to replace: a hunk that only adds is an insertion above the
-            // line it was placed at, and it brings its own line break.
+            // Nothing to replace: a hunk that only adds is an insertion above
+            // the line it was placed at, and it brings its own line break.
             document.insertString(start, replacement + "\n")
             return
         }
@@ -237,9 +236,9 @@ internal object Patch {
     /**
      * Where [hunk] fits in [document], searching from [searchFrom] downwards.
      *
-     * The `@@` header's line is tried first when it has one and it is at or after
-     * where the last hunk left off, because a patch generated against this very
-     * file will land there and the scan is then a formality.
+     * The `@@` header's line is tried first when it has one and it is at or
+     * after where the last hunk left off, because a patch generated against
+     * this very file will land there and the scan is then a formality.
      */
     private fun locateHunk(document: Document, hunk: Hunk, searchFrom: Int): Applied {
         val lines = document.lineCount
@@ -271,16 +270,12 @@ internal object Patch {
     }
 
     /**
-     * The lines to leave at [start] if [hunk] matches the file there, else null.
+     * The lines to leave at [start] if [hunk] matches the file there, else
+     * null.
      *
-     * Two spellings of every kept and removed line are tried: the one the diff's
-     * prefix implies, and the raw line as written. That is not fuzz — it is the
-     * one mistake in a hand- or model-written patch that the file itself can
-     * settle. A line of an indented file *starts* with a space, so a patch that
-     * leaves the ' ' prefix off a context line is indistinguishable from one that
-     * includes it and means a line indented one space less; only the file knows
-     * which, and here it says. Whichever spelling matched is what goes back,
-     * because a kept line is the file's line and not the patch's copy of it.
+     * Kept and removed lines may match either the text after the diff prefix or
+     * the raw line. This supports context lines whose leading `' '` marker was
+     * omitted while retaining the document's exact text for kept lines.
      */
     private fun matchAt(document: Document, hunk: Hunk, start: Int): List<String>? {
         val kept = ArrayList<String>(hunk.before.size)
@@ -310,8 +305,8 @@ internal object Patch {
      *
      * Trailing whitespace is ignored, and only trailing: a diff that has been
      * through a chat window, a JSON string or an editor that strips it should
-     * still apply, while indentation — which is meaning, in more than one language
-     * — has to be exactly right.
+     * still apply, while indentation — which is meaning, in more than one
+     * language — has to be exactly right.
      */
     private fun sameLine(expected: String, actual: String): Boolean =
         expected.trimEnd() == actual.trimEnd()
@@ -319,40 +314,43 @@ internal object Patch {
     /**
      * Every hunk of a unified diff, in order.
      *
-     * File headers are skipped rather than checked: the file is a separate input,
-     * so a `---`/`+++` pair says nothing this call does not already know, and a
-     * patch generated for one path should still apply to the one it was sent with.
+     * File headers are skipped rather than checked: the file is a separate
+     * input, so a `---`/`+++` pair says nothing this call does not already
+     * know, and a patch generated for one path should still apply to the one it
+     * was sent with.
      */
     private fun parseHunks(patch: String, indented: Boolean): List<Hunk> {
         val hunks = ArrayList<Hunk>()
         var current: MutableHunk? = null
-        // A patch that ends with a newline does not have an empty last line: that
-        // break belongs to the line before it. Keeping it would add a phantom
-        // context line, which is a hunk that matches somewhere else entirely.
+        // A patch that ends with a newline does not have an empty last line:
+        // that break belongs to the line before it. Keeping it would add a
+        // phantom context line, which is a hunk that matches somewhere else
+        // entirely.
         val lines = patch.split("\n").let { if (it.lastOrNull()?.isEmpty() == true) it.dropLast(1) else it }
         for (raw in lines) {
             val header = HUNK_HEADER.matchEntire(raw.trim())
             if (header != null) {
                 current?.let { hunks.add(it.build()) }
-                // 1-based in the format, 0-based here; a hunk header of 0 means an
-                // empty file, which is line 0 either way.
+                // 1-based in the format, 0-based here; a hunk header of 0 means
+                // an empty file, which is line 0 either way.
                 current = MutableHunk((header.groupValues[1].toInt() - 1).coerceAtLeast(0))
                 continue
             }
             val hunk = current ?: continue
-            // With `indented`, whatever whitespace was put in front of the marker
-            // goes with it; without, the first character is the marker, which is
-            // what a unified diff says.
+            // With `indented`, whatever whitespace was put in front of the
+            // marker goes with it; without, the first character is the marker,
+            // which is what a unified diff says.
             val line = if (indented) raw.trimStart(' ', '\t') else raw
             when {
                 line.startsWith("+") -> hunk.lines.add(PatchLine('+', line.substring(1), line))
                 line.startsWith("-") -> hunk.lines.add(PatchLine('-', line.substring(1), line))
                 raw.startsWith(" ") -> hunk.lines.add(PatchLine(' ', raw.substring(1), raw))
-                // "\ No newline at end of file" says something about the last line,
-                // not a line of its own.
+                // "\ No newline at end of file" says something about the last
+                // line, not a line of its own.
                 raw.startsWith("\\") -> Unit
-                // A bare empty line is how an unchanged empty line survives a trip
-                // through anything that trims. Anything else ends the hunk.
+                // A bare empty line is how an unchanged empty line survives a
+                // trip through anything that trims. Anything else ends the
+                // hunk.
                 raw.isEmpty() -> hunk.lines.add(PatchLine(' ', "", ""))
                 else -> {
                     hunks.add(hunk.build())
@@ -375,8 +373,8 @@ internal object Patch {
      * One line of a hunk: what it does, and the two ways of reading it.
      *
      * [text] is the line with its prefix taken off, [raw] the line as the patch
-     * wrote it. They differ by one character, and which one is the file's line is
-     * a question only the file can answer — see [matchAt].
+     * wrote it. They differ by one character, and which one is the file's line
+     * is a question only the file can answer — see [matchAt].
      */
     class PatchLine(val kind: Char, val text: String, val raw: String)
 

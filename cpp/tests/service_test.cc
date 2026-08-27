@@ -91,7 +91,8 @@ TEST(ServiceTest, TheConnectionHookRunsBeforeTheSessionStartsPumping) {
       [&prepared, registry](
           const std::shared_ptr<Session>& session,
           const std::shared_ptr<net::WireStream>& /*stream*/) {
-        // Specialising the connection: the service itself has an empty registry.
+        // Specialising the connection: the service itself has an empty
+        // registry.
         (void)session->SetActionRegistry(registry);
         prepared.push_back(session->GetId());
         return a11::ReadyTask();

@@ -249,22 +249,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    */
   a11::Future<std::uint32_t> PutFragment(data::NodeFragment fragment);
 
-  /**
-   * @brief Serialize and write a typed value to the stream.
-   *
-   * Encodes `value` via the node's serialization registry and admits the
-   * resulting chunk.
-   *
-   * @tparam T The type of the value being written.
-   * @param value The value to encode and write.
-   * @param seq Optional explicit sequence number; assigned in order when
-   *   omitted.
-   * @param final Set true on the last write to establish the logical final
-   *   sequence. This does not close the writer.
-   * @param mimetype Optional MIME type selecting the encoding.
-   * @return An awaitable that resolves to the stored sequence number, or a
-   *   failed future if serialization fails.
-   */
+  /** Serialize and write a typed value to the stream. */
   /**
    * @brief Write a typed value **without encoding it**.
    *
@@ -281,9 +266,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * Two obligations, and both are already true of anything put in a store:
    *
    *   * **The value must not change afterwards.** A node replays its fragments
-   *     to every reader, including readers that attach later, so a mutable value
-   *     was never sound here. Consumers are handed copies, so nothing they do
-   *     can reach back.
+   *     to every reader, including late readers. Consumers receive copies and
+   *     cannot mutate the stored value.
    *   * **@p mimetype is stated rather than derived.** Put() lets the registry
    *     choose it; here the caller says it, because a chunk whose mimetype
    *     differed from the one its bytes would have had would be filtered

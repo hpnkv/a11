@@ -79,14 +79,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
   return *table;
 }
 
-// What each stage does, as reference. Accuracy is from `Scope::ProduceStage` in
-// `runtime.cc`, which is the one implementation of every one of these; where
-// the two disagree the runtime is right and this is a bug.
-//
-// House style, since a table of 19 of these only reads well if they agree:
-// present tense, "the stream" for the whole and "each value" for one of them,
-// no second person, and the caveat last rather than buried. `--` is never
-// written in text a reader sees: a colon or an em dash instead.
+// What each stage does, as reference.
 const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"first",
@@ -287,11 +280,12 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "Written `scan 0 as n, n + 1`, exactly as `fold` is, and the "
         "difference "
         "is where the values go: `fold` yields one when the stream ends and "
-        "this yields one per value as it arrives. That is what a state machine "
-        "is, a state carried forward and read at every step, so a stream whose "
-        "meaning depends on what came before it is expressible without holding "
-        "the stream. The start may be a record, which is what a state of more "
-        "than one part needs; `scan 0 as n, n + 1` numbers a stream, which is "
+        "this yields one per value as it arrives. It carries state forward and "
+        "reads it at every step, supporting streams whose values depend on "
+        "earlier input without retaining the full stream. The initial state "
+        "may "
+        "be a record with several fields. `scan 0 as n, n + 1` numbers a "
+        "stream, "
         "the smallest useful one.",
         "lines | scan 0 as n, n + 1 -> numbered"}},
       {"sort",
@@ -504,8 +498,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
         "strformat(\"%s took %s\", name, elapsed) -> line"}},
       {"b64encode",
        {"A value as base64 text.", "one value",
-        "Encoding gives text, which is the whole point of it: text is what a "
-        "JSON field or a header can carry. Padding is written.",
+        "Produces padded text suitable for a JSON field or header.",
         "b64encode(page.bytes) -> encoded"}},
       {"b64decode",
        {"The bytes that base64 text encodes.", "one value",
@@ -554,20 +547,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
 }
 
 // --- the rest of the language -----------------------------------------------
-//
-// Everything below documents the forms an editor used to have nothing to say
-// about: a hover on `|` answered "flow operator", which is the token's kind
-// rather than an answer, and a hover on `in` answered "declaration keyword".
-//
-// Same house style as the two tables above, and the same sources of truth: what
-// a form *admits* is `parser.cc`, what it *does* is `runtime.cc`, and the prose
-// agrees with `a11/sdk/flow_tools/SKILL.md`, which is the reference a model is
-// given. Where any of those disagrees with a line here, this is the bug.
-//
-// One table per role rather than one keyed by the word, because a word means
-// different things in different positions. A word genuinely in two sets has one
-// [WordDoc] named here and referenced from each table that lists it, so the two
-// cannot drift apart.
+// Everything below documents the forms an editor
 
 constexpr WordDoc kStreamDoc = {
     "Says the port carries many values rather than one.", "",
@@ -677,12 +657,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
       {"skip",
        {"Reads a stream to its end and keeps nothing.",
         "a stream, a count and a port, or several of either, separated by ','",
-        "Every output of every step is read whether the flow names it or not, "
-        "so this changes nothing the runtime would not have done: it says "
-        "plainly that an output is not wanted, and is worth writing where the "
-        "output is large. `skip n port` is the other form and a different "
-        "thing, dropping the port's first `n` values for *every* reader of it, "
-        "which is how a header row stops being everybody's problem; several of "
+        "The runtime already drains every output. This form records that an "
+        "output is unused. `skip n port` drops the port's first `n` values "
+        "for every reader, such as removing a shared header row. Several of "
         "them naming one port add up. A bare call skips every one of its "
         "outputs, and `skip o1, o2 of act` (or `skip (o1, o2) of act`) skips "
         "just those; several subjects may share one `skip`, across lines.",
@@ -735,9 +712,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
       {"log",
        {"Writes a line to the flow's log.",
         "optionally a level, and what to log",
-        "The log is the flow's own: no port declares it, nothing has to drain "
-        "it, and a flow that never logs pays nothing for it. Waits for "
-        "nothing, "
+        "The log requires no declared port or manual drain, and is created "
+        "only when used. This statement does not wait, "
         "so like `fail` it belongs in an `if` or a loop body, or carries an "
         "`after` saying what it waits for; one at the top of a body would run "
         "before the thing it is describing.",
@@ -840,9 +816,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
       {"out",
        {"Declares an output port: what a caller reads back.",
         "a name, a type, any of `stream`/`required`, and a description",
-        "These are what cross back, so they are the part worth keeping small: "
-        "an output carrying every fetched page is the pages paid for after "
-        "all. "
+        "Outputs cross back to the caller, so keep them focused on requested "
+        "results. Returning every fetched page also returns all intermediate "
+        "data. "
         "Nothing in the flow writing to a declared output is reported, because "
         "a caller reading it would get nothing.",
         "out answer: string \"The answer, as it is written.\""}},
@@ -871,9 +847,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
         R"(header "x-a11-locale" as locale default "en")"}},
       // `stream` and `required` are in [OrderedDeclarations] because a port
       // declaration is where they are offered, but they are documented in
-      // [PortModifierDocs] rather than here: what they modify is the port, and
-      // "a declaration" is the wrong word above the summary. The lookup chain
-      // for a declaration keyword reaches the modifier tables after this one.
+      // [PortModifierDocs] rather than here:
       {"node",
        {"Makes a stream of the flow's own.",
         "optionally an id, and optionally `in` a map",
@@ -907,10 +881,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "for hit in search.hits parallel 2 { .. }"}},
       {"unordered",
        {"Lets a parallel stage publish its values as they finish.", "",
-        "A parallel stage otherwise puts the stream back in the order it read "
-        "it, which is what makes `parallel` safe to add to a pipeline nobody "
-        "else changed. This gives that up for whatever it saves, so it is "
-        "worth writing only where the consumer does not care.",
+        "A parallel stage normally restores input order before publishing. "
+        "This modifier publishes completion order and requires a consumer "
+        "that does not depend on ordering.",
         "urls | map fetch(it) parallel 8 unordered -> bodies"}},
       {"by",
        {"What to compare, where a stage orders values.",
@@ -1151,9 +1124,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "The escape hatch, for a port that really does carry anything: nothing "
         "is checked and nothing is converted. A named type, a shape or a "
         "quoted "
-        "mimetype says more, and everything reading the interface benefits "
-        "from "
-        "it, so this is worth a second thought.",
+        "mimetype provides validation and a more specific interface.",
         "in payload: any"}},
   };
   return *table;
@@ -1225,10 +1196,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
   return *table;
 }
 
-// The codes are Abseil's, and so are these meanings. The value of documenting
-// them here is the pairs a reader confuses: `permission_denied` against
-// `unauthenticated`, `failed_precondition` against `invalid_argument`, and
-// which of them a *flow* itself can raise.
+// The codes are Abseil's, and so are these meanings.
 const absl::flat_hash_map<std::string_view, WordDoc>& LogLevelDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"debug",
@@ -1314,8 +1282,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatusCodeDocs() {
         "fail permission_denied \"that path is outside the project\""}},
       {"resource_exhausted",
        {"Something ran out: a quota, a rate limit, room to work in.", "",
-        "Often worth retrying later, which is what tells it from "
-        "`failed_precondition`.",
+        "A later retry may succeed; `failed_precondition` instead requires a "
+        "state change.",
         "fail resource_exhausted \"the provider is rate limiting\""}},
       {"failed_precondition",
        {"The system is not in a state where this can be done.", "",
@@ -1391,8 +1359,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatusFieldDocs() {
   return *table;
 }
 
-// Every unit shares one paragraph, because what is worth knowing is true of all
-// six and nothing else about `ms` distinguishes it from `s`.
+// Every duration unit shares the same documentation.
 constexpr std::string_view kDurationDetail =
     "A duration is a value like any other: it may be compared, added to an "
     "instant or to another duration, and read as a number with `seconds()`. "
@@ -1466,9 +1433,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
       {"==",
        {"Whether two values are equal.", "two values",
         "Compares what the values are rather than how they were written, so a "
-        "number is a number whichever way it arrived. `=` is the binding, "
-        "which "
-        "is the slip this is worth knowing about.",
+        "number is a number whichever way it arrived. `=` performs binding; "
+        "`==` compares values.",
         "lower(header.value) == \"application/json\""}},
       {"!=",
        {"Whether two values differ.", "two values",
@@ -1702,9 +1668,7 @@ constexpr std::array kStatementOrder = {
 
 // `else` continues an `if`; `parallel` and `max` say how wide a loop or a stage
 // runs and `unordered` gives up the order a parallel stage otherwise keeps;
-// `of` ties a `skip`'s output names to the call they belong to, and a `wait
-// first of` to its candidates; `by` and `desc` say how to `sort`; `into` says
-// where a `try` stage sends what it could not do.
+// `of` ties a `skip`'s output names to the call they belong to, and.
 constexpr std::array kClauseOrder = {
     std::string_view("else"),      std::string_view("parallel"),
     std::string_view("unordered"), std::string_view("max"),
@@ -1712,10 +1676,7 @@ constexpr std::array kClauseOrder = {
     std::string_view("desc"),      std::string_view("into"),
 };
 
-// As a flow is written, top to bottom. `struct` sits beside `flow` because it
-// is the other thing a file declares; what a *field* says about itself is
-// [OrderedFieldModifiers] rather than a declaration word, the same way a port's
-// modifiers are their own table.
+// As a flow is written, top to bottom.
 constexpr std::array kDeclarationOrder = {
     std::string_view("flow"),     std::string_view("struct"),
     std::string_view("describe"), std::string_view("in"),
@@ -1999,9 +1960,7 @@ std::vector<std::string_view> WordsOf(WordRole role) {
   const auto listed = [](absl::Span<const std::string_view> words) {
     return std::vector<std::string_view>(words.begin(), words.end());
   };
-  // Sorted rather than in an order the language does not have, so that walking
-  // a role twice walks it the same way: a payload that changed because a hash
-  // table was rebuilt would break every generated file that reads one.
+  // Generated files require stable order, so sets are sorted before export.
   const auto ordered_set = [](const absl::flat_hash_set<std::string_view>& in) {
     std::vector<std::string_view> out(in.begin(), in.end());
     std::sort(out.begin(), out.end());
@@ -2070,9 +2029,7 @@ const absl::flat_hash_set<std::string_view>& PositionalStages() {
 const absl::flat_hash_set<std::string_view>& ParallelStages() {
   // Every stage that reshapes or judges one value on its own, and nothing that
   // gathers, orders or counts: `| collect parallel 8` has one value to make and
-  // `| sort parallel 8` has an order to keep, so both would be asking for
-  // workers with nothing to do. `flatten` is here because each list is cut on
-  // its own; `pace` and `timeout` are not, because both are about *when*.
+  // `| sort parallel 8` has an order to keep, so both would be asking.
   static const auto* words =
       MakeSet({"map", "where", "at", "truncate", "match", "mime", "flatten",
                "text", "json", "packb", "strformat", "chunk"});
@@ -2152,8 +2109,6 @@ absl::Span<const std::string_view> OrderedModifiers() {
 const absl::flat_hash_set<std::string_view>& SourceWords() {
   // `status x` reads an outcome, `zip(a, b)` reads several streams in step, and
   // `interleave(a, b)` reads several as one, in the order values arrive.
-  // Both stand where a pipeline's source does and nowhere else, which is what
-  // makes them source words rather than statements or functions.
   static const auto* words = MakeSet({"status", "zip", "interleave"});
   return *words;
 }

@@ -16,12 +16,14 @@
 
 namespace a11::flow {
 
+// Moving around a document: what is under the caret, what the file declares,
+// and where a name was bound.
+
 /// Moving around a document: what is under the caret, what the file declares,
 /// and where a name was bound.
 ///
 /// Navigation uses the parser and resolver so hover, completion, diagnostics,
 /// and editor integrations assign the same role and binding to each name.
-
 /// What a thing *is*, which is what an editor turns into an icon.
 ///
 /// Serialized in `flow.symbols/v1` and `flow.hover/v1`.
@@ -81,7 +83,10 @@ struct Description {
   /// Where it was declared, when it was declared in this document.
   bool has_definition = false;
   Range definition;
-  /// Where it was declared, when it was declared in *another* file and something
+  // Where it was declared, when it was declared in *another* file and something
+  // read that file: an action or a type the catalogue carries an origin for.
+  /// Where it was declared, when it was declared in *another* file and
+  /// something
   /// read that file: an action or a type the catalogue carries an origin for.
   ///
   /// Separate from [definition], which always refers to the current document.
@@ -93,6 +98,8 @@ Description Describe(
     std::string_view source, size_t offset,
     const catalogue::Catalogue& known = catalogue::Catalogue::Builtin());
 
+// An action, written out as the Markdown a reader wants to see: what it does,
+// then every port it has.
 /// An action, written out as the Markdown a reader wants to see: what it does,
 /// then every port it has.
 ///
@@ -113,15 +120,19 @@ std::string FlowMarkdown(const FlowPlan& flow);
 /// A struct, written out the same way: how many fields, then each of them.
 std::string ShapeMarkdown(const DtoPlan& shape);
 
+// One word or mark of the language, written out as reference: what it does,
+// what it takes, how it behaves, and a line of Flow using it.
 /// One word or mark of the language, written out as reference: what it does,
 /// what it takes, how it behaves, and a line of Flow using it.
 ///
 /// Empty where nothing documents the name. `role` says which position the name
-/// was read in, since a word can mean two things; where that role's table has no
+/// was read in, since a word can mean two things; where that role's table has
+/// no
 /// entry the other tables are asked, because a word set may list a word that a
 /// neighbouring set documents (`vocabulary::AnyDocumentation`).
 ///
-/// The name may be written in either case, as the language allows: `TRUNCATE` is
+/// The name may be written in either case, as the language allows: `TRUNCATE`
+/// is
 /// documented and shown as written.
 std::string WordMarkdown(std::string_view name, vocabulary::WordRole role);
 

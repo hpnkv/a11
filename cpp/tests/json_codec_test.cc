@@ -1,19 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 // The UTF-8 guard in front of nlohmann.
-//
-// What these can and cannot prove is worth being clear about. `DumpJson`
-// rejecting a bad string is testable and tested here. The failure the guard
-// actually exists to prevent -- nlohmann's `throw` becoming `std::abort()` in a
-// `-fno-exceptions` translation unit -- is **not** testable from here, because
-// this binary is compiled with exceptions on, so the `dump()` instantiation
-// under test is the one that raises while the shipped library may link one that
-// aborts. A test asserting only the Status passes either way, which is how the
-// bug survived having tests.
-//
-// That is exactly why the guard is a *check*: its answer depends on the bytes
-// rather than on how something was compiled, so proving the check is right here
-// does say something about the library there.
 
 #include "a11/json_codec.h"
 

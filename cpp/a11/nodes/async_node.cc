@@ -216,19 +216,8 @@ std::optional<absl::Status> AsyncNode::GetWriterAbortStatus() const {
 }
 
 a11::Future<bool> AsyncNode::IsWritable() {
-  // The writer is snapshotted *here*, on the caller's thread, rather than inside
-  // the continuation. That is what makes `Then` safe for this: the continuation
-  // runs on whichever thread completes `GetFinalSeq()` -- for a remote store, one
-  // that may not be a fibre at all -- and taking this node's fibre-aware mutex
-  // there is exactly the class of hazard that has bitten this tree before. With the
-  // snapshot taken up front the continuation is pure, and safe anywhere.
-  //
-  // The snapshot is therefore of the writer as it was before the final-seq lookup
-  // rather than after. For an in-memory store the lookup is already complete and
-  // there is no difference; in general a writer attached or detached during the
-  // lookup is now missed. That is within what this query means -- it answers
-  // "was this writable", and a caller that needs the answer to still hold has to
-  // be holding something that stops it changing.
+  // The writer is snapshotted *here*, on the caller's thread, rather than
+  // inside the continuation.
   std::shared_ptr<stores::ChunkStoreWriter> writer;
   {
     thread::MutexLock lock(&mu_);
@@ -280,9 +269,7 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
 
   // The final chunk is enqueued before closure is asked for, and that order is
   // the whole of the synchronisation: the writer's state machine only starts
-  // its close once nothing is outstanding, and admits whatever its bounded
-  // buffer held back before that count reaches zero. So a close requested here
-  // cannot overtake the chunk, even one still waiting for admission.
+  // its close once nothing is outstanding, and admits whatever its bounded.
   stores::ChunkStoreWrite write =
       (*output)->EnqueueChunk(std::move(chunk), options.seq, /*final=*/true,
                               /*ensure_started=*/!options.wait);
@@ -338,9 +325,7 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
     absl::Duration timeout) {
   // Materialised here, which is what keeps the local fast path invisible to
   // every existing caller: a fragment leaving this node has its bytes, exactly
-  // as it did before a chunk could carry a value instead. `Then`, not `Submit`,
-  // for the reason NextChunk gives -- there is nothing to wait for beyond the
-  // read itself, so there is no fibre to spend.
+  // as it did before a chunk could carry a value instead.
   return a11::Then(
       NextFragmentRaw(timeout),
       [](const absl::StatusOr<std::optional<data::NodeFragment>>& fragment)
@@ -361,13 +346,8 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
 a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
     absl::Duration timeout) {
   // `Then`, not `Submit`: this only reshapes what NextFragment produces, and a
-  // fibre whose whole life is "await one future, unwrap it" is a fibre spent on
-  // nothing. `Then` runs the reshaping inline when the fragment is already there --
-  // which it is whenever the reader's pump could answer without waiting -- and
-  // otherwise on whichever thread completes it. Either way the waiting is the
-  // reader's, driven by its pump, and no second fibre exists to hold this frame.
-  //
-  // The transform must not block, and does not: it unwraps and copies.
+  // fibre whose whole life is "await one future, unwrap it" is a fibre spent
+  // on nothing.
   return a11::Then(
       NextFragment(timeout),
       [](const absl::StatusOr<std::optional<data::NodeFragment>>& fragment)

@@ -6,7 +6,8 @@
  *
  * `testdata/serial_tags.json` at the repository root is the one table every
  * language answers to. This test asserts the C++ constants against it, and that
- * the audio types -- the ones C++ actually serializes -- publish those constants
+ * the audio types -- the ones C++ actually serializes -- publish those
+ * constants
  * through their `A11SerialTag` customization point. A tag renamed in one
  * language and forgotten here fails a test rather than a conversation.
  */
@@ -266,10 +267,7 @@ TEST(SerialTagsTest, AudioTypesPublishTheCanonicalTags) {
 }
 
 TEST(SerialTagsTest, MediaTypesMatchTheFixture) {
-  // Pinned across languages exactly as the tags are. `text` and `bytes` are the
-  // ones that matter: they are the defaults for a string and a byte array in the
-  // languages that tell those apart, and a chunk using either carries no `type`
-  // parameter, so the media type alone is what a peer has to go on.
+  // Pinned across languages exactly as the tags are.
   const nlohmann::json table = SharedTagTable();
   const nlohmann::json& media_types = table.at("media_types");
 
@@ -281,8 +279,8 @@ TEST(SerialTagsTest, MediaTypesMatchTheFixture) {
 
 TEST(SerialTagsTest, AStdStringDefaultsToThePinnedBytesMediaType) {
   // C++ has no text-versus-bytes distinction in its type system, so this is the
-  // one language whose string type defaults to bytes; text/plain is available by
-  // naming it. See cpp/tests/string_codec_test.cc.
+  // one language whose string type defaults to bytes; text/plain is available
+  // by naming it. See cpp/tests/string_codec_test.cc.
   const nlohmann::json media_types = SharedTagTable().at("media_types");
   absl::StatusOr<Chunk> chunk =
       GlobalSerializationRegistry().ToChunk<std::string>("value");

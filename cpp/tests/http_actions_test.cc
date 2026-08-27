@@ -167,7 +167,8 @@ class ActionTestServer {
   std::string seen_method_;
 };
 
-// --- Reading an action's ports ------------------------------------------------
+// --- Reading an action's ports
+// ------------------------------------------------
 
 /// Writes one JSON document to a unary input port and ends it.
 absl::Status PutJson(const std::shared_ptr<Action>& action,
@@ -419,11 +420,7 @@ TEST(HttpActionsTest, DeliversAnErrorResponseRatherThanFailing) {
   ASSERT_NE(action, nullptr);
   ASSERT_TRUE(action->Run().ok());
   // A 404 is a response, not a failure of the request: the server was reached
-  // and answered. Failing here would make the `status` port pointless in exactly
-  // the cases a caller cares about, and would throw away the error document --
-  // and a caller that does want a failure can get one from `status`, whereas the
-  // reverse is not recoverable. The action only fails when there is no response
-  // at all.
+  // and answered.
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
       << action->Wait(kPatience).Await().status();
   EXPECT_EQ(ReadOne(action, "status_code"), 404);

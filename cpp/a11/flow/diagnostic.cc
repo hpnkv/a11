@@ -16,13 +16,7 @@ namespace a11::flow {
 namespace {
 
 // Every code the language publishes, sorted by code so a listing is stable and
-// a lookup can binary-search. The summary is what `a11 flow codes` prints, and
-// what the documentation generates from: one line, saying what is wrong rather
-// than what to do about it.
-//
-// Adding a check adds a row here. Removing a row is a contract change -- a
-// toolchain may be matching on the code -- so a check that goes away keeps its
-// code reserved rather than reusing it for something else.
+// a lookup can binary-search.
 constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.after-order", Family::kBarrier, Severity::kWarning,
              "An 'after' names a step written further down the flow, or names "
@@ -377,9 +371,8 @@ Position LineIndex::At(size_t offset) const {
   Position position;
   position.offset = clamped;
   position.line = static_cast<int>(index) + 1;
-  // Columns count characters, not bytes: `a11.flow.lexer` reports them over a
-  // Python string, and a `§` in a prompt would otherwise put every column after
-  // it in disagreement. Continuation bytes are the middles of characters.
+  // Columns count characters because `a11.flow.lexer` reports positions in a
+  // Python string. UTF-8 continuation bytes do not advance the column.
   int column = 1;
   for (size_t at = line_starts_[index]; at < clamped; ++at) {
     if (!utf8::IsContinuation(source_[at])) {

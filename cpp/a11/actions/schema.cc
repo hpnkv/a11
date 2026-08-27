@@ -57,9 +57,7 @@ absl::Status ActionSchema::Validate() const {
   }
   // A port's node id is derived from the action id and the port name alone --
   // Action::MakeNodeId does not know the direction -- so an input and an output
-  // sharing a name are the *same node*, and writing the output would collide
-  // with whatever was fed to the input. Rejecting that here turns a puzzling
-  // runtime failure into a schema error.
+  // sharing a name are the *same node*, and writing the output would.
   for (const auto& key : inputs | std::views::keys) {
     if (outputs.contains(key)) {
       return absl::InvalidArgumentError(absl::StrCat(

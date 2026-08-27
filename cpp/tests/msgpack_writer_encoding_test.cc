@@ -14,7 +14,8 @@
  * So each test here encodes the same value both ways and compares the bytes.
  * The interesting cases are the boundaries between MessagePack size classes --
  * fixint/uint8/uint16/uint32/uint64, fixstr/str8/str16, bin8/bin16, and the
- * negative-integer forms -- because picking a different class for the same value
+ * negative-integer forms -- because picking a different class for the same
+ * value
  * is legal MessagePack, decodes correctly, and is still a wire change.
  */
 

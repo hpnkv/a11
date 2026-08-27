@@ -93,11 +93,7 @@ TEST(AudioActionsTest, TranscribeAudioRejectsAnUnresolvableModel) {
                   .Await()
                   .ok());
   // An *absent* model is no longer an error -- it means the default shorthand,
-  // which would download. A model that is neither a shorthand nor a file still
-  // is, and needs no network to reject.
-  // Raw tagged JSON rather than the registry's typed path, as elsewhere in
-  // this file: the registry's std::any round trip does not survive crossing a
-  // translation unit.
+  // which would download.
   data::Chunk asr_options;
   asr_options.metadata = data::ChunkMetadata{
       .mimetype = "application/json;type=a11.sdk.SpeechRecognizerOptions"};

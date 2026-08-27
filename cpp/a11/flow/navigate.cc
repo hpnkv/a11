@@ -82,7 +82,8 @@ DocumentSymbol PortSymbol(const LineIndex& lines, const PortPlan& port) {
 /// The ports of an action, as one block of Markdown.
 ///
 /// What a hover over a call's name is *for*: `run make_http_request(` is eight
-/// output ports and nine inputs, and the whole reason to hover it is to see them
+/// output ports and nine inputs, and the whole reason to hover it is to see
+/// them
 /// without leaving the file.
 std::string PortTable(const catalogue::ActionInfo& action) {
   std::string out;
@@ -130,7 +131,8 @@ std::string FieldTable(const DtoPlan& shape) {
 ///
 /// A flow owns the text from its own `flow` to whatever is declared next, which
 /// is the only way to say which flow an offset is in: a declaration records
-/// where it starts, and asking whether an offset is merely *after* one would put
+/// where it starts, and asking whether an offset is merely *after* one would
+/// put
 /// every name in the file in the first flow that has a name like it.
 std::vector<size_t> DeclarationStarts(const ParseResult& parsed) {
   std::vector<size_t> starts;
@@ -199,9 +201,9 @@ const SemanticToken* absl_nullable TokenAt(
 
 /// The dotted name the token at `index` is part of, and where it starts.
 ///
-/// `a11.sdk.AudioBuffer` is five tokens and one name, and a caret anywhere in it
-/// is a caret on the type -- so the whole chain is gathered rather than the one
-/// word the caret happens to be in.
+/// `a11.sdk.AudioBuffer` is five tokens and one name, and a caret anywhere in
+/// it is a caret on the type -- so the whole chain is gathered rather than the
+/// one word the caret happens to be in.
 std::pair<std::string, size_t> DottedAround(const std::vector<Token>& tokens,
                                             size_t index) {
   size_t first = index;
@@ -221,14 +223,18 @@ std::pair<std::string, size_t> DottedAround(const std::vector<Token>& tokens,
   return {name, first};
 }
 
+// Formats docstrings in Markdown using bold text, code spans, and paragraph
+// breaks for compatibility across editor renderers.
 /// Formats docstrings in Markdown using bold text, code spans, and paragraph
 /// breaks for compatibility across editor renderers.
 ///
-/// Returns the candidate word roles for a given semantic kind, in priority order.
+/// Returns the candidate word roles for a given semantic kind, in priority
+/// order.
 ///
 /// `kStatementKeyword` covers statements, source words, and clauses, while
 /// `kDeclarationKeyword` covers declarations and port/field modifiers.
-/// This function tries kinds in the highlighter's own order (`SemanticKindOf` in
+/// This function tries kinds in the highlighter's own order (`SemanticKindOf`
+/// in
 /// `highlight.cc`) to determine the position's role.
 ///
 /// Empty for the kinds that are never a word of the language: an identifier, a
@@ -476,24 +482,30 @@ std::string_view SymbolClassName(SymbolClass kind) {
   return "external";
 }
 
-/// The whole construct a declaration opens: its first token through the `}` that
-/// closes its block.
+// The whole construct a declaration opens: its first token through the `}` that
+// closes its block.
+/// The whole construct a declaration opens: its first token through the `}`
+/// that closes its block.
 ///
-/// **Why this is worked out here.** The parser records where a node *started* --
-/// the token it began at, which is what `flow.syntax/v1` documents `at` as -- and
-/// that is the wrong extent for a symbol. A `flow`'s name is the token *after* the
-/// keyword, so a range of the keyword alone does not contain the name, and a
-/// document symbol whose selection is outside its range is a protocol violation:
-/// LSP refuses the whole answer with "selectionRange must be contained in
-/// fullRange", so one bad entry cost the document its entire outline.
+/// **Why this is worked out here.** The parser records where a node *started*
+/// -- the token it began at, which is what `flow.syntax/v1` documents `at` as
+/// -- and that is the wrong extent for a symbol. A `flow`'s name is the token
+/// *after* the keyword, so a range of the keyword alone does not contain the
+/// name, and a document symbol whose selection is outside its range is a
+/// protocol violation: LSP refuses the whole answer with "selectionRange must
+/// be contained in fullRange", so one bad entry cost the document its entire
+/// outline.
 ///
 /// It is also what the format promises: `range` is the whole construct, so
 /// "select symbol" takes the block.
 /// `range`, widened to hold `selection`.
 ///
-/// The invariant every document symbol has to satisfy, applied where a construct
-/// has no block to match braces around: a port, a field, a bound step. Their range
-/// and selection are usually the same token, and this is what makes "usually" into
+/// The invariant every document symbol has to satisfy, applied where a
+/// construct
+/// has no block to match braces around: a port, a field, a bound step. Their
+/// range
+/// and selection are usually the same token, and this is what makes "usually"
+/// into
 /// "always".
 Range Widened(const LineIndex& lines, const Range& range,
               const Range& selection) {
@@ -520,9 +532,9 @@ Range ConstructRange(const LineIndex& lines, absl::Span<const Token> tokens,
       }
     }
   }
-  // A declaration somebody is part-way through typing has no closing brace, and a
-  // range that stopped short of its own name would be the violation this exists to
-  // prevent. So the name is always inside it, whatever the text looks like.
+  // A declaration somebody is part-way through typing has no closing brace, and
+  // a range that stopped short of its own name would be the violation this
+  // exists to prevent.
   end = std::max(end, selection.end.offset);
   return lines.Between(std::min(opened.start, selection.start.offset), end);
 }
@@ -531,8 +543,9 @@ std::vector<DocumentSymbol> Symbols(std::string_view source) {
   const LineIndex lines(source);
   const ParseResult parsed = Parse(source);
   const ResolveResult resolved = Resolve(source, parsed);
-  // Lexed again rather than threaded through: finding a construct's end is brace
-  // matching, and the tokens are what that reads. Cheap next to the resolve above.
+  // Lexed again rather than threaded through: finding a construct's end is
+  // brace matching, and the tokens are what that reads. Cheap next to the
+  // resolve above.
   const LexResult lexed = Lex(source);
   std::vector<DocumentSymbol> found;
 
@@ -633,13 +646,7 @@ Description Describe(std::string_view source, size_t offset,
 
   const std::vector<size_t> starts = DeclarationStarts(parsed);
 
-  // A name the document bound. Asked first, because a flow's own names are what
-  // a reader is usually looking at, and a port called `text` is that port rather
-  // than the stage of the same name.
-  //
-  // Only the flow the caret is *in*: two flows may each declare `in q`, and
-  // answering with whichever came first in the file would describe a port the
-  // reader cannot see and offer a definition in the wrong flow.
+  // A name the document bound.
   for (const ResolvedFlow& flow : resolved.flows) {
     if (flow.declaration == nullptr) {
       continue;
@@ -677,8 +684,7 @@ Description Describe(std::string_view source, size_t offset,
     }
   }
 
-  // A shape, whether this file declared it or the host knows it. Both read the
-  // same, which is the point of recording them the same way.
+  // File-declared and host-provided shapes share the same representation.
   if (!about.has_definition && index < lexed.tokens.size() &&
       lexed.tokens[index].IsWord()) {
     const auto [dotted, first] = DottedAround(lexed.tokens, index);
@@ -741,14 +747,6 @@ Description Describe(std::string_view source, size_t offset,
   }
 
   // A word or a mark of the language, with the language's own reference for it.
-  //
-  // Which table answers is decided by what the highlighter already said this
-  // position means, so this is a lookup and not a second guess: the same `text`
-  // is a stage after a `|` and a function before a `(`, and they do different
-  // things. Everything here used to be one line naming the token's kind --
-  // "flow operator" for a `|` -- with four hand-written paragraphs bolted on
-  // beside it for the words that read as something else. The paragraphs are in
-  // `vocabulary.cc` now, with the rest of the language.
   if (about.summary.empty()) {
     for (const vocabulary::WordRole role : RolesFor(here->kind)) {
       const std::string key = role == vocabulary::WordRole::kSymbol ? about.text

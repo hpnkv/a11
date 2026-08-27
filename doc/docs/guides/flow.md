@@ -1,9 +1,9 @@
 # Compose actions without deploying code
 
-Say you want this: hold this machine's microphone open, recognise what is said on
-the machine that has the GPU, take the first sentence that ends in a full stop,
-put it to a model along with everything said earlier in the conversation, and
-stream the answer back as it is written.
+This guide composes a voice interaction from existing actions. The client
+captures microphone audio, a GPU host transcribes it, and a model receives the
+first complete sentence with the conversation history. The answer streams back
+as it is generated.
 
 Every piece of that already exists. `capture_audio`, `transcribe_audio` and
 `interact_with_llm` are deployed, registered and doing their jobs. What is
@@ -45,9 +45,9 @@ descriptions are not decoration — this is the [`ActionSchema`][a11.actions.act
 whoever dispatches the flow will read, and if that is a model, this is what it
 reads to decide whether the flow is the thing it wants.
 
-Note what `history` is: not the conversation, but the **id of a node** holding it.
-The flow is stateless; the turns so far belong to the caller, and the flow will
-attach to that stream rather than have it copied in.
+`history` is the **ID of a node** that holds the conversation. The caller owns
+the prior turns, and the stateless flow attaches to that stream without copying
+it.
 
 ## Opening the microphone
 
@@ -56,22 +56,17 @@ attach to that stream rather than have it copied in.
   skip mic.events  # <- we never read them, so declare as skipped
 ```
 
-`call`, not `run`. A11 has two verbs for getting an action done and a flow says
-which it means: `run` executes the handler registered where the flow is running,
-`call` puts the action on the stream the flow is attached to and lets the peer do
-it. This composition runs on a gateway, and the microphone is not there — so the
-one step that needs the client is the one written with `call`.
+`run` executes a handler registered with the process running the flow. `call`
+dispatches through the flow's attached stream. Because this composition runs on
+a gateway while the microphone belongs to the client, capture uses `call`.
 
-`skip` reads an output port and keeps nothing. It is needed because an output
-nobody drains stalls the action producing it; saying it in the flow is how a
-composition stays explicit about what it is not interested in. Where the work on
-the way is the point and only the result is unwanted, `-> _` is the other half:
-`pages | map summarise(it) -> _` summarises every page and keeps nothing, where
-`skip pages` would not have looked at one.
+`skip` drains an output port without retaining its values. Undrained outputs
+stall their producers. Use `-> _` when a pipeline must execute but its result is
+not needed: `pages | map summarise(it) -> _` processes every page, while
+`skip pages` performs no summarisation.
 
-The `timeout` is the whole flow's patience for a sentence. If it runs out, the
-error propagates and the flow fails, which is the wanted behaviour: nobody said
-anything, and that is worth reporting rather than waiting on.
+The `timeout` bounds the wait for a sentence. Expiry propagates as a flow
+failure.
 
 ## Recognising what was said
 
@@ -84,28 +79,25 @@ anything, and that is worth reporting rather than waiting on.
   skip transcribe.events
 ```
 
-This is the line the whole page is about. `mic.audio` is the client's capture
-stream and `audio:` is the recogniser's input port, and putting one into the
-other is the entire instruction. A hundred-odd buffers a second flow from a
-`call` step's output straight into a `run` step's input, and:
+`mic.audio` is the client's capture stream, and `audio:` is the recogniser's
+input port. The pipe sends each buffer directly from the remote `call` output to
+the local `run` input:
 
-* they are never assembled into a value anybody holds;
-* they are never rendered as text, because there is no text to render;
-* they are never seen by a model, and cost nothing in a context window.
+* buffers are not assembled into one in-memory value;
+* binary audio is not rendered as text;
+* audio buffers do not enter the model context.
 
-`| packb` says they travel as `application/x-msgpack` rather than JSON. It is a
-no-op when the producer already wrote MessagePack, so it is safe in front of a
-port that wants packed bytes whatever is upstream.
+`| packb` encodes values as `application/x-msgpack`. It is a no-op when the
+producer already wrote MessagePack, so the destination receives packed bytes
+for either input representation.
 
-`nodes scratch` and `via scratch` are the other half of "nothing in the middle is
-read by anybody". A `nodes` block gives the steps inside it a
-[`NodeMap`][a11.nodes.async_node.NodeMap] of their own, so their ports are not in
-the session's node map and the peer that dispatched the flow neither sees them nor
-receives their fragments. Transcription fragments are for this flow; the client
-gets the sentence.
+`nodes scratch` and `via scratch` keep intermediate nodes local. A `nodes` block
+gives its steps a separate [`NodeMap`][a11.nodes.async_node.NodeMap], so their
+ports do not appear in the session's node map and their fragments are not sent
+to the dispatching peer. Only the completed sentence reaches the client.
 
-Without a reader for transcription errors, omitting `try` allows unhandled
-errors to propagate immediately to the caller rather than failing silently.
+Because nothing reads transcription errors, omitting `try` propagates them to
+the caller.
 
 ## The first full sentence
 
@@ -123,11 +115,10 @@ Recognition arrives as pieces, and a piece is not a sentence.
   said -> sentence
 ```
 
-`| group EXPR` is `batch` with a question instead of a count: values gather into a
-list, and the list closes when the expression holds of the value just added. So
-fragments accumulate until one of them ends in a full stop, a question mark or an
-exclamation mark — and that list, joined, is a sentence. `| first 1` takes one of
-them and the pipeline is over.
+`| group EXPR` collects values until the expression is true for the newest
+value. Here, fragments accumulate until one ends with a full stop, question
+mark, or exclamation mark. Joining that group produces a sentence, and
+`| first 1` ends the pipeline after the first sentence.
 
 `said` is a node of the flow's own because the sentence is wanted **twice** — by
 the client, on `sentence`, and by the model, as the question. A node is how a
@@ -144,8 +135,8 @@ crosses the wire is the one on `sentence`.
 
 This is the only ordering statement in the file. Everything else in a flow's body
 runs at once — **steps run concurrently, and order comes from the data** — so
-`after` exists for the cases where order is the point. Here it is: the microphone
-should close when there is a sentence, and not before.
+`after` expresses required ordering. Here the microphone should close when
+there is a sentence, and not before.
 
 ## The conversation
 
@@ -166,11 +157,10 @@ should close when there is a sentence, and not before.
 on the `history` port, reading an external stream. Each interaction arrives
 as the type it was written as and preserves its structured payload.
 
-`TYPE{...}` builds a value of a named type — the sentence becomes an
-`a11.sdk.Interaction`, validated into the type, so a field that will not fit is an
-error here rather than a surprise inside the model call. Which types exist is the
-host's decision: a dotted name is a tag the running process's serialisation
-registries resolve, and a flow cannot import anything.
+`TYPE{...}` builds a named value. The sentence becomes an
+`a11.sdk.Interaction`, and validation reports incompatible fields before the
+model call. The host defines available types: its serialisation registries
+resolve dotted tags, while a flow cannot import modules.
 
 `asked` is its own node for the same reason `said` was: both the model and the
 client's history want it.
@@ -193,11 +183,9 @@ client's history want it.
   asked then interact.new_interactions -> turn
 ```
 
-`earlier then asked` is one stream and then the other: the turns so far, then the
-question just heard. Two statements writing to the same node would interleave by
-arrival, which is fine for fetched pages and wrong for a conversation — `then` is
-how a flow says which comes first, and it is what makes a multi-turn chat
-expressible at all.
+`earlier then asked` concatenates the prior turns and the new question in that
+order. Direct writes from two statements would interleave by arrival; `then`
+preserves conversation order.
 
 `forward headers "x-a11-llm-*"` passes the caller's own headers on to the step
 that needs them, so which provider and which model stay the caller's decision and
@@ -266,14 +254,13 @@ or high-rate values such as audio buffers, fetched pages, and transcript
 fragments stay out of the model context. In this example, the model receives one
 completed sentence and the caller receives the streamed answer.
 
-## Four shapes worth knowing about
+## Four common composition patterns
 
 The following patterns cover common extensions to a composition.
 
 **Work on several values at once.** A `map` whose expression is expensive — a
 coercion, a round trip through the host — may say how many values it may have in
-hand. What follows still reads them in the order they arrived, so this can be
-added to a pipeline nobody else changed:
+hand. Downstream stages still receive results in input order:
 
 ```a11flow
 urls | map fetch_page(it) parallel 8 -> bodies
@@ -314,20 +301,19 @@ orders | sum it.price -> revenue
 hits   | sort by it.score desc | first 10 -> best
 ```
 
-`| fold 0 as total, total + it` is the general form, and `| scan` is that same
-fold with every value it passed through published rather than only the last —
-which is how a stream whose meaning depends on what came before it is written:
+`| fold 0 as total, total + it` emits the final accumulated value. `| scan` emits
+each intermediate accumulated value, supporting streams whose values depend on
+prior input:
 
 ```a11flow
 lines | scan 0 as n, n + 1 -> numbered
 ```
 
-`| window 2` is `batch` with the lists overlapping, for a question about
-neighbours rather than about groups — a pattern spanning two lines is invisible
-to a `batch`, because a boundary falls somewhere and half the matches fall on it.
+`| window 2` creates overlapping lists. Unlike `batch`, it can detect a pattern
+that spans a group boundary.
 
-`| timeout 30s` and `| pace 100ms` are the two stages about *when* a value
-arrives rather than what it is.
+`| timeout 30s` limits gaps between values, and `| pace 100ms` enforces a minimum
+interval between emitted values.
 
 ## Where to go from here
 

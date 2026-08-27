@@ -77,9 +77,8 @@ class Response:
 
     A `Response` exists as soon as the action has been started, which is
     *before* the response has arrived: `status` and `headers` await the ports
-    that carry them, and the body is only read when asked for. That is the
-    behaviour the ports give for free, and it is why `status` is worth awaiting
-    on its own: whether to read a body at all can be decided before it lands.
+    that carry them, and the body is read only on request. Awaiting `status`
+    separately lets a caller decide whether to read the body before it arrives.
     """
 
     def __init__(self, action: Action, *, ports: Iterable[str]) -> None:

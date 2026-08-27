@@ -37,7 +37,9 @@ std::string NewWebSocketId() {
   return NewStreamId("ws-");
 }
 
-/** Parses a `ws`/`wss` URL, rejecting the schemes this transport cannot dial. */
+/**
+ * Parses a `ws`/`wss` URL, rejecting the schemes this transport cannot dial.
+ */
 absl::StatusOr<ParsedUrl> ParseWebSocketUrl(std::string_view url) {
   ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseUrl(url));
   if (parsed.scheme != "ws" && parsed.scheme != "wss") {

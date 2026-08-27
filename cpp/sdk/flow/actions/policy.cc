@@ -234,7 +234,8 @@ absl::Status CheckAddress(const NetworkPolicy& policy,
     }
     if (parts[0] == 169 && parts[1] == 254 && !policy.allow_link_local) {
       // 169.254.169.254 is a cloud instance's credential endpoint. This is the
-      // single most valuable address to an attacker holding a flow that fetches.
+      // single most valuable address to an attacker holding a flow that
+      // fetches.
       return refuse("a link-local address");
     }
     if (!policy.allow_private) {

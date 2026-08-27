@@ -227,35 +227,31 @@ inline void Detach(std::unique_ptr<Fiber> fiber) {
 }
 
 /**
- * @brief
- *   Hand a started fiber to the pool to be joined and destroyed when it finishes.
+ * @brief Hand a started fiber to the pool for eventual joining and destruction.
  *
- * For the caller who needs the fiber *pointer* to stay valid -- `Cancel()` walks
+ * For the caller who needs the fiber *pointer* to stay valid -- `Cancel()`
+ * walks
  * the fiber tree and locks each node, so it cannot be given a fiber that might
- * delete itself -- but has nobody to `Join()` it. `Submit` is exactly that case:
- * it hands back a Future rather than a joinable handle, so no caller ever joins.
- *
- * Before this existed, each such call spent a whole second fiber that did nothing
- * but block in `Join()` to keep the first one's pointer alive. That was ~15% of all
- * fibers created by a server workload.
+ * delete itself -- but has nobody to `Join()` it. `Submit` is exactly that
+ * case:
+ * it hands back a Future rather than a joinable handle, so no caller ever
+ * joins.
  *
  * @param fiber
  *   A started fiber. Ownership passes here.
  * @param on_finished
- *   Run after the join and *before* the fiber is destroyed, under whatever lock
- *   the caller uses to guard its own copy of the pointer. This is the ordering the
- *   whole arrangement rests on: it is what makes a `Cancel()` racing the fiber's
- *   completion either take effect on a finished-but-live fiber, or find the handle
- *   already cleared. Must not block for long and must not itself join.
+ *   Run after the join and before destruction, under the lock guarding the
+ *   caller's pointer. A racing Cancel() therefore sees either a live fiber or a
+ *   cleared handle. Must not block for long or join the fiber.
  */
 void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
                       absl::AnyInvocable<void() &&> on_finished);
 
 /**
- * @brief
- *   Join and destroy any fibers handed to ReapWhenFinished() that have finished.
+ * @brief Join and destroy finished fibers handed to ReapWhenFinished().
  *
- * Called by pool workers as they come round, so reaping costs no fiber of its own.
+ * Called by pool workers as they come round, so reaping costs no fiber of its
+ * own.
  * Only touches fibers whose `Joinable()` is already true, so it never blocks on
  * work still running.
  *
@@ -268,11 +264,11 @@ void ReapFinishedFibers();
  * @brief
  *   How many fibers are waiting to be reaped, without taking the reap lock.
  *
- * A hint, not a fence: the count may change the moment it is read. It exists so a
- * caller in a hot loop can decide whether a drain is worth attempting at all. Zero
- * is exact in the only direction that matters -- there is genuinely nothing queued,
- * so a drain would find nothing -- because the count is decremented only after an
- * entry has been removed from the queue.
+ * A hint, not a fence: the count may change the moment it is read. It exists
+ * so a caller in a hot loop can decide whether a drain is worth attempting at
+ * all. Zero is exact in the only direction that matters -- there is genuinely
+ * nothing queued, so a drain would find nothing -- because the count is
+ * decremented only after an entry has been removed from the queue.
  */
 size_t PendingReapCount();
 

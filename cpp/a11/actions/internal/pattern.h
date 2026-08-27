@@ -26,7 +26,6 @@
 #include <absl/status/statusor.h>
 
 namespace a11::actions::internal {
-
 /**
  * @brief Compiles an ECMAScript pattern, or explains why it is not one.
  *
@@ -34,7 +33,6 @@ namespace a11::actions::internal {
  * `x-a11-allowed-llm-actions` already established with Python's `re.fullmatch`.
  */
 absl::StatusOr<std::regex> CompilePattern(const std::string& pattern);
-
 }  // namespace a11::actions::internal
 
 #endif  // A11_ACTIONS_INTERNAL_PATTERN_H_

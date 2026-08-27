@@ -192,9 +192,11 @@ class Client:
         """Server-side write-and-read-back; no payload crosses the wire."""
         call = self._call(STORE)
         await call.call()
-        await call["request"].finalize(
-            {"count": count, "size": size, "batch": batch}
-        )
+        await call["request"].finalize({
+            "count": count,
+            "size": size,
+            "batch": batch,
+        })
         report = await call["report"].consume(dict)
         await call.wait(_WAIT)
         return int(report.get("read", 0))
@@ -241,29 +243,13 @@ class Fleet:
         return client
 
     async def disconnect(self, client: Client) -> None:
-        """Half-close, drain, then **abort** -- and the abort is load-bearing.
+        """Half-close, drain, then abort to release the client socket.
 
         `half_close()` closes the write half. It does not close the connection,
-        because a half-closed connection is still a connection: the peer's write
-        half is open and the socket stays. Measured directly, with concurrency
-        one against a real service: `half_close()` plus
-        `drain_outgoing_messages()` retains **1.04 file descriptors per
-        connection**, and so does simply dropping the last Python reference and
-        collecting it. `abort()` holds flat.
-
-        That cost this suite two rounds of wrong numbers. With a default
-        `ulimit -n` of 1024 the churn population died at about a thousand cycles
-        and reported it as the *server* refusing connections -- three different
-        error strings across three configurations
-        (`connection reset by peer`, `HTTP/1.1 connection is not connected`,
-        `Starting HTTP/2 TCP connection failed: too many open files`), of which
-        only the last names the actual cause. The first two were healthy
-        connections failing downstream of the client's exhausted descriptor
-        table.
-
-        So: drain for the graceful path, because that is what an application
-        does and it is what makes the peer see an orderly end of stream, then
-        abort to reclaim the socket. See `FINDINGS.md`, "A closed client stream
+        because the peer's write half remains open. Draining delivers the
+        orderly end of stream; aborting then releases the descriptor. Omitting
+        the abort retains about one descriptor per connection and distorts
+        high-churn benchmark results. See `FINDINGS.md`, "A closed client stream
         keeps its file descriptor".
         """
         with contextlib.suppress(Exception):

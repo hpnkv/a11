@@ -3,12 +3,10 @@
     python examples/005-http/main.py            # against a local server
     python examples/005-http/main.py --live     # and against the real web
 
-Four things are worth watching for as it runs:
+The example demonstrates four HTTP Action properties:
 
 * **The status arrives before the body.** `only-if-json` branches on the content
-  type while the body is still in flight, and never reads one it did not want. A
-  buffered `Response` cannot express that: by the time you can look at the
-  status, you have already paid for the body.
+  type while the body is still in flight and skips unwanted response bodies.
 * **Trailers are a port.** They cannot be sent with the headers -- a checksum is
   not known until the body has been produced -- so a client that flattens a
   response into one object either drops them or makes you wait for everything.
@@ -218,8 +216,8 @@ async def shared_connections(server) -> None:
     await slow.status()
     joined = await client.request(url(server, "/page"))
     await joined.read()
-    # HTTP/2 multiplexes, so this finished over the same socket while the first
-    # was still open. That is what makes sharing worth doing.
+    # HTTP/2 multiplexing completes this request on the same socket while the
+    # first request remains open.
     print(
         f"  joined a connection in use: {(await joined.connection())['reused']}"
     )

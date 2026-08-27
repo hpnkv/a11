@@ -50,9 +50,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         default=[],
         metavar="PATTERN",
         dest="names",
-        help=(
-            "Only actions whose name fully matches this regex. Repeatable."
-        ),
+        help=("Only actions whose name fully matches this regex. Repeatable."),
     )
     parser.add_argument(
         "--all-ports",
@@ -141,7 +139,9 @@ def _http_document(args: argparse.Namespace) -> dict[str, Any]:
     # paste; treat it as the base either way.
     if base.endswith("/actions"):
         base = base[: -len("/actions")]
-    path = "/actions" + (f"/{urllib.parse.quote(args.action)}" if args.action else "")
+    path = "/actions" + (
+        f"/{urllib.parse.quote(args.action)}" if args.action else ""
+    )
     query = [("name", pattern) for pattern in args.names]
     if args.all_ports:
         query.append(("ports", "all"))
@@ -171,9 +171,8 @@ async def _protocol_document(args: argparse.Namespace) -> dict[str, Any]:
         if args.timeout is not None
         else None
     )
-    # Connect through the client's own helper rather than rebuilding the dance:
-    # it disables h2/h2c for an RFC6455 peer and bounds only the handshake, both
-    # of which are load-bearing and commented as such where they live.
+    # The shared client helper disables h2/h2c for RFC6455 peers and applies the
+    # timeout only to the handshake.
     connection = await GatewayConnection.connect(args.endpoint, timeout=bound)
     try:
         if args.action:

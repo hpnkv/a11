@@ -105,13 +105,14 @@ struct RunOutcome {
 /**
  * @brief Registers the standard library on @p registry, under @p capabilities.
  *
- * Every name the registry already has is left as it is. Called by Run(); exposed
+ * Every name the registry already has is left as it is. Called by Run();
+ * exposed
  * because a host may want the actions without running anything yet.
  *
  * @param registry Registry to extend with standard actions.
  * @param capabilities Policy applied by capability-sensitive actions.
  * @param standard_streams Whether to bind `read_stdin`, `write_stdout` and
- *        `write_stderr`, which RegisterFlowActions deliberately omits.
+ *        `write_stderr`, which RegisterFlowActions does not register.
  */
 absl::Status RegisterStandardLibrary(
     actions::ActionRegistry& registry,
@@ -120,9 +121,8 @@ absl::Status RegisterStandardLibrary(
 /**
  * @brief Compiles @p source and runs its entry flow to completion.
  *
- * @return What the program did, or the reason it could not: a compile error with
- *         its line and column, a missing entry flow, a policy that allows
- *         nothing, or the failure the flow itself ended with.
+ * @return The program outcome, or a compile error with its location, a missing
+ *         entry flow, an empty policy, or the flow's terminal failure.
  */
 absl::StatusOr<RunOutcome> Run(const Source& source, const RunOptions& options);
 

@@ -8,30 +8,25 @@ to 234 µs.
 A11 enables the allocator for its executables and CLI. Applications embedding
 A11 in another process must preload it before startup.
 
-## What you get for free
+## A11 executables and the CLI
 
-**A11's native executables** — `a11_bench`, the `a11-flow` tool — link the
-allocator directly. Nothing to do.
+**A11's native executables**, including `a11_bench` and `a11-flow`, link the
+allocator directly.
 
 **The `a11` command** re-executes itself once at startup with the allocator
-preloaded, so everything run through the CLI gets the full effect. This matters
-most for `a11 gateway`, which is the native server. Again, nothing to do.
+preloaded, so commands such as `a11 gateway` use it automatically.
 
-## What you have to do yourself
+## Applications that embed A11
 
-If you run A11 inside **your own** process — `python myserver.py`, a notebook,
-uvicorn, pytest — then A11 cannot switch the allocator on for you, and the reason
-is worth understanding rather than working around.
+When A11 runs inside an existing process — `python myserver.py`, a notebook,
+uvicorn, or pytest — preload the allocator before starting that process.
 
-`a11._native` is a shared library that your interpreter loads *after* it has
-already allocated memory through the C library. A module that replaced `free` for
-the whole process at that point would, sooner or later, be handed a pointer that
-libc allocated before it arrived — and free it with the wrong allocator. A11 will
-not do that to your process.
+The interpreter loads `a11._native` after allocating memory through the C
+library. Replacing `free` at that point could route existing allocations to the
+wrong allocator, so A11 does not enable it after process startup.
 
-Replacing the allocator *before* the process starts has none of that problem.
-That is a property of how the process is launched, so only whoever launches it can
-do it. One line:
+Preloading replaces the allocator before the process starts and avoids mixing
+allocators. Configure it when launching the process:
 
 === "Linux"
 
@@ -64,7 +59,7 @@ subprocess.run(
 )
 ```
 
-## Checking rather than assuming
+## Check whether the allocator is active
 
 ```python
 import a11.allocator
@@ -72,9 +67,9 @@ import a11.allocator
 a11.allocator.is_active()  # True only if it really is
 ```
 
-This asks the dynamic loader whether the allocator's symbols resolve in this
-process. Trust it over the environment variable, because there is a case where
-the variable is set and the allocator is not loaded — see below.
+This asks the dynamic loader whether the allocator's symbols resolve in the
+current process. It remains accurate when the environment variable is set but
+the allocator was not loaded.
 
 ## Platform considerations
 
@@ -100,11 +95,10 @@ debugging process startup.
 `system`. `auto` is a *preference order*, per platform, following the
 measurements in `bench/PERF_PLAN.md`: tcmalloc then mimalloc on Linux, mimalloc
 on macOS. Whichever of them the build can actually reach is used, and the system
-allocator is the last resort — so a deps prefix carrying only mimalloc (which is
-what `scripts/bootstrap_wheel_deps.sh` builds) gets mimalloc on Linux rather than
-a failed configure. Naming one explicitly is a requirement rather than a
-preference: `-DA11_ALLOCATOR=tcmalloc` against a prefix without it is an error,
-which is the point of saying it.
+allocator is the fallback. A dependency prefix containing only mimalloc, as
+produced by `scripts/bootstrap_wheel_deps.sh`, therefore selects mimalloc on
+Linux. An explicit selection is required to exist:
+`-DA11_ALLOCATOR=tcmalloc` fails when the prefix does not contain tcmalloc.
 
 jemalloc, mimalloc and tcmalloc all measured within a few percent of each other
 and all beat glibc by 20–30%, so which one is chosen matters much less than not

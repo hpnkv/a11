@@ -62,9 +62,15 @@ _SELF_DESCRIBING_MEDIA_TYPES = frozenset({TEXT_MIMETYPE, BYTES_MIMETYPE})
 #: holding one of these carries no ``type`` parameter at all: ``;type=object``
 #: on an object says nothing a parser did not already know, and a peer matching
 #: on bare ``application/json`` would fail to recognise it.
-_GENERIC_TAGS = frozenset(
-    {"object", "array", "string", "integer", "number", "boolean", "null"}
-)
+_GENERIC_TAGS = frozenset({
+    "object",
+    "array",
+    "string",
+    "integer",
+    "number",
+    "boolean",
+    "null",
+})
 
 _MIME_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _MIME_PART_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z?*\[\]-]+$")
@@ -165,9 +171,8 @@ def _parse_mimetype(value: str, *, allow_patterns: bool) -> _Mimetype:
     sees is small and the result is a frozen dataclass nobody can mutate, so
     the parse is cached rather than repeated.
 
-    Invalid values are deliberately *not* cached: `lru_cache` does not memoise
-    a raised exception, so a caller passing garbage re-parses each time and
-    cannot fill the cache with it.
+    Invalid values are not cached. `lru_cache` does not memoise exceptions, so
+    repeated invalid input is parsed again and cannot fill the cache.
     """
     if not isinstance(value, str):
         raise Status(
@@ -315,12 +320,10 @@ def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
         type_identifier not in _GENERIC_TAGS
         and mimetype.media_type not in _SELF_DESCRIBING_MEDIA_TYPES
     ):
-        parameters.append(
-            (
-                _TYPE_PARAMETER,
-                urllib.parse.quote(type_identifier, safe="!#$%&'*+.^_`|~-"),
-            )
-        )
+        parameters.append((
+            _TYPE_PARAMETER,
+            urllib.parse.quote(type_identifier, safe="!#$%&'*+.^_`|~-"),
+        ))
     suffix = "".join(
         f";{name}={_format_parameter(value)}" for name, value in parameters
     )

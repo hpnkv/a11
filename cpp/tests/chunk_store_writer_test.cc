@@ -297,7 +297,7 @@ TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {
   auto store = *LocalChunkStore::Create("writer-close-tee");
   auto writer = *ChunkStoreWriter::Create(store);
   ASSERT_TRUE(writer->AttachStream(pair.first).ok());
-  // Deliberately no final fragment: the marker is all a peer gets.
+  // Omit a final fragment so the peer receives only the closure marker.
   ASSERT_EQ(*writer->PutChunk(data::Chunk{.data = "sent"}).Await(), 0);
   EXPECT_TRUE(writer->DrainAndClose().Await().ok());
 

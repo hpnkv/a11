@@ -1,9 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
-// Concurrent exchanges on one HTTP/2 connection. A11's own transports issue them
-// -- the HTTP SSE client posts outbound messages without waiting for the one
-// before it -- so "many at once on one client" is a supported usage pattern and
-// not just something nghttp2 happens to allow.
+// Concurrent exchanges on one HTTP/2 connection.
 
 #include <atomic>
 #include <memory>

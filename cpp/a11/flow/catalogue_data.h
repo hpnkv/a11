@@ -4,8 +4,8 @@
 //
 // The snapshot of the world the standalone tools know with nothing
 // configured: every action the SDK registers and every type its
-// serialization registry knows. A frontend with a live registry passes
-// its own, which is merged over this.
+// serialization registry knows. A frontend with a live registry
+// passes its own catalogue, which is merged over this.
 
 #ifndef A11_FLOW_CATALOGUE_DATA_H_
 #define A11_FLOW_CATALOGUE_DATA_H_
@@ -17,6 +17,65 @@ namespace a11::flow::catalogue {
 inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
 {
   "actions": [
+    {
+      "description": "Describe one action this peer serves, as an a11.actions/v1 document. Fails NOT_FOUND when the name is not registered here.",
+      "inputs": [
+        {
+          "description": "Name of the action to describe.",
+          "name": "action",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "__get_schema__",
+      "outputs": [
+        {
+          "description": "The a11.actions/v1 document for that one action.",
+          "name": "schema",
+          "required": true,
+          "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "List the actions this peer serves, with their schemas, as one a11.actions/v1 document. Takes an optional request object on 'request': 'names' (full-match patterns), 'exact' (names), 'ports' (\"callable\" or \"all\"), 'include_reserved', and 'runnable_only'.",
+      "inputs": [
+        {
+          "description": "Which actions to describe. Absent means all of them.",
+          "name": "request",
+          "type": "application/json"
+        }
+      ],
+      "name": "__list_actions__",
+      "outputs": [
+        {
+          "description": "The a11.actions/v1 document, whole.",
+          "name": "actions",
+          "required": true,
+          "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "Ping the server to check if it is alive. Requires a single value on the port `input`, which it returns as a single value on the port `output`.",
+      "inputs": [
+        {
+          "description": "Ping input value",
+          "name": "input",
+          "type": "text/plain",
+          "unary": false
+        }
+      ],
+      "name": "__ping",
+      "outputs": [
+        {
+          "description": "Pong response value",
+          "name": "output",
+          "type": "text/plain",
+          "unary": false
+        }
+      ]
+    },
     {
       "description": "Capture audio from an input device and stream fixed-size AudioBuffers until a stop control event arrives or the action is cancelled.",
       "headers": [

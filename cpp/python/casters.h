@@ -8,8 +8,6 @@
 #include <pybind11_abseil/status_casters.h>
 
 // A11 data records are registered as first-class pybind11 classes by
-// data_bindings.cc. Keeping this shared include means every binding translation
-// unit sees the standard STL and Abseil casters without a serialization-based
-// duplicate type caster.
+// data_bindings.cc.
 
 #endif  // A11_PYTHON_CASTERS_H_

@@ -34,12 +34,7 @@ ActionLogSink& SinkSlot() {
   return *sink;
 }
 
-// The default sink. Abseil's log is where A11's C++ diagnostics already go, and
-// a host language picks them up from there without a second consumer of the log
-// port: cpp/python/logging_bindings.cc turns every entry into a LogRecord.
-//
-// AtLocation is what carries the log's own file and line through; without it a
-// Python consumer would be told every action log came from this function.
+// The default sink.
 void ReportThroughAbseil(const LogRecord& record) {
   const absl::LogSeverity severity = LogLevelToSeverity(record.level);
   const std::string prefix =

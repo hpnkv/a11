@@ -34,9 +34,9 @@ enum class BytePacketType : std::uint8_t {
 /// Parsed packet metadata plus the owned piece of application payload.
 struct BytePacket {
   BytePacketType type = BytePacketType::kCompleteBytes;  ///< Packet shape.
-  std::string payload;             ///< Bytes contributed by this packet.
-  std::uint64_t transient_id = 0;  ///< Id used to interleave messages safely.
-  std::uint32_t sequence = 0;      ///< Zero-based position in the message.
+  std::string payload;  ///< Bytes contributed by this packet.
+  std::uint64_t transient_id = 0;
+  std::uint32_t sequence = 0;  ///< Zero-based position in the message.
   std::uint32_t packet_count =
       0;  ///< Total count, when supplied by the first packet.
 

@@ -53,7 +53,7 @@ bool IsPositional(const syntax::Stage& stage) {
 /// The stages that reshape every value the same way, so twice is once.
 ///
 /// `sort` is here because sorting a sorted stream is the same stream, and
-/// `flatten` is deliberately *not*: a stream of lists of lists is flattened one
+/// `flatten` is not recursive: a stream of lists of lists is flattened one
 /// level at a time, so twice is a second level and not a repeat.
 bool IsIdempotent(std::string_view stage) {
   return stage == "collect" || stage == "distinct" || stage == "text" ||
@@ -146,6 +146,9 @@ class Inspector {
     }
   }
 
+  // Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
+  // VisitSubtree rather than a recursive walk of its own, so a deeply nested
+  // document costs heap rather than fibre stack.
   /// Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
   ///
   /// Every node, whatever its kind: a cast can be anywhere an expression can,
@@ -278,10 +281,11 @@ class Inspector {
 
   /// Whether a name stands for something that only exists once the flow runs.
   ///
-  /// An `in` port and a header are there before the first statement, so reading
-  /// one says nothing about when a statement happened. A node, a call's port and
-  /// a barrier are filled in *while* the flow runs, and reading one at a moment
-  /// nothing pins down is the mistake this file is about.
+  /// An `in` port and a header are there before the first statement, so
+  /// reading one says nothing about when a statement happened. A node, a
+  /// call's port and a barrier are filled in *while* the flow runs, and
+  /// reading one at a moment nothing pins down is the mistake this file is
+  /// about.
   bool ProducedWhileRunning(std::string_view name) const {
     const Symbol* symbol = SymbolNamed(name);
     if (symbol == nullptr) {
@@ -352,7 +356,8 @@ class Inspector {
   /// two different values rather than two copies of the first -- and a node
   /// carrying one value gives the second read the end of the stream, which
   /// renders as nothing at all. Within one statement there is no `after` that
-  /// could say which read comes first, so the only fix is to stop reading twice:
+  /// could say which read comes first, so the only fix is to stop reading
+  /// twice:
   /// `let` names a value, and a value is shared.
   ///
   /// Only nodes of the flow's own: everything else a flow reads for a value
@@ -361,8 +366,7 @@ class Inspector {
   void ValueReadTwice(const std::vector<const Node*>& roots) {
     // Counted first and reported afterwards, at the *second* read in the text:
     // [syntax::VisitSubtree] promises only that a parent comes before its
-    // children, so reporting as they arrive would point at either one of them
-    // depending on the shape of the statement.
+    // children, so reporting as they arrive would point at either one of them.
     absl::flat_hash_map<std::string, std::pair<int, const syntax::Name*>> seen;
     for (const Node* root : roots) {
       if (root == nullptr) {
@@ -793,6 +797,7 @@ class Inspector {
   std::string flow_;
   /// The flow being walked, for the questions that are about a *name*.
   const ResolvedFlow* absl_nullable current_ = nullptr;
+  // How many `if`/`for`/`repeat` bodies deep this statement is.
   /// How many `if`/`for`/`repeat` bodies deep this statement is. What it
   /// answers is the one `CheckReachedByChoice` asks in the resolver: whether
   /// anything at all says when this statement runs. A `nodes` block does not

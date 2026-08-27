@@ -2,11 +2,9 @@
 
 """A Python A11 echo peer, for checking that a folded TypeScript frame is read.
 
-The TypeScript sender folds queued wire messages together, so a Python peer now
-receives frames carrying several fragments where it used to receive one frame
-each. Nothing in the format changed -- a WireMessage has always been a batch --
-but "has always been allowed" and "is actually handled" are different claims and
-only one of them is testable.
+The TypeScript sender folds queued wire messages, so the Python peer may receive
+several fragments in one frame. ``WireMessage`` framing permits such batches;
+this peer verifies that they are handled in practice.
 
 Echoes one fragment per arriving fragment, which is the credit contract
 `bench/peer.py` settled on for exactly this reason: counting messages through a

@@ -20,9 +20,7 @@ namespace a11::obs {
  */
 class Tracer {
  public:
-  // Starts a span continuing a remote parent recovered from headers. When
-  // `parent` is null (or points at an empty context), the span begins a fresh
-  // root trace. Baggage carried by the parent is retained for propagation.
+  // Starts a span continuing a remote parent recovered from headers.
   /// Continue @p parent, or begin a root when it is null or empty.
   static Span StartSpan(std::string_view name, SpanKind kind,
                         const TraceContext* parent);
@@ -32,10 +30,8 @@ class Tracer {
   static Span StartChildSpan(std::string_view name, SpanKind kind,
                              const Span& parent);
 
-  // Starts a root span for a session or stream, optionally pinning the trace
-  // id (32 lowercase hex chars). An empty `preassigned_trace_id` lets the SDK
-  // generate one. This is the implementation-level hook for preassigning trace
-  // ids without widening any public transport interface.
+  // Starts a root span for a session or stream, optionally pinning the trace id
+  // (32 lowercase hex chars).
   /// Start a root span, optionally using a preassigned 32-character trace id.
   static Span StartRootSpan(std::string_view name, SpanKind kind,
                             std::string_view preassigned_trace_id = {});

@@ -101,20 +101,6 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
 }
 
 // Aborting an already half-closed stream must finish it, not silently succeed.
-//
-// This is the file-descriptor leak in `FINDINGS.md` item 0, reduced to its
-// mechanism. A half-close shuts the write half and leaves the socket held --
-// correctly, because the peer's half is still open -- so abort is the only call
-// a departing client has that returns the descriptor. It used to return OK and
-// do nothing once `local_end` had left kNone, which is unobservable from the
-// caller: measured on Linux against a real Service, `abort()` alone held flat
-// while `half_close()` then `abort()` retained exactly one ESTABLISHED
-// descriptor per connection, released only at process exit.
-//
-// The assertion is on the *client's* completion after the abort, with the peer
-// deliberately never half-closing: that is the case where a graceful finish is
-// impossible, so nothing but the abort can end the stream. Before the fix the
-// wait below times out.
 TEST(WebSocketWireStreamTest, AbortAfterHalfCloseFinishesTheStream) {
   a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
   auto accepted_future = accepted_promise.future();
@@ -245,18 +231,6 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeOverHttp1) {
 
 // Each sender's messages arrive in the order that sender wrote them, whichever
 // path carried them.
-//
-// A message may go out on the endpoint's own Sender fibre, or on the thread
-// that called Send when nothing was queued ahead of it, or from the queue once
-// the fibre catches up. Several threads sending at once puts all three in play.
-//
-// One small packet per message, and not many of them, deliberately. Chunked
-// ordering has its own test below; and `Send` has no way to say "not yet", so a
-// flood aborts the stream instead of pushing back -- interleaving multi-packet
-// messages from four threads exceeds `max_pending_messages` on the receiving
-// side, and even single packets abort it if there are enough of them. What is
-// under test here is the order of the paths a message can take, not capacity.
-// `seq` carries the sender's index in its high bits.
 TEST(WebSocketWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   constexpr int kSenders = 4;
   constexpr int kPerSender = 12;

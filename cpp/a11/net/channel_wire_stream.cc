@@ -44,10 +44,7 @@ enum class End { kNone, kHalfClose, kAbort };
 
 struct ChannelWireStream::State {
   struct Outbound {
-    // The message, not its bytes. Encoding here rather than in Send() is what
-    // lets the sender fold messages already queued behind one another into a
-    // single frame -- see the merge in Sender() -- and it moves the encode off
-    // the caller's thread, which for a Python caller is the event loop.
+    // The message, not its bytes.
     data::WireMessage message;
     End end = End::kNone;
     std::uint64_t message_id = 0;
@@ -99,9 +96,7 @@ struct ChannelWireStream::State {
   bool started ABSL_GUARDED_BY(mu) = false;
   bool open ABSL_GUARDED_BY(mu) = false;
   // Set while somebody is writing a message that is no longer in `outgoing`:
-  // either Sender, or the thread that called Send and took the fast path. It is
-  // what keeps those two from writing at once, and so what keeps them in order.
-  // See Send and DeliverClaimed.
+  // either Sender, or the thread that called Send and took the fast path.
   bool sending ABSL_GUARDED_BY(mu) = false;
   bool channel_closed ABSL_GUARDED_BY(mu) = false;
   bool finished ABSL_GUARDED_BY(mu) = false;
@@ -164,24 +159,7 @@ ChannelWireStream::MakeState(std::shared_ptr<internal::BinaryChannel> channel,
 ChannelWireStream::~ChannelWireStream() {
   // Callbacks first: nothing inbound may run against a half-destroyed stream.
   (void)state_->channel->ResetCallbacks();
-  // Then *abort*, not Close(). This is the last moment anything will speak for
-  // this stream, and `BinaryChannel::Close()` is a graceful close -- over HTTP it
-  // ends the request, so a peer still holding its half keeps the socket alive on
-  // both ends and the descriptor is never returned. Measured before this changed:
-  // dropping the last reference to a stream grew the descriptor count by
-  // +1.000/connection on each side and stranded a Session, on a probe that ran a
-  // 30s reap and a 60s settle window (`bench/fdprobe.py --teardown drop`).
-  //
-  // Being graceful here would also have nobody to be graceful *for*: Finish()
-  // deliberately leaves a cleanly half-closed channel open so that a peer's
-  // in-flight final packets are not cut off by an SCTP stream reset, and it names
-  // this destructor as the deterministic release that ends that grace period. So
-  // the grace period ends here, by construction.
-  //
-  // Nothing else may happen in this frame. `Finish()` is not called and `on_done`
-  // is not run: a done callback invoked from a destructor would run on whichever
-  // thread dropped the last reference, and a Python caller dropping a stream holds
-  // the GIL, which is the deadlock item 0a in FINDINGS.md already paid for once.
+  // Then *abort*, not Close().
   (void)state_->channel->Abort(
       absl::CancelledError("WireStream released without an explicit close"));
 }
@@ -236,20 +214,9 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
       const std::uint64_t message_id = state_->next_outgoing_message_id++;
-      // Write it here rather than waking the Sender fibre to do it.
-      //
-      // The fibre is needed for the things a caller of Send must not be made to
-      // do: wait for the channel to open, and carry the lifecycle of a
-      // half-close or abort through to the transport's drain. An ordinary
-      // message on an open channel with an empty queue needs none of that, and
-      // handing it over costs a scheduling round trip -- plus an OS thread wake
-      // when the fibre's worker is parked -- to move bytes this thread already
-      // holds.
-      //
-      // The claim is what keeps order: while it is held, Sender will not pop
-      // and another Send will not take this path, so nothing can overtake the
-      // message being written. The message id is still allocated here, under
-      // the lock, so ids stay in send order however the message travels.
+      // Write it here rather than waking the Sender fibre to do it. The message
+      // id is still allocated here, under the lock, so ids stay in send order
+      // however the message travels.
       if (end == End::kNone && state_->outgoing.empty() && !state_->sending &&
           state_->started && state_->open) {
         state_->sending = true;
@@ -511,55 +478,12 @@ absl::Status ChannelWireStream::Abort(absl::Status status) {
     if (state_->finished || state_->local_end == End::kAbort) {
       return absl::OkStatus();
     }
-    // Aborting an already half-closed stream used to return OK and do nothing,
-    // which cost one file descriptor per connection and could not be observed
-    // from the outside.
-    //
-    // A half-closed connection is still a connection: the write half is shut,
-    // the peer's is open, and the socket is legitimately held until the peer
-    // closes too. So the only way for a client that is going away to release
-    // the socket is to abort -- and this method silently refused to, because
-    // `local_end` was no longer kNone. Measured on Linux, 120 connect/dispatch/
-    // disconnect cycles against a real Service, sampling the server's
-    // /proc/<pid>/fd by kind: abort() alone held flat at 16 descriptors,
-    // half_close() plus drain retained exactly +1.000 per cycle, and
-    // half_close() then abort() retained the same +1.000 -- all of them
-    // ESTABLISHED, none released after twelve seconds of settling. See
-    // `bench/fdprobe.py`, and `FINDINGS.md` item 0, whose "server-side teardown
-    // lags under load" reading this replaces: nothing lagged, the abort was a
-    // no-op, and the growth was 1:1 with half-closed connections rather than
-    // time-dependent.
-    //
-    // Upgrading locally rather than sending, and `can_communicate=false` is the
-    // load-bearing part. The Sender fibre `return`s after it publishes *any*
-    // terminal message (see the `outbound.end != End::kNone` branch), so once a
-    // half-close has gone out there is nobody left to carry an abort frame:
-    // queueing one would leave `local_end_sent` at kHalfClose, MaybeFinish
-    // would never fire, and this fix would silently do nothing -- the same
-    // failure it is fixing, one layer down.
-    //
-    // So the abort is local. ForceAbort promotes `local_end` to kAbort, drops
-    // whatever is still queued (which is what abort has always meant --
-    // "discarding buffered work" -- and a caller that wanted its queue
-    // delivered has DrainOutgoingMessages), and finishes; Finish closes the
-    // channel because the status is non-OK, which is what returns the
-    // descriptor. The peer learns by its connection ending, which is what a
-    // client going away looks like on any transport. It therefore sees a
-    // transport-level end rather than this status, and that is honest: the
-    // status describes why *this* side left, and nothing on the wire could
-    // carry it after the half-close.
+    // Aborting an already half-closed stream
     upgrade = state_->local_end == End::kHalfClose;
   }
   if (upgrade) {
-    // On a fibre, not here. ForceAbort with nothing to send finishes the stream
-    // in the same frame, and finishing runs `on_done` -- the session's stream
-    // teardown, and through a binding a callback that needs the interpreter.
-    // The ordinary abort path never did that on the caller's thread: it queues a
-    // message and the *sender* fibre finishes. Running it inline instead
-    // deadlocked a Python caller against its own loop, because the binding
-    // releases the GIL to call this and the done callback then waits to
-    // re-acquire it. Abort has always been "accepted", not "completed", so
-    // handing it to a fibre costs the caller nothing it was promised.
+    // On a fibre, not here. The ordinary abort path never did that on the
+    // caller's thread: it queues a message and the *sender* fibre finishes.
     std::shared_ptr<State> state = state_;
     a11::Schedule([state = std::move(state), status = std::move(status)]() {
       ForceAbort(state, status, /*can_communicate=*/false);
@@ -623,14 +547,6 @@ void* absl_nullable ChannelWireStream::GetImpl() const {
 }
 
 // Merged frames stay small on purpose.
-//
-// The whole gain is in folding together the three-byte status markers an
-// action trails -- a dispatch status, a completion status, a close marker per
-// port. Large data messages get nothing from it: they are already one frame
-// per payload, merging them only builds a bigger frame to split again, and it
-// would erase message boundaries a peer can reasonably expect to see
-// preserved. So accumulate only up to this much and leave anything bigger
-// alone.
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
 void ChannelWireStream::Sender(const std::shared_ptr<State>& state) {
@@ -674,14 +590,7 @@ void ChannelWireStream::Sender(const std::shared_ptr<State>& state) {
         state->outgoing.pop_front();
         state->sending = true;
         has_outbound = true;
-        // Fold in whatever is already waiting behind it. Nothing is ever held
-        // back to build a bigger frame: only messages already queued merge, so
-        // a lone message still goes out immediately. Worth ~15% on concurrent
-        // action throughput, where messages belonging to different actions
-        // arrive together. Only compatible ones merge -- no lifecycle marker,
-        // identical headers, and within the peer's per-message ceiling.
-        // A message already at the ceiling has nothing to gain and is left
-        // exactly as it is.
+        // Fold in whatever is already waiting behind it.
         if (outbound.end == End::kNone &&
             outbound.message.ApproxBytes() < kMergeCeilingBytes) {
           size_t approximate = outbound.message.ApproxBytes();
@@ -922,10 +831,7 @@ void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
                                        const data::WireMessage& message,
                                        std::uint64_t message_id) {
   // The same encode, packetise and write the Sender fibre would have done, and
-  // the same treatment of a failure: abort the stream. Send still reports OK
-  // either way, because that is what it reported when this work happened on the
-  // fibre -- a transport failure reaches the caller through the stream's
-  // lifecycle, not through the return of the send that happened to trigger it.
+  // the same treatment of a failure: abort the stream.
   absl::Status failure;
   {
     absl::StatusOr<std::string> encoded = message.ToMsgpack();
@@ -959,10 +865,9 @@ void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
     Notify(state);
   }
   if (!failure.ok()) {
-    // Off this thread, deliberately. Finish runs the stream's on_done callback,
+    // Run this off-thread because Finish invokes the stream's on_done callback,
     // which is user code, and on the fibre path it never ran on a caller of
-    // Send. Keeping it there means the fast path cannot hand a caller somebody
-    // else's callback -- re-entering the binding, say, from inside a send.
+    // Send.
     a11::Schedule([state, failure = std::move(failure)]() mutable {
       Finish(state, std::move(failure));
     });
@@ -972,10 +877,7 @@ void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
 }
 
 void ChannelWireStream::MarkActivity(const std::shared_ptr<State>& state) {
-  // Only a stream with a message timeout has anybody to tell. Without one,
-  // `last_activity` is never read, and this runs on every message sent and
-  // every message received: a clock read, the endpoint's lock, and a Notify
-  // that wakes all three of its fibres, to keep a number nothing would look at.
+  // Only a stream with a message timeout has anybody to tell.
   if (state->options.message_timeout == absl::InfiniteDuration()) {
     return;
   }
@@ -983,10 +885,7 @@ void ChannelWireStream::MarkActivity(const std::shared_ptr<State>& state) {
     thread::MutexLock lock(&state->mu);
     state->last_activity = absl::Now();
   }
-  // No Notify even then. WatchTiming recomputes its deadline from
-  // `last_activity` every time it wakes, so activity needs no prompt -- it will
-  // find the newer timestamp and re-arm. Sender and Receiver are woken by the
-  // things they actually wait for, in Send and in the inbound enqueue.
+  // No Notify even then.
 }
 
 void ChannelWireStream::ForceAbort(const std::shared_ptr<State>& state,
@@ -1081,19 +980,12 @@ void ChannelWireStream::Finish(const std::shared_ptr<State>& state,
     (void)startup->SetValue(a11::Unit{});
   }
   Notify(state);
-  // A clean bidirectional A11 half-close is not itself an acknowledgement
-  // that the peer has received our final transport packets. In particular,
-  // SCTP stream reset can overtake callback delivery for a large message on
-  // the peer. Keep a clean channel alive until its WireStream owner releases
-  // it; error paths still close immediately. The destructor provides the
-  // deterministic RAII close.
+  // A clean bidirectional A11 half-close is not itself an acknowledgement that
+  // the peer has received our final transport packets.
   if (close_channel) {
     // `close_channel` is only ever set because the status is non-OK, so this is
     // the abort path and a graceful close is the wrong operation: over HTTP it
-    // half-closes a connection whose other half the peer still holds, and the
-    // socket survives on both ends (see BinaryChannel::Abort). Measured: the
-    // half-close-then-abort sequence went from +1.000 descriptors per
-    // connection on each side to flat.
+    // half-closes a connection whose other half the peer still holds, and the.
     (void)state->channel->Abort(span_status.ok()
                                     ? absl::CancelledError("WireStream aborted")
                                     : span_status);

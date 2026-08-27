@@ -156,7 +156,7 @@ std::filesystem::path GoldenCodesPath() {
 TEST(FlowCodesJson, MatchesTheTableEveryLanguageReads) {
   // `testdata/flow/codes.json` is the published code table, in the same spirit
   // as `testdata/serial_tags.json`: the C++ owns it, and the Python CLI and any
-  // editor read it back rather than keeping a second list. Regenerate with
+  // editor read it back rather than keeping a second list. Regenerate with:
   //
   //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test
   //       --gtest_filter=FlowCodesJson.MatchesTheTableEveryLanguageReads

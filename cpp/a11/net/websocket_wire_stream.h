@@ -149,11 +149,15 @@ struct WebSocketServerOptions {
   WireStreamOptions stream_options;  ///< Defaults for accepted streams.
   ChannelFramingOptions framing;     ///< Framing for accepted streams.
   Http2Options http2_options;        ///< Server HTTP/2 and TLS policy.
+  // `GET /actions` on this same port, when something above filled in the
+  // handler.
   /// `GET /actions` on this same port, when something above filled in the
   /// handler. A WebSocket client can ask `__list_actions__` over the stream it
   /// already has; this is for whoever has only the port number. See
   /// a11/net/describe_endpoint.h.
   DescribeEndpointOptions describe;
+  // Response-header policy for this port's HTTP surface -- the `Server` header,
+  // cross-origin access and cache hints.
   /// Response-header policy for this port's HTTP surface -- the `Server`
   /// header, cross-origin access and cache hints. It has one even though its
   /// business is upgrades: a 404 and a `GET /actions` are ordinary HTTP

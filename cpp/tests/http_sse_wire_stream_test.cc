@@ -164,10 +164,7 @@ TEST(ServerHeadersTest, NeverOverridesWhatARouteAlreadySaid) {
   EXPECT_EQ(GetHttpHeader(headers, "cache-control"), "max-age=1");
   EXPECT_EQ(GetHttpHeader(headers, "content-type"), "text/event-stream");
 
-  // `Server` was already there in another case. Header names are
-  // case-insensitive, so adding a second would be sending the header twice with
-  // two different values -- counted rather than looked up, because
-  // GetHttpHeader matches the stored name exactly and would not find this one.
+  // `Server` was already there in another case.
   int servers = 0;
   for (const auto& [name, value] : headers) {
     if (absl::EqualsIgnoreCase(name, "server")) {
@@ -445,14 +442,7 @@ TEST_P(HttpSseOutboundDeliveryTest, DeliversEveryMessageBeforeTheHalfClose) {
 
   thread::MutexLock lock(&server_recorder->mu);
   // Not "in order": WireMessages carry none, and concurrent POSTs are free to
-  // land in any order. What is promised is that all of them land, and that the
-  // half-close is not observed until they have.
-  //
-  // Counted in fragments rather than messages, because the in-process bridge on
-  // each endpoint folds queued messages into one frame -- so a burst arrives as
-  // fewer, larger messages with every fragment intact. Which index each fragment
-  // came from survives in its id for the same reason: a fold keeps one headers
-  // map, so the per-message `index` header does not survive it.
+  // land in any order.
   size_t fragments = 0;
   std::vector<bool> seen(kMessages, false);
   for (const data::WireMessage& message : server_recorder->messages) {
@@ -485,9 +475,8 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // Streamed delivery over HTTP/1.1, where the body is a chunked one and the
-// connect request already owns its connection -- so the upload has to get one of
-// its own. It is also the one configuration in which POST delivery cannot work
-// at all, since an HTTP/1.1 connection carries a single request.
+// connect request already owns its connection -- so the upload has to get one
+// of its own.
 TEST(HttpSseWireStreamTest, StreamsOutboundOverHttp11) {
   auto server = HttpSseServer::Create("127.0.0.1", 0);
   ASSERT_TRUE(server.ok()) << server.status();
@@ -662,8 +651,8 @@ TEST(HttpSseWireStreamTest, AdvertisesBothOutboundModesOnConnect) {
 }
 
 // A server that does not advertise streamed delivery must not be spoken to that
-// way: the client silently keeps posting, which is what makes the option safe to
-// set against an unknown peer.
+// way: the client silently keeps posting, which is what makes the option safe
+// to set against an unknown peer.
 TEST(HttpSseWireStreamTest, FallsBackToPostsWhenTheServerIsSilentOnModes) {
   auto sse_server = HttpSseServer::Create("127.0.0.1", 0);
   ASSERT_TRUE(sse_server.ok()) << sse_server.status();

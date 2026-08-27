@@ -35,10 +35,7 @@ Fiber* absl_nullable GetScheduledFiberPtr();
 // notably includes Apple arm64; see the affinity block in thread_pool.cc.
 std::vector<int> ProcessAllowedCpus();
 
-// Parses an A11_POOL_PIN spec against `allowed`. Exposed for testing: the
-// grammar has more corners than the one line of code that consumes it, and
-// getting it wrong means a pool confined to the wrong cores rather than an
-// error. See ParseAffinitySpec in thread_pool.cc for the grammar.
+// Parses an A11_POOL_PIN spec against `allowed`.
 std::vector<int> ParsePoolAffinitySpec(const char* absl_nullable spec,
                                        const std::vector<int>& allowed);
 

@@ -6,7 +6,8 @@
  *   How a std::string travels: as bytes by default, as text when asked.
  *
  * C++ has no type that means "text" rather than "bytes" -- a `std::string` is a
- * sequence of bytes, and whether those bytes are UTF-8 is a fact about the value
+ * sequence of bytes, and whether those bytes are UTF-8 is a fact about the
+ * value
  * and not about its type. So `application/octet-stream` is the default here and
  * `text/plain` is available by naming it, which is the only place the
  * distinction can live. Python, Kotlin and TypeScript all have the distinction

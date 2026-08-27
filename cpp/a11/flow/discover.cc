@@ -44,6 +44,8 @@ bool IsSpace(char c) {
 
 // --- masking -----------------------------------------------------------------
 
+// A source file with its comments and its string *contents* blanked out, and
+// the strings kept to one side.
 /// A source file with its comments and its string *contents* blanked out, and
 /// the strings kept to one side.
 ///
@@ -53,7 +55,8 @@ bool IsSpace(char c) {
 /// starts a comment, and hard on text where they do. Blanking those *in place*
 /// keeps every offset equal to the offset in the real file, so an origin needs
 /// no translation and is exact. The quotes themselves are left standing, which
-/// is how a value is recognised as a string at all, and the decoded contents are
+/// is how a value is recognised as a string at all, and the decoded contents
+/// are
 /// found by the offset of the opening quote.
 ///
 /// Newlines survive blanking, so a line number is still a line number.
@@ -116,10 +119,14 @@ class Masked {
     strings_.emplace(open, Held{std::move(value), end});
   }
 
-  /// Reads a quoted run starting at `index`, whose delimiter is `quote` repeated
+  // Reads a quoted run starting at `index`, whose delimiter is `quote` repeated
+  // `quote_length` times, honouring `\` escapes unless `raw`.
+  /// Reads a quoted run starting at `index`, whose delimiter is `quote`
+  /// repeated
   /// `quote_length` times, honouring `\` escapes unless `raw`.
   ///
-  /// Returns one past the closing delimiter, or the end of the file for a string
+  /// Returns one past the closing delimiter, or the end of the file for a
+  /// string
   /// nobody closed -- which is what a file somebody is in the middle of typing
   /// looks like, and is not a reason to stop reading it.
   size_t ReadQuoted(size_t index, char quote, size_t quote_length, bool raw,
@@ -133,7 +140,8 @@ class Masked {
         continue;
       }
       if (c == '\\' && raw && at + 1 < source_.size()) {
-        // A raw string keeps the backslash, but a quote after one still does not
+        // A raw string keeps the backslash, but a quote after one still does
+        // not
         // close it, which is the one thing `r"..\"` needs.
         value.push_back(c);
         value.push_back(source_[at + 1]);
@@ -219,10 +227,8 @@ class Masked {
         const size_t quote_length = Repeats(at, c, 3) ? 3 : 1;
         std::string value;
         const size_t end = ReadQuoted(at, c, quote_length, raw, value);
-        // A `"""..."""` description gives back the indentation the source put in
-        // front of it, exactly as the Flow parser does for its own: the text is
-        // what a reader is shown, and eight spaces of Python indentation are not
-        // part of it.
+        // A `"""..."""` description gives back the indentation the source put
+        // in front of it, exactly as the Flow parser does for its own:
         if (quote_length == 3) {
           value = Dedent(value);
         }
@@ -318,7 +324,8 @@ class Masked {
       if (c == '"' || c == '\'' || c == '`') {
         std::string value;
         const size_t end = ReadQuoted(at, c, 1, /*raw=*/false, value);
-        // A template literal holding `${..}` is not a literal value, and half of
+        // A template literal holding `${..}` is not a literal value, and half
+        // of
         // one would be worse than none.
         if (c == '`' && absl::StrContains(value, "${")) {
           Blank(at, end);
@@ -335,7 +342,7 @@ class Masked {
     }
   }
 
-  /// A multi-line literal without the indentation its source put in front of it.
+  /// A multi-line literal with source indentation removed.
   ///
   /// The same rule the Flow parser applies to a `"""..."""` description: the
   /// smallest indentation of any non-blank line after the first is what the
@@ -542,18 +549,12 @@ std::vector<size_t> WholeWords(const Masked& masked, std::string_view word) {
 ///
 /// `NAME = "..."` in Python, `const NAME = '...'` in TypeScript, and
 /// `constexpr std::string_view kName = "...";` in C++ -- which is how nearly
-/// every C++ action names itself, so without this the C++ side would find almost
-/// nothing.
+/// every C++ action names itself, so without this the C++ side would find
+/// almost nothing.
 using Constants = absl::flat_hash_map<std::string, std::string>;
 
 void CollectConstants(const Masked& masked, Constants& into) {
-  // Parentheses and brackets only. A binding that is really a binding stands at
-  // the top level of a module, a namespace, a class body or a function body --
-  // all of which are braces, or nothing at all in Python -- whereas `name="x"`
-  // inside a call is a keyword *argument*. Counting braces too would drop every
-  // C++ constant for being inside its namespace; not counting parens at all made
-  // `ActionSchema(name="bench-echo")` bind the word `name`, which is how this
-  // came to be written.
+  // Parentheses and brackets only.
   int depth = 0;
   for (size_t at = 0; at < masked.size(); ++at) {
     const char c = masked.at(at);
@@ -613,6 +614,8 @@ struct Value {
 Value ReadValue(const Masked& masked, size_t from, size_t to,
                 const Constants& constants);
 
+// A value written as a call: `Port("a", "b")`, `new ActionPortSchema({..})`,
+// `std::string(kName)`.
 /// A value written as a call: `Port("a", "b")`, `new ActionPortSchema({..})`,
 /// `std::string(kName)`.
 ///
@@ -683,7 +686,8 @@ bool ReadCall(const Masked& masked, size_t from, size_t to,
     }
   }
   if (args.size() == 1 && value.call == std::string(kPortWord)) {
-    // `new ActionPortSchema({name: .., type: ..})`: the object is the arguments.
+    // `new ActionPortSchema({name: .., type: ..})`: the object is the
+    // arguments.
     const Value inner =
         ReadValue(masked, args[0].first, args[0].second, constants);
     if (inner.is_object) {
@@ -767,6 +771,8 @@ struct Entry {
   size_t value_from = 0;
   size_t value_to = 0;
   bool keyed = false;
+  // Whether the key was written as a string literal (`"actions": ..`) rather
+  // than as a bare word (`name=..`, `text: ..`).
   /// Whether the key was written as a string literal (`"actions": ..`) rather
   /// than as a bare word (`name=..`, `text: ..`).
   ///
@@ -776,8 +782,8 @@ struct Entry {
   /// keyword argument's key is never a variable in either language, which is
   /// why resolving happens in [ReadPorts] and not here.
   bool key_was_literal = false;
-  /// Whether the key was written as `[NAME]`: a key that is deliberately a
-  /// variable, which is TypeScript's way of saying so.
+  /// Whether the key was written as `[NAME]`, TypeScript syntax for a computed
+  /// variable key.
   bool computed_key = false;
 };
 
@@ -854,7 +860,8 @@ Entry ReadEntry(const Masked& masked, size_t from, size_t to,
       entry.computed_key = true;
     }
     // Only a plain word is a key. Anything else -- an index, a call -- is a
-    // key this cannot read, and a wrong one would be a port that does not exist.
+    // key this cannot read, and a wrong one would be a port that does not
+    // exist.
     if (std::all_of(word.begin(), word.end(), IsWordChar)) {
       entry.key = std::string(word);
     }
@@ -970,15 +977,16 @@ PortInfo ReadPort(const Masked& masked, std::string_view port_name, size_t from,
   return port;
 }
 
-/// The name a map key stands for, or empty where it names nothing this can read.
+/// The name a map key stands for, or empty where it names nothing this can
+/// read.
 ///
-/// A map key is the one place a bare word may be a *variable*, and the languages
-/// disagree about when: `{PORT: ..}` in Python is a dict whose key is whatever
-/// `PORT` holds, while `{text: ..}` in TypeScript is a property literally called
-/// `text` and `{[PORT]: ..}` is the variable form. Getting this wrong is not
-/// harmless -- it offers a port called `NARRATION_PORT`, which is a port
-/// that does not exist -- so a name that cannot be resolved gives nothing and the
-/// port is dropped.
+/// A map key is the one place a bare word may be a *variable*, and the
+/// languages disagree about when: `{PORT: ..}` in Python is a dict whose key
+/// is whatever `PORT` holds, while `{text: ..}` in TypeScript is a property
+/// literally called `text` and `{[PORT]: ..}` is the variable form. Getting
+/// this wrong is not harmless -- it offers a port called `NARRATION_PORT`,
+/// which is a port that does not exist -- so a name that cannot be resolved
+/// gives nothing and the port is dropped.
 std::string KeyName(const Entry& entry, Language language,
                     const Constants& constants) {
   if (entry.key_was_literal) {
@@ -1058,7 +1066,8 @@ std::pair<size_t, size_t> EnclosingBlock(const Masked& masked, size_t at) {
 /// A schema assembled statement by statement: the C++ shape.
 ///
 /// `ActionSchema schema; schema.name = ..; schema.outputs.emplace("p", ..);`.
-/// Read by looking for assignments to the variable the declaration named, within
+/// Read by looking for assignments to the variable the declaration named,
+/// within
 /// the block it was declared in.
 void ReadAssembled(const Masked& masked, size_t word_at,
                    const Constants& constants, Language language,
@@ -1277,8 +1286,8 @@ std::optional<std::string> ReadFile(const std::filesystem::path& path,
 ///
 /// Nearly every C++ action names itself with a `constexpr std::string_view`
 /// declared in the header beside the implementation, so a scan that read only
-/// the `.cc` would drop every one of them for having no name. One sibling, not a
-/// search: this is the idiom, not an include graph.
+/// the `.cc` would drop every one of them for having no name. One sibling, not
+/// a search: this is the idiom, not an include graph.
 Constants SiblingConstants(const std::filesystem::path& path, size_t limit) {
   Constants constants;
   if (path.extension() != ".cc" && path.extension() != ".cpp") {
@@ -1423,9 +1432,7 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
     }
   }
   // A name declared twice keeps the first, which is the one a reader scanning
-  // the tree top to bottom would find. Two files really declaring one action is
-  // a problem in the project rather than in the scan, and answering with both
-  // would make a hover flicker between them.
+  // the tree top to bottom would find.
   std::vector<ActionInfo> unique;
   for (ActionInfo& action : found) {
     const bool seen = std::any_of(

@@ -27,16 +27,12 @@ namespace {
 
 /// The units the language writes a duration in, and their spelling.
 ///
-/// A second copy of `a11::flow::ParseDuration`, deliberately. That one lives in
-/// a11::flow_runtime -- the half of the language that executes flows -- and
-/// depending on it from here would mean a host that wants `read_file` links the
-/// whole flow engine to get it, and would point the dependency the wrong way
-/// round: the runtime is what *calls* these actions.
+/// Local duration parsing keeps this action library independent of
+/// a11::flow_runtime, which calls these actions. The shared behaviour is
+/// limited to this unit table and the loop below.
 ///
-/// The duplication is bounded to this table and the loop below, and the tests
-/// pin both against the spellings the language accepts. If a third copy ever
-/// wants writing, the answer is to move this into a11::core rather than to
-/// write it again.
+/// Tests keep both implementations aligned with the language's accepted
+/// spellings. A third consumer should move this parser into a11::core.
 struct Unit {
   std::string_view name;
   double seconds;
@@ -47,7 +43,7 @@ constexpr Unit kUnits[] = {
     {"ms", 1e-3},  {"us", 1e-6}, {"ns", 1e-9},
 };
 
-/// Names a JSON value the way an error message wants it named.
+/// Returns the type description used in error messages.
 std::string_view Describe(const nlohmann::json& value) {
   switch (value.type()) {
     case nlohmann::json::value_t::null:
@@ -174,9 +170,8 @@ absl::StatusOr<std::vector<std::string>> Options::StringList(
     return names;
   }
   const nlohmann::json& value = value_.at(std::string(key));
-  // A bare string counts as a list of one, because `omit: "body"` is what
-  // somebody writes when they mean one port and reading it as an error would
-  // be pedantry rather than a diagnosis.
+  // A bare string represents a one-element list, so `omit: "body"` names one
+  // port.
   if (value.is_string()) {
     names.push_back(value.get<std::string>());
     return names;

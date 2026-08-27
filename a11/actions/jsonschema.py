@@ -108,7 +108,7 @@ def get_json_schema_type(obj_type: Any) -> dict[str, Any]:
 
 
 def _is_dedupable_jsonschema(resolved: dict[str, Any]) -> bool:
-    """Whether a resolved subschema is worth hoisting into `$defs`.
+    """Whether a resolved subschema should be hoisted into `$defs`.
 
     Restricted to "named" schemas (models and enums, which is what
     `get_json_schema_type` actually produces `title`s for) so that e.g. a

@@ -72,9 +72,7 @@ def test_default_codecs_round_trip_required_types(mimetype, value):
     # A tag the format already implies is left off: the media type alone is a
     # complete description of an object, an array, a string or a number.
     expected = (
-        mimetype
-        if tag in canonical_tags.values()
-        else f"{mimetype};type={tag}"
+        mimetype if tag in canonical_tags.values() else f"{mimetype};type={tag}"
     )
     assert chunk.get_mimetype() == expected
 
@@ -264,10 +262,8 @@ def test_registry_reports_specified_status_codes():
         registry.from_chunk(chunk, obj_type=list)
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 
-    # A representation nothing is registered under. `text/*` used to be one and
-    # is not any more: `text/plain` is how a `str` travels now, so asking for it
-    # explicitly is a documented override rather than a missing codec (see
-    # test_explicit_mimetype_can_override_stale_metadata).
+    # Use a representation with no registered decoder. `text/plain` is the
+    # standard `str` representation and therefore cannot exercise this case.
     with pytest.raises(StatusException) as raised:
         registry.from_chunk(chunk, "image/*")
     assert raised.value.status.code == StatusCode.NOT_FOUND

@@ -26,15 +26,15 @@ import javax.swing.JComponent
 import javax.swing.UIManager
 
 /**
- * The JCEF-hosted A11 surface. One page bundle drives two views — the chat
- * window and the action explorer — selected by [view] (`"chat"` / `"actions"`).
+ * The JCEF-hosted A11 chat and action-explorer views, selected by [view].
  *
  * The page runs the TypeScript A11 library, which owns the WebSocket to the A11
- * gateway directly. Everything that needs the live IDE (running a tool, fetching
- * connection config, reading a flow the plugin ships, leaving a comment on a
- * highlight) is reached through [JBCefJSQuery] bridges that call back into Kotlin;
- * [IdeTools] remains the single source of truth for the IDE tools. The Kotlin A11 runtime ([dev.curiositystack.a11.clion.session])
- * is untouched and still available for richer, Kotlin-driven experiences.
+ * gateway directly. Operations that require the live IDE (running a tool,
+ * fetching connection config, reading a flow the plugin ships, leaving a
+ * comment on a highlight) is reached through [JBCefJSQuery] bridges that call
+ * back into Kotlin; [IdeTools] remains the single source of truth for the IDE
+ * tools. The Kotlin A11 runtime remains available through
+ * [dev.curiositystack.a11.clion.session].
  */
 class A11WebView(private val project: Project, view: String, parent: Disposable) {
 
@@ -52,10 +52,8 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     /**
      * The frame rate last pushed to the browser, or 0 for "none yet".
      *
-     * Not seeded with the rate the browser was *built* with, however plausible
-     * that looks: out of process, that value is dropped (see
-     * [followDisplayFrameRate]), so seeding it here is what made the one call
-     * that works look redundant and skip.
+     * The builder's rate may be discarded for out-of-process JCEF. Starting at
+     * zero ensures [followDisplayFrameRate] updates the live browser.
      */
     private var pushedFrameRate = 0
 
@@ -78,9 +76,7 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         suggestOnHighlightQuery.addHandler { note -> respond { suggestOnHighlight(note) } }
         clearSuggestionsQuery.addHandler { path -> respond { clearSuggestions(path) } }
 
-        // Push the rate rather than trusting the one the browser was built with,
-        // and push it again whenever the window changes display: AWT fires this
-        // property then.
+        // Push the rate initially and whenever AWT reports a display change.
         followDisplayFrameRate()
         browser.component.addPropertyChangeListener("graphicsConfiguration") { followDisplayFrameRate() }
 
@@ -90,28 +86,21 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     /**
      * Tell the browser to paint at the refresh rate of the display it is on.
      *
-     * An off-screen browser paints at a rate it is told, not at the display's, and
-     * CEF's default is 30 — a third of the frames on a 120 Hz screen, which is
-     * what "scrolling skips" looks like. Neither CEF nor Chromium caps the number
-     * (CEF's `ClampFrameRate` only floors it; the capture pipeline's bound is
-     * 1000fps), so the rate can simply follow the hardware.
+     * An off-screen browser uses its configured frame rate, and CEF defaults to
+     * 30 fps. CEF's clamp only sets a minimum and Chromium's capture limit is
+     * 1000 fps, so the display rate can be used directly.
      *
-     * It has to be *pushed* to the live browser, though. The IDE runs JCEF out of
-     * process by default (`ide.browser.jcef.out-of-process.enabled`), and its
-     * `RemoteBrowser` keeps the `CefBrowserSettings` it was constructed with in a
-     * field it never reads: `windowless_frame_rate` appears nowhere in that class,
-     * `Browser_Create` sends only the request context, and the rate starts life as
-     * a hardcoded 30. So the builder's value — and with it the registry key it
-     * defaults from — is silently dropped, which is why setting
-     * `ide.browser.jcef.osr.framerate` has no effect either. What does work is
-     * `setWindowlessFrameRate`: it sends `Browser_SetFrameRate` over the wire, and
-     * defers itself until the browser exists, so calling it this early is safe.
+     * The rate must be pushed to the live browser. The IDE runs JCEF out
+     * of process by default (`ide.browser.jcef.out-of-process.enabled`), and
+     * its `RemoteBrowser` does not send `windowless_frame_rate` in
+     * `Browser_Create`; the process starts at 30 fps. The
+     * `ide.browser.jcef.osr.framerate` registry setting therefore has no effect
+     * in this mode. `setWindowlessFrameRate` sends `Browser_SetFrameRate` and
+     * defers the update until the browser exists.
      *
-     * There is deliberately no read-back to confirm it: `getWindowlessFrameRate`
-     * in that same class returns its own cached field, with a TODO where the real
-     * implementation should be, so it would only ever echo what we set. The IDE's
-     * own OSR FPS meter (internal action `JBCefOsrMeasureFps`) is what actually
-     * measures this.
+     * Do not verify through `getWindowlessFrameRate`: it returns a cached
+     * value, not the browser's effective rate. The IDE's `JBCefOsrMeasureFps`
+     * action measures the rendered frame rate.
      */
     private fun followDisplayFrameRate() {
         val rate = frameRateOf(browser.component.graphicsConfiguration?.device)
@@ -129,7 +118,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         }
     }
 
-    /** Run a bridge handler, mapping the result/exception onto the JS promise. */
+    /**
+     * Run a bridge handler, mapping the result/exception onto the JS promise.
+     */
     private fun respond(block: () -> String): JBCefJSQuery.Response =
         try {
             JBCefJSQuery.Response(block())
@@ -139,7 +130,8 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         }
 
     /**
-     * Handle `runAction`: `{name, inputs}` in, the tool's JSON result out, where
+     * Handle `runAction`: `{name, inputs}` in, the tool's JSON result out,
+     * where
      * `inputs` holds one entry per input port (a list for a streaming port).
      */
     private fun runAction(request: String): String {
@@ -154,20 +146,18 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     }
 
     /**
-     * Handle `suggestOnHighlight`: one record the review flow produced — a comment or
-     * a patch — attached to the range of the file it is about.
+     * Handle `suggestOnHighlight`: one record the review flow produced — a
+     * comment or a patch — attached to the range of the file it is about.
      *
-     * One suggestion normally arrives as two of these, off the flow's two output
-     * ports, and the second is merged into the first by its `id` rather than marking
-     * the range again; see `HighlightSuggestions.suggest`. So `has_patch` in the reply
-     * is the state of the whole suggestion after this record, not of the record.
+     * One suggestion normally arrives as two of these, off the flow's two
+     * output ports, and the second is merged into the first by its `id` rather
+     * than marking the range again; see `HighlightSuggestions.suggest`. So
+     * `has_patch` in the reply is the state of the whole suggestion after this
+     * record, not of the record.
      *
-     * Deliberately *not* one of [IdeTools]' tools, though it is the same kind of
-     * "reach into the IDE" call. Every tool there is announced to the model — the
-     * allowed-tools header in [config] is built from `listDescriptors()` — and this
-     * is a sink for the plugin's own UI, not a capability a chat turn should be
-     * offered. The flow keeps producing readable output ports; the page decides
-     * that the editor is where they go.
+     * This UI sink is not registered as an [IdeTools] model tool. The review
+     * flow writes suggestions to output ports, and the page forwards them to
+     * the editor without exposing the sink to chat turns.
      */
     private fun suggestOnHighlight(note: String): String {
         @Suppress("UNCHECKED_CAST")
@@ -180,12 +170,12 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     }
 
     /**
-     * Handle `clearSuggestions`: drop what the last run left, for one file or for
-     * all of them (an empty argument means all).
+     * Handle `clearSuggestions`: drop what the last run left, for one file or
+     * for all of them (an empty argument means all).
      *
-     * A run of the flow replaces the previous run's suggestions rather than adding to
-     * them: two models' opinions about the same range, one of them about a version of
-     * the file that no longer exists, is not twice the help.
+     * A run of the flow replaces the previous run's suggestions rather than
+     * adding to them: two models' opinions about the same range, one of them
+     * about a version of the file that no longer exists, is not twice the help.
      */
     private fun clearSuggestions(path: String): String {
         val suggestions = HighlightSuggestions.getInstance(project)
@@ -196,12 +186,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     /**
      * Handle `readFlow`: the text of one flow the plugin ships, by bare name.
      *
-     * The flows are taken from the repo's own `scripts` directory at build time
-     * (see `processResources`), so what runs is the file that is developed and
-     * there is no second copy to drift. The name is checked rather than
-     * sanitized: a bare name is the whole contract, so anything else — a
-     * directory, a `..`, an extension — is a caller's mistake and is refused as
-     * one, which also leaves no way to spell a path out of the flows directory.
+     * `processResources` packages flows from the repository's `scripts`
+     * directory. Only a bare name is accepted; directories, `..`, and file
+     * extensions are rejected to keep access within the packaged flow folder.
      */
     private fun readFlow(name: String): String {
         require(name.isNotEmpty() && name.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
@@ -213,21 +200,22 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     }
 
     /**
-     * Handle `getConfig`: gateway URL + provider/model/apiKey from settings, plus
-     * where the model actually is — which IDE, which project, which directory.
+     * Handle `getConfig`: gateway URL + provider/model/apiKey from settings,
+     * plus where the model actually is — which IDE, which project, which
+     * directory.
      *
      * That last part is resolved here rather than guessed in the page: the IDE
      * name is whatever product this build is running in (the plugin is not
-     * CLion-only), and the project is the one this tool window belongs to, which
-     * the page has no other way to learn.
+     * CLion-only), and the project is the one this tool window belongs to,
+     * which the page has no other way to learn.
      */
     private fun config(): String {
         val settings = A11Settings.getInstance()
         val cfg = settings.state
         // The IDE's own tools, plus whatever patterns the user allowed the
         // gateway to add (its shell tools, by default). Both go into the
-        // allowed-tools header, which is what decides whether the gateway offers
-        // the model a tool of its own.
+        // allowed-tools header, which is what decides whether the gateway
+        // offers the model a tool of its own.
         val allowedTools = ideTools.listDescriptors().map { it["name"] } + settings.allowedToolPatterns()
         val appInfo = ApplicationInfo.getInstance()
         val config = linkedMapOf<String, Any?>(
@@ -240,15 +228,17 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
             "ide" to ApplicationNamesInfo.getInstance().fullProductName,
             "ideVersion" to appInfo.fullVersion,
             "projectName" to project.name,
-            // Null for the default (project-less) frame, and for a project opened
-            // as a set of unrelated roots; the page omits the line rather than
-            // telling the model the project lives at "null".
+            // Null for the default (project-less) frame, and for a project
+            // opened as a set of unrelated roots; the page omits the line
+            // rather than telling the model the project lives at "null".
             "projectPath" to project.basePath,
         )
         return A11Json.encodeToString(config).valueOrThrow()
     }
 
-    /** Build the page HTML: template + theme vars + bridge shims + app bundle. */
+    /**
+     * Build the page HTML: template + theme vars + bridge shims + app bundle.
+     */
     private fun page(view: String): String {
         // Guard against the (currently absent) "</script>" inlining hazard so a
         // future bundle change cannot terminate the inline <script> early.
@@ -262,13 +252,12 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
 
     /**
      * Define `window.__a11Bridge` before the app bundle runs. Each method wraps
-     * its [JBCefJSQuery] injection in a Promise so the TypeScript side can await
-     * it. `inject(request, onSuccess, onFailure)` splices `onSuccess`/`onFailure`
-     * into the generated `window.<func>({request, onSuccess, onFailure})` call as
-     * *values*, so they must be full `function(...) {...}` expressions (not bare
-     * bodies) — otherwise the emitted object literal is a syntax error and the
-     * whole bridge fails to define. `response` / `error_message` are the params
-     * the query router passes back.
+     * its [JBCefJSQuery] injection in a Promise for TypeScript callers.
+     * `inject(request, onSuccess, onFailure)` splices
+     * `onSuccess`/`onFailure` into the generated `window.<func>({request,
+     * onSuccess, onFailure})` call as values. They must be complete
+     * `function(...) {...}` expressions, not function bodies. `response` and
+     * `error_message` are parameters supplied by the query router.
      */
     private fun bridgeJs(): String {
         fun wrap(query: JBCefJSQuery): String = query.inject(
@@ -307,8 +296,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         val bg = UIUtil.getPanelBackground()
         val fg = UIUtil.getLabelForeground()
         val bgAlt = UIUtil.getTextFieldBackground()
-        // JSON highlighting in the action explorer follows the editor's scheme, so
-        // a hand-typed value is colored like the same JSON would be in an editor.
+        // JSON highlighting in the action explorer follows the editor's scheme,
+        // so a hand-typed value is colored like the same JSON would be in an
+        // editor.
         val scheme = EditorColorsManager.getInstance().globalScheme
         fun syntax(key: TextAttributesKey, fallback: Color): Color =
             scheme.getAttributes(key)?.foregroundColor ?: fallback
@@ -337,10 +327,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
     private fun hex(color: Color): String = "#%02x%02x%02x".format(color.red, color.green, color.blue)
 
     /**
-     * Text color to lay on top of [background]. Not [JBColor.WHITE]: the JBColor
-     * constants are light/dark *pairs*, so under a dark theme it resolves to a
-     * near-black — unreadable on the saturated accent blue, which stays blue in
-     * both themes. Contrast follows the accent, not the theme.
+     * Text colour with sufficient contrast against [background].
+     * [JBColor.WHITE] is a theme pair and resolves to near-black in dark mode,
+     * while the accent background remains blue in both themes.
      */
     private fun contrastingFg(background: Color): Color {
         val luma = (0.299 * background.red + 0.587 * background.green + 0.114 * background.blue) / 255.0
@@ -362,7 +351,8 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         const val ERROR_CODE = 1
 
         /**
-         * The rate to fall back to when the display will not say what it runs at.
+         * The rate to fall back to when the display will not say what it runs
+         * at.
          *
          * `DisplayMode.getRefreshRate` returns `REFRESH_RATE_UNKNOWN` on some
          * setups, and this is a better guess than CEF's own default of 30 —
@@ -375,8 +365,9 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
 
         /**
          * The frame rate to run an off-screen browser on [device] at: that
-         * display's refresh rate. Pass null for the default screen — which is the
-         * best available answer before the component has been added to a window.
+         * display's refresh rate. Pass null for the default screen — which is
+         * the best available answer before the component has been added to a
+         * window.
          */
         fun frameRateOf(device: GraphicsDevice?): Int {
             val screen = try {
@@ -394,18 +385,15 @@ class A11WebView(private val project: Project, view: String, parent: Disposable)
         }
 
         /**
-         * A browser that paints at the default display's refresh rate, rather than
-         * at CEF's 30fps default for a windowless browser.
+         * A browser configured for the default display's refresh rate.
          *
          * The rate is corrected to the display the tool window ends up on by
-         * [followDisplayFrameRate]; this is the starting value, and the only one an
-         * IDE too old for the runtime setter will ever have.
+         * [followDisplayFrameRate]. This remains the only configured value on
+         * IDE versions without the runtime setter.
          *
-         * `setWindowlessFramerate` is newer than this plugin's compatibility floor
-         * (build 243), and the plugin is compiled against a much later platform
-         * than the oldest it claims to run on — so on an older IDE the call is
-         * simply not there. That is a missing frame rate, not a missing chat: the
-         * browser is built either way.
+         * `setWindowlessFramerate` is newer than the compatibility floor (build
+         * 243). Older IDEs may raise [LinkageError]; browser creation continues
+         * with the default frame rate.
          */
         private fun newBrowser(): JBCefBrowser {
             val builder = JBCefBrowser.createBuilder()

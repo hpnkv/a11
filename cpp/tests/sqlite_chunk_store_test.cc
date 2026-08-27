@@ -312,11 +312,7 @@ TEST(SQLiteChunkStoreTest, RejectsWritesAfterCloseAndPreservesTheStatus) {
             absl::StatusCode::kFailedPrecondition);
   // An empty batch reports INVALID_ARGUMENT rather than FAILED_PRECONDITION,
   // because the all-or-none sequence rule is evaluated before any state is
-  // consulted and an empty batch trivially fails it (no seq is set, yet
-  // "every" seq vacuously is). LocalChunkStore behaves identically, which
-  // makes its own empty-batch branch unreachable. Matching that exactly
-  // matters more than the rule being pretty: the two backends share a
-  // conformance suite.
+  // consulted and an empty batch trivially fails it (no seq is set, yet.
   EXPECT_EQ(store->PutMany({}).Await().status().code(),
             absl::StatusCode::kInvalidArgument);
 

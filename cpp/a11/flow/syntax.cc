@@ -289,11 +289,7 @@ std::optional<Constant> ConstantValue(const Node* node) {
   return std::nullopt;
 }
 
-// Every `static_cast` below is guarded by the `node.kind` it is written under,
-// which is what `kind` is for: a node's kind *is* its type tag, set once by the
-// constructor of the struct that declares it. `dynamic_cast` would ask RTTI the
-// same question the switch already answered, once per node per walk, on the
-// path every editor feature runs.
+// Node kinds are the type tags for these hot-path downcasts.
 // NOLINTBEGIN(cppcoreguidelines-pro-type-static-cast-downcast)
 void VisitChildren(const Node& node,
                    const std::function<void(const Node&)>& visit) {

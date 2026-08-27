@@ -467,9 +467,8 @@ ActionSchema EnvGetSchema() {
   schema.name = std::string(kEnvGetAction);
   schema.description =
       "Read named environment variables, and only the ones this host allows. "
-      "There is deliberately no way to ask for the whole environment: a "
-      "composition that names what it wants is one a reader can audit, and one "
-      "that asks for everything can take credentials it was never told about.";
+      "The action requires explicit names so access can be audited and cannot "
+      "include unrelated credentials.";
   schema.inputs.emplace(
       "names",
       Port("names", JsonType(),

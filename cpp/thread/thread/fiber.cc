@@ -60,11 +60,7 @@ struct ThreadLocalFiber {
     // null, there is no dynamic fiber for this thread.
     DVLOG(2) << "PerThreadDynamicFiber destructor called: " << f.get();
     if (f != nullptr) {
-      // Retire the placeholder without touching the fiber scheduler: at this
-      // point the thread's TLS is being torn down, so the normal join path
-      // (MarkFinished()/InternalJoin() -> fiber-aware Mutex/Select) would
-      // dereference Boost's thread_local active-context through already-freed
-      // TLS. See RetireUnstarted().
+      // Retire the placeholder without touching the fiber scheduler:
       f->RetireUnstarted();
       f.reset();
     }
@@ -165,11 +161,8 @@ void Fiber::Join() {
   InternalJoin();
 }
 
-// Update *this to a FINISHED state.  Preparing it to be Join()-ed (and
-// notifying any waiters) when applicable. Returns whether the fiber was
-// detached when marked finished.
-//
-// REQUIRES: *this has not already been marked finished.
+// Update *this to a FINISHED state. Returns whether the fiber was detached when
+// marked finished.
 bool Fiber::MarkFinished() {
   thread::MutexLock lock(&mu_);
   DCHECK_EQ(state_, RUNNING);
@@ -185,13 +178,8 @@ bool Fiber::MarkFinished() {
   return detached_.load(std::memory_order_relaxed);
 }
 
-// Record that the Join() requirement has been satisfied.  In the case of a
+// Record that the Join() requirement has been satisfied. In the case of a
 // detached fiber this may have been internally generated.
-//
-// If *this was a child fiber it will be removed from its parent's active
-// children.
-//
-// No-op if *this has already been Join()-ed.
 void Fiber::MarkJoined() {
   DCHECK(joinable_.HasBeenNotified());
 
@@ -228,12 +216,6 @@ void Fiber::InternalJoin() {
 namespace {
 
 // Fibers handed over by ReapWhenFinished(), waiting to finish.
-//
-// A plain `std::mutex` and not this library's fiber-aware `Mutex`: the queue is
-// touched from `ReapFinishedFibers()`, which pool workers call as they come round,
-// and a fiber mutex there would be one more scheduler interaction per pass on the
-// path this exists to make cheaper. The critical section is a vector push or a
-// swap, so there is nothing to suspend for.
 struct ReapEntry {
   std::unique_ptr<Fiber> fiber;
   absl::AnyInvocable<void() &&> on_finished;
@@ -249,12 +231,7 @@ std::vector<ReapEntry>& ReapQueue() {
   return *queue;
 }
 
-// ReapQueue().size(), readable without the lock. Workers consult this on every
-// pass round their loop, and an idle pool must not pay a lock acquisition to be
-// told there is nothing there: `try_lock` on a process-wide mutex is a read-modify
-// -write on one shared cache line, so every worker doing it every pass keeps that
-// line bouncing between cores whether or not there is any work. A relaxed load of
-// a line nobody is writing is free by comparison.
+// ReapQueue().size(), readable without the lock.
 std::atomic<size_t>& ReapPending() {
   static absl::NoDestructor<std::atomic<size_t>> pending{0};
   return *pending;
@@ -281,23 +258,12 @@ void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
 }
 
 void ReapFinishedFibers() {
-  // Bounded work per call, and never blocking.
-  //
-  // The first version scanned the whole queue under the lock on every worker
-  // round. With a few hundred connections in flight the queue is never empty, so
-  // that was an O(queue) walk behind one global mutex, repeatedly, on all workers
-  // at once -- measured as a 28% throughput loss at 256 clients with the pool
-  // *less* busy than before (3.65 cores against 4.43), which is what contention on
-  // a shared lock looks like from the outside. So: `try_lock`, so a worker with
-  // real work never waits for the reaper, and a rotating cursor over a bounded
-  // window, so the cost per round does not grow with the number of live fibers.
+  // Bounded work per call, and never blocking. The first version scanned the
+  // whole queue under the lock on every worker round.
   constexpr size_t kMaxScanPerPass = 32;
   static std::atomic<size_t> cursor{0};
 
-  // The no-work gate. Workers call this on every pass round their loop, so an
-  // otherwise idle pool used to spend a `try_lock` per worker per pass on a shared
-  // cache line to learn that the queue was empty; this reads a line nobody is
-  // writing instead. See ReapPending().
+  // The no-work gate.
   if (PendingReapCount() == 0) {
     return;
   }
@@ -319,7 +285,8 @@ void ReapFinishedFibers() {
       if (at >= queue.size()) {
         at = 0;
       }
-      // `Joinable()` is a notified-event read: asks "has it finished" without ever
+      // `Joinable()` is a notified-event read: asks "has it finished" without
+      // ever
       // suspending on one that has not.
       if (queue[at].fiber->Joinable()) {
         ready.push_back(std::move(queue[at]));
@@ -332,14 +299,12 @@ void ReapFinishedFibers() {
     ReapPending().store(queue.size(), std::memory_order_relaxed);
   }
   for (ReapEntry& entry : ready) {
-    // Join first: the fiber has finished, so this returns without suspending and
-    // leaves it safe to destroy.
+    // Join first: the fiber has finished, so this returns without suspending
+    // and leaves it safe to destroy.
     entry.fiber->Join();
-    // Then let the owner clear its pointer, under the owner's own lock, *before*
-    // the fiber is destroyed. A `Cancel()` racing completion therefore either runs
-    // against a finished-but-live fiber, which is harmless, or finds the handle
-    // already cleared. Reversing these two lines is the bug this ordering exists
-    // to prevent.
+    // Then let the owner clear its pointer, under the owner's own lock,
+    // *before* the fiber is destroyed. Reversing these two lines is the bug
+    // this ordering exists to prevent.
     if (entry.on_finished != nullptr) {
       std::move(entry.on_finished)();
     }
@@ -349,18 +314,7 @@ void ReapFinishedFibers() {
 
 void Fiber::RetireUnstarted() ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // Called only from ~ThreadLocalFiber, on the per-thread placeholder that
-  // Current() creates for a thread which never ran under a real fiber. That
-  // destructor fires during OS-thread teardown, when the thread's TLS block may
-  // already be freed. The normal teardown path is unsafe there: MarkFinished()
-  // and InternalJoin() take the fiber-aware mu_ and Select() on joinable_, both
-  // of which read Boost's thread_local active-context via __tls_get_addr and so
-  // touch freed TLS (surfacing later as heap/GC corruption).
-  //
-  // A placeholder is never Start()ed (its Boost context is never scheduled), has
-  // no parent, and -- in correct use -- has no live children, so it is
-  // reachable only from this exiting thread. No synchronization is needed to
-  // retire it: transition straight to JOINED so ~Fiber()'s invariant holds,
-  // bypassing the scheduler entirely.
+  // Current() creates for a thread which never ran under a real fiber.
   CHECK(parent_ == nullptr)
       << "F " << this << " RetireUnstarted() on a non-root fiber.";
   CHECK(first_child_ == nullptr)
@@ -384,8 +338,6 @@ void Fiber::Cancel() ABSL_NO_THREAD_SAFETY_ANALYSIS {
     bool cancelled = current->cancellation_.HasBeenNotified();
 
     // If we have children, and we're already cancelled, then they must be also.
-    // We don't need to re-walk our children as future descendants will be
-    // spawned into a cancelled state.
     // If we have children, and we're not cancelled, we must visit them before
     // operating on "fiber".
     if (!cancelled && current->first_child_ != nullptr) {
@@ -420,18 +372,12 @@ void Fiber::Cancel() ABSL_NO_THREAD_SAFETY_ANALYSIS {
       DCHECK(current->parent_->first_child_ != nullptr);
 
       // If there is an unvisited sibling, we go there to process it.
-      // Equivalent recursion note: recursive call return and recursive call.
-      // The sibling list is circular. Returning to the parent's first child,
-      // rather than finding a self-link, marks the end of a multi-child list.
       if (current->next_sibling_ != current->parent_->first_child_) {
         current = current->next_sibling_;
         break;
       }
 
-      // We've reached the final sibling in this subtree.  Continue traversing
-      // from our parent, who has no more unvisited children and is next in the
-      // traversal order.
-      // Equivalent recursion note: recursive call return.
+      // We've reached the final sibling in this subtree.
       current = current->parent_;
 
       // Reached child => traversal spans our parent, which must need

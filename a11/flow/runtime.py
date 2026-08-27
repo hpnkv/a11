@@ -10,8 +10,7 @@ here is the way a Python caller *starts* one and reads it back --
 [invoke][a11.flow.runtime.invoke] for the convenience of collecting the lot at
 the end -- and nothing about the language itself.
 
-Three behaviours of the engine are worth knowing about, because they are what a
-composition needs and what hand-written glue usually gets wrong:
+The engine provides three behaviours required by streaming compositions:
 
 * **Every output is drained.** An output port of a called action that the flow
   does not read is read and discarded anyway, because an unread output stalls
@@ -75,9 +74,9 @@ def make_handler(flow: FlowPlan, dispatch_stream: Any = None) -> Callable:
 class Running:
     """A flow that has been started, and the port nodes it is moving values on.
 
-    A flow's ports are [AsyncNode][a11.nodes.async_node.AsyncNode]s like any
-    other action's, so the honest way to read an output is to read the node --
-    values arrive as the flow produces them.
+    A flow's ports are [AsyncNode][a11.nodes.async_node.AsyncNode] values like
+    any other action's. Read an output node to receive values as the flow
+    produces them.
     [invoke][a11.flow.runtime.invoke]'s dict of lists is a convenience on top
     of this for the callers that want the lot at the end (a tool call, a test,
     a script), not the other way round.
@@ -251,9 +250,7 @@ async def start(
         # before the flow is allowed to proceed.
         confirmations = [
             await node.put(one)
-            for one in (
-                value if isinstance(value, (list, tuple)) else [value]
-            )
+            for one in (value if isinstance(value, (list, tuple)) else [value])
         ]
         for confirmation in confirmations:
             await confirmation

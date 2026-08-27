@@ -183,8 +183,8 @@ TEST(Http2Test, StreamsARequestBodyWrittenAfterTheHeaders) {
                     .Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(client.ok()) << client.status();
 
-  // No content-length: the length is not known when the headers go out, which
-  // is the point of a streamed body.
+  // A streamed body has no content-length because its size is unknown when the
+  // headers are sent.
   auto upload = (*client)->RequestStreamingBody(
       "PUT", "/upload", {{"content-type", "application/octet-stream"}});
   ASSERT_TRUE(upload.ok()) << upload.status();
@@ -221,10 +221,6 @@ absl::StatusOr<std::shared_ptr<Http2Server>> PushingServer() {
          const std::shared_ptr<Http2ResponseWriter>& response) -> a11::Task {
         // The promise goes out before the response it accompanies is finished;
         // after that the protocol has nowhere to put it.
-        //
-        // A push that the client refuses -- because it disabled push, or reset
-        // the promised stream -- must not take the response down with it, so
-        // neither failure here is fatal. That is what a real server does too.
         if (absl::StatusOr<std::shared_ptr<Http2ResponseWriter>> pushed =
                 response->PushPromise("GET", "/style.css",
                                       {{"accept", "text/css"}});
@@ -300,9 +296,7 @@ TEST(Http2Test, DeliversNoPushWhenTheClientDidNotEnableIt) {
   auto server = PushingServer();
   ASSERT_TRUE(server.ok()) << server.status();
   // The default: push off and advertised as off, so nothing this side did not
-  // ask for is ever delivered to it. The server may still try -- a SETTINGS
-  // frame and a request can cross -- and the promised stream is then reset
-  // without the response it came with noticing.
+  // ask for is ever delivered to it.
   auto client = Http2Client::Connect("127.0.0.1", (*server)->port())
                     .Await(absl::Now() + absl::Seconds(5));
   ASSERT_TRUE(client.ok()) << client.status();

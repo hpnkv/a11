@@ -342,12 +342,7 @@ class PythonActionCallback {
     if (PyCallable_Check(callable.ptr()) == 0) {
       return absl::InvalidArgumentError("action callback must be callable");
     }
-    // Deliberately CaptureRunning() rather than Capture(): registering a
-    // handler is ordinary module-level Python, where there is often no loop at
-    // all, and Capture() would answer that with one it invented and nobody
-    // runs -- so every dispatch posted to it waited for good. A handler
-    // registered outside a loop leaves this null and asks the question again
-    // when it is actually invoked; see EnsureLoop.
+    // Capture the running loop rather than creating or retrieving another loop.
     std::shared_ptr<PythonLoop> loop;
     if (needs_loop) {
       loop = PythonLoop::CaptureRunning();
@@ -461,8 +456,7 @@ absl::StatusOr<actions::ActionHandler> MakeActionHandler(
   }
   // A handler that is already native (an SDK Action implemented in C++, handed
   // back by ActionHandlerToPython) passes straight through: wrapping it in a
-  // PythonActionCallback would bounce every invocation through the interpreter
-  // for no reason, and would need a running loop the native handler does not.
+  // PythonActionCallback would bounce every invocation through the.
   if (py::isinstance<NativeActionHandler>(callable)) {
     return callable.cast<NativeActionHandler>().value();
   }
@@ -498,9 +492,7 @@ PyActionHandler ActionHandlerToPython(const actions::ActionHandler& handler) {
   const auto* python = handler.target<AsyncPythonActionHandler>();
   if (python == nullptr) {
     // A handler implemented in C++ has no Python callable behind it, so hand
-    // back an opaque handle. It is accepted anywhere a handler is taken (see
-    // MakeActionHandler), which is what lets a native Action be re-registered
-    // or bound from Python.
+    // back an opaque handle.
     return py::cast(NativeActionHandler(handler));
   }
   return python->owner->callable();
@@ -1015,14 +1007,7 @@ void BindActions(py::module_& module) {
       .def("get_session", &actions::Action::GetSession,
            "Return the action's bound session.")
       // Every port accessor releases the GIL, because asking for a port is not
-      // the lookup it looks like. A port materialises on use, and a port of an
-      // action that has already finished is closed on the way out:
-      // Action::GetOutput awaits IsWritable and Close() to hand back the
-      // terminal state its reader expects. Those awaits park on a fibre, and
-      // the work they wait for can need the GIL -- a store writer's completion
-      // resolves a Python future through call_soon_threadsafe. Holding the GIL
-      // here closed that cycle: the waiter never woke, because the thread that
-      // would have woken it could not run Python. See WithoutGil in interop.h.
+      // the lookup it looks like.
       .def(
           "get_node",
           [](actions::Action& self, std::string node_id) {
@@ -1055,8 +1040,8 @@ void BindActions(py::module_& module) {
           },
           "Return the port node with the given name.", py::arg("name"))
       // The log surface. Only the chunk-taking half is native: turning a Python
-      // object into a chunk is the Python registry's job, and it already reads a
-      // str as text/plain, which is what a log wants. See a11.actions.Action.log.
+      // object into a chunk is the Python registry's job, and it already reads
+      // a str as text/plain, which is what a log wants.
       .def(
           "log_chunk",
           [](actions::Action& self, data::Chunk chunk,
@@ -1217,10 +1202,6 @@ Examples:
       .def(
           "run",
           [](actions::Action& self) {
-            // Starting an action is the last moment before its handler is
-            // invoked that is certain to be Python on the loop's own thread, so
-            // it is where a handler registered before any loop existed gets one
-            // to post to (see PythonLoop::Resolve).
             PythonLoop::NoteRunningLoop();
             return ValueOrThrow(self.Run());
           },
@@ -1248,11 +1229,9 @@ Examples:
             // As in `run`, and before the GIL goes: a dispatched action's
             // handler may be a Python one registered outside any loop.
             PythonLoop::NoteRunningLoop();
-            // Without the GIL: this starts work and can park in the
-            // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. Holding the GIL across it deadlocks
-            // the process against a worker that needs the GIL to resolve
-            // a Python future.
+            // Without the GIL: this starts work and can park in the fibre
+            // scheduler before returning a future, and it runs on the
+            // event-loop thread.
             return FutureToPython(
                 WithoutGil([&] { return self->Call(std::move(*converted)); }));
           },
@@ -1279,11 +1258,9 @@ Examples:
               return FutureToPython(
                   a11::FailedFuture<absl::Status>(converted.status()));
             }
-            // Without the GIL: this starts work and can park in the
-            // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. Holding the GIL across it deadlocks
-            // the process against a worker that needs the GIL to resolve
-            // a Python future.
+            // Without the GIL: this starts work and can park in the fibre
+            // scheduler before returning a future, and it runs on the
+            // event-loop thread.
             return FutureToPython(
                 WithoutGil([&] { return self->WaitForDispatch(*converted); }));
           },
@@ -1300,11 +1277,9 @@ Examples:
                   a11::FailedFuture<std::shared_ptr<actions::Action>>(
                       converted.status()));
             }
-            // Without the GIL: this starts work and can park in the
-            // fibre scheduler before returning a future, and it runs on
-            // the event-loop thread. Holding the GIL across it deadlocks
-            // the process against a worker that needs the GIL to resolve
-            // a Python future.
+            // Without the GIL: this starts work and can park in the fibre
+            // scheduler before returning a future, and it runs on the
+            // event-loop thread.
             return FutureToPython(
                 WithoutGil([&] { return self->Wait(*converted); }));
           },
@@ -1499,8 +1474,8 @@ Examples:
       [](const std::shared_ptr<actions::ActionRegistry>& registry,
          const py::object& request) {
         const std::string encoded = DescribeRequestToJson(request);
-        // Takes the registry's mutex, so the GIL is released across the call and
-        // taken again to convert the result. See interop.h's WithoutGil.
+        // Takes the registry's mutex, so the GIL is released across the call
+        // and taken again to convert the result. See interop.h's WithoutGil.
         return ValueOrThrow(WithoutGil([&]() -> absl::StatusOr<std::string> {
           ABSL_ASSIGN_OR_RETURN(const actions::SchemaQuery parsed,
                                 actions::ParseSchemaQuery(encoded));

@@ -98,13 +98,16 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
   return "";
 }
 
+// Which of the language's word tables documents a proposal of this kind, or
+// `nullopt` where the proposal names something this document or the host
+// declared rather than a word of the language.
 /// Which of the language's word tables documents a proposal of this kind, or
 /// `nullopt` where the proposal names something this document or the host
 /// declared rather than a word of the language.
 ///
 /// A name the *document* bound gets its text from the plan it was resolved to,
 /// beside where this is called; this is only for the fixed vocabulary. `kField`
-/// is deliberately absent: a field proposal may be a status's `code` or a
+/// excludes `kField`: a field proposal may be a status's `code` or a
 /// shape's own field of the same name, and answering with the status text for
 /// the latter would be confidently wrong.
 std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
@@ -208,10 +211,7 @@ class Completer {
     cut_ = 0;
     // No partial word means one that starts *at the caret* and is empty, which
     // is what `prefix_start` has to say: a frontend replaces `[prefix_start,
-    // caret)` with what it inserts. Left at zero, that range was the whole
-    // document up to the caret -- so taking any proposal at a position where
-    // nothing had been typed yet, which is most of them, deleted the file in
-    // front of it.
+    // caret)` with what it inserts.
     prefix_start_ = offset_;
     for (size_t index = 0; index < tokens_.size(); ++index) {
       const Token& token = tokens_[index];
@@ -226,10 +226,7 @@ class Completer {
       if (token.start >= offset_) {
         break;
       }
-      // The caret is inside this token. A word or a number is one being typed,
-      // and the completion is about what may stand where it stands; anything
-      // else -- inside a string, a comment, or half of a `->` -- is a place
-      // where offering the language's words would be noise.
+      // The caret is inside this token.
       if (token.IsWord() || token.kind == TokenKind::kNumber) {
         prefix_ =
             std::string(source_.substr(token.start, offset_ - token.start));
@@ -279,9 +276,8 @@ class Completer {
       }
     }
     // The lexer drops a trailing run of line breaks, because a break with
-    // nothing after it ends nothing -- which is right for a parser and wrong
-    // here: the caret on a fresh line is at the head of a statement, and the
-    // only record of that break is the text itself.
+    // nothing after it ends nothing which is right for a parser and wrong here:
+    // the caret on a fresh line is at the head of a statement, and the only.
     const size_t tail = cut_ == 0 ? 0 : tokens_[cut_ - 1].end;
     if (tail <= offset_ &&
         absl::StrContains(source_.substr(tail, offset_ - tail), '\n')) {
@@ -741,6 +737,8 @@ class Completer {
     return "";
   }
 
+  // The keys of a `Shape{...}` being written, when the shape is one this file
+  // declares.
   /// The keys of a `Shape{...}` being written, when the shape is one this file
   /// declares.
   ///
@@ -1157,10 +1155,7 @@ class Completer {
       // An argument is a name and a colon; writing the colon is writing what
       // the grammar requires, not guessing what the author meant.
       proposal.insert = absl::StrCat(name, ": ");
-      // Both, and in that order. `(required)` used to *replace* the
-      // description, so the ports that have to be written were the ones the
-      // list said least about -- which is backwards: what a port is for is the
-      // question, and whether it is required is the aside.
+      // Both, and in that order.
       if (required) {
         absl::StrAppend(&proposal.tail, " (required)");
       }
@@ -1393,11 +1388,7 @@ class Completer {
     }
     for (const std::string_view declaration :
          vocabulary::OrderedDeclarations()) {
-      // The declarations that open a line. `flow` opens a file rather than a
-      // statement in one, and the rest of them stand in the middle of a
-      // declaration they cannot begin: `as` and `default` belong to a header,
-      // `stream` and `required` to a port, and `node` to the name being bound
-      // to it.
+      // The declarations that open a line.
       if (declaration == "flow" || declaration == "as" ||
           declaration == "default" || declaration == "stream" ||
           declaration == "required" || declaration == "node") {

@@ -121,9 +121,7 @@ async def _redis_client():
     from a11.redis.client import RedisClient, RedisClientOptions
 
     url = os.environ.get("A11_TEST_REDIS_URL")
-    options = (
-        RedisClientOptions.from_url(url) if url else RedisClientOptions()
-    )
+    options = RedisClientOptions.from_url(url) if url else RedisClientOptions()
     options.connect_timeout = timing.Duration.milliseconds(250)
     options.command_timeout = timing.Duration.seconds(5)
     client = RedisClient(options)
@@ -200,15 +198,11 @@ async def put_throughput(scale: float) -> list[Result]:
     async with _backends() as backends:
         for backend in backends:
             for window in (1, 32, 256):
-                # Redis used to be skipped here because concurrent puts
-                # deadlocked the process. That was the GIL/fibre deadlock, not
-                # anything about Redis, and it is fixed; the smaller budget is
-                # just because a network round trip per put is slow.
+                # Redis uses a smaller budget because each put includes a
+                # network round trip.
                 budget = {"local": 4000, "sqlite": 800}.get(backend.name, 300)
                 iterations = _scaled(budget, scale)
-                store = backend.open(
-                    _node_id(backend.name, f"putwin{window}")
-                )
+                store = backend.open(_node_id(backend.name, f"putwin{window}"))
                 await _initialise(store)
                 payload = b"x" * 256
                 metrics = await pipelined(
@@ -238,18 +232,16 @@ async def put_many_batching(scale: float) -> list[Result]:
     async with _backends() as backends:
         for backend in backends:
             for batch in (8, 64, 256):
-                calls = _scaled(
-                    400 if backend.name == "local" else 60, scale
-                )
+                calls = _scaled(400 if backend.name == "local" else 60, scale)
                 store = backend.open(_node_id(backend.name, f"many{batch}"))
                 await _initialise(store)
                 payload = b"x" * 256
 
                 def put_batch(index, s=store, b=batch, p=payload):
                     start = index * b
-                    return s.put_many(
-                        [_fragment(start + i, p) for i in range(b)]
-                    )
+                    return s.put_many([
+                        _fragment(start + i, p) for i in range(b)
+                    ])
 
                 metrics = await throughput(
                     put_batch,
@@ -281,14 +273,10 @@ async def read_paths(scale: float) -> list[Result]:
             payload = b"x" * 256
             for start in range(0, count, 200):
                 chunk = min(200, count - start)
-                await store.put_many(
-                    [
-                        _fragment(
-                            start + i, payload, final=start + i == count - 1
-                        )
-                        for i in range(chunk)
-                    ]
-                )
+                await store.put_many([
+                    _fragment(start + i, payload, final=start + i == count - 1)
+                    for i in range(chunk)
+                ])
 
             deadline = _deadline()
             results.append(
@@ -370,16 +358,14 @@ async def fanout(scale: float) -> list[Result]:
                 payload = b"x" * 128
                 for start in range(0, count, 250):
                     size = min(250, count - start)
-                    await store.put_many(
-                        [
-                            _fragment(
-                                start + i,
-                                payload,
-                                final=start + i == count - 1,
-                            )
-                            for i in range(size)
-                        ]
-                    )
+                    await store.put_many([
+                        _fragment(
+                            start + i,
+                            payload,
+                            final=start + i == count - 1,
+                        )
+                        for i in range(size)
+                    ])
 
                 deadline = _deadline()
 
@@ -448,9 +434,9 @@ async def resident_memory(scale: float) -> list[Result]:
     async def append(count: int, s=store) -> int:
         for start in range(0, count, 500):
             size = min(500, count - start)
-            await s.put_many(
-                [_fragment(next(written), payload) for _ in range(size)]
-            )
+            await s.put_many([
+                _fragment(next(written), payload) for _ in range(size)
+            ])
         return count
 
     slope, trail = await memory_slope(

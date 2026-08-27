@@ -95,9 +95,8 @@ TEST(ActionTest, LocalRunStreamsDataAndPublishesStatus) {
 
 TEST(ActionTest, RejectsAPortNameUsedInBothDirections) {
   // A port's node id is derived from the action id and the port name alone, so
-  // an input and an output sharing a name are the *same node*: feeding the input
-  // would establish an end the output then cannot write past. Catching it in the
-  // schema turns a puzzling runtime failure into an obvious one.
+  // an input and an output sharing a name are the *same node*: feeding the
+  // input would establish an end the output then cannot write past.
   actions::ActionSchema schema;
   schema.name = "both-ways";
   schema.inputs.emplace(

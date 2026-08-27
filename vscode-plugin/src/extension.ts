@@ -1,24 +1,12 @@
 /**
- * A11 for VSCode: the Flow language, and a chat that can call this editor's tools.
+ * A11 Flow language support and chat integration for VS Code.
  *
- * **Where the language is.** Not here. The lexer, parser, resolver, inspector,
- * formatter, completer, and the scanner that reads a project's own actions are
- * `cpp/a11/flow/`, and this extension runs them as `a11-flow serve --protocol lsp`.
- * So a stage added to the grammar is a stage this extension colours, completes and
- * checks with no change on this side, and what it reports is word for word what
- * `a11 flow check` and CI report, because it is the same code. That is the same
- * arrangement the JetBrains plugin has; this is the second client of one language,
- * not a second implementation of it.
+ * The extension runs the native language implementation from `cpp/a11/flow/`
+ * through `a11-flow serve --protocol lsp`. It owns service discovery,
+ * VS Code-backed tools, embedded Flow fragments, and the webview host bridge.
  *
- * **What is genuinely this extension's.** Four things: locating the tool, the ten
- * IDE-backed tools written against VSCode's APIs, the fragment support for flows
- * inside string literals, and the two webview views — whose UI is shared with the
- * JetBrains plugin behind a six-method bridge.
- *
- * **With no binary for this platform** the editor degrades on purpose rather than
- * breaking: a `.flow` is still coloured by the generated TextMate grammar, which
- * knows the language's words and nothing about what they mean, and one notification
- * says why.
+ * If no binary is available, the generated TextMate grammar still highlights
+ * `.flow` files and one notification explains why semantic features are absent.
  */
 
 import * as vscode from 'vscode';
@@ -45,8 +33,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const suggestions = new Suggestions();
   context.subscriptions.push(suggestions, registerApply());
 
-  // The two views. Before the language server, because a chat that works without
-  // an `a11-flow` binary should not wait for one.
+  // The two views. Before the language server, because a chat that works
+  // without an `a11-flow` binary should not wait for one.
   const views = new Map<'chat' | 'actions', A11ViewProvider>();
   for (const view of ['chat', 'actions'] as const) {
     const provider = new A11ViewProvider(context, view, suggestions);
@@ -58,11 +46,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
 
-  // The language, if this machine has it. A `FlowServer` that never started is a
-  // state the commands below have to answer for rather than a reason not to
-  // register them: a command in the palette that reports "command not found" tells
-  // the reader their editor is broken, when the truth is that a binary is missing
-  // and there is something they can do about it.
+  // The language, if this machine has it. A `FlowServer` that never started is
+  // a state the commands below have to answer for rather than a reason not to
+  // register them: a command in the palette that reports "command not found"
+  // tells the reader their editor is broken, when the truth is that a binary is
+  // missing and there is something they can do about it.
   const flow = new FlowSupport(context);
 
   // Continuation-aware indent on Enter, needing no server and no binary: a
@@ -96,8 +84,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Every command this extension declares, registered here and nowhere else, in
   // one place that nothing returns before. `commands.test.mjs` holds that: a
-  // command contributed in `package.json` and registered behind a conditional is
-  // exactly the bug this shape prevents.
+  // command contributed in `package.json` and registered behind a conditional
+  // is exactly the bug this shape prevents.
   context.subscriptions.push(
     ...registerKeyCommands(context),
     vscode.commands.registerCommand('a11.clearSuggestions', () => suggestions.clear()),
@@ -113,18 +101,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 /**
  * The language server, and everything that needs one.
  *
- * A holder rather than a bare local, so the commands can be registered before the
- * binary has been looked for and still do the right thing afterwards — including
- * the case that matters most to somebody setting this up: **the binary appears
- * later**. `a11.restartFlowServer` looks again, so building `a11-flow` and running
- * that command is enough, with no window reload.
+ * A holder rather than a bare local, so the commands can be registered before
+ * the binary has been looked for and still do the right thing afterwards —
+ * including the case that matters most to somebody setting this up: **the
+ * binary appears later**. `a11.restartFlowServer` looks again, so building
+ * `a11-flow` and running that command is enough, with no window reload.
  */
 class FlowSupport implements vscode.Disposable {
   private server: FlowServer | undefined;
   private started = false;
   private readonly parts: vscode.Disposable[] = [];
 
-  /** One channel for the whole session, however many servers pass through it. */
+  /**
+   * One channel for the whole session, however many servers pass through it.
+   */
   private readonly log = vscode.window.createOutputChannel('A11 Flow');
 
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -132,11 +122,11 @@ class FlowSupport implements vscode.Disposable {
   /**
    * Look for the tool and, if it is there, start everything that needs it.
    *
-   * A start that fails is *reported*, not thrown. Letting it out of here failed the
-   * whole activation — so the chat and the tools went with the language, over a
-   * binary that will not run — and left a dead client assigned for the next call to
-   * trip over. The message says what actually happened, because "activating
-   * extension failed" says nothing anybody can act on.
+   * A start that fails is *reported*, not thrown. Letting it out of here failed
+   * the whole activation — so the chat and the tools went with the language,
+   * over a binary that will not run — and left a dead client assigned for the
+   * next call to trip over. The message says what actually happened, because
+   * "activating extension failed" says nothing anybody can act on.
    */
   async start(): Promise<boolean> {
     const executable = findFlowTool(this.context);
@@ -161,8 +151,9 @@ class FlowSupport implements vscode.Disposable {
     }
     this.server = server;
     if (!this.started) {
-      // The document listeners are attached once and outlive a restart: they read
-      // through `this.server`, so a fresh one is picked up without re-subscribing.
+      // The document listeners are attached once and outlive a restart: they
+      // read through `this.server`, so a fresh one is picked up without
+      // re-subscribing.
       startScanning(() => this.server, this.parts);
       registerFragmentSupport(() => this.server, this.parts);
       this.started = true;
@@ -174,10 +165,11 @@ class FlowSupport implements vscode.Disposable {
   /**
    * Start the server, or stop and start it again.
    *
-   * Also the way *in* after building the binary: it looks for the tool again, so
-   * `cmake --build … --target a11_flow_tool` followed by this command is enough,
-   * with no window reload. Silent on failure, because `start` has already said what
-   * went wrong and saying it twice is worse than saying it once.
+   * Also the way *in* after building the binary: it looks for the tool again,
+   * so `cmake --build … --target a11_flow_tool` followed by this command is
+   * enough, with no window reload. Silent on failure, because `start` has
+   * already said what went wrong and saying it twice is worse than saying it
+   * once.
    */
   async restart(): Promise<void> {
     await this.server?.stop();
@@ -206,8 +198,8 @@ class FlowSupport implements vscode.Disposable {
     }
     const found = await this.server.scan(roots);
     if (found?.reached_file_limit) {
-      // Said rather than silently applied: a half-read workspace otherwise looks
-      // exactly like a workspace with two actions in it.
+      // Said rather than silently applied: a half-read workspace otherwise
+      // looks exactly like a workspace with two actions in it.
       void vscode.window.showWarningMessage(
         `A11: stopped after ${found.files_read} files, so some of the workspace was` +
           ' not read for actions.',
@@ -228,7 +220,10 @@ class FlowSupport implements vscode.Disposable {
   }
 }
 
-/** What to say when a command needs the language and this machine has no binary. */
+/**
+ * What to say when a command needs the
+ * language and this machine has no binary.
+ */
 async function missing(): Promise<void> {
   const choice = await vscode.window.showWarningMessage(
     'A11: no `a11-flow` binary, so the language is not running. Build one with' +
@@ -248,13 +243,14 @@ async function missing(): Promise<void> {
  * Read the workspace's own actions again when one of them changes.
  *
  * The language ships a snapshot of what the SDK registers, so hovering
- * `interact_with_llm` has always said something useful. An action somebody wrote
+ * `interact_with_llm` has always said
+ * something useful. An action somebody wrote
  * this afternoon is in no snapshot: this is what makes it hover with its
  * description and its ports, and gives F12 somewhere to go.
  *
  * Debounced, because a save-all over twenty files is one interesting event. The
- * server is read through a getter rather than captured, so a restart is picked up
- * without re-subscribing these listeners.
+ * server is read through a getter rather than captured, so a restart is picked
+ * up without re-subscribing these listeners.
  */
 function startScanning(
   server: () => FlowServer | undefined,
@@ -289,7 +285,8 @@ function startScanning(
 }
 
 /**
- * Flows written inside another language's strings: checked, completed and hovered.
+ * Flows written inside another language's strings: checked, completed and
+ * hovered.
  *
  * The `.flow` case is the language client's and needs nothing here. This is the
  * other case, and the one most flows are actually in.
@@ -330,9 +327,8 @@ function registerFragmentSupport(
   const selector = HOSTS.map((language) => ({scheme: 'file', language}));
 
   parts.push(
-    // The quick fixes are the edits the diagnostic came with, applied as they are.
-    // Nothing here works out what a repair should be: a fix that re-derived it
-    // would be a second implementation of the check.
+    // Apply the edits carried by the diagnostic without re-deriving a repair
+    // from its message.
     vscode.languages.registerCodeActionsProvider(
       selector,
       {
@@ -368,11 +364,11 @@ function registerFragmentSupport(
             : [];
         },
       },
-      // The same set the language server advertises, and for the same reason: `(`
-      // opens an argument list and `,` separates one argument from the next, so
-      // both are positions where the answer is "the ports of the action being
-      // called". Kept in step by `completion.test.mjs`, since two lists of trigger
-      // characters is two lists to forget.
+      // The same set the language server advertises, and for the same reason:
+      // `(` opens an argument list and `,` separates one argument from the
+      // next, so both are positions where the answer is "the ports of the
+      // action being called". Kept in step by `completion.test.mjs`, since two
+      // lists of trigger characters is two lists to forget.
       '.',
       '|',
       ':',

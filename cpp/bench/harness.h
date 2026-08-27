@@ -2,12 +2,9 @@
 
 /**
  * @file
- * @brief
- *   The measuring apparatus for A11's native benchmarks, deliberately
- *   equivalent to `bench/harness.py`.
+ * @brief Native benchmark measurement utilities matching `bench/harness.py`.
  *
- * The point of this binary is comparison, so the method has to match the
- * Python suite's or the comparison is meaningless. Same three conventions:
+ * Native and Python benchmarks use the same three conventions:
  * latency and throughput are measured separately (a `steady_clock` pair around
  * a 40ns operation measures the clock), memory is a slope over a growing
  * population rather than one delta, and a result is a record that goes to JSON

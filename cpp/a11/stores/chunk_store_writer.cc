@@ -267,10 +267,7 @@ struct ChunkStoreWriter::State
 
     // The one place a chunk carrying a value becomes bytes, and the reason the
     // rest of the system never has to know such a chunk exists: a store that
-    // persists needs them, and a peer needs them, so either of those turns the
-    // value into its encoding here, before anything downstream sees it. An
-    // in-memory store with nobody attached needs neither, which is exactly the
-    // case the value was kept for.
+    // persists needs them, and a peer needs them, so either of those turns the.
     if (!batch.streams.empty() || !store->HoldsObjects()) {
       for (Element& element : batch.elements) {
         if (const absl::Status materialised = element.chunk.Materialize();
@@ -446,11 +443,7 @@ struct ChunkStoreWriter::State
       CompleteTask(waiter, remaining_status);
     }
     CompleteTask(failed_lifecycle, remaining_status);
-    // Another pass, for anything queued behind this batch. A completion that
-    // ran inline -- a store confirming in the caller's frame -- hands that pass
-    // to the turn on this stack: a worker posted here would race the caller's
-    // next flush and take the write off it, costing that caller an event-loop
-    // turn for work it was about to do itself.
+    // Another pass, for anything queued behind this batch.
     bool running = false;
     {
       thread::MutexLock lock(&mu);
@@ -466,12 +459,7 @@ struct ChunkStoreWriter::State
 
   // Closing a writer is a lifecycle fact bound peers cannot otherwise observe:
   // a remote reader ends a node on a not-continued fragment, and closing
-  // appends none. The graceful path therefore tees one closure marker -- a
-  // status chunk carrying data::kCloseAttribute -- so a mirror on the far side
-  // closes its own write half. Draining is already synchronised with the tee:
-  // the close operation only starts once every batch has been sent, so the
-  // marker is the last thing a peer sees. The abort path sends nothing here;
-  // Action::SendNodeAbortStatuses already fans failures out.
+  // appends none.
   absl::Status TeeClose(const absl::Status& close_status) {
     std::vector<std::shared_ptr<net::WireStream>> streams;
     {
@@ -546,9 +534,7 @@ struct ChunkStoreWriter::State
           "ChunkStore closed with a different status than requested");
     }
     // A failed closure marker cannot un-close the store, exactly as a failed
-    // data tee cannot revoke store confirmations. The store still closes and
-    // the send error becomes the writer's terminal status, so the producer
-    // learns its peer was never told.
+    // data tee cannot revoke store confirmations.
     if (operation_status.ok()) {
       operation_status = tee_status;
     }
@@ -758,37 +744,7 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
 a11::Future<std::uint32_t> ChunkStoreWriter::PutChunk(
     data::Chunk chunk, std::optional<std::uint32_t> seq, bool final) {
   // Flushes inline rather than waking the scheduler, which is what FINDINGS.md
-  // item 3 asked for and what the stack budget used to forbid.
-  //
-  // The budget, measured by marking the base of a drive and recording the deepest
-  // frame reached below it across translation units -- the depth is not in the
-  // pump but in what the pump calls:
-  //
-  //   writer frames alone                        911 B
-  //   + into ChunkStore::PutMany               1,407 B
-  //   + the tee to an attached WireStream     67,695 B
-  //
-  // The tee is on this stack rather than a worker's because an in-memory store
-  // returns an already-ready future and Future::OnReady invokes its callback in
-  // the calling frame -- so WriteDone, the WireMessage build and
-  // WireStream::Send all run under Drive(). That is more than the 64 KiB default
-  // fibre stack held, and `DriveInline` permits four nested drives on top of it,
-  // so the worst case is ~271 KiB.
-  //
-  // Both stacks that a store write can be reached from were raised instead of
-  // shortening the chain: the global default to 512 KiB
-  // (cpp/thread/CMakeLists.txt, which carries the reasoning and the memory
-  // argument) and the session dispatch fibres from 16 KiB to that default. Raising
-  // them globally rather than per store is deliberate -- a pump that drives on
-  // whichever thread asked it for something cannot know what stack it is on, so
-  // making the stack a property of the *store* would put the knowledge in the one
-  // place that cannot use it.
-  //
-  // The tiny pooled stacks the original note worried about (256-2048 B) are not
-  // affected and never were: every explicit small-stack fibre in the tree
-  // (a11/concurrency/executor.cc's joiner, the three in wire_stream_with_recv.cc,
-  // audio_input.cc's reader) only joins a fibre or selects on a channel, and none
-  // can reach a store write.
+  // item 3 asked for and what the stack budget
   ChunkStoreWrite write = EnqueueChunk(std::move(chunk), seq, final, false);
   Flush();
   return std::move(write.confirmation);

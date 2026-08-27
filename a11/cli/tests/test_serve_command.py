@@ -615,13 +615,7 @@ async def test_webrtc_without_an_identity_is_refused(tmp_path: Path) -> None:
 async def test_a_signalling_credential_travels_on_the_handshake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A credential given must reach the server, not be quietly dropped.
-
-    It used to be refused outright, because A11's signalling client could not
-    send headers. It can, so the flag is honoured -- and this asserts the
-    honouring rather than the refusal, because "silently unauthenticated" is
-    still the one outcome worse than an error.
-    """
+    """A signalling credential reaches the server handshake."""
     from a11.cli.commands.serve import _signalling_client
 
     captured: dict[str, object] = {}
@@ -632,9 +626,7 @@ async def test_a_signalling_credential_travels_on_the_handshake(
         captured["headers"] = dict(options.headers)
         return object()
 
-    monkeypatch.setattr(
-        net.WebSocketSignallingClient, "connect", fake_connect
-    )
+    monkeypatch.setattr(net.WebSocketSignallingClient, "connect", fake_connect)
     await _signalling_client(
         _args(
             "unused",
@@ -661,7 +653,8 @@ def _client_options() -> net.WebSocketClientOptions:
 
 async def _call_shout(session, stream, schema, text: str) -> str:
     call = (
-        a11.Action(schema)
+        a11
+        .Action(schema)
         .bind_node_map(session.node_map)
         .bind_session(session)
         .bind_stream(stream)
@@ -766,8 +759,8 @@ async def test_two_endpoints_reach_one_service(tmp_path: Path) -> None:
         )
         assert await _call_shout(ws_client, ws_stream, schema, "ws") == "WS"
 
-        # The client mirrors the endpoint: HTTP/1.1, which SSE reaches by
-        # giving its outbound direction a connection of its own.
+        # The client mirrors the endpoint: HTTP/1.1, which SSE reaches by giving
+        # its outbound direction a connection of its own.
         sse_options = net.HttpSseOptions()
         sse_options.http2_options.enable_http1 = True
         sse_options.http2_options.enable_h2 = False
@@ -984,10 +977,9 @@ async def test_following_the_claim_rebinds_on_a_new_transport():
 async def test_serving_ends_when_hosting_stops_for_good() -> None:
     """A command whose only job is a hosted identity must not outlive it.
 
-    Before this, a revoked credential left the process running with its
-    WebSocket listener up and its exit code zero, while the identity it was
-    hosting was unreachable -- a failure that looks like success to a
-    supervisor, to a health check and to whoever is reading the log.
+    A revoked credential makes the hosted identity unreachable. The process
+    must stop with a failure instead of leaving its WebSocket listener running
+    and reporting success.
     """
     from a11.cli.commands.serve import _until_stopped_or_signalled
 

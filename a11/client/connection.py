@@ -112,7 +112,7 @@ class GatewayConnection:
         Raises:
             StatusException: When the transport cannot be established.
         """
-        # The connect deadline bounds the *handshake*, and only that. It must not
+        # The connect deadline bounds only the handshake. It must not
         # become `WireStreamOptions.deadline`, which is the absolute time the
         # stream is aborted at: a chat session outlives its handshake by hours,
         # and a stream deadline of "now + 10s" makes every turn after the first
@@ -127,9 +127,7 @@ class GatewayConnection:
         await session.add_stream(stream, mode="start")
         return cls(session, stream, url=url)
 
-    async def probe(
-        self, *, timeout: timing.Duration | None = None
-    ) -> None:
+    async def probe(self, *, timeout: timing.Duration | None = None) -> None:
         """Verify the peer is a live A11 gateway, via a ``__ping`` round trip.
 
         Raises:
@@ -173,8 +171,8 @@ class GatewayConnection:
         transport's ordinary close path, where a non-OK one would fail the
         connection.
 
-        Every step is best effort. A peer that has already gone is not a
-        problem worth reporting on the way out.
+        Every step is best effort. A peer that has already disconnected needs
+        no additional shutdown error.
         """
         with contextlib.suppress(Exception):
             self.stream.half_close()
@@ -189,11 +187,12 @@ class GatewayConnection:
         The one way to address the peer: bound to this session's node map so its
         replies route back, and to this stream so the call goes out on it.
         """
-        resolved = schema if schema is not None else self._registry.get_schema(
-            name
+        resolved = (
+            schema if schema is not None else self._registry.get_schema(name)
         )
         return (
-            a11.Action(resolved)
+            a11
+            .Action(resolved)
             .bind_node_map(self.session.node_map)
             .bind_session(self.session)
             .bind_stream(self.stream)
@@ -256,8 +255,7 @@ async def open_gateway(
             ),
         ).to_exception()
 
-    # Imported here so a client that never needs an embedded gateway does not
-    # pay for the gateway's imports.
+    # Import only when the fallback needs an embedded gateway.
     from a11.gateway.embedded import embedded_gateway
 
     async with embedded_gateway(registry=registry) as connection:

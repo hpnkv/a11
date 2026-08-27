@@ -24,10 +24,7 @@
 
 namespace thread {
 
-// Fiber-aware synchronization primitives. Their Boost implementation is kept
-// out of this public header in fixed, stack-resident storage; size/alignment
-// checks in the implementation fail the build if the implementation ever
-// outgrows that storage.
+// Fiber-aware synchronization primitives.
 class ABSL_LOCKABLE ABSL_ATTRIBUTE_WARN_UNUSED Mutex {
  public:
   Mutex();

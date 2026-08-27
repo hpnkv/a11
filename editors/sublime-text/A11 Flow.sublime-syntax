@@ -16,8 +16,8 @@
 #
 # Every keyword may be written in lower case or UPPER CASE, but not Mixed, which
 # is exactly what the patterns below accept: a word matches as a keyword only if
-# it is uniformly cased, so `For` highlights as a name just as the compiler reads
-# it as one.
+# it is uniformly cased, so `For` highlights as a name just as the compiler
+# reads it as one.
 name: A11 Flow
 file_extensions: [flow]
 scope: source.a11flow
@@ -414,8 +414,8 @@ contexts:
       scope: constant.numeric.a11flow
 
   strings:
-    # `"""..."""` first, so three quotes are not read as an empty string and a
-    # quote. A line break inside one is content, which is the whole point of it.
+    # Match `"""..."""` first so three quotes are not read as an empty string
+    # followed by a quote. Block strings may contain line breaks.
     - match: '"""'
       scope: punctuation.definition.string.begin.a11flow
       push:

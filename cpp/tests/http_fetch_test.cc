@@ -254,9 +254,7 @@ TEST(HttpFetchTest, EnforcesTheBufferedBodyLimit) {
 
 TEST(HttpFetchTest, ABodyLargerThanTheBufferStreamsInsteadOfFailing) {
   // A reader slower than the link is ordinary, and on a fast path it is the
-  // common case. The transport answers by pausing the socket -- closing the TCP
-  // window back to the peer -- rather than by failing the transfer, which is
-  // what it used to do once the response buffer filled.
+  // common case.
   constexpr size_t kBodySize = 8 * 1024 * 1024;
   const std::string body(kBodySize, 'x');
   auto server = Http2Server::Create(
@@ -271,7 +269,7 @@ TEST(HttpFetchTest, ABodyLargerThanTheBufferStreamsInsteadOfFailing) {
   ASSERT_TRUE(server.ok()) << server.status();
 
   FetchOptions options;
-  // Deliberately far smaller than the body, so the buffer bound is crossed many
+  // Far smaller than the body so the buffer bound is crossed many
   // times over the course of the transfer.
   options.transport.max_buffered_response_bytes = 256 * 1024;
   options.transport.max_response_body_size = 2 * kBodySize;

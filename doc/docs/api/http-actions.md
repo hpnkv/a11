@@ -8,14 +8,11 @@ Action can be run — Python, a Flow, or a model's tool call.
 | `make_http_request` | HTTP with nothing hidden: a port per protocol concern |
 | `web-fetch` | the `fetch()`-shaped adapter, for a caller that wants a document |
 
-## Why an Action rather than a function
+## Why HTTP uses an Action
 
-An ordinary HTTP client hands back one `Response` object because its language
-gives it nothing better to hand back: headers, body and trailers are one value
-that is only complete at the end. An A11 port is a stream, and there is no
-reason for these to share one — so they do not.
-
-That is not a stylistic preference; it is what lets a caller
+An ordinary HTTP client returns one `Response` object after receiving headers,
+body, and trailers. A11 exposes these fields on separate streaming ports. This
+lets a caller
 
 * branch on the status **while the body is still arriving**, and never read one
   it did not want;
@@ -35,9 +32,8 @@ That is not a stylistic preference; it is what lets a caller
 | `request_body` | bytes | stream | the request body, in order |
 | `options` | JSON | one | see [Options](#options) |
 
-`request_body` rather than `body` because a port name identifies one node
-whichever direction it faces, and the response body is a port too. Feeding it is
-optional; closing it empty means a bodyless request.
+`request_body` distinguishes the input from the response `body` output. Feeding
+it is optional; closing it empty sends a bodyless request.
 
 ### Outputs
 
@@ -104,11 +100,11 @@ All optional.
 | `user_agent` | `a11-http/1` | sent when no `user-agent` header is given |
 | `headers` | — | an object merged **over** the action's own headers |
 | `tls` | — | `{verify_peer, ca_file, certificate_file, key_file}` |
-| `omit` | — | output port names to close immediately rather than write |
+| `omit` | — | output port names to close without writing |
 
-`"stream"` is the reason `request_body` is a stream port: an upload whose length
-nobody knows yet has no `content-length` to declare. It cannot be replayed to a
-redirect, so a URL that may redirect wants `"buffer"`.
+`"stream"` supports uploads whose length is not known in advance and therefore
+cannot include `content-length`. Streaming bodies cannot be replayed after a
+redirect; use `"buffer"` when redirects are possible.
 
 ## `web-fetch`
 
@@ -116,8 +112,8 @@ The same engine with the protocol turned down. Inputs are the same;
 outputs are `status_code`, `ok` (below 400), `headers`, `text`, `json`, `body`,
 and `items`.
 
-`json` closes with nothing when the body does not parse — "it is not JSON" is an
-answer, not a failure.
+`json` closes without a value when the body is not valid JSON. This does not fail
+the action.
 
 `items` decodes the body by content type, so a caller does not have to:
 
@@ -138,11 +134,9 @@ literal `x-a11-...` header reaches a peer that wants one.
 
 ## Connections
 
-A request to a peer another request is already talking to joins that connection
-rather than opening a socket — HTTP/2 multiplexes, so both travel at once. When
-the last request on a connection finishes, it is **closed**: nothing is kept open
-with no work on it, so there is no idle keep-alive to reason about and no
-"the server closed our pooled socket" failure mode.
+Concurrent requests to the same peer share one HTTP/2 connection. When its last
+request finishes, the connection **closes**; A11 does not retain idle pooled
+connections.
 
 HTTP/1.1 is not shared, because A11's HTTP/1.1 connection carries one request by
 design. `connection.http_version` says which you got.
@@ -174,8 +168,8 @@ async with await http.fetch("https://example.com/rows.ndjson") as response:
         ...
 ```
 
-Eight ports is right for the protocol and wrong for a caller who wants three of
-them, so `request` and `fetch` do the wiring and drain what nobody asked for.
+The `request` and `fetch` helpers wire the requested outputs and drain the
+remaining protocol ports.
 
 ::: a11.sdk.http.client
 

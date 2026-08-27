@@ -10,7 +10,7 @@
  * -- following a `Location` header while downloading -- needs reference
  * resolution none of them had. One parser serves them all.
  *
- * The scope is deliberately narrow: absolute `http`/`https`/`ws`/`wss` URLs
+ * The scope is limited to absolute `http`/`https`/`ws`/`wss` URLs
  * with an authority, plus the relative forms a redirect may answer with. This
  * is not a general RFC 3986 implementation -- there is no userinfo, no percent
  * normalisation, and no dot-segment removal beyond what ResolveReference needs.

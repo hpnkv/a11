@@ -13,14 +13,11 @@ namespace a11::flow {
 
 /// What the formatter is allowed to decide.
 ///
-/// Short on purpose. A formatter with options is a formatter every project
-/// configures differently, and the point of having one at all is that every flow
-/// in the world reads the same way.
+/// The fixed style keeps formatting consistent across projects.
 struct FormatOptions {
-  /// Spaces per level of block. Two, as every flow in this repository already is.
+  /// Spaces per block level. Repository Flow files use two.
   int indent = 2;
-  /// Whether consecutive `in`/`out` declarations line their columns up. On, and
-  /// here only so a test can look at one thing at a time.
+  /// Whether to align consecutive `in` and `out` declaration columns.
   bool align_ports = true;
 };
 
@@ -30,10 +27,13 @@ struct FormatResult {
   /// and equal to the input, unchanged, when the file does not parse.
   std::string formatted;
   bool changed = false;
+  // One edit that turns the input into `formatted`, trimmed to the part that
+  // actually differs, so an editor applying it does not move the cursor or lose
+  // a selection over a file that only changed at the bottom.
   /// One edit that turns the input into `formatted`, trimmed to the part that
-  /// actually differs, so an editor applying it does not move the cursor or lose
-  /// a selection over a file that only changed at the bottom. Empty when nothing
-  /// changed.
+  /// actually differs, so an editor applying it does not move the cursor or
+  /// lose a selection over a file that only changed at the bottom. Empty when
+  /// nothing changed.
   std::vector<Edit> edits;
   /// Why the file was left alone, where it was.
   std::vector<Diagnostic> diagnostics;
@@ -43,20 +43,26 @@ struct FormatResult {
 ///
 /// **What it decides:** indentation, the spaces between tokens, how far a
 /// continued line is indented, how many blank lines are allowed and where, the
-/// columns of a run of port declarations, trailing whitespace, and the newline at
+/// columns of a run of port declarations, trailing whitespace, and the newline
+/// at
 /// the end of the file.
 ///
-/// **What it leaves to the author:** where the lines break. Whether a pipeline is
-/// written across four lines or one, whether a list literal is split a value per
-/// line, and where the comments are, is a judgement about what the flow *means* --
+/// **What it leaves to the author:** where the lines break. Whether a pipeline
+/// is
+/// written across four lines or one, whether a list literal is split a value
+/// per
+/// line, and where the comments are, is a judgement about what the flow *means*
+/// --
 /// which values belong together, which stage is the interesting one -- and a
-/// formatter that overruled it would make every flow in the repository worse. So a
-/// break the author wrote is kept and indented properly, and a break they did not
+/// formatter that overruled it would make every flow in the repository worse.
+/// So a
+/// break the author wrote is kept and indented properly, and a break they did
+/// not
 /// write is not invented.
 ///
-/// **It refuses a file it cannot read.** With an error diagnostic, `formatted` is
-/// the input and `diagnostics` says why: half-formatting a file somebody is in the
-/// middle of typing is how a formatter loses somebody's work.
+/// **It refuses a file it cannot read.** With an error diagnostic, `formatted`
+/// is the input and `diagnostics` says why: half-formatting a file somebody is
+/// in the middle of typing is how a formatter loses somebody's work.
 ///
 /// Two invariants, both tested over every flow in the repository:
 ///

@@ -381,8 +381,9 @@ class Interaction(BaseModel):
     status: Status | None = Field(
         default=Status.ok(),
         description="The status of the interaction.",
-        exclude_if=lambda x: x is None
-        or (x.is_ok() and x.message in ("", "OK")),
+        exclude_if=lambda x: (
+            x is None or (x.is_ok() and x.message in ("", "OK"))
+        ),
     )
 
     system_instructions: list[a11.Chunk] = Field(
@@ -478,9 +479,9 @@ class InteractionAdapter(metaclass=abc.ABCMeta):
 # interaction is tagged (in `backend_specific_metadata`) with the backend that
 # produced it, and each backend contributes a normalizer that turns its own
 # native content into the provider-independent `NormalizedMessage` below. A
-# consumer that meets a foreign interaction calls `normalize_interaction`
-# (which dispatches to the producer's normalizer by tag) and then translates
-# the `NormalizedMessage` into its own native shape.
+# consumer that meets a foreign interaction calls `normalize_interaction` (which
+# dispatches to the producer's normalizer by tag) and then translates the
+# `NormalizedMessage` into its own native shape.
 
 
 BACKEND_METADATA_KEY = "backend"
@@ -680,6 +681,11 @@ def normalize_interaction(
 # and then shares all of this.
 
 
+#: Valid wire id for an output mapped to ``ActionSchema.WHOLE_JSON``. The
+#: schema sentinel ``$`` is not a valid A11 fragment name.
+WHOLE_JSON_FRAGMENT_ID = "_"
+
+
 @dataclasses.dataclass
 class ToolCall:
     """A tool call a model asked for, however its SDK spelled it."""
@@ -725,8 +731,10 @@ def encode_backend_value(value: Any) -> bytes:
 def decode_action_output_fragments(fragments: list[a11.NodeFragment]) -> Any:
     """Decode one action's output fragments into a value per output port.
 
-    A single port named ``$`` is the action's whole result, so it is unwrapped
-    rather than reported as a one-key mapping.
+    A single port mapped to the whole JSON result is unwrapped rather than
+    reported as a one-key mapping. Its fragment uses
+    [WHOLE_JSON_FRAGMENT_ID][a11.sdk.llm.WHOLE_JSON_FRAGMENT_ID] because the
+    schema sentinel ``$`` is not a valid fragment id.
     """
     grouped: dict[str, list[a11.NodeFragment]] = {}
     for fragment in fragments:
@@ -743,8 +751,8 @@ def decode_action_output_fragments(fragments: list[a11.NodeFragment]) -> Any:
             continue
         values[field_name] = decoded[0] if len(decoded) == 1 else decoded
 
-    if list(values.keys()) == ["$"]:
-        return values["$"]
+    if list(values.keys()) == [WHOLE_JSON_FRAGMENT_ID]:
+        return values[WHOLE_JSON_FRAGMENT_ID]
     return values
 
 

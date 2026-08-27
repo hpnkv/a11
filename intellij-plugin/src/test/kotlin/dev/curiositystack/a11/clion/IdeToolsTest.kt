@@ -8,11 +8,11 @@ import dev.curiositystack.a11.clion.tools.RUN_LOG_KEY
 
 /**
  * Verifies the IDE tools against a real (headless) platform fixture, exercising
- * the direct execution surface the JCEF bridge uses: `listDescriptors` (schemas)
- * and `runByName` (execution), plus the A11 registry that the kept Kotlin
- * session path builds from the same implementations.
+ * the direct execution surface the JCEF bridge uses: `listDescriptors`
+ * (schemas) and `runByName` (execution), plus the A11 registry that the kept
+ * Kotlin session path builds from the same implementations.
  *
- * These tests deliberately do NOT drive a full A11 action (`action.run()`):
+ * These tests do not drive a full A11 action (`action.run()`):
  * BasePlatformTestCase runs on the EDT, and a tool handler dispatched on A11's
  * background runtime that then hops back to the EDT (`invokeAndWait`) deadlocks
  * against the test-held EDT and hangs teardown's `checkEditorsReleased`. The
@@ -53,13 +53,15 @@ class IdeToolsTest : BasePlatformTestCase() {
             assertEquals(true, port["required"])
         }
 
-        // `get_active_file` reads the whole file when asked for nothing, so every
+        // `get_active_file` reads the whole
+        // file when asked for nothing, so every
         // field of its request — and the request itself — is optional.
         val slicePort = inputPorts("get_active_file").single()
         assertEquals(false, slicePort["required"])
         assertEquals(emptyList<String>(), schemaOf(slicePort)["required"])
         assertTrue("max_results" in propertiesOf(schemaOf(inputPorts("find_file").single())))
-        // The slice bounds a model must respect are in the schema, not just in prose.
+        // The slice bounds a model must respect are in the schema, not just in
+        // prose.
         val slice = propertiesOf(schemaOf(slicePort))
         assertEquals(0, (slice["line_offset"] as Map<*, *>)["minimum"])
         assertEquals(1, (slice["line_limit"] as Map<*, *>)["minimum"])
@@ -107,8 +109,8 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testOutputsThatCanBeEmptyAreNotRequired() {
-        // "required" would promise a value the tool cannot always produce: there
-        // may be no selection, no open file, and no match.
+        // "required" would promise a value the tool cannot always produce:
+        // there may be no selection, no open file, and no match.
         for (name in IdeTools(project).listDescriptors().map { it["name"] as String }) {
             for (port in outputPorts(name)) {
                 assertEquals("${name}.${port["name"]} should be optional", false, port["required"])
@@ -164,7 +166,9 @@ class IdeToolsTest : BasePlatformTestCase() {
     @Suppress("UNCHECKED_CAST")
     private fun outputPorts(name: String) = descriptor(name)["outputs"] as List<Map<String, Any?>>
 
-    /** The outputs a model is allowed to see: the run log is the user's alone. */
+    /**
+     * The outputs a model is allowed to see: the run log is the user's alone.
+     */
     private fun modelOutputs(name: String) = outputPorts(name).filter { it["user_facing"] != true }
 
     @Suppress("UNCHECKED_CAST")
@@ -174,8 +178,9 @@ class IdeToolsTest : BasePlatformTestCase() {
     private fun propertiesOf(schema: Map<String, Any?>) = schema["properties"] as Map<String, Any?>
 
     fun testToolDefinitionsDescribeTheRequestFieldsToTheModel() {
-        // The model-visible contract: `ToolAdapter` must use the port's declared
-        // JSON Schema, not a bare `{"type": "object"}` derived from its MIME type.
+        // The model-visible contract: `ToolAdapter` must use the port's
+        // declared JSON Schema, not a bare `{"type": "object"}` derived from
+        // its MIME type.
         val (registry, _) = IdeTools(project).buildRegistry()
         val definition = getToolDefinitions(registry, listOf("find_file")).valueOrThrow().single()
 
@@ -211,9 +216,10 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testActiveFileReturnsOnlyTheRequestedLines() {
-        // configureByText opens the file in the fixture's editor, which the fixture
-        // also releases on teardown; the handler hops to the EDT we already hold,
-        // so invokeAndWait runs inline and nothing is left pending.
+        // configureByText opens the file in the fixture's editor, which the
+        // fixture also releases on teardown; the handler hops to the EDT we
+        // already hold, so invokeAndWait runs inline and nothing is left
+        // pending.
         myFixture.configureByText("slice.cpp", (1..5).joinToString("\n") { "line $it" })
         val tools = IdeTools(project)
 
@@ -244,20 +250,20 @@ class IdeToolsTest : BasePlatformTestCase() {
             "get_active_file",
             mapOf("request" to mapOf("include_line_numbers" to true)),
         )
-        // 0-based, tab-separated: the same spelling `read_file` uses, so a numbered
-        // line means one thing whichever tool produced it.
+        // 0-based, tab-separated: the same spelling `read_file` uses, so a
+        // numbered line means one thing whichever tool produced it.
         assertEquals((1..5).map { "${it - 1}\tline $it" }, numbered["lines"])
 
-        // The file's own numbers, not the slice's. A caller that paged in from line
-        // 3 and got them renumbered from 0 would locate nothing with them.
+        // The file's own numbers, not the slice's. A caller that paged in from
+        // line 3 and got them renumbered from 0 would locate nothing with them.
         val page = tools.runByName(
             "get_active_file",
             mapOf("request" to mapOf("line_offset" to 3, "include_line_numbers" to true)),
         )
         assertEquals(listOf("3\tline 4", "4\tline 5"), page["lines"])
 
-        // Off unless asked for: the numbers are not part of the file, and text that
-        // will be quoted back into a patch has to come without them.
+        // Off unless asked for: the numbers are not part of the file, and text
+        // that will be quoted back into a patch has to come without them.
         val plain = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
         assertEquals(listOf("line 4", "line 5"), plain["lines"])
     }
@@ -282,8 +288,9 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testFileSymbolsComeFromThePsiTree() {
-        // XML is parsed by the platform itself, so this exercises real PSI without
-        // depending on a language plugin: tags and attributes are PsiNamedElements.
+        // XML is parsed by the platform itself, so this exercises real PSI
+        // without depending on a language plugin: tags and attributes are
+        // PsiNamedElements.
         myFixture.configureByText("beans.xml", "<root>\n  <bean id=\"first\"/>\n</root>")
 
         val found = IdeTools(project).runByName("get_file_symbols", emptyMap())
@@ -297,7 +304,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(2, bean["line"])
         assertEquals(4, bean["column"])
         assertTrue((bean["kind"] as String).isNotEmpty())
-        // Source order, so the outer tag is reported before the one it contains.
+        // Source order, so the outer tag is reported before the one it
+        // contains.
         assertTrue(symbols.indexOfFirst { it["name"] == "root" } < symbols.indexOfFirst { it["name"] == "bean" })
     }
 
@@ -328,7 +336,8 @@ class IdeToolsTest : BasePlatformTestCase() {
             namesWith(mapOf("request" to mapOf("line_offset" to 2, "line_limit" to 1))),
         )
 
-        // Kinds match the parser's own names by substring, so "attribute" is enough.
+        // Kinds match the parser's own names by substring, so "attribute" is
+        // enough.
         val attributes = namesWith(mapOf("request" to mapOf("kinds" to listOf("attribute"))))
         assertEquals("$attributes", listOf("id"), attributes)
         assertTrue(namesWith(mapOf("request" to mapOf("kinds" to listOf("nothing_like_this")))).isEmpty())
@@ -351,13 +360,15 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(true, port["unary"])
         val fields = propertiesOf(schemaOf(port))
         assertEquals(setOf("path", "name_pattern", "line_offset", "line_limit", "kinds"), fields.keys)
-        // Nothing is required inside: each field narrows one dimension on its own.
+        // Nothing is required inside: each field narrows one dimension on its
+        // own.
         assertEquals(emptyList<String>(), schemaOf(port)["required"])
         assertEquals("array", (fields["kinds"] as Map<*, *>)["type"])
     }
 
     fun testFileSymbolsCanBeAskedAboutAFileThatIsNotOpen() {
-        // Added, not opened: `path` is what makes a file with no editor readable.
+        // Added, not opened: `path` is what makes a file with no editor
+        // readable.
         val other = myFixture.addFileToProject("other.xml", "<other>\n  <thing/>\n</other>")
         myFixture.configureByText("beans.xml", "<root>\n  <bean/>\n</root>")
         val tools = IdeTools(project)
@@ -370,7 +381,7 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         // No path: the active editor, as before.
         assertTrue(namesIn(emptyMap()).contains("root"))
-        // A path: that file, wherever it is and whether or not anyone opened it.
+        // A path selects the file whether it is open or closed.
         val named = namesIn(mapOf("request" to mapOf("path" to other.virtualFile.path)))
         assertTrue("$named", named.containsAll(listOf("other", "thing")))
         assertFalse("$named", named.contains("root"))
@@ -393,7 +404,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         fun readWith(request: Map<String, Any?>): Map<String, Any?> =
             tools.runByName("read_file", mapOf("request" to (mapOf("path" to path) + request)))
 
-        // 0-based, end_line inclusive — the coordinates get_error_highlights uses.
+        // 0-based, end_line inclusive — the coordinates get_error_highlights
+        // uses.
         assertEquals(listOf("line 1", "line 2"), readWith(mapOf("start_line" to 1, "end_line" to 2))["lines"])
         // Omitting either end means "to the edge of the file".
         assertEquals((0..5).map { "line $it" }, readWith(emptyMap())["lines"])
@@ -420,7 +432,8 @@ class IdeToolsTest : BasePlatformTestCase() {
     fun testReadFileSeesWhatTheEditorHoldsRatherThanTheDisk() {
         myFixture.configureByText("live.txt", "first\nsecond")
         val path = myFixture.file.virtualFile.path
-        // An edit nobody has saved: the tool reads the document, so it is there.
+        // An edit nobody has saved: the tool reads the document, so it is
+        // there.
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             myFixture.editor.document.setText("first\nedited")
         }
@@ -546,7 +559,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         )
         assertEquals("added first\nkeep\nkeep too\n", myFixture.editor.document.text)
 
-        // `---`/`+++` headers are allowed and ignored: the path is a separate input.
+        // `---`/`+++` headers are allowed and
+        // ignored: the path is a separate input.
         tools.runByName(
             "apply_patch",
             mapOf(
@@ -583,9 +597,9 @@ class IdeToolsTest : BasePlatformTestCase() {
             myFixture.editor.document.text,
         )
 
-        // Also from a model: the markers indented, and a header whose numbers are
-        // punctuated wrongly. Both are read for what they are, because the file is
-        // what settles which line is which.
+        // Also from a model: the markers indented, and a header whose numbers
+        // are punctuated wrongly. Both are read for what they are, because the
+        // file is what settles which line is which.
         tools.runByName(
             "apply_patch",
             mapOf("path" to path, "patch" to "@@ -4,1,4,1 @@\n -  int y;\n +  int y = 0;"),
@@ -595,8 +609,8 @@ class IdeToolsTest : BasePlatformTestCase() {
             myFixture.editor.document.text,
         )
 
-        // But indentation that is simply wrong is refused: a patch claiming a tab
-        // where the file has spaces is not this file's text.
+        // But indentation that is simply wrong is refused: a patch claiming a
+        // tab where the file has spaces is not this file's text.
         assertRejected {
             tools.runByName(
                 "apply_patch",
@@ -611,7 +625,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(true, port["required"])
         val fields = propertiesOf(schemaOf(port))
         assertEquals(setOf("path", "start_line", "end_line"), fields.keys)
-        // The file is the only thing a caller must give; the range defaults to all of it.
+        // The file is the only thing a caller must give; the range defaults to
+        // all of it.
         assertEquals(listOf("path"), schemaOf(port)["required"])
         assertEquals(0, (fields["start_line"] as Map<*, *>)["minimum"])
         assertEquals(0, (fields["end_line"] as Map<*, *>)["minimum"])
@@ -628,7 +643,8 @@ class IdeToolsTest : BasePlatformTestCase() {
             ),
             propertiesOf(schemaOf(highlights)).keys,
         )
-        // Everything but the tooltip is always there: a highlight need not have one.
+        // Everything but the tooltip is always there: a highlight need not have
+        // one.
         assertEquals(
             listOf("severity", "start_line", "end_line", "start_column", "end_column", "text", "message"),
             schemaOf(highlights)["required"],
@@ -636,10 +652,9 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testErrorHighlightsReportsWhatTheEditorUnderlines() {
-        // An unclosed XML tag: the platform's own annotator flags it, so this needs
-        // no language plugin. `doHighlighting` runs the daemon for the fixture's
-        // file, which is what leaves the markup this tool reads for an open file —
-        // the only path available on the EDT the fixture holds.
+        // An unclosed XML tag: the platform's own annotator flags it, so this
+        // needs no language plugin. `doHighlighting` runs the daemon for the
+        // fixture's file and creates the markup read by the tool on the EDT.
         val file = myFixture.configureByText("broken.xml", "<root>\n  <bean>\n</root>\n")
         myFixture.doHighlighting()
         val path = file.virtualFile.path
@@ -652,7 +667,8 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         val first = highlights.first()
         assertEquals("ERROR", first["severity"])
-        // Positions are 0-based, so they can be fed straight back as a range bound.
+        // Positions are 0-based, so they can be fed straight back as a range
+        // bound.
         assertTrue("$first", (first["start_line"] as Int) >= 0)
         assertTrue("$first", (first["end_column"] as Int) >= (first["start_column"] as Int))
         assertTrue("$first", (first["message"] as String).isNotEmpty())
@@ -684,13 +700,14 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         val everything = highlightsIn(emptyMap())
         assertFalse(everything.isEmpty())
-        // An omitted start_line is the top of the file, an omitted end_line its end.
+        // An omitted start_line is the top of the file, an omitted end_line its
+        // end.
         assertEquals(everything.size, highlightsIn(mapOf("start_line" to 0)).size)
         // A range above every highlight reports nothing.
         assertEquals(emptyList<Any?>(), highlightsIn(mapOf("start_line" to 99)))
 
-        // A single-line range reports the highlights overlapping that line, and only
-        // those — which is every highlight whose own span covers it.
+        // A single-line range reports the highlights overlapping that line, and
+        // only those — which is every highlight whose own span covers it.
         val line = everything.first()["start_line"] as Int
         val onThatLine = highlightsIn(mapOf("start_line" to line, "end_line" to line))
         assertEquals(
@@ -755,12 +772,12 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testRunByNameDrivesTheIdeImplementations() {
-        // The JCEF bridge path: run a tool directly by name with its inputs keyed
-        // by port name.
-        // Add the file WITHOUT opening an editor (index-only tool), so nothing
-        // needs the EDT and teardown's editor-release check has nothing to wait
-        // on. (Editor-backed tools like get_active_file are exercised manually
-        // through the Action explorer.)
+        // The JCEF bridge path: run a tool directly by name with its inputs
+        // keyed by port name. Add the file WITHOUT opening an editor
+        // (index-only tool), so nothing needs the EDT and teardown's
+        // editor-release check has nothing to wait on. (Editor-backed tools
+        // like get_active_file are exercised manually through the Action
+        // explorer.)
         myFixture.addFileToProject("widget.cpp", "// hello")
 
         val found = IdeTools(project).runByName("find_file", mapOf("request" to mapOf("name" to "widget.cpp")))

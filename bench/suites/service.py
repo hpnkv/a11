@@ -118,7 +118,8 @@ class _Fleet:
 
 async def _echo_call(session, stream) -> str:
     call = (
-        a11.Action(_ECHO)
+        a11
+        .Action(_ECHO)
         .bind_node_map(session.node_map)
         .bind_session(session)
         .bind_stream(stream)
@@ -222,9 +223,8 @@ async def aggregate_throughput(scale: float) -> list[Result]:
     `std::condition_variable::wait` inside the extension -- the same stack, at
     the same offsets, as the Redis deadlock in `stores/put_throughput`. So it
     is one native blocking call reachable from two unrelated suites, and while
-    it is unfixed this benchmark eats a run: the harness timeout cannot fire
-    because the blocked thread is the one the event loop runs on. Run it
-    deliberately with `--slow` when working on that bug.
+    the harness timeout cannot fire because the blocked thread runs the event
+    loop. Run this benchmark only with `--slow` while investigating the issue.
 
     The gateway-sizing number. Each connection runs its own sequence of echo
     calls; the total is what the service delivers. Compare against

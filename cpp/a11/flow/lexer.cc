@@ -31,10 +31,7 @@ bool IsAsciiLetter(char letter) {
   return (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
 }
 
-// A name may start with a letter, `_` or `$`. Bytes at or above 0x80 count too:
-// Python's `str.isalpha` accepts any Unicode letter, so a port named in another
-// script lexes the same way there, and treating UTF-8 continuation bytes as name
-// characters is the same rule for text that is already valid UTF-8.
+// A name may start with a letter, `_` or `$`.
 bool IsNameStart(char letter) {
   return IsAsciiLetter(letter) || letter == '_' || letter == '$' ||
          static_cast<unsigned char>(letter) >= 0x80;
@@ -44,19 +41,13 @@ bool IsNamePart(char letter) {
   return IsNameStart(letter) || IsDigit(letter);
 }
 
-/// `…` -- U+2026, which the language does **not** spell a spread with.
+/// U+2026 is diagnosed with a repair to the supported `...` spelling.
 ///
-/// It is looked for only to say so. Two ways of writing one operator is two
-/// ways for a file to differ from another that means the same thing, and the
-/// one that survives a copy through a chat window, a terminal without the font,
-/// and a keyboard layout without the key is the one made of three dots. So a
-/// `…` is a diagnostic with the repair attached rather than a second spelling.
-///
-/// It has to be looked for before [IsNameStart], which takes every byte at or
-/// above 0x80 for a letter so that a port may be named in any script.
+/// This check precedes [IsNameStart], which accepts bytes at or above 0x80 in
+/// names.
 constexpr std::string_view kEllipsis = "…";
 
-/// The lexer's state, kept in one place so the rules read in order.
+/// State shared by the lexer rules.
 class Lexer {
  public:
   Lexer(std::string_view source, const LexOptions& options)
@@ -106,9 +97,9 @@ class Lexer {
         Report("flow.syntax.unexpected-character",
                "A spread is written '...'; '…' is not one.", start,
                start + kEllipsis.size());
-        // Read as the spread it plainly meant, with the repair travelling on the
-        // diagnostic: the rest of the statement is worth checking, and an editor
-        // can offer the fix.
+        // Read as the spread it plainly meant, with the repair travelling on
+        // the diagnostic: the rest of the statement is worth checking, and an
+        // editor can offer the fix.
         Take(TokenKind::kSpread, start, kEllipsis.size());
         result_.diagnostics.back().fixes.push_back(
             Fix{.label = "Write '...'",
@@ -137,13 +128,14 @@ class Lexer {
   /// The 1-based column of a byte offset, counted in characters.
   ///
   /// Not in bytes: `a11.flow.lexer` reports columns over a Python string, which
-  /// is code points, and a flow that holds a `§` in a prompt would otherwise have
+  /// is code points, and a flow that holds a `§` in a prompt would otherwise
+  /// have
   /// every column after it disagree between the two. Continuation bytes
   /// (`10xxxxxx`) are the middles of characters and do not count.
   ///
-  /// Tokens are emitted in order, so the scan resumes from the last answer rather
-  /// than starting at the line: the common case costs the characters since the
-  /// previous token.
+  /// Tokens are emitted in order, so the scan resumes from the last answer
+  /// rather than starting at the line: the common case costs the characters
+  /// since the previous token.
   int Column(size_t at) const {
     if (at < counted_at_ || counted_at_ < line_start_) {
       counted_at_ = line_start_;
@@ -184,17 +176,15 @@ class Lexer {
     result_.diagnostics.push_back(std::move(diagnostic));
   }
 
-  /// The value of a `"""..."""` string: the text between the delimiters, with
-  /// the indentation the source put in front of it taken back off.
+  /// The value of a `"""..."""` string with source indentation removed.
   ///
-  /// The rule, in the order it applies: a first line that is blank goes away, a
-  /// last line that is only whitespace goes away with the break above it, and the
-  /// indentation every remaining line shares is removed from all of them. That is
-  /// what lets a long description sit at the indentation of the flow it describes
-  /// and still read as prose -- which is the whole reason to have the form.
+  /// The rule, in the order it applies: a first line that is blank goes away,
+  /// a last line that is only whitespace goes away with the break above it,
+  /// and the indentation every remaining line shares is removed from all of
+  /// them. This lets descriptions align with the surrounding flow while their
+  /// values retain prose indentation.
   ///
-  /// Escapes are resolved afterwards, so a `\n` written by hand is a line break in
-  /// the value and never an indented line to be dedented.
+  /// Escapes are resolved afterwards, so a written `\n` is not dedented.
   static std::string Dedent(std::string_view inner) {
     std::vector<std::string_view> lines;
     size_t at = 0;
@@ -269,7 +259,8 @@ class Lexer {
   /// `"""..."""`: a string that may hold line breaks.
   ///
   /// Three quotes rather than allowing a break inside a single-quoted string,
-  /// because a missing quote then costs one line rather than the rest of the file
+  /// because a missing quote then costs one line rather than the rest of the
+  /// file
   /// -- the same reason Python draws the line in the same place.
   void ReadMultilineString() {
     const size_t start = index_;
@@ -297,15 +288,15 @@ class Lexer {
       ++index_;
     }
     if (!terminated) {
-      // Recovery: it ends where the file does. There is nothing further along to
-      // mistake for the rest of it.
+      // Recovery: it ends where the file does. There is nothing further along
+      // to mistake for the rest of it.
       inner_end = index_;
       Report("flow.syntax.unterminated-string", R"(Unterminated """ string.)",
              start, index_);
     }
-    // The token is reported at the line it *started* on, as every other token is,
-    // so the position is wound back for the push and then forward again: what
-    // follows the closing quotes is on the line the scan ended up at.
+    // The token is reported at the line it *started* on, as every other token
+    // is, so the position is wound back for the push and then forward again:
+    // what follows the closing quotes is on the line the scan ended up at.
     const int ending_line = line_;
     const size_t ending_line_start = line_start_;
     line_ = start_line;
@@ -420,7 +411,8 @@ class Lexer {
           absl::StrCat("Unknown duration unit '", unit, "' (use ",
                        absl::StrJoin(vocabulary::DurationUnits(), ", "), ")."),
           unit_start, index_, Family::kForm);
-      // Recovery: one bad token over the whole thing. Splitting it into a number
+      // Recovery: one bad token over the whole thing. Splitting it into a
+      // number
       // and a name would read as two things the author did not write.
       Push(TokenKind::kBad, start, index_);
       return;
@@ -439,7 +431,8 @@ class Lexer {
         ++index_;
         continue;
       }
-      // A dash continues a name only when a word follows it, which is what keeps
+      // A dash continues a name only when a word follows it, which is what
+      // keeps
       // `starts-with` one name and `a -> b` a pipe.
       if (source_[index_] == '-' && index_ + 1 < source_.size() &&
           IsNamePart(source_[index_ + 1])) {

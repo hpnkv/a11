@@ -61,7 +61,7 @@ absl::StatusOr<AudioModelSpec> LookupVadModel(std::string_view shorthand);
 /**
  * @brief The directory shorthand models are cached in.
  *
- * `$HOME/.cache/a11/audio`. Deliberately not `XDG_CACHE_HOME`-derived: this is
+ * `$HOME/.cache/a11/audio`. This does not use `XDG_CACHE_HOME` because it is
  * the path `a11.cli.voice` has always used, and a second spelling would
  * re-download every model a user already has.
  */

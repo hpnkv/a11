@@ -282,9 +282,7 @@ TEST(FlowHighlight, SemanticKindNamesRoundTrip) {
 
 TEST(FlowHighlight, ADeclarationEndsAtItsLine) {
   // `as` names a type in a cast and *renames* in a header, and the state it put
-  // the classifier in used to outlive the line -- so the first word of the next
-  // line was coloured as a type. Two header lines in a row is the shape that
-  // showed it.
+  // the classifier in
   EXPECT_EQ(Coloured("flow f {\n"
                      "  header \"x-a\" as a\n"
                      "  header \"x-b\" as b default 3\n"
@@ -359,8 +357,8 @@ TEST(FlowHighlight, OnlyAPlainIdentifierBecomesAPort) {
 }
 
 TEST(FlowHighlight, AShapesFieldsAreNotTheFlowsPorts) {
-  // A `struct` written after a flow is not inside it, so a field that happens to
-  // share a port's name is a field.
+  // A `struct` written after a flow is not inside it, so a field that happens
+  // to share a port's name is a field.
   const std::vector<std::string> resolved = Coloured(
       "flow f {\n  in url: string required\n  out b: string\n"
       "  url -> b\n}\n"

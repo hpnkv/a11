@@ -54,10 +54,8 @@ _FIELD_TYPES: dict[object, str] = {
 def _flow_type(annotation: object) -> tuple[str, str]:
     """The Flow type an annotation is, and its element type where it has one.
 
-    Deliberately shallow. This is what a *tool* shows: a completion list, a
-    hover, a field that is or is not a list. A faithful rendering of every
-    generic Python type would be a second type system, and nothing here would
-    read it.
+    This shallow representation supports completions, hovers, and list fields.
+    The catalogue does not reproduce Python's full generic type system.
     """
     origin = typing.get_origin(annotation)
     if origin in (typing.Union, types.UnionType):
@@ -87,7 +85,10 @@ def _flow_type(annotation: object) -> tuple[str, str]:
 
 
 def _port(name: str, schema: object) -> dict[str, object]:
-    port: dict[str, object] = {"name": name, "type": getattr(schema, "type", "")}
+    port: dict[str, object] = {
+        "name": name,
+        "type": getattr(schema, "type", ""),
+    }
     description = getattr(schema, "description", "")
     if description:
         port["description"] = description
@@ -154,7 +155,9 @@ def _fields_of(model: type) -> list[dict[str, object]]:
             continue
         entry = {"name": name, "type": "json"}
         if member.__doc__:
-            entry["description"] = inspect.cleandoc(member.__doc__).split("\n")[0]
+            entry["description"] = inspect.cleandoc(member.__doc__).split("\n")[
+                0
+            ]
         described.append(entry)
     return described
 
@@ -177,8 +180,8 @@ _REGISTERING_MODULES = (
 #: ``interact_with_llm`` is the foundational one: it is how a flow reaches a
 #: model at all, and it is a dispatcher rather than a module with a registry
 #: function -- which provider answers it is decided per call by the headers. A
-#: tool that could complete `make_http_request`'s ports and not this one would be
-#: missing the action people write most.
+#: tool that could complete `make_http_request`'s ports and not this one would
+#: be missing the action people write most.
 _NAMED_SCHEMAS = (
     ("a11.sdk.interact_with_llm", "INTERACT_WITH_LLM_SCHEMA"),
     ("a11.sdk.interact_with_llm_schema", "INTERACT_WITH_LLM_SCHEMA"),
@@ -211,9 +214,13 @@ def _registered_actions() -> list[dict[str, object]]:
     named = {one["name"] for one in described}
     for module_name, constant in _NAMED_SCHEMAS:
         try:
-            schema = getattr(__import__(module_name, fromlist=[constant]), constant)
+            schema = getattr(
+                __import__(module_name, fromlist=[constant]), constant
+            )
         except Exception as error:  # pragma: no cover - optional dependency
-            print(f"  skipped {module_name}.{constant}: {error}", file=sys.stderr)
+            print(
+                f"  skipped {module_name}.{constant}: {error}", file=sys.stderr
+            )
             continue
         if schema.name in named:
             continue
@@ -240,14 +247,13 @@ def _registered_types() -> list[dict[str, object]]:
     from a11.data import serial_tags
 
     registry = get_global_serialization_registry()
-    tags = sorted(
-        {
-            value
-            for name, value in vars(serial_tags).items()
-            if not name.startswith("_") and isinstance(value, str)
-            and value.startswith("a11.")
-        }
-    )
+    tags = sorted({
+        value
+        for name, value in vars(serial_tags).items()
+        if not name.startswith("_")
+        and isinstance(value, str)
+        and value.startswith("a11.")
+    })
     described: list[dict[str, object]] = []
     for tag in tags:
         model = registry.resolve_type(tag)
@@ -283,8 +289,8 @@ def header_for(text: str) -> str:
         "//\n"
         "// The snapshot of the world the standalone tools know with nothing\n"
         "// configured: every action the SDK registers and every type its\n"
-        "// serialization registry knows. A frontend with a live registry passes\n"
-        "// its own, which is merged over this.\n"
+        "// serialization registry knows. A frontend with a live registry\n"
+        "// passes its own catalogue, which is merged over this.\n"
         "\n"
         "#ifndef A11_FLOW_CATALOGUE_DATA_H_\n"
         "#define A11_FLOW_CATALOGUE_DATA_H_\n"
@@ -293,9 +299,9 @@ def header_for(text: str) -> str:
         "\n"
         "namespace a11::flow::catalogue {\n"
         "\n"
-        "inline constexpr std::string_view kCatalogueSnapshot = R\"catalogue(\n"
+        'inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(\n'
         f"{text}"
-        ")catalogue\";\n"
+        ')catalogue";\n'
         "\n"
         "}  // namespace a11::flow::catalogue\n"
         "\n"
@@ -333,7 +339,8 @@ def main() -> int:
     for path, text in wanted.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        print(f"{path.relative_to(ROOT)}: {'generated' if path in stale else 'unchanged'}")
+        state = "generated" if path in stale else "unchanged"
+        print(f"{path.relative_to(ROOT)}: {state}")
     return 0
 
 

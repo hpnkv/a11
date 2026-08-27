@@ -57,7 +57,7 @@ size_t TextIndex::LineEnd(size_t line) const {
 size_t TextIndex::Utf16Of(size_t byte_offset) const {
   const size_t wanted = std::min(byte_offset, text_.size());
   // The line whose start is at or before the offset, then a walk along it: the
-  // whole point of holding the per-line totals.
+  // reason for retaining per-line totals.
   const auto found =
       std::upper_bound(line_starts_.begin(), line_starts_.end(), wanted);
   const size_t line = static_cast<size_t>(found - line_starts_.begin()) - 1;

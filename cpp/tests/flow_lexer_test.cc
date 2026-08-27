@@ -244,9 +244,7 @@ TEST(FlowVocabulary, CanonicalFollowsTheCompilersCasingRule) {
 TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
   // The reference an editor shows is part of the language, so a stage or a
   // function added to the tables without one is a hole here rather than a hover
-  // that says nothing. What the words *mean* is checked by reading them; what
-  // this checks is that each has been written at all, and written to the shape
-  // every consumer renders.
+  // that says nothing.
   const auto documented = [](const vocabulary::WordDoc* doc,
                              std::string_view name, bool takes_argument) {
     ASSERT_NE(doc, nullptr) << name << " has no reference text";
@@ -296,19 +294,12 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
 
 TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
   // The same contract as the stages and the functions, over every other word
-  // set: a statement, a declaration, a modifier, a type, a status code, a
-  // constant, a duration unit and a mark of punctuation each have reference
-  // text. This is what stops a form reaching a reader as its token's kind --
-  // "`|` — flow operator" was the whole of what a hover said about a pipe --
-  // and it is why adding a word to the grammar without writing what it does
-  // fails here rather than in an editor.
+  // set:
   for (const vocabulary::WordRole role : vocabulary::WordRoles()) {
     const std::string_view role_name = vocabulary::WordRoleName(role);
     for (const std::string_view word : vocabulary::WordsOf(role)) {
       // The role's own table, or whichever documents the word: a set may list a
-      // word a neighbouring set documents, which is deliberate. `stream` is in
-      // the declarations because a port declaration is where it is offered, and
-      // is documented as the port modifier it is.
+      // word a neighbouring set documents, which is deliberate.
       const vocabulary::WordDoc* doc = vocabulary::Documentation(role, word);
       if (doc == nullptr) {
         doc = vocabulary::AnyDocumentation(word);
@@ -381,8 +372,6 @@ TEST(FlowVocabulary, EveryStageSaysWhatItTakes) {
   EXPECT_EQ(vocabulary::StageTakes("then"), vocabulary::StageArgument::kStream);
   EXPECT_EQ(vocabulary::StageTakes("collect"),
             vocabulary::StageArgument::kNone);
-  // A word that reads like a stage and is not one: the language says so rather
-  // than guessing. (`flatten` used to stand here, and is now a stage.)
   EXPECT_FALSE(vocabulary::StageTakes("shuffle").has_value());
 }
 
@@ -422,11 +411,7 @@ TEST(FlowLexer, ReadsRangesAndSpreadsWithoutBreakingNumbers) {
   // Longest wins: `...` is a spread, `..` a range, `.` a dot.
   EXPECT_EQ(absl::StrJoin(Dump("...x"), " "), "...:... word:x");
   EXPECT_EQ(absl::StrJoin(Dump("a.b"), " "), "word:a .:. word:b");
-  // `...` is *not* a second spelling. Two ways of writing one operator is two
-  // ways for a file to differ from one that means the same thing, and the one
-  // that survives a chat window and a keyboard without the key is three dots.
-  // It is still read as the spread it plainly meant, with the repair attached,
-  // so the rest of the statement is still checked.
+  // `...` is *not* a second spelling.
   EXPECT_EQ(absl::StrJoin(Dump("…it"), " "), "...:… word:it");
   EXPECT_EQ(absl::StrJoin(Codes("…it"), " "),
             "flow.syntax.unexpected-character");

@@ -265,8 +265,8 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
 }
 
 TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {
-  // Encoding gives text, because text is what a JSON field or a header can
-  // carry; decoding gives bytes, because that is what was encoded.
+  // Encoding produces text for JSON fields and headers; decoding recovers the
+  // original bytes.
   EXPECT_EQ(TextOf(R"(b64encode("hi there"))"), "aGkgdGhlcmU=");
   EXPECT_EQ(EvaluatedIn(R"(b64encode("hi"))")->kind(), Value::Kind::kString);
   EXPECT_EQ(TextOf(R"(text(b64decode("aGkgdGhlcmU=")))"), "hi there");

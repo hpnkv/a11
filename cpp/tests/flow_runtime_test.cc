@@ -1,10 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
-// What the native runtime is *for*: running flows. Each case is a whole flow
-// compiled, registered against real actions and run to completion, because the
-// things that go wrong in a dataflow runtime -- a reader that was never
-// counted, a node nobody closed, a pass of a loop that saw the wrong value --
-// do not show up in a unit test of a part.
+// What the native runtime is *for*: running flows.
 
 #include <algorithm>
 #include <map>
@@ -399,9 +395,7 @@ flow ignore {
 
 TEST(FlowRuntimeTest, ADiscardPerformsThePipelineAndKeepsNothing) {
   // The difference between `-> _` and `skip`: a counted `skip` is elided, and a
-  // discard is *run*. What pins it is a stage with an observable effect --
-  // every value is logged, so the log says whether the pipeline was walked or
-  // thrown away whole.
+  // discard is *run*.
   LogCapture logs;
   const Outcome outcome = RunFlow(R"(
 flow ignore {
@@ -420,8 +414,7 @@ flow ignore {
 TEST(FlowRuntimeTest, ADiscardIsAReaderLikeAnyOtherDestination) {
   // A discard takes a reader slot, so the stream it reads still fans out to
   // everything else reading it and every value still reaches the real
-  // destination. If it claimed no slot the other reader would be starved or
-  // the plan would be told the stream has more readers than it accounted for.
+  // destination.
   const Outcome outcome = RunFlow(R"(
 flow both {
   in  words: string stream
@@ -437,12 +430,8 @@ flow both {
 
 TEST(FlowRuntimeTest, ADiscardBesideAStreamingReaderDoesNotStallAtVolume) {
   // The shape the console's own template has, and the one worth proving: one
-  // stream read twice, once by a *reducing* pipeline that keeps nothing and once
-  // straight through to a port. A bus slot holds `kQueueDepth` (8) items and
-  // then stops the producer for every reader, so a discard that consumed more
-  // slowly than the port would stall both in lockstep -- at which point the
-  // output stops mid-stream and the flow appears to hang. Many more values than
-  // the queue is deep, so a stall cannot hide in the first batch.
+  // stream read twice, once by a *reducing* pipeline that keeps nothing and
+  // once straight through to a port.
   const int many = 500;
   std::vector<std::string> sent;
   sent.reserve(many);
@@ -512,20 +501,7 @@ flow prefixed {
 }
 
 TEST(FlowRuntimeTest, ALoopReadsAnOuterStreamBeforeItCloses) {
-  // The buffer a materialised ref goes through used to read its source to the
-  // *end* before handing out a single value, so a loop whose body read anything
-  // from outside it could not start until that stream was finished.
-  //
-  // Here it cannot be finished until the loop has run: `held` gets its second
-  // value from `seen`, and `seen` is written only by the loop's *second* pass.
-  // The pass matters -- a pass cannot block itself, since every step of a body
-  // runs concurrently, so the dependency has to cross passes to be real. With
-  // the old buffer, pass one waits for `held` to end, `held` waits for pass
-  // two, and pass two waits for pass one.
-  //
-  // The bare `wait held timeout 2s` is what makes that a failing test rather
-  // than a hanging one: the timeout fails a step, which stops the monitor and
-  // ends the run with `deadline_exceeded`.
+  // The buffer a materialised ref goes through
   const Outcome outcome = RunFlow(R"(
 flow woven {
   in  items: string stream
@@ -554,12 +530,7 @@ flow woven {
 }
 
 TEST(FlowRuntimeTest, TwoValueReadsOfOneStreamAreTwoValues) {
-  // Reading a stream where a value is expected used to take its *first* value
-  // and silently throw the rest away, however many places read it. The value
-  // reads of one ref now share a single view of it and take turns: two reads
-  // are two values. Which turn each gets is not defined, so this asserts the
-  // set rather than the order -- `after` is what a flow that cares about the
-  // order writes.
+  // Reading a stream where a value is expected
   const Outcome outcome = RunFlow(R"(
 flow twice {
   in  words: string stream
@@ -636,9 +607,7 @@ flow promised {
 
 TEST(FlowRuntimeTest, AdvanceBindsTheNextValueOfTheSameStream) {
   // The guarantee `advance` exists for: the first use of the name sees the
-  // first value, the second use the second, and so on. It holds however the
-  // flow is scheduled -- each binding is the *k*th value of its stream by
-  // construction, not because one step ran before another.
+  // first value, the second use the second, and so on.
   const Outcome outcome =
       RunFlow(R"(
 flow paced {
@@ -812,10 +781,7 @@ flow split {
 
 TEST(FlowRuntimeTest, APatternThatCannotBeReadIsRefusedBeforeItRuns) {
   // A pattern is a literal almost every time, so a typo in one is the flow's
-  // own mistake. The resolver reads it where it is written, which is why this
-  // never reaches the runtime at all: the flow is refused with the pattern
-  // language's own complaint, and the runtime keeps its own guard for a pattern
-  // that was computed rather than written.
+  // own mistake.
   const Outcome outcome = RunFlow(R"(
 flow broken {
   in  lines: string stream required
@@ -834,8 +800,6 @@ TEST(FlowRuntimeTest, ALetTakesAValueApartByFieldOrByPosition) {
   // `let name, age = user` and `let first, second = pair` are the same
   // statement written twice, and which one is meant is a question about the
   // value: its field where it has one, its position where it is a list.
-  // `Lookup` answers by the value's own kind, so this has to ask both ways
-  // rather than choose once.
   const Outcome outcome =
       RunFlow(R"(
 flow taken {
@@ -912,12 +876,6 @@ flow counting {
 TEST(FlowRuntimeTest, ATryPipeTurnsAFailingStreamIntoAValue) {
   // The gap: a pipe whose source failed mid-stream ended the *flow*, and the
   // only survivable case was a source that happened to be a `try` call's port.
-  // Now the statement itself can say it expects that, and the failure becomes
-  // something the flow reads.
-  //
-  // `abort` supplies the failure, which is what makes the two changes fit
-  // together: one ends a stream badly and the other survives being on the far
-  // end of one.
   const Outcome outcome = RunFlow(R"(
 flow resilient {
   in  words: string stream
@@ -933,7 +891,7 @@ flow resilient {
 }
 )",
                                   "resilient", {{"words", {"a", "bad"}}});
-  // The flow succeeded, which is the whole point of `try`.
+  // `try` keeps the flow successful after the handled failure.
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   ASSERT_EQ(outcome.outputs.at("why").size(), 1u);
   EXPECT_NE(outcome.outputs.at("why").front().find("the source went away"),
@@ -958,17 +916,9 @@ flow fine {
 }
 
 TEST(FlowRuntimeTest, AbortEndsANodeWithAFailureRatherThanWithAnEnd) {
-  // The ending `drain` cannot express. Both end the stream; only this one tells
-  // a reader *why*, and without it a stream cut short by something the flow
-  // noticed is indistinguishable from one that finished.
-  //
-  // Read through `status`, because that is where a node's abort status surfaces
-  // -- and the flow itself still succeeds, which is the point: the *node*
-  // failed, not the composition.
-  // Inside the loop, which holds the node open for as long as it runs -- so the
-  // abort provably happens before anything would have closed it. Aborting a node
-  // that something else is about to close cleanly is a race, and not a race this
-  // test wants to be about.
+  // The ending `drain` cannot express. Aborting a node that something else is
+  // about to close cleanly is a race, and not a race this test wants to be
+  // about.
   const Outcome outcome = RunFlow(R"(
 flow cut-short {
   in  words: string stream
@@ -994,9 +944,7 @@ flow cut-short {
 
 TEST(FlowRuntimeTest, ANamedLoopIsABarrierTheRestOfTheFlowCanWaitFor) {
   // What a loop writing an outer node could not say before: "once the loop is
-  // over, that node is over". The node was already closed when the loop's step
-  // finished -- a loop counts as one writer for as long as it runs -- but there
-  // was no way to *say* it, so a flow could not be read for its finished state.
+  // over, that node is over".
   const Outcome outcome = RunFlow(R"(
 flow tidy {
   in  words: string stream
@@ -1038,8 +986,9 @@ flow ordered {
 }
 
 TEST(FlowRuntimeTest, AForStopsOnItsUntilAndLeavesTheRestUnread) {
-  // The gap this closes: `repeat` could say when to stop and `for` could not, so
-  // a loop over a stream had to read all of it however early it knew enough.
+  // The gap this closes: `repeat` could say when to stop and `for` could not,
+  // so a loop over a stream had to read all of it however early it knew
+  // enough.
   const Outcome outcome =
       RunFlow(R"(
 flow scanning {
@@ -1135,9 +1084,6 @@ flow strict {
 }
 
 TEST(FlowRuntimeTest, FailEndsTheFlowWithTheCodeItNames) {
-  // In an `if`, because a `fail` at the top of a body races every other
-  // statement and the language now refuses one. This flow used to be written
-  // without the branch and passed because `fail` happened to win that race.
   const Outcome outcome = RunFlow(R"(
 flow refuse {
   in  who: string
@@ -1257,10 +1203,7 @@ TEST(FlowRuntimeTest, CompileReportsTheFirstErrorWithItsPlace) {
 }
 
 // --- one value ---------------------------------------------------------------
-//
-// Everything else here is a stream, and that is the right default. Some of what
-// moves through a flow is one value, though, and these are about it having a
-// name that can be compared, branched on and cut up.
+// Everything else here is a stream, and that is the right default.
 
 TEST(FlowRuntimeTest, LetBindsOneValueThatReadsAsAValue) {
   const Outcome outcome = RunFlow(R"(
@@ -1384,10 +1327,8 @@ flow whole {
 }
 
 // --- zip ---------------------------------------------------------------------
-//
 // The interesting cases are all about *ending*: two streams almost never run
-// out together, and what a joint iteration does at the ragged end is the whole
-// of what makes it usable or not.
+// out together, and what a joint iteration does at the ragged end.
 
 TEST(FlowRuntimeTest, ZipReadsStreamsInStep) {
   const Outcome outcome = RunFlow(R"(
@@ -1598,9 +1539,7 @@ flow narrated {
 TEST(FlowRuntimeTest, ALogStatementMayPrintAValueItRead) {
   // A log's arguments live in its own tail rather than in the `message` every
   // other statement uses, and they were left out of the analysis -- so a log
-  // that named a stream was one uncounted reader of it and the flow died with
-  // "has no reader slot left" at run time, having compiled clean. Every case
-  // here is that bug: a `let`, a node, and a value read twice.
+  // that named a stream was one uncounted reader of it and the flow died.
   LogCapture logs;
   const Outcome outcome = RunFlow(R"(
 flow narrated {
@@ -1813,7 +1752,7 @@ flow neighbours {
 }
 
 TEST(FlowRuntimeTest, AWindowWiderThanTheStreamYieldsNothing) {
-  // Deliberately unlike `batch`, whose last list may be short: a window
+  // Unlike `batch`, whose last list may be short, a window
   // narrower than it was asked for is not a window, and a `| window 3` that
   // sometimes yielded two values would make every reader check.
   const Outcome outcome = RunFlow(R"(
@@ -1922,7 +1861,7 @@ flow merged {
               "merged", {{"fast", {"\"a\"", "\"b\""}}, {"slow", {"\"c\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   // Every value, once. The order between the two sources is whatever arrived
-  // first, which is the whole point, so only the multiset is pinned.
+  // first, so only the multiset is pinned.
   Values sorted = outcome.outputs.at("all");
   std::sort(sorted.begin(), sorted.end());
   EXPECT_EQ(sorted, Values({"\"a\"", "\"b\"", "\"c\""}));
@@ -1992,8 +1931,7 @@ flow wide {
 )",
       "wide", {{"words", {"\"a\"", "\"b\"", "\"c\"", "\"d\"", "\"e\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  // Four at a time, and the stream downstream is still the order it was read
-  // in: that is what `parallel` without `unordered` promises.
+  // `parallel` preserves input order unless `unordered` is present.
   EXPECT_EQ(outcome.outputs.at("out"),
             Values({"\"A\"", "\"B\"", "\"C\"", "\"D\"", "\"E\""}));
 }
@@ -2162,11 +2100,7 @@ flow watched {
   // Two stages, neither of which changed anything: the values arrive as
   // written, JSON quoting and all.
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
-  // Every value is logged once by each stage. The grouping is by stage rather
-  // than by value: a stage is its own producer, so the first one has seen the
-  // whole stream before the second sees any of it. Pinned because a reader
-  // watching a pipeline through two logs would otherwise expect them
-  // interleaved.
+  // Every value is logged once by each stage.
   EXPECT_EQ(logs.texts(), Values({"a", "b", "saw a", "saw b"}));
 }
 
@@ -2236,7 +2170,7 @@ flow said {
 }
 
 TEST(FlowRuntimeTest, AFlowThatLogsDeclaresNoPortForIt) {
-  // The whole point of the reserved port: the log is not part of what the flow
+  // The reserved log port is not part of what the flow
   // says it is, so nothing calling it has to know about it.
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
       CompiledProgram::Compile(R"(

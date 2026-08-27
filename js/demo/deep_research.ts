@@ -5,13 +5,12 @@
  * ports plus its log. That action is not code on the backend: it is the
  * composition in `a11/demos/deep_research.flow`, which plans the topic,
  * investigates the parts of it at the same time, and writes one report. The
- * intermediate findings never reach this page — the flow keeps them in a node
- * map of its own — so what crosses the socket is the plan, the report, and the
- * narration.
+ * intermediate findings stay in the flow's node map. The socket carries the
+ * plan, report, and log.
  *
- * The narration arrives on the action's **log**, not on a port of its own. Every
- * action has one, so this is the reading that works for any action a page calls;
- * a narration *port* only works for a client that has been told its name.
+ * The narration arrives on the action's **log**, not on a port of its own.
+ * Every action has a log, so clients can read progress without a dedicated
+ * output port name.
  */
 
 import {ActionPortSchema, ActionSchema} from '../src/index.js';
@@ -34,8 +33,8 @@ import {
 /**
  * The ports of `flow deep-research`, declared here by hand.
  *
- * A flow *is* an action, so this page neither knows nor cares that the thing it
- * calls is a composition. The port names and shapes are the whole contract.
+ * A flow uses the action interface; its port names and shapes define the page's
+ * contract.
  */
 const DEEP_RESEARCH_SCHEMA = new ActionSchema({
   name: 'deep-research',
@@ -63,9 +62,8 @@ class DeepResearchDemo {
     try {
       const connection = await connect(this.backend.server.value.trim() || DEFAULT_SERVER_URL);
       const call = makeCall(connection, DEEP_RESEARCH_SCHEMA);
-      // The provider is named once, on the composition. Every model call inside
-      // it is a nested action, and A11 hands a nested action its parent's
-      // `x-a11-` headers — which is why the flow says nothing about providers.
+      // Nested model calls inherit the composition's `x-a11-` headers, so the
+      // provider is configured once on the outer action.
       for (const [header, value] of LlmHeadersFor(this.backend.value)) {
         need(call.setHeader(header, value));
       }
@@ -77,8 +75,8 @@ class DeepResearchDemo {
       const topicInput = need(await call.getInput('topic'));
       need(await topicInput.finalize(topic));
 
-      // Everything at once: the narration is the point of watching, and it
-      // arrives while the report is still being written.
+      // Read narration and report output concurrently so progress arrives
+      // while the report is still being written.
       await Promise.all([
         readLogFrom(logs, (line, level) => addLine(this.log, line, level === 'info' ? '' : level)),
         readPort(call, 'plan', (value) => {

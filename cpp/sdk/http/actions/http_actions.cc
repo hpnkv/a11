@@ -73,11 +73,6 @@ constexpr std::string_view kOctetStream = "application/octet-stream";
 
 // ---------------------------------------------------------------------------
 // Small chunk helpers.
-//
-// Values travel as plain JSON or as octet-stream bytes; no type is registered
-// for any of this, because an HTTP header map really is a map and a body really
-// is bytes. That also keeps the cross-language tag table out of it.
-// ---------------------------------------------------------------------------
 
 /// A JSON chunk, or the reason the value will not fit JSON.
 ///
@@ -202,7 +197,8 @@ class Outputs {
 
   /// Writes one JSON value to a port and leaves it open.
   ///
-  /// The pairing for PutOnly, and the reason both exist rather than every caller
+  /// The pairing for PutOnly, and the reason both exist rather than every
+  /// caller
   /// spelling out the encode: JsonChunk can fail, and a caller that has to
   /// unpack a StatusOr before it can write tends to write `dump()` instead.
   absl::Status PutJson(std::string_view name, const nlohmann::json& value) {
@@ -743,9 +739,11 @@ absl::Status PumpRequestBody(const std::shared_ptr<AsyncNode>& body,
  * Reads pushed responses off @p response until there are no more.
  *
  * A push carries a head *and* a body, and one port cannot interleave several
- * bodies without inventing a framing for them. A11 already has the right answer:
+ * bodies without inventing a framing for them. A11 already has the right
+ * answer:
  * each pushed body gets a node of its own, and the record on the `pushes` port
- * carries that node's id. A reader attaches to it -- `node(rec.body)` in Flow --
+ * carries that node's id. A reader attaches to it -- `node(rec.body)` in Flow
+ * --
  * exactly as it would to any other stream.
  */
 absl::Status PumpPushes(const std::shared_ptr<Action>& action,
@@ -821,7 +819,9 @@ absl::Status PumpPushes(const std::shared_ptr<Action>& action,
   }
 }
 
-/** The output ports of @c make_http_request, in the order they become readable. */
+/**
+ * The output ports of @c make_http_request, in the order they become readable.
+ */
 const std::vector<std::string>& RequestOutputNames() {
   static const std::vector<std::string>* const names =
       new std::vector<std::string>{"status_code", "headers",   "fields",
@@ -849,9 +849,8 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
       ABSL_ASSIGN_OR_RETURN(attempt, Send(exchange, target, method, body));
 
       // A streamed body is pumped on its own fiber while the response headers
-      // are awaited: a server may well answer -- a 401, a 413 -- before it has
-      // taken all of an upload, and waiting for the whole body first would miss
-      // that.
+      // are awaited: a server may well answer a 401, a 413 before it has taken
+      // all of an upload, and waiting for the whole body first would miss that.
       a11::Task upload = a11::ReadyTask();
       if (attempt.upload != nullptr) {
         upload = a11::SubmitTask(
@@ -923,8 +922,7 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
       ABSL_RETURN_IF_ERROR(outputs.PutOnly("status_code", head->status));
       ABSL_RETURN_IF_ERROR(
           outputs.PutOnly("headers", HeaderObject(head->headers)));
-      // One field per value, in wire order: a stream, because that is what a
-      // header block is, repeats and all.
+      // Preserve header order and repeated fields on the stream.
       for (const nlohmann::json& field : FieldPairs(head->headers)) {
         ABSL_RETURN_IF_ERROR(outputs.PutJson("fields", field));
       }
@@ -1222,9 +1220,9 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
       break;
     }
 
-    // Unlike make_http_request, a 4xx or 5xx is data here rather than a failure:
-    // `ok` is false and the body is still delivered, which is what `fetch()`
-    // does and what a caller reading an API's error document needs.
+    // Unlike make_http_request, a 4xx or 5xx is data here rather than a
+    // failure: `ok` is false and the body is still delivered, which is what
+    // `fetch()` does and what a caller reading an API's error document needs.
     ABSL_RETURN_IF_ERROR(outputs.PutOnly("status_code", head.status));
     ABSL_RETURN_IF_ERROR(outputs.PutOnly("ok", head.status < 400));
     ABSL_RETURN_IF_ERROR(
@@ -1261,7 +1259,8 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
       if (wants_whole) {
         whole.append(piece);
       }
-      // The streaming half of `items`: an event or a line is complete as soon as
+      // The streaming half of `items`: an event or a line is complete as soon
+      // as
       // its terminator arrives, so it goes out then rather than at the end.
       if (wants_items && framing == ItemFraming::kEvents) {
         std::vector<nlohmann::json> decoded;

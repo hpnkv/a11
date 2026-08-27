@@ -10,7 +10,8 @@
  * has to hold for a registry nobody configured, for a registry a service copied
  * per connection, and for a registry an application has since called
  * `Unregister` all over. That rules out being an entry in
- * a11::actions::ActionRegistry -- `Register` replaces and `Unregister` removes --
+ * a11::actions::ActionRegistry -- `Register` replaces and `Unregister` removes
+ * --
  * and it rules out a service-level install, because every client builds its own
  * bare registry and would have nothing.
  *
@@ -44,10 +45,9 @@ inline constexpr std::string_view kGetSchemaName = "__get_schema__";
 /**
  * @brief Echoes a value, so a caller can tell A11 from anything holding a port.
  *
- * The name and shape a gateway has always used, kept exactly: four languages'
- * clients probe with it, and the point of moving it here is that the probe now
- * works against any A11 service rather than only against the one server that
- * remembered to register it.
+ * The name and shape a gateway has always used are preserved because clients in
+ * four languages probe with it. The probe works against every A11 service
+ * because registration is automatic.
  */
 inline constexpr std::string_view kPingName = "__ping";
 

@@ -61,6 +61,9 @@ using ::a11::nodes::AsyncNode;
 constexpr int kPollMilliseconds = 50;
 constexpr std::size_t kPipeChunkBytes = 64 * 1024;
 
+// Writing to the stdin of a child that has exited raises SIGPIPE, whose default
+// action is to kill *this* process -- so a flow feeding a program that stops
+// reading would take the gateway down with it.
 /// Writing to the stdin of a child that has exited raises SIGPIPE, whose
 /// default action is to kill *this* process -- so a flow feeding a program that
 /// stops reading would take the gateway down with it. Ignored once, on first
@@ -189,7 +192,8 @@ class Pipe {
     read_end_ = fds[0];
     write_end_ = fds[1];
     // So that neither end survives an exec in some *other* child spawned
-    // concurrently. The ends this child needs are dup2'd, which clears the flag.
+    // concurrently. The ends this child needs are dup2'd, which clears the
+    // flag.
     (void)::fcntl(read_end_, F_SETFD, FD_CLOEXEC);
     (void)::fcntl(write_end_, F_SETFD, FD_CLOEXEC);
     return absl::OkStatus();
@@ -199,6 +203,8 @@ class Pipe {
 
   [[nodiscard]] int write_end() const { return write_end_; }
 
+  // Hands the write end to somebody else, who must close it. Ownership moves
+  // rather than being shared.
   /// Hands the write end to somebody else, who must close it.
   ///
   /// The child's standard input has to be closed by whoever finishes writing to
@@ -283,7 +289,7 @@ absl::StatusOr<std::vector<std::string>> ReadArguments(
     return arguments;
   }
   if (value->is_string()) {
-    // One argument, not a command line. Deliberately not split on spaces:
+    // Treat this as one argument, not a command line; do not split on spaces.
     // splitting is how a filename with a space in it becomes two arguments and
     // a flow that meant one thing runs another.
     arguments.push_back(value->get<std::string>());
@@ -315,11 +321,11 @@ absl::StatusOr<std::vector<std::string>> ReadArguments(
  * Everything the child needs, laid out before the fork.
  *
  * This class exists because of what may happen between fork() and exec(): the
- * child of a multi-threaded process holds whatever locks the other threads held
- * at the moment of the fork, so allocating there -- which takes the allocator's
- * lock -- deadlocks the child, occasionally, on a busy machine. Every string and
- * pointer array is therefore built here, in the parent, and the child calls
- * nothing but dup2, chdir, setpgid, execvp and _exit.
+ * child of a multi-threaded process holds whatever locks the other threads
+ * held at the moment of the fork, so allocating there -- which takes the
+ * allocator's lock -- deadlocks the child, occasionally, on a busy machine.
+ * Every string and pointer array is therefore built here, in the parent, and
+ * the child calls nothing but dup2, chdir, setpgid, execvp and _exit.
  */
 class ChildPlan {
  public:
@@ -452,8 +458,7 @@ absl::StatusOr<pid_t> Spawn(const ChildPlan& plan, const Sandbox& sandbox,
     (void)::setpgid(0, 0);
     // After chdir -- the working directory has to be resolvable before the
     // ruleset takes effect -- and before exec, which is the only order in which
-    // the restriction covers the program rather than this frame. Allocation-free
-    // by construction: see Sandbox::Apply.
+    // the restriction covers the program rather than this frame.
     if (const int reason = sandbox.Apply(); reason != 0) {
       fail(reason);
     }
@@ -607,8 +612,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   }
 
   // Prepared before the fork, because everything it needs to allocate has to be
-  // allocated before the fork. A policy that requires confinement and cannot
-  // get it fails here, which is the point of `required`.
+  // allocated before the fork. A policy with `required` fails here when
+  // confinement is unavailable.
   absl::StatusOr<std::shared_ptr<Sandbox>> sandbox =
       Sandbox::Prepare(*capabilities, program);
   if (!sandbox.ok()) {
@@ -658,12 +663,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   }
 
   // stdin is fed by a fibre of its own: feeding it means reading a port, which
-  // blocks, and the same fibre cannot also be polling for output.
-  //
-  // The fibre owns the pipe's write end and closes it when the content stream
-  // ends. That close is what a program reading to EOF is waiting for, so it has
-  // to happen when the content does -- not when this handler finishes, which
-  // for `cat` would be never.
+  // blocks, and the same fibre cannot also be polling for output. The fibre
+  // owns the pipe's write end and closes it when the content stream ends.
   absl::StatusOr<std::shared_ptr<AsyncNode>> content =
       action->GetInput("stdin");
   if (!content.ok()) {
@@ -724,23 +725,9 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   std::string buffer(kPipeChunkBytes, '\0');
 
   while ((streams[0].open || streams[1].open) && trouble.ok()) {
-    // Give this worker's fibre scheduler a turn.
-    //
-    // `poll()` below is a plain syscall, so this loop occupies its OS thread
-    // without ever reaching a suspension point, and the thread's dispatcher
-    // cannot run. Every fibre attached to that dispatcher is then stranded for
-    // as long as the child lives -- including the control watcher, which is
-    // usually a sibling on this very worker because a submitted fibre lands in
-    // its creator's own slot. A stop command would arrive, complete the
-    // watcher's read, be handed to the scheduler by
-    // `scheduler::schedule_from_remote` -- and sit in a remote-ready queue only
-    // this thread drains, while this loop waits for a child only that command
-    // would end. That is a deadlock, and it was one:
-    // `SpawnProcessTest.StopsALongRunningProcessAndSaysHow` failed about 40% of
-    // the time under load without this yield and not at all with it.
-    //
-    // Cheap by construction: two context switches per poll timeout, so twenty a
-    // second per running child, against ~0.1us each.
+    // Give this worker's fibre scheduler a turn. That is a deadlock, and it was
+    // one: `SpawnProcessTest.StopsALongRunningProcessAndSaysHow` failed about
+    // 40% of the time under load without this yield and not at all with it.
     thread::SleepFor(absl::ZeroDuration());
     if (stop->stopped() && !termed) {
       // Asked nicely first: a program that flushes its output on SIGTERM gets
@@ -996,11 +983,7 @@ ActionSchema SpawnProcessSchema() {
            "{user_ms, system_ms, max_rss_bytes, output_bytes} once it has "
            "finished.",
            /*required=*/false, /*unary=*/true));
-  // Reported rather than assumed. A composition that cares whether the program
-  // was actually confined -- as opposed to merely policy-checked, which covers
-  // none of the syscalls the program makes for itself -- can read this and
-  // decide, and a host that will not run unconfined says so with
-  // `sandbox: required` instead.
+  // Reported rather than assumed.
   schema.outputs.emplace(
       "sandbox",
       Port("sandbox", "string",

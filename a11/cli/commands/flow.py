@@ -11,24 +11,23 @@ Subcommands:
 * ``describe FILE`` -- the resolved plan: ports, headers, steps, node maps.
 * ``highlight FILE`` -- what each token means, for a syntax highlighter.
 * ``complete FILE`` -- what may be written at a position in it.
-* ``run FILE`` -- run it. A file with a ``flow { ... }`` is a **program**: it runs
+* ``run FILE`` -- run it. A file with a
+* ``flow { ... }`` is a **program**: it runs
   through the interpreter, with `argv`, a policy, standard streams and an exit
   code. A file of named flows only runs one of them here and prints its ports.
 * ``serve`` -- answer language requests on standard input, one per line.
 * ``syntax`` -- generate the editor definitions, or check they are current.
 * ``codes`` -- every diagnostic code the language publishes, and what it means.
 
-Every subcommand takes ``--format``. ``text`` is for people, ``json`` is the
-versioned envelope documented in [a11.flow.diagnostics][a11.flow.diagnostics], and
-``sarif`` is what code-scanning services and CI annotators already read. A file of
-``-`` is standard input, so a flow can be piped in from anywhere.
+Every subcommand takes ``--format``. ``text`` is human-readable, ``json`` uses
+the versioned envelope documented in
+[a11.flow.diagnostics][a11.flow.diagnostics], and ``sarif`` is accepted by
+code-scanning services and CI annotators. A file of ``-`` is standard input.
 
-The engine behind all of these is `cpp/a11/flow/` -- one lexer, one grammar, one
-resolver, one set of checks, one formatter -- reached through `a11._native.flow`.
-The standalone `a11-flow` binary runs the same library without Python, and answers
-in the same envelopes; the formats are the contract between them, which is why they
-are pinned by `testdata/flow/codes.json` and by this module's tests rather than by
-whichever frontend happens to be printing them.
+All subcommands use the native implementation in `cpp/a11/flow/` through
+`a11._native.flow`. The standalone `a11-flow` binary uses the same library
+without Python and returns the same envelopes. `testdata/flow/codes.json` and
+this module's tests define those formats.
 
 Running is the one place the two frontends genuinely differ, and it is why this
 one exists. ``a11 flow run`` on a *program* calls
@@ -75,21 +74,19 @@ def _syntax_error_diagnostic(error: Any, source: str) -> diag.Diagnostic:
     diagnostic and not a list. It carries a line and a column; the offset comes
     from the source, because a diagnostic promises all three.
 
-    The code is the general one: every problem the current compiler raises is a
-    `FlowSyntaxError` with a sentence, and inventing a precise code by matching on
-    that sentence would be a mapping that rots. Precise codes arrive with the
-    native parser and resolver, which report them at the point they are found.
+    The general code applies because `FlowSyntaxError` provides no structured
+    code. The native parser and resolver supply precise codes when available.
     """
     index = diag.LineIndex(source)
     line = getattr(error, "line", 1) or 1
     column = getattr(error, "column", 1) or 1
     start = index.offset_of(line, column)
-    # `message` is the sentence; `str(error)` prefixes it with the location, which
+    # `message` is the sentence;
+    # `str(error)` prefixes it with the location, which
     # every output format here writes for itself.
     message = getattr(error, "message", None) or str(error)
-    # The compiler points at a token without saying how long it is. A range of
-    # one character is honest about that, and every frontend widens to the word
-    # under it when it wants to.
+    # The compiler does not provide the token length. Emit a one-character
+    # range; frontends may widen it to the containing word.
     return diag.Diagnostic(
         code="flow.syntax.unexpected",
         message=message,
@@ -102,10 +99,8 @@ def _syntax_error_diagnostic(error: Any, source: str) -> diag.Diagnostic:
 def _check_source(source: str) -> list[diag.Diagnostic]:
     """Everything wrong with one flow file.
 
-    One call into the native engine, which parses and resolves and reports *every*
-    problem it finds rather than the first: three misspelled stages are three
-    diagnostics, and a syntax problem on line 4 does not hide an unknown name on
-    line 5. Both passes recover, which is what makes that possible.
+    The native parser and resolver recover after errors and report every problem
+    they find, not only the first.
     """
     from a11._native import flow as native_flow
 
@@ -151,10 +146,9 @@ async def _run_check(args: argparse.Namespace) -> int:
 async def _run_describe(args: argparse.Namespace) -> int:
     """The resolved plan of a file: ports, headers, node maps and steps.
 
-    What a reader diffs to see whether a change to a flow changed what it *does*.
-    The native resolver produces it, so this and `check` agree about what a file
-    means -- and a file with an error in it still describes as far as it got, with
-    the errors on standard error and a non-zero exit.
+    Use this output to compare the semantics of two flow versions. The native
+    resolver also powers `check`. A file with errors returns its partial plan,
+    writes diagnostics to standard error, and exits non-zero.
     """
     from a11._native import flow as native_flow
 
@@ -211,18 +205,49 @@ def _outline(node: Any, depth: int = 0) -> None:
     label = node.get("kind", "?")
     # The fields worth putting on the line: what the node is *called*, and the
     # scalars that tell two nodes of a kind apart.
-    for key in ("name", "action", "mode", "op", "variable", "alias", "direction"):
+    for key in (
+        "name",
+        "action",
+        "mode",
+        "op",
+        "variable",
+        "alias",
+        "direction",
+    ):
         if node.get(key):
             label = f"{label} {node[key]}"
-    print(f"  {at.get('line', 1):4}:{at.get('column', 1):<4}"
-          f" {'  ' * depth}{label}")
+    print(
+        f"  {at.get('line', 1):4}:{at.get('column', 1):<4}"
+        f" {'  ' * depth}{label}"
+    )
     # In reading order rather than the envelope's -- the JSON is sorted by key,
     # which puts a flow's body in front of its ports.
-    order = ("ports", "headers", "type", "condition", "source", "pipeline",
-             "subject", "target", "value", "start", "stages", "args",
-             "modifiers", "targets", "then_body", "else_body", "body")
-    ranked = sorted(node.items(), key=lambda pair: (
-        order.index(pair[0]) if pair[0] in order else len(order), pair[0]))
+    order = (
+        "ports",
+        "headers",
+        "type",
+        "condition",
+        "source",
+        "pipeline",
+        "subject",
+        "target",
+        "value",
+        "start",
+        "stages",
+        "args",
+        "modifiers",
+        "targets",
+        "then_body",
+        "else_body",
+        "body",
+    )
+    ranked = sorted(
+        node.items(),
+        key=lambda pair: (
+            order.index(pair[0]) if pair[0] in order else len(order),
+            pair[0],
+        ),
+    )
     for key, value in ranked:
         if key in ("kind", "at"):
             continue
@@ -240,9 +265,8 @@ def _outline(node: Any, depth: int = 0) -> None:
 async def _run_parse(args: argparse.Namespace) -> int:
     """The syntax tree, and everything wrong with the file.
 
-    Both, always: the parser recovers, so a file with a mistake in it still has a
-    tree. That is what an editor needs, and it is why `--format json` prints the
-    tree even when the exit code is 1.
+    The parser recovers and returns a tree even when the file has diagnostics.
+    `--format json` therefore includes the tree when the exit code is 1.
     """
     from a11._native import flow as native_flow
 
@@ -259,19 +283,16 @@ async def _run_parse(args: argparse.Namespace) -> int:
         for flow in payload.get("flows", []):
             _outline(flow)
         for one in found:
-            print(
-                one.as_text("" if name == _STDIN else name), file=sys.stderr
-            )
+            print(one.as_text("" if name == _STDIN else name), file=sys.stderr)
     return 1 if errors else 0
 
 
 async def _run_fmt(args: argparse.Namespace) -> int:
     """Format flows, in place, to standard output, or as a check.
 
-    Exit codes are the ones every formatter uses, because that is what a hook and
-    a CI job already expect: 0 when there was nothing to do, 1 when something
-    would change (or, with `--check`, did not), 2 when a file could not be read or
-    could not be parsed.
+    Uses conventional formatter exit codes: 0 when no change is required, 1
+    when content changes or `--check` detects a difference, and 2 when input
+    cannot be read or parsed.
     """
     from a11._native import flow as native_flow
 
@@ -286,7 +307,8 @@ async def _run_fmt(args: argparse.Namespace) -> int:
 
         payload = native_flow.format(source)
         found = diag.sort_diagnostics(
-            diag.Diagnostic.from_payload(entry) for entry in payload["diagnostics"]
+            diag.Diagnostic.from_payload(entry)
+            for entry in payload["diagnostics"]
         )
         errors = [one for one in found if one.severity is diag.Severity.ERROR]
         if errors:
@@ -333,13 +355,11 @@ async def _run_fmt(args: argparse.Namespace) -> int:
 
 
 async def _run_highlight(args: argparse.Namespace) -> int:
-    """What each token in a flow *means*, from the one implementation of that.
+    """Classify each token using the native Flow implementation.
 
-    The native classifier decides it -- a stage after a `|`, a type past a port's
-    `:`, a member after a `.`, a function only where it is called -- so an editor
-    that reads this needs no lexer of its own. `text` prints the source with each
-    token labelled, which is mostly useful for seeing why something is coloured
-    the way it is.
+    Classification depends on context: stages follow `|`, types follow a port's
+    `:`, members follow `.`, and functions are marked at call sites. The `text`
+    format prints the source with each token labelled.
     """
     from a11._native import flow as native_flow
 
@@ -362,12 +382,8 @@ async def _run_highlight(args: argparse.Namespace) -> int:
 def _target_names() -> tuple[str, ...]:
     """Every target the language generates a definition for.
 
-    Asked rather than listed. A target is a C++ decision -- the template and the
-    tables that fill it are there -- and a copy of the list here would be one more
-    thing to keep in step, which is the whole failure mode generating these files
-    exists to avoid. Only an editor that *cannot* call the language out needs one
-    of these at all: a static grammar file loaded by a highlighter with no way to
-    run a process.
+    The native generator owns this list and its templates. Static grammar files
+    support editors that cannot invoke the language tooling.
     """
     from a11._native import flow as native_flow
 
@@ -377,10 +393,8 @@ def _target_names() -> tuple[str, ...]:
 async def _run_syntax(args: argparse.Namespace) -> int:
     """Write the generated editor definitions, or check they are up to date.
 
-    A static grammar file is a copy of the language's word lists, and a copy is a
-    thing that falls behind: `then` added as a stage is a stage the editor does not
-    colour until somebody remembers the file. So it is generated from the one table
-    and this holds it to being current -- which is a diff, not a judgement.
+    Static grammar files are generated from the native vocabulary. Check mode
+    reports whether checked-in definitions match current generator output.
     """
     from a11._native import flow as native_flow
 
@@ -397,9 +411,7 @@ async def _run_syntax(args: argparse.Namespace) -> int:
             if args.format == "text":
                 print(f"{generated['path']}: generated")
             continue
-        current = (
-            path.read_text(encoding="utf-8") if path.is_file() else None
-        )
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
         if current == generated["text"]:
             if args.format == "text" and not args.quiet:
                 print(f"{generated['path']}: up to date")
@@ -412,24 +424,21 @@ async def _run_syntax(args: argparse.Namespace) -> int:
         )
 
     if args.format in ("json", "sarif"):
-        _emit(
-            {
-                "format": "flow.syntax-check/v1",
-                "targets": sorted(names),
-                "generated": written,
-                "out_of_date": changed,
-            }
-        )
+        _emit({
+            "format": "flow.syntax-check/v1",
+            "targets": sorted(names),
+            "generated": written,
+            "out_of_date": changed,
+        })
     return 1 if changed else 0
 
 
 async def _run_complete(args: argparse.Namespace) -> int:
     """What may be written at one position in a file.
 
-    The one implementation of that judgement, through the command line: after a
-    `|` only a stage, past a port's `:` only a type, after `x.` only what `x`
-    actually has. An editor that can run a process needs no completion of its own,
-    and this is the same answer `a11-flow complete` and the plugin get.
+    Completion is context-aware: after `|` it offers stages, after a port's `:`
+    it offers types, and after `x.` it offers members of `x`. This is the same
+    result used by `a11-flow complete` and editor plugins.
     """
     from a11._native import flow as native_flow
 
@@ -462,11 +471,8 @@ async def _run_complete(args: argparse.Namespace) -> int:
 async def _run_serve(args: argparse.Namespace) -> int:
     """Answer language requests on standard input, one JSON object per line.
 
-    The same methods `a11-flow serve --protocol json` speaks, from the same
-    library -- this is here so a host that already has A11 installed need not find
-    the binary. `--protocol lsp` is the standalone tool's: an editor wanting a
-    language server should run `a11-flow`, which starts in milliseconds and does
-    not import Python.
+    This exposes the JSON methods from `a11-flow serve` to Python installations.
+    Editors requiring LSP should run the standalone `a11-flow` server.
     """
     from a11._native import flow as native_flow
 
@@ -478,9 +484,10 @@ async def _run_serve(args: argparse.Namespace) -> int:
             request = json.loads(line)
         except ValueError:
             print(
-                json.dumps(
-                    {"ok": False, "error": {"message": "That is not JSON."}}
-                ),
+                json.dumps({
+                    "ok": False,
+                    "error": {"message": "That is not JSON."},
+                }),
                 flush=True,
             )
             continue
@@ -618,14 +625,12 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
         code = diagnostic.get("code", "")
         print(f"{name}: {message} [{code}]", file=sys.stderr)
     if args.format in ("json", "sarif"):
-        _emit(
-            {
-                "format": "flow.program/v1",
-                "source": name,
-                "exit_code": outcome.get("exit_code", 0),
-                "diagnostics": list(outcome.get("diagnostics", ())),
-            }
-        )
+        _emit({
+            "format": "flow.program/v1",
+            "source": name,
+            "exit_code": outcome.get("exit_code", 0),
+            "diagnostics": list(outcome.get("diagnostics", ())),
+        })
         return 0
     return int(outcome.get("exit_code", 0))
 
@@ -644,9 +649,8 @@ async def _invoke_at_peer(
 
     1. **The name has to resolve.** Flow's resolver looks the action up in the
        registry before it decides anything, so a peer-only action must be
-       registered here -- with its schema and *no handler*, which is exactly how
-       "this lives on the peer, say `call`" is spelled. That is what
-       `install_peer_actions` does with what `__list_actions__` came back with.
+       registered here with its schema and no handler. `install_peer_actions`
+       registers entries returned by `__list_actions__` in this form.
     2. **The stream has to be the dispatch stream, not the flow's own.** A
        locally-run action that holds a stream ends that stream when it finishes,
        so passing `stream=` would work once and then leave the session unable to
@@ -662,8 +666,8 @@ async def _invoke_at_peer(
         installed = await discovery.install_peer_actions(
             connection, registry, timeout=timeout
         )
-        # Worth saying on stderr: a flow whose `call` fails NOT_FOUND is
-        # otherwise indistinguishable from a peer that served nothing.
+        # Report discovery count so a later NOT_FOUND can be distinguished from
+        # a peer that exposed no callable actions.
         print(
             f"{args.peer}: {len(installed)} action(s) available to call",
             file=sys.stderr,
@@ -687,8 +691,7 @@ async def _run_run(args: argparse.Namespace) -> int:
     A file with a `flow { ... }` is a program, and running it means what
     ``a11-flow-run`` means -- `argv`, a policy, standard streams, an exit code.
     A file of named flows has no entry point, so one of them is run here and its
-    ports are printed, which is for trying a flow out rather than for dispatching
-    one at a gateway.
+    ports are printed for local inspection.
 
     ``--flow`` picks a named flow explicitly, and so is also how to run one *out
     of* a file that has a program in it.
@@ -751,14 +754,12 @@ async def _run_run(args: argparse.Namespace) -> int:
         return 1
 
     if args.format in ("json", "sarif"):
-        _emit(
-            {
-                "format": "flow.run/v1",
-                "source": name,
-                "flow": wanted,
-                "outputs": produced,
-            }
-        )
+        _emit({
+            "format": "flow.run/v1",
+            "source": name,
+            "flow": wanted,
+            "outputs": produced,
+        })
         return 0
     for port, value in produced.items():
         if isinstance(value, list):
@@ -782,11 +783,9 @@ async def _run_codes(args: argparse.Namespace) -> int:
 async def _run_scan(args: argparse.Namespace) -> int:
     """Report the actions a project declares in its own source.
 
-    The catalogue tells the tools what the world contains, and until this the
-    world meant the SDK: an action somebody wrote this afternoon was not in it,
-    so hovering its name in a flow said nothing and there was nowhere to go. This
-    reads the project for ``ActionSchema`` declarations in Python, C++ and
-    TypeScript and prints them with the file and line each was written at.
+    Reads ``ActionSchema`` declarations from Python, C++, and TypeScript so
+    editor tooling can describe and navigate project-defined actions. Each
+    result includes its source file and line.
 
     What an editor runs on a workspace open, and what a CI step can diff to
     notice an action that lost its description.
@@ -900,7 +899,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         description=(
             "Formats each file. Prints the result by default, rewrites the file"
             " with -i, and says what would change with --check. It decides"
-            " indentation, the spaces between tokens, blank lines and the columns"
+            " indentation, token spacing, blank lines, and declaration columns;"
             " of a run of port or header declarations; it does not decide where"
             " the lines break, because that is a judgement about what belongs"
             " together and it stays yours. Exits 1 when something changed (or,"
@@ -938,10 +937,10 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "parse",
         help="The syntax tree of a flow file, and what is wrong with it.",
         description=(
-            "Parses a flow file and prints the tree it read. The parser recovers,"
-            " so a file with a mistake in it still gives a tree: 'text' shows the"
+            "Parses a flow file and prints its tree. The parser recovers after"
+            " errors: 'text' shows the"
             " outline with the problems on standard error, 'json' is the"
-            " flow.syntax/v1 envelope with both. Exits 1 if anything is an error."
+            " flow.syntax/v1 envelope with both. Exits 1 on any error."
         ),
     )
     parse.add_argument(
@@ -974,8 +973,8 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "complete",
         help="What may be written at a position in a flow.",
         description=(
-            "Everything the language allows at one offset, in the order it should"
-            " be offered: after a '|' only a stage, past a port's ':' only a type,"
+            "The language constructs allowed at one offset, in display order:"
+            " after a '|' only a stage, past a port's ':' only a type,"
             " after 'x.' only what x has. Unfiltered -- whoever offers these"
             " filters by their own rules."
         ),
@@ -988,7 +987,9 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     complete.add_argument(
         "--offset", type=int, help="Byte offset of the caret."
     )
-    complete.add_argument("--line", type=int, help="Line of the caret, 1-based.")
+    complete.add_argument(
+        "--line", type=int, help="Line of the caret, 1-based."
+    )
     complete.add_argument(
         "--column", type=int, help="Column of the caret, 1-based."
     )
@@ -1001,10 +1002,8 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         description=(
             "One JSON request per line, one answer per line:"
             ' {"method": "check", "source": "flow t { }"}. The same methods the'
-            " standalone `a11-flow serve` speaks, for a host that already has A11"
-            " installed. An editor wanting a language server should run `a11-flow"
-            " serve --protocol lsp`, which starts in milliseconds and imports no"
-            " Python."
+            " standalone `a11-flow serve` accepts. Editors needing LSP should"
+            " run `a11-flow serve --protocol lsp`, which imports no Python."
         ),
     )
     serve.add_argument(
@@ -1019,7 +1018,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "run",
         help="Run a flow here and print what its ports produced.",
         description=(
-            "Compiles the file, runs one of its flows in this process, and prints"
+            "Compiles the file, runs one flow in this process, and prints"
             " each output port.\n\n"
             "Without --peer, everything the flow calls has to be registered"
             " here, so it runs a composition of the actions the CLI itself has:"
@@ -1147,7 +1146,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
             "The editor definitions the language writes for itself. A static"
             " grammar file is a copy of the language's word lists, so it is"
             " generated from the one table rather than maintained: --generate"
-            " writes it, and the default checks it and exits 1 when it is out of"
+            " writes it; the default checks it and exits 1 when it is out of"
             " date, which is what a CI job gates on."
         ),
     )
@@ -1193,13 +1192,13 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         description=(
             "Reads each path -- a file or a directory -- for ActionSchema"
             " declarations in Python, C++ and TypeScript, and reports every"
-            " action with the file and line it was declared at. The JSON form is"
-            " a flow.catalogue/v1 payload whose entries carry an 'origin', which"
+            " action with its declaration file and line. JSON uses a"
+            " flow.catalogue/v1 payload whose entries carry an 'origin'. This"
             " is what an editor folds into its context so that hovering a"
             " project's own action shows what it does and 'go to declaration'"
             " lands on it."
             "\n\n"
-            "A tolerant textual read rather than a parser for three languages: a"
+            "A tolerant textual scan is used across the three languages: a"
             " schema written as a constructor call with literal arguments comes"
             " back whole, one assembled statement by statement comes back with"
             " thinner ports, and one whose name is computed at run time is not"

@@ -51,7 +51,9 @@ export enum LlmHeaders {
   ALLOWED_LLM_ACTIONS = 'x-a11-allowed-llm-actions',
 }
 
-/** Conversation roles. `model` is the assistant role, matching the Python SDK. */
+/**
+ * Conversation roles. `model` is the assistant role, matching the Python SDK.
+ */
 export enum Role {
   SYSTEM = 'system',
   ASSISTANT = 'model',
@@ -148,10 +150,9 @@ function wireValueField<T>(tag: string) {
 /**
  * A `dict[str, bytes]` field.
  *
- * The values are bytes, so that is what a caller supplies. Untagged, the wire
- * spells them as base64 in JSON and as real bytes in MessagePack, and a string
- * is read as the former — text belongs in the field as its encoded bytes, via
- * `utf8Encode`, not as a string that would be indistinguishable from base64.
+ * Supply byte values directly. JSON represents them as base64; MessagePack uses
+ * its byte type. Encode text with `utf8Encode` before assigning it to this
+ * field.
  */
 const byteRecordSchema = z
   .record(
@@ -217,7 +218,9 @@ export function validateA11Peer(peer: A11Peer): StatusOr<A11Peer> {
   return result;
 }
 
-/** Render a peer back into its `protocol[+scheme]://identity[@endpoint]` URL. */
+/**
+ * Render a peer back into its `protocol[+scheme]://identity[@endpoint]` URL.
+ */
 export function a11PeerToString(peer: A11Peer): string {
   const parts: string[] = [];
   if (peer.identity) parts.push(peer.identity);
@@ -337,11 +340,10 @@ export type InteractionInput = z.input<typeof interactionSchema>;
 /**
  * Validate and default-fill an unknown value into an {@link Interaction}.
  *
- * The result is branded with its serialization tag, which is what lets it go
- * back out to a peer as an `Interaction` rather than an anonymous object — see
- * {@link tagValue}. Build interactions through here (or
- * {@link makeTextMessageInteraction}) rather than as object literals, or the
- * backend will reject them.
+ * The result receives the serialization tag required when sending an
+ * `Interaction` to another peer; see {@link tagValue}. Build interactions here
+ * or with {@link makeTextMessageInteraction}, because untagged object literals
+ * do not satisfy the wire contract.
  */
 export function parseInteraction(value: unknown): StatusOr<Interaction> {
   const parsed = zodParse(interactionSchema, value, 'Interaction');
@@ -362,11 +364,9 @@ export function makeInteraction(
  * The content is the backend-neutral `{role, content: [text part]}` envelope,
  * so a plain text turn stays portable across a mid-conversation model switch.
  *
- * An interaction's `content` and `system_instructions` are lists of
- * {@link Chunk}s, not of bare JSON — that is what every backend reads, and a
- * peer validating this one against its own model rejects anything else. Which
- * is why this is async: making a chunk means going through the serialization
- * registry, the same way `a11.to_chunk` does on the Python side.
+ * `content` and `system_instructions` contain {@link Chunk} values. Building
+ * those chunks uses the asynchronous serialization registry, equivalent to
+ * `a11.to_chunk` in Python.
  */
 export async function makeTextMessageInteraction(
   text: string,
@@ -405,16 +405,13 @@ function randomUuid(): string {
 
 // --- Serialization -----------------------------------------------------------
 //
-// The SDK's models are `zod` types, so at runtime they are plain objects with
-// nothing to tell them apart from any other object a caller might send. Each is
-// branded with its canonical tag when built or decoded, and registered here so
-// it survives a round trip through a peer in another language: an interaction
-// handed back to the backend has to arrive as `a11.sdk.Interaction`, not as an
-// anonymous JSON blob the strict `interactions` port will refuse.
+// SDK models are plain objects at runtime. Canonical tags distinguish their
+// wire types across language boundaries, including the type required by the
+// strict `interactions` port.
 //
-// `dump` is a shallow copy: the brand lives under a symbol, so a model's own
-// enumerable fields are already exactly what goes on the wire — but handing the
-// encoder the very object it is walking would read as a cycle and be refused.
+// `dump` returns a shallow copy because the tag is stored under a symbol and
+// only enumerable fields go on the wire. Returning the source object would be
+// detected as a cycle by the active encoder.
 
 function registerModelCodec<S extends z.ZodType>(
   tag: string,
@@ -544,7 +541,7 @@ export type InteractionNormalizer = (
 
 const interactionNormalizers = new Map<string, InteractionNormalizer>();
 
-/** Register a backend's native-content → {@link NormalizedMessage} producer. */
+/** Register a backend-specific {@link NormalizedMessage} converter. */
 export function registerInteractionNormalizer(
   backend: string,
   normalizer: InteractionNormalizer,

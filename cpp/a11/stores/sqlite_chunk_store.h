@@ -55,7 +55,9 @@ struct SQLiteChunkStoreOptions {
    */
   absl::Duration cross_process_poll_interval = absl::ZeroDuration();
 
-  /** How long an unreferenced blob must survive before a sweep may remove it. */
+  /**
+   * How long an unreferenced blob must survive before a sweep may remove it.
+   */
   absl::Duration blob_grace_period = absl::Hours(1);
 
   /// Validate the threshold, owner id and durations.
@@ -89,7 +91,7 @@ class SQLiteChunkStoreFactory;
 /**
  * A persistent ChunkStore backed by one SQLite database and a blob directory.
  *
- * The layout under the storage root is deliberately plain:
+ * The layout under the storage root is:
  *
  * ```
  * ./store.sqlite
@@ -262,7 +264,9 @@ class SQLiteChunkStoreFactory {
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>> Create(
       const std::string& root);
 
-  /** Create a factory at the default root with the environment/default policy. */
+  /**
+   * Create a factory at the default root with the environment/default policy.
+   */
   static absl::StatusOr<std::shared_ptr<SQLiteChunkStoreFactory>> Create();
 
   /**

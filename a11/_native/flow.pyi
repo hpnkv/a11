@@ -180,10 +180,9 @@ class Program:
         """
         Whether the file declares a `flow { ... }` -- a program.
 
-        A bool rather than the flow itself, because an entry flow is deliberately
-        unaddressable: it has no name, so there is no `program["..."]` that reaches it and
-        nothing can `run` or `call` it. What a caller does with this is decide whether to
-        run the file with `run_program` or to pick one of `names`.
+        Returns a bool because an entry flow has no name and cannot be accessed through
+        `program["..."]`, `run`, or `call`. Use this to choose between `run_program` and
+        a named flow from `names`.
         """
 
     @property
@@ -354,9 +353,8 @@ def scan(paths: collections.abc.Sequence[str]) -> dict[str, typing.Any]:
 
     Walks each path -- a file or a directory -- for ``ActionSchema`` declarations in
     Python, C++ and TypeScript, and returns a ``flow.catalogue/v1`` payload in which
-    every entry carries the ``origin`` it was declared at. That is what makes an
-    action somebody wrote this afternoon hoverable in a flow, and what gives it
-    somewhere for "go to declaration" to land.
+    every entry carries its declaration ``origin``. Editors use that location for
+    hover information and "go to declaration".
 
     A tolerant textual read, not a parser for three languages: a schema written as a
     constructor call with literal arguments comes back whole, one assembled statement

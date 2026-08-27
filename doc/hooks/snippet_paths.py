@@ -1,21 +1,16 @@
 # Copyright 2026 The A11 Authors.
 
-"""Anchor snippet paths to the repository rather than to the shell.
+"""Resolve documentation snippets relative to the repository.
 
 A page embeds a file from the checkout with `--8<-- "path/to/file"`, and
-`pymdownx.snippets` resolves that against its `base_path` -- which it resolves
-against the **current working directory**. Written in ``mkdocs.yml`` as ``..``
-that means "the repository" only while mkdocs is run from ``doc/``, which
-``doc/build.sh`` does and a person typing ``mkdocs build -f doc/mkdocs.yml``
-does not. The failure is a hard error naming a file that is plainly there.
-
-So the relative entry is replaced with the absolute path it was always meant to
-be, worked out from where this file is. Every cwd then reads the same snippet.
+`pymdownx.snippets` resolves `base_path` from the current working directory.
+Converting the configured path to an absolute repository path keeps both
+``doc/build.sh`` and ``mkdocs build -f doc/mkdocs.yml`` consistent.
 """
 
 import pathlib
 
-#: The directory ``mkdocs.yml`` is in, which is what its relative paths mean.
+#: Directory containing ``mkdocs.yml`` and the base for its relative paths.
 CONFIG_DIR = pathlib.Path(__file__).resolve().parents[1]
 
 #: The extension whose paths are being anchored.

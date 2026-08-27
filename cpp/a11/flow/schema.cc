@@ -23,7 +23,8 @@ namespace {
 
 using syntax::Constant;
 
-/// A Flow constant as JSON. The three the language has that JSON does not go out
+/// A Flow constant as JSON. The three the language has that JSON does not go
+/// out
 /// the way the schema says to read them back.
 nlohmann::json ConstantJson(const Constant& value) {
   switch (value.kind) {
@@ -128,7 +129,8 @@ Constant ConstantOf(const nlohmann::json& value) {
 
 /// Whether a range on this type bounds a length rather than a magnitude.
 ///
-/// The same judgement the coercion makes, and it has to be: a schema that turned
+/// The same judgement the coercion makes, and it has to be: a schema that
+/// turned
 /// `1..200` on a string into `minimum` would validate different values from the
 /// flow it came from.
 bool BoundsLength(std::string_view type) {
@@ -178,9 +180,7 @@ void WriteScalar(std::string_view type, nlohmann::json& out) {
     return;
   }
   // `json` and `any` say nothing, which in JSON Schema is `{}` -- anything
-  // validates. A quoted mimetype or a registry tag is a type only the host
-  // knows; a schema can say it is a string carrying that, and the extension says
-  // which.
+  // validates.
   if (type == "json" || type == "any") {
     return;
   }
@@ -319,7 +319,8 @@ void Report(SchemaImport& into, std::string_view code, std::string message) {
 /// The Flow name for a shape, from a `$ref` or a `$defs` key.
 ///
 /// A name that would not lex as one is repaired rather than refused: a schema
-/// written elsewhere is under no obligation to name things the way this language
+/// written elsewhere is under no obligation to name things the way this
+/// language
 /// does, and an import that failed on a hyphen would be useless.
 std::string FlowName(std::string_view given) {
   std::string name;
@@ -406,8 +407,9 @@ std::string ScalarType(const nlohmann::json& property) {
   if (type != property.end() && type->is_string()) {
     spelled = type->get<std::string>();
   } else if (type != property.end() && type->is_array()) {
-    // A union of a type and `null` is how a schema spells "may be absent", which
-    // Flow spells by the field not being required. The type is the other one.
+    // A union of a type and `null` is how a schema spells "may be absent",
+    // which Flow spells by the field not being required. The type is the other
+    // one.
     for (const nlohmann::json& one : *type) {
       if (one.is_string() && one.get<std::string>() != "null") {
         spelled = one.get<std::string>();
@@ -500,9 +502,7 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
   } else {
     // A length and a magnitude are one range in Flow, and which of the two a
     // range means is decided by the field's type -- so `minLength` on a string
-    // and `minimum` on a number both arrive here as the same thing. A schema
-    // that wrote both of a pair would be describing a value that is a string and
-    // a number at once; the one that matches the type is the one read.
+    // and `minimum` on a number both arrive here as the same thing.
     const bool length = BoundsLength(field.type);
     const char* low = length ? "minLength" : "minimum";
     const char* high = length ? "maxLength" : "maximum";
@@ -648,7 +648,8 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
       if (FlowName(key) != named || !definition.is_object()) {
         continue;
       }
-      // The `$defs` travel with every nested read, so a shape that names one two
+      // The `$defs` travel with every nested read, so a shape that names one
+      // two
       // levels down is still found.
       nlohmann::json carried = definition;
       if (!carried.contains("$defs")) {
@@ -732,7 +733,8 @@ SchemaImport JsonSchemaToDtos(const nlohmann::json& schema,
 }
 
 std::string DtoToFlow(const DtoPlan& dto) {
-  // The columns the formatter would give it, worked out the same way: the widest
+  // The columns the formatter would give it, worked out the same way: the
+  // widest
   // name, and the widest type among the lines that carry a description.
   size_t name_width = 0;
   size_t type_width = 0;

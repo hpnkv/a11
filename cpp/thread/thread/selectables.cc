@@ -31,9 +31,7 @@ bool PermanentEvent::Handle(
     // Synchronized by lock_
     thread::MutexLock l2(&case_state->selector->mu);
     // Consider that in the presence of a race with another Selectable,
-    // c->TryPick() may return false in this case. This is safe as we are not
-    // required to maintain an active list after notification has been
-    // delivered.
+    // c->TryPick() may return false in this case.
     return case_state->TryPick();
   }
   if (enqueue) {
@@ -67,7 +65,8 @@ void PermanentEvent::Notify() {
     internal::CaseInSelectClause* case_in_select_clause = cases_to_be_selected_;
     thread::MutexLock l2(&case_in_select_clause->selector->mu);
     case_in_select_clause->TryPick();
-    // Continued storage of enqueued_list_ after TryPick() is guaranteed by selector->mu
+    // Continued storage of enqueued_list_ after TryPick() is guaranteed by
+    // selector->mu
     internal::UnlinkFromList(&cases_to_be_selected_, case_in_select_clause);
   }
 }

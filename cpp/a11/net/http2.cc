@@ -78,6 +78,7 @@ bool IsLowercaseToken(std::string_view text) {
   });
 }
 
+/** The connection-level HTTP/2 receive window. */
 /**
  * The connection-level HTTP/2 receive window.
  *
@@ -91,34 +92,14 @@ bool IsLowercaseToken(std::string_view text) {
  * send ahead; A11's own reader applies backpressure separately, through
  * Http2Options::max_buffered_response_bytes.
  */
-/**
- * The connection-level HTTP/2 receive window.
- *
- * HTTP/2 defaults both the connection and each stream to 65535 bytes, and
- * SETTINGS_INITIAL_WINDOW_SIZE governs *streams only* -- the connection window
- * has to be raised on its own. A window is a bandwidth-delay product: 64 KiB
- * against a CDN edge 40 ms away is 1.6 MB/s no matter how fast the link, which
- * is what made downloads here run at a few MB/s on a multi-gigabit connection.
- *
- * Shared by every stream on the connection, so it is sized above the per-stream
- * window rather than equal to it.
- */
 constexpr std::int32_t kConnectionWindowSize = 16 * 1024 * 1024;
 
-/**
- * @brief The per-stream receive window, bounded by what we will buffer.
- *
- * A receive window is a promise to accept that much unacknowledged data, so
- * promising more than the reader is willing to hold just moves the queue into
- * memory we did not budget. Tying the two together means one knob --
- * Http2Options::max_buffered_response_bytes -- sets both how much is buffered
- * and how much may be in flight, and a caller doing a bulk transfer raises them
- * together.
- */
+/** The per-stream receive window, bounded by what we will buffer. */
 /**
  * How much space a response batch reserves on its first DATA frame.
  *
- * One TCP read commonly carries several 16 KiB frames, and a batch is bounded by
+ * One TCP read commonly carries several 16 KiB frames, and a batch is bounded
+ * by
  * what a single read delivered, so this is sized to libuv's read buffer.
  * Reserving up front means the batch grows by appending into spare capacity
  * rather than reallocating and copying its way up.
@@ -841,7 +822,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,
          static_cast<std::uint32_t>(StreamWindowSize(options_))}};
     if (server_) {
-      // Extended CONNECT is a server's to offer. ENABLE_PUSH is deliberately
+      // Extended CONNECT is a server capability. ENABLE_PUSH is
       // absent: a server may only ever send it as 0, so saying so adds nothing.
       settings.push_back({NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1});
     } else {
@@ -856,12 +837,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (result != 0) {
       return Nghttp2Error(result, "nghttp2_submit_settings");
     }
-    // SETTINGS_INITIAL_WINDOW_SIZE above governs *stream* windows only. The
-    // connection-level receive window is separate and stays at HTTP/2's 65535
-    // default unless it is raised explicitly, which caps the whole connection at
-    // 64 KiB in flight -- one bandwidth-delay product of about 10 MB/s on a 6 ms
-    // path, and far less once per-frame acknowledgement latency dominates. It is
-    // the difference between a few MB/s and line rate on a fast link.
+    // SETTINGS_INITIAL_WINDOW_SIZE above governs *stream* windows only.
     result = nghttp2_session_set_local_window_size(
         session_, NGHTTP2_FLAG_NONE, /*stream_id=*/0, kConnectionWindowSize);
     if (result != 0) {
@@ -877,8 +853,10 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
    *
    * nghttp2 delivers one callback per DATA frame -- 16 KiB by default -- so a
    * bulk transfer would otherwise cost an allocation, a promise resolution, a
-   * fiber wake-up and a downstream write *per frame*. Everything that arrived in
-   * one TCP read is handed over together instead, which costs no latency at all:
+   * fiber wake-up and a downstream write *per frame*. Everything that arrived
+   * in
+   * one TCP read is handed over together instead, which costs no latency at
+   * all:
    * the bytes were already here, and the reader was going to be woken for them
    * regardless.
    *
@@ -1320,8 +1298,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
                                    ? std::string(secure() ? "https" : "http")
                                    : associated->origin_scheme;
     if (associated->origin_authority.empty()) {
-      // Every promised request needs an `:authority`, and the only honest source
-      // of one is the request being answered.
+      // A promised request inherits `:authority` from the request being
+      // answered.
       return absl::FailedPreconditionError(
           "The request being answered has no authority to push against");
     }
@@ -1445,8 +1423,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
    * Whether this request's body should reach the handler as it arrives.
    *
    * The predicate sees the head as the handler will: the method and path
-   * pseudo-headers pulled out, and the ordinary fields on their own. Runs on the
-   * loop thread inside nghttp2's frame callback, so a throwing or blocking
+   * pseudo-headers pulled out, and the ordinary fields on their own. Runs on
+   * the loop thread inside nghttp2's frame callback, so a throwing or blocking
    * predicate is the caller's problem; the option documents that.
    */
   bool WantsStreamedRequestBody(const Stream* stream) const {
@@ -1684,11 +1662,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
                   frame->headers.cat == NGHTTP2_HCAT_PUSH_RESPONSE ||
                   frame->headers.cat == NGHTTP2_HCAT_HEADERS)) {
         // Which of the two header blocks a response may carry this is comes
-        // from the block itself rather than from nghttp2's category: one with
-        // `:status` is a response head, and a trailer section is forbidden
-        // from carrying pseudo-headers at all. HCAT_PUSH_RESPONSE is the head
-        // of a pushed response, and HCAT_HEADERS covers the trailers of
-        // either kind.
+        // from the block itself rather than from nghttp2's category:
         if (GetHttpHeader(stream->inbound_headers, ":status").has_value()) {
           self->CompleteResponseHeaders(stream);
         } else {
@@ -2212,10 +2186,6 @@ absl::StatusOr<std::shared_ptr<HttpTransport>> CreateServerConnection(
 }
 
 // Turns off Nagle, and says so if it cannot.
-//
-// Not fatal: a connection with Nagle on works, it just holds small writes back
-// waiting for an ack that A11's request/response traffic has no reason to send
-// yet. Worth a log rather than a failed connection.
 void SetNoDelay(const std::shared_ptr<uvw::tcp_handle>& tcp,
                 absl::string_view which) {
   if (tcp == nullptr) {
@@ -2269,12 +2239,8 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
           }
           std::shared_ptr<uvw::tcp_handle> client;
           client = listening.parent().resource<uvw::tcp_handle>();
-          // A11's traffic is request and response: small frames whose sender
-          // is waiting for an answer before it has anything else to send.
-          // Nagle exists to coalesce a stream of such writes, and with
-          // nothing following to coalesce it just holds each one back for an
-          // ack, which is the one case where it costs latency and buys
-          // nothing.
+          // A11's traffic is request and response: small frames whose sender is
+          // waiting for an answer before it has anything else to send.
           SetNoDelay(client, "accepted");
           const int accepted = listening.accept(*client);
           if (accepted != 0) {
@@ -2306,14 +2272,7 @@ absl::StatusOr<std::shared_ptr<Http2Server>> Http2Server::Create(
                   }
                   return;
                 }
-                // Decided under the lock, closed outside it. Close() reaches the
-                // connection's on_closed hook -- remove_connection above, which
-                // takes this very mutex -- and on the loop thread it gets there
-                // synchronously, because RunStatusOnUv runs its operation inline
-                // when it is already on the loop. Closing with the lock held
-                // therefore re-locked it: a fibre mutex refuses that, so the
-                // server aborted with "a deadlock is detected" on whichever
-                // accept happened to land after the listener stopped running.
+                // Decided under the lock, closed outside it.
                 bool registered = false;
                 if (std::shared_ptr<State> active = weak.lock();
                     active != nullptr) {
@@ -2586,9 +2545,7 @@ a11::Future<std::shared_ptr<Http2Client>> Http2Client::Connect(
                   if (!ready.ok()) {
                     ready_connection->Close(ready.status()).IgnoreError();
                     // Cleartext try-and-downgrade: if the preferred protocol
-                    // could not be established (e.g. the server speaks the
-                    // other one and closed the connection), reconnect once
-                    // with the alternate protocol.
+                    // could not be established (e.g.
                     if (!options.tls.enabled &&
                         options.client_allow_downgrade &&
                         options.client_preference == Preference::kAuto &&

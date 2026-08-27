@@ -184,10 +184,7 @@ absl::Status ValidateName(std::string_view name) {
         "name must start and end with an ASCII letter, digit, or underscore");
   }
   // One table lookup per character rather than the four comparisons and two
-  // calls that the predicate form compiles to. This runs over every id in every
-  // record A11 encodes or decodes -- it was 2.19% of the server benchmark's
-  // profile once the allocator stopped dominating -- and the table is 256 bytes
-  // resolved at compile time.
+  // calls that the predicate form compiles to.
   static constexpr std::array<bool, 256> kAllowed = [] {
     std::array<bool, 256> allowed{};
     for (int value = 0; value < 256; ++value) {
@@ -244,8 +241,8 @@ absl::Status ChunkMetadata::SetAttribute(std::string key, std::string value) {
 }
 
 absl::StatusOr<Bytes> ChunkMetadata::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -355,8 +352,8 @@ absl::Status Chunk::Materialize() {
 }
 
 absl::StatusOr<Bytes> Chunk::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -461,8 +458,8 @@ absl::Status NodeRef::Validate() const {
 }
 
 absl::StatusOr<Bytes> NodeRef::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -561,8 +558,8 @@ absl::StatusOr<const NodeRef* absl_nonnull> NodeFragment::GetNodeRef() const {
 }
 
 absl::StatusOr<Bytes> NodeFragment::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -659,8 +656,8 @@ absl::Status Port::Validate() const {
 }
 
 absl::StatusOr<Bytes> Port::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -730,8 +727,8 @@ absl::Status ActionMessage::Validate() const {
 }
 
 absl::StatusOr<Bytes> ActionMessage::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;
@@ -894,8 +891,8 @@ absl::Status WireMessage::Validate() const {
 }
 
 absl::StatusOr<Bytes> WireMessage::ToMsgpack() const {
-  // Validated once, here, for the whole tree: Validate() recurses, so leaving it
-  // in ToMsgpackInto() as well re-checked every nested id once per ancestor
+  // Validated once, here, for the whole tree: Validate() recurses, so leaving
+  // it in ToMsgpackInto() as well re-checked every nested id once per ancestor
   // level. ValidateName was 2.19% of profile, most of it that repetition.
   ABSL_RETURN_IF_ERROR(Validate());
   MsgpackWriter writer;

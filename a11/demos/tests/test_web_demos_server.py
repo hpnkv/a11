@@ -89,11 +89,10 @@ class _FakeStream:
 
 
 class _FakeOllama:
-    """Answers each `chat` from what it was asked.
+    """Return deterministic `chat` responses based on request content.
 
-    Content-addressed rather than scripted by call order, because the
-    investigations run in parallel: which of them reaches the provider first is
-    not something a test should depend on.
+    Parallel investigations may reach the provider in any order, so responses
+    cannot depend on call sequence.
     """
 
     def __init__(self, reply) -> None:
@@ -152,7 +151,8 @@ class _Peer:
 
     def action(self, schema: a11.ActionSchema) -> a11.Action:
         return (
-            a11.Action(schema)
+            a11
+            .Action(schema)
             .bind_node_map(self.session.node_map)
             .bind_session(self.session)
             .bind_stream(self.stream)
@@ -295,13 +295,11 @@ async def test_a_turn_is_recorded_and_read_back_after_a_reload(
 
 # --- The deep-research guide -------------------------------------------------
 
-_PLAN = "\n".join(
-    (
-        "Find out what a fiber is.",
-        "Find out what a node is.",
-        "FINALLY: write both up in one paragraph.",
-    )
-)
+_PLAN = "\n".join((
+    "Find out what a fiber is.",
+    "Find out what a node is.",
+    "FINALLY: write both up in one paragraph.",
+))
 
 
 def _research_reply(asked: str) -> list[ollama.ChatResponse]:
@@ -445,10 +443,9 @@ def test_the_research_flows_advertise_the_local_ollama(
 
 # --- The browser-tools guide -------------------------------------------------
 
-#: A port per argument, because that is what the model is shown: the tool
-#: definition is derived from the ports (see
-#: [ToolAdapter][a11.sdk.llm_tools.adapter.ToolAdapter]), and a streaming port
-#: becomes an array.
+#: A port per argument. The model tool definition is derived from these ports
+#: through [ToolAdapter][a11.sdk.llm_tools.adapter.ToolAdapter]. A streaming
+#: port becomes an array.
 SET_COLOR_SCHEMA = a11.ActionSchema(
     name="set_color",
     description="Recolour the blobs with the given ids.",
@@ -505,9 +502,8 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
     mine.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, set_color)
     connected = await peer(mine)
 
-    # Nothing is announced: the page registered `set_color` on the registry it
-    # gave its session, and the server asks that session what it serves the
-    # first time a turn needs tools. This is the whole of a page's part.
+    # The page registers `set_color` on its session registry. The server reads
+    # the available actions from that registry when a turn first needs tools.
     answer, _ = await _one_turn(
         connected, _user("make blob 2 red"), allowed=b"set_color"
     )
@@ -558,9 +554,7 @@ def test_the_service_is_not_built_by_importing_the_module(
     import does" is not answerable in a process that has already done it.
     """
     root = tmp_path / "unwanted"
-    environment = dict(
-        os.environ, **{demos.CONVERSATION_ROOT_ENV: str(root)}
-    )
+    environment = dict(os.environ, **{demos.CONVERSATION_ROOT_ENV: str(root)})
     finished = subprocess.run(
         [
             sys.executable,
@@ -591,7 +585,10 @@ def test_the_hosting_flags_are_a11_serves_own(
     args = parser.parse_args(["--ws", "--hosted", "demoserver"])
 
     assert args.target == demos.TARGET
-    assert (args.ws_port, args.ws_path) == (demos.DEFAULT_PORT, demos.DEFAULT_PATH)
+    assert (args.ws_port, args.ws_path) == (
+        demos.DEFAULT_PORT,
+        demos.DEFAULT_PATH,
+    )
     assert args.hosted == "demoserver"
 
 
@@ -614,9 +611,11 @@ def test_its_own_flags_reach_the_service_through_the_environment(
         return 0
 
     monkeypatch.setattr(serve_command, "run", fake_run)
-    code = demos.main(
-        ["--conversation-root", str(tmp_path / "here"), "--no-text-to-image"]
-    )
+    code = demos.main([
+        "--conversation-root",
+        str(tmp_path / "here"),
+        "--no-text-to-image",
+    ])
 
     assert code == 0
     assert ran and ran[0].target == demos.TARGET
@@ -653,7 +652,8 @@ async def test_a_browser_style_websocket_client_reaches_the_demo_actions(
         )
         try:
             listing = (
-                a11.Action(conversation_actions.GET_CONVERSATIONS_SCHEMA)
+                a11
+                .Action(conversation_actions.GET_CONVERSATIONS_SCHEMA)
                 .bind_node_map(session.node_map)
                 .bind_session(session)
                 .bind_stream(stream)

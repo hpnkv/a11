@@ -35,13 +35,12 @@ def test_ice_is_not_multiplexed_by_default():
 
 
 def test_a_hosted_agent_holds_its_mtu_rather_than_probing_upward():
-    """Discovery off, against the transport's own default, and deliberately.
+    """Disable MTU discovery for hosted agents.
 
     A raised MTU whose packets are dropped in flight produces no send error, so
-    nothing reports it: the association wedges until the black-hole detector
-    notices. Observed as a flow run whose output stops mid-stream and never
-    resumes, about one run in six. A hosted agent is reached through a TURN
-    relay across the internet, which is the path least worth guessing about.
+    the association waits for the black-hole detector before falling back.
+    Hosted agents use internet paths through TURN relays, where probing is not
+    reliable enough to raise the configured MTU.
     """
     configuration = hosted_configuration()
 
@@ -65,16 +64,14 @@ def test_multiplexing_is_available_for_a_single_peer_host():
 
 
 def test_stun_and_turn_are_separated():
-    configuration = hosted_configuration(
-        [
-            {"urls": ["stun:stun.example:3478"]},
-            {
-                "urls": ["turn:turn.example:3478"],
-                "username": "1787568765:a-claim",
-                "credential": "the-derived-password",
-            },
-        ]
-    )
+    configuration = hosted_configuration([
+        {"urls": ["stun:stun.example:3478"]},
+        {
+            "urls": ["turn:turn.example:3478"],
+            "username": "1787568765:a-claim",
+            "credential": "the-derived-password",
+        },
+    ])
 
     assert list(configuration.stun_servers) == ["stun:stun.example:3478"]
     assert len(configuration.turn_servers) == 1
@@ -88,19 +85,17 @@ def test_stun_and_turn_are_separated():
 
 def test_one_entry_may_carry_several_urls():
     """As `RTCIceServer` allows, and as the exchange emits."""
-    configuration = hosted_configuration(
-        [
-            {
-                "urls": [
-                    "turn:turn.example:3478",
-                    "turn:turn.example:3478?transport=tcp",
-                    "turns:turn.example:5349",
-                ],
-                "username": "u",
-                "credential": "p",
-            }
-        ]
-    )
+    configuration = hosted_configuration([
+        {
+            "urls": [
+                "turn:turn.example:3478",
+                "turn:turn.example:3478?transport=tcp",
+                "turns:turn.example:5349",
+            ],
+            "username": "u",
+            "credential": "p",
+        }
+    ])
 
     kinds = [server.relay_type for server in configuration.turn_servers]
     assert kinds == [
@@ -118,9 +113,9 @@ def test_one_entry_may_carry_several_urls():
 
 
 def test_a_url_without_a_port_gets_the_scheme_default():
-    configuration = hosted_configuration(
-        [{"urls": ["turn:turn.example", "turns:turn.example"]}]
-    )
+    configuration = hosted_configuration([
+        {"urls": ["turn:turn.example", "turns:turn.example"]}
+    ])
 
     assert [s.hostname for s in configuration.turn_servers] == [
         "turn.example",
@@ -131,9 +126,9 @@ def test_a_url_without_a_port_gets_the_scheme_default():
 
 def test_unknown_schemes_are_dropped_rather_than_guessed():
     """An exchange may advertise something this client does not speak."""
-    configuration = hosted_configuration(
-        [{"urls": ["https://turn.example/rest", "stun:stun.example:3478"]}]
-    )
+    configuration = hosted_configuration([
+        {"urls": ["https://turn.example/rest", "stun:stun.example:3478"]}
+    ])
 
     assert list(configuration.stun_servers) == ["stun:stun.example:3478"]
     assert list(configuration.turn_servers) == []
@@ -233,11 +228,10 @@ async def test_a_lapsing_credential_rebinds_in_the_right_order():
 
 @pytest.mark.asyncio
 async def test_a_failing_drop_hook_does_not_stop_the_rebind():
-    """A listener that will not stop must not cost the host its reconnect.
+    """A failing drop hook does not prevent transport rebinding.
 
-    The whole point of the rebind is to get a working transport back. If a
-    misbehaving hook could abort it, one bad listener would leave the host
-    unregistered -- the failure this is all here to prevent.
+    Hook failures are isolated so the host can register the replacement
+    transport.
     """
     import time as time_module
 
@@ -313,9 +307,10 @@ async def test_no_rebind_when_renewal_has_not_produced_newer_credentials():
 def test_credentials_expire_at_takes_the_earliest():
     endpoint = _endpoint()
     endpoint.claim = _FakeClaim(1000.0)
-    endpoint.claim.ice_servers.append(
-        {"urls": ["turn:other.example:3478"], "expires_at": 500.0}
-    )
+    endpoint.claim.ice_servers.append({
+        "urls": ["turn:other.example:3478"],
+        "expires_at": 500.0,
+    })
 
     assert endpoint.credentials_expire_at() == 500.0
 
@@ -489,7 +484,9 @@ def _maintaining(status_code) -> "hosting.HostedEndpoint":
     endpoint._bound_expiry = None
 
     async def refuse() -> None:
-        raise Status(code=status_code, message="The credential is not valid.").to_exception()
+        raise Status(
+            code=status_code, message="The credential is not valid."
+        ).to_exception()
 
     endpoint._renew_if_due = refuse
     return endpoint
@@ -501,7 +498,9 @@ def _maintaining(status_code) -> "hosting.HostedEndpoint":
     ids=["unauthenticated", "permission-denied"],
 )
 @pytest.mark.asyncio
-async def test_a_credential_that_stopped_working_stops_hosting(code, monkeypatch):
+async def test_a_credential_that_stopped_working_stops_hosting(
+    code, monkeypatch
+):
     """Rather than retrying it every thirty seconds for the life of the process.
 
     The bug this exists for: a personal key was given to a long-running host,
@@ -522,7 +521,9 @@ async def test_a_credential_that_stopped_working_stops_hosting(code, monkeypatch
     assert endpoint.fatal is not None
     assert endpoint.fatal.code == code
     # And a caller waiting on it is told, without having to poll.
-    assert await asyncio.wait_for(endpoint.wait_stopped(), timeout=5) is not None
+    assert (
+        await asyncio.wait_for(endpoint.wait_stopped(), timeout=5) is not None
+    )
 
 
 @pytest.mark.asyncio
@@ -551,7 +552,9 @@ async def test_a_transient_renewal_failure_keeps_hosting(monkeypatch):
         calls += 1
         if calls >= 3:
             endpoint._stopped.set()
-        raise Status(code=StatusCode.UNAVAILABLE, message="try later").to_exception()
+        raise Status(
+            code=StatusCode.UNAVAILABLE, message="try later"
+        ).to_exception()
 
     endpoint._renew_if_due = refuse_then_stop
 

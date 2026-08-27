@@ -49,13 +49,11 @@ REBIND_MARGIN_SECONDS = 120.0
 #: `UNAUTHENTICATED` and `PERMISSION_DENIED` are the credential: a key that has
 #: been revoked or narrowed answers the same way for ever, and a host that
 #: retries it stays online-looking and unreachable until a person reads the log.
-_HOPELESS = frozenset(
-    {
-        StatusCode.FAILED_PRECONDITION,
-        StatusCode.UNAUTHENTICATED,
-        StatusCode.PERMISSION_DENIED,
-    }
-)
+_HOPELESS = frozenset({
+    StatusCode.FAILED_PRECONDITION,
+    StatusCode.UNAUTHENTICATED,
+    StatusCode.PERMISSION_DENIED,
+})
 
 
 def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
@@ -67,7 +65,7 @@ def _turn_server(url: str, username: str, password: str) -> "net.TurnServer":
         host, port = rest, ""
     transport = ""
     if query.startswith("transport="):
-        transport = query[len("transport="):].lower()
+        transport = query[len("transport=") :].lower()
     if not transport:
         transport = "tls" if scheme == "turns" else "udp"
 
@@ -92,24 +90,17 @@ def hosted_configuration(
 ) -> "net.WebRtcConfiguration":
     """How a hosted agent should negotiate with peers that dial it.
 
-    `ice_servers` is the list the exchange handed over with the claim, in
-    `RTCIceServer` shape. Passing it matters more than it looks: without it a
-    host behind NAT offers only its own private addresses and the relay only
-    its cloud NAT's, neither can use the other's, and the handshake just never
-    completes -- with nothing in either log saying why. Prefer
+    `ice_servers` is the `RTCIceServer` list included with the exchange claim.
+    It supplies relay addresses needed when hosts are behind NAT. Prefer
     `HostedEndpoint.webrtc_configuration()`, which reads the live claim.
 
-    `discover_path_mtu` is **off** here, against the transport's own default,
-    and the reason is the whole point of the flag. Discovery raises the
-    association MTU once a burst of padded heartbeats is acknowledged; a burst
-    of probes can be luckier than a stream of data, and when it is, packets at
-    the raised size are dropped in flight. A silent drop produces no local send
-    error, so nothing reports it and the association sits wedged until the
-    black-hole detector notices -- observed as a flow run whose output stops
-    mid-stream and never resumes, about one run in six. A hosted agent is
-    reached *through a TURN relay across the internet*, which is exactly the
-    path whose MTU cannot be characterised, so it holds the configured one.
-    Pass True where both ends are on a network you know.
+    `discover_path_mtu` is disabled here, overriding the transport default.
+    Discovery raises the association MTU after acknowledging a burst of padded
+    heartbeats. Intermittent probe success can select a size that later packets
+    cannot carry, delaying fallback until black-hole detection completes.
+    Hosted agents commonly use internet paths through TURN relays, whose MTU
+    cannot be characterised reliably, so they keep the configured value. Pass
+    True only when both endpoints use a controlled network.
     """
     configuration = net.WebRtcConfiguration()
     configuration.enable_ice_udp_mux = multiplex_ice
@@ -354,9 +345,7 @@ class HostedEndpoint:
         """Renew the claim before it lapses; reconnect when the socket goes."""
         backoff = MIN_RECONNECT_BACKOFF
         while not self._stopped.is_set():
-            await asyncio.sleep(
-                min(RENEW_POLL_SECONDS, MAX_RECONNECT_BACKOFF)
-            )
+            await asyncio.sleep(min(RENEW_POLL_SECONDS, MAX_RECONNECT_BACKOFF))
             if self._stopped.is_set():
                 return
 
@@ -390,7 +379,9 @@ class HostedEndpoint:
                 continue
 
             self._connected.clear()
-            logging.info("signalling for %s dropped; reconnecting", self.identity)
+            logging.info(
+                "signalling for %s dropped; reconnecting", self.identity
+            )
             await self._relinquish()
             try:
                 await self._connect()

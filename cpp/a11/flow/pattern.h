@@ -31,15 +31,16 @@ namespace a11::flow::pattern {
 ///
 /// The pattern **searches**: it matches anywhere in the value, so
 /// `match("age={age:int}", line)` works on a longer line without leading and
-/// trailing wildcards. A hole captures at least one character and does not cross
+/// trailing wildcards. A hole captures at least one character and does not
+/// cross
 /// a line break unless its type says to.
 ///
 /// This half knows nothing about [Value]: it compiles a pattern, says what its
 /// holes are called, and hands back the *text* each one took. Reading that text
 /// as a number, an instant or a duration is the value layer's job, and keeping
-/// the split is what lets the resolver ask a pattern for its field names without
+/// the split is what lets the resolver ask a pattern for its field names
+/// without
 /// the runtime being linked in.
-
 /// What a hole reads its text as, and how much of it a hole may take.
 enum class HoleType {
   /// Anything up to the next literal, on one line. The default.

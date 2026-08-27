@@ -53,7 +53,7 @@ std::vector<std::string> BodyKinds(const syntax::FlowDeclaration& flow) {
   return kinds;
 }
 
-// A flow using most of the grammar at once. Deliberately one test rather than
+// One flow using most of the grammar at once, kept in a single test so
 // thirty: what matters is that a realistic flow comes out with the shape it was
 // written in, and a per-construct test says less than this does.
 constexpr std::string_view kResearch = R"flow(
@@ -264,9 +264,6 @@ TEST(FlowParser, LogAndLogfReadTheSameTailAsAStatementAndAsAStage) {
 
 TEST(FlowParser, LogIsStillANameWhereTheGrammarWantsOne) {
   // Making a word open a statement makes it a keyword *there* and nowhere else.
-  // A port called `log`, a pipeline sourced from it, and a step bound to the
-  // name all still read as they did, because a statement word followed by `->`,
-  // `|`, `=`, `<-`, `.` or `[` is a name.
   const ParseResult result = Parse(
       "flow f {\n"
       "  in a: string stream\n"
@@ -478,8 +475,7 @@ TEST(FlowParser, ADescriptionMayStandOnTheLineBelowWhatItDescribes) {
 TEST(FlowParser, TryFrontsThreeDifferentThingsToldApartByWhatFollows) {
   // `try` is the one word in the language that fronts three shapes, and the
   // test exists because getting the lookahead off by one silently reclassified
-  // every `try run` in the repository as a pipe -- `Peek(0)` is `Current()`, so
-  // asking about "the next word" from 0 asks about the `try` itself.
+  // every `try run` in the repository as a pipe -- `Peek(0)` is.
   struct Case {
     std::string_view body;
     syntax::NodeKind kind;
@@ -516,8 +512,6 @@ TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
   ASSERT_TRUE(result.diagnostics.empty())
       << absl::StrJoin(Messages(result), "; ");
   ASSERT_EQ(result.flows.size(), 1u);
-  // The bind, whose value is the loop -- not a call, which is what `name = for`
-  // used to be misread as.
   const syntax::Node* bound = result.flows.front()->body[2].get();
   ASSERT_EQ(bound->kind, syntax::NodeKind::kBind);
   const auto* bind = syntax::As<syntax::Bind>(bound);
@@ -531,12 +525,6 @@ TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
 TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
   // A break inside `{ }`, `[ ]` or `( )` ends nothing -- the closing bracket is
   // what ends it -- so an operator may begin the next line.
-  //
-  // This used to be true only straight after a `,`, because the loops reading a
-  // comma-separated list skip newlines themselves: `{"a": 1,\n "b": 2}` parsed
-  // and `{"a": x\n or y}` was `Expected }, found 'or'`. One rule now, and it
-  // matters most for a `scan` carrying a record, which is where the language's
-  // longest expressions are.
   for (const std::string_view wrapped : {
            "  l | map {\"a\": starts-with(it, \"B\")\n"
            "       or ends-with(it, \"E\")} -> o\n",
@@ -556,10 +544,7 @@ TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
 }
 
 TEST(FlowParser, OutsideBracketsALineBreakStillEndsTheStatement) {
-  // The property the change above must not cost. A break outside brackets ends
-  // the statement, which is what stops a `where` on the line below from being
-  // read as a continuation of the pipe above it -- so an operator alone on the
-  // next line is still an error rather than a continuation.
+  // The property the change above must not cost.
   const ParseResult result = Parse(
       "flow f {\n  in l: string stream\n  out o: string stream\n"
       "  l where starts-with(it, \"B\")\n"
@@ -750,8 +735,6 @@ TEST(FlowParser, EveryDiagnosticCodeItProducesIsPublished) {
 }
 
 TEST(FlowParser, StopsRatherThanSpinsOnTextThatIsNotAFlowAtAll) {
-  // Every one of these used to be a way to hang a hand-written parser. The
-  // guarantee is only that parsing terminates and says something.
   const std::string_view sources[] = {
       "",
       "}",
@@ -839,9 +822,6 @@ TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
 // A block and an `abort` are statements like any other, and both were once
 // missing from the switches that name a node and write one out: the envelope
 // carried a `block` with no body at all, and `abort` came back as "error".
-// Deep nesting is a diagnostic, not a stack overflow: the parse is recursive
-// descent and A11's fibres have small fixed stacks, so the depth a document can
-// reach has to be a constant of the parser rather than a property of the input.
 TEST(FlowParser, RefusesToDescendPastItsNestingBound) {
   std::string deep = "flow f {\n  out o: json\n  ";
   deep.append(400, '[');
@@ -918,8 +898,8 @@ std::string ReadFile(const std::filesystem::path& path) {
 TEST(FlowSyntaxJson, MatchesTheGoldenEveryLanguageReads) {
   // `testdata/flow/syntax.json` is the syntax format pinned against one small
   // flow, in the same spirit as `testdata/flow/codes.json`: the C++ owns it,
-  // and a frontend in another language reads it back to check its own decoder.
-  // Regenerate with
+  // and another-language frontend reads it back to check its decoder.
+  // Regenerate with:
   //
   //   A11_UPDATE_GOLDENS=1 build/ctests/cpp/tests/a11_flow_test
   //       --gtest_filter=FlowSyntaxJson.MatchesTheGoldenEveryLanguageReads
@@ -1114,10 +1094,7 @@ TEST(FlowParser, AFileMayDeclareOnlyShapes) {
 }
 
 TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
-  // Both are statements and both begin with `{`. A record's keys are strings
-  // followed by `:`, and a spread is only ever a record's; anything else opens
-  // statements. Getting this wrong turns `{"a": 1} -> out` into a block, which
-  // is how the values tests found it.
+  // Both are statements and both begin with `{`.
   const auto kind = [](std::string_view source) {
     const ParseResult result = Parse(source);
     if (result.flows.empty() || result.flows.front()->body.empty()) {

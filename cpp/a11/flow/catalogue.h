@@ -17,7 +17,8 @@ namespace a11::flow {
 
 /// What the language knows about the world it runs in.
 ///
-/// **Why this exists.** The tools know the *language* exhaustively and the world
+/// **Why this exists.** The tools know the *language* exhaustively and the
+/// world
 /// it runs in not at all: `run make_http_request(` offers no ports, hovering an
 /// action name says "identifier", and a flow that names `a11.sdk.AudioBuffer`
 /// gets no more help than one that names `a11.sdk.Typo`. The tools cannot fix
@@ -47,7 +48,8 @@ namespace catalogue {
 /// formats uses.
 struct Origin {
   /// The path as the host gave it to the scanner: absolute if the root was,
-  /// relative if it was. Passed through rather than normalised, because the host
+  /// relative if it was. Passed through rather than normalised, because the
+  /// host
   /// has to open the answer in the terms it asked in.
   std::string file;
   int line = 1;
@@ -87,7 +89,8 @@ struct ActionInfo {
 
 /// One type the host knows, by the tag a flow writes it as.
 ///
-/// A [DtoPlan] rather than a shape of its own: a `struct` and a registered type are
+/// A [DtoPlan] rather than a shape of its own: a `struct` and a registered type
+/// are
 /// the same idea to everything that consumes this -- completion of its fields,
 /// a hover that lists them, a schema made from it -- and one shape means the
 /// tools have one code path rather than two.
@@ -107,26 +110,24 @@ class Catalogue {
 
   /// The catalogue these entries make.
   ///
-  /// For a producer that has the entries as values rather than as JSON, which is
-  /// what `discover::Discover` is: it reads source and builds `ActionInfo`s, and
-  /// routing them out through JSON and back would be a round trip that could
-  /// only lose things.
+  /// For a producer that has the entries as values rather than as JSON, which
+  /// is what `discover::Discover` is: it reads source and builds
+  /// `ActionInfo`s, and routing them out through JSON and back would be a
+  /// round trip that could only lose things.
   static Catalogue Of(std::vector<ActionInfo> actions,
                       std::vector<TypeInfo> types = {});
 
   /// The catalogue `value` describes, in the shape [ToJson] writes.
   ///
-  /// Never fails: a field of the wrong type is skipped, because this arrives
-  /// from a frontend that may be older or newer than the tool reading it and
-  /// refusing the lot over one bad entry helps nobody.
+  /// Never fails. Fields with unexpected types are skipped for compatibility
+  /// with older and newer frontends.
   static Catalogue FromJson(const nlohmann::json& value);
 
   /// This catalogue with `other` laid over it.
   ///
-  /// A name in `other` replaces the entry of that name; a name only here stays.
-  /// That is what "a live registry extends the snapshot" means, and it is why
-  /// merging is a whole-entry replace rather than a field-by-field merge: half a
-  /// description from each side would be a third thing that is true of neither.
+  /// A name in `other` replaces the corresponding entry; other existing names
+  /// remain. Whole-entry replacement avoids combining fields from two distinct
+  /// descriptions.
   [[nodiscard]] Catalogue MergedWith(const Catalogue& other) const;
 
   [[nodiscard]] const ActionInfo* absl_nullable Action(

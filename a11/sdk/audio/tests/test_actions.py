@@ -51,9 +51,10 @@ def test_register_installs_every_action() -> None:
 
 
 def test_exported_pairs_cover_every_action_in_order() -> None:
-    assert tuple(
-        schema.name for schema, _ in actions.AUDIO_ACTIONS
-    ) == _NAMES_IN_PROTOCOL_ORDER
+    assert (
+        tuple(schema.name for schema, _ in actions.AUDIO_ACTIONS)
+        == _NAMES_IN_PROTOCOL_ORDER
+    )
     for schema, handler in actions.AUDIO_ACTIONS:
         schema.validate()  # raises if invalid
         assert isinstance(handler, a11.actions.NativeActionHandler)
@@ -221,12 +222,11 @@ def test_audio_buffer_msgpack_round_trip() -> None:
 
 
 def test_transcribe_audio_rejects_a_model_it_cannot_resolve() -> None:
-    """An unresolvable model is the remaining validation on that input.
+    """Reject an explicit model that cannot be resolved.
 
-    An *absent* model is no longer an error -- it means the default shorthand,
-    which the action downloads into the shared cache. That path needs a model
-    file and a network, so it is covered by the C++ suites and by the end-to-end
-    gateway checks rather than here.
+    An absent model selects the default shorthand, which the action downloads
+    into the shared cache. That network-dependent path is covered by the C++
+    suites and end-to-end gateway checks.
     """
 
     async def run():
@@ -280,7 +280,9 @@ def test_deadline_header_ms_and_ns_semantics() -> None:
 
 def test_set_deadline_header_round_trips_at_ms() -> None:
     action = _registry().make_action(actions.TRANSCRIBE_AUDIO)
-    deadline = a11.Time.from_nanoseconds_since_epoch(1_700_000_000_000 * 1_000_000)
+    deadline = a11.Time.from_nanoseconds_since_epoch(
+        1_700_000_000_000 * 1_000_000
+    )
     a11.set_deadline_header(action, deadline)
     assert action.get_header("x-a11-deadline", decode=True) == "1700000000000"
     assert a11.get_deadline(action) == deadline
@@ -325,7 +327,9 @@ def test_control_event_surface() -> None:
     assert AudioControlEvent().command == "stop"
     assert AudioControlEvent.stop().command == "stop"
     assert AudioControlEvent(command="stop") == AudioControlEvent.stop()
-    assert AudioControlEvent.model_validate({"command": "stop"}).command == "stop"
+    assert (
+        AudioControlEvent.model_validate({"command": "stop"}).command == "stop"
+    )
     assert AudioControlEvent().model_dump() == {"command": "stop"}
 
 
@@ -335,9 +339,13 @@ def test_capture_event_surface() -> None:
     assert dropped.dropped == 3
     assert AudioCaptureEvent.started().kind == "started"
     assert AudioCaptureEvent.stopped().kind == "stopped"
-    assert AudioCaptureEvent.model_validate(
-        {"kind": "buffers_dropped", "dropped": 7}
-    ).dropped == 7
+    assert (
+        AudioCaptureEvent.model_validate({
+            "kind": "buffers_dropped",
+            "dropped": 7,
+        }).dropped
+        == 7
+    )
 
 
 def test_transcription_event_surface() -> None:
@@ -350,9 +358,10 @@ def test_transcription_event_surface() -> None:
 
 
 def test_audio_input_options_new_fields() -> None:
-    options = AudioInputOptions.model_validate(
-        {"device_name": "Mic", "buffer_frames": 512}
-    )
+    options = AudioInputOptions.model_validate({
+        "device_name": "Mic",
+        "buffer_frames": 512,
+    })
     assert options.device_name == "Mic"
     assert options.buffer_frames == 512
     # Defaults omitted from a compact dump.

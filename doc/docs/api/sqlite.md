@@ -37,10 +37,8 @@ A root holds one database and one blob directory:
 ./blobs/7ee4a05e-f439-4e5f-bb97-8d1388960f29
 ```
 
-Every store opened under the same root shares one database, one set of
-connections, and one set of worker threads, so a process holding a thousand
-nodes pays for one database rather than a thousand. Use one factory per root
-to make that sharing explicit.
+Every store opened under the same root shares one database, connection set, and
+worker pool. Use one factory per root to share those resources across nodes.
 
 The `nodes` table holds a row per represented node: the shared producer and
 consumer cursors, closure state and terminal status, the declared final
@@ -50,9 +48,9 @@ sequence, `owner_id`, `created_at`/`updated_at`, and cached counters such as
 [`get_final_seq`][a11.stores.sqlite_chunk_store.SQLiteChunkStore.get_final_seq]
 are single-row reads. A row is created implicitly by the first accepted write.
 
-The `fragments` table decomposes each fragment into columns rather than storing
-an opaque encoded blob, so ordinary SQL can filter by owner, timestamp, or
-reference target. Indexes cover `(node_id, seq)` for sequenced reading,
+The `fragments` table stores fragment fields in separate columns, allowing SQL
+filters by owner, timestamp, or reference target. Indexes cover
+`(node_id, seq)` for sequenced reading,
 `(node_id, arrival_order)` for ingestion order, `owner_id` on the node table,
 and partial indexes on `node_ref_id` and on the blob reference.
 
@@ -87,8 +85,7 @@ still in flight.
 
 This is the only backend that accepts `NodeRef` payloads — `LocalChunkStore`
 and `RedisChunkStore` reject them as `UNIMPLEMENTED`. The target, offset, and
-length become indexed columns, so asking what points at a node is a query
-rather than a walk over every store:
+length become indexed columns, making referrer lookup a query:
 
 ```python
 referrers = await store.find_referrers()
@@ -96,15 +93,14 @@ referrers = await store.find_referrers()
 
 Because a tombstone is chunk-shaped,
 [`clear_data`][a11.stores.sqlite_chunk_store.SQLiteChunkStore.clear_data]
-refuses a node-reference fragment rather than handing back a payload of a
-different type.
+rejects node-reference fragments to avoid returning a different payload type.
 
 ## Transactions and waiting
 
 Every mutation runs as one `BEGIN IMMEDIATE` transaction, so a batch either
 lands whole or not at all, leaving no partial rows and no stray blob files.
-Contention is retried with bounded backoff rather than `sqlite3_busy_timeout`,
-which would block the calling thread inside SQLite.
+Contention uses bounded retries because `sqlite3_busy_timeout` would block the
+calling thread inside SQLite.
 
 Readers never poll. A getter snapshots a per-node change event, runs an
 optimistic read, and parks on that event only if the fragment it wants has not
@@ -112,10 +108,8 @@ arrived; a committing writer fires the event once `COMMIT` has returned. Taking
 the snapshot before the read, and firing strictly after the commit, is what
 closes the lost-wakeup window in both directions.
 
-SQLite calls run on a small pool of dedicated threads rather than on A11's
-fiber workers. Those workers also drain every deadline timer in the process, so
-letting a fiber block inside `sqlite3_step` could stall the runtime along with
-the timers meant to rescue it.
+SQLite calls run on a small dedicated thread pool. Running them on A11's fiber
+workers could block deadline timers while `sqlite3_step` waits.
 
 !!! warning "One writing process per root, by default"
 

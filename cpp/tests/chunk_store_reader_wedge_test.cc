@@ -5,12 +5,12 @@
  * @brief
  *   A read that waits for ever on a fragment its store already holds.
  *
- * `ServerSuite` in cpp/bench/bench_main.cc wedges above a handful of concurrent
- * calls: the server writes its reply, the fragment reaches the client's node, and
- * a `NextChunk()` left on its default `InfiniteDuration` timeout never returns.
- * Every thread is idle at that moment, and a *fresh* read on the same node
- * returns the fragment immediately -- so the data is there and the wake is what
- * went missing.
+ * `ServerSuite` in cpp/bench/bench_main.cc wedges above a handful of
+ * concurrent calls: the server writes its reply, the fragment reaches the
+ * client's node, and a `NextChunk()` left on its default `InfiniteDuration`
+ * timeout never returns. Every thread is idle at that moment, and a *fresh*
+ * read on the same node returns the fragment immediately -- so the data is
+ * there and the wake is what went missing.
  *
  * These tests try to reproduce that at the reader, away from the transport, the
  * session and the action layers. The shape they copy is the one the bench
@@ -67,11 +67,11 @@ data::NodeFragment FinalFragment(std::string payload) {
 /**
  * @brief One node, one reader, a read started before the write lands.
  *
- * The reader is asked for a fragment that does not exist yet, so the read has to
- * park; the write then arrives from another fibre. This is the ordering the bench
- * produces when a client asks for its reply before the server has sent it, which
- * the delay experiment showed is the ordering that matters -- reading *after* the
- * fragment lands never wedged.
+ * The reader is asked for a fragment that does not exist yet, so the read has
+ * to park; the write then arrives from another fibre. This is the ordering the
+ * bench produces when a client asks for its reply before the server has sent
+ * it, which the delay experiment showed is the ordering that matters --
+ * reading *after* the fragment lands never wedged.
  */
 TEST(ChunkStoreReaderWedgeTest, ReadParkedBeforeTheWriteIsWokenByIt) {
   for (int attempt = 0; attempt < 200; ++attempt) {
@@ -101,10 +101,10 @@ TEST(ChunkStoreReaderWedgeTest, ReadParkedBeforeTheWriteIsWokenByIt) {
 /**
  * @brief Many node/reader pairs racing at once.
  *
- * A reader per node is what the bench has -- every call owns its ports -- so the
- * pumps do not contend with each other. What they do share is the process-wide
- * callback scheduler every reader wakes through, and the worker pool underneath
- * it, which is the only place concurrency here can bite.
+ * A reader per node is what the bench has -- every call owns its ports -- so
+ * the pumps do not contend with each other. What they do share is the
+ * process-wide callback scheduler every reader wakes through, and the worker
+ * pool underneath it, which is the only place concurrency here can bite.
  */
 TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesEachWakeTheirOwnReader) {
   constexpr size_t kNodes = 256;
@@ -150,12 +150,12 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesEachWakeTheirOwnReader) {
 /**
  * @brief The same race one layer up: whole nodes, written through their writer.
  *
- * The two tests above drive the store directly, which is not what a port does. A
- * node writes through a `ChunkStoreWriter` -- a second pump, with its own inline
- * drive -- and the bench's ports additionally have a wire stream attached, so a
- * write tees to that stream inside the drive and `WireStream::Send` can park.
- * This test adds the writer without the stream, to separate "the writer pump" from
- * "the tee" as candidates.
+ * The two tests above drive the store directly, which is not what a port does.
+ * A node writes through a `ChunkStoreWriter` -- a second pump, with its own
+ * inline drive -- and the bench's ports additionally have a wire stream
+ * attached, so a write tees to that stream inside the drive and
+ * `WireStream::Send` can park. This test adds the writer without the stream,
+ * to separate "the writer pump" from "the tee" as candidates.
  */
 TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesWrittenThroughTheirWriter) {
   constexpr size_t kNodes = 256;
@@ -205,13 +205,14 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesWrittenThroughTheirWriter) {
  * @brief The race with a wire stream attached, which is what a bench port has.
  *
  * This is the layer the previous three do not cover, and the one named as the
- * suspension source: a write on a stream-bound node tees to the stream inside the
- * writer's inline drive, and `WireStream::Send` parks on the peer's fibre-aware
- * mutex. If the wedge needs a parked tee, it should appear here and not above.
+ * suspension source: a write on a stream-bound node tees to the stream inside
+ * the writer's inline drive, and `WireStream::Send` parks on the peer's
+ * fibre-aware mutex. If the wedge needs a parked tee, it should appear here
+ * and not above.
  *
- * The peer end is deliberately left undrained. That is the bench's shape too --
- * the client's reply-carrying node has a stream attached and nobody is reading the
- * other side of it -- and it is where a tee has something to park on.
+ * The peer end remains undrained, matching the benchmark setup. the client's
+ * reply-carrying node has a stream attached and nobody is reading the other
+ * side of it -- and it is where a tee has something to park on.
  */
 TEST(ChunkStoreReaderWedgeTest, ConcurrentStreamBoundNodesWakeTheirReaders) {
   constexpr size_t kNodes = 128;

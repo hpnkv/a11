@@ -109,7 +109,9 @@ bool ColumnIsNull(sqlite3_stmt* statement, int index) {
   return sqlite3_column_type(statement, index) == SQLITE_NULL;
 }
 
-/** Read the node row. A missing row is not an error: it means "no writes yet". */
+/**
+ * Read the node row. A missing row is not an error: it means "no writes yet".
+ */
 absl::StatusOr<SqliteNodeState> LoadNodeState(SqliteConnection& connection,
                                               std::string_view node_id) {
   ABSL_ASSIGN_OR_RETURN(
@@ -268,7 +270,9 @@ absl::StatusOr<data::NodeFragment> DecodeFragment(
   return fragment;
 }
 
-/** Everything needed to insert one fragment, resolved before the transaction. */
+/**
+ * Everything needed to insert one fragment, resolved before the transaction.
+ */
 struct EncodedFragment {
   std::uint32_t seq = 0;
   std::uint64_t arrival_order = 0;
@@ -882,10 +886,7 @@ a11::Future<std::vector<std::uint32_t>> SQLiteChunkStore::PutMany(
         }
 
         // Payload encoding, including externalizing oversized chunks to blob
-        // files, happens before the transaction opens. That keeps file I/O off
-        // the write lock, guarantees a blob is durable before the row naming it
-        // commits, and means a busy-retry of the transaction cannot write the
-        // same payload twice.
+        // files, happens before the transaction opens.
         const absl::Time now = absl::Now();
         std::vector<EncodedFragment> encoded;
         std::vector<std::string> owned_blobs;

@@ -300,10 +300,7 @@ TEST(Http1ConnectionTest, NegotiatesHttp1OverTlsViaAlpn) {
 }
 
 // A cleartext client with an explicit HTTP/1.1 preference reaches a server that
-// serves only HTTP/1.1 -- the server's preface sniff accepts it directly. (This
-// is the recommended way to pin a cleartext protocol; the h2c client publishes
-// readiness optimistically, so h2c-vs-http1 mismatches surface on the first
-// request rather than at connect, which client_allow_downgrade cannot preempt.)
+// serves only HTTP/1.1 -- the server's preface sniff accepts it directly.
 TEST(Http1ConnectionTest, CleartextHttp1OnlyServerServesExplicitHttp1Client) {
   Http2Options server_options;
   server_options.enable_h2c = false;
@@ -333,9 +330,9 @@ TEST(Http1ConnectionTest, CleartextHttp1OnlyServerServesExplicitHttp1Client) {
   EXPECT_TRUE((*server)->Stop().ok());
 }
 
-// Http2Options::stream_request_body on an ordinary chunked POST: the handler runs
-// while the body is still arriving, which is what an open-ended upload needs and
-// what the SSE transport's streamed outbound direction is built on.
+// Http2Options::stream_request_body on an ordinary chunked POST: the handler
+// runs while the body is still arriving, which is what an open-ended upload
+// needs and what the SSE transport's streamed outbound direction is built on.
 TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyToTheHandler) {
   auto first_chunk_seen = std::make_shared<a11::Promise<a11::Unit>>();
   a11::Task first_chunk_arrived = first_chunk_seen->future();
@@ -389,7 +386,8 @@ TEST(Http1ConnectionTest, StreamsAnAcceptedRequestBodyToTheHandler) {
   ASSERT_TRUE(upload.ok()) << upload.status();
 
   ASSERT_TRUE((*upload)->Write("first").ok());
-  // The handler has the first chunk before the body ends: proof it was dispatched
+  // The handler has the first chunk before the body ends: proof it was
+  // dispatched
   // on the headers rather than at END_STREAM.
   ASSERT_TRUE(first_chunk_arrived.Await(absl::Now() + absl::Seconds(5)).ok());
   ASSERT_TRUE((*upload)->Write("-second").ok());

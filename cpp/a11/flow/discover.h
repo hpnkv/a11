@@ -30,13 +30,13 @@ namespace a11::flow {
 /// own index, and two IDEs would then be two implementations of one question,
 /// each covering only the languages it knows. `ActionSchema` is declared in
 /// Python, in C++ and in TypeScript in this repository alone. Reading source
-/// for declarations is not knowledge of the *language* -- it is knowledge of the
-/// *world*, which is what a catalogue carries -- so it belongs where the
+/// for declarations is not knowledge of the *language* -- it is knowledge of
+/// the *world*, which is what a catalogue carries -- so it belongs where the
 /// catalogue is, and both editors, the CLI and CI get it from one place.
 ///
 /// **What it is.** A tolerant textual scan, not a parser for three languages.
-/// It reads string literals and same-file constants, and it is deliberately
-/// happy to come away with less than everything:
+/// It reads string literals and same-file constants and may return partial
+/// entries:
 ///
 /// * A schema written as a constructor call with literal arguments -- the
 ///   Python and TypeScript shape -- comes back whole: name, description, and
@@ -124,6 +124,9 @@ Result Discover(absl::Span<const std::string> roots,
 catalogue::Catalogue DiscoverInSource(std::string_view source,
                                       std::string_view path, Language language);
 
+// The `format` field of the envelope a scan answers with, which is the
+// catalogue's own: what a scan produces *is* a catalogue, and a consumer that
+// had to tell them apart would be a consumer with two code paths for one.
 /// The `format` field of the envelope a scan answers with, which is the
 /// catalogue's own: what a scan produces *is* a catalogue, and a consumer that
 /// had to tell them apart would be a consumer with two code paths for one

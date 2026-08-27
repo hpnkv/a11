@@ -1,15 +1,14 @@
 """Run the flows in this directory.
 
-Three things are worth watching for as it runs:
+The example demonstrates three Flow properties:
 
-* The flows are *text*. They are compiled here from files, but the same call
-  compiles a string that arrived over a wire -- which is the point: a gateway
-  can be given a composition of actions it has never seen and run it, with no
-  repository change and no redeploy.
+* Flows are *text*. The example compiles files, while the same API accepts a
+  string received over a wire. A gateway can run a new action composition
+  without a repository change or redeployment.
 * A flow is an action. `headline` calls `research`, and neither one knows the
   other is a composition; the registry treats both like anything else.
-* What the flows trim, nothing pays for. The summarizer reports how much text it
-  was handed, and the flow hands it a fraction of what was fetched.
+* Intermediate filtering reduces the text sent to the summarizer. Its report
+  shows how much of the fetched content it received.
 
     python examples/003-flow-dsl/main.py
 
@@ -23,10 +22,9 @@ real `a11 gateway run` serves -- its shell, its microphone, and the same
     python examples/003-flow-dsl/main.py --gateway ws://127.0.0.1:8011/a11
     python examples/003-flow-dsl/main.py --gateway ... --listen   # microphone
 
-`ask-the-pages` is the one to read twice: its retrieval actions run *here*, its
-model runs on the gateway, and the flow does not distinguish between them. An
-action with a schema and no handler in the local registry is one the flow
-dispatches over the session -- that is the whole configuration.
+In `ask-the-pages`, retrieval actions run locally and the model runs on the
+gateway. An action with a schema but no local handler is dispatched through the
+session; no other flow changes are required.
 """
 
 from __future__ import annotations
@@ -412,9 +410,7 @@ async def run_dictation(url: str) -> None:
         await node.finalize()
 
     print()
-    print(
-        f"--- dictate-a-note (say something for {FLAGS.listen_seconds}s) ---"
-    )
+    print(f"--- dictate-a-note (say something for {FLAGS.listen_seconds}s) ---")
 
     async def show() -> None:
         async for sentence in said:

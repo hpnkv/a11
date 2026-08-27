@@ -165,10 +165,7 @@ bool PathMtuDiscovery::ProbeCandidate(size_t candidate,
        ++attempt) {
     const absl::Status applied = prober_.apply(candidate);
     if (!applied.ok()) {
-      // The stack would not take the size. That says nothing about the path, so
-      // the candidate stays untested rather than being recorded as too large --
-      // treating a startup race as evidence would converge on a tiny MTU and
-      // stay there.
+      // The stack would not take the size.
       *indeterminate = true;
       break;
     }
@@ -176,10 +173,7 @@ bool PathMtuDiscovery::ProbeCandidate(size_t candidate,
       thread::MutexLock lock(&mu_);
       ++probes_sent_;
     }
-    // A burst, not a probe. Several probes in flight together is what stresses
-    // path reassembly the way real traffic does; probes that wait for each other
-    // are each isolated, and a size that only survives in isolation would be
-    // confirmed and then stall the stream.
+    // A burst, not a probe.
     const size_t payload = candidate - options_.probe_overhead;
     const absl::Time deadline = absl::Now() + options_.probe_timeout;
     std::optional<bool> answered;
@@ -227,32 +221,17 @@ size_t PathMtuDiscovery::Search() {
     confirmed_ = 0;
   }
 
-  // The base first, and it is not a formality. Everything above is compared
-  // against it, and a base that does not arrive means the path is not carrying
-  // what every conforming path must -- which is a connectivity failure and not
-  // an MTU to search for.
+  // The base first, and it is not a formality.
   SetState(PathMtuState::kBase);
   bool indeterminate = false;
   if (!ProbeCandidate(options_.base_mtu, &indeterminate)) {
     if (indeterminate) {
-      // Could not even be attempted. Leave the state alone so the caller retries
+      // Could not even be attempted. Leave the state alone so the caller
+      // retries
       // rather than declaring a dead path from a transport that was not ready.
       return 0;
     }
-    // Give up probing. **Do not touch the stream.**
-    //
-    // The first version of this reported a base-MTU failure as a connectivity
-    // failure and aborted the stream, on the reasoning that every conforming path
-    // carries 1280 so failing it means the path is dead. That reasoning ignores
-    // where the evidence comes from: probes ride an *unreliable* channel, and
-    // under load their acknowledgements are exactly what gets dropped. It aborted
-    // streams that were carrying application data at full rate, which is as wrong
-    // as a transport error can be -- the stream itself is the proof the path
-    // works.
-    //
-    // A dead association is SCTP's business and SCTP already detects it. All this
-    // can honestly conclude is "cannot discover right now", and the response to
-    // that is to keep the base MTU -- the safe value -- and try again later.
+    // Give up probing.
     LOG(INFO) << "a11 webrtc: path MTU probing gave up at the base MTU of "
               << options_.base_mtu
               << " bytes; keeping it and leaving the stream alone";
@@ -294,7 +273,8 @@ size_t PathMtuDiscovery::Search() {
       continue;
     }
     if (indeterminate) {
-      // Cannot learn anything right now; stop rather than spin, keeping whatever
+      // Cannot learn anything right now; stop rather than spin, keeping
+      // whatever
       // is confirmed. The raise timer will try again.
       break;
     }
@@ -329,10 +309,7 @@ void PathMtuDiscovery::Run() {
       }
     }
     // Nothing confirmed and not an error means the transport was not ready --
-    // no association yet, so no size could even be applied. Come back soon
-    // rather than sitting out the raise timer, which would leave the connection
-    // at the base MTU for ten minutes because the probe channel happened to be
-    // ready before SCTP was.
+    // no association yet, so no size could even be applied.
     if (confirmed == 0) {
       std::shared_ptr<thread::PermanentEvent> changed;
       {
@@ -348,12 +325,9 @@ void PathMtuDiscovery::Run() {
       continue;
     }
 
-    // Between searches, wait for whichever comes first: the raise timer, because
-    // the path may have grown and nothing else would notice; or a black-hole
-    // report, because it certainly shrank. A shrink is urgent and skips straight
-    // to the base -- restoring connectivity comes before finding the best size,
-    // and searching from a size that is currently black-holing would spend every
-    // probe on the failure.
+    // Between searches, wait for whichever comes first: the raise timer,
+    // because the path may have grown and nothing else would notice; or a
+    // black-hole report, because it certainly shrank.
     const absl::Time wake = absl::Now() + options_.raise_timer;
     while (true) {
       std::shared_ptr<thread::PermanentEvent> changed;

@@ -37,19 +37,15 @@ namespace py = pybind11;
 /**
  * @brief Whether the interpreter is going away and must not be entered.
  *
- * **`Py_IsInitialized()` is not this test**, and every native destructor in the
- * bindings used to make that mistake. It stays true through most of
- * finalization, and `PyGILState_Ensure()` called after finalization has begun
+ * **`Py_IsInitialized()` is not this test**: it stays true through most of
+ * finalization. `PyGILState_Ensure()` called after finalization has begun
  * does not fail or return an error -- CPython *exits the calling thread* with
  * `pthread_exit()` ("a thread tried to acquire the GIL after finalization").
  * The forced unwind that follows walks up through A11 frames compiled
  * `-fno-exceptions`, finds no landing pad, and calls `std::terminate`.
  *
- * The symptom is a process that aborts on exit with
- * `terminate called without an active exception` and several threads inside
- * `__pthread_unwind`, and it needs a *population* to show up: a process holding
- * ~188 sessions did it 3-4 times in 5, while a handful of sessions almost never
- * does. The reason is reference counting -- Python drops a session, but the last
+ * Reference counting makes this timing-dependent: Python drops a session, but
+ * the last
  * `shared_ptr` to its state is usually held by a pool worker, so the destructor
  * that releases the Python callback runs on a worker thread, and that is the
  * thread CPython kills.
@@ -67,16 +63,7 @@ inline bool InterpreterIsGoingAway() {
     return true;
   }
   // `Py_IsFinalizing` became public in 3.13; before that only the underscored
-  // `_Py_IsFinalizing` exists. `requires-python` is >= 3.11, so both spellings
-  // have to be reachable, and the wrong one is a *compile* error on a version
-  // nobody built -- which is worse than a runtime bug, because CI only builds
-  // 3.12 today and would not see it.
-  //
-  // Both arms have been syntax-checked; the >= 3.13 arm was checked against a
-  // hand-declared `Py_IsFinalizing`, not against real 3.13 headers, so it is
-  // verified as valid C++ calling the right symbol rather than verified as
-  // building on 3.13. **Extending the CI matrix past 3.12 is what would actually
-  // prove it**, and is worth doing before claiming support for a version.
+  // `_Py_IsFinalizing` exists.
 #if PY_VERSION_HEX >= 0x030D0000
   return Py_IsFinalizing() != 0;
 #else
@@ -87,17 +74,17 @@ inline bool InterpreterIsGoingAway() {
 /**
  * @brief Hands a Python reference to whoever next holds the GIL, or leaks it.
  *
- * **A destructor must not acquire the GIL, and a check is not enough.** Guarding
- * on InterpreterIsGoingAway() is check-then-act: finalization can begin between
- * the test and the `PyGILState_Ensure()`, and with a population of objects being
- * destroyed there are hundreds of chances to lose that race. Measured: adding the
- * check to all twelve destructors that had it wrong left the abort at 9 runs in
- * 12, statistically unchanged.
+ * **A destructor must not acquire the GIL, and a check is not enough.**
+ * Guarding on InterpreterIsGoingAway() is check-then-act: finalization can
+ * begin between the test and the `PyGILState_Ensure()`, and with a population
+ * of objects being destroyed there are hundreds of chances to lose that race.
+ * Measured: adding the check to all twelve destructors that had it wrong left
+ * the abort at 9 runs in 12, statistically unchanged.
  *
- * So references are not released in destructors at all. They are queued here and
- * dropped by a thread that already holds the GIL -- any binding entry point, or
- * the `atexit` drain -- which cannot race, because holding the GIL is precisely
- * what proves the interpreter is still alive.
+ * So references are not released in destructors at all. They are queued here
+ * and dropped by a thread that already holds the GIL -- any binding entry
+ * point, or the `atexit` drain -- which cannot race, because holding the GIL
+ * is precisely what proves the interpreter is still alive.
  *
  * Anything still queued when the process exits is **leaked on purpose**: the
  * interpreter's heap is about to go back to the operating system, and the only
@@ -115,10 +102,7 @@ class DeferredPythonRefs {
     }
     // The common case, and the reason the queue does not grow: a destructor
     // running on the thread that already holds the GIL can just drop the
-    // reference. Holding the GIL is exactly the proof that the interpreter is
-    // alive, so there is no race to lose and nothing to defer. Most destruction
-    // in a healthy process happens this way -- Python drops the last reference
-    // itself -- and only the ones that land on a pool worker take the slow path.
+    // reference.
     if (Py_IsInitialized() != 0 && PyGILState_Check() != 0) {
       Py_DECREF(object);
       return;
@@ -132,6 +116,7 @@ class DeferredPythonRefs {
                                               std::memory_order_relaxed)) {}
   }
 
+  // Release everything queued.
   /// Release everything queued. **The caller must hold the GIL.**
   ///
   /// Called from every Python invocation path (see CallPythonAsync) as well as
@@ -176,7 +161,7 @@ class DeferredPythonRefs {
     return *high;
   }
 
-  // Deliberately absl::Mutex and not thread::Mutex: this is reachable from a
+  // Uses absl::Mutex, not thread::Mutex, because this is reachable from a
   // fibre destructor, and a fibre-aware mutex would want a scheduler that a
   // teardown path may no longer have.
   static absl::Mutex& Mutex() {
@@ -537,23 +522,6 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   py::module_ coordination = py::module_::import("a11._asyncio");
 
   // Hand back a future that is *already* resolved when the native one is.
-  //
-  // Much native work finishes without ever waiting -- a store read whose
-  // fragment is buffered, a writer admitting into free space -- and since
-  // `ChunkStoreReader::Next` and `LocalChunkStore::Next` gained their inline
-  // fast paths that is the normal case, not the exception. Wiring such a future
-  // through OnReady costs two event-loop turns for nothing: one to run the
-  // completion callback, one to resume whoever was awaiting. Awaiting a future
-  // that is already done costs neither -- `Future.__await__` returns the result
-  // without yielding -- so a read that the store could satisfy immediately now
-  // costs about 0.2us instead of ~45us.
-  //
-  // The consequence to be aware of: such an await is no longer a yield point.
-  // A loop draining thousands of buffered values in a row will not give the
-  // event loop a turn, exactly as `StreamReader.read` does not when its buffer
-  // is full. Code that must stay fair should drain in batches
-  // (`next_fragments`) and yield between them rather than rely on a read
-  // suspending.
   if (future.IsReady()) {
     absl::StatusOr<T> result = future.Await();
     py::object resolved = coordination.attr("_create_native_future")(
@@ -575,11 +543,8 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   py::object py_future = coordination.attr("_create_native_future")(
       loop,
       // Without the GIL: cancelling reaches into the producing operation and
-      // can park in the fibre scheduler, and this runs on the event-loop
-      // thread -- a `wait_for` timeout calls it as an ordinary loop callback.
-      // Holding the GIL across it is the same deadlock as any other blocking
-      // binding: a worker resolving a Python future cannot get the GIL from a
-      // loop thread that is parked waiting for that worker.
+      // can park in the fibre scheduler, and this runs on the event-loop thread
+      // -- a `wait_for` timeout calls it as an ordinary loop callback.
       py::cpp_function([future]() mutable {
         // Nothing to report a failed cancellation to: asyncio has already
         // marked the future cancelled, and a future that resolved first is
@@ -604,10 +569,7 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
       if (references->OnLoopThread()) {
         // Resolve directly: the work finished on the loop's own thread, so an
         // await that follows in the same coroutine step sees a finished future
-        // and never yields. Posting to `call_soon_threadsafe` here would cost
-        // that awaiter a turn to learn what this frame already knows. Setting
-        // a result only schedules the future's callbacks, so this cannot
-        // reenter native code.
+        // and never yields.
         references->completion()(references->future(), std::move(value),
                                  std::move(exception));
       } else {
@@ -705,9 +667,7 @@ a11::Future<T> CallPythonAsync(const std::shared_ptr<PythonLoop>& loop,
                                const py::function& function, Args&&... args) {
   py::gil_scoped_acquire acquire;
   // The GIL is held here, so this is a safe and frequent place to release
-  // whatever native destructors could not. It keeps the deferred queue from
-  // growing in a long-running process: anything retired by a worker thread is
-  // dropped by the next callback invocation rather than waiting for `atexit`.
+  // whatever native destructors could not.
   DeferredPythonRefs::Drain();
   try {
     // Creating a coroutine by calling the override on an arbitrary native

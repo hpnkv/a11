@@ -1,10 +1,6 @@
 // Copyright 2026 The A11 Authors.
 
 // The pattern language `match` reads.
-//
-// Written against the cases somebody actually types: a key-value line, a log
-// line, a number in the middle of prose. The point of the syntax is that those
-// are one-liners, so if a test here needs explaining the syntax is wrong.
 
 #include <string>
 #include <string_view>
@@ -66,10 +62,8 @@ TEST(FlowPattern, SearchesRatherThanAnchoring) {
 }
 
 TEST(FlowPattern, AHoleTakesAsLittleAsItCanUnlessItIsLast) {
-  // The shortest capture that lets the rest fit, so `{a}` stops at the first `,`
-  // rather than the last. The *last* hole has nothing to grow towards, so it
-  // takes the rest of its line, which is what "and then the value" means and
-  // what Python's `parse` does with the same pattern.
+  // The shortest capture that lets the rest fit, so `{a}` stops at the first
+  // `,` rather than the last.
   EXPECT_EQ(Taken("{a},{b}", "one,two,three"), "a=one b=two,three");
   EXPECT_EQ(Taken("{a},{b},end", "one,two,end"), "a=one b=two");
 }

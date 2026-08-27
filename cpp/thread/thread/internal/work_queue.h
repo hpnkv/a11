@@ -27,45 +27,6 @@ namespace thread::internal {
 
 // One worker slot's queue of pending work: a bounded lock-free ring, with an
 // overflow list behind a mutex for the case of the ring filling up.
-//
-// Push, Pop and stealing are all the same two operations from the queue's point
-// of view -- any thread may do either -- and neither takes a lock on the ring.
-// That is the point of it. A worker pool's slot queue is pushed to by whoever
-// submits work, popped by the slot's own worker, and popped again by any other
-// worker looking for something to steal, so a mutex there is contended by every
-// thread in the pool for an operation that is otherwise a few instructions.
-//
-// **Order is preserved.** Work comes out in the order it went in, which is why
-// this is a ring rather than the Chase-Lev deque that work-stealing pools
-// usually reach for. Chase-Lev gives its owner an even cheaper pop by taking
-// from the end it pushes to, and so hands back the *newest* item it was given;
-// for a pool whose queues carry stackless callbacks that is a reordering, and
-// parts of A11 -- fragment delivery, batches of due timers -- are written
-// expecting two things posted in order to run in that order.
-//
-// The ring is deliberately bounded and deliberately not the whole story. Sizing
-// it for the worst case would mean sizing it for a fibre that spawns tens of
-// thousands of children, on every slot; the overflow list costs a lock in that
-// case and nothing at all in every other one.
-//
-// Two properties to know before relying on this:
-//
-//   * A Pop can report the queue empty while items are in it. A pusher claims
-//     its cell before it fills it, and FIFO order means nothing behind that
-//     cell may be handed out first, so a pusher descheduled in that window
-//     hides whatever is queued behind it until it runs again. Callers must
-//     therefore treat "empty" as "nothing available right now" -- which for a
-//     worker pool is what it does anyway, since it also has to cope with
-//     another thread having taken the item first.
-//   * Order is per queue, not across the pushers into it. Two threads pushing
-//     concurrently interleave in whatever order they claim cells; what is
-//     guaranteed is that one thread's pushes come out in the order it made
-//     them, and that nothing overtakes anything already queued. The exception
-//     is the moment the ring fills: a push that finds room in the ring while
-//     another is already spilling into the overflow list can come out ahead of
-//     it.
-// The cells are stored inline, so an instance is Capacity * sizeof(T) plus
-// change: give one a home on the heap rather than a stack frame.
 template <typename T, size_t Capacity>
 class WorkQueue {
  public:

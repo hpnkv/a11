@@ -169,11 +169,7 @@ using OnProgressPython =
     py::typing::Optional<py::typing::Callable<void(py::int_, py::int_)>>;
 
 // GIL-reacquiring release for a Python type held as an ActionPortSchema
-// typeinfo handle. Mirrors the actions binding's own deleter so the referent
-// stays alive for exactly as long as any copy of the schema.
-// Deferred rather than released here: a shared_ptr deleter runs on whichever
-// thread drops the last copy, which may be a pool worker. See
-// DeferredPythonRefs.
+// typeinfo handle.
 void ReleaseHttpTypeInfo(void* object) {
   DeferredPythonRefs::Retire(static_cast<PyObject*>(object));
 }
@@ -192,12 +188,13 @@ struct HttpActionEntry {
 };
 
 /**
- * The two HTTP Actions, with Python types attached to the ports C++ cannot name.
+ * The two HTTP Actions, with Python types attached to the ports C++ cannot
+ * name.
  *
- * Every port here carries JSON, bytes, or a scalar, so the mapping is to Python
- * builtins rather than to bound native classes -- an HTTP header map really is a
- * dict and a body really is bytes, which is also why none of this needed a new
- * serialization tag.
+ * Every port here carries JSON, bytes, or a scalar, so the mapping is to
+ * Python builtins rather than to bound native classes -- an HTTP header map
+ * really is a dict and a body really is bytes, which is also why none of this
+ * needed a new serialization tag.
  */
 std::vector<HttpActionEntry> HttpActionEntries() {
   const auto type_for = [](std::string_view port_type) -> PyObject* {
@@ -269,10 +266,10 @@ void RegisterHttpActionsPy(
  * Wraps a Python progress callable for a fetch or download.
  *
  * The callback runs on the pooled fiber doing the transfer, not on the asyncio
- * loop, so it has to take the GIL itself. A callback that raises is reported and
- * dropped rather than propagated: a broken progress bar is not a reason to fail
- * a download that is otherwise succeeding, and letting the exception cross the
- * fiber boundary would surface as an unrelated Unknown status.
+ * loop, so it has to take the GIL itself. A callback that raises is reported
+ * and dropped rather than propagated: a broken progress bar is not a reason to
+ * fail a download that is otherwise succeeding, and letting the exception
+ * cross the fiber boundary would surface as an unrelated Unknown status.
  */
 net::OnFetchProgress ProgressFromPython(const py::object& on_progress) {
   if (on_progress.is_none()) {
@@ -525,8 +522,7 @@ void BindHttp(py::module_& module) {
 
   // Declared before either gains members because each names the other: a
   // response stream hands back pushed responses, and a pushed response *is* a
-  // response stream. pybind11 renders a signature when def() runs, so both types
-  // have to be registered by then or one of them has no name to render.
+  // response stream.
   py::class_<net::HttpPushedResponse> pushed_response(module,
                                                       "HttpPushedResponse");
   py::classh<net::Http2ResponseStream> response_stream(module,

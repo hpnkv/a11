@@ -14,10 +14,12 @@ namespace a11::flow {
 ///
 /// The whole of what a frontend needs from the language, behind one function: a
 /// method name, a document, and whatever that method takes. Every surface is an
-/// adapter over this -- `a11-flow serve --protocol json` passes requests through
+/// adapter over this -- `a11-flow serve --protocol json` passes requests
+/// through
 /// almost unchanged, the LSP adapter translates positions and wraps the answers
 /// in what an editor expects, and `a11.flow.request` hands the same dict across
-/// the Python boundary -- so a capability added here is available in all of them
+/// the Python boundary -- so a capability added here is available in all of
+/// them
 /// without any adapter knowing what it is.
 ///
 /// A request is
@@ -26,12 +28,14 @@ namespace a11::flow {
 /// {"id": 1, "method": "check", "source": "flow t { }", "path": "t.flow"}
 /// ```
 ///
-/// and the answer is `{"id": 1, "ok": true, "result": {...}}` with the envelope the
-/// method produces, or `{"id": 1, "ok": false, "error": {"message": "..."}}` when
-/// the request itself made no sense. A *flow* that makes no sense is not an
-/// error: it answers with diagnostics, which is the whole point.
+/// and the answer is `{"id": 1, "ok": true, "result": {...}}` with the
+/// envelope the method produces, or `{"id": 1, "ok": false, "error":
+/// {"message": "..."}}` when the request itself made no sense. A *flow* that
+/// makes no sense is not an error; syntax problems are returned as
+/// diagnostics.
 ///
-/// `id` is echoed if it is there and omitted if it is not, so a client that does
+/// `id` is echoed if it is there and omitted if it is not, so a client that
+/// does
 /// not correlate need not invent one.
 nlohmann::json Handle(const nlohmann::json& request);
 

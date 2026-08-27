@@ -24,7 +24,7 @@ enum class Severity {
   kWarning,
   /// The flow works, and part of it is doing nothing.
   kWeakWarning,
-  /// Worth knowing, never worth blocking on.
+  /// Non-blocking information.
   kInformation,
 };
 
@@ -77,7 +77,8 @@ struct Edit {
 /// An edit, or set of edits, that would fix a diagnostic.
 ///
 /// Offered only where a single edit is obviously the right one. A frontend
-/// applies these blind -- it never re-derives what the fix should be -- so a fix
+/// applies these blind -- it never re-derives what the fix should be -- so a
+/// fix
 /// that guesses would be a fix that corrupts somebody's file.
 struct Fix {
   std::string label;
@@ -147,8 +148,8 @@ const CodeInfo* absl_nullable FindCode(std::string_view code);
 /// Line and column lookup over one source text.
 ///
 /// Built once per file and shared by everything that reports a position, so a
-/// diagnostic never costs a scan of the source to locate. Borrows the text, which
-/// must outlive it.
+/// diagnostic never costs a scan of the source to locate. Borrows the text,
+/// which must outlive it.
 class LineIndex {
  public:
   explicit LineIndex(std::string_view source);

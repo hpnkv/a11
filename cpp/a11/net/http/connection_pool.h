@@ -4,19 +4,13 @@
  * @file
  * @brief Sharing one HTTP connection between concurrent requests to a peer.
  *
- * HTTP/2 multiplexes: several exchanges travel over one connection at once, and
- * a client that opens a fresh socket per request pays a TCP and TLS handshake it
- * did not need and gives up the peer's header compression context. What it wants
- * instead is that a request to a peer it is *already talking to* joins the
- * conversation in progress.
+ * HTTP/2 multiplexes several exchanges over one connection. Reusing an active
+ * connection avoids another TCP and TLS handshake and preserves the peer's
+ * header-compression context.
  *
- * What it does not want is a connection cache. An idle pooled connection is a
- * file descriptor, a peer-side session, and a keep-alive timer being spent on
- * nothing, and it turns "the server closed our socket" into a failure mode a
- * caller has to know about. So this pool holds only *weak* references: a
- * connection lives exactly as long as the leases on it, and the moment the last
- * request finishes it is closed and forgotten. Reuse while there is work, and
- * nothing at all when there is not.
+ * The pool retains only weak references. A connection lives while it has active
+ * leases and closes when its final request finishes, avoiding idle file
+ * descriptors, peer sessions, and keep-alive timers.
  *
  * HTTP/1.1 is not pooled. A11's HTTP/1.1 connection carries a single request by
  * design -- there is no pipelining -- so those leases are exclusive and the
@@ -46,12 +40,14 @@ class HttpConnectionPool;
 /**
  * @brief A borrowed connection, held for as long as a caller needs it.
  *
- * The unit of lifetime the pool works in: the connection is closed when the last
+ * The unit of lifetime the pool works in: the connection is closed when the
+ * last
  * lease on it goes away. Hold one for the whole exchange -- from the request to
  * the last byte of the response, including its trailers -- because dropping it
  * early may close the socket mid-response.
  *
- * Copyable, and a copy is another share of the same connection rather than a new
+ * Copyable, and a copy is another share of the same connection rather than a
+ * new
  * one, so a lease can be captured by whatever outlives the call that took it.
  */
 class HttpConnectionLease {
@@ -69,7 +65,9 @@ class HttpConnectionLease {
   /** @return Whether the connection is HTTP/2. @see Http2Client::multiplexed */
   [[nodiscard]] bool multiplexed() const;
 
-  /** Releases this share of the connection early; the destructor does it too. */
+  /**
+   * Releases this share of the connection early; the destructor does it too.
+   */
   void Release() { client_.reset(); }
 
  private:
@@ -113,7 +111,8 @@ class HttpConnectionPool
    *
    * @param origin Parsed URL; its scheme, host and port select the peer, and
    *        the scheme decides TLS.
-   * @param options Transport settings. Their TLS and protocol fields are part of
+   * @param options Transport settings. Their TLS and protocol fields are part
+   * of
    *        the pool key, since a connection trusting different roots is a
    *        different peer. `deadline` is ignored (see the class note).
    * @return An awaitable resolving to the lease, or the dial's error.
@@ -157,7 +156,7 @@ class HttpConnectionPool
   /// Drops @p key's entry, once its last lease has closed the connection.
   void Forget(const std::string& key);
 
-  /// Wraps a freshly dialled client so the last lease closes and unregisters it.
+  /// Wraps a new client so the last lease closes and unregisters it.
   std::shared_ptr<Http2Client> Adopt(std::string key,
                                      std::shared_ptr<Http2Client> client);
 

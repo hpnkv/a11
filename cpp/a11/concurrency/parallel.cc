@@ -33,9 +33,9 @@ absl::Status RunAllToCompletion(
   if (work.empty()) {
     return absl::OkStatus();
   }
-  // One item is the common case for a narrow action, and spawning a fibre to run
-  // it while this one waits is strictly worse than running it here: same work,
-  // one extra handoff. The whole header exists to remove handoffs.
+  // One item is the common case for a narrow action, and spawning a fibre to
+  // run it while this one waits is strictly worse than running it here: same
+  // work, one extra handoff. The whole header exists to remove handoffs.
   if (work.size() == 1) {
     return std::move(work.front())();
   }
@@ -47,10 +47,7 @@ absl::Status RunAllToCompletion(
     tasks.push_back(SubmitTask(std::move(one), options));
   }
 
-  // Await every one of them, including after a failure: see the header. The
-  // first error in submission order wins, so the result does not depend on which
-  // fibre happened to be scheduled first -- a teardown that reported a different
-  // status run to run would be very hard to debug.
+  // Await every one of them, including after a failure: see the header.
   absl::Status first;
   for (const Task& task : tasks) {
     if (absl::Status status = task.Await().status();

@@ -75,19 +75,8 @@ struct InProcessWireStream::State {
   std::weak_ptr<State> peer;
   mutable thread::Mutex mu;
   // One condition variable per thing that is waited for, rather than one per
-  // endpoint.
-  //
-  // Each endpoint runs three fibres -- Sender, Receiver, WatchTiming -- and
-  // each waits for something different. Sharing a condition variable between
-  // them means every state change wakes all three, and two of them only to look
-  // and go back to sleep. A wake is a fibre scheduled and, when that fibre's
-  // worker is parked, an OS thread brought back; a message that changes two
-  // states therefore costs several of them for one delivery. Split, each change
-  // reaches only the fibre whose predicate it can make true.
-  //
-  // The waiter for each is named where it waits. Signalling is still SignalAll:
-  // the queues below can have a second waiter under backpressure, and
-  // correctness here should not depend on counting them.
+  // endpoint. Split, each change reaches only the fibre whose predicate it can
+  // make true.
   thread::CondVar outbound_cv;  // Sender, for something to send.
   thread::CondVar incoming_cv;  // Receiver, for something to deliver.
   thread::CondVar room_cv;      // The peer's Sender, for buffer room.
@@ -96,9 +85,7 @@ struct InProcessWireStream::State {
   std::deque<std::string> incoming ABSL_GUARDED_BY(mu);
   size_t incoming_bytes ABSL_GUARDED_BY(mu) = 0;
   // Set while somebody is delivering a message that is no longer in `outbound`:
-  // either Sender, or the thread that called Send and took the fast path. It is
-  // what keeps the two from delivering at once, and so what keeps them in order
-  // -- see Send and DeliverClaimed.
+  // either Sender, or the thread that called Send and took the fast path.
   bool sending ABSL_GUARDED_BY(mu) = false;
 
   bool started ABSL_GUARDED_BY(mu) = false;
@@ -217,20 +204,8 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
               absl::StrCat(message.node_fragments.size())},
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
-      // Deliver on this thread when there is nothing to get in the way.
-      //
-      // The Sender fibre exists for the two things a caller of Send must not
-      // do: wait for room in a full peer, and carry the lifecycle of a
-      // half-close or abort. Neither applies to an ordinary message arriving at
-      // an endpoint with an empty queue, and handing that message to a fibre
-      // costs a scheduling round trip -- and an OS thread wake when the fibre's
-      // worker is parked -- to move bytes this thread is already holding.
-      //
-      // The claim is what keeps order: while it is held, Sender will not pop
-      // and another Send will not take this path, so nothing can overtake the
-      // message in flight. Anything this path cannot finish goes back to the
-      // front of the queue for Sender to deal with, which keeps the waiting and
-      // the error handling in one place.
+      // Deliver on this thread when there is nothing to get in the way. The
+      // Sender fibre exists for the two things a caller of Send must not do:
       if (end == End::kNone && state_->outbound.empty() && !state_->sending) {
         state_->sending = true;
         claimed = true;
@@ -461,14 +436,6 @@ void* absl_nullable InProcessWireStream::GetImpl() const {
 }
 
 // Merged frames stay small on purpose.
-//
-// The whole gain is in folding together the three-byte status markers an
-// action trails -- a dispatch status, a completion status, a close marker per
-// port. Large data messages get nothing from it: they are already one frame
-// per payload, merging them only builds a bigger frame to split again, and it
-// would erase message boundaries a peer can reasonably expect to see
-// preserved. So accumulate only up to this much and leave anything bigger
-// alone.
 constexpr size_t kMergeCeilingBytes = 64 * 1024;
 
 void InProcessWireStream::Sender(const std::shared_ptr<State>& state) {
@@ -513,27 +480,9 @@ void InProcessWireStream::Sender(const std::shared_ptr<State>& state) {
         continue;
       }
 
-      // Fold in whatever is already waiting behind it.
-      //
-      // An action costs `3 + 2 x ports` wire messages and most carry three
-      // bytes of status -- a dispatch status, a completion status, one
-      // `a11-close` marker per output port. Each was its own message, its own
-      // decode and its own callback on the far side, while `WireMessage` has
-      // always been able to carry a list of fragments.
-      //
-      // This waits for nothing: only messages *already* queued are merged, so
-      // nothing is ever held back to build a bigger one. That is why it
-      // belongs here and not in `ChunkStoreWriter`, where folding a close
-      // marker into the final data batch would mean delaying that batch until
-      // the writer closed -- the last fragment of every stream, to save a
-      // message.
-      //
-      // Only plainly compatible messages merge: no lifecycle marker
-      // (half-close or abort must remain its own boundary), and identical
-      // headers, since a header describes the message rather than the
-      // fragments inside it.
-      // A message already at the ceiling has nothing to gain and is left
-      // exactly as it is.
+      // Fold in whatever is already waiting behind it. An action costs `3 + 2 x
+      // ports` wire messages and most carry three bytes of status -- a dispatch
+      // status, a completion status, one `a11-close` marker per output port.
       if (outbound.end == End::kNone &&
           outbound.message.ApproxBytes() < kMergeCeilingBytes) {
         size_t approximate = outbound.message.ApproxBytes();
@@ -749,10 +698,7 @@ void InProcessWireStream::WatchTiming(const std::shared_ptr<State>& state) {
 
 void InProcessWireStream::MarkActivity(const std::shared_ptr<State>& first,
                                        const std::shared_ptr<State>& second) {
-  // Only an endpoint with a message timeout has anybody to tell. Without one,
-  // `last_activity` is never read, and recording it would cost a clock read and
-  // an endpoint's lock -- taken against its own Sender and Receiver -- on every
-  // message, to keep a number nothing would look at.
+  // Only an endpoint with a message timeout has anybody to tell.
   const bool wanted =
       (first && first->options.message_timeout != absl::InfiniteDuration()) ||
       (second && second->options.message_timeout != absl::InfiniteDuration());

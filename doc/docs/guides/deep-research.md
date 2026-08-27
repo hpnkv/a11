@@ -113,17 +113,15 @@ flow deep-research {
 }
 ```
 
-Four things in that are worth reading twice.
+Four parts define the composition's execution and data flow.
 
-**`log info line`** is where the narration goes: the action's own log, which every
-A11 action has, rather than an output port the caller has to be told the name of.
-The steps hand their lines up on a `narration` port because a *nested* action's
-log is its own — it reaches the server's log, not the caller's — so the
-composition does the logging on their behalf.
+**`log info line`** writes narration to the action log, which is available on
+every action without a declared output port. Nested action logs remain with
+their actions, so the nested steps send narration through a port and the
+composition logs it for the caller.
 
-**`for ... parallel 3`** is the fan-out. The planner's `briefs` port is still open
-when the loop starts reading it, so an investigation begins as soon as its brief
-exists rather than after the plan is complete.
+**`for ... parallel 3`** is the fan-out. The loop reads the planner's open
+`briefs` stream and starts an investigation as soon as each brief arrives.
 
 **`nodes research { ... }`** gives everything inside it a
 [node map][a11.nodes.async_node.NodeMap] of its own. The investigations' reports
@@ -231,9 +229,8 @@ const DEEP_RESEARCH_SCHEMA = new ActionSchema({
 });
 ```
 
-The log is not declared, because it is not in any action's schema: every action
-has one, and it is claimed rather than named. Claim it *before* dispatch, since a
-line logged before anything holds the port goes to the server's log instead:
+The log is not part of the action schema. Claim it before dispatch so that early
+entries are delivered to the caller instead of the server log:
 
 ```ts
 const logs = await claimLog(call);
@@ -251,12 +248,10 @@ await Promise.all([
 need(await call.wait(600_000));
 ```
 
-An output nobody drains stalls the step producing it, so reading them in sequence
-would not merely be slower — it would hold the composition up.
+An undrained output stalls its producer, so read the output ports concurrently.
 
 ## The whole composition
 
 ```a11flow
 --8<-- "a11/demos/deep_research.flow"
 ```
-

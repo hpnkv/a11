@@ -167,9 +167,8 @@ class MemoryProbe:
             things = [make_one() for _ in range(1000)]
         probe.bytes_each   # what one costs
 
-    The allocator does not return pages promptly, so this is honest in one
-    direction only: it measures *growth*. Take it as an upper bound per object
-    and a lower bound on nothing.
+    The allocator may retain pages, so this measures growth only and provides an
+    upper bound on resident bytes per object.
     """
 
     def __init__(self, count: int = 1) -> None:
@@ -264,7 +263,7 @@ def clock_call_ns(iterations: int = 200_000) -> float:
     whole batch and are unaffected, so on a host like that they are the only
     comparable rows. There is no workaround from inside the guest -- a coarse
     clock has millisecond resolution and no other source is offered -- so the
-    honest response is to record the number, warn, and read the throughput rows.
+    record the clock cost, warn, and use the throughput rows for comparisons.
     """
     started = time.perf_counter_ns()
     for _ in range(iterations):
@@ -433,9 +432,9 @@ async def pipelined(
     while remaining > 0:
         batch = min(window, remaining)
         if batch == 1:
-            # `gather` of one still allocates a Task, which would make a
-            # window of 1 look slower than plain sequential awaiting and
-            # misstate the baseline the other windows are compared against.
+            # `gather` of one still allocates a Task, which would make a window
+            # of 1 look slower than plain sequential awaiting and misstate the
+            # baseline the other windows are compared against.
             await _drain(operation(issued))
         else:
             await asyncio.gather(
@@ -591,13 +590,9 @@ event_loop_name = "asyncio"
 def _source_revision() -> str:
     """The commit the tree is on, with a marker when it is not clean.
 
-    Recorded because a baseline is only a baseline if the build that produced
-    it can be rebuilt. A run of this suite was once compared against a file
-    from the same morning whose extension no longer existed anywhere on disk,
-    and the difference -- 14% on a core store path -- could not be attributed
-    to anything, because there was no way to reconstruct what it had measured.
-    A commit and a dirty flag are not a build id, but they are enough to know
-    whether two files are even talking about the same code.
+    A baseline is useful only when its build can be identified. A commit and
+    dirty flag are not a complete build id, but they show whether two result
+    files refer to the same source state.
     """
     import subprocess
 
@@ -707,11 +702,9 @@ async def run_selected(
         except asyncio.TimeoutError:
             # Tell the harness's own timeout apart from the benchmark's.
             #
-            # A benchmark that bounds its own waits raises exactly this
-            # exception type, so catching it blindly reported "hung after 600s"
-            # for something that had in fact failed after twenty -- and led to
-            # a diagnosis of a deadlock that was not there. Only an elapsed time
-            # at the budget is a hang; anything sooner came from inside.
+            # A benchmark may raise this exception while bounding its own wait.
+            # Only elapsed time near the outer budget identifies a harness
+            # timeout; an earlier exception belongs to the benchmark.
             if time.perf_counter() - started_at < budget * 0.9:
                 print(
                     f"  TIMED OUT {entry.suite}/{entry.name}: the benchmark's"
@@ -767,11 +760,8 @@ def partial_path(path: str) -> str:
 def append_partial(path: str, result: Result) -> None:
     """Append one finished result to the partial log, as a JSON line.
 
-    A suite that has to be killed for exceeding its timeout used to take every
-    result it had already produced with it, because the JSON was written once at
-    the end: an hour of measurement could vanish because the last benchmark hung.
-    Each line here is flushed and fsynced as it is produced, so whatever finished
-    survives the kill.
+    Each line is flushed and fsynced as it is produced, so completed results
+    survive a later benchmark timing out or crashing.
     """
     with open(path, "a") as handle:
         handle.write(json.dumps(result.to_json(), sort_keys=True) + "\n")

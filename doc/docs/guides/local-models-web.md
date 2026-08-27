@@ -1,32 +1,31 @@
 # Local models on the web
 
-The [Browser clients](browser-clients.md) guide called a model that lived on a
-server. This guide removes the server: `interact_with_gemma` loads a
+The [Browser clients](browser-clients.md) guide calls a model hosted on a
+server. This guide runs the model locally: `interact_with_gemma` loads a
 [Gemma](https://ai.google.dev/gemma)-family model **into the page** and runs it
 on the browser's GPU through [WebGPU](https://developer.mozilla.org/docs/Web/API/WebGPU_API).
 Nothing leaves the device, and the reply streams onto an `AsyncNode` exactly as
 a remote backend's would.
 
-`interact_with_gemma` is an ordinary A11 action. It has the same ports as every
-other backend — an `interactions` input, a unary `config` input, and
+`interact_with_gemma` is an A11 action with the same interaction ports as the
+other LLM backends: an `interactions` input, a unary `config` input, and
 `text_output` / `new_interactions` outputs — so the code that drives it is the
-same code you already write for `interact_with_llm`. The only new idea is that
-its handler runs a model locally instead of calling an API.
+same as for `interact_with_llm`. Its handler runs a local model instead of
+calling an API.
 
 !!! note "Before you start"
 
-    You need `npm install a11@npm:@curiositystack/a11`, a browser with WebGPU
-    enabled, and a URL to a hosted Gemma model asset (`.task` / `.litertlm`)
-    that MediaPipe can load. The model file is large; serve it from a location
-    with permissive CORS. No API key and no server are involved.
+    Install `a11@npm:@curiositystack/a11`. Use a browser with WebGPU enabled and
+    provide a hosted Gemma model asset (`.task` or `.litertlm`) that MediaPipe
+    can load. Serve the large model file with permissive CORS. This setup does
+    not require an API key or model server.
 
 ## Try it
 
-Paste a hosted Gemma model URL, then chat. The first message downloads and
-compiles the model in your browser (this can take a while); after that,
-generation is local and the reply **streams token by token** into the bubble.
-The download is cached, so reloading the page skips it. A WebGPU-capable
-browser is required.
+Paste a hosted Gemma model URL and send a message. The first message downloads
+and compiles the model in the browser. Later generation is local, and each reply
+**streams token by token**. The browser cache avoids another download after a
+reload. A WebGPU-capable browser is required.
 
 <link rel="stylesheet" href="../assets/local-models.css">
 <div id="gemma-demo" class="gemma-demo">
@@ -47,8 +46,8 @@ browser is required.
 
 ## 1. The action contract
 
-Import the backend and the SDK names you need. `INTERACT_WITH_GEMMA_SCHEMA`
-already describes the ports; you register it like any other schema.
+Import the backend and SDK types. `INTERACT_WITH_GEMMA_SCHEMA` describes the
+ports and registers like any other schema.
 
 ```ts
 import {
@@ -145,10 +144,9 @@ history = [...history, user, assistant];
 
 ## 5. Swap the runtime (optional)
 
-By default the handler dynamically imports Google's MediaPipe `LlmInference`
-task and runs it on WebGPU. You can replace that runtime — to cache the loaded
-model across turns, report download progress, or plug in a different engine —
-with `setGemmaEngineFactory`:
+By default, the handler dynamically imports Google's MediaPipe `LlmInference`
+task and runs it on WebGPU. Use `setGemmaEngineFactory` to cache a loaded model
+across turns, report download progress, or provide another engine:
 
 ```ts
 import {setGemmaEngineFactory, type GemmaEngine} from '@curiositystack/a11';
@@ -165,9 +163,9 @@ setGemmaEngineFactory(async (config) => {
 });
 ```
 
-A factory returns a `StatusOr<GemmaEngine>`: on failure return a status built
-with a helper such as `unavailableError(...)` rather than throwing, and the
-runtime aborts the output ports with it.
+A factory returns a `StatusOr<GemmaEngine>`. Return a status such as
+`unavailableError(...)` on failure; the runtime aborts the output ports with
+that status.
 
 ## 6. Display failures
 
@@ -183,4 +181,3 @@ try {
     errorRegion.textContent = error instanceof Error ? error.message : String(error);
 }
 ```
-

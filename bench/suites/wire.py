@@ -80,11 +80,9 @@ class _Pair:
         """Close, but never wait forever for it.
 
         `drain_outgoing_messages` waits for the peer's transport buffer to
-        take the half-close, and a peer that is not reading never makes room
-        -- so closing a stream that was deliberately overrun blocks
-        indefinitely. That is worth knowing (see `send_backpressure`) but it
-        must not be the way a benchmark run ends, so the wait is bounded and a
-        stuck close is reported rather than waited on.
+        take the half-close. A peer that is not reading does not make room, so
+        closing an overrun stream can block indefinitely. Bound the wait and
+        report a stuck close in the result; see `send_backpressure`.
         """
         try:
             await asyncio.wait_for(self._close(), timeout=timeout)
@@ -249,27 +247,14 @@ async def round_trip(scale: float) -> list[Result]:
 async def one_way_throughput(scale: float) -> list[Result]:
     """Streaming one direction, which is what a node mirror does.
 
-    The sender does not wait for the receiver, so this measures the transport's
-    sustained rate rather than its round-trip latency. The receiver counting
-    every *fragment* is what makes it honest -- a benchmark that only measures
-    `send` is measuring a queue.
+    The sender does not wait for the receiver, so this measures sustained
+    transport rate rather than round-trip latency. The receiver counts every
+    fragment; timing `send` alone would measure queue admission.
 
-    **Fragments, not messages, and that is the whole reason this benchmark
-    exists as it does.** A transport is free to deliver the fragments of
-    several sends in one `WireMessage`: A11's in-process stream folds whatever
-    is already queued behind the message it is about to deliver, which is worth
-    having because an action costs `3 + 2 x ports` messages that mostly carry
-    three bytes of status. So `n` sends can arrive as fewer than `n` receives
-    with nothing lost at all.
-
-    An earlier version of this counted messages, waited for one receive per
-    send, and hung on the first transport whose peer sees concurrent sends --
-    SSE, whose POSTs land on the server's bridge from a fibre each, so a queue
-    forms and the merge has something to fold. It timed out at 20s and took the
-    two transports that had already passed down with it, which is why this row
-    has never appeared in a recorded run on either machine. Counting fragments
-    is not a workaround for that; it is the only count the transport contract
-    actually promises.
+    A transport may combine fragments from concurrent sends into one received
+    message. The receive pump includes messages already queued for delivery,
+    reducing overhead for the small status messages used by actions. The
+    benchmark therefore counts fragments, not received messages.
     """
     results = []
     for name, transport in TRANSPORTS.items():
@@ -294,22 +279,15 @@ async def one_way_throughput(scale: float) -> list[Result]:
                     # bounds it is counting what has actually been read. That
                     # `send` gives the caller nothing to count with, and that
                     # this benchmark has to reconstruct it from the receive
-                    # side, is the finding in `send_backpressure`.
-                    # A semaphore, not an Event, and that is not a style
-                    # choice. The Event version had a lost wakeup: the sender
-                    # checked its budget, the drain read a message and set the
-                    # event, and only *then* did the sender clear it -- wiping
-                    # the wakeup it was about to wait for. It survived until
-                    # receives started resolving synchronously, which let the
-                    # drain run ahead in bursts and made the interleaving
-                    # common; the suite then hung. A credit per unread slot
-                    # cannot lose one.
+                    # side, is the finding in `send_backpressure`. Use one
+                    # semaphore credit per unread slot. An Event permits a lost
+                    # wakeup when the drain signals between the sender checking
+                    # its budget and clearing the event.
                     credit = asyncio.Semaphore(16)
 
                     async def drain(p=pair, c=count) -> int:
-                        # Bounded by fragments seen, not iterations: one
-                        # receive may carry several, and waiting for `c`
-                        # receives is what used to hang here.
+                        # Bound by fragments seen because one receive may carry
+                        # several fragments.
                         seen = 0
                         while seen < c:
                             message = await asyncio.wait_for(
@@ -394,9 +372,7 @@ async def send_backpressure(scale: float) -> list[Result]:
                 pair = await connect()
                 sent = 0
                 outcome = "survived the probe's ceiling"
-                limit = min(
-                    int(_scaled(20_000, scale)), ceiling_bytes // size
-                )
+                limit = min(int(_scaled(20_000, scale)), ceiling_bytes // size)
                 deadline = time.perf_counter() + budget_s
                 try:
                     while sent < limit:
@@ -412,9 +388,7 @@ async def send_backpressure(scale: float) -> list[Result]:
                             if not pair.client.get_status().is_ok():
                                 break
                             if time.perf_counter() > deadline:
-                                outcome = (
-                                    f"survived {budget_s:.0f}s of sending"
-                                )
+                                outcome = f"survived {budget_s:.0f}s of sending"
                                 break
                 except Exception as failure:  # noqa: BLE001 - the abort is the result
                     outcome = f"send raised {type(failure).__name__}"
@@ -466,9 +440,7 @@ async def stream_capacity(scale: float) -> list[Result]:
                 return count
 
             started = time.perf_counter_ns()
-            slope, trail = await memory_slope(
-                open_many, counts=[stage] * 6
-            )
+            slope, trail = await memory_slope(open_many, counts=[stage] * 6)
             elapsed = (time.perf_counter_ns() - started) / 1e9
             total = stage * 6
             results.append(
@@ -508,9 +480,7 @@ async def concurrent_stream_traffic(scale: float) -> list[Result]:
         async with transport() as connect:
             for streams in (1, 8, 64):
                 pairs = [await connect() for _ in range(streams)]
-                per_stream = _scaled(
-                    200 if name == "in-process" else 60, scale
-                )
+                per_stream = _scaled(200 if name == "in-process" else 60, scale)
                 payload = _message(b"x" * 256)
                 reply = _message(b"y" * 256)
 
@@ -545,8 +515,7 @@ async def concurrent_stream_traffic(scale: float) -> list[Result]:
                         metrics,
                         {"transport": name, "streams": streams},
                         note=(
-                            "ops/s is aggregate; percentiles are per round"
-                            " trip"
+                            "ops/s is aggregate; percentiles are per round trip"
                         ),
                     )
                 )

@@ -81,11 +81,6 @@ TEST(InProcessWireStreamTest, DeliversMessagesAndOrderedHalfClose) {
 }
 
 // Order is per endpoint and holds however the message got there.
-//
-// A message may be delivered by the sending endpoint's own fibre, or by whoever
-// called Send, or from the queue after backpressure has cleared -- and the
-// receiver must not be able to tell which. The buffer here is deliberately far
-// smaller than the traffic, so all three paths run in one test.
 TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
   constexpr int kMessages = 400;
   WireStreamOptions narrow;
@@ -111,10 +106,7 @@ TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
               [&](std::optional<data::WireMessage> message) {
                 if (message.has_value() && !message->node_fragments.empty()) {
                   thread::MutexLock lock(&mu);
-                  // Every fragment, not every message: the sender folds
-                  // whatever is already queued into one message, so a
-                  // delivery can carry many fragments and the order
-                  // being checked is theirs.
+                  // Every fragment, not every message:
                   for (const data::NodeFragment& fragment :
                        message->node_fragments) {
                     seen.push_back(static_cast<int>(fragment.seq.value_or(0)));
@@ -152,12 +144,6 @@ TEST(InProcessWireStreamTest, PreservesSendOrderThroughBackpressure) {
 }
 
 // Concurrent senders interleave, but each one's own messages stay in order.
-//
-// This is the race the fast path in Send has to get right: two threads reaching
-// it at once, one of them taking the claim and delivering while the other
-// queues behind it, and the queued one having to come out after -- not before
-// -- the one in flight. `seq` carries the sender's index in the high bits so
-// the receiver can separate the streams it should not be reordering.
 TEST(InProcessWireStreamTest, PreservesEachSendersOrderUnderConcurrency) {
   constexpr int kSenders = 4;
   constexpr int kPerSender = 250;

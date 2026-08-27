@@ -120,8 +120,8 @@ async def test_async_iteration_skips_a_null_final_marker():
     assert await _confirm(value_write) == [0]
     await node.finalize(wait=True)
 
-    # The language-neutral JSON ``array`` tag deliberately does not retain
-    # whether Python supplied a list or tuple; default JSON decoding uses list.
+    # The language-neutral JSON ``array`` tag does not distinguish Python lists
+    # from tuples; default JSON decoding uses a list.
     assert [value async for value in node] == [["only", "value"]]
 
 
@@ -211,13 +211,15 @@ def test_expected_type_configuration_validates_arguments():
 
     with pytest.raises(StatusException) as raised:
         node.set_expected_types(
-            ["application/json", 1], dict  # type: ignore[list-item]
+            ["application/json", 1],
+            dict,  # type: ignore[list-item]
         )
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 
     with pytest.raises(StatusException) as raised:
         node.set_expected_types(
-            "application/json", "dict"  # type: ignore[arg-type]
+            "application/json",
+            "dict",  # type: ignore[arg-type]
         )
     assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 

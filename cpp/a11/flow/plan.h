@@ -34,15 +34,17 @@ struct PortPlan {
 
 /// One field of a `struct`, resolved.
 ///
-/// The syntax node's constraints, with the type worked out the way a port's is:
-/// `declared` is what was written and `type` is what it *is*. A field naming
-/// another `struct` keeps that name in both, and `dto_name` says so, which is what
-/// saves every reader from deciding whether a bare name is a shape again.
+/// The syntax node's constraints, with the type worked out the way a port's
+/// is: `declared` is what was written and `type` is what it *is*. A field
+/// naming another `struct` keeps that name in both, and `dto_name` says so,
+/// which is what saves every reader from deciding whether a bare name is a
+/// shape again.
 struct FieldPlan {
   std::string name;
   std::string declared;
   std::string type;
-  /// The element type of a `list[T]`, resolved, or empty where it is not a list.
+  /// The element type of a `list[T]`, resolved, or empty where it is not a
+  /// list.
   std::string element;
   /// Whether the field, or a list's element, names a declared shape.
   std::string dto_name;
@@ -65,10 +67,13 @@ struct DtoPlan {
   std::string name;
   std::string description;
   std::vector<FieldPlan> fields;
+  // Whether the shape holds bytes anywhere in it, directly or through another
+  // shape it names.
   /// Whether the shape holds bytes anywhere in it, directly or through another
   /// shape it names.
   ///
-  /// Worked out once, at resolution, because it is what decides whether `| json`
+  /// Worked out once, at resolution, because it is what decides whether `|
+  /// json`
   /// on a value of this shape can mean anything -- and working it out on demand
   /// would mean walking a graph of shapes that may refer to each other.
   bool binary = false;
@@ -97,14 +102,15 @@ struct HeaderPlan {
 /// Flat on purpose: this is what `a11 flow describe` prints and what a reader
 /// diffs to see whether a change to a flow changed what it does. The executable
 /// graph -- refs with buffers, steps that can be run -- arrives with the native
-/// runtime and grows out of these, rather than being a second description of them.
+/// runtime and grows out of these, rather than being a second description of
+/// them.
 struct StepPlan {
   /// The kind of statement, as `a11.flow.plan`'s `Step.kind` spells it: `call`,
   /// `pipe`, `skip`, `wait`, `drain`, `cancel`, `fail`, `for`, `repeat`, `if`,
   /// `capture`.
   std::string kind;
-  /// The name this step is known by: a bound name, or `action`, `for`, `if` with
-  /// a `#2` after it where one label is used twice.
+  /// The name this step is known by: a bound name, or `action`, `for`, `if`
+  /// with a `#2` after it where one label is used twice.
   std::string label;
   /// What it waits for, by label.
   std::vector<std::string> after;
@@ -167,10 +173,10 @@ struct Program {
   std::vector<FlowPlan> flows;
   /// The shapes, in declaration order.
   ///
-  /// Beside the flows because a shape is not any one flow's: two flows in a file
+  /// Beside the flows because a shape is not any one flow's: two flows in a
+  /// file
   /// describe the same records. A name here **outranks** a serialisation
-  /// registry tag of the same name, which is the point of being able to declare
-  /// one -- what a file says about a shape is what the file means by it.
+  /// registry tag of the same name, so the local declaration defines the shape.
   std::vector<DtoPlan> dtos;
 
   /// The flow of this name, or `nullptr`. Never returns the entry flow: an

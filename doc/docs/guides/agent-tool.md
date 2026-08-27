@@ -1,9 +1,8 @@
 # A toy agent with a tool
 
-An agent is a model that can *act* — call functions you expose and use the
-results. In A11 a tool is nothing new: it is an **action** you register, and
-`interact_with_llm` lets the model call it mid-conversation. This page gives the
-model a `get_weather` tool with a simulated response, building on the
+An A11 action can serve as an LLM tool. Register the action, allow the model to
+call it through `interact_with_llm`, and return its output to the conversation.
+This guide adds a simulated `get_weather` action to the
 [LLM interaction](llm.md).
 
 ```python
@@ -81,8 +80,8 @@ tool_definitions = runner.get_tool_definitions(registry, ["get_weather"])
 
 ## Run the turn
 
-Feeding and reading are just like the [plain interaction](llm.md) — the only
-addition is streaming the tool definitions onto the `tools` port:
+Feed and read the action as shown in the [plain interaction](llm.md), and stream
+the tool definitions onto the `tools` port:
 
 ```python
 user_turn = Interaction(
@@ -103,17 +102,17 @@ await tools.finalize()
 When the model decides to call `get_weather`, `interact_with_llm` dispatches the
 action **in this process**, streams its `report` back to the model, and lets the
 model continue — so the final text on `text_output` already reflects the tool
-result. You just read the output:
+result. Read that output from `text_output`:
 
 ```python
 async for chunk in interact["text_output"]:
     print(chunk, end="", flush=True)
 ```
 
-## What just happened
+## How the tool call is handled
 
-The loop — model asks for a tool, the tool runs, its output goes back, the model
-answers — is the whole of "being an agent". Because the tool is an ordinary
+The model requests a tool call, the registered action runs, and its output
+returns to the model before the model answers. Because the tool is an ordinary
 action:
 
 - it could stream progress on `report` instead of returning one string;

@@ -16,11 +16,6 @@ namespace a11::net::internal {
 namespace {
 
 // A path with a size limit, and nothing else.
-//
-// The point of the prober seam is that the interesting cases -- a path that
-// shrinks under a live association, a peer that stops answering -- are trivial
-// here and close to unreachable against a real network, which cannot be
-// reconfigured from inside a test.
 class FakePath {
  public:
   explicit FakePath(size_t limit) : limit_(limit), sustained_limit_(limit) {}
@@ -93,8 +88,10 @@ class FakePath {
     sustained_limit_ = limit;
   }
 
-  /// A path that answers a single probe up to `limit` but only carries traffic up
-  /// to `sustained`. Real: measured between 4096 and 4256 on the reference machine.
+  /// A path that answers a single probe up to `limit` but only carries traffic
+  /// up
+  /// to `sustained`. Real: measured between 4096 and 4256 on the reference
+  /// machine.
   void SetSustainedLimit(size_t sustained) {
     thread::MutexLock lock(&mu_);
     sustained_limit_ = sustained;
@@ -170,8 +167,8 @@ TEST(PathMtuTest, ConvergesJustBelowThePathLimit) {
 
   EXPECT_EQ(discovery.state(), PathMtuState::kSearchComplete);
   // Within one granularity step of the truth, and never above it -- the whole
-  // safety property of the search is that it does not leave the association at a
-  // size the path drops.
+  // safety property of the search is that it does not leave the association at
+  // a size the path drops.
   EXPECT_LE(confirmed, 4096u);
   EXPECT_GT(confirmed, 4096u - TestOptions().granularity);
   EXPECT_EQ(path.association_mtu(), confirmed);
@@ -194,9 +191,9 @@ TEST(PathMtuTest, ProbesPayloadsNetOfHeaderOverhead) {
   discovery.Search();
 
   ASSERT_FALSE(path.probed().empty());
-  // A probe has to produce a packet of the candidate size, so its payload is the
-  // candidate less the headers -- probing the full candidate would test a size
-  // one header larger than the one being considered.
+  // A probe has to produce a packet of the candidate size, so its payload is
+  // the candidate less the headers -- probing the full candidate would test a
+  // size one header larger than the one being considered.
   EXPECT_EQ(path.probed().front(), options.base_mtu - options.probe_overhead);
 }
 
@@ -207,12 +204,6 @@ TEST(PathMtuTest, DoesNotHoldApplicationTrafficWhileProbing) {
   discovery.Search();
 
   // Nothing is held back, and that is the design rather than an oversight.
-  // Raising the MTU does expose in-flight data to an unconfirmed size, and SCTP
-  // repairs that on the way back down -- it re-fragments and resends whatever
-  // went out too big. Holding traffic instead turned every rejected candidate
-  // into a stall of a whole probe timeout, which timed out a ten-second drain in
-  // webrtc_wire_stream_test; and the workaround for *that* -- probing only a
-  // quiet stream -- meant a busy stream never probed at all.
   EXPECT_EQ(path.pauses(), 0u);
   EXPECT_EQ(path.resumes(), 0u);
   EXPECT_GT(discovery.probes_sent(), 0);
@@ -225,15 +216,8 @@ TEST(PathMtuTest, APeerThatAnswersNothingGivesUpWithoutTouchingTheStream) {
 
   EXPECT_EQ(discovery.Search(), 0u);
   EXPECT_EQ(discovery.state(), PathMtuState::kError);
-  // **No failure is reported**, and this is the important assertion in the file.
-  //
-  // An earlier version treated an unanswered base probe as a connectivity failure
-  // and aborted the stream, reasoning that every conforming path carries 1280.
-  // But probes ride an unreliable channel, and under load their acknowledgements
-  // are precisely what is dropped -- so it aborted streams that were carrying
-  // application data at full rate. A lost probe is not evidence that a path is
-  // dead; the stream working is evidence that it is not. Discovery may only ever
-  // give up.
+  // **No failure is reported**, and this is the important assertion in the
+  // file.
   EXPECT_TRUE(path.failure().ok());
 }
 
@@ -317,14 +301,9 @@ TEST(PathMtuTest, StoppingLeavesTheAssociationAtAConfirmedSize) {
   EXPECT_EQ(path.pauses(), path.resumes());
 }
 
-// The most expensive lesson in this feature, pinned.
-//
-// A single acknowledged probe does not prove a size usable. Measured on the bare
-// data channel: a 64 KiB stream runs at 173 MiB/s at MTU 4096 and does not run at
-// all at 4256, while one probe at 4256 comes back -- one IP-fragmented datagram
-// reassembles where a stream of them does not. A search that trusted one probe
-// converged on 4256, applied it, and stalled the stream; every row above 64 bytes
-// in the wire suite timed out.
+// The most expensive lesson in this feature, pinned. A search that trusted one
+// probe converged on 4256, applied it, and stalled the stream; every row above
+// 64 bytes in the wire suite timed out.
 TEST(PathMtuTest, RejectsASizeThatOnlySurvivesOneProbeAtATime) {
   FakePath path(8192);
   path.SetSustainedLimit(

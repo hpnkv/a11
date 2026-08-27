@@ -70,8 +70,8 @@ async def test_turn_is_refused_without_the_sdk(uninstalled_sdk, capsys):
 
 
 def test_a_remote_gateway_is_not_judged_by_this_environment(uninstalled_sdk):
-    # The gateway runs elsewhere, so what is importable here says nothing about
-    # what it can serve; the turn's own status is the only honest answer.
+    # A remote gateway has its own environment, so local imports do not
+    # determine which backends it can serve.
     ui = _ui(_connection(embedded=False))
     assert ui._report_missing_sdk() is False
 

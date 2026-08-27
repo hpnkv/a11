@@ -53,7 +53,7 @@ using ::a11::nodes::AsyncNode;
  *
  * A first-run fetch of a whisper model is tens or hundreds of megabytes and
  * happens on whichever machine serves the action, so silence there reads as a
- * hung action. Logging is deliberately coarse: this runs per body chunk.
+ * hung action. Logging is coarse because this runs once per body chunk.
  */
 OnModelProgress LogModelProgress(std::string_view what) {
   auto last_decile = std::make_shared<std::int64_t>(-1);
@@ -212,10 +212,7 @@ absl::Status PutJson(AsyncNode& node, const T& value, bool final) {
 }
 
 // Encodes a string the way every other language's registry expects one: a JSON
-// scalar, not a bare `text/plain` payload. A port's declared type is only a
-// schema label; deserializers are matched on the chunk's mimetype, and nothing
-// is registered for `text/plain`. JSON already says this is a string, so the
-// mimetype carries no type parameter to repeat it.
+// scalar, not a bare `text/plain` payload.
 data::Chunk TextChunk(const std::string& text) {
   data::Chunk chunk;
   chunk.metadata =
@@ -224,12 +221,7 @@ data::Chunk TextChunk(const std::string& text) {
   return chunk;
 }
 
-// Adapts a chunk write to the Task the recognizer callbacks return. The write
-// is already asynchronous -- the node's writer batches, persists and tees to
-// attached streams on its own state machine -- so a single put needs no fiber.
-// Cancellation is forwarded to the write so the Task stays a drop-in for the
-// SubmitTask this replaced: a promise-backed Future with no cancellation source
-// answers Cancel() with Unimplemented instead of unwinding the operation.
+// Adapts a chunk write to the Task the recognizer callbacks return.
 a11::Task WriteTask(const a11::Future<std::uint32_t>& write) {
   a11::Promise<a11::Unit> promise;
   a11::Task task = promise.future();
@@ -412,16 +404,7 @@ ActionHandler MakeCaptureTranscriptionHandler() {
           ReadOptionalOptions<SpeechRecognizerOptions>(
               action, "asr_options", SpeechRecognizerOptions{}));
       // `model` and `vad_model` accept a shorthand as well as a path, and an
-      // absent model means the default one. Resolving here -- on this action's
-      // fiber, where blocking is legal -- is what lets a remote caller ask for
-      // "base.en" without knowing where this side keeps its cache.
-      //
-      // Progress is logged rather than sent on the `events` port: the port
-      // carries a closed TranscriptionEvent enum whose tag is mirrored in the
-      // JS and Kotlin clients, and a first-run download is the operator's
-      // concern, on whose disk the cache lives.
-      // The blocking forms: this already runs on a fiber, and awaiting a
-      // nested Submit from one does not complete.
+      // absent model means the default one. The blocking forms:
       ABSL_ASSIGN_OR_RETURN(
           asr_options.model,
           internal::ResolveAsrModelBlocking(asr_options.model,
@@ -438,9 +421,7 @@ ActionHandler MakeCaptureTranscriptionHandler() {
                             SpeechRecognizer::Create(std::move(model), input,
                                                      std::move(asr_options)));
 
-      // Bridge recognizer callbacks onto the output ports. The recognizer awaits
-      // each returned Task, which is the natural backpressure point, and its Run
-      // epilogue is the single finalizer for both outputs (exactly-once).
+      // Bridge recognizer callbacks onto the output ports.
       OnTranscription on_piece =
           [pieces_out](std::optional<std::string> piece) -> a11::Task {
         if (piece.has_value()) {
@@ -515,16 +496,7 @@ ActionHandler MakeTranscribeAudioHandler() {
           ReadOptionalOptions<SpeechRecognizerOptions>(
               action, "asr_options", SpeechRecognizerOptions{}));
       // `model` and `vad_model` accept a shorthand as well as a path, and an
-      // absent model means the default one. Resolving here -- on this action's
-      // fiber, where blocking is legal -- is what lets a remote caller ask for
-      // "base.en" without knowing where this side keeps its cache.
-      //
-      // Progress is logged rather than sent on the `events` port: the port
-      // carries a closed TranscriptionEvent enum whose tag is mirrored in the
-      // JS and Kotlin clients, and a first-run download is the operator's
-      // concern, on whose disk the cache lives.
-      // The blocking forms: this already runs on a fiber, and awaiting a
-      // nested Submit from one does not complete.
+      // absent model means the default one. The blocking forms:
       ABSL_ASSIGN_OR_RETURN(
           asr_options.model,
           internal::ResolveAsrModelBlocking(asr_options.model,

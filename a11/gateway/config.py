@@ -1,15 +1,12 @@
 # Copyright 2026 The A11 Authors.
 
-"""What a gateway is configured with, independent of how it was invoked.
+"""Gateway configuration independent of its invocation method.
 
-The gateway used to be built straight from an `argparse.Namespace`, which meant
-only the CLI could build one. Anything else that wants a gateway -- an embedded
-one inside `a11 chat`, a test, a future embedding -- needs a plain value, and it
-should not have to guess which ``no_*`` attributes the namespace happened to
-carry.
+Embedded gateways, tests, and the CLI share this plain value instead of
+depending on argparse-specific attributes.
 
-Flags are positive here. The negation belongs to argparse, where ``--no-x`` reads
-naturally on a command line; a config object that has to be read as
+Flags are positive here. The negation belongs to argparse, where ``--no-x``
+reads naturally on a command line; a config object that has to be read as
 ``not no_shell_tools`` does not.
 """
 

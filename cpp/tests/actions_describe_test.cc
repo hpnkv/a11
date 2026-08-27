@@ -159,7 +159,7 @@ TEST(SchemaFromDescriptionTest, RoundTripsWhatCanTravel) {
   EXPECT_TRUE(rebuilt->outputs.at("lines").json_schema.empty());
   EXPECT_EQ(rebuilt->output_to_json_field.at("lines"), "$");
 
-  // Autofills deliberately do not travel: they are receiver-owned defaults, and
+  // Autofills remain local because they are receiver-owned defaults, while
   // a caller that could set one could override the receiver's own.
   EXPECT_TRUE(rebuilt->inputs.at("hidden").autofills.empty());
 }

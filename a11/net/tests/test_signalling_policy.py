@@ -49,7 +49,10 @@ def client_options(
 
 
 async def connect(
-    port: int, identity: str, *, headers: dict[str, str] | None = None,
+    port: int,
+    identity: str,
+    *,
+    headers: dict[str, str] | None = None,
     on_message=None,
 ):
     """Connect A11's signalling client to a server on ``port``."""
@@ -395,10 +398,12 @@ async def test_the_connect_deadline_does_not_expire_the_registration():
         options = net.WebSocketSignallingClientOptions()
         options.http2_options.enable_h2 = False
         options.http2_options.enable_h2c = False
-        # Deliberately shorter than this test takes.
+        # The connection must remain usable after this deadline passes.
         options.deadline = timing.now() + timing.Duration.seconds(1)
         host = await net.WebSocketSignallingClient.connect(
-            f"ws://127.0.0.1:{server.port}/ice", "long-lived", on_message,
+            f"ws://127.0.0.1:{server.port}/ice",
+            "long-lived",
+            on_message,
             options,
         )
         peer = await connect(server.port, "peer")
@@ -425,18 +430,15 @@ async def test_the_connect_deadline_does_not_expire_the_registration():
 
 
 async def test_client_options_ask_for_http_1_1():
-    """Because a reverse proxy will not carry a WebSocket over HTTP/2.
+    """Use HTTP/1.1 for WebSockets routed through a reverse proxy.
 
     nginx and its peers do not implement RFC 8441's extended CONNECT, so a
-    signalling client that prefers HTTP/2 gets a bare `400` the moment the
-    server it registers with sits behind an ingress. The failure looks like a
-    rejected credential rather than a protocol mismatch, which is why this is
-    worth asserting rather than leaving to whoever reads the handshake.
+    signalling client that prefers HTTP/2 receives a bare `400` when the server
+    sits behind an ingress.
     """
     options = net.signalling.client_options()
 
-    # The preference is the load-bearing one: clearing the two flags alone
-    # still had the client offer h2 and still earned a 400 from nginx.
+    # The explicit preference prevents the client from offering h2.
     assert (
         options.http2_options.client_preference
         == net.HttpProtocolPreference.HTTP11

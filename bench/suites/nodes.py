@@ -289,16 +289,14 @@ async def read_batching_headroom(scale: float) -> list[Result]:
         store = LocalChunkStore(f"headroom-store-{limit}")
         for start in range(0, count, 500):
             size = min(500, count - start)
-            await store.put_many(
-                [
-                    types.NodeFragment(
-                        data=chunk,
-                        seq=start + offset,
-                        continued=start + offset < count - 1,
-                    )
-                    for offset in range(size)
-                ]
-            )
+            await store.put_many([
+                types.NodeFragment(
+                    data=chunk,
+                    seq=start + offset,
+                    continued=start + offset < count - 1,
+                )
+                for offset in range(size)
+            ])
         deadline = timing.now() + _DEADLINE
         drained = 0
         started = _time.perf_counter_ns()
@@ -337,9 +335,8 @@ async def read_batching_headroom(scale: float) -> list[Result]:
 async def round_trip(scale: float) -> list[Result]:
     """Write one value, read it back: the streaming unit, both pacings.
 
-    Sequential is the honest number for a producer that waits for its consumer.
-    Pipelined is what a producer running ahead of its consumer gets, which is
-    the normal shape for token streaming.
+    Sequential mode represents a producer that waits for its consumer. Pipelined
+    mode represents token producers that run ahead of consumers.
     """
     iterations = _scaled(2000, scale)
     results = []

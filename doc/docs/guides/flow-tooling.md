@@ -21,17 +21,15 @@ a11 flow syntax --generate                   # write the editor definitions
 a11 flow serve                               # answer requests on stdin
 ```
 
-`check` exits `0` when nothing is an error, `1` when something is, and `2` when a
-file could not be read — so it drops into a pre-commit hook or a CI job with no
-wrapper. A file named `-` reads standard input.
+`check` exits `0` with no errors, `1` with language errors, and `2` when the file
+cannot be read. A file named `-` reads standard input.
 
 ## `a11-flow`, the standalone tool
 
-Everything above is also a small native binary, `a11-flow`, built by
-`cmake --build . --target a11_flow_tool`. It is the same library behind the same
-commands, and the point of it is what it does **not** link: no Python, no OpenSSL,
-no libuv, no audio. An editor extension can bundle it per platform, and a CI image
-can carry it without carrying A11.
+The `a11-flow` native binary provides the same commands and is built with
+`cmake --build . --target a11_flow_tool`. It links only the language library,
+Abseil, and nlohmann, so editor extensions and CI images can use it without the
+full A11 runtime.
 
 ```sh
 a11-flow check my.flow --format json
@@ -42,24 +40,18 @@ a11-flow --stdio                  # the same, spelled the way an LSP client does
 a11-flow serve --protocol json    # one request per line, one answer per line
 ```
 
-`serve --protocol lsp` speaks the Language Server Protocol: diagnostics with quick
-fixes built from each diagnostic's own edits, semantic tokens, formatting,
-completion, hover, document symbols and go-to-declaration. `--stdio` means the same
-thing and is accepted because that is what an LSP client says: `vscode-languageclient`
-appends it to a server's arguments on its own, and a tool that refused it would exit
-before reading a byte -- which a client reports as a connection that went away
-rather than as an unrecognised flag. That is a VSCode or
-Neovim integration with no language knowledge of its own — a client, a few
-hundred lines at most. It also takes three methods of its own. `a11flow/setContext` is how a client that
-knows what actions and types are available says so for the session;
-`a11flow/scan` asks it to read a project's own source for the actions *it*
-declares and folds the answer into the same place; and `a11flow/relay` carries one
-request of the JSON protocol below, for the questions LSP has no method for -- the
-one that matters being a flow written inside a string literal, which is not a
-document the server has.
+`serve --protocol lsp` provides diagnostics and quick fixes, semantic tokens,
+formatting, completion, hover, document symbols, and go-to-declaration.
+`--stdio` is an alias accepted by clients such as `vscode-languageclient`.
 
-`serve --protocol json` is the same capabilities with no framing to implement,
-which is what a host with a pipe and no LSP client wants:
+Three custom methods cover Flow-specific integration. `a11flow/setContext`
+sets the session's available actions and types. `a11flow/scan` extracts action
+declarations from project source and adds them to that context.
+`a11flow/relay` carries a JSON-protocol request for features outside LSP, such
+as analysing Flow embedded in a host-language string.
+
+`serve --protocol json` exposes the same capabilities as newline-delimited JSON
+for hosts that do not use an LSP client:
 
 ```
 {"id": 1, "method": "check", "source": "flow t { }"}
@@ -68,33 +60,28 @@ which is what a host with a pipe and no LSP client wants:
 
 The methods are `check`, `tokens`, `parse`, `plan`, `format`, `complete`,
 `describe`, `symbols`, `definition`, `catalogue`, `scan`, `schema`, `shapes`,
-`codes`, `vocabulary` and `syntax`; each answers with the envelope of the same name below.
-Every one of them accepts a `context`, which is what the language knows of the
-world outside the document — see `flow.catalogue/v1`.
+`codes`, `vocabulary`, and `syntax`. Each returns the corresponding envelope
+described below. Every method accepts a `context` containing the actions and
+types available outside the document; see `flow.catalogue/v1`.
 `a11 flow serve` speaks the identical protocol through the Python bindings, for a
 host that already has A11 installed.
 
 ### Which units the offsets are in
 
-Every offset in the formats below is a **byte** offset by default, because that is
-what the language reads and what an edit is applied in. Most editor hosts do not
-count that way: a JVM `CharSequence` and a JavaScript string are indexed in UTF-16
-code units, so `§` is one unit and two bytes.
+Offsets are **byte offsets** by default. JVM and JavaScript editor APIs usually
+index strings in UTF-16 code units, where `§` occupies one unit and two UTF-8
+bytes.
 
-For ASCII the two agree, which makes this the easiest thing in the whole protocol
-to get wrong — it works on every example file and then colours the first document
-with prose in it a column to the left of itself. So a client says which arithmetic
-it counts in, once per request:
+ASCII has identical byte and UTF-16 offsets, so test integrations with non-ASCII
+text. Set the offset unit once per request:
 
 ```
 {"method": "tokens", "source": "...", "offsets": "utf16"}
 ```
 
-`"bytes"` (the default) or `"utf16"`. It applies to the whole exchange: every
-offset in the answer comes back in those units, and `complete`'s inbound `offset`
-is read in them too. The conversion is the language's — a frontend that did it
-itself would be re-deriving something the service already knows how to do, and
-would be the second implementation of it.
+Use `"bytes"` (the default) or `"utf16"`. The selected unit applies to every
+returned offset and to the inbound `offset` for `complete`. The service performs
+the conversion.
 
 Two fields represent distinct coordinate systems rather than document offsets: a
 diagnostic's `line` and `column` (1-based, code-point count), and a completion
@@ -132,18 +119,13 @@ a version is bumped only when a field changes meaning or disappears.
 }
 ```
 
-A few decisions worth knowing, because they are what make the format usable
-without the source file in hand:
+The envelope remains usable without the source text:
 
-* **A range carries both.** Byte offsets are what an editor edits with; lines and
-  columns are what a person and a build log read. Computing one from the other
-  needs the text, which a diagnostic that has travelled as JSON no longer has, so
-  both travel. Lines and columns are 1-based; the range is half-open.
-* **A fix is a set of edits, not advice.** A frontend applies them blind and never
-  re-derives what the fix should have been. Fixes are offered only where exactly
-  one edit is obviously right, so there is never a choice to make.
-* **`counts` is there so a gate needs no walk** of the list: fail the build on
-  `counts.error > 0`, or on warnings too if you like.
+* **A range carries offsets, lines, and columns.** Lines and columns are 1-based;
+  ranges are half-open.
+* **A fix contains complete edits.** Frontends apply them without deriving a
+  repair. Fixes are present only when one safe edit is available.
+* **`counts` supports build gates** without traversing the diagnostics list.
 * **`flow` is absent, not empty,** when the text did not get far enough to name
   one.
 
@@ -161,9 +143,8 @@ a11 flow codes --format json | jq '.codes[] | select(.family == "unused")'
 
 ### `flow.tokens/v1`
 
-What `a11 flow highlight --format json` gives: one entry per token with the
-*meaning* of the word at that position, which is the judgement a syntax
-highlighter is making.
+`a11 flow highlight --format json` returns one entry per token with its semantic
+role.
 
 ```json
 {
@@ -194,10 +175,8 @@ distinguish a flow port from a local node. Other kinds are lexical, so an editor
 can apply them before resolution completes. The IntelliJ plugin renders resolved
 ports with the identifier colour and italic emphasis.
 
-`lexical` is the lexer's own name for the token (`word`, `->`, `{`), beside what it
-*means*. A client that only colours wants `kind`; one that has to drive a lexer of
-its own — an IDE that insists on tokenising every character, and matches braces by
-token type — wants both, and one call gives it both.
+`lexical` contains the token's lexical type (`word`, `->`, `{`), while `kind`
+contains its semantic role. Clients that tokenize locally can use both fields.
 
 Tokens tile the source: every offset in the file is covered by exactly one of
 them, comments included, so a client can colour a whole file from one response.
@@ -205,10 +184,9 @@ Columns count characters, not bytes.
 
 ### `flow.syntax/v1`
 
-What `a11 flow parse --format json` gives: the flows a file declares, as the tree
-the parser read, **and** everything wrong with it. Both, always — the parser
-recovers rather than stopping at the first problem, so a file somebody is in the
-middle of typing still has a tree to highlight, format and check.
+`a11 flow parse --format json` returns the parsed tree and all diagnostics. The
+parser recovers after errors so editors can continue to highlight, format, and
+check incomplete source.
 
 ```json
 {
@@ -240,19 +218,16 @@ middle of typing still has a tree to highlight, format and check.
 }
 ```
 
-* **`kind` says what a node is**, in kebab case, and the rest of the object is
-  what that kind holds: `pipe` has a `pipeline` and `targets`, `call` has an
+* **`kind` identifies the node**, in kebab case. The remaining fields depend on
+  that kind: `pipe` has a `pipeline` and `targets`, `call` has an
   `action`, `args` and `modifiers`, `for-each` has a `variable` and a `body`,
   `block` has a `body` and whether it is `tolerant`.
-* **`at` is where the node started** — the token it began at, not the extent of the
-  whole construct. It is nested under its own key rather than sitting beside the
-  node's fields because a `repeat` has a `start` of its own, and a format where one
-  key means two things is a format somebody reads wrong exactly once.
+* **`at` identifies the node's first token**, not the full construct. Nesting it
+  avoids a conflict with the `start` field used by `repeat`.
 * **A duration is `{"$duration": seconds}`.** `250ms` and `0.25` are different
   things, and a reader should not have to guess which one a bare number was.
-* **A statement that could not be read is an `error` node** with what was expected
-  there, so a subtree that is missing *says* it is missing rather than looking like
-  something else.
+* **An unreadable statement becomes an `error` node** containing the expected
+  syntax, so consumers can distinguish it from an omitted subtree.
 
 The format is pinned by `testdata/flow/example.flow` and `testdata/flow/syntax.json`
 — one small flow using nearly every construct, and the tree it produces.
@@ -272,11 +247,9 @@ What `a11 flow fmt --format json` gives:
 }
 ```
 
-`edits` is one edit, trimmed to the part of the file that actually differs, so an
-editor applying it does not move the cursor or lose a fold over a file that only
-changed at the bottom. A file with an **error** in it is returned exactly as it
-was, `changed` is false, and `diagnostics` says why: half-formatting a file
-somebody is in the middle of typing is how a formatter loses their work.
+`edits` contains one edit trimmed to the changed range, which limits cursor and
+fold disruption. A file with an **error** is returned unchanged with
+`changed: false` and an explanatory diagnostic.
 
 #### What the formatter decides, and what it does not
 
@@ -285,19 +258,15 @@ continued line is indented, how many blank lines are allowed and where, the colu
 of a run of `in`/`out` or `header` declarations, trailing whitespace, and the
 newline at the end of the file.
 
-It does **not** decide where the lines break. Whether a pipeline is written across
-four lines or one, and whether a list literal is split a value per line, is a
-judgement about what belongs together — which values go with which, which stage is
-the interesting one — and it stays the author's. A break that is written is kept and
-indented properly; a break that is not written is not invented.
+It does **not** change line breaks. Existing breaks are retained and indented;
+new breaks are not introduced.
 
 Two invariants, tested over every flow in the repository:
 
 * **Idempotent.** Formatting formatted text changes nothing.
-* **The program does not change.** The formatted text lexes to the same tokens
-  (line breaks aside, since a block body has to go on its own line) and parses to
-  the same tree. Whitespace is all it may touch, and the test says so rather than
-  the documentation promising it.
+* **The program does not change.** Except for required block-body line breaks,
+  formatted text has the same tokens and parse tree. Tests enforce this
+  invariant.
 
 ### `flow.plan/v1`
 
@@ -353,21 +322,16 @@ What the `describe` method gives: what is at one offset, and where it came from.
 }
 ```
 
-`markdown` is the whole thing an editor shows; `summary` is the one line a
-status bar wants. `definition` is there only when the thing was declared in
-*this* document.
+`markdown` contains the full editor display; `summary` contains one line for a
+status bar. `definition` is present only for declarations in the current
+document.
 
-`origin` is the other half of that, and is there when the thing was declared in
-another file that something read — an action a `scan` found. The two are kept
-apart rather than folded into one field because they answer differently: a
-definition is a range in the document that was passed in, and an origin is a path
-a host has to open. A frontend that treated them as one would put the caret at
-line 12 of the wrong file.
+`origin` identifies declarations found by `scan` in another file. A `definition`
+is a range in the current document; an `origin` contains a path the host must
+open.
 
-Deciding that the word under the caret is a port and not a stage is name
-resolution, so it happens in the language rather than in each editor. This used
-to live in the LSP adapter, which is how things end up in adapters: it was small
-when it was written.
+The language service performs name resolution before returning hover results, so
+editors do not reproduce this logic.
 
 ### `flow.symbols/v1`
 
@@ -403,42 +367,35 @@ Both directions of the shape/schema translation. `schema` takes a document and a
 schema and gives back **Flow source** — text that can be pasted into a file,
 read and checked in.
 
-Neither direction is the real one: a shape is what the language reads and a
-schema is what the world outside it reads. The three types JSON has no word for
-— `bytes`, `time`, `duration` — go out as strings with the encoding or format
-that says how to read them *and* an `x-a11-type` beside it, which is what makes
-coming back lossless. Field order travels in `x-a11-order`, because a JSON
-object's keys have none and a shape's fields do.
+Shapes are the Flow representation; schemas are the external representation.
+The `bytes`, `time`, and `duration` types become strings with an encoding or
+format plus `x-a11-type`, preserving round trips. `x-a11-order` preserves field
+declaration order.
 
 ### `flow.catalogue/v1`
 
-What the tools know about the world the language runs in: the actions that may
-be called and the types that may be named, each with its description and its
-ports or fields.
+The catalogue lists available actions and types with descriptions, ports, and
+fields.
 
-The language links nothing but Abseil and nlohmann, so it cannot import a
-registry — what the world contains reaches it as *data*. A snapshot generated
+The language library cannot import a runtime registry, so context is supplied as
+data. A snapshot generated
 from the live registries
 (`scripts/generate_flow_catalogue.py` → `testdata/flow/catalogue.json`) is
-embedded, so the standalone tool completes `make_http_request`'s ports with
-nothing configured. A frontend that has a live registry sends its own:
+embedded, so the standalone tool can complete `make_http_request` without
+additional configuration. A frontend with a live registry sends its own:
 
 ```json
 {"method": "complete", "source": "...", "offset": 42,
  "context": {"actions": [...], "types": [...], "replace": false}}
 ```
 
-which is merged over the snapshot — or replaces it, with `"replace": true`, for
-a host that knows exactly which registry an inline flow is attached to. Over
-LSP the same thing is said once per session with the `a11flow/setContext`
-notification, rather than on every keystroke.
+The context merges with the snapshot, or replaces it when `"replace": true`.
+Over LSP, send it once per session with `a11flow/setContext`.
 
 #### Actions a project declares in its own source
 
-The snapshot is what the *SDK* registers. An action somebody wrote this afternoon
-is in no snapshot, and that is the common case for anybody composing their own
-actions: hovering its name said "action name", completing its ports offered
-nothing, and there was nowhere to go.
+The snapshot covers SDK actions. Use `scan` to add project-defined actions so
+hover, completion, and navigation include them.
 
 `scan` reads source for `ActionSchema` declarations and answers a catalogue in
 which every entry carries an **origin**:
@@ -465,8 +422,8 @@ everything that came from a live registry or from the embedded snapshot: a
 registry knows what it holds and not where the text that put it there was
 written.
 
-Reading Python, C++ and TypeScript. It is a tolerant textual read rather than a
-full compiler frontend, extracting available structural declarations:
+`scan` performs a tolerant textual read of Python, C++, and TypeScript to extract
+structural declarations:
 
 * A schema written as a **constructor call with literal arguments** — the Python
   and TypeScript shape — comes back whole: name, description, and every port with
@@ -475,17 +432,12 @@ full compiler frontend, extracting available structural declarations:
   its source put in front of it.
 * A schema **assembled statement by statement** — the C++ shape, `schema.name =
   ...; schema.outputs.emplace(...)` — comes back with its name, its description and
-  its port names. A port's type and description come from the literals of
-  whatever call builds it, read for what they look like, so a helper whose
-  arguments run in an unexpected order gives a port with no type rather than a
-  port with the wrong one. A port added by a helper the schema was *passed to* is
-  not found: following that means following a call across functions.
-* A name a file binds to a constant resolves, including one declared in a `.cc`
-  file's sibling header — which is how nearly every C++ action names itself, so
-  without it the C++ side would find almost nothing.
-* A name **computed at run time** is not found, and a schema whose name cannot be
-  read is dropped: nothing can look up an action with no name, so half an entry
-  would be worse than none.
+  its port names. Port types and descriptions come from literals in the
+  construction call. If their positions are ambiguous, the field is omitted.
+  The scan does not follow schemas passed through helper calls.
+* Constants resolve within a file and from a `.cc` file's sibling header.
+* Names computed at run time do not resolve. Schemas without a readable name are
+  omitted.
 
 `scanned` says what was *not* read, so a caller can tell a half-read tree from a
 small one:
@@ -522,13 +474,10 @@ a11 flow vocabulary --format json | jq '.documentation.symbol["|"]'
 }
 ```
 
-Every word of every set has one, which
-`FlowVocabulary.EveryWordOfTheLanguageIsDocumented` pins: a form added to the
-grammar without reference text fails CI rather than reaching a reader. That is
-what a hover and the popup beside a completion list are both rendered from — one
-answer to a question asked twice — and it is why hovering a `|` says what a pipe
-does rather than `flow-operator`, which is the name of the token's kind and not an
-answer.
+`FlowVocabulary.EveryWordOfTheLanguageIsDocumented` requires documentation for
+every entry. Hover and completion render this shared text, so hovering `|`
+describes the pipe operation instead of showing only its `flow-operator` token
+kind.
 
 The role names are the word-list keys, singular: `stage`, `builtin`, `statement`,
 `declaration`, `clause_word`, `modifier`, `source`, `port_modifier`,
@@ -547,20 +496,16 @@ distinction if you want it.
 
 ## Severities and families
 
-| Severity | Means |
+| Severity | Description |
 | --- | --- |
 | `error` | The flow does not compile. |
 | `warning` | It compiles and does something other than what it says. |
-| `weak-warning` | It works, and part of it is doing nothing. |
-| `information` | Worth knowing, never worth blocking on. |
+| `weak-warning` | The flow compiles, but part of it has no effect. |
+| `information` | Non-blocking information. |
 
-The **family** is the grouping a reader thinks in, and an editor turns each one
-into a single switchable inspection: `syntax`, `form` (a form the language does not
-have, or not there), `name` (unresolvable or used as the wrong thing), `sequence`
-(operations that cannot do what they appear to), `barrier` (a wait, ordering or
-loop tail that cannot hold), `unused` (a status, wait or declaration nothing uses).
-The middle part of every code is its family, so `flow.unused.header` needs no
-lookup to place.
+Editors can expose each diagnostic **family** as one switchable inspection:
+`syntax`, `form`, `name`, `sequence`, `barrier`, and `unused`. The middle segment
+of each code contains its family, as in `flow.unused.header`.
 
 ## In Python
 
@@ -609,29 +554,23 @@ diagnostics, descriptions, and execution.
 
 ## Editors
 
-An editor that can run a process needs no language knowledge at all, and there are
-two worked examples.
+Editors can delegate language analysis to the service. The repository contains
+two integrations.
 
 The **IntelliJ plugin** (`intellij-plugin/`) runs one
-`a11-flow serve --protocol json` per IDE and its Kotlin side is platform wiring — a
-replay lexer over the token stream, an external annotator over the diagnostics, a
-formatting service, a completion contributor. It carries no word lists, no parser
-and no resolver.
+`a11-flow serve --protocol json` process per IDE. Kotlin adapts the returned
+tokens, diagnostics, formatting, and completions to IntelliJ APIs. It contains no
+Flow word lists, parser, or resolver.
 
-The **VSCode extension** (`vscode-plugin/`) runs `a11-flow serve --protocol lsp`
-per window and is a `vscode-languageclient` over it, which is what the protocol
-half of this document exists to make possible: diagnostics, quick fixes, semantic
-tokens, formatting, completion, hover, symbols and definitions arrive with no
-language knowledge in the client at all.
+The **VS Code extension** (`vscode-plugin/`) runs
+`a11-flow serve --protocol lsp` per window through `vscode-languageclient`. The
+server supplies diagnostics, quick fixes, semantic tokens, formatting,
+completion, hover, symbols, and definitions.
 
-The two differ in exactly one place, and it is a difference in the *editors* rather
-than in the language. IntelliJ has a `MultiHostInjector`, so a flow inside a string
-literal is a real document of the injected language and every feature works in it
-for free. VSCode has no equivalent, so its extension colours fragments with the
-generated injection grammar and asks the language about them as text through
-`a11flow/relay`, translating offsets by where the fragment starts. Same capability,
-each platform's own means — which is the useful shape for a contract like this one:
-what is shared is the *answers*, and how an editor asks is its own business.
+Embedded Flow uses editor-specific integration. IntelliJ exposes a string
+literal as an injected-language document through `MultiHostInjector`. VS Code
+uses the generated injection grammar and sends fragment text through
+`a11flow/relay`, translating offsets from the fragment to the host document.
 
 With no binary for the platform, both colour what they can and say so once.
 
@@ -653,7 +592,6 @@ There are four targets, and `a11 flow syntax` with no `--target` checks them all
 | `vscode` | `editors/vscode/a11flow.tmLanguage.json` | VSCode, for a `.flow` |
 | `vscode-injection` | `editors/vscode/a11flow-injection.tmLanguage.json` | VSCode, for a flow inside a host language's string |
 
-All four are written from the language's own tables, so a word the language gains
-reaches them by running the generator; the check exits 1 when nobody has, which is
-what CI gates on. The list of targets is the C++'s, asked for rather than restated,
-so a target added there is a target the check covers.
+All four files are generated from the language tables. The check exits `1` when
+any generated file is stale. It reads the target list from C++, so new targets
+are included automatically.

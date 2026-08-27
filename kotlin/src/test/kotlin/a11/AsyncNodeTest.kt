@@ -9,11 +9,9 @@ import kotlin.test.assertTrue
 /**
  * What a null chunk means to a reader.
  *
- * It marks the end of a node rather than being a value in it, so a reader must
- * neither hand it back nor refuse it: iteration skips it, and a node holding
- * nothing else reads as empty. That is what lets a caller close an optional
- * port — a unary `config` it wants the backend's defaults for — by writing a
- * bare null final.
+ * It marks the end of a node and is not returned as a value. Iteration skips
+ * it, and a node containing no other values reads as empty. A caller can
+ * therefore close an optional unary port with a bare null final.
  */
 class AsyncNodeTest {
     private fun <T> ok(value: StatusOr<T>): T = when (value) {

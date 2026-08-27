@@ -23,9 +23,7 @@ namespace py = pybind11;
 namespace {
 
 // Installs Abseil's failure signal handler so fatal signals (SIGSEGV, SIGABRT,
-// ...) print a symbolized stack trace instead of a bare crash. Opt out with
-// A11_DISABLE_FAILURE_SIGNAL_HANDLER for environments (debuggers, some test
-// harnesses) that want to own signal handling.
+// ...) print a symbolized stack trace instead of a bare crash.
 void InstallFailureSignalHandler() {
   if (std::getenv("A11_DISABLE_FAILURE_SIGNAL_HANDLER") != nullptr) {
     return;
@@ -88,10 +86,7 @@ PYBIND11_MODULE(_native, module) {
   // Net is registered first because store writers and later runtime classes
   // accept WireStream base pointers in their signatures.
   a11::python::BindNet(module);
-  // The Flow language. Nothing else in the extension depends on it, and it
-  // depends on nothing else here: the language is a component, not a layer.
-  // It comes after Net all the same, because `make_handler` names a WireStream
-  // in its signature and an unregistered type is written out as its C++ name.
+  // The Flow language.
   a11::python::BindFlow(module);
   a11::python::BindHttp(module);
   a11::python::BindWebRtc(module);

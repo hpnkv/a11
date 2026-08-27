@@ -96,26 +96,17 @@ class MultiplexedBinaryChannel
   /// Number of member channels currently open for sending and receiving.
   [[nodiscard]] size_t LiveCount() const;
 
-  /**
-   * @brief Holds packets in the unassigned queue instead of handing them over.
-   *
-   * For path MTU probing, which raises the association's MTU to a size nothing
-   * has confirmed yet. The association has one MTU, so an application packet
-   * emitted during that window would go out at the unconfirmed size too --
-   * pausing is what makes "no application packet is ever sent above a confirmed
-   * MTU" true rather than merely likely.
-   *
-   * Nesting counts, so overlapping pauses do not release early. Nothing is
-   * dropped or reordered: packets keep their sequence numbers and are assigned in
-   * order when sends resume.
-   */
+  /** Holds packets in the unassigned queue instead of handing them over. */
   /**
    * @brief Reports member send outcomes to path MTU discovery.
    *
-   * The search can confirm a size that later stops working -- a path changes, or a
-   * burst of probes was luckier than a stream of data. Its fall-back-to-base logic
+   * The search can confirm a size that later stops working -- a path changes,
+   * or a
+   * burst of probes was luckier than a stream of data. Its fall-back-to-base
+   * logic
    * needs a signal, and this is where the transport has one: a member's send
-   * failing, or a member being lost. Without it a bad size is never walked back.
+   * failing, or a member being lost. Without it a bad size is never walked
+   * back.
    */
   void SetSendOutcomeObserver(std::function<void(bool succeeded)> observer);
 
@@ -128,8 +119,11 @@ class MultiplexedBinaryChannel
     std::uint64_t id = 0;
     std::shared_ptr<BinaryChannel> channel;
     bool open = false;
+    // Packets assigned to this member and not yet handed to it, and whether a
+    // caller is currently handing them over.
     /// Packets assigned to this member and not yet handed to it, and whether a
-    /// caller is currently handing them over. The claim is per member, so a send
+    /// caller is currently handing them over. The claim is per member, so a
+    /// send
     /// on one channel does not wait behind a send on another -- which is the
     /// point of striping in the first place.
     std::deque<std::string> pending = {};
@@ -157,10 +151,7 @@ class MultiplexedBinaryChannel
   void OnMemberMessage(std::string framed);
   // Assigns every packet still in pending_out_ to a live member, round-robin.
   void AssignPendingLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
-  // Assigns queued packets, then hands each member's queue to it. Members with
-  // work and no owner are claimed here: the first is flushed on the caller's
-  // thread and the rest on fibers of their own, so several channels take bytes at
-  // once instead of queueing behind one flusher.
+  // Assigns queued packets, then hands each member's queue to it.
   void FlushPending();
   // Hands one member its queue. The caller must hold member->flushing.
   void FlushMember(const std::shared_ptr<Member>& member);

@@ -48,10 +48,7 @@ TEST(NewShortIdTest, ClampsTheRequestedWidth) {
 }
 
 TEST(NewShortIdTest, DoesNotRepeatItselfInBulk) {
-  // 48 bits: a million ids is far below the birthday threshold, so a repeat
-  // here means the generator is not generating.
-  // Plain literal, no digit separators: clang-format has been seen to read
-  // 1'000'000 as character literals when reflowing this region.
+  // A repeat among one million 48-bit ids indicates a faulty generator.
   constexpr int kCount = 1000000;
   std::unordered_set<std::string> seen;
   seen.reserve(kCount);

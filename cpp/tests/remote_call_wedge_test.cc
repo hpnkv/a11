@@ -2,31 +2,35 @@
 
 /**
  * @file
- * @brief Remote calls reusing one connection, which a caller can silently break.
+ * @brief Remote calls reusing one connection, which a caller can silently
+ * break.
  *
- * A caller binds its ports to the wire stream, and `bind_stream` is not symmetric
- * between the two directions -- getting it wrong on an *output* is accepted, works
+ * A caller binds its ports to the wire stream, and `bind_stream` is not
+ * symmetric
+ * between the two directions -- getting it wrong on an *output* is accepted,
+ * works
  * for exactly one call, and then breaks the connection.
  *
  * An **input** on the calling side must be bound: that is how what the caller
- * writes reaches the peer. An **output** must not be. The session already routes
- * inbound fragments to the node by id, and a bound output node tees what it
- * receives straight back to the peer -- so the caller echoes each reply, and the
- * connection is corrupted for every later call on it. Binding both was what made
- * `ServerSuite` in cpp/bench/bench_main.cc lose 1-3% of its calls, and made those
- * losses look like a lost wake-up: the reply was written and delivered, and the
- * read never returned.
+ * writes reaches the peer. An **output** must not be. The session already
+ * routes inbound fragments to the node by id, and a bound output node tees
+ * what it receives straight back to the peer -- so the caller echoes each
+ * reply, and the connection is corrupted for every later call on it. Binding
+ * both was what made `ServerSuite` in cpp/bench/bench_main.cc lose 1-3% of its
+ * calls, and made those losses look like a lost wake-up: the reply was written
+ * and delivered, and the read never returned.
  *
  * The failure is worth a test because of how it presents. It is not an error at
  * the point of the mistake; the first call succeeds, and what fails is a later
  * call on the same connection, as either a read that never returns or
  * `FAILED_PRECONDITION: The opposite side has aborted the stream`. Over
  * `InProcessWireStream` it is close to deterministic -- 48 of 64 connections
- * before the fix -- which is why these run over one rather than a socket: no HTTP
+ * before the fix -- which is why these run over one rather than a socket: no
+ * HTTP
  * framing and no libuv loop between the mistake and the symptom.
  *
- * `A11_WEDGE_CONNECTIONS`, `A11_WEDGE_CALLS` and `A11_WEDGE_BARE_SESSION` vary the
- * shape; the defaults are what reproduced it.
+ * `A11_WEDGE_CONNECTIONS`, `A11_WEDGE_CALLS` and `A11_WEDGE_BARE_SESSION` vary
+ * the shape; the defaults are what reproduced it.
  */
 
 #include <cstddef>
@@ -58,12 +62,15 @@
 namespace a11::service {
 namespace {
 
-/// Long enough not to mistake a loaded scheduler for a wedge, short enough that a
-/// wedge is reported rather than waited on.
+/// Long enough not to mistake a loaded scheduler for a wedge, short enough
+/// that a wedge is reported rather than waited on.
 constexpr absl::Duration kCallDeadline = absl::Seconds(15);
 
+// Each call stage gets a deadline shorter than the driver's, so a wedge is
+// reported as the stage that wedged.
 /// Each call stage gets a deadline shorter than the driver's, so a wedge is
-/// reported as the stage that wedged. With both the same, the driver's own await
+/// reported as the stage that wedged. With both the same, the driver's own
+/// await
 /// expires first and every failure reads DEADLINE_EXCEEDED with nothing to say
 /// which of call / put-input / read-output / wait was stuck.
 constexpr absl::Duration kStageDeadline = absl::Seconds(3);
@@ -110,7 +117,9 @@ actions::ActionHandler EchoHandler() {
   };
 }
 
-/** @brief A client session and a server session joined by an in-process pair. */
+/**
+ * @brief A client session and a server session joined by an in-process pair.
+ */
 struct Peers {
   std::shared_ptr<Session> client;
   std::shared_ptr<Session> server;
@@ -124,11 +133,8 @@ absl::StatusOr<Peers> ConnectedPeers(size_t index) {
   ABSL_RETURN_IF_ERROR(
       registry->Register(EchoSchema().name, EchoSchema(), EchoHandler()));
 
-  // A11_WEDGE_BARE_SESSION=1 accepts on a bare Session instead, which is how this
-  // test was first written. The default is a real Service, because that is what a
-  // server is and what `ServerSuite` in the bench uses -- and the two are worth
-  // being able to compare, since a defect present in only one of them is a
-  // different defect from the bench's.
+  // A11_WEDGE_BARE_SESSION=1 accepts on a bare Session instead, which is how
+  // this test was first written.
   const char* bare = std::getenv("A11_WEDGE_BARE_SESSION");
   const bool use_bare_session = bare != nullptr && *bare == '1';
   std::shared_ptr<Session> server;
@@ -163,8 +169,9 @@ absl::StatusOr<Peers> ConnectedPeers(size_t index) {
 /**
  * @brief One echo call on a connected pair, exactly as the bench drives it.
  *
- * The output is read on the default infinite timeout deliberately: that is the
- * read the bench loses, and a finite one would paper over the fault by re-driving
+ * The output uses the default infinite timeout to reproduce the
+ * read the bench loses, and a finite one would paper over the fault by
+ * re-driving
  * the pump when its timer fires.
  */
 /// Labels a stage's failure, so a timeout names what wedged rather than the
@@ -177,7 +184,8 @@ absl::Status Stage(std::string_view name, absl::Status status) {
 }
 
 absl::Status OneEchoCall(const Peers& peers, int round) {
-  // An empty action id, so each call gets a generated one. A literal makes every
+  // An empty action id, so each call gets a generated one. A literal makes
+  // every
   // call share an instance id and their port nodes collide in the node map.
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<actions::Action> call,
@@ -189,12 +197,7 @@ absl::Status OneEchoCall(const Peers& peers, int round) {
       Stage(absl::StrCat("call/round", round),
             call->Call().Await(absl::Now() + kStageDeadline).status()));
 
-  // No bind_stream argument, deliberately. It overrides a default the library
-  // keys off the action's mode -- inputs bind when `mode != kRun`, outputs when
-  // `mode == kRun` -- which gives a caller bound inputs and unbound outputs, and
-  // a handler the reverse. Passing it is how this test broke: `false` on the
-  // input stopped the write travelling, and `true` on the output made the caller
-  // tee each reply back, corrupting the connection for every later call.
+  // Omit bind_stream to exercise dispatch_stream alone.
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<nodes::AsyncNode> input,
                         call->GetInput("input"));
   ABSL_RETURN_IF_ERROR(
@@ -233,16 +236,14 @@ TEST(RemoteCallWedgeTest, OneCallOverAnInProcessPairCompletes) {
 /**
  * @brief Many connections, each running a sequence of calls at the same time.
  *
- * One connection per client with several calls each is the bench's shape, and the
- * fraction it loses grows with the client count -- so this drives enough of both
- * to have a chance of catching it.
+ * One connection per client with several calls each is the bench's shape, and
+ * the fraction it loses grows with the client count -- so this drives enough
+ * of both to have a chance of catching it.
  */
 TEST(RemoteCallWedgeTest, ConcurrentCallsAcrossConnectionsAllComplete) {
-  // Overridable so the threshold can be swept: a failure that appears sharply at
-  // a particular count is a resource cap, while one that fades in gradually is a
-  // race.
-  // A knob that will not parse keeps the default rather than becoming zero,
-  // which in this test would silently turn a wedge hunt into a no-op.
+  // Overridable so the threshold can be swept: a failure that appears sharply
+  // at a particular count is a resource cap, while one that fades in gradually
+  // is a race.
   const auto knob = [](const char* name, int fallback) {
     const char* value = std::getenv(name);
     int parsed = 0;

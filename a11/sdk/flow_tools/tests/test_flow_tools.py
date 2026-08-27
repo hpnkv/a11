@@ -20,32 +20,26 @@ from a11.sdk import flow_tools
 from a11.sdk.llm import LlmHeaders
 from a11.status import StatusCode, StatusException
 
-UPPER = ActionSchema.model_validate(
-    {
-        "name": "text-upper",
-        "description": "Upper-case each value.",
-        "inputs": {"text": {"name": "text", "type": str}},
-        "outputs": {"upper": {"name": "upper", "type": str}},
-    }
-)
-SIZE = ActionSchema.model_validate(
-    {
-        "name": "text-size",
-        "description": "Count the characters of one value.",
-        "inputs": {
-            "text": {"name": "text", "type": str, "unary": True},
-        },
-        "outputs": {"size": {"name": "size", "type": int, "unary": True}},
-    }
-)
-SECRET = ActionSchema.model_validate(
-    {
-        "name": "launch-missiles",
-        "description": "Something the caller is not allowed to reach.",
-        "inputs": {"text": {"name": "text", "type": str}},
-        "outputs": {"done": {"name": "done", "type": str}},
-    }
-)
+UPPER = ActionSchema.model_validate({
+    "name": "text-upper",
+    "description": "Upper-case each value.",
+    "inputs": {"text": {"name": "text", "type": str}},
+    "outputs": {"upper": {"name": "upper", "type": str}},
+})
+SIZE = ActionSchema.model_validate({
+    "name": "text-size",
+    "description": "Count the characters of one value.",
+    "inputs": {
+        "text": {"name": "text", "type": str, "unary": True},
+    },
+    "outputs": {"size": {"name": "size", "type": int, "unary": True}},
+})
+SECRET = ActionSchema.model_validate({
+    "name": "launch-missiles",
+    "description": "Something the caller is not allowed to reach.",
+    "inputs": {"text": {"name": "text", "type": str}},
+    "outputs": {"done": {"name": "done", "type": str}},
+})
 
 
 @pytest_asyncio.fixture
@@ -234,9 +228,8 @@ async def drive_streaming(
 ) -> Action:
     """Run `flow_run` with its ports named on `input_streams` and written here.
 
-    Which is the whole difference from [drive][]: there is no object of values to
-    hand over, only ports to write and close -- one value or several, the same
-    way either way.
+    Unlike [drive][], this writes and closes ports directly. The same path
+    supports unary and streaming inputs.
     """
     action = registry.make_action("flow_run")
     if allowed is not None:
@@ -421,8 +414,6 @@ async def test_a_flow_may_not_call_the_flow_tools(registry):
     assert "flow_run" in raised.value.status.message
 
 
-
-
 @pytest.mark.asyncio
 async def test_without_the_header_nothing_here_restricts_the_calls(registry):
     """A script driving these handlers is not a model being kept to a list."""
@@ -465,7 +456,7 @@ async def test_flow_check_describes_the_composition_without_running_it(
     described = await result_of(action, "plan")
     assert [one["flow"] for one in described["flows"]] == ["careful"]
     assert "run" in {step["step"] for step in described["flows"][0]["steps"]}
-    # Nothing was dispatched, which is the whole point of checking first.
+    # Validation completes before dispatch.
     assert registry.fired == []
 
 
@@ -492,9 +483,7 @@ async def test_flow_check_refuses_the_same_calls_flow_run_would(registry):
 @pytest.mark.asyncio
 async def test_a_flow_that_will_not_compile_says_where(registry, tool: str):
     with pytest.raises(StatusException) as raised:
-        await drive(
-            registry, tool, source="flow broken {\n  in a: nonsense\n}"
-        )
+        await drive(registry, tool, source="flow broken {\n  in a: nonsense\n}")
     status = raised.value.status
     assert status.code == StatusCode.INVALID_ARGUMENT
     assert "Unknown type" in status.message

@@ -16,8 +16,6 @@ TEST(AudioModelRegistryTest, ListsTheAcceptedShorthands) {
   EXPECT_EQ(AsrModelShorthands(),
             (std::vector<std::string>{"tiny", "tiny.en", "base", "base.en"}));
   EXPECT_EQ(VadModelShorthands(), (std::vector<std::string>{"silero-v5.1.2"}));
-  // The defaults have to be in their own tables, or resolving an empty spec
-  // would fail.
   EXPECT_TRUE(LookupAsrModel(kDefaultAsrModel).ok());
   EXPECT_TRUE(LookupVadModel(kDefaultVadModel).ok());
 }

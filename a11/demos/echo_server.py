@@ -55,9 +55,7 @@ async def serve(
 
     registry = make_registry()
 
-    # One service, and its `accept` is the listener's callback. The
-    # make-a-session-per-stream-and-wait glue this used to spell out by hand now
-    # lives in a11.service.Service.
+    # The service owns session creation and stream lifecycle management.
     service = a11.Service(action_registry=registry)
 
     options = a11.HttpSseOptions()

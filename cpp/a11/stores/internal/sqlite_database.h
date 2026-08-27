@@ -9,7 +9,8 @@
  * This is an implementation detail of `a11::stores`, not public API. It exists
  * so connections, prepared statements, the SQLite worker threads and the commit
  * hooks are owned once per storage root rather than once per store: a process
- * holding a thousand nodes under one root pays for one database, not a thousand.
+ * holding a thousand nodes under one root pays for one database, not a
+ * thousand.
  */
 
 #ifndef A11_STORES_INTERNAL_SQLITE_DATABASE_H_
@@ -99,7 +100,9 @@ struct SqliteNodeState {
   /** The terminal status recorded by CloseWritesWithStatus(). */
   std::optional<absl::Status> status;
   std::optional<std::uint32_t> final_seq;
-  /** The shared Next() cursor: the *next expected seq*, not a delivered count. */
+  /**
+   * The shared Next() cursor: the *next expected seq*, not a delivered count.
+   */
   std::uint64_t next_cursor = 0;
   /** Producer cursor; doubles as the next arrival order. */
   std::uint64_t put_count = 0;
@@ -234,10 +237,9 @@ class SqliteDatabase : public std::enable_shared_from_this<SqliteDatabase> {
    * back and wakes nobody. `SQLITE_BUSY` is retried by re-running the whole
    * body, so bodies must be idempotent with respect to their own reads.
    *
-   * The wakeup deliberately happens *after* COMMIT returns. Swapping the
-   * generation event any earlier lets a reader snapshot the new event, read the
-   * pre-commit snapshot, park, and then miss a notification aimed at the old
-   * event.
+   * Wake readers only after COMMIT returns. Earlier replacement of the
+   * generation event can let a reader observe the new event with pre-commit
+   * data and then miss the notification on the old event.
    *
    * @param body
    *   Work to run inside the transaction, returning the touched node ids.

@@ -30,7 +30,9 @@ enum class LlmHeaders(val header: String) {
     ALLOWED_LLM_ACTIONS("x-a11-allowed-llm-actions"),
 }
 
-/** Conversation roles. `model` is the assistant role, matching the Python SDK. */
+/**
+ * Conversation roles. `model` is the assistant role, matching the Python SDK.
+ */
 enum class Role(val value: String) {
     SYSTEM("system"), ASSISTANT("model"), USER("user")
 }
@@ -38,11 +40,8 @@ enum class Role(val value: String) {
 /**
  * Portable, backend-independent record of one turn; JSON object on the wire.
  *
- * A map, because that is what an interaction is once a backend has filled it —
- * but a map that knows its own name. Implementing [A11Serializable] is what
- * lets one be nested in a serialized value and handed back to a peer as an
- * `a11.sdk.Interaction`; the strict `interactions` port on the Python side
- * refuses an anonymous object.
+ * The map retains the `a11.sdk.Interaction` type tag through serialization, so
+ * it can be nested in another value and accepted by strict interaction ports.
  */
 class Interaction : LinkedHashMap<String, Any?>, A11Serializable {
     constructor() : super()
@@ -74,9 +73,9 @@ fun makeInteraction(partial: Map<String, Any?> = emptyMap()): Interaction {
  * The content is the backend-neutral `{role, content: [text part]}` envelope,
  * so a plain text turn stays portable across a mid-conversation model switch.
  *
- * An interaction's `content` and `system_instructions` are lists of [Chunk]s,
- * not of bare values — that is what every backend reads, and a peer validating
- * this one against its own model rejects anything else.
+ * `content` and `system_instructions`
+ * contain [Chunk] values, as required by the
+ * backend-independent interaction schema.
  */
 fun makeTextMessageInteraction(
     text: String,

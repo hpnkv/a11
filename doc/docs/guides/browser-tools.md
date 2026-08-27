@@ -1,11 +1,10 @@
 # The model calls back into the page
 
-The interesting half of an agent in a browser is not the page calling the model.
-It is the model calling the page: the state worth acting on — the canvas, the
-selection, the editor — is in the browser, and only the browser can touch it.
+Browser-hosted actions let a model operate on state that exists only in the
+page, such as a canvas, selection, or editor.
 
-This guide serves three actions from a web page, tells the backend they exist, and
-lets a model use them. The page's handlers run in the page; the backend never
+This guide serves three actions from a web page, registers them with the backend,
+and lets a model use them. The page's handlers run in the page; the backend never
 touches the canvas; and the model sees three ordinary A11 actions.
 
 !!! note "Before you start"
@@ -97,7 +96,8 @@ const SET_COLOR_SCHEMA = new ActionSchema({
 });
 ```
 
-— rather than as one opaque `request` blob the model has to guess the shape of.
+The schema exposes each input with its field description; it does not wrap them
+in an opaque `request` object.
 
 !!! warning "A TypeScript port has a MIME type, not a value type"
 
@@ -115,20 +115,18 @@ const SET_COLOR_SCHEMA = new ActionSchema({
     Those go to `getToolDefinitions(registry, names, PORT_SCHEMAS)`. Python needs
     no equivalent: an `ActionPortSchema` there carries `typeinfo`.
 
-## 2. Narration is not part of the result
+## 2. Keep progress logs separate from results
 
-A tool's account of its own run goes to `action.log()`, for the person watching.
-No port declares it, so it cannot become part of the tool result the model is
-shown; the backend's [tool runner](../llm-sdk/tool-runner.md) reads it separately,
-files it under the call id, and records it in the turn's metadata — so a
-conversation replayed later still shows what a tool *did* rather than only that it
-ran.
+A tool can report user-visible activity through `action.log()`. Because no port
+declares this log, it does not become part of the model's tool result. The
+backend's [tool runner](../llm-sdk/tool-runner.md) reads it separately, associates
+it with the call ID, and records it in the turn metadata for later replay.
 
 ```ts
 need(await action.log(`Recoloured ${recoloured} blob(s).`));
 ```
 
-Nothing to close, and nothing to remember to strip.
+The log channel requires no declared port or result cleanup.
 
 ## 3. The page serves its actions
 
@@ -150,9 +148,8 @@ need(registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) =
 
 ### Validate, then act
 
-A tool call is the least trustworthy input a page gets: every value in it is a
-model's idea of what the schema said. So each argument is checked **before
-anything is touched**, and a call that cannot be honoured comes back as a status:
+Validate every model-supplied argument before modifying page state. Return a
+status when the request cannot be applied:
 
 ```ts
 const dx = rawDx === null ? 0 : finiteNumber(rawDx, 'dx', scene.width);
@@ -165,14 +162,12 @@ so the model sees what was wrong and can call again with a number. Coercing
 instead is what hurts: `Number('a bit left')` is `NaN`, `blob.x + NaN` is `NaN`,
 and the blob leaves the canvas for good while the tool reports "moved 5 blobs".
 
-Two habits fall out of that, and both are the tool's job rather than the model's:
+Apply two constraints in each handler:
 
-- **Nothing is written until every argument has been read.** A refused call leaves
-  the scene exactly as it was; a half-applied one is harder to undo than to
-  prevent.
-- **The scene's own limits are enforced by the scene.** A move that would take a
-  blob off the canvas stops at the edge, and the run log says so, because "off the
-  left edge" is not a place the page can show or the model can name again.
+- **Read and validate every argument before writing.** A refused call leaves the
+  scene unchanged.
+- **Enforce the scene's bounds in the handler.** Clamp moves at the canvas edge
+  and record the adjustment in the action log.
 
 The registry is bound to the session **before** the stream is attached, so an
 inbound call cannot arrive before there is something to serve it:
@@ -183,7 +178,7 @@ const stream = need(WebSocketWireStream.connect(serverUrl));
 need(await session.addStream(stream, StreamMode.START));
 ```
 
-## 4. Nothing to announce
+## 4. Discover page actions
 
 The backend cannot dispatch to an action it has never heard of — so it asks. Every
 A11 peer answers `__list_actions__`, a page included, and
@@ -192,15 +187,15 @@ tools and registers a reverse-dispatch proxy per schema that comes back. The
 proxies go on *this connection's own* registry copy, because these actions belong
 to one page.
 
-Which means the page's part is the registry it already built:
+The page supplies its existing registry:
 
 ```ts
 const connection = await connect(serverUrl, pageRegistry(scene, log));
 ```
 
-That is the whole of it. The answer is an `a11.actions/v1` document — one
-`ActionSchema` per entry, written as JSON, with each port's `json_schema` carried
-along so the model can be shown the real argument types.
+The response is an `a11.actions/v1` document containing one JSON
+`ActionSchema` per entry, including each port's `json_schema` for model tool
+definitions.
 
 !!! note "This used to be a handshake"
 
@@ -210,9 +205,8 @@ along so the model can be shown the real argument types.
     where the other belonged produced a proxy with no inputs at all — the model's
     arguments had nowhere to land and every call failed with "unexpected input".
 
-    Both are gone. There is one document now, the schema in JSON, and the
-    definition the model sees is *derived* from it rather than sent alongside.
-    The `__register_tools__` action no longer exists.
+    Registration now sends one JSON schema document. The model-facing definition
+    is derived from that schema. The `__register_tools__` action no longer exists.
 
 ## 5. The turn
 
@@ -224,11 +218,9 @@ called.
 need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, 'describe_scene,set_color,shift_position'));
 ```
 
-What happens next is the point of the whole guide. The model's tool call reaches
-the backend's runner, the runner resolves it against this connection's registry,
-finds the proxy, and the proxy dispatches the call **back down the same
-WebSocket** to the page — which runs the real handler and streams the outputs
-back. The model sees one A11 action; the work happens where the canvas is.
+The backend resolves the model's tool call against the connection registry. Its
+proxy dispatches the action back through the same WebSocket, where the page runs
+the handler and streams the outputs to the model.
 
 ## 6. What was left out, and why
 
@@ -238,4 +230,3 @@ and images ride as *message content*, not as tool results. So instead of
 photographing the scene the model reads it — `describe_scene` returns one
 `{id, x, y, radius, color}` per blob — which serves the same purpose (find out
 what is there before changing it) within the contract that exists.
-

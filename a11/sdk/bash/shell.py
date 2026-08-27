@@ -12,9 +12,8 @@ process-plus-async-IO shape of ``bao.utils.secure_subprocess``.
 The execution protocol keeps a persistent shell reusable across commands while
 still allowing a single command to be terminated on its own:
 
-* Commands run in the **foreground** of the shell, so state they set -- exported
-  variables, the working directory, shell functions -- persists into the next
-  command, which is the whole point of a stateful shell.
+* Commands run in the shell foreground, so exported variables, the working
+  directory, and shell functions persist into the next command.
 * Job control (``set -m``) is enabled, so any external process a command spawns
   lands in its **own** process group, distinct from the shell's. That lets us
   signal just the command's process tree on a timeout, leaving the shell itself
@@ -239,7 +238,7 @@ class BashShell:
             + b"\n} </dev/null\n"
             + b"printf '"
             + token
-            + b" %d\\n' \"$?\"\n"
+            + b' %d\\n\' "$?"\n'
         )
         self._proc.stdin.write(wrapper)
         await self._proc.stdin.drain()

@@ -31,15 +31,15 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime only
 DISCOVERY_TIMEOUT = timing.Duration.seconds(30)
 
 
-async def _consume_or_explain(call, port: str, timeout: timing.Duration) -> dict:
+async def _consume_or_explain(
+    call, port: str, timeout: timing.Duration
+) -> dict:
     """The document on ``port``, or the reason the call could not produce one.
 
-    A failed call writes nothing to its output, so the read fails first and
-    fails with the wrong thing -- "AsyncNode is empty" rather than the NOT_FOUND
-    the peer actually answered. The real status lives in the terminal wait, so a
-    read that comes up empty asks for that before giving up. The read's own error
-    is re-raised only when the call itself was fine, which means the trouble is
-    genuinely local.
+    A failed call writes nothing to its output, so the read first reports
+    "AsyncNode is empty" instead of the peer's status. The terminal wait carries
+    the peer's status and is checked after an empty read. The read error is
+    re-raised only when the call completed successfully.
     """
     try:
         return await call[port].consume(dict)
@@ -148,10 +148,10 @@ def install_schemas(
     *,
     overwrite: bool = False,
 ) -> list[str]:
-    """Register the peer's actions here, for their schemas alone.
+    """Register peer action schemas without local handlers.
 
-    No handler, deliberately: that is how "this lives on the peer" is expressed,
-    and it is what lets a flow's `call` step resolve a name it cannot run.
+    Handler-free entries allow a Flow `call` step to resolve an action that runs
+    on the peer.
 
     Args:
         registry: Where to register them.
@@ -178,9 +178,10 @@ def install_schemas(
         try:
             schema = describe.schema_from_json(entry)
         except Exception:
-            # One unreadable entry should not cost the caller the other forty.
+            # Skip one unreadable entry without discarding valid peer schemas.
             logging.warning(
-                "could not read the peer's description of %r", name,
+                "could not read the peer's description of %r",
+                name,
                 exc_info=True,
             )
             continue

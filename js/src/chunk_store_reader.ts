@@ -186,18 +186,16 @@ export class ChunkStoreReader {
       }, timeoutMs);
     }
     this.pendingReads.push(request);
-    // Woken rather than driven on the caller's turn, deliberately. Native fills
-    // inline here (bench/FINDINGS.md, "Reader prefetch") because a scheduler hop
-    // there is a thread wake; in JavaScript it is a microtask, and the fetch it
-    // would skip ahead of is a promise that costs one anyway. Measured on
-    // `nodes/drain_live`: 467-473k inline against 453-470k woken, which is
-    // noise. Filling inline was tried and reverted -- it bought nothing and the
-    // caller would have had to guarantee it was not already inside `drive()`.
+    // Wake the pump instead of running it on the caller's turn. In JavaScript
+    // the scheduler hop is one microtask, and this avoids re-entering
+    // `drive()`. See bench/FINDINGS.md, "Reader prefetch".
     this.wake();
     return request.deferred.promise;
   }
 
-  /** Iterate to the clean reader end, yielding one terminal error when needed. */
+  /**
+   * Iterate to the clean reader end, yielding one terminal error when needed.
+   */
   async *values(timeoutMs?: number): AsyncGenerator<StatusOr<NodeFragment>, void, void> {
     while (true) {
       const result = await this.next(timeoutMs);

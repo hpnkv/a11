@@ -11,6 +11,7 @@ from a11._native import NodeFragment
 
 import a11
 from a11.actions import describe
+from a11.actions.jsonschema import organise_and_deduplicate_jsonschema
 from a11.status import Status, StatusCode, StatusException
 
 from a11.sdk.llm import (
@@ -18,6 +19,7 @@ from a11.sdk.llm import (
     get_allowed_llm_action_patterns,
     Interaction,
     TOOL_LOGS_METADATA_KEY,
+    WHOLE_JSON_FRAGMENT_ID,
 )
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
 
@@ -25,14 +27,9 @@ from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
 def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
     """The model's view of one action, from its `a11.actions/v1` entry.
 
-    A *derivation*, not a second document. It used to be that a tool reached a
-    model one way (a JSON-Schema definition, built from a port's live Python
-    `typeinfo`) and reached a proxy builder another (a written schema), the two
-    were both called a tool's "schema", and announcing one where the other was
-    wanted produced a proxy with no inputs at all. A written schema carries each
-    port's `json_schema`, so the model's view can be computed from the same
-    document -- including for an action on a peer, whose Python types were never
-    here to derive from.
+    Derive the model definition from the written schema, including each port's
+    ``json_schema``. This also supports peer actions whose Python types are not
+    available locally.
     """
     properties: dict[str, Any] = {}
     required: list[str] = []
@@ -59,7 +56,9 @@ def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": entry.get("name", ""),
         "description": entry.get("description", ""),
-        "input_schema": input_schema,
+        # Hoist each port schema's root `$defs` into the assembled document so
+        # its `$ref` values resolve against the correct root.
+        "input_schema": organise_and_deduplicate_jsonschema(input_schema),
     }
 
 
@@ -103,10 +102,9 @@ async def collect_tools(
 
     Between the two, the peer is *asked*. If a tool bridge is bound to this
     session and has not asked yet, it calls `__list_actions__` on the caller and
-    registers a proxy per answer -- so the caller's own tools reach the model
-    without the caller announcing anything. This is the moment to ask rather
-    than at connection time: the session is certainly pumping by now, and a
-    connection that never chats never pays for it.
+    registers a proxy per answer, allowing the model to use the caller's tools
+    without prior registration. Discovery occurs here, after the session pump
+    starts, and is skipped for connections without model interactions.
     """
     deadline = deadline if deadline is not None else a11.get_deadline(action)
     allowed_patterns = get_allowed_llm_action_patterns(action)
@@ -132,8 +130,7 @@ async def collect_tools(
         for name in registry.list_registered_actions()
         if name not in requested
         and name != action.get_schema().name
-        # A11's own actions are not tools. This one rule replaces the exclusion
-        # list each discovery workaround used to keep for itself.
+        # A11's reserved actions are protocol operations, not model tools.
         and not describe.is_reserved_action(name)
         and action_name_matches_allowed(name, allowed_patterns)
     )
@@ -210,14 +207,15 @@ async def _user_facing_log(node: a11.AsyncNode, deadline: a11.Duration) -> str:
     """What a call logged for the person watching, as one block of text.
 
     Reads the call's log port and keeps the entries that are *not* marked
-    internal -- "user facing" is the absence of that flag, so a handler narrating
-    itself needs no second port and no second decision. Each entry is rendered by
+    internal -- "user facing" is the absence of that flag, so a handler
+    narrating itself needs no second port and no second decision. Each entry is
+    rendered by
     [log_record_from_chunk][a11._native.log_record_from_chunk], which is also
     what the ``a11.action`` logger uses, so a line reads the same wherever it is
     shown.
 
-    Best effort throughout: a log that will not decode is not worth failing a
-    tool over. Bounded by the turn's deadline like every other read here.
+    Log decoding is best effort and does not fail the tool. The read uses the
+    turn's deadline.
     """
     parts: list[str] = []
     async for chunk in node.iter_chunks(
@@ -284,15 +282,16 @@ async def execute_actions_from_interaction(
                 ).to_exception()
 
             nested_action = (
-                action.make_nested(registry.get_schema(call.name))
+                action
+                .make_nested(registry.get_schema(call.name))
                 .set_id(call.id)
                 .bind_stream(None)
                 .bind_handler(registry.get_handler(call.name))
             )
             a11.set_deadline_header(nested_action, deadline)
             # Claimed before the run, because the log the handler writes on its
-            # first line has to arrive here rather than on the process sink: this
-            # runner is the consumer that shows it to a person.
+            # first line has to arrive here rather than on the process sink:
+            # this runner is the consumer that shows it to a person.
             log_nodes[call.id] = nested_action.get_log_node()
             nested_action.run()
             input_fragments = interaction.action_inputs.get(call.id, [])
@@ -326,11 +325,11 @@ async def execute_actions_from_interaction(
 
     all_outputs: dict[str, list[NodeFragment]] = defaultdict(list)
     logs: dict[str, str] = {}
-    # Every call the model made gets an entry, including one that failed
-    # before it could run. Backends pair exactly one tool result with each tool
-    # call, so a call missing here is a protocol error on the next request
-    # rather than an empty result — and the turn then dies after the tools
-    # have run, which reads as the model falling silent.
+    # Every call the model made gets an entry, including one that failed before
+    # it could run. Backends pair exactly one tool result with each tool call,
+    # so a call missing here is a protocol error on the next request rather than
+    # an empty result — and the turn then dies after the tools have run, which
+    # reads as the model falling silent.
     for call in interaction.action_calls:
         all_outputs.setdefault(call.id, [])
 
@@ -340,12 +339,8 @@ async def execute_actions_from_interaction(
             action_outputs[output_name] = []
             try:
                 node = nested_action[output_name]
-                # Bounded by the turn's deadline, like everything else here. A
-                # call whose action has finished can still leave an output that
-                # never ends — one nobody closed, or one whose node was resolved
-                # from a stale id and belongs to an earlier call — and reading it
-                # without a timeout hangs the whole turn: no text is ever
-                # written, so the caller learns nothing until *its* read expires.
+                # The turn deadline also bounds output reads. An action may
+                # finish while an unclosed or stale output remains active.
                 async for fragment in node.iter_fragments(
                     timeout=max(deadline - a11.now(), a11.zero_duration())
                 ):
@@ -354,17 +349,18 @@ async def execute_actions_from_interaction(
                     action_outputs[output_name].append(fragment)
             except StatusException as error:
                 # An aborted output carries the failure that aborted it, and a
-                # timed-out one the deadline. Keep whatever arrived before it and
-                # record the reason once.
+                # timed-out one the deadline. Keep whatever arrived before it
+                # and record the reason once.
                 errors.setdefault(nested_action.id, error.status)
             if action_outputs[output_name]:
                 action_outputs[output_name][-1].continued = False
 
-        # Read separately from the outputs above, because the log port is not one
-        # of them: it is not in the schema, so the model's tool result is built
-        # from what the action declared and the narration cannot leak into it by
-        # accident. Nothing has to close the port either -- the action does, with
-        # its other outputs -- so an action that never logs costs one ended read.
+        # Read separately from the outputs above, because the log port is not
+        # one of them: it is not in the schema, so the model's tool result is
+        # built from what the action declared and the narration cannot leak into
+        # it by accident. Nothing has to close the port either -- the action
+        # does, with its other outputs -- so an action that never logs costs one
+        # ended read.
         node = log_nodes.get(nested_action.id)
         if node is not None:
             try:
@@ -379,9 +375,9 @@ async def execute_actions_from_interaction(
         # is that port's payload rather than an object wrapping it. The sentinel
         # is the mapped-to *field*, matching ActionSchema's own validation
         # (cpp/a11/actions/schema.cc), the tool-definition side
-        # ([a11.sdk.llm_tools.adapter][a11.sdk.llm_tools.adapter]) and the Kotlin
-        # port. Reading it as the key instead left the sentinel to fall through
-        # as a fragment id, where it fails name validation.
+        # ([a11.sdk.llm_tools.adapter][a11.sdk.llm_tools.adapter]) and the
+        # Kotlin port. Reading it as the key instead left the sentinel to fall
+        # through as a fragment id, where it fails name validation.
         whole_output_port = None
         if len(mapping) == 1:
             port, field = next(iter(mapping.items()))
@@ -389,7 +385,7 @@ async def execute_actions_from_interaction(
                 whole_output_port = port
         if whole_output_port is not None:
             for fragment in action_outputs.get(whole_output_port, []):
-                fragment.id = "_"
+                fragment.id = WHOLE_JSON_FRAGMENT_ID
                 all_outputs[nested_action.id].append(fragment)
             continue
 
@@ -405,6 +401,4 @@ async def execute_actions_from_interaction(
                 fragment.id = map_to
                 all_outputs[nested_action.id].append(fragment)
 
-    return ExecutedActions(
-        outputs=dict(all_outputs), errors=errors, logs=logs
-    )
+    return ExecutedActions(outputs=dict(all_outputs), errors=errors, logs=logs)

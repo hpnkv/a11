@@ -19,7 +19,8 @@ struct ParseResult {
   std::vector<syntax::FlowDeclarationPtr> flows;
   /// The shapes the file declares, in declaration order.
   ///
-  /// Beside the flows rather than inside them: a `struct` is a sibling declaration,
+  /// Beside the flows rather than inside them: a `struct` is a sibling
+  /// declaration,
   /// and a file may declare one and no flow at all -- a file of types is a
   /// perfectly good thing to have, and is what `flow.dto_from_schema` writes.
   std::vector<syntax::DtoDeclarationPtr> dtos;
@@ -28,10 +29,10 @@ struct ParseResult {
   /// The offset of every `{` that opens a *value* rather than a block, sorted.
   ///
   /// The one thing about the token stream that cannot be worked out from the
-  /// tokens: `flow research {` and `a11.sdk.Interaction{` are a word followed by a
-  /// brace either way, and only the grammar knows which. The formatter needs it to
-  /// know whether a brace opens a line or a literal, so the parser -- which knew
-  /// at the time -- writes it down.
+  /// tokens: `flow research {` and `a11.sdk.Interaction{` are a word followed
+  /// by a brace either way, and only the grammar knows which. The formatter
+  /// needs it to know whether a brace opens a line or a literal, so the parser
+  /// -- which knew at the time -- writes it down.
   std::vector<size_t> value_braces;
 
   /// The offsets of the value braces that follow a type tag, sorted.
@@ -52,25 +53,21 @@ struct ParseResult {
 /// Parse Flow source.
 ///
 /// The grammar is `a11/flow/parser.py`'s, one for one: recursive descent, one
-/// token of lookahead, and no reserved words -- a word means `skip` or `for` only
+/// token of lookahead, and no reserved words -- a word means `skip` or `for`
+/// only
 /// where it opens a statement and is not immediately followed by something that
 /// makes it a name.
 ///
-/// **This never throws and always returns a tree.** The Python reference raises
-/// at the first problem, which is right for a compiler and useless for everything
-/// else: an inspector wants every problem, a formatter wants to format the rest of
-/// the file, and an editor is looking at something half-typed. So a problem here
-/// becomes a `Diagnostic`, the parser recovers -- skipping to the end of the
-/// statement, or standing in a `syntax::ErrorNode` where a value was wanted -- and
-/// parsing carries on. Nothing downstream has to guess: a subtree that could not
-/// be read *says* so.
+/// Never throws and always returns a tree. Problems become diagnostics, and
+/// recovery skips to the statement end or inserts a `syntax::ErrorNode` where
+/// a value was required. This supports partial input in formatters and editors.
 ParseResult Parse(std::string_view source);
 
 /// Parse an already-lexed stream, sharing the lex diagnostics.
 ///
-/// For a frontend that has the tokens in hand -- a formatter, a highlighter that
-/// then wants a tree -- so one file is lexed once. Comment tokens are stepped
-/// over here, which is what lets the same stream serve both.
+/// For a frontend that has the tokens in hand -- a formatter, a highlighter
+/// that then wants a tree -- so one file is lexed once. Comment tokens are
+/// stepped over here, which is what lets the same stream serve both.
 ParseResult ParseTokens(std::string_view source, absl::Span<const Token> tokens,
                         std::vector<Diagnostic> diagnostics);
 

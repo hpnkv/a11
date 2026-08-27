@@ -217,8 +217,7 @@ class Http2WebSocketChannel final
 
   // Fail() already does exactly what an abortive close is: it aborts the duplex
   // stream (or cancels the request / aborts the response writer), which drops
-  // the connection rather than half-closing it. Close() cannot, because ending
-  // the request is a graceful HTTP operation by construction.
+  // the connection rather than half-closing it.
   absl::Status Abort(absl::Status status) override {
     Fail(std::move(status));
     return absl::OkStatus();
@@ -351,10 +350,7 @@ class Http2WebSocketChannel final
         return absl::ResourceExhaustedError(
             "Buffered WebSocket frame exceeds max_message_size");
       }
-      // Adopt the read outright when nothing is part-parsed. A whole message
-      // usually arrives in one read, so this is the ordinary path, and
-      // appending would copy every byte of it into a buffer that is about to be
-      // handed straight back out again.
+      // Adopt the read outright when nothing is part-parsed.
       if (input_.empty()) {
         input_ = std::move(data);
       } else {
@@ -459,9 +455,6 @@ class Http2WebSocketChannel final
       if (consumed == 0 && payload_offset + payload_size == input_.size()) {
         // The buffer holds exactly this one frame and nothing before it, which
         // is the common case for a message that arrived in its own TCP read.
-        // Taking the buffer whole and erasing the header off the front is one
-        // memmove of a 2-14 byte header instead of a copy of the payload -- and
-        // at 64 KiB that copy is a measurable share of the message's cost.
         payload = std::move(input_);
         input_.clear();
         payload.erase(0, payload_offset);

@@ -6,9 +6,8 @@ streams, storage, and transport interfaces.
 ## One toolkit in every language
 
 A11 exposes the same action, node, session, storage, and transport concepts in
-Python, TypeScript, and C++, and each language participates in the full
-runtime. That parity lets a team build clients, backends, and peer-to-peer
-applications in the languages that fit each environment, over one protocol.
+Python, TypeScript, and C++. Clients, backends, and peer-to-peer applications
+can use the language suited to each environment while sharing one protocol.
 
 ## Everything is asynchronous
 
@@ -60,9 +59,9 @@ customization across deployment environments.
 A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] is the ordered log behind a
 node. The default
 [`LocalChunkStore`][a11.stores.local_chunk_store.LocalChunkStore] keeps chunks in
-memory, but the interface is yours to implement: persist a stream to disk or a
-database, enforce a retention policy, or inject faults in tests — without
-changing any action or node code. You choose an implementation by passing a
+memory. Implement the interface to persist a stream, enforce a retention
+policy, or inject faults in tests without changing action or node code. Select
+an implementation by passing a
 `ChunkStoreFactory` (a `node_id -> ChunkStore` callable) to a
 [`NodeMap`][a11.nodes.async_node.NodeMap] or
 [`AsyncNode.create`][a11.nodes.async_node.AsyncNode.create].
@@ -74,11 +73,11 @@ carrying [`WireMessage`][a11.data.types.WireMessage] values between two
 endpoints. Delivery is unordered, but synchronised on closure — a reader
 observes every delivered message before the stream reports done. Everything
 above it — node mirroring, session multiplexing, remote action dispatch — is
-written against this one interface, so the concrete transport is a detail you
-pick at the edge:
+written against this interface. Select a concrete transport at the application
+boundary:
 
 - [`InProcessWireStream`][a11.net.in_process_wire_stream.InProcessWireStream] —
-  two endpoints in one process (great for tests and in-process composition);
+  two endpoints in one process, suitable for tests and local composition;
 - [`WebSocketWireStream`][a11.net.websocket_wire_stream.WebSocketWireStream] —
   the default network transport, over A11's nghttp2/HTTP2 stack;
 - [`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream] — an

@@ -36,8 +36,7 @@ void Schedule(absl::AnyInvocable<void() &&> work,
               thread::TreeOptions tree_options) {
   // Wrapped rather than caught here: the fibre that runs this work belongs to
   // A11 and is compiled without exceptions, so a throw has to be stopped inside
-  // the wrapper's own frame. Nobody is waiting for the result of scheduled
-  // work, so what the wrapper does with a raised exception is log it.
+  // the wrapper's own frame.
   thread::Detach(tree_options,
                  [work = exception_guard::WrapConsuming(
                       std::move(work), "Unobserved scheduled task")]() mutable {
@@ -62,13 +61,7 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
     }
   }
   // Handed to the pool to reap, rather than spending a second fiber to hold it.
-  //
-  // That second fiber did nothing but block in `Join()` so that `Cancel()` -- which
-  // walks the fiber tree and locks each node, and so cannot be handed a fiber that
-  // might delete itself -- always had a live pointer to work with. It was ~15% of
-  // every fiber this process created. `ReapWhenFinished` keeps the same guarantee
-  // by ordering the handle's clearing before the destruction, and the join happens
-  // on whichever pool worker next comes round.
+  // It was ~15% of every fiber this process created.
   thread::ReapWhenFinished(std::move(fiber), [control]() mutable {
     thread::MutexLock lock(&control->mu);
     control->fiber = nullptr;

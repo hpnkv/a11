@@ -134,10 +134,7 @@ bool Matches(const Mimetype& registration, const Mimetype& selection) {
   return true;
 }
 
-// Tags a JSON or MessagePack payload already spells out for itself. A chunk
-// holding one of these carries no type parameter: writing ";type=object" on an
-// object says nothing a parser did not already know, and it stops a peer that
-// only has "application/json" from being understood.
+// Tags a JSON or MessagePack payload already spells out for itself.
 bool IsGenericTag(std::string_view tag) {
   static constexpr std::string_view kGeneric[] = {
       "json",   "object",  "array",   "string",
@@ -208,17 +205,6 @@ absl::Status RegisterNative(SerializationRegistry* registry) {
 using ::a11::IsValidUtf8;
 
 // Registers std::string under both self-describing media types.
-//
-// C++ has no type that means "text" as opposed to "bytes" -- a std::string is a
-// sequence of bytes, and whether those bytes are UTF-8 is a fact about the
-// value, not about its type. So the default is application/octet-stream, and
-// text/plain is available by asking for it, which is the only way the
-// distinction can be expressed here. Registration order decides the default:
-// bytes is registered first.
-//
-// Neither codec transforms anything. That is the entire point: the JSON
-// representation of a std::string is a quoted, escaped copy, and of bytes a
-// base64 copy a third larger again.
 absl::Status RegisterStringCodecs(
     SerializationRegistry* absl_nonnull registry) {
   ABSL_RETURN_IF_ERROR(registry->Register<std::string>(
@@ -232,11 +218,7 @@ absl::Status RegisterStringCodecs(
   return registry->Register<std::string>(
       "string", std::string(kTextMimetype),
       [](const std::string& value) -> absl::StatusOr<Chunk> {
-        // Checked on the way out, not on the way in. A peer in a language whose
-        // string type *is* text -- which is all three of the others -- will
-        // reject this chunk on arrival, and the useful place to report that is
-        // here, where the offending value came from, rather than in a session
-        // teardown one hop away.
+        // Checked on the way out, not on the way in.
         if (!IsValidUtf8(value)) {
           return absl::InvalidArgumentError(absl::StrCat(
               "A ", kTextMimetype, " chunk must be valid UTF-8; use ",
@@ -420,8 +402,6 @@ absl::StatusOr<Chunk> SerializationRegistry::ToChunkErased(
   }
   // No guard here: a codec is wrapped where it is registered, in the
   // translation unit that owns it -- see RegisterSerializer in serialization.h.
-  // The erased signatures are private, so registration through those templates
-  // is the only way one can arrive.
   absl::StatusOr<Chunk> chunk = serializer(value);
   if (!chunk.ok()) {
     return chunk.status();
@@ -469,8 +449,7 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
 
   // The caller named the type it wants through the template argument, so the
   // chunk's own tag has nothing left to decide: a payload written as
-  // "application/json;type=a11.sdk.Interaction" is still valid JSON, and
-  // FromChunk<nlohmann::json> is entitled to read it as such.
+  // "application/json;type=a11.sdk.Interaction" is still valid JSON, and.
   ErasedDeserializer deserializer;
   {
     const Impl* impl = GetImpl();
@@ -500,7 +479,8 @@ absl::StatusOr<std::any> SerializationRegistry::FromChunkErased(
 }
 
 absl::Status SerializationRegistry::RegisterDefaults() {
-  // Before the JSON codecs, so a std::string with no mimetype asked for lands on
+  // Before the JSON codecs, so a std::string with no mimetype asked for lands
+  // on
   // application/octet-stream rather than a quoted JSON copy of itself.
   ABSL_RETURN_IF_ERROR(RegisterStringCodecs(this));
   ABSL_RETURN_IF_ERROR(Register<nlohmann::json>(

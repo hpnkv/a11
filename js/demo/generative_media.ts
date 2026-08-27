@@ -20,6 +20,7 @@ import {
   makeCall,
   need,
   readPort,
+  reportExampleSuccess,
   showError,
   whileBusy,
 } from './demo_support.js';
@@ -101,6 +102,7 @@ class GenerativeMediaDemo {
       this.image.src = this.objectUrl;
       this.image.hidden = false;
       this.status.textContent = `${chunk.data.byteLength} bytes of ${chunk.mimetype}`;
+      reportExampleSuccess('generative-media');
       connection.session.halfClose();
     } catch (error) {
       showError(this.errors, error);

@@ -38,6 +38,17 @@ site is still built (the C++ pages are simply omitted). The
 uv run --group docs mkdocs serve -f doc/mkdocs.yml
 ```
 
+## Analytics
+
+Set `A11_ANALYTICS_ENDPOINT` to a GoatCounter-compatible `/count` URL when
+building the deployed site. An empty value disables analytics, which is the
+default for local builds and pull requests from forks. The GitHub Pages
+workflow reads the value from a secret of the same name.
+
+The local tracker records the adoption stages described in
+[`docs/privacy.md`](docs/privacy.md). It uses no cookies or visitor identifier
+and respects Do Not Track.
+
 ## Conventions
 
 - **Python:** Google-style docstrings (see `AGENTS.md` → "Documentation").

@@ -120,7 +120,7 @@ server = a11.HttpSseServer.create("127.0.0.1", 80, accept, options)
 ```
 
 The complete deployable module is
-[`a11/demos/echo_server.py`](https://github.com/curiosity-ai/a11/blob/main/a11/demos/echo_server.py).
+[`a11/demos/echo_server.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/echo_server.py).
 Create and trust a localhost certificate with
 [mkcert](https://github.com/FiloSottile/mkcert), then run the service with TLS:
 

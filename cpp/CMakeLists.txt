@@ -13,7 +13,7 @@ endif ()
 project(
         a11
         VERSION ${A11_VERSION_STRING}
-        DESCRIPTION "A11 action and streaming runtime"
+        DESCRIPTION "A11 streaming action runtime"
         LANGUAGES C CXX)
 
 include(CTest)

@@ -1,0 +1,35 @@
+name: Question or friction
+description: Ask for help or report something that made A11 hard to adopt.
+title: "[Question]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying A11. Specific points of friction help improve the
+        library and its documentation.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to build?
+      description: Describe the agent, API, model service, or pipeline.
+      placeholder: I want to...
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Where are you blocked?
+      description: Include the command, API, or guide you reached.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Relevant output or code
+      description: Remove credentials and private data before pasting.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: A11 version and environment
+      placeholder: a11-kit 0.5.0, Python 3.12, macOS arm64

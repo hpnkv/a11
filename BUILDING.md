@@ -4,7 +4,7 @@ This is the contributor build guide: the development environment, the editable
 Python workflow, the native C++ build, how to test both layers, and the release
 wheel matrix. If you just want to *use* A11, see the
 [README](README.md) (`pip install "a11-kit[llm]"`) and the
-[documentation](https://hpnkv.github.io/a11); the README also has a minimal,
+[documentation](https://docs.a11.to/); the README also has a minimal,
 self-contained recipe for building and linking the C++ runtime on its own.
 
 A11 is a Python action and streaming runtime backed by a C++20 implementation.

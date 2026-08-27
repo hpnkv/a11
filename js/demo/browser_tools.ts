@@ -34,6 +34,7 @@ import {
   addLine,
   connect,
   need,
+  reportExampleSuccess,
   runTurn,
   showError,
   streamInto,
@@ -499,6 +500,7 @@ class BrowserToolsDemo {
         portSchemas: PORT_SCHEMAS,
         onToken: streamInto(answer, this.messages),
       });
+      reportExampleSuccess('browser-tools');
     } catch (error) {
       answer.remove();
       this.connection = null;

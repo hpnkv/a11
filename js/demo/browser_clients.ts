@@ -87,10 +87,13 @@ class EchoDemo {
       const input = need(await action.getInput('input'));
       need(await input.finalize(text));
       need(await action.waitForDispatch(10_000));
-      need(await action.wait(30_000));
       const output = need(await action.getOutput('output', false));
       const reply = need(await output.next({ timeoutMs: 10_000 }));
+      need(await action.wait(30_000));
       this.addBubble(String(reply), 'reply');
+      window.dispatchEvent(
+        new CustomEvent('a11:example-succeeded', {detail: {example: 'echo'}}),
+      );
     } catch (error) { this.showError(error); }
   }
 

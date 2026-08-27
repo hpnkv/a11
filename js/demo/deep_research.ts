@@ -26,6 +26,7 @@ import {
   need,
   readLogFrom,
   readPort,
+  reportExampleSuccess,
   showError,
   whileBusy,
 } from './demo_support.js';
@@ -90,6 +91,7 @@ class DeepResearchDemo {
       ]);
       need(await call.wait(600_000));
       addLine(this.log, 'done.', 'done');
+      reportExampleSuccess('deep-research');
       connection.session.halfClose();
     } catch (error) {
       showError(this.errors, error);

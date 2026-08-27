@@ -1,5 +1,7 @@
 site_name: A11
-site_description: A concurrent action and streaming runtime for building AI agents
+site_description: >-
+  A streaming action runtime for AI agents, model serving, and multimodal APIs
+site_url: https://docs.a11.to/
 repo_url: https://github.com/hpnkv/a11
 repo_name: A11 on GitHub
 docs_dir: docs
@@ -26,6 +28,9 @@ watch:
 
 theme:
   name: material
+  custom_dir: overrides
+  logo: assets/a11-mark.svg
+  favicon: assets/a11-mark.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -80,6 +85,16 @@ hooks:
   - hooks/flow_highlighting.py
   - hooks/snippet_paths.py
 
+extra_javascript:
+  - assets/analytics.js
+
+extra:
+  analytics_endpoint: !ENV [A11_ANALYTICS_ENDPOINT, ""]
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/hpnkv/a11
+      name: A11 on GitHub
+
 plugins:
   - search
   - mkdocstrings:
@@ -112,6 +127,7 @@ plugins:
 nav:
   - Documentation:
       - Overview: index.md
+      - Analytics and privacy: privacy.md
       - State machines:
           - WireStream lifecycle: lifecycles/wire-stream.md
           - AsyncNode lifecycle: lifecycles/async-node.md

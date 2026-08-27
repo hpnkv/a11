@@ -1,132 +1,119 @@
+<p align="center">
+  <img src="https://docs.a11.to/assets/a11-logo.svg"
+       width="260" alt="A11">
+</p>
+
 # A11
 
-**A concurrent action and streaming runtime for building AI agents.**
+**A streaming action runtime for AI agents, model serving, and multimodal
+APIs.**
 
-A11 lets you write agents as ordinary `async def` code: values *stream* between
-producers and consumers, work is packaged as composable *actions*, and the same
-code runs in one process or across a network with a transport swap. The API is
-Python; the runtime underneath is a native C++20 implementation, so the
-streaming and concurrency stay fast and off the event loop's critical path.
+A11 gives ordinary asynchronous code a stable boundary for tools, model calls,
+pipelines, and services. Its Python API runs on a native C++20 runtime, with
+TypeScript, Kotlin, C++, and Flow interfaces for the boundaries that need them.
 
-📖 **[Documentation →](https://hpnkv.github.io/a11)**
+- **Named streams instead of mixed provider events.** Read model text,
+  reasoning, tool activity, progress, and durable interaction state from
+  separate ports.
+- **The same action contract locally and remotely.** Move a handler to a GPU
+  host, browser, or service without changing its inputs and outputs.
+- **Deterministic runtime composition with Flow.** Check and load compositions
+  at runtime with defined concurrency, draining, deadlines, cancellation, and
+  error propagation.
 
-## Install
+**[Install in five minutes](#five-minute-quickstart)** ·
+**[Try the live research agent][live-demo]** ·
+**[Read the documentation](https://docs.a11.to/)** ·
+**[Star A11](https://github.com/hpnkv/a11)**
+
+[live-demo]: https://docs.a11.to/guides/deep-research.html#try-the-deployed-agent
+
+## Try A11 live
+
+The hosted [parallel research
+agent](https://docs.a11.to/guides/deep-research.html#try-the-deployed-agent)
+plans a topic, runs several investigations concurrently, and streams one report
+to the browser. Its default Ollama backend needs no account or API key.
+
+## Five-minute quickstart
+
+Install the core runtime on Python 3.12 or later:
 
 ```sh
-pip install "a11-kit[llm]"
+python -m venv .venv
+source .venv/bin/activate
+pip install a11-kit
 ```
 
-The `[llm]` extra pulls in the Anthropic and Google model SDKs. Drop it for the
-core runtime only.
-
-## See it in 30 seconds
-
-Chat with a model right from the terminal (streaming its reply, and its
-thoughts with `-v`):
-
-```sh
-export GEMINI_API_KEY=...        # or ANTHROPIC_API_KEY
-a11 chat -v
-```
-
-## The ideas
-
-A11 is small at its core — a few ideas compose into everything from a one-file
-helper to a fleet of networked agents. (The
-[Principles](https://hpnkv.github.io/a11/principles.html) page goes deeper.)
-
-- **Everything is asynchronous.** Every operation that can wait is a coroutine
-  you `await`; the runtime schedules thousands cooperatively. Completion is an
-  event (`await action.done.wait()`) and lifecycles are context managers that
-  finalise — or abort with the right status — for you.
-- **Everything is a stream.** The unit of state is a **node**: a single ordered
-  sequence of chunks with a writer end and a reader end. An agent rarely has its
-  whole answer at once — it has the *next* token, frame, or tool call — so nodes
-  make incremental production and consumption the natural shape, with
-  backpressure built in.
-- **Actions are wired streams.** An action's typed input/output **ports** are
-  nodes, so calling one is wiring streams together. A handler can emit output
-  before it has finished reading input — exactly what streaming an LLM response
-  through a pipeline looks like.
-- **Two extension points: storage and transport.** A `ChunkStore` is the log
-  behind a node (swap the in-memory default for disk, a database, or fault
-  injection); a `WireStream` moves bytes between peers (in-process, WebSocket,
-  HTTP SSE, WebRTC). Everything above them is unchanged, so making an agent
-  distributed is a transport swap, not a rewrite.
-- **Sessions tie it together.** A `Session` multiplexes wire streams, dispatches
-  incoming action calls against a registry, and drains and closes the connection
-  cleanly.
-
-## A taste
-
-Produce into a node and read it back — backpressure and finalisation included:
+Save this as `quickstart.py`. The function signature becomes an action schema,
+and its asynchronous iterator becomes a named streaming output:
 
 ```python
 import asyncio
+from collections.abc import AsyncIterator
+
 import a11
 
 
-async def main() -> None:
-    node = a11.AsyncNode.create("tokens")
-    for word in ["A11", "streams", "everything"]:
-        await node.put(word)                              # await = backpressure
-    await node.finalize()                                 # ends and seals it
+REGISTRY = a11.ActionRegistry()
 
-    async for token in node:
-        print(token)
+
+@REGISTRY.action(name="split-words", output="words")
+async def split_words(text: str) -> AsyncIterator[str]:
+    """Emit the words in a line as they become available."""
+    for word in text.split():
+        yield word
+
+
+async def main() -> None:
+    action = REGISTRY.make_action("split-words")
+    await action["text"].finalize("named streams arrive early")
+    action.run()
+
+    async for word in action["words"]:
+        print(word)
+    await action.wait()
 
 
 asyncio.run(main())
 ```
 
-Stream a model's reply through an `interact_with_llm` action. Write the user
-turn to its input and read tokens from `text_output` as they arrive:
+Run it:
 
-```python
-import asyncio
-import os
-
-import a11
-from a11.sdk.interact_with_llm import INTERACT_WITH_LLM_SCHEMA, interact_with_llm
-from a11.sdk.llm import Interaction, LlmHeaders, Role
-
-
-async def ask(text: str) -> None:
-    interact = (
-        a11.Action(INTERACT_WITH_LLM_SCHEMA)
-        .bind_handler(interact_with_llm)
-        .set_header(LlmHeaders.PROVIDER.value, "gemini")
-        .set_header(LlmHeaders.MODEL.value, "gemini-3.5-flash")
-        .set_header(LlmHeaders.API_KEY.value, os.environ["GEMINI_API_KEY"])
-        .run()
-    )
-
-    user_turn = Interaction(
-        role=Role.USER,
-        content=[a11.to_chunk({"role": "user", "content": [{"type": "text", "text": text}]})],
-    )
-    await interact["interactions"].finalize(user_turn)
-    await interact["config"].finalize()
-    await interact["tools"].finalize()
-
-    async for chunk in interact["text_output"]:
-        print(chunk, end="", flush=True)
-
-
-asyncio.run(ask("Explain backpressure in one sentence."))
+```sh
+python quickstart.py
 ```
 
-The [guides](https://hpnkv.github.io/a11/guides/streaming.html) build these up
-step by step — from a node, to a WebSocket echo session, to calling an action on
-a remote server, to a tool-using agent.
+The output port streams four values and then closes successfully. The same
+`REGISTRY` can be served over WebSocket, HTTP SSE, or WebRTC; callers still use
+the `text` and `words` ports.
 
-## Learn more
+Add model providers when the application needs them. With Ollama already
+running locally:
 
-- **[Documentation](https://hpnkv.github.io/a11)** — principles, guides, and the
-  full Python API reference.
-- **[Guides](https://hpnkv.github.io/a11/guides/streaming.html)** — hands-on
-  walkthroughs from a single stream to a networked, tool-using agent.
-- **Examples** — runnable programs under [`examples/`](examples/).
+```sh
+pip install "a11-kit[llm]"
+a11 chat --provider ollama --no-voice --no-shell-tools
+```
+
+## Continue from a working example
+
+- [Build a parallel research agent in
+  Python](https://docs.a11.to/guides/deep-research.html).
+- [Stream one model interface across Claude, Gemini, and
+  Ollama](https://docs.a11.to/guides/llm.html).
+- [Turn an application action into an LLM
+  tool](https://docs.a11.to/guides/agent-tool.html).
+- [Move a local action behind a remote
+  service](https://docs.a11.to/guides/local-to-remote.html).
+- [Compose allowed actions safely at
+  runtime](https://docs.a11.to/guides/flow.html).
+
+Questions and rough edges are useful project signals:
+**[start a discussion](https://github.com/hpnkv/a11/discussions)**,
+**[report friction](https://github.com/hpnkv/a11/issues/new?template=question.yml)**,
+or **[tell us about an
+integration](https://github.com/hpnkv/a11/issues/new?template=adoption.yml)**.
 
 ## Building the C++ runtime
 
@@ -200,4 +187,4 @@ int main() {
 
 Configure your project with `-DCMAKE_PREFIX_PATH=/path/to/install` so
 `find_package` locates it. The generated C++ API reference is published
-[alongside the docs](https://hpnkv.github.io/a11/cpp/).
+[alongside the docs](https://docs.a11.to/cpp/).

@@ -27,6 +27,20 @@ another process. Storage and transport are separate choices, and
 runtime-defined composition. Applications can begin with local calls and add
 these pieces as their deployment and reliability needs grow.
 
+<p class="a11-primary-actions">
+  <a href="guides/deep-research.html#try-the-deployed-agent"
+     data-a11-event="run-demo">Try the live research agent</a>
+  <span aria-hidden="true"> · </span>
+  <a href="https://pypi.org/project/a11-kit/"
+     data-a11-event="install">Install A11</a>
+  <span aria-hidden="true"> · </span>
+  <a href="https://github.com/hpnkv/a11"
+     data-a11-event="star">Star the project</a>
+  <span aria-hidden="true"> · </span>
+  <a href="https://github.com/hpnkv/a11/discussions"
+     data-a11-event="discuss">Join a discussion</a>
+</p>
+
 ## Choose what you want to build
 
 <link rel="stylesheet" href="assets/navigation-cards.css">
@@ -155,3 +169,12 @@ then show exactly when a [node](lifecycles/async-node.md),
 - [TypeScript API](typescript.md)
 - [C++ API](cpp.md)
 - [Flow language](api/flow.md)
+
+If an example is unclear or fails in your environment,
+[report the friction][friction]{ data-a11-event="report-friction" }.
+If A11 is part of a project,
+[share the integration][adoption]{ data-a11-event="real-project" }. Public
+documentation analytics are described in [Analytics and privacy](privacy.md).
+
+[adoption]: https://github.com/hpnkv/a11/issues/new?template=adoption.yml
+[friction]: https://github.com/hpnkv/a11/issues/new?template=question.yml

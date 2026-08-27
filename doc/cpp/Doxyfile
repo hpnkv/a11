@@ -10,7 +10,7 @@
 
 DOXYFILE_ENCODING      = UTF-8
 PROJECT_NAME           = "A11 (C++ runtime)"
-PROJECT_BRIEF          = "Native C++ implementation of the A11 action and streaming runtime"
+PROJECT_BRIEF          = "Native C++ implementation of the A11 streaming action runtime"
 
 # Run from doc/cpp/; sources live at the repository root under cpp/a11. The
 # hand-written landing page (mainpage.md) lives beside this Doxyfile and is

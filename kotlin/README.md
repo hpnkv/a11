@@ -6,6 +6,10 @@ gives JVM/Kotlin clients (such as the CLion plugin in
 [`../intellij-plugin`](../intellij-plugin)) everything needed to expose tools and
 call LLM-based actions over an A11 WebSocket.
 
+[A11 documentation](https://docs.a11.to/) ·
+[Repository](https://github.com/hpnkv/a11) ·
+[Questions and issues](https://github.com/hpnkv/a11/issues)
+
 ## What's here
 
 - **Core** (`a11`): `Status`/`StatusOr`, byte utils, the concatenated-MessagePack

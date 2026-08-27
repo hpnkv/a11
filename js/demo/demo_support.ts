@@ -409,6 +409,13 @@ export function showError(region: HTMLElement, error: unknown): void {
     region.textContent = error instanceof Error ? error.message : String(error);
 }
 
+/** Report that a documentation example reached its successful result. */
+export function reportExampleSuccess(example: string): void {
+    window.dispatchEvent(
+        new CustomEvent('a11:example-succeeded', {detail: {example}}),
+    );
+}
+
 /** Disable a form while a turn runs, and put it back afterwards. */
 export async function whileBusy<T>(form: HTMLFormElement, work: () => Promise<T>): Promise<T | undefined> {
     const controls = [...form.elements] as HTMLInputElement[];

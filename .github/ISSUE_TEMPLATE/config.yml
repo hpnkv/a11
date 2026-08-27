@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A11 documentation
+    url: https://docs.a11.to/
+    about: Read the guides, design principles, and API references.
+  - name: A11 discussions
+    url: https://github.com/hpnkv/a11/discussions
+    about: Discuss designs, use cases, and open-ended questions.

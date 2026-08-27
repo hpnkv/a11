@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="A11">
+  <meta property="og:title"
+        content="{{ page.title | default(config.site_name, true) }}">
+  <meta property="og:description" content="{{ config.site_description }}">
+  <meta property="og:image"
+        content="{{ config.site_url }}assets/a11-social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image"
+        content="{{ config.site_url }}assets/a11-social-card.png">
+  <meta name="a11-analytics-endpoint"
+        content="{{ config.extra.analytics_endpoint }}">
+{% endblock %}

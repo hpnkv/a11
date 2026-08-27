@@ -7,12 +7,31 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "a11-kit"
 dynamic = ["version"]
-description = "Concurrent action and streaming runtime with a native C++ backend"
+description = "A streaming action runtime for AI agents, model serving, and multimodal APIs"
 readme = "README.md"
-requires-python = ">=3.11"
+authors = [
+    { name = "Curiosity Stack", email = "hello@curiositystack.dev" },
+]
+keywords = [
+    "agents",
+    "generative-ai",
+    "llm",
+    "model-serving",
+    "streaming",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.12"
 dependencies = [
     "absl-py>=2.5.0",
     "fastapi>=0.139.0",
+    "harbor",
     "httpx>=0.28.1",
     "msgpack>=1.2.1",
     "ormsgpack>=1.12.2",
@@ -25,10 +44,18 @@ dependencies = [
 [project.scripts]
 a11 = "a11.cli.__main__:main"
 
+[project.urls]
+Homepage = "https://docs.a11.to/"
+Documentation = "https://docs.a11.to/"
+Repository = "https://github.com/hpnkv/a11"
+Issues = "https://github.com/hpnkv/a11/issues"
+Discussions = "https://github.com/hpnkv/a11/discussions"
+
 [project.optional-dependencies]
 claude = ["anthropic>=0.120.0"]
 gemini = ["google-genai>=1.55.0"]
 ollama = ["ollama>=0.6.0"]
+mcp = ["mcp>=2.1.1"]
 llm = [
     "anthropic>=0.120.0",
     "google-genai>=1.55.0",
@@ -142,6 +169,8 @@ dev = [
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
     "google-genai>=1.55.0",
+    "harbor",
+    "mcp>=2.1.1",
     "ollama>=0.6.0",
     "pybind11-stubgen>=2.5.5",
     "pytest>=9.1.1",
@@ -162,6 +191,9 @@ gemini = [
 ]
 ollama = [
     "ollama>=0.6.0",
+]
+mcp = [
+    "mcp>=2.1.1",
 ]
 docs = [
     "mkdocs-material>=9.5.0",

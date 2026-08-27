@@ -3,6 +3,12 @@
   "version": "0.2.3",
   "private": true,
   "description": "The A11 chat and action-explorer UI, shared by the JetBrains and VSCode extensions.",
+  "homepage": "https://docs.a11.to/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hpnkv/a11.git",
+    "directory": "webview"
+  },
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit"

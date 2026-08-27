@@ -5,7 +5,11 @@
   "publisher": "curiositystack",
   "private": true,
   "license": "Apache-2.0",
-  "description": "The A11 Flow language, and an AI chat that can call tools backed by your editor.",
+  "description": "A11 Flow tooling and AI chat with editor-hosted actions.",
+  "homepage": "https://docs.a11.to/guides/flow-tooling.html",
+  "bugs": {
+    "url": "https://github.com/hpnkv/a11/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hpnkv/a11.git",

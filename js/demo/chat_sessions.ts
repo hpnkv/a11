@@ -26,6 +26,7 @@ import {
   makeCall,
   need,
   readPort,
+  reportExampleSuccess,
   runTurn,
   showError,
   streamInto,
@@ -118,6 +119,7 @@ class ChatDemo {
       this.history.push(...added);
       this.rememberInUrl();
       await this.refreshConversations();
+      reportExampleSuccess('persistent-chat');
     } catch (error) {
       this.discard();
       answer.remove();

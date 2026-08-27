@@ -1,0 +1,31 @@
+name: Example request
+description: Propose a runnable example for a concrete A11 use case.
+title: "[Example]: "
+body:
+  - type: textarea
+    id: journey
+    attributes:
+      label: What should a developer accomplish?
+      description: Start with the user journey, not a list of APIs.
+      placeholder: Run a local model behind an authenticated streaming API...
+    validations:
+      required: true
+  - type: textarea
+    id: audience
+    attributes:
+      label: Who needs this example?
+      placeholder: Agent builders moving tools from a notebook to a service.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What should the example demonstrate?
+      description: Name the observable result and any important constraints.
+    validations:
+      required: true
+  - type: input
+    id: references
+    attributes:
+      label: Related projects or protocols
+      placeholder: MCP, vLLM, WebRTC, Redis, or a public repository

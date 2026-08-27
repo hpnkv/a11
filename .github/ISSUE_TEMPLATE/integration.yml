@@ -1,0 +1,30 @@
+name: Integration proposal
+description: Propose or coordinate support for another library or service.
+title: "[Integration]: "
+body:
+  - type: input
+    id: project
+    attributes:
+      label: Project or service
+      placeholder: Name and public URL
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow to support
+      description: Explain what data crosses the boundary and in which order.
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: What becomes easier with A11?
+      placeholder: Streaming, remote dispatch, tool reuse, persistence...
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Implementation and maintenance
+      description: Note whether you can test or help maintain the integration.

@@ -1,0 +1,42 @@
+name: Adoption report
+description: Tell us how A11 is used in a project, product, or experiment.
+title: "[Adoption]: "
+body:
+  - type: textarea
+    id: project
+    attributes:
+      label: What did you build?
+      description: Private projects may be described without naming them.
+    validations:
+      required: true
+  - type: checkboxes
+    id: components
+    attributes:
+      label: Which parts of A11 do you use?
+      options:
+        - label: Actions and registries
+        - label: AsyncNode or a persistent ChunkStore
+        - label: Sessions and remote transports
+        - label: LLM SDK or model tools
+        - label: Flow
+        - label: TypeScript, Kotlin, or C++ interfaces
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What result did A11 help you achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: What should improve?
+  - type: dropdown
+    id: publicity
+    attributes:
+      label: May the project mention this adoption?
+      options:
+        - Contact me before publishing it.
+        - Yes, this report may be quoted and linked publicly.
+        - No, keep it within this issue.
+    validations:
+      required: true

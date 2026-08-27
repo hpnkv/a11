@@ -44,6 +44,8 @@ jobs:
         run: pip install mkdocs-material "mkdocstrings[python]" griffe
 
       - name: Build site (Python + TypeScript + C++)
+        env:
+          A11_ANALYTICS_ENDPOINT: ${{ secrets.A11_ANALYTICS_ENDPOINT }}
         run: doc/build.sh --strict
 
       - uses: actions/upload-pages-artifact@v3

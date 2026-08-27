@@ -1,24 +1,73 @@
-# Compose actions without deploying code
+# Compose actions through streamed data
 
 This guide composes a voice interaction from existing actions. The client
 captures microphone audio, a GPU host transcribes it, and a model receives the
 first complete sentence with the conversation history. The answer streams back
 as it is generated.
 
-Every piece of that already exists. `capture_audio`, `transcribe_audio` and
-`interact_with_llm` are deployed, registered and doing their jobs. What is
-missing is forty lines saying how they connect — and written in Python, those
-forty lines are a commit, a review, a release and a restart of whatever they run
-on.
-
-[Flow](../api/flow.md) expresses those connections as text that the runtime
-compiles wherever it is dispatched. This page builds the composition one
-statement at a time.
+`capture_audio`, `transcribe_audio`, and `interact_with_llm` are independently
+registered actions. [Flow](../api/flow.md) connects their existing ports in a
+document that the receiving runtime compiles. The document can be stored with
+the application or supplied at runtime by a client or model. Its handlers and
+their deployment locations do not change.
 
 The composition keeps high-rate audio and transcript fragments inside the
 runtime. Buffers pass directly from each step's output port to the next input
 port; only the completed sentence and model response cross the external
 boundary.
+
+## Execution follows the data
+
+A flow is not a stored action graph. Its calls are started eagerly and run
+concurrently. Reading an input waits for data, writing an output makes data
+available, and the runtime closes a destination after all of its writers
+finish. Use `after` or `wait` only when ordering cannot be expressed by a data
+dependency.
+
+Calls may therefore be declared before all of their inputs are supplied:
+
+```a11flow
+search = run web-search(query: question, limit: 3)
+brief  = run llm-summarize(question: question)
+
+for hit in search.hits parallel 3 {
+  page = run web-fetch(url: hit.url)
+  page.text | truncate 2000 -> brief.pages
+}
+
+brief.summary -> answer
+```
+
+The summarizer is available while searches and fetches are running. Pages
+stream into its open `pages` port, so it can begin consuming the first page
+without waiting for a collected list. Declaring calls first gives the document
+a graph-like overview when that is useful; ports still provide the scheduling
+and synchronization.
+
+## Compose what is available at runtime
+
+Flow is a runtime language over an `ActionRegistry`. A client can ask a host
+which actions it currently provides, construct a document using their declared
+ports, check that document, and run it immediately. A model uses the same path
+through `flow_actions`, `flow_check`, and `flow_run`.
+
+This remains controlled dynamic composition:
+
+- parsing and resolution report malformed syntax, unknown actions, missing
+  ports, and incompatible connections before execution;
+- `flow_run` checks every model-authored call against the turn's action
+  allow-list before any step runs;
+- a document can use only registered actions, host-registered value types, and
+  Flow's bounded language constructs; it cannot import or define code;
+- deadlines, cancellation, stream failure, and sandbox limits are runtime
+  contracts;
+- intermediate values pipe between actions without another model turn and can
+  stay in local nodes instead of crossing the wire.
+
+The composition may change for each request while its available capabilities
+and policy remain explicit. This is useful for user-designed automations,
+model-authored tool plans, and services that assemble a response from whatever
+actions are deployed on the receiving host.
 
 ## The interface
 
@@ -129,14 +178,13 @@ crosses the wire is the one on `sentence`.
 ## Stopping, once there is something to answer
 
 ```a11flow
-  # synchronisation point: wait until we have a sentence, then stop audio capture
+  # Wait for a sentence before stopping audio capture.
   {"command": "stop"} -> mic.control_events after said
 ```
 
-This is the only ordering statement in the file. Everything else in a flow's body
-runs at once — **steps run concurrently, and order comes from the data** — so
-`after` expresses required ordering. Here the microphone should close when
-there is a sentence, and not before.
+This is the only ordering statement in the file. Everything else in the flow
+body runs concurrently, with data dependencies providing synchronization.
+`after` closes the microphone only once a sentence exists.
 
 ## The conversation
 
@@ -187,9 +235,9 @@ client's history want it.
 order. Direct writes from two statements would interleave by arrival; `then`
 preserves conversation order.
 
-`forward headers "x-a11-llm-*"` passes the caller's own headers on to the step
-that needs them, so which provider and which model stay the caller's decision and
-this file never mentions either.
+`forward headers "x-a11-llm-*"` passes the caller's headers to the step that
+needs them. The caller selects the model and provider without changing the
+composition.
 
 `interact.text_output -> reply` is the answer, streamed to the client token by
 token as the model writes it. And `turn` hands back what to remember: the

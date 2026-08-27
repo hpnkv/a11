@@ -42,9 +42,31 @@ result = await unary_node.consume()
 
 ::: a11.nodes.async_node.AsyncNode
 
+## AsyncNode and durable stream services
+
+An `AsyncNode` backed by Redis or SQLite combines an ordered record stream with
+an action port's lifecycle. Producers append chunks; readers can follow new
+data or read stored data; finalization and failure are part of the same
+contract. Media metadata and serialization tags remain attached to the data,
+and changing the store does not change the action schema.
+
+Modern stream services expose related facilities. For example,
+[S2](https://s2.dev/docs/intro) provides managed, durable, ordered streams with
+append sessions, live tailing, and replay from retained positions. Its
+[agent patterns](https://s2.dev/docs/use-cases/agents) include resumable token
+delivery, event sourcing, and coordination through a stream per run.
+
+The scopes differ. S2 is a hosted stream storage API with service-specific
+positions, access controls, reconnection, and scaling. `AsyncNode` is an A11
+runtime primitive connected directly to action inputs and outputs. Its storage
+is selectable: memory for local work, SQLite for embedded durability, or Redis
+for readers and writers in independent processes. This is useful when the
+application needs streamed action ports and already operates Redis, or when a
+single-machine service can keep its state in SQLite.
+
 ## NodeMap
 
-`NodeMap` coordinates shared named streams across multiple actions within a session:
+`NodeMap` coordinates named streams shared by actions within a session:
 
 ```python
 node_map = a11.NodeMap()

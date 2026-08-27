@@ -1,13 +1,15 @@
 # Stream a model response
 
 `interact_with_llm` presents Claude, Gemini, and Ollama through one action
-contract. Feed it a conversation, model configuration, and optional tools; read
-visible text while the provider is still producing it; retain the completed
+contract. Feed it messages, generation settings, and optional tool definitions;
+read the response while the model is generating it; retain the completed
 interaction for the next turn.
 
-This separation is useful in chat interfaces and longer workflows: rendered
-text can remain transient while the structured interaction becomes durable
-application state.
+Provider SDKs commonly expose one event stream containing text deltas,
+reasoning, tool-call arguments, usage, and completion events. A11 separates
+those concerns into named output ports. A chat UI can consume `text_output`, an
+observability view can consume `thoughts` or `event_stream`, and conversation
+storage can retain `new_interactions`. None has to inspect the others' events.
 
 Alongside `import a11` this page needs a few names from the SDK, which is where
 the model helpers live:
@@ -100,6 +102,11 @@ await stream_task
 
 Keep `new_interactions` around and prepend them (plus the user turn) to the next
 call's `interactions` to carry the conversation forward.
+
+An `Interaction` records assistant messages, tool calls, tool results, usage,
+and provider continuation IDs. It is completed conversation state, not a live
+stream or an agent checkpoint. Store it as ordinary application data; use the
+output streams for content that must be rendered or processed incrementally.
 
 ## Putting it together
 

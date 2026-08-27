@@ -5,6 +5,12 @@ the same action to another peer over a session. This supports servers that hold
 API keys, provide network egress, or own a GPU without changing the action's
 schema, handler, or ports.
 
+For example, begin with speech recognition beside a desktop client, then move
+the handler to a GPU service when several clients need it. The client continues
+to stream audio into the same input and read transcript fragments from the same
+output. The same transition applies to model inference, image generation,
+embedding, document conversion, and other resource-intensive handlers.
+
 This guide demonstrates the transition with a small action. The same steps move
 `interact_with_llm`, which has additional ports.
 

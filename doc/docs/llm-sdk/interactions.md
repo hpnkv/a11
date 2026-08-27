@@ -5,6 +5,10 @@ conversation. It can represent a user message, an assistant response, a set of
 tool calls, or the tool results returned to the model. A list of interactions
 therefore holds both the conversation and the work performed during it.
 
+Provider APIs variously call this state messages, contents, responses, or
+interaction history. A11 keeps the ordered turns in one application-owned
+model while retaining provider-native content needed to continue a turn.
+
 An interaction carries structured A11 values:
 
 - `content` contains serialised text, images, or provider-native response data;
@@ -64,7 +68,7 @@ Interactions are Pydantic models, so they can be validated, copied, and stored
 as JSON alongside the rest of an application’s state:
 
 ```python
-# Persist after each completed turn; restore with Interaction.model_validate_json.
+# Persist after each turn; restore with Interaction.model_validate_json.
 payload = interaction.model_dump_json()
 restored = Interaction.model_validate_json(payload)
 ```

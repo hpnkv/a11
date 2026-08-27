@@ -8,6 +8,14 @@ Applications normally create a Session, attach at least one stream, and let the
 session route messages. Calling handlers directly bypasses the limits,
 cancellation, and status propagation described here.
 
+This is the connection-reuse boundary familiar from
+[gRPC channels](https://grpc.io/docs/what-is-grpc/core-concepts/), with a
+runtime registry in place of a generated stub. `add_stream` starts or accepts
+the physical transport immediately. The session then multiplexes many logical
+action calls and node streams over it, and can attach further transports when
+needed. Dynamism at the action layer therefore does not create a connection per
+operation or value.
+
 See the [Python Session API](../api/service.md),
 [transport API](../api/net.md), [TypeScript reference](../typescript.md), and
 [C++ runtime reference](../cpp.md) for language-specific entry points.

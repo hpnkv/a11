@@ -2,10 +2,11 @@
 
 [`SQLiteChunkStore`][a11.stores.sqlite_chunk_store.SQLiteChunkStore] is a
 durable [`ChunkStore`][a11.stores.chunk_store.ChunkStore] that needs no server.
-It sits between the two existing backends: `LocalChunkStore` is fast but loses
-everything at exit, and `RedisChunkStore` persists but requires Redis. When a
-single machine wants its node streams to survive a restart, this is the one to
-reach for.
+It maps node records and lifecycle state onto the established SQLite
+transaction and write-ahead-log facilities, with large payloads in adjacent
+blob files. A single-machine service gains durable streams without operating a
+custom A11 storage server. `LocalChunkStore` remains the process-local choice;
+`RedisChunkStore` supports programs sharing streams through a Redis deployment.
 
 ```python
 from a11.stores.sqlite_chunk_store import SQLiteChunkStoreFactory

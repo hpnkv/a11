@@ -10,6 +10,12 @@ The resulting actions work with the rest of A11: offer them to a model through
 [`interact_with_llm`](interact-actions.md), call them from a flow, or serve them
 to another peer.
 
+The MCP client/server boundary stays intact. A11 handles discovery and tool
+execution as an MCP client, then presents the discovered capabilities through
+the same registry used for application actions. Existing allow-lists,
+deadlines, logs, remote dispatch, and Flow composition apply without an MCP-only
+execution path in the application.
+
 Install the MCP integration with `pip install 'a11-kit[mcp]'`.
 
 ## Connect

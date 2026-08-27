@@ -1,13 +1,78 @@
 # Let a model compose its own tools
 
 A model that calls tools one at a time must read each intermediate result and
-include it in the next call. Large pages, transcripts, and file listings
-therefore consume model context and may lose detail during copying.
+include it in a later request. Large pages, transcripts, and file listings then
+consume the context window, add input tokens, and require the model to copy
+values between calls.
 
 [`a11.sdk.flow_tools`][a11.sdk.flow_tools] offers the alternative as three
 tools. The model writes a [flow](../guides/flow.md) — a composition of the
-actions it can already call — and runs it as one step. The values that move
-between the steps never pass through the model at all.
+actions available for that turn — and runs it as one step. No new handler is
+generated or deployed. The host checks the document against its current
+registry and allow-list, then the values moving between steps bypass the model.
+
+Flow does not add a persistent graph or another agent loop. The runtime starts
+the declared actions, pipes their named ports, and lets data arrival coordinate
+them. The model still chooses the composition, but the deterministic transfer
+of intermediate values runs outside its context.
+
+## Use skills for knowledge and Flow for a checked procedure
+
+The [Agent Skills specification](https://agentskills.io/specification) defines
+a portable folder containing `SKILL.md` instructions and optional scripts,
+references, and assets. Compatible harnesses use progressive disclosure: they
+advertise each skill's name and description, then load its instructions when a
+task appears to match.
+
+That format is useful for domain knowledge, judgment, and procedures whose
+details vary with the task. A skill may bundle tested scripts, but its
+`SKILL.md` procedure is still interpreted by the model. The model decides
+whether the skill applies, selects each tool, and copies each tool result into
+a later request. More detailed instructions can improve consistency, but they
+do not guarantee that every described step occurs.
+
+Flow is the stronger form when the procedure can be expressed through actions:
+
+- `flow_check` resolves action names, ports, and types before execution, and
+  `flow_run` checks the model turn's action permissions before dispatch;
+- branches, loops, ordering, concurrency, and failure handling have defined
+  runtime semantics;
+- an output pipes directly to the next input without entering model context;
+- large intermediate values can remain in local nodes and off the wire;
+- only the Flow source and declared results need to occupy model context.
+
+This distinction matters in a research task. A skill can tell a model to
+search, fetch several pages, trim them, and summarize them. The model must still
+perform that loop and observe the page contents. A Flow expresses the same
+procedure once:
+
+```a11flow
+search = run web-search(query: question, limit: 3)
+brief  = run summarize(question: question)
+
+for hit in search.hits parallel 3 {
+  page = run web-fetch(url: hit.url)
+  page.text | truncate 2000 -> brief.pages
+}
+
+brief.summary -> answer
+```
+
+The runtime performs every declared pipe and control-flow construct. It does
+not depend on the model remembering the next instruction after each tool call.
+Model calls and external services remain variable, and concurrent streams may
+arrive in different orders. The model sees the compact composition and final
+answer, not every fetched page or transfer step.
+
+Skills and Flow can work together. `a11.sdk.flow_tools` publishes its compact
+language reference as an Agent Skill, helping a model decide when and how to
+write a composition. `flow_check` then validates the document, and `flow_run`
+executes the checked semantics. The skill supplies judgment; Flow supplies the
+data path and control flow.
+
+When a model chooses whether to call `flow_run`, that choice is still model
+judgment. Once the document is submitted, completing its declared procedure no
+longer depends on further skill activation or instruction following.
 
 ```python
 from a11.actions import ActionRegistry

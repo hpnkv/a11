@@ -3,6 +3,10 @@
 Two Actions over one engine in C++, for making HTTP requests from anywhere an
 Action can be run — Python, a Flow, or a model's tool call.
 
+An ingestion service can inspect status and headers immediately, stream NDJSON
+records to workers as the body arrives, and verify trailers concurrently. This
+is useful application plumbing even when no model or agent participates.
+
 | Action | For |
 | --- | --- |
 | `make_http_request` | HTTP with nothing hidden: a port per protocol concern |

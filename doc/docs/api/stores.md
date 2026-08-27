@@ -3,6 +3,20 @@
 A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] is the ordered log behind a
 node and an extension point for custom storage. Readers and writers are its cursors.
 
+A11 supplies node semantics over established storage infrastructure instead of
+requiring a separate durable-stream database. Choose the backend by deployment:
+
+- `LocalChunkStore` keeps short-lived data inside one process;
+- `SQLiteChunkStore` uses an embedded SQLite database for one-machine
+  persistence;
+- `RedisChunkStore` lets independent programs share named streams through an
+  existing Redis deployment.
+
+Persistence and transactions retain the behavior and operational constraints
+of SQLite or Redis. Redis deployments also retain their existing replication,
+monitoring, and scaling facilities. A11 adds chunk ordering, reader and writer
+cursors, node finality, and structured status.
+
 ## ChunkStore
 
 The main store operations are intentionally low-level:

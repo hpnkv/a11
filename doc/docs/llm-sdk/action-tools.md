@@ -6,6 +6,10 @@ description, typed inputs, and typed outputs. The LLM adapter converts that
 native schema to JSON Schema; the action handler remains normal application
 code.
 
+This keeps one contract at four boundaries: direct application calls, model
+function calling, remote action discovery, and Flow composition. Adding a tool
+does not require a provider-specific wrapper around the underlying operation.
+
 ## Define the action
 
 ```python
@@ -66,6 +70,10 @@ The adapter maps Pydantic models, enums, unions, collections, and annotated
 field constraints, and places reusable definitions in a root `$defs`. Streaming
 ports become arrays. Inputs marked for runtime autofill are omitted because the
 model must not supply values such as identity or session context.
+
+When the model calls the tool, the runner writes arguments through these same
+typed ports. Invalid arguments fail as a structured action status, so the
+provider adapter can return the error as that call's tool result.
 
 For normal use, register the action and let the runner build the complete tool
 definition:

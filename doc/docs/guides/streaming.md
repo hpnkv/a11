@@ -2,8 +2,9 @@
 
 An [`AsyncNode`][a11.nodes.async_node.AsyncNode] is A11's unit of streaming
 state: an **ordered** sequence of chunks that one side writes and another reads.
-Action inputs and outputs are async nodes, and model tokens can stream through
-them. This guide builds a minimal producer and consumer.
+Action inputs and outputs are async nodes. Model tokens, audio frames, decoded
+records, progress updates, and ordinary application values all use this same
+interface. This guide builds a minimal producer and consumer.
 
 All required types are available from the top-level package:
 

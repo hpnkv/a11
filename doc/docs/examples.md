@@ -1,19 +1,24 @@
 # Examples by task
 
 Each guide starts from an application outcome and introduces the A11 concepts
-needed to reach it. Begin with a core example, or go directly to the kind of
-agent you are building.
+needed to reach it. Begin with a core example, or go directly to the agent,
+model service, streaming API, or data pipeline you are building.
 
-## Learn actions and streams
+## Build streaming APIs and pipelines
 
 - **[Return values as they are produced](guides/streaming.md).** Write, read,
   finalize, and fail an asynchronous stream.
 - **[Serve an action over WebSocket](guides/echo-session.md).** Connect a client
   and server, send a call, and shut both sides down cleanly.
-- **[Run the same action locally or remotely](guides/local-to-remote.md).** Move
-  a handler to another peer without changing its schema or port I/O.
-- **[Compose actions in a Flow document](guides/flow.md).** Build concurrent
-  workflows from actions that are already registered.
+- **[Host the same operation locally or remotely](guides/local-to-remote.md).**
+  Move inference or data processing to another peer without changing its
+  schema or port I/O.
+- **[Compose available actions at runtime](guides/flow.md).** Check and run a
+  concurrent composition without deploying another handler.
+- **[Stream progress and a finished image separately](guides/generative-media.md).**
+  Keep lightweight status records independent from a binary model result.
+- **[Represent an HTTP exchange as streams](api/http-actions.md).** Process
+  status, headers, body, trailers, and pushed responses as they arrive.
 
 ## Add models and tools
 
@@ -27,6 +32,8 @@ agent you are building.
   investigate several briefs concurrently, and stream the final report.
 - **[Let a model compose its tools](llm-sdk/flow-skill.md).** Keep intermediate
   tool results out of model context by running their composition as one action.
+- **[Build a harness or evaluation path](guides/harnesses-evals.md).** Assemble
+  only the session, storage, policy, and result streams an application needs.
 
 ## Build browser experiences
 
@@ -39,15 +46,11 @@ agent you are building.
   state.
 - **[Run a model in the browser](guides/local-models-web.md).** Stream WebGPU
   inference through the same ports as a hosted model.
-- **[Stream progress and a finished image separately](guides/generative-media.md).**
-  Give each independently consumed result its own output port.
 
 ## Distribute and operate
 
 - **[Exchange durable streams through Redis](guides/going-distributed.md).** Let
   two programs communicate without a direct connection.
-- **[Represent an HTTP exchange as streams](api/http-actions.md).** Read status,
-  headers, body, trailers, and pushed responses independently.
 - **[Choose and verify the native allocator](guides/allocator.md).** Enable the
   packaged allocator for native executables or embedding processes.
 - **[Integrate Flow diagnostics into an editor or CI](guides/flow-tooling.md).**

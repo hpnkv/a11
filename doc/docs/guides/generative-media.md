@@ -5,6 +5,12 @@ the model runs and one image when it finishes. Giving each result its own output
 port lets a caller drain them concurrently, apply different size limits, and
 display either one without decoding a mixed event stream.
 
+This is a general generative-model API pattern, not an agent-specific one. A
+video service can separate preview frames, logs, and the completed asset; a
+speech synthesizer can separate audio frames from alignment records; an image
+editor can return masks and rendered output under distinct media types. Each
+consumer subscribes to the result it understands.
+
 !!! note "Before you start"
 
     This guide's action needs `diffusers`, `torch` and a Stable Diffusion

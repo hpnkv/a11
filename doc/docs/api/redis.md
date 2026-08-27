@@ -5,6 +5,13 @@ binary-safe commands as native futures and Python awaitables. It maintains a
 multiplexed command connection and a separate Pub/Sub connection, so waiting
 for chunk-store changes does not block ordinary commands.
 
+`RedisChunkStore` maps A11's ordered chunks, cursors, and terminal status onto
+Redis Streams, hashes, Lua transactions, and Pub/Sub. Persistence and
+multi-process access therefore use a widely deployed database and its existing
+operational tools. A11 does not add a separate storage service. Redis
+replication and scaling behavior still apply, including the Cluster routing
+constraints below.
+
 Compose a client explicitly into a
 [`RedisChunkStore`][a11.stores.redis_chunk_store.RedisChunkStore] when the
 application owns connection policy:

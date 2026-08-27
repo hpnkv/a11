@@ -132,6 +132,7 @@ nav:
       - Talk to a model: guides/llm.md
       - From a local run to a remote call: guides/local-to-remote.md
       - A toy agent with a tool: guides/agent-tool.md
+      - Agent harnesses and evaluations: guides/harnesses-evals.md
       - Going distributed: guides/going-distributed.md
       - Browser clients: guides/browser-clients.md
       - A chat that survives a reload: guides/chat-sessions.md
@@ -145,7 +146,6 @@ nav:
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
-      - Flow language: api/flow.md
       - Stores: api/stores.md
       - Redis client: api/redis.md
       - SQLite store: api/sqlite.md
@@ -156,5 +156,6 @@ nav:
       - Logging: api/logging.md
       - Observability: api/observability.md
       - Status & timing: api/status-timing.md
+  - Flow reference: api/flow.md
   - TypeScript reference: typescript.md
   - C++ reference: cpp.md

@@ -13,6 +13,13 @@ Use this pattern when named streams must outlive either process or accept data
 before the reader starts. Use a [session](echo-session.md) when peers need to
 discover and dispatch actions over a live connection.
 
+This resembles the append, replay, and live-follow model offered by durable
+stream services such as [S2](https://s2.dev/docs/concepts/streams). The boundary
+here is smaller: `AsyncNode` supplies the stream and action-port lifecycle,
+while an existing Redis deployment supplies shared persistence and its normal
+operational controls. S2 is a managed service with its own positions, access
+tokens, and scaling guarantees; this example does not use or emulate its API.
+
 | Redis-backed node | Writer | Reader |
 | --- | --- | --- |
 | `alice_to_bob_messages` | Alice | Bob |

@@ -6,6 +6,10 @@ runner turns those records back into live nested A11 actions, waits for them,
 and returns output fragments. Those outputs belong on a **new user
 interaction**, which follows the assistant interaction containing the calls.
 
+This is the execution part of the agent loop. It handles parallel tool calls,
+deadlines, partial failure, and output collection without coupling an action
+handler to a provider SDK.
+
 ```python
 import a11
 

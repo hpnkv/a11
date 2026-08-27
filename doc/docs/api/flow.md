@@ -1,10 +1,14 @@
 # Flow language
 
-Flow describes a composition of actions as an action. This page is the language
-reference and Python API. Start with
-[Compose actions without deploying code](../guides/flow.md) for a guided
-example. `a11.flow.REFERENCE` provides a compact version suitable for model
-prompts.
+Flow describes a composition of actions as an action. A document can be loaded
+with application code or received and checked at runtime, then resolved against
+the host's current action registry. This makes the composition dynamic without
+giving the document a way to import code or call capabilities outside that
+registry.
+
+This page is the language reference and Python API. Start with
+[Compose actions through streamed data](../guides/flow.md) for a guided example.
+`a11.flow.REFERENCE` provides a compact version suitable for model prompts.
 
 ## One flow, read from the top
 

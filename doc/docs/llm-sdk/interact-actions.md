@@ -5,6 +5,11 @@ Gemini, or Ollama. Its `tools` input is a stream of provider-neutral tool
 definitions. Bind the same registry to the action so requested names can be
 resolved and run.
 
+The handler owns the repeated model/tool loop: send definitions, receive tool
+calls, run them, encode one result for every call, and ask the model to
+continue. The application supplies policy and handlers without reconstructing
+the different message shapes expected by each provider.
+
 ## Prepare the model action
 
 ```python
@@ -53,8 +58,10 @@ await tools.finalize()
 ```
 
 The handler sends those definitions to the chosen provider. If the model calls
-one, the handler uses the included runner, returns the action output to the
-model, and continues until the model produces an answer or the deadline ends.
+one or more, the included runner executes the calls independently, returns each
+result in the provider's expected shape, and continues until the model produces
+an answer or the deadline ends. One failed call is reported without discarding
+successful calls from the same response.
 
 Sending the definitions is optional for actions the handler's own registry
 already holds. Before the request, the handler collects the turn's tools with

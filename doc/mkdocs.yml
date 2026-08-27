@@ -29,7 +29,7 @@ watch:
 theme:
   name: material
   custom_dir: overrides
-  logo: assets/a11-mark.svg
+  logo: assets/a11-mark-header.svg
   favicon: assets/a11-mark.svg
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -47,7 +47,6 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
-    - navigation.instant
     - navigation.tracking
     - navigation.sections
     - navigation.tabs

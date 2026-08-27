@@ -37,7 +37,7 @@ to the browser. Its default Ollama backend needs no account or API key.
 
 ## Five-minute quickstart
 
-Install the core runtime on Python 3.12 or later:
+Install the core runtime on Python 3.11 or later:
 
 ```sh
 python -m venv .venv

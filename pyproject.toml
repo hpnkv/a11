@@ -27,11 +27,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Libraries",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "absl-py>=2.5.0",
     "fastapi>=0.139.0",
-    "harbor",
     "httpx>=0.28.1",
     "msgpack>=1.2.1",
     "ormsgpack>=1.12.2",
@@ -169,7 +168,6 @@ dev = [
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
     "google-genai>=1.55.0",
-    "harbor",
     "mcp>=2.1.1",
     "ollama>=0.6.0",
     "pybind11-stubgen>=2.5.5",

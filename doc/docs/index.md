@@ -24,22 +24,37 @@ these pieces as their deployment and reliability needs grow.
 
 ## Choose what you want to build
 
-- **[Return results while work is still running](guides/streaming.md).** Start
-  with an ordered stream and learn how producers signal completion or failure.
-- **[Host a model or pipeline behind a stable API](guides/local-to-remote.md).**
-  Keep its streamed inputs and outputs unchanged while the handler moves to a
-  GPU host or service process.
-- **[Stream text without handling provider events](guides/llm.md).** Read text,
-  reasoning, and completed conversation state from separate outputs.
-- **[Give a model tools you already use](guides/agent-tool.md).** Turn an
-  application action into a model tool and authorize it for one turn.
-- **[Call an A11 service from a browser](guides/browser-clients.md).** Share an
-  action contract between a Python service and a TypeScript interface.
-- **[Compose the available tools safely at runtime](guides/flow.md).** Check a
-  Flow document, enforce its call policy, and pipe data between concurrent
-  actions.
-- **[Build a focused agent harness or evaluation path](guides/harnesses-evals.md).**
-  Reuse actions for tools, durable conversations, trials, and streamed results.
+<link rel="stylesheet" href="assets/navigation-cards.css">
+<nav class="a11-card-nav" aria-label="Ways to start with A11">
+  <a href="guides/streaming.html">
+    <strong>Return results while work is running</strong>
+    <span>Stream values and make completion or failure explicit.</span>
+  </a>
+  <a href="guides/local-to-remote.html">
+    <strong>Host a model or pipeline</strong>
+    <span>Move a handler to a GPU host without changing its ports.</span>
+  </a>
+  <a href="guides/llm.html">
+    <strong>Stream a model response</strong>
+    <span>Read text, reasoning, and conversation state separately.</span>
+  </a>
+  <a href="guides/agent-tool.html">
+    <strong>Give a model application tools</strong>
+    <span>Expose an action and authorize it for one model turn.</span>
+  </a>
+  <a href="guides/browser-clients.html">
+    <strong>Connect a browser</strong>
+    <span>Share one action contract across Python and TypeScript.</span>
+  </a>
+  <a href="guides/flow.html">
+    <strong>Compose tools safely at runtime</strong>
+    <span>Check policy and pipe data between concurrent actions.</span>
+  </a>
+  <a href="guides/harnesses-evals.html">
+    <strong>Build a harness or evaluation path</strong>
+    <span>Assemble tools, durable trials, and streamed results.</span>
+  </a>
+</nav>
 
 The [examples page](examples.md) groups the remaining guides by task, including
 persistent chat, browser-hosted tools, parallel research, local models, and

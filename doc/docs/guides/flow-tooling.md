@@ -24,6 +24,36 @@ a11 flow serve                               # answer requests on stdin
 `check` exits `0` with no errors, `1` with language errors, and `2` when the file
 cannot be read. A file named `-` reads standard input.
 
+## Find a topic
+
+<link rel="stylesheet" href="../assets/navigation-cards.css">
+<nav class="a11-card-nav" aria-label="Flow tooling topics">
+  <a href="#a11-flow-the-standalone-tool">
+    <strong>Run the standalone tool</strong>
+    <span>Add Flow language services to an editor or CI image.</span>
+  </a>
+  <a href="#the-formats">
+    <strong>Consume stable formats</strong>
+    <span>Read diagnostics, plans, tokens, completion, and fixes.</span>
+  </a>
+  <a href="#severities-and-families">
+    <strong>Classify diagnostics</strong>
+    <span>Filter stable codes by severity and family.</span>
+  </a>
+  <a href="#in-python">
+    <strong>Call tooling from Python</strong>
+    <span>Use the native service through the Python bindings.</span>
+  </a>
+  <a href="#native-language-services">
+    <strong>Embed native services</strong>
+    <span>Use the small C++ language library without the runtime.</span>
+  </a>
+  <a href="#editors">
+    <strong>Connect an editor</strong>
+    <span>Choose LSP, JSON service calls, or generated syntax data.</span>
+  </a>
+</nav>
+
 ## `a11-flow`, the standalone tool
 
 The `a11-flow` native binary provides the same commands and is built with

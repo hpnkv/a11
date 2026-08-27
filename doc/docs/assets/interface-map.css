@@ -1,0 +1,127 @@
+.a11-interface-map {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: .5rem;
+  background: var(--md-code-bg-color);
+}
+
+.a11-interface-map svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  color: var(--md-default-fg-color);
+  font-family: var(--md-text-font-family);
+}
+
+.a11-map-node > rect {
+  fill: var(--md-default-bg-color);
+  stroke: var(--md-primary-fg-color);
+  stroke-width: 2;
+  transition: fill 120ms ease, stroke-width 120ms ease;
+}
+
+.a11-map-node > text {
+  fill: var(--md-default-fg-color);
+  font-size: 17px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.a11-map-node.extensible > rect {
+  fill: color-mix(in srgb, var(--md-accent-fg-color) 9%,
+    var(--md-default-bg-color));
+  stroke: var(--md-accent-fg-color);
+  stroke-width: 3;
+}
+
+.a11-map-node > text.a11-map-badge {
+  fill: var(--md-accent-fg-color);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
+.a11-map-node:is(:hover, :focus) {
+  outline: none;
+}
+
+.a11-map-node:is(:hover, :focus) > rect {
+  fill: color-mix(in srgb, var(--md-primary-fg-color) 14%,
+    var(--md-default-bg-color));
+  stroke-width: 4;
+}
+
+.a11-map-node:focus-visible > rect {
+  stroke: var(--md-accent-fg-color);
+  stroke-width: 5;
+}
+
+.a11-map-edges path,
+.a11-map-legend path {
+  fill: none;
+  stroke-width: 2;
+}
+
+.a11-map-edges path.owned,
+.a11-map-legend path.owned {
+  marker-end: url(#a11-map-owned);
+  stroke: var(--md-primary-fg-color);
+}
+
+.a11-map-edges path.used,
+.a11-map-legend path.used {
+  marker-end: url(#a11-map-used);
+  stroke: var(--md-accent-fg-color);
+  stroke-dasharray: 7 5;
+}
+
+.a11-map-arrow-owned {
+  fill: var(--md-primary-fg-color);
+}
+
+.a11-map-arrow-used {
+  fill: var(--md-accent-fg-color);
+}
+
+.a11-map-edges text,
+.a11-map-legend text {
+  fill: var(--md-default-fg-color--light);
+  font-size: 15px;
+}
+
+.a11-map-tip {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
+}
+
+.a11-map-node:is(:hover, :focus) .a11-map-tip {
+  opacity: 1;
+}
+
+.a11-map-tip rect,
+.a11-map-help rect {
+  fill: var(--md-default-bg-color);
+  stroke: var(--md-default-fg-color--lightest);
+  stroke-width: 2;
+}
+
+.a11-map-tip text,
+.a11-map-help text {
+  fill: var(--md-default-fg-color);
+  font-size: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a11-map-node > rect,
+  .a11-map-tip {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .a11-interface-map svg {
+    min-width: 42rem;
+  }
+}

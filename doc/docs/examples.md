@@ -4,6 +4,26 @@ Each guide starts from an application outcome and introduces the A11 concepts
 needed to reach it. Begin with a core example, or go directly to the agent,
 model service, streaming API, or data pipeline you are building.
 
+<link rel="stylesheet" href="assets/navigation-cards.css">
+<nav class="a11-card-nav" aria-label="Example categories">
+  <a href="#build-streaming-apis-and-pipelines">
+    <strong>Streaming APIs and pipelines</strong>
+    <span>Move partial results between local and remote components.</span>
+  </a>
+  <a href="#add-models-and-tools">
+    <strong>Models and tools</strong>
+    <span>Build model calls, tool loops, research, and evaluations.</span>
+  </a>
+  <a href="#build-browser-experiences">
+    <strong>Browser experiences</strong>
+    <span>Connect web interfaces, page tools, chat, and local models.</span>
+  </a>
+  <a href="#distribute-and-operate">
+    <strong>Distribution and operations</strong>
+    <span>Share durable streams and integrate native tooling.</span>
+  </a>
+</nav>
+
 ## Build streaming APIs and pipelines
 
 - **[Return values as they are produced](guides/streaming.md).** Write, read,

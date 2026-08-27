@@ -10,6 +10,52 @@ This page is the language reference and Python API. Start with
 [Compose actions through streamed data](../guides/flow.md) for a guided example.
 `a11.flow.REFERENCE` provides a compact version suitable for model prompts.
 
+## Find a topic
+
+<link rel="stylesheet" href="../assets/navigation-cards.css">
+<nav class="a11-card-nav" aria-label="Flow language topics">
+  <a href="#one-flow-read-from-the-top">
+    <strong>Read a complete flow</strong>
+    <span>See declarations, calls, loops, pipes, and skipped outputs.</span>
+  </a>
+  <a href="#what-a-port-holds">
+    <strong>Declare ports and values</strong>
+    <span>Choose types, media types, cardinality, and requirements.</span>
+  </a>
+  <a href="#descriptions">
+    <strong>Describe and construct values</strong>
+    <span>Document a flow and create registered structured types.</span>
+  </a>
+  <a href="#action-composition">
+    <strong>Compose actions</strong>
+    <span>Run locally, call remotely, and connect streamed ports.</span>
+  </a>
+  <a href="#handle-expected-failures">
+    <strong>Handle expected failures</strong>
+    <span>Use status values and recovery paths without hiding errors.</span>
+  </a>
+  <a href="#loops-branches-and-state">
+    <strong>Control work and state</strong>
+    <span>Use bounded loops, branches, variables, and synchronization.</span>
+  </a>
+  <a href="#flow-boundaries-and-sandbox-limits">
+    <strong>Understand the boundary</strong>
+    <span>See what source can access and how the host limits it.</span>
+  </a>
+  <a href="#the-tables-as-data">
+    <strong>Inspect language data</strong>
+    <span>Read the vocabulary and stable diagnostic tables.</span>
+  </a>
+  <a href="#compiling">
+    <strong>Compile and run</strong>
+    <span>Load flows, inspect plans, and execute programs.</span>
+  </a>
+  <a href="#diagnostics">
+    <strong>Report diagnostics</strong>
+    <span>Consume syntax and resolution failures from Python.</span>
+  </a>
+</nav>
+
 ## One flow, read from the top
 
 ```a11flow

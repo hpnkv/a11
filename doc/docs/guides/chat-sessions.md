@@ -156,7 +156,7 @@ history every turn, and only what is new is appended, by interaction id.
 
     The demo server also registers the same action, unrecorded, as `ask_model`.
     A step inside a composition is not a chat turn: recorded, each of the
-    [deep-research](deep-research.md) flow's model calls would arrive in this
+    [deep-research](deep-research.md) agent's model calls would arrive in this
     guide's conversation list as a conversation of its own.
 
 ## 4. Reloading is two calls

@@ -1,10 +1,15 @@
 # Why A11
 
-A live-captioning service sends transcript fragments while audio is still
-arriving. An image-generation API reports denoising progress before returning a
-PNG. A document pipeline fetches pages, decodes records, and feeds several
-workers without collecting the corpus at every boundary. A model gateway serves
-tokens from a GPU process to browser, Python, and native clients.
+A research agent can stream its plan, investigate several briefs concurrently,
+keep intermediate evidence on the backend, and synthesize one report for its
+caller. A browser agent can call tools in the page that owns an editor or
+canvas. A support agent can retain structured conversation turns and resume
+them with another model provider.
+
+The same runtime needs appear in responsive APIs: a live-captioning service
+sends transcript fragments while audio is arriving, an image-generation API
+reports progress before returning a PNG, and a model gateway serves tokens from
+a GPU process to browser, Python, and native clients.
 
 These systems have the same runtime needs as an agent: they wait on independent
 producers, exchange structured and multimodal data, and often move components
@@ -19,6 +24,10 @@ and network placement remain deployment choices.
 <link rel="stylesheet" href="assets/navigation-cards.css">
 
 <nav class="a11-card-nav" aria-label="Problems A11 can help solve">
+  <a href="#a-research-agent-built-from-actions-and-streams">
+    <strong>Build a research agent that works in parallel</strong>
+    <span>Stream the plan and report while several investigations run.</span>
+  </a>
   <a href="#build-streaming-apis-and-throughput-sensitive-pipelines">
     <strong>Return useful output before work finishes</strong>
     <span>Stream tokens, audio, progress, and media through separate ports.</span>
@@ -28,30 +37,46 @@ and network placement remain deployment choices.
     <span>Use included Claude, Gemini, and Ollama actions with portable state.</span>
   </a>
   <a href="#start-with-calls-and-streams-not-an-action-graph">
-    <strong>Let a composition change at runtime</strong>
+    <strong>Let an agent change its plan at runtime</strong>
     <span>Pipe data through checked Flow source using registered actions.</span>
   </a>
   <a href="#build-a-capability-once">
     <strong>Move work to a GPU, browser, or service</strong>
     <span>Keep one action contract across local and remote execution.</span>
   </a>
-  <a href="#discover-operations-at-runtime-and-reuse-connections">
-    <strong>Add operations without regenerating clients</strong>
-    <span>Discover schemas at runtime while reusing physical connections.</span>
-  </a>
   <a href="#choose-where-stream-data-lives">
-    <strong>Retain or share a live stream</strong>
-    <span>Use memory, SQLite, Redis, or an application ChunkStore.</span>
+    <strong>Keep conversations, trials, or live streams</strong>
+    <span>Use application data, SQLite, Redis, or a custom ChunkStore.</span>
   </a>
   <a href="#connect-peers-when-they-need-live-calls">
-    <strong>Use the connection your product needs</strong>
-    <span>Choose built-in browser and peer transports or provide one.</span>
+    <strong>Let an agent act where the state lives</strong>
+    <span>Call browser or remote tools over built-in or custom transports.</span>
   </a>
   <a href="#make-completion-and-failure-observable">
-    <strong>Know whether partial work completed</strong>
+    <strong>Stop stalled model and tool work safely</strong>
     <span>Carry finality, failure, deadlines, and cancellation explicitly.</span>
   </a>
 </nav>
+
+## A research agent, built from actions and streams
+
+The [deep-research example](guides/deep-research.md) presents a typical agent as
+one `deep-research` action. Its inputs and outputs are the stable product
+boundary: a topic comes in, while the plan, activity log, and report stream back
+to a browser.
+
+Inside, the Python handler calls a planning action and starts an investigation
+for each brief. An `asyncio.Semaphore` bounds concurrency, and the included LLM
+action handles every model call. The handler collects investigation reports
+locally, then streams the synthesis through the public report node. The
+intermediate reports do not cross the browser connection.
+
+The composition uses the same mechanisms as a smaller tool-calling agent:
+registered actions define capabilities, `Interaction` values carry model and
+tool state, nodes move partial results, and a session reaches remote or
+browser-hosted actions. The handler registers as one action, so callers only
+need its topic, plan, and report ports. An optional Flow implementation can
+express the same composition when it needs to be supplied at runtime.
 
 ## See how the interfaces fit together
 

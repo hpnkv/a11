@@ -5,6 +5,11 @@ services around them. It connects model calls, application tools, storage, and
 user interfaces through one small set of concepts that work in Python,
 TypeScript, and C++.
 
+An agent can use the included model actions, expose application functions as
+tools, keep conversation state in ordinary application data, and compose work
+at runtime with Flow. The same action can run beside the agent, on a GPU host,
+or in the browser that owns the state it needs to change.
+
 The same runtime can serve a GPU model to several clients, stream live captions
 from speech recognition, feed decoded records into an indexing pipeline, or
 report diffusion progress before returning an image. None of these products
@@ -26,6 +31,10 @@ these pieces as their deployment and reliability needs grow.
 
 <link rel="stylesheet" href="assets/navigation-cards.css">
 <nav class="a11-card-nav" aria-label="Ways to start with A11">
+  <a href="guides/deep-research.html">
+    <strong>Build a parallel research agent</strong>
+    <span>Plan, investigate several briefs, and stream one report.</span>
+  </a>
   <a href="guides/streaming.html">
     <strong>Return results while work is running</strong>
     <span>Stream values and make completion or failure explicit.</span>
@@ -42,9 +51,9 @@ these pieces as their deployment and reliability needs grow.
     <strong>Give a model application tools</strong>
     <span>Expose an action and authorize it for one model turn.</span>
   </a>
-  <a href="guides/browser-clients.html">
-    <strong>Connect a browser</strong>
-    <span>Share one action contract across Python and TypeScript.</span>
+  <a href="guides/browser-tools.html">
+    <strong>Let an agent use tools in a web page</strong>
+    <span>Operate on page state through its existing connection.</span>
   </a>
   <a href="guides/flow.html">
     <strong>Compose tools safely at runtime</strong>
@@ -59,6 +68,19 @@ these pieces as their deployment and reliability needs grow.
 The [examples page](examples.md) groups the remaining guides by task, including
 persistent chat, browser-hosted tools, parallel research, local models, and
 distributed streams.
+
+## See an agent assembled from these pieces
+
+The [deep-research agent](guides/deep-research.md) exposes one
+`deep-research` action to a browser. Its Python handler asks a model to plan the
+topic, starts several investigations with an `asyncio` concurrency limit, and
+keeps their reports local. A final model action synthesizes those findings while
+its report streams to the caller.
+
+The browser receives the plan, action log, and final report, but the larger
+intermediate reports stay on the backend. The example shows model integration,
+tool-like actions, bounded parallel work, streamed progress, and remote serving
+with ordinary Python control flow and no separate agent graph.
 
 ## A stream in one minute
 

@@ -48,8 +48,8 @@ model service, streaming API, or data pipeline you are building.
   action schema into a tool and run requested calls through its registry.
 - **[Use tools published by an MCP server](llm-sdk/mcp-tools.md).** Convert MCP
   declarations into actions that models, flows, and remote peers can call.
-- **[Build a parallel research workflow](guides/deep-research.md).** Plan,
-  investigate several briefs concurrently, and stream the final report.
+- **[Build a parallel research agent in Python](guides/deep-research.md).**
+  Plan, investigate several briefs concurrently, and stream the final report.
 - **[Let a model compose its tools](llm-sdk/flow-skill.md).** Keep intermediate
   tool results out of model context by running their composition as one action.
 - **[Build a harness or evaluation path](guides/harnesses-evals.md).** Assemble

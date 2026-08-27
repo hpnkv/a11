@@ -1,9 +1,9 @@
-# A port per thing the caller cares about
+# Stream progress and a finished image separately
 
-Image generation provides a compact example of separate action ports. One
-request produces two different results: a step counter used while the work runs
-and a payload delivered at the end. Separate ports make both available without
-combining progress and final output into one response.
+Image generation produces two results with different lifecycles: progress while
+the model runs and one image when it finishes. Giving each result its own output
+port lets a caller drain them concurrently, apply different size limits, and
+display either one without decoding a mixed event stream.
 
 !!! note "Before you start"
 
@@ -129,8 +129,8 @@ Close every output port so readers can observe the end of the stream.
 
 ## 3. The image is bytes
 
-A11 does not encode images for you, and it should not: the handler knows what
-format it wants.
+The handler encodes the image in its chosen format and labels the chunk with
+the corresponding media type.
 
 ```python
 png = await asyncio.to_thread(_png_bytes, result.images[0])

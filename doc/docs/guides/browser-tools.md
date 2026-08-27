@@ -1,4 +1,4 @@
-# The model calls back into the page
+# Let a model use tools in the browser
 
 Browser-hosted actions let a model operate on state that exists only in the
 page, such as a canvas, selection, or editor.
@@ -23,8 +23,8 @@ touches the canvas; and the model sees three ordinary A11 actions.
     [mkcert](https://github.com/FiloSottile/mkcert) makes one — if the
     browser blocks it.
 
-    A model that follows tool schemas well makes this much less frustrating.
-    `glm-4.7-flash` on Ollama, Claude and Gemini all work.
+    Use a model with reliable tool-schema support. The example has been tested
+    with `glm-4.7-flash` on Ollama, Claude, and Gemini.
 
 ## Try it
 
@@ -180,12 +180,10 @@ need(await session.addStream(stream, StreamMode.START));
 
 ## 4. Discover page actions
 
-The backend cannot dispatch to an action it has never heard of — so it asks. Every
-A11 peer answers `__list_actions__`, a page included, and
-`a11.gateway.tool_bridge.RemoteToolBridge` calls it the first time a turn needs
-tools and registers a reverse-dispatch proxy per schema that comes back. The
-proxies go on *this connection's own* registry copy, because these actions belong
-to one page.
+The backend discovers actions through the page's `__list_actions__` response.
+When a turn needs tools, it creates a reverse-dispatch proxy for each returned
+schema. Those proxies belong to this connection's registry because the actions
+operate on state in one page.
 
 The page supplies its existing registry:
 
@@ -194,19 +192,8 @@ const connection = await connect(serverUrl, pageRegistry(scene, log));
 ```
 
 The response is an `a11.actions/v1` document containing one JSON
-`ActionSchema` per entry, including each port's `json_schema` for model tool
-definitions.
-
-!!! note "This used to be a handshake"
-
-    A page announced its tools on a reserved `__register_tools__` action, sending
-    a hand-built *port descriptor* per tool. That document was not the JSON-Schema
-    tool definition the model is shown, the two shared a word, and sending one
-    where the other belonged produced a proxy with no inputs at all — the model's
-    arguments had nowhere to land and every call failed with "unexpected input".
-
-    Registration now sends one JSON schema document. The model-facing definition
-    is derived from that schema. The `__register_tools__` action no longer exists.
+`ActionSchema` per entry. Each port retains its JSON Schema, allowing the
+backend to derive the model-facing tool definition without a second contract.
 
 ## 5. The turn
 
@@ -222,11 +209,15 @@ The backend resolves the model's tool call against the connection registry. Its
 proxy dispatches the action back through the same WebSocket, where the page runs
 the handler and streams the outputs to the model.
 
-## 6. What was left out, and why
+## 6. Choose what the model can observe
 
-The predecessor of this example took a WebGL screenshot and fed it to the model
-mid-turn. A11's tool contract has no place for that today: a tool result is JSON,
-and images ride as *message content*, not as tool results. So instead of
-photographing the scene the model reads it — `describe_scene` returns one
-`{id, x, y, radius, color}` per blob — which serves the same purpose (find out
-what is there before changing it) within the contract that exists.
+`describe_scene` returns one `{id, x, y, radius, color}` object per blob, giving
+the model the state needed by the mutation tools. Image inputs belong in model
+message content, while tool results are JSON values. An application that needs
+visual reasoning can send a screenshot as message content and keep tool results
+for structured state and operation outcomes.
+
+Use browser-hosted actions when the capability or authoritative state belongs
+in the page, such as an editor selection, canvas, or local document. For tools
+that belong on the backend, register them directly with
+[`interact_with_llm`](../llm-sdk/interact-actions.md).

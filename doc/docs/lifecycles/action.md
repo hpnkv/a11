@@ -80,10 +80,10 @@ method explicitly documents otherwise.
 Each input/output is an AsyncNode in the bound NodeMap. The Action maps schema
 port names to their node ids and can attach selected nodes to a WireStream.
 
-For a remote call, the `ActionMessage` carries those mappings rather than the
-port payloads themselves. Payloads travel as sequenced `NodeFragment` values,
-which lets the caller stream a large input while the remote handler is already
-running and lets outputs return incrementally.
+For a remote call, the `ActionMessage` carries those mappings. Port payloads
+travel separately as sequenced `NodeFragment` values, which lets the caller
+stream a large input while the remote handler is already running and lets
+outputs return incrementally.
 
 Required ports must map to valid nodes. Unary is a contract about how the
 handler should consume a port; it does not turn the underlying node into a
@@ -119,8 +119,7 @@ input must remain empty, so incoming data for that port is rejected: a caller
 cannot inject a value into an input the receiving agent controls.
 
 Autofills make optional/default agent inputs part of the schema. Keep large or
-dynamic defaults in application code rather than embedding them in every
-dispatch message.
+dynamic defaults in application code so dispatch messages remain small.
 
 ### 5. Run the handler
 
@@ -141,9 +140,10 @@ async def summarize(action: a11.Action) -> None:
 
 The handler need not wait for that write: the writer's pump completes it and the
 closure after the handler has returned. Action cleanup closes writable outputs
-the handler left open, but it does **not** invent final data. Only the handler knows whether its last token, object, or event is a
-complete value. On failure, cleanup aborts output nodes so readers receive the
-structured error instead of mistaking partial data for success.
+the handler left open, but it does **not** invent final data. The handler must
+identify whether its last token, object, or event is a complete value. On
+failure, cleanup aborts output nodes so readers receive the structured error
+instead of mistaking partial data for success.
 
 ### 6. Finish local status and resources
 
@@ -253,8 +253,7 @@ caller.
 
 When local execution fails, output nodes are aborted and the completion status
 is still communicated when possible. When a remote status is non-OK, readers
-and `wait()` observe the same failure rather than a generic transport
-exception.
+and `wait()` observe that status as the failure.
 
 ## What should I await?
 

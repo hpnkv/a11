@@ -83,9 +83,9 @@ Use `"bytes"` (the default) or `"utf16"`. The selected unit applies to every
 returned offset and to the inbound `offset` for `complete`. The service performs
 the conversion.
 
-Two fields represent distinct coordinate systems rather than document offsets: a
-diagnostic's `line` and `column` (1-based, code-point count), and a completion
-proposal's `caret` (offset into the inserted proposal text).
+Two fields use their own coordinate systems: a diagnostic's `line` and `column`
+are 1-based code-point counts, and a completion proposal's `caret` is an offset
+into the inserted proposal text.
 
 ## The formats
 
@@ -133,9 +133,9 @@ The envelope remains usable without the source text:
 
 The published table of every code the language can produce, its family, its
 default severity and one line on what it means. A toolchain may match on a code:
-codes are stable, and the wording of a message is not. The table is generated from
-the C++ source of truth into `testdata/flow/codes.json`, and every language reads
-it from there rather than keeping a list of its own.
+codes are stable, and the wording of a message is not. The table is generated
+from the C++ source of truth into `testdata/flow/codes.json`, which every
+language reads.
 
 ```sh
 a11 flow codes --format json | jq '.codes[] | select(.family == "unused")'
@@ -415,12 +415,10 @@ a11-flow scan a11 cpp js --format json | jq '.actions[0]'
 }
 ```
 
-`origin` is 1-based, like a diagnostic's line and column, and the path is the one
-the scan was given — absolute if the root was, relative if it was — because the
-host has to open the answer in the terms it asked in. It is **absent** for
-everything that came from a live registry or from the embedded snapshot: a
-registry knows what it holds and not where the text that put it there was
-written.
+`origin` is 1-based, like a diagnostic's line and column. Its path retains the
+form supplied to the scan: an absolute root produces absolute paths, and a
+relative root produces relative paths. Entries from a live registry or the
+embedded snapshot omit `origin` because those sources provide no file location.
 
 `scan` performs a tolerant textual read of Python, C++, and TypeScript to extract
 structural declarations:
@@ -509,7 +507,7 @@ of each code contains its family, as in `flow.unused.header`.
 
 ## In Python
 
-The same shapes, as values rather than JSON:
+Python exposes the same shapes as values:
 
 ```python
 from a11.flow import diagnostics

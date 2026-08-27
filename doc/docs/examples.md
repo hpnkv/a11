@@ -1,25 +1,57 @@
-# Examples
+# Examples by task
 
-Use these examples to build local streams, distributed services, and
-tool-using agents. Each example focuses on one application task and the A11 APIs
-required to implement it.
+Each guide starts from an application outcome and introduces the A11 concepts
+needed to reach it. Begin with a core example, or go directly to the kind of
+agent you are building.
 
-| Example | Outcome |
-| --- | --- |
-| [Compose actions without deploying code](guides/flow.md) | Describe a composition of existing actions in the Flow language and run it as one action. |
-| [Stream data through an AsyncNode](guides/streaming.md) | Produce and consume an ordered asynchronous stream, including clean finalisation. |
-| [A WebSocket echo session](guides/echo-session.md) | Connect a client and server session over WebSocket and stream an action result back. |
-| [Talk to a model](guides/llm.md) | Call `interact_with_llm`, feed a conversation, and print model output as it arrives. |
-| [From a local run to a remote call](guides/local-to-remote.md) | Move an action across a session without changing its schema or handler-facing API. |
-| [A toy agent with a tool](guides/agent-tool.md) | Register an A11 action as an LLM tool and let the model use its result. |
-| [Going distributed](guides/going-distributed.md) | Choose storage and transport boundaries for an agent that spans processes or machines. |
-| [Browser clients](guides/browser-clients.md) | Connect a TypeScript browser application to an A11 backend. |
-| [A chat that survives a reload](guides/chat-sessions.md) | Answer with any provider through one action, and continue a conversation the SQLite store recorded. |
-| [Deep research, as a composition](guides/deep-research.md) | Plan a topic, investigate its parts at once and synthesise a report — in Flow, with no orchestration code. |
-| [The model calls back into the page](guides/browser-tools.md) | Serve actions from a web page and let a model drive them over the same socket. |
-| [A port per thing the caller cares about](guides/generative-media.md) | Stream a step counter and a finished image off one action, on ports of their own. |
-| [Local models on the web](guides/local-models-web.md) | Run a local model in a browser-facing application while retaining A11 action semantics. |
-| [HTTP as separate streams](api/http-actions.md) | Make HTTP requests with a port per protocol concern — act on the status before the body arrives, read trailers, and receive pushed responses. |
+## Learn actions and streams
 
-Runnable companion programs live in the repository’s
+- **[Return values as they are produced](guides/streaming.md).** Write, read,
+  finalize, and fail an asynchronous stream.
+- **[Serve an action over WebSocket](guides/echo-session.md).** Connect a client
+  and server, send a call, and shut both sides down cleanly.
+- **[Run the same action locally or remotely](guides/local-to-remote.md).** Move
+  a handler to another peer without changing its schema or port I/O.
+- **[Compose actions in a Flow document](guides/flow.md).** Build concurrent
+  workflows from actions that are already registered.
+
+## Add models and tools
+
+- **[Stream a model response](guides/llm.md).** Send a portable conversation to
+  Claude, Gemini, or Ollama through one action interface.
+- **[Let a model call an application action](guides/agent-tool.md).** Turn an
+  action schema into a tool and run requested calls through its registry.
+- **[Use tools published by an MCP server](llm-sdk/mcp-tools.md).** Convert MCP
+  declarations into actions that models, flows, and remote peers can call.
+- **[Build a parallel research workflow](guides/deep-research.md).** Plan,
+  investigate several briefs concurrently, and stream the final report.
+- **[Let a model compose its tools](llm-sdk/flow-skill.md).** Keep intermediate
+  tool results out of model context by running their composition as one action.
+
+## Build browser experiences
+
+- **[Call an A11 service from a browser](guides/browser-clients.md).** Use the
+  same action contract in a Python backend and a TypeScript page.
+- **[Continue a chat after a reload](guides/chat-sessions.md).** Store structured
+  interactions and reopen a conversation by ID.
+- **[Let a model use tools in the page](guides/browser-tools.md).** Serve actions
+  over the page's existing connection so the model can operate on browser
+  state.
+- **[Run a model in the browser](guides/local-models-web.md).** Stream WebGPU
+  inference through the same ports as a hosted model.
+- **[Stream progress and a finished image separately](guides/generative-media.md).**
+  Give each independently consumed result its own output port.
+
+## Distribute and operate
+
+- **[Exchange durable streams through Redis](guides/going-distributed.md).** Let
+  two programs communicate without a direct connection.
+- **[Represent an HTTP exchange as streams](api/http-actions.md).** Read status,
+  headers, body, trailers, and pushed responses independently.
+- **[Choose and verify the native allocator](guides/allocator.md).** Enable the
+  packaged allocator for native executables or embedding processes.
+- **[Integrate Flow diagnostics into an editor or CI](guides/flow-tooling.md).**
+  Consume stable diagnostic, formatting, completion, and navigation responses.
+
+Runnable companion programs are available in the repository's
 [`examples/`](https://github.com/hpnkv/a11/tree/main/examples) directory.

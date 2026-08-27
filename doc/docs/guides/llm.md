@@ -1,9 +1,13 @@
-# Talk to a model with interact_with_llm
+# Stream a model response
 
-Most agent work is a conversation with a model. A11 ships that conversation as
-an ordinary **action**, `interact_with_llm`, whose ports stream the model's
-output as it arrives. You drive it exactly like any other action: feed its input
-ports, read its output ports.
+`interact_with_llm` presents Claude, Gemini, and Ollama through one action
+contract. Feed it a conversation, model configuration, and optional tools; read
+visible text while the provider is still producing it; retain the completed
+interaction for the next turn.
+
+This separation is useful in chat interfaces and longer workflows: rendered
+text can remain transient while the structured interaction becomes durable
+application state.
 
 Alongside `import a11` this page needs a few names from the SDK, which is where
 the model helpers live:

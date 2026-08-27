@@ -1,98 +1,103 @@
 # Why A11
 
-A11 builds one-process helpers and networked agents from the same actions,
-streams, storage, and transport interfaces.
+Agent applications spend much of their time waiting: for model output, tools,
+people, storage, and other services. They also change shape as they grow. A
+handler that begins in one process may later need a GPU service, a browser
+client, durable state, or execution on another machine.
 
-## One toolkit in every language
+A11 keeps the operation's contract stable through those changes. The
+application describes work as actions and moves data through streams; storage
+and network placement remain deployment choices.
 
-A11 exposes the same action, node, session, storage, and transport concepts in
-Python, TypeScript, and C++. Clients, backends, and peer-to-peer applications
-can use the language suited to each environment while sharing one protocol.
+## Build a capability once
 
-## Everything is asynchronous
+An [`Action`][a11.actions.action.Action] is a named operation with described
+input and output ports. Its handler can run in the caller's process or be
+registered on another peer. Callers feed and read the same ports in either
+case.
 
-A11 is built for work that waits — on a model, a tool, a peer, a human. Every
-operation that could block is a coroutine you `await`, and the runtime schedules
-thousands of them cooperatively while blocking I/O yields to other work.
+This makes location a deployment decision:
 
-The public API exposes completion and stream termination directly:
+- keep a formatter or parser beside its caller;
+- put model access behind a service that owns credentials or a GPU;
+- run a browser action in the page that owns the canvas or editor state;
+- compose several registered actions into one workflow.
 
-- **Completion is an event.** An [`Action`][a11.actions.action.Action] and a
-  [`Session`][a11.service.session.Session] each expose a `done` you can
-  `await action.done.wait()`, shaped like an `asyncio.Event`.
-- **Ending a stream is one call.** `await node.finalize()` marks the logical end
-  of the data and closes the writer, so the other side always learns how it
-  ended; `abort_with_status` ends it with a failure instead. Wire streams and
-  sessions are context managers, and finalise themselves on the way out.
+The [local-to-remote guide](guides/local-to-remote.md) follows one action across
+that boundary. [Browser-hosted tools](guides/browser-tools.md) show the reverse
+direction: a backend dispatches an action to the connected page.
 
-## Everything is a stream
+## Return work as it is produced
 
-The unit of data in A11 is the **chunk**, and the unit of state is the
-**node** — an [`AsyncNode`][a11.nodes.async_node.AsyncNode], which is a single
-ordered sequence of chunks with a writer end and a reader end.
+Every action port is an [`AsyncNode`][a11.nodes.async_node.AsyncNode], an ordered
+stream of values. A handler can write progress, tokens, audio frames, records,
+or one complete object. The caller chooses whether to process each value or
+collect a unary result.
 
-Agents typically generate answers incrementally—token by token, frame by
-frame, or tool call by tool call. Nodes match this streaming pattern directly:
+- `put()` appends a value and exposes confirmation from the backing store.
+- `async for` consumes values until the stream ends.
+- `consume()` reads a port expected to contain one complete value.
+- `finalize()` marks the logical end of the data and closes the writer.
+- `abort_with_status()` ends the stream with a structured failure.
 
-- **Produce incrementally** with `put()`, and end with `finalize()`. Each write
-  returns a future that completes when the backing store accepts the chunk.
-  Attached transport sends are attempted during the same flush, but this is not
-  a remote-delivery acknowledgement.
-- **Consume in whatever shape fits** — `await node.next()` for the next value,
-  `async for value in node` to drain, or `await node.consume()` for a single
-  whole result. Objects are serialized on the way in and deserialized on the way
-  out via the node's
-  [`SerializationRegistry`][a11.data.serialization.SerializationRegistry].
+Because a consumer can start before the producer finishes, connected actions
+can overlap their work. A text interface can display model output immediately;
+a media action can report progress on one port while preparing an image on
+another. See [streaming through a node](guides/streaming.md) and
+[separate progress and result ports](guides/generative-media.md).
 
-Actions are built from nodes: an [`Action`][a11.actions.action.Action]'s typed
-input and output **ports** are nodes, so calling an action is really wiring
-streams together. A handler can emit output before it has finished reading its
-inputs, allowing the next action to consume incremental results immediately.
+## Choose where stream data lives
 
-## Two extension points: storage and transport
+A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] holds a node's ordered
+chunks. The default local store keeps them in memory. Redis and SQLite stores
+support different application needs without changing the producer or consumer:
 
-Storage and transport are configurable extension points designed for
-customization across deployment environments.
+- SQLite can retain conversations and reopen them after a process restart;
+- Redis can connect programs through durable, named streams even when their
+  lifetimes do not overlap;
+- a custom store can apply an application's retention, persistence, or testing
+  policy.
 
-### ChunkStore — where stream data lives
+The [persistent chat](guides/chat-sessions.md) and
+[Redis stream](guides/going-distributed.md) guides demonstrate these choices.
 
-A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] is the ordered log behind a
-node. The default
-[`LocalChunkStore`][a11.stores.local_chunk_store.LocalChunkStore] keeps chunks in
-memory. Implement the interface to persist a stream, enforce a retention
-policy, or inject faults in tests without changing action or node code. Select
-an implementation by passing a
-`ChunkStoreFactory` (a `node_id -> ChunkStore` callable) to a
-[`NodeMap`][a11.nodes.async_node.NodeMap] or
-[`AsyncNode.create`][a11.nodes.async_node.AsyncNode.create].
+## Connect peers when they need live calls
 
-### WireStream — how bytes move between peers
+A [`Session`][a11.service.session.Session] dispatches actions and carries their
+node data over one or more connections. It tracks in-flight work so callers and
+services can drain and close cleanly.
 
-A [`WireStream`][a11.net.wire_stream.WireStream] is a bidirectional channel
-carrying [`WireMessage`][a11.data.types.WireMessage] values between two
-endpoints. Delivery is unordered, but synchronised on closure — a reader
-observes every delivered message before the stream reports done. Everything
-above it — node mirroring, session multiplexing, remote action dispatch — is
-written against this interface. Select a concrete transport at the application
-boundary:
+The connection implements the
+[`WireStream`][a11.net.wire_stream.WireStream] interface. Applications can use
+an in-process pair, WebSocket, HTTP Server-Sent Events, or WebRTC while the
+action layer remains unchanged. The [echo service](guides/echo-session.md)
+shows the complete client and server lifecycle; the
+[browser client](guides/browser-clients.md) uses an HTTP-compatible transport.
 
-- [`InProcessWireStream`][a11.net.in_process_wire_stream.InProcessWireStream] —
-  two endpoints in one process, suitable for tests and local composition;
-- [`WebSocketWireStream`][a11.net.websocket_wire_stream.WebSocketWireStream] —
-  the default network transport, over A11's nghttp2/HTTP2 stack;
-- [`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream] — an
-  HTTP Server-Sent-Events channel for firewall-friendly, HTTP-only paths;
-- [`WebRtcWireStream`][a11.net.webrtc_wire_stream.WebRtcWireStream] —
-  peer-to-peer data channels, with NAT traversal via
-  [signalling](api/net.md).
+Use a session for live action dispatch between peers. Use a shared store when
+the main requirement is durable stream data that either side may read later.
 
-Action and node code use the same interface for local and network transports.
-Implement `WireStream` to carry A11 traffic over another transport.
+## Make completion and failure observable
 
-## Sessions tie it together
+Stream termination is part of the data contract. Finalization tells a consumer
+that it received a complete result; an aborted stream carries a status instead
+of appearing to be valid but truncated.
 
-A [`Session`][a11.service.session.Session] is the connection-scoped runtime: add
-one or more wire streams, and it multiplexes them, dispatches inbound action
-calls against a registry, and tracks their lifetimes so the whole connection can
-be drained and closed cleanly. It is the object you build a server or client
-agent around.
+Actions, sessions, and connections also expose completion explicitly. A caller
+can await the result it needs, wait for the full action, or let a context manager
+drain a connection during shutdown. Deadlines and cancellation propagate
+through nested action calls.
+
+The lifecycle articles describe the exact transitions for
+[nodes](lifecycles/async-node.md), [actions](lifecycles/action.md),
+[sessions](lifecycles/session.md), and [connections](lifecycles/wire-stream.md).
+
+## Use the language suited to each boundary
+
+Python, TypeScript, and C++ expose the same action, node, session, storage, and
+transport concepts. A Python service, TypeScript browser, and native component
+can share action schemas and exchange the same wire messages while each uses
+the conventions of its language.
+
+Start with the [examples by task](examples.md), or go directly to the
+[Python](api/nodes.md), [TypeScript](typescript.md), or [C++](cpp.md) reference.

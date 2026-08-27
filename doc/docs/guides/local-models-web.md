@@ -1,4 +1,4 @@
-# Local models on the web
+# Run a model in the browser
 
 The [Browser clients](browser-clients.md) guide calls a model hosted on a
 server. This guide runs the model locally: `interact_with_gemma` loads a

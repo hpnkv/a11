@@ -1,9 +1,15 @@
-# A toy agent with a tool
+# Let a model call an application action
 
 An A11 action can serve as an LLM tool. Register the action, allow the model to
-call it through `interact_with_llm`, and return its output to the conversation.
-This guide adds a simulated `get_weather` action to the
-[LLM interaction](llm.md).
+call it through `interact_with_llm`, and return its output before the model
+continues. This guide adds a simulated `get_weather` action to the
+[basic model interaction](llm.md).
+
+Three controls stay separate throughout the example:
+
+- the action schema tells the model what it may request;
+- the allow-list authorizes the action for this model turn;
+- the registry supplies the handler that executes the request.
 
 ```python
 import os
@@ -124,3 +130,8 @@ action:
 
 The complete interactive version — multi-turn, multi-provider, with the tool
 registry — is `examples/002-llm-interactions`.
+
+For applications that receive provider interactions directly, see
+[running requested actions](../llm-sdk/tool-runner.md). To offer tools from an
+MCP server through the same registry, see
+[MCP tools as actions](../llm-sdk/mcp-tools.md).

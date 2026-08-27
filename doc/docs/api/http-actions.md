@@ -64,15 +64,14 @@ which is precisely the detail this action exists to preserve.
 `make_http_request` fails only when there is **no** response. A 404 was answered
 by a server that was reached, so it arrives on `status_code` with its body
 intact. A caller that wants a failure can make one from the status; the reverse
-is not recoverable, and failing would discard the error document — usually the
-interesting part.
+is not recoverable. Treating every 4xx response as an action failure would also
+discard an error document that may contain details the caller needs.
 
 ### Pushed responses
 
 A push carries a head *and* a body, and one port cannot interleave several
-bodies without inventing a framing for them. A11 already has the answer: each
-pushed body gets a node of its own, and the record on `pushes` carries that
-node's id.
+bodies without additional framing. Each pushed body therefore gets its own
+node, and the record on `pushes` carries that node's ID.
 
 ```
 {"method": "GET", "url": "...", "path": "/style.css", "status": 200,

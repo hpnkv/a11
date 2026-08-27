@@ -12,8 +12,8 @@ the same interface, configured via headers.
     The demo on this page talks to the hosted backend at
     `wss://a11.services:9443/a11-demos`, which runs an Ollama beside itself — so the
     default (Ollama, `glm-4.7-flash`, base URL `http://127.0.0.1:11434`) answers
-    with no key at all. Note whose localhost that is: the base URL is resolved by
-    whoever *serves* the action. Claude and Gemini need a key in the key field.
+    without a key. The process serving the action resolves the base URL, so
+    `127.0.0.1` refers to that backend host. Claude and Gemini need a key.
 
     To run the backend yourself instead:
 

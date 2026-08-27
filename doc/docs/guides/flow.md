@@ -22,8 +22,8 @@ boundary.
 
 ## The interface
 
-A flow is an action, so it starts by saying what an action says: what it is for,
-and what goes in and out.
+A flow begins with the same contract as an action: its purpose, inputs, and
+outputs.
 
 ```a11flow
 flow interact-on-full-sentence {
@@ -39,11 +39,11 @@ flow interact-on-full-sentence {
 }
 ```
 
-A port says what it holds first and what it is like afterwards: it carries one
-value unless it says `stream`, and is optional unless it says `required`. The
-descriptions are not decoration — this is the [`ActionSchema`][a11.actions.action.ActionSchema]
-whoever dispatches the flow will read, and if that is a model, this is what it
-reads to decide whether the flow is the thing it wants.
+A port declares its value type, followed by its cardinality and requirement. It
+carries one value unless marked `stream`, and is optional unless marked
+`required`. These declarations become the
+[`ActionSchema`][a11.actions.action.ActionSchema] used by callers and by models
+selecting a tool.
 
 `history` is the **ID of a node** that holds the conversation. The caller owns
 the prior turns, and the stateless flow attaches to that stream without copying
@@ -197,15 +197,14 @@ question, then the answer and any tool interactions the model made on the way to
 it. The client appends those to the conversation and hands its node back as
 `history` next time round.
 
-## The whole thing
+## The complete flow
 
 ```a11flow
 --8<-- "intellij-plugin/src/main/resources/flows/interact-on-full-sentence.flow"
 ```
 
-Twenty-odd statements, more comment than code, and no deployment. Read as a list
-of what it decided, it is one line per decision: who runs each step, what goes
-where, what is not interesting, what stays local, and the single place order
+The document records where each step runs, how values move between steps, which
+outputs are discarded, which calls remain local, and where execution order
 matters.
 
 ## Running it
@@ -319,8 +318,8 @@ interval between emitted values.
 
 The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,
 `try`/`wait`/`fail`, `log`/`logf`, `match`, `strformat`, and sandbox limits
-— is in the [Flow language reference](../api/flow.md), and `a11.flow.REFERENCE` is
-the same thing sized for a prompt.
+— is in the [Flow language reference](../api/flow.md). `a11.flow.REFERENCE`
+provides a compact version suitable for a model prompt.
 
 The runnable examples are in
 [`examples/003-flow-dsl`](https://github.com/hpnkv/a11/tree/main/examples/003-flow-dsl).

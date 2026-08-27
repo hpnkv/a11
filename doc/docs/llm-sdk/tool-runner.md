@@ -40,7 +40,7 @@ is the model's request to use tools; the new user interaction is the
 application's response. Keeping them as separate, ordered turns preserves the
 conversation structure expected by Claude and the other included handlers.
 
-The runner performs the lifecycle work that is easy to get subtly wrong:
+The runner handles five lifecycle responsibilities for each requested action:
 
 1. It checks every requested name against `x-a11-allowed-llm-actions`.
 2. It resolves the schema and handler from the action registry.

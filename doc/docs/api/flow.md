@@ -204,8 +204,8 @@ pages | map summarise(it) | logf info "summarised %s" it.url -> _
 Every page is summarised and every line is logged, but the result is discarded.
 `_` is valid only as a destination; it cannot be bound or read. `_ = node()`,
 `_ | count -> n`, `drain _` and `in _: string` are each refused while the flow is
-compiled. It may stand beside a real destination (`a -> b, _`), where it simply
-adds a reader that discards its values.
+compiled. It may stand beside a real destination (`a -> b, _`), where it adds a
+reader that discards its values.
 
 ### Putting a stream back together
 
@@ -236,8 +236,8 @@ they held.
 pages | map it.lines | flatten -> lines
 ```
 
-A value that is not a list goes through as itself, so a mixed stream is
-flattened rather than refused.
+Lists are expanded and other values pass through unchanged, so `flatten` also
+accepts a mixed stream.
 
 `| window N` is `batch` with the lists overlapping: one list of the last `N`
 values per value, once `N` have arrived.
@@ -264,8 +264,7 @@ every source ends; a source failure ends it with that status.
 
 ### Reducing a stream to one value
 
-`| collect` and `| count` were the whole of it; the arithmetic ones are here for
-the same reason:
+Arithmetic reducers calculate one result from a complete stream:
 
 ```a11flow
 orders | sum it.price -> revenue
@@ -493,7 +492,7 @@ The final `after` delays `drain` until `reader` finishes writing through
 `seen.id`. Without the dependency, the node would close immediately. The
 compiler reports `flow.barrier.wait-lends-node` for `wait seen` in this pattern.
 
-## Failures a flow expects
+## Handle expected failures
 
 A composition that calls four actions will sometimes have one of them fail, and
 often that is not a reason to abandon the other three. `try` says so — on

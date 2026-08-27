@@ -1,10 +1,9 @@
-# Browser clients
+# Call an A11 service from a browser
 
-This guide builds a browser client for a minimal A11 `echo` service over
-HTTP/2 Server-Sent Events (SSE). The action has one `text/plain` input named
-`input` and one `text/plain` output named `output`. The Python server and the
-TypeScript browser use the same `ActionSchema`, `Action`, `AsyncNode`,
-`Session`, and wire-message concepts; only the transport-facing syntax differs.
+This guide connects a TypeScript page to a Python `echo` service over HTTP/2
+Server-Sent Events (SSE). Both sides describe the same action and its input and
+output streams. The page can therefore construct, call, and observe the action
+without a browser-specific request format.
 
 !!! note "Before you start"
 
@@ -92,8 +91,8 @@ the page.
 
 ## 3. Prepare and run the Python service
 
-Each SSE connection becomes an accepting `Session` whose registry knows how to
-run `echo`. The endpoint pair shares the `/demos/echo` prefix:
+Each SSE connection becomes an accepting `Session` with `echo` registered as a
+handler. The endpoint pair shares the `/demos/echo` prefix:
 
 ```python
 registry = a11.ActionRegistry()
@@ -161,8 +160,9 @@ const output = need(await action.getOutput('output', false));
 const reply = need(await output.next({timeoutMs: 10_000}));
 ```
 
-This symmetry is the useful part: an interface field remains an A11 node, and
-the action and session retain their identities and lifecycle on both peers.
+The interface field remains an A11 node, while the action and session retain
+their identities and lifecycle on both peers. The page can therefore use the
+same streaming and completion operations as the service.
 
 ## 6. Display failures
 
@@ -184,4 +184,3 @@ try {
     errorRegion.textContent = error instanceof Error ? error.message : String(error);
 }
 ```
-

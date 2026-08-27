@@ -1,4 +1,4 @@
-# Going distributed
+# Exchange durable streams through Redis
 
 An [`AsyncNode`][a11.nodes.async_node.AsyncNode] does not have to keep its
 chunks in the process that created it. Give two nodes Redis-backed stores and
@@ -8,6 +8,10 @@ listens to the other, while Bob does the reverse.
 This guide runs the same `chat.py` on two imaginary machines. Both machines can
 reach the same Redis deployment, but they do not need a direct connection to
 each other.
+
+Use this pattern when named streams must outlive either process or accept data
+before the reader starts. Use a [session](echo-session.md) when peers need to
+discover and dispatch actions over a live connection.
 
 | Redis-backed node | Writer | Reader |
 | --- | --- | --- |

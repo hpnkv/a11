@@ -133,9 +133,8 @@ last.
 
 Once a store has a final sequence, a conflicting second final sequence or a
 fragment beyond it is invalid. This lets out-of-order transports fill earlier
-gaps while preserving one unambiguous end. It is also the one thing to watch
-when converting code: a value already written with `final=true` has recorded
-finality, so what such a producer still needs is `close()`, not another
+gaps while preserving one unambiguous end. A value written with `final=true`
+has already recorded finality; its producer must call `close()`, not another
 `finalize()`.
 
 ## 4. Close writes

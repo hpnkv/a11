@@ -1,11 +1,9 @@
-# Deep research, as a composition
+# Build a parallel research workflow
 
-This guide builds a "deep research" agent — plan a topic, investigate its parts
-at the same time, write one report — and then shows that the whole of it is a
-text file. There is no orchestration code: the backend serves
-[`interact_with_llm`](../llm-sdk/interactions.md) and one text-splitting action,
-and the composition that puts them together is
-[Flow](../api/flow.md).
+This guide builds a research action that plans a topic, investigates several
+briefs concurrently, and synthesizes one report. A [Flow](../api/flow.md)
+document composes `interact_with_llm` with one text-splitting action, so the
+workflow can change without changing either handler.
 
 The page dispatches one action, `deep-research`, reads two of its ports and
 follows its log.
@@ -79,11 +77,11 @@ The page is
 takes the same subject further into the language — typed sources, `zip`, a flow
 calling a flow.
 
-## 1. What the composition has to say
+## 1. Describe the workflow's boundary
 
-The shape is the one the predecessor of this example wrote in about 400 lines of
-Python: a planner, N investigations that do not depend on each other, and a
-synthesis at the end. Written as a flow it is four declarations:
+The flow exposes the topic as input, the plan and report as outputs, and
+activity through the standard action log. Its body declares a planner,
+independent investigations, and a final synthesis:
 
 ```a11flow
 flow deep-research {
@@ -135,11 +133,10 @@ cannot be written by three loop passes; a node can, and one reader reads it back
 Arrival order is the order things happened, and the page shows the log while it
 waits.
 
-## 2. A model call, in a language with no model in it
+## 2. Construct a model interaction
 
-`interact_with_llm` wants an `a11.sdk.llm.Interaction`, and a flow can make one: `TYPE{...}` names a type the host's
-serialization registry knows, and
-`to_chunk` makes the content it is built from.
+`interact_with_llm` accepts an `a11.sdk.llm.Interaction`. `TYPE{...}` constructs
+a type registered by the host, and `to_chunk` creates its content.
 
 ```a11flow
 llm = run ask_model(
@@ -177,7 +174,7 @@ server registers both). A step of a composition is not a chat turn — recorded,
 every investigation would show up in the
 [chat guide](chat-sessions.md)'s conversation list as a conversation of its own.
 
-## 3. The one thing the language will not do
+## 3. Convert the planner output into a stream
 
 The planner answers with one brief per line, and the fan-out needs those lines as
 a *stream*. Flow has `split`, but a list is one value: `for` iterates a stream,
@@ -201,10 +198,10 @@ lines.lines | where starts-with(it, "FINALLY:") | first 1 -> synthesis
 values again; `where` sorts the plan's briefs from the instruction about writing
 the report.
 
-## 4. Serving it
+## 4. Serve the workflow as an action
 
-A flow is an action. Compiling the file and registering it is two lines, and from
-then on nothing can tell the composition from a handler:
+A compiled flow registers as an action. Callers use its declared ports without
+needing to know whether its implementation is a flow or a handler:
 
 ```python
 from a11 import flow

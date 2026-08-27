@@ -12,10 +12,8 @@ bidirectional shutdowns:
 ```python
 import a11
 
-# Create an in-process connected pair for testing or local routing
 client_stream, server_stream = a11.create_in_process_wire_stream_pair()
 
-# Start or accept streams with message and completion handlers
 async def on_message(msg):
     if msg is None:
         print("Peer closed write direction")
@@ -42,10 +40,8 @@ await client_stream.start(on_message, on_done)
 ## WebSocket
 
 ```python
-# Connect to a WebSocket endpoint
 stream = a11.WebSocketWireStream.connect("ws://127.0.0.1:8080/ws")
 
-# Or run a WebSocket listener
 server = a11.WebSocketWireServer.create(accept_callback, port=8080)
 ```
 

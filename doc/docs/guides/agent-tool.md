@@ -31,9 +31,6 @@ string instead of a real API call:
 ```python
 async def get_weather(action):
     location = await action["location"].consume()
-    # This handler is the sole writer of `report`: `finalize` marks the value
-    # final and seals the port, so the caller sees a complete, OK-terminated
-    # result.
     await action["report"].finalize(f"It is 22°C and sunny in {location}.")
 ```
 
@@ -44,12 +41,24 @@ model sees when deciding whether and how to call the tool:
 GET_WEATHER = a11.ActionSchema(
     name="get_weather",
     description="Get the current weather for a location.",
-    inputs={"location": a11.ActionPortSchema(
-        name="location", type="text/plain", typeinfo=str, required=True,
-        description="The city and state, e.g. San Francisco, CA.")},
-    outputs={"report": a11.ActionPortSchema(
-        name="report", type="text/plain", typeinfo=str, required=True,
-        description="A short human-readable weather report.")},
+    inputs={
+        "location": a11.ActionPortSchema(
+            name="location",
+            type="text/plain",
+            typeinfo=str,
+            required=True,
+            description="The city and country or region.",
+        )
+    },
+    outputs={
+        "report": a11.ActionPortSchema(
+            name="report",
+            type="text/plain",
+            typeinfo=str,
+            required=True,
+            description="A short weather report.",
+        )
+    },
 )
 ```
 
@@ -97,7 +106,6 @@ user_turn = Interaction(
 )
 
 await interact["interactions"].finalize(user_turn)
-# `config` is finalized empty: the backend applies its own defaults.
 await interact["config"].finalize()
 tools = interact["tools"]
 for tool in tool_definitions:
@@ -113,6 +121,7 @@ result. Read that output from `text_output`:
 ```python
 async for chunk in interact["text_output"]:
     print(chunk, end="", flush=True)
+await interact.wait()
 ```
 
 ## How the tool call is handled

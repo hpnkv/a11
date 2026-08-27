@@ -26,23 +26,30 @@ output port, exactly like the LLM interaction:
 ```python
 async def shout(action):
     text = await action["text"].consume()
-    # `finalize` marks the value final and seals the port with OK.
     await action["result"].finalize(text.upper())
 
 
 SHOUT = a11.ActionSchema(
     name="shout",
-    inputs={"text": a11.ActionPortSchema(
-        name="text", type="text/plain", typeinfo=str, required=True)},
-    outputs={"result": a11.ActionPortSchema(
-        name="result", type="text/plain", typeinfo=str, required=True)},
+    inputs={
+        "text": a11.ActionPortSchema(
+            name="text", type="text/plain", typeinfo=str, required=True
+        )
+    },
+    outputs={
+        "result": a11.ActionPortSchema(
+            name="result", type="text/plain", typeinfo=str, required=True
+        )
+    },
 )
 
 
 async def run_locally() -> str:
     action = a11.Action(SHOUT).bind_handler(shout).run()
     await action["text"].finalize("hello")
-    return await action["result"].consume()      # -> "HELLO"
+    result = await action["result"].consume()
+    await action.wait()
+    return result
 ```
 
 ## Register it so a server can host it
@@ -100,8 +107,9 @@ input, read the output — but the bytes now travel over the network to the
 server's handler and back:
 
 ```python
-await action["text"].finalize("hello")            # mark it final, and seal it
-print(await action["result"].consume())           # -> "HELLO"
+await action["text"].finalize("hello")
+print(await action["result"].consume())
+await action.wait()
 ```
 
 Sealing a port carries across the connection as well as locally: closing a
@@ -122,16 +130,21 @@ import a11
 
 async def shout(action):
     text = await action["text"].consume()
-    # `finalize` marks the value final and seals the port with OK.
     await action["result"].finalize(text.upper())
 
 
 SHOUT = a11.ActionSchema(
     name="shout",
-    inputs={"text": a11.ActionPortSchema(
-        name="text", type="text/plain", typeinfo=str, required=True)},
-    outputs={"result": a11.ActionPortSchema(
-        name="result", type="text/plain", typeinfo=str, required=True)},
+    inputs={
+        "text": a11.ActionPortSchema(
+            name="text", type="text/plain", typeinfo=str, required=True
+        )
+    },
+    outputs={
+        "result": a11.ActionPortSchema(
+            name="result", type="text/plain", typeinfo=str, required=True
+        )
+    },
 )
 
 
@@ -139,7 +152,7 @@ async def main() -> None:
     # Local: the handler runs in this process.
     local = a11.Action(SHOUT).bind_handler(shout).run()
     await local["text"].finalize("hello")
-    print("local:", await local["result"].consume())      # -> HELLO
+    print("local:", await local["result"].consume())
 
     # Remote: host the same action on a server and call it over a socket.
     registry = a11.ActionRegistry()
@@ -165,7 +178,7 @@ async def main() -> None:
         )
         await action.call()
         await action["text"].finalize("hello")
-        print("remote:", await action["result"].consume())  # -> HELLO
+        print("remote:", await action["result"].consume())
         await action.wait()
     finally:
         server.stop()

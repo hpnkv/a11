@@ -86,6 +86,31 @@ An evaluation can then invoke the production actions. It does not need a second
 implementation of tool dispatch or streaming accumulation, and a verifier can
 consume the same typed outputs that an application client receives.
 
+For example, a compact evaluation flow can reuse the production model action
+and verifier, limit concurrent trials, and stream scores as they finish:
+
+```a11flow
+flow evaluate-answers {
+  in  cases:  object stream required
+  out scores: number stream
+
+  nodes trials {
+    for case in cases parallel 8 {
+      answer = run answer-question(question: case.question) timeout 2m
+      checked = run verify-answer(
+        expected: case.expected, answer: answer.text,
+      )
+      checked.score -> scores
+    }
+  }
+}
+```
+
+The case source, answerer, and verifier remain ordinary actions that an
+application can call directly. `parallel 8` is the trial limit, the timeout is
+enforced per answer, and the `nodes` block keeps intermediate model output
+local. A durable store can retain the `scores` node for later inspection.
+
 This approach is intentionally narrower than a benchmark framework. A11 does
 not provide Harbor's container isolation, dataset registry, reward conventions,
 or results viewer. It provides reusable execution and data contracts for teams

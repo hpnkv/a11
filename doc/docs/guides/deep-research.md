@@ -58,15 +58,10 @@ research action. `propagate_io=False` keeps its raw events, reasoning, and
 completed interactions in the process. Only text copied to a parent output is
 sent to the research caller.
 
-Every output is drained concurrently. This matters for model SDKs that produce
-text, reasoning, events, and completed interactions at the same time.
+The helper reads only the text it needs. When the parent action finishes in a
+session, A11 cleans up the unused nested outputs with the rest of the action.
 
 ```python
-async def _drain(node: a11.AsyncNode) -> None:
-    async for _ in node:
-        pass
-
-
 async def _read_text(
     node: a11.AsyncNode,
     destination: a11.AsyncNode | None = None,
@@ -94,10 +89,6 @@ async def ask_model(
     text = asyncio.create_task(
         _read_text(model["text_output"], stream_to)
     )
-    drains = [
-        asyncio.create_task(_drain(model[name]))
-        for name in ("thoughts", "event_stream", "new_interactions")
-    ]
 
     turn = Interaction(
         role=Role.USER,
@@ -111,7 +102,6 @@ async def ask_model(
     await model["tools"].finalize()
 
     answer = await text
-    await asyncio.gather(*drains)
     await model.wait()
     return answer
 ```
@@ -335,12 +325,12 @@ nodes research {
 }
 ```
 
-This short form also handles work that the Python version spells out:
+Flow also makes the orchestration policies part of the loaded composition:
 
 - The runtime drains every declared action output that the flow does not read.
-  An unused model event stream cannot fill its buffer and stall the action.
-  `skip output` remains available when the composition should record that an
-  output is intentionally ignored.
+  The Python illustration can leave unused nested outputs to session cleanup;
+  Flow keeps them moving during the run. `skip output` records an intentional
+  discard when that is useful to a reader.
 - `parallel 3` starts up to three investigations without task creation,
   semaphore, and gather code. The bound is part of the composition and applies
   when the source is loaded at runtime.

@@ -16,19 +16,26 @@ import a11
 
 SCHEMA = a11.ActionSchema(
     name="transform_text",
-    description="Transforms input text to uppercase.",
-    inputs={"text": a11.ActionPortSchema(name="text", type="text/plain", typeinfo=str, required=True)},
-    outputs={"result": a11.ActionPortSchema(name="result", type="text/plain", typeinfo=str, required=True)},
+    description="Transform input text to uppercase.",
+    inputs={
+        "text": a11.ActionPortSchema(
+            name="text", type="text/plain", typeinfo=str, required=True
+        )
+    },
+    outputs={
+        "result": a11.ActionPortSchema(
+            name="result", type="text/plain", typeinfo=str, required=True
+        )
+    },
 )
 
 async def handler(action: a11.Action) -> None:
     text = await action["text"].consume()
     await action["result"].finalize(text.upper())
 
-# Run locally
 action = a11.Action(SCHEMA).bind_handler(handler).run()
 await action["text"].finalize("hello world")
-result = await action["result"].consume()  # "HELLO WORLD"
+print(await action["result"].consume())
 await action.wait()
 ```
 
@@ -71,7 +78,6 @@ handlers, supporting both local execution and dispatch through networked service
 registry = ActionRegistry()
 registry.register("transform_text", SCHEMA, handler)
 
-# Construct configured actions
 action = registry.make_action("transform_text")
 ```
 

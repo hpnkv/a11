@@ -98,6 +98,7 @@ new_interactions = []
 async for interaction in interact["new_interactions"]:
     new_interactions.append(interaction)
 await stream_task
+await interact.wait()
 ```
 
 Keep `new_interactions` around and prepend them (plus the user turn) to the next
@@ -122,7 +123,7 @@ from a11.sdk.interact_with_llm import (
 from a11.sdk.llm import Interaction, LlmHeaders, Role
 
 
-async def ask(text: str) -> None:
+async def ask(text: str) -> list[Interaction]:
     interact = (
         a11.Action(INTERACT_WITH_LLM_SCHEMA)
         .bind_handler(interact_with_llm)
@@ -136,7 +137,11 @@ async def ask(text: str) -> None:
         async for chunk in interact["text_output"]:
             print(chunk, end="", flush=True)
 
-    stream_task = asyncio.create_task(stream_text())
+    async def collect_interactions():
+        return [item async for item in interact["new_interactions"]]
+
+    text_task = asyncio.create_task(stream_text())
+    state_task = asyncio.create_task(collect_interactions())
 
     user_turn = Interaction(
         role=Role.USER,
@@ -147,13 +152,18 @@ async def ask(text: str) -> None:
     await interact["config"].finalize()
     await interact["tools"].finalize()
 
-    async for _ in interact["new_interactions"]:
-        pass
-    await stream_task
+    await text_task
+    new_interactions = await state_task
+    await interact.wait()
+    return [user_turn, *new_interactions]
 
 
-asyncio.run(ask("Say hello in three languages."))
+history = asyncio.run(ask("Say hello in three languages."))
 ```
+
+`history` is ready for the next model call or application storage. The visible
+text and durable conversation state travel independently, so neither needs to
+be reconstructed from the other.
 
 The full multi-turn, multi-provider version is `examples/002-llm-interactions`.
 

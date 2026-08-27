@@ -28,21 +28,20 @@ defines routing, backpressure, and shutdown in detail.
 ## Using Session and Service
 
 ```python
+import asyncio
+
 import a11
 from a11.actions import ActionRegistry
 from a11.service.serving import serving, websocket
 
-# 1. Register application actions
 registry = ActionRegistry()
 
 @registry.action(name="greet")
 async def greet(name: str) -> str:
     return f"Hello, {name}!"
 
-# 2. Create the service with the registry
 service = a11.Service(action_registry=registry)
 
-# 3. Serve over listeners with automatic graceful shutdown
 async def run_server():
     async with serving(service, websocket(port=8080)):
         print("Server running on ws://localhost:8080")

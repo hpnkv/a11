@@ -68,8 +68,16 @@ describing the same runnable action and streaming ports on each side.
 ```ts
 const echoSchema = new ActionSchema({
     name: 'echo',
-    inputs: {input: new ActionPortSchema({name: 'input', type: 'text/plain', required: true})},
-    outputs: {output: new ActionPortSchema({name: 'output', type: 'text/plain', required: true})},
+    inputs: {
+        input: new ActionPortSchema({
+            name: 'input', type: 'text/plain', required: true,
+        }),
+    },
+    outputs: {
+        output: new ActionPortSchema({
+            name: 'output', type: 'text/plain', required: true,
+        }),
+    },
 });
 ```
 
@@ -155,9 +163,9 @@ need(await action.call());
 const input = need(await action.getInput('input'));
 need(await input.finalize(text));
 need(await action.waitForDispatch(10_000));
-need(await action.wait(30_000));
 const output = need(await action.getOutput('output', false));
 const reply = need(await output.next({timeoutMs: 10_000}));
+need(await action.wait(30_000));
 ```
 
 The interface field remains an A11 node, while the action and session retain
@@ -181,6 +189,8 @@ const need = <T>(value: T | Status): T => {
 try {
     await sendEcho(text);
 } catch (error) {
-    errorRegion.textContent = error instanceof Error ? error.message : String(error);
+    errorRegion.textContent = error instanceof Error
+        ? error.message
+        : String(error);
 }
 ```

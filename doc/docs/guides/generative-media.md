@@ -113,7 +113,14 @@ def on_step(_pipeline, step, _timestep, kwargs):
     )
     return kwargs
 
-result = await asyncio.to_thread(pipeline, request.prompt, callback_on_step_end=on_step, ...)
+result = await asyncio.to_thread(
+    pipeline,
+    request.prompt,
+    num_inference_steps=request.num_inference_steps,
+    height=request.height,
+    width=request.width,
+    callback_on_step_end=on_step,
+)
 ```
 
 The handler does not await each progress tick's confirmation future, so a
@@ -124,9 +131,9 @@ must be confirmed — `await (await node.put(value))` — as
 Both ports are closed however the handler ends:
 
 ```python
+try:
+    ...
 finally:
-    # `progress` has no final event. `image_out` finalizes the PNG itself or
-    # fails before producing one.
     await progress.close()
     await image_out.close()
 ```

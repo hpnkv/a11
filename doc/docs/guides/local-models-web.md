@@ -99,14 +99,12 @@ const interactions = need(await action.getInput('interactions'));
 need(await interactions.finalize(user));
 
 const config = need(await action.getInput('config'));
-need(await config.finalize({
-    model_asset_path:
-        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm?download=true',
-}));
+need(await config.finalize({}));
 ```
 
-That HuggingFace URL is also the SDK default, so omitting `model_asset_path`
-loads the same model. The asset is fetched with redirects followed (the
+The default config loads Gemma 3n E2B from Hugging Face. Set
+`model_asset_path` to select another compatible asset. The asset is fetched
+with redirects followed (the
 `resolve` URL 302s to a CDN), then handed to the runtime as bytes. The
 downloaded bytes are stored in the browser's [Cache
 Storage](https://developer.mozilla.org/docs/Web/API/CacheStorage), so a page

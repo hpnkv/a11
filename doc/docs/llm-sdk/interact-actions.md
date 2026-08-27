@@ -13,6 +13,7 @@ the different message shapes expected by each provider.
 ## Prepare the model action
 
 ```python
+import asyncio
 import os
 
 import a11
@@ -31,7 +32,6 @@ interact = (
     .set_header(LlmHeaders.PROVIDER.value, "gemini")
     .set_header(LlmHeaders.MODEL.value, "gemini-3.5-flash")
     .set_header(LlmHeaders.API_KEY.value, os.environ["GEMINI_API_KEY"])
-    # Only these registered actions are callable during this model turn.
     .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, ",".join(allowed))
     .run()
 )
@@ -47,13 +47,11 @@ for previous in history:
     await interactions.put(previous)
 await interactions.finalize(question)
 
-# Finalizing an empty config port accepts the backend's defaults.
 await interact["config"].finalize()
 
 tools = interact["tools"]
 for definition in tool_definitions:
     await tools.put(definition)
-# With no value, finalize() marks the end of this finite list of definitions.
 await tools.finalize()
 ```
 
@@ -82,6 +80,7 @@ async def print_answer() -> None:
 print_task = asyncio.create_task(print_answer())
 new_interactions = [item async for item in interact["new_interactions"]]
 await print_task
+await interact.wait()
 
 # Persist both sides of the turn for the next request.
 history.extend([question, *new_interactions])

@@ -35,7 +35,6 @@ question = Interaction(
             {
                 "role": "user",
                 "content": [
-                    # Parts leave room for images or other content later.
                     {"type": "text", "text": "Which orders are delayed?"}
                 ],
             }
@@ -68,7 +67,6 @@ Interactions are Pydantic models, so they can be validated, copied, and stored
 as JSON alongside the rest of an application’s state:
 
 ```python
-# Persist after each turn; restore with Interaction.model_validate_json.
 payload = interaction.model_dump_json()
 restored = Interaction.model_validate_json(payload)
 ```

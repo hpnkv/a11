@@ -18,11 +18,8 @@ import a11
 
 node = a11.AsyncNode.create("events")
 
-# Write values into the stream
 await node.put({"event": "start"})
 await node.put({"event": "progress", "percent": 50})
-
-# Mark the stream complete and close the writer
 await node.finalize({"event": "complete", "percent": 100})
 ```
 
@@ -32,11 +29,9 @@ Consume items with `async for` or [`next`][a11.nodes.async_node.AsyncNode.next].
 actions returning a single complete value, use [`consume`][a11.nodes.async_node.AsyncNode.consume]:
 
 ```python
-# Stream values as they arrive
 async for event in node:
     print(event)
 
-# Or consume a single complete value from a unary result port
 result = await unary_node.consume()
 ```
 

@@ -85,5 +85,6 @@ registry = a11.ActionRegistry()
 registry.register("look_up_order", LOOK_UP_ORDER, look_up_order)
 
 tools = runner.get_tool_definitions(registry, ["look_up_order"])
-# Each item contains name, description, and input_schema.
 ```
+
+Each item contains the action's name, description, and generated input schema.

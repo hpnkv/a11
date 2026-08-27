@@ -101,7 +101,11 @@ LlmHeaders.BASE_URL  # x-a11-llm-base-url
 In the browser they are the same names, set on the call before it is dispatched:
 
 ```ts
-const call = need(Action.create(INTERACT_WITH_LLM_SCHEMA, {session, stream, nodeMap: session.getNodeMap()}));
+const call = need(Action.create(INTERACT_WITH_LLM_SCHEMA, {
+    session,
+    stream,
+    nodeMap: session.getNodeMap(),
+}));
 need(call.setHeader(LlmHeaders.PROVIDER, 'ollama'));
 need(call.setHeader(LlmHeaders.MODEL, 'glm-4.7-flash'));
 need(call.setHeader(LlmHeaders.BASE_URL, 'http://127.0.0.1:11434'));
@@ -118,10 +122,9 @@ provider's event stream.
 
 ## 2. The conversation is a list of interactions
 
-A turn's history is not a transcript the page rebuilt from text. It is the list
-of `a11.sdk.llm.Interaction` objects the provider itself produced — including the tool calls it made and their results —
-and the next turn
-puts the whole list back in front of the model:
+A turn's history is not a transcript rebuilt from text. It is the list of
+`a11.sdk.llm.Interaction` objects the provider produced, including tool calls
+and results. The next turn sends that structured history back to the model:
 
 ```ts
 const interactions = need(await call.getInput('interactions'));
@@ -168,8 +171,16 @@ are the backend's, mirrored:
 ```ts
 const GET_CONVERSATION_SCHEMA = new ActionSchema({
     name: 'get_conversation',
-    inputs: {id: new ActionPortSchema({name: 'id', type: 'text/plain', unary: true, required: true})},
-    outputs: {interactions: new ActionPortSchema({name: 'interactions', type: 'application/json', required: true})},
+    inputs: {
+        id: new ActionPortSchema({
+            name: 'id', type: 'text/plain', unary: true, required: true,
+        }),
+    },
+    outputs: {
+        interactions: new ActionPortSchema({
+            name: 'interactions', type: 'application/json', required: true,
+        }),
+    },
 });
 ```
 
